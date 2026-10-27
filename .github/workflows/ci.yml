@@ -29,38 +29,31 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
-      - name: Show versions
+      - name: Build & find wasm
         run: |
-          rustc -vV
-          cargo -vV
-      - name: Cargo build (debug, verbose)
-        run: |
-          echo "PWD=$(pwd)"
-          ls bouncer/contracts/bouncer/
+          set -x
           cd bouncer/contracts/bouncer
-          echo "now at $(pwd)"
+          pwd
           ls
-          RUSTFLAGS="-C link-arg=-s" cargo build --target wasm32-unknown-unknown -v 2>&1 | tail -200
-          echo "---target---"
-          ls target/wasm32-unknown-unknown/debug/ | head -40
-      - name: Locate wasm & copy
-        run: |
-          set -euo pipefail
-          mkdir -p dist
-          echo "--- listing all wasm files ---"
-          find . -name "*.wasm" -not -path "*/node_modules/*"
-          SRC=""
-          for cand in bouncer/contracts/bouncer/target/wasm32-unknown-unknown/debug/bouncer.wasm bouncer/target/wasm32-unknown-unknown/debug/bouncer.wasm target/wasm32-unknown-unknown/debug/bouncer.wasm; do
-            if [ -f "$cand" ]; then SRC="$cand"; break; fi
-          done
-          echo "SRC=$SRC"
-          test -n "$SRC"
-          cp "$SRC" dist/bouncer.wasm
-          ls -la dist/bouncer.wasm
-          wc -c dist/bouncer.wasm
+          RUSTFLAGS="-C link-arg=-s" cargo build --target wasm32-unknown-unknown -v 2>&1 | tee /tmp/build.log | tail -200
+          echo "=== FIND WASM ==="
+          find /home/runner -name "*.wasm" 2>&1 | head -30
+          ls target/ 2>&1 || true
+          ls target/wasm32-unknown-unknown/ 2>&1 || true
+          ls target/wasm32-unknown-unknown/debug/ 2>&1 || true
+          mkdir -p /home/runner/work/_dist
+          find /home/runner -name "bouncer.wasm" | head -1 | xargs -I{} cp {} /home/runner/work/_dist/bouncer.wasm
+          ls -la /home/runner/work/_dist/
+          wc -c /home/runner/work/_dist/bouncer.wasm || echo "NO WASM"
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: bouncer-wasm
-          path: dist/bouncer.wasm
+          path: /home/runner/work/_dist/bouncer.wasm
           if-no-files-found: error
-          compression-level: 0
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: build-log
+          path: /tmp/build.log
+          if-no-files-found: ignore
