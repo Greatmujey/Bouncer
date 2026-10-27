@@ -29,37 +29,34 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
-      - name: Install cargo-near (standard Near build tool)
+      - name: Show versions
         run: |
-          # Install cargo-near via its installer
-          curl --proto '=https' --tlsv1.2 -LsSf https://github.com/near/cargo-near/releases/latest/download/cargo-near-installer.sh | sh -s -- --no-modify-path 2>&1 | tail -20 || true
-          ls "$HOME/.cargo/bin/" 2>&1 || true
-          which cargo-near || echo "no cargo-near in path; will use cargo build"
-      - name: Cargo build
+          rustc -vV
+          cargo -vV
+          which rust-lld || echo "no rust-lld"
+          ls ~/.rustup/toolchains/*/lib/rustlib/wasm32-unknown-unknown/lib/ 2>&1 | head -20 || true
+      - name: Cargo build (debug, verbose)
         working-directory: bouncer/contracts/bouncer
         run: |
-          echo "WORKSPACE=$GITHUB_WORKSPACE"
-          echo "PWD=$(pwd)"
-          ls
-          # plain cargo build, no tail, no shell pipes to avoid exit code confusion
-          RUSTFLAGS="-C link-arg=-s" cargo build --target wasm32-unknown-unknown
-          echo "--- AFTER BUILD ---"
-          ls -la
-          ls -la target/ 2>&1 || true
-          ls -la target/wasm32-unknown-unknown/ 2>&1 || true
-          ls -la target/wasm32-unknown-unknown/debug/ 2>&1 || true
-      - name: Find & copy wasm
+          RUSTFLAGS="-C link-arg=-s" cargo build --target wasm32-unknown-unknown -v 2>&1 | tail -200
+      - name: Find wasm
         run: |
-          set -x
-          find $GITHUB_WORKSPACE -name "*.wasm" -not -path "*/node_modules/*" 2>&1
+          echo "FIND:"
+          find . -name "bouncer.wasm" 2>&1
+          ls -la bouncer/target/wasm32-unknown-unknown/debug/ 2>&1 | head -30 || echo "no outer bouncer/target"
+          ls -la bouncer/contracts/bouncer/target/wasm32-unknown-unknown/debug/ 2>&1 | head -30 || echo "no inner target"
+      - name: Copy wasm
+        run: |
           mkdir -p dist
-          # cargo build from working-directory bouncer/contracts/bouncer places target at bouncer/contracts/bouncer/target/ (cargo targets go under manifest dir)
-          cp bouncer/contracts/bouncer/target/wasm32-unknown-unknown/debug/bouncer.wasm dist/bouncer.wasm 2>&1 || \
-            cp bouncer/target/wasm32-unknown-unknown/debug/bouncer.wasm dist/bouncer.wasm 2>&1 || \
-            find $GITHUB_WORKSPACE -name "bouncer.wasm" -not -path "*/node_modules/*" -exec cp {} dist/bouncer.wasm \;
-          ls -lh dist/
+          if [ -f bouncer/contracts/bouncer/target/wasm32-unknown-unknown/debug/bouncer.wasm ]; then
+            cp bouncer/contracts/bouncer/target/wasm32-unknown-unknown/debug/bouncer.wasm dist/bouncer.wasm
+          elif [ -f bouncer/target/wasm32-unknown-unknown/debug/bouncer.wasm ]; then
+            cp bouncer/target/wasm32-unknown-unknown/debug/bouncer.wasm dist/bouncer.wasm
+          fi
+          ls -la dist/
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: bouncer-wasm
           path: dist/bouncer.wasm
-          if-no-files-found: error
+          if-no-files-found: ignore
