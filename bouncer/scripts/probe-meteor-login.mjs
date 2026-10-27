@@ -45,8 +45,12 @@ try {
   })));
   const text = (await popup.locator('body').innerText()).replace(/\s+/g, ' ').slice(0, 1000);
   const summary = JSON.stringify({ origin: location.origin, path: location.pathname, controls, text }).replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A');
-  console.log(`::notice title=Meteor testnet login UI probe::${summary}`);
-  console.log('Reached the real wallet UI with no account, secret, sign-in, or transaction.');
+  console.log(`::notice title=Meteor testnet external-page probe::${summary}`);
+  if (/sorry, you have been blocked|cloudflare ray id|recaptcha requires verification/i.test(text)) {
+    console.log('::warning title=Meteor wallet unavailable to this runner::The external wallet returned an access block or challenge. No wallet sign-in was tested.');
+  } else {
+    console.log('The external page loaded; no account, secret, sign-in, or transaction was tested.');
+  }
 } finally {
   await browser.close();
   await new Promise(resolve => server.close(resolve));

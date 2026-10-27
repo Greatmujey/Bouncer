@@ -2,7 +2,7 @@ name: One-shot public website preview
 
 on:
   push:
-    branches: [arena/ebb614bb-near-hub]
+    branches: [main, 'arena/**']
 
 # This job only runs on an explicit marker. The guest upload is public and
 # temporary; it never changes the visibility of the private repository.

@@ -2,7 +2,7 @@ name: Build & Test Bouncer
 
 on:
   push:
-    branches: [arena/ebb614bb-near-hub]
+    branches: [main, 'arena/**']
   pull_request:
   workflow_dispatch:
 
@@ -89,7 +89,7 @@ jobs:
           path: bouncer.wasm
           if-no-files-found: error
       - name: Commit built wasm on branch pushes
-        if: github.event_name == 'push' && github.ref == 'refs/heads/arena/ebb614bb-near-hub'
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/arena/')
         run: |
           git config user.name "CI Bot"
           git config user.email "ci@bouncer.local"
@@ -143,7 +143,7 @@ jobs:
       - run: node bouncer/demo-multi-resource.mjs
 
   wallet-probe:
-    name: Real Meteor testnet login UI probe
+    name: External Meteor testnet page probe (no sign-in)
     if: github.event_name == 'push' && contains(github.event.head_commit.message, '[wallet-probe]')
     runs-on: ubuntu-latest
     timeout-minutes: 5

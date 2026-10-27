@@ -8,8 +8,9 @@ ownership and does not create or connect a Bouncer vault, configure policies,
 permit the agent to spend, sign messages or send transactions. No seed phrase
 or private key should be entered into Bouncer. The connector has been tested
 with a mocked sandbox wallet; the pinned Meteor UI has also been opened and
-cancelled with its backend blocked. An actual wallet sign-in has not yet been
-independently verified end to end.
+cancelled with its backend blocked. A later attempt to open the real Meteor
+login page from a GitHub Actions runner encountered a Cloudflare access block.
+An actual wallet sign-in has not yet been independently verified end to end.
 
 The bundled NEAR Connect version is pinned, and the curated Meteor, Nightly and
 Ledger executor URLs use immutable Git commit IDs. NEAR Connect's shared
