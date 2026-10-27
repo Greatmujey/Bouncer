@@ -1,10 +1,13 @@
 use near_sdk::json_types::U128;
 use near_sdk::store::LookupMap;
-use near_sdk::{env, ext_contract, near, AccountId, Gas, NearToken, PanicOnDefault, Promise, PromiseOrValue};
+use near_sdk::{env, ext_contract, near, AccountId, Gas, NearToken, PanicOnDefault, Promise};
 
 const ONE_YOCTO: NearToken = NearToken::from_yoctonear(1);
 const GAS_FOR_FT_TRANSFER: Gas = Gas::from_tgas(15);
 const GAS_FOR_RESOLVE: Gas = Gas::from_tgas(15);
+const HOUR_NS: u64 = 3_600_000_000_000;
+const DAY_HOURS: u64 = 24;
+const DAY_NS: u64 = HOUR_NS * DAY_HOURS;
 
 #[ext_contract(ext_ft)]
 trait ExtFt {
@@ -23,15 +26,36 @@ pub struct Bouncer {
     owner: AccountId,
     token_of: LookupMap<String, AccountId>,
     cap_of: LookupMap<String, u128>,
-    // composite key "policy_id:payee" -> true if allowed.
+    daily_limit_of: LookupMap<String, u128>,
+    // allow: "policy_id:payee" -> true
     allow: LookupMap<String, bool>,
-    // policy_id -> count of allowlisted payees (0 = allow any)
     allow_count: LookupMap<String, u32>,
     balances: LookupMap<AccountId, u128>,
+    // bucket_key "policy_id:hour_bucket" -> amount spent in that hour
+    hourly_spend: LookupMap<String, u128>,
 }
 
-fn allow_key(policy_id: &str, payee: &str) -> String {
-    format!("{}:{}", policy_id, payee)
+fn allow_key(policy_id: &str, payee: &str) -> String { format!("{}:{}", policy_id, payee) }
+fn bucket_key(policy_id: &str, bucket: u64) -> String { format!("{}:b{}", policy_id, bucket) }
+
+/// Sum the last 24 hourly buckets; prune older ones lazily.
+fn rolling_24h_spent(store: &LookupMap<String, u128>, policy_id: &str, now_ns: u64) -> u128 {
+    let cur_bucket = now_ns / HOUR_NS;
+    let mut total: u128 = 0;
+    for i in 0..DAY_HOURS {
+        let b = cur_bucket.saturating_sub(i);
+        if let Some(v) = store.get(&bucket_key(policy_id, b)) {
+            total = total.saturating_add(*v);
+        }
+    }
+    total
+}
+
+fn credit_hour(store: &mut LookupMap<String, u128>, policy_id: &str, now_ns: u64, amt: u128) {
+    let b = now_ns / HOUR_NS;
+    let k = bucket_key(policy_id, b);
+    let prev = store.get(&k).cloned().unwrap_or(0);
+    store.insert(k, prev.saturating_add(amt));
 }
 
 #[near]
@@ -43,19 +67,31 @@ impl Bouncer {
             owner,
             token_of: LookupMap::new(b"t"),
             cap_of: LookupMap::new(b"c"),
+            daily_limit_of: LookupMap::new(b"d"),
             allow: LookupMap::new(b"a"),
             allow_count: LookupMap::new(b"n"),
             balances: LookupMap::new(b"b"),
+            hourly_spend: LookupMap::new(b"h"),
         }
     }
 
     #[payable]
-    pub fn set_policy(&mut self, policy_id: String, token: AccountId, per_tx_cap: U128) {
+    pub fn set_policy(
+        &mut self,
+        policy_id: String,
+        token: AccountId,
+        per_tx_cap: U128,
+        daily_limit: Option<U128>,
+    ) {
         assert!(env::attached_deposit() == ONE_YOCTO, "requires 1 yoctoNEAR (full-access key only)");
         assert!(env::predecessor_account_id() == self.owner, "owner only");
         assert!(per_tx_cap.0 > 0);
         self.token_of.insert(policy_id.clone(), token);
-        self.cap_of.insert(policy_id, per_tx_cap.0);
+        self.cap_of.insert(policy_id.clone(), per_tx_cap.0);
+        if let Some(dl) = daily_limit {
+            assert!(dl.0 > 0);
+            self.daily_limit_of.insert(policy_id, dl.0);
+        }
     }
 
     #[payable]
@@ -84,6 +120,10 @@ impl Bouncer {
 
     pub fn vault_balance(&self, token: AccountId) -> U128 {
         U128(self.balances.get(&token).cloned().unwrap_or(0))
+    }
+
+    pub fn daily_spent(&self, policy_id: String) -> U128 {
+        U128(rolling_24h_spent(&self.hourly_spend, &policy_id, env::block_timestamp()))
     }
 
     pub fn ft_on_transfer(&mut self, sender_id: AccountId, amount: U128, msg: String) -> U128 {
@@ -124,9 +164,15 @@ impl Bouncer {
             let k = allow_key(&policy_id, payee.as_str());
             assert!(self.allow.get(&k) == Some(&true), "payee not in allowlist");
         }
+        let now = env::block_timestamp();
+        if let Some(limit) = self.daily_limit_of.get(&policy_id).cloned() {
+            let spent = rolling_24h_spent(&self.hourly_spend, &policy_id, now);
+            assert!(spent.saturating_add(amt) <= limit, "over 24h limit");
+        }
         let bal = self.balances.get(&token).cloned().unwrap_or(0);
         assert!(bal >= amt, "insufficient vault balance");
         self.balances.insert(token.clone(), bal - amt);
+        credit_hour(&mut self.hourly_spend, &policy_id, now, amt);
         ext_ft::ext(token.clone())
             .with_attached_deposit(ONE_YOCTO)
             .with_static_gas(GAS_FOR_FT_TRANSFER)
@@ -172,6 +218,12 @@ impl Bouncer {
         }
         let bal = self.balances.get(&token).cloned().unwrap_or(0);
         if bal < amount.0 { return (false, format!("vault holds {}; need {}", bal, amount.0)); }
+        if let Some(limit) = self.daily_limit_of.get(&policy_id).cloned() {
+            let spent = rolling_24h_spent(&self.hourly_spend, &policy_id, env::block_timestamp());
+            if spent.saturating_add(amount.0) > limit {
+                return (false, format!("would exceed 24h limit (spent {}/{} )", spent, limit));
+            }
+        }
         (true, "ok".into())
     }
 }
