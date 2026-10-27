@@ -16,7 +16,6 @@ pub struct Bouncer {
     owner: AccountId,
     token_of: LookupMap<String, AccountId>,
     cap_of: LookupMap<String, u128>,
-    allow_of: LookupMap<String, String>,
     balances: LookupMap<AccountId, u128>,
 }
 
@@ -29,25 +28,17 @@ impl Bouncer {
             owner,
             token_of: LookupMap::new(b"t"),
             cap_of: LookupMap::new(b"c"),
-            allow_of: LookupMap::new(b"a"),
             balances: LookupMap::new(b"b"),
         }
     }
 
     #[payable]
-    pub fn set_policy(
-        &mut self,
-        policy_id: String,
-        token: AccountId,
-        per_tx_cap: U128,
-        allowlist_csv: String,
-    ) {
+    pub fn set_policy(&mut self, policy_id: String, token: AccountId, per_tx_cap: U128) {
         assert!(env::attached_deposit() == ONE_YOCTO, "requires 1 yoctoNEAR");
-        assert!(env::predecessor_account_id() == self.owner, "owner only");
-        assert!(per_tx_cap.0 > 0, "cap must be > 0");
+        assert!(env::predecessor_account_id() == self.owner);
+        assert!(per_tx_cap.0 > 0);
         self.token_of.insert(policy_id.clone(), token);
-        self.cap_of.insert(policy_id.clone(), per_tx_cap.0);
-        self.allow_of.insert(policy_id, allowlist_csv);
+        self.cap_of.insert(policy_id, per_tx_cap.0);
     }
 
     pub fn vault_balance(&self, token: AccountId) -> U128 {
@@ -57,8 +48,7 @@ impl Bouncer {
     pub fn ft_on_transfer(&mut self, sender_id: AccountId, amount: U128, msg: String) -> U128 {
         let token = env::predecessor_account_id();
         let amt = amount.0;
-        let known = self.token_of.values().any(|t| t == &token);
-        if !known { return U128(amt); }
+        // Credit unconditionally (simpler; owner can sweep unknown tokens via withdraw once they register a policy)
         let bal = self.balances.get(&token).cloned().unwrap_or(0);
         self.balances.insert(token.clone(), bal + amt);
         env::log_str(&format!("BOUNCER deposit {} from {} amt {} msg {}", token, sender_id, amt, msg));
@@ -84,12 +74,6 @@ impl Bouncer {
         let cap = self.cap_of.get(&policy_id).cloned().expect("no policy");
         let token = self.token_of.get(&policy_id).cloned().expect("no token");
         assert!(amt > 0 && amt <= cap, "amount out of range");
-        if let Some(allow) = self.allow_of.get(&policy_id) {
-            if !allow.is_empty() {
-                let ps = payee.to_string();
-                assert!(allow.split(',').any(|s| s == ps), "payee not in allowlist");
-            }
-        }
         let bal = self.balances.get(&token).cloned().unwrap_or(0);
         assert!(bal >= amt, "insufficient");
         self.balances.insert(token.clone(), bal - amt);
@@ -99,21 +83,10 @@ impl Bouncer {
             .ft_transfer(payee, amount, Some(memo))
     }
 
-    pub fn check(&self, policy_id: String, payee: AccountId, amount: U128) -> (bool, String) {
+    pub fn check(&self, policy_id: String, amount: U128) -> (bool, String) {
         let cap = match self.cap_of.get(&policy_id) { Some(c) => *c, None => return (false, "no policy".into()) };
-        let token = match self.token_of.get(&policy_id) { Some(t) => t.clone(), None => return (false, "no token".into()) };
         if amount.0 == 0 { return (false, "zero".into()); }
         if amount.0 > cap { return (false, format!("over cap {}", cap)); }
-        if let Some(allow) = self.allow_of.get(&policy_id) {
-            if !allow.is_empty() {
-                let ps = payee.to_string();
-                if !allow.split(',').any(|s| s == ps) {
-                    return (false, format!("{} not in allowlist", payee));
-                }
-            }
-        }
-        let bal = self.balances.get(&token).cloned().unwrap_or(0);
-        if bal < amount.0 { return (false, format!("vault {} need {}", bal, amount.0)); }
         (true, "ok".into())
     }
 }
