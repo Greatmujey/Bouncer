@@ -94,7 +94,13 @@ test('website discloses snapshot, synthetic credits, self-hosted services, and t
   assert.match(html, /newly created testnet tokens/);
   assert.match(html, /Unaudited/);
   assert.match(html, /separate refund test/);
-  assert.doesNotMatch(html, /Connect wallet|Start buying/i);
+  assert.doesNotMatch(html, /Start buying/i);
+  assert.match(html, /Connect a testnet wallet/i);
+  assert.match(html, /does not create a vault, grant an agent access, sign a transaction, or spend funds/i);
+  assert.match(html, /Gemini CLI and Claude Code passed local connection checks/i);
+  assert.match(html, /ChatGPT web and other hosted assistants need HTTPS/i);
+  assert.match(html, /Model conversations have not been tested/i);
+  assert.match(html, /id="welcome-tour"/);
   assert.match(html, /requests are prepared by a person/i);
   assert.match(html, /not yet an AI planner/i);
   assert.match(html, /FUTURE WE’RE BUILDING TOWARD · NOT AVAILABLE YET/);

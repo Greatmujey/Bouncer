@@ -20,9 +20,14 @@ fulfillment flow and provides an interactive walkthrough of three real,
 and separate refund test, and distinguishes what works today from planned AI
 planning and commercial integrations.
 The two credit tokens are synthetic and fulfillment was self-hosted. The site
-is not a wallet, live agent dashboard, or commercial marketplace. It can try
-an optional public-RPC read of the contract’s current vault balances; if that
-fails it clearly keeps the recorded snapshot.
+is not a live agent dashboard or commercial marketplace. It includes an
+optional, identity-only testnet wallet connection on an isolated top-level
+origin; **wallet connection is disabled on the shared-origin guest preview**.
+The connector has been exercised with a mock and a real Meteor UI opened and
+cancelled, but not with a real wallet sign-in. Connecting does not create a
+vault, grant spending access, or sign transactions. The site can try an
+optional public-RPC read of the recorded contract’s current vault balances; if
+that fails it keeps the recorded snapshot.
 
 To view it locally from the repository root (Node is not required):
 
@@ -31,11 +36,22 @@ python3 -m http.server 4173 --bind 0.0.0.0 --directory bouncer/web
 ```
 
 GitHub Pages is not configured for this private repository. The explicitly
-opt-in `[publish-web-preview]` workflow publishes **only the five static web
-files** to a public third-party guest host for a time-limited preview; it does
-not publish the repository, credentials or journals. The host controls
+opt-in `[publish-web-preview]` workflow publishes **only the seven whitelisted
+static web files** to a public third-party guest host for a time-limited preview;
+it does not publish the repository, credentials or journals. The host controls
 availability and expiry. It is not a durable production deployment, and normal
-pushes do not trigger it.
+pushes do not trigger it. See [website and wallet notes](bouncer/docs/WEB.md).
+
+## AI assistant access (MCP)
+
+The [MCP server](bouncer/docs/MCP.md) exposes policy inspection and configured
+quote/preflight tools over local stdio or authenticated loopback HTTP. These
+are read-only testnet tools: no keys, policy changes, payments or deliveries.
+Gemini CLI and Claude Code have passed local stdio connection checks without a
+model conversation; project configuration is included. ChatGPT web and other
+remote clients need a separately hosted HTTPS endpoint and compatible
+authentication; an OAuth deployment is not supplied or verified. MCP connects
+tools—it does not provide AI planning or a model.
 
 ## Target tracks
 

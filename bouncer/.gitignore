@@ -6,7 +6,6 @@ contracts/bouncer/.near/
 .env.*
 *.log
 .DS_Store
-package-lock.json
 
 # Local payment journals can contain transaction/account metadata.
 *.bouncer-journal.json

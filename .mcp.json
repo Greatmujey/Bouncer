@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "bouncer": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["bouncer/mcp/server.mjs"]
+    }
+  }
+}

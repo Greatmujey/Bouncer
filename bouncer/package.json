@@ -1,7 +1,7 @@
 {
   "name": "near-bouncer",
   "version": "0.1.0",
-  "description": "Bouncer \u2014 testnet multi-resource procurement with on-chain spending policies (unaudited prototype)",
+  "description": "Bouncer — testnet multi-resource procurement with on-chain spending policies (unaudited prototype)",
   "type": "module",
   "private": true,
   "scripts": {
@@ -13,7 +13,9 @@
     "quote": "node agent/intents.mjs quote",
     "market": "node agent/intents.mjs market",
     "demo": "node demo-multi-resource.mjs",
-    "simulation": "echo \"Offline simulation only: open demo/index.html; no transactions are sent.\""
+    "simulation": "echo \"Offline simulation only: open demo/index.html; no transactions are sent.\"",
+    "build:web": "node scripts/build-web.mjs",
+    "mcp": "node mcp/server.mjs"
   },
   "license": "MIT",
   "repository": {
@@ -21,6 +23,13 @@
     "url": "https://github.com/abdullahimujeeb0505-stack/Bouncer"
   },
   "dependencies": {
-    "near-api-js": "6.5.1"
+    "@hot-labs/near-connect": "0.12.0",
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "express": "5.2.1",
+    "near-api-js": "6.5.1",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
   }
 }

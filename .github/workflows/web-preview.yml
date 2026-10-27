@@ -36,7 +36,7 @@ jobs:
           BOUNCER_PREVIEW_URL_FILE: ${{ runner.temp }}/bouncer-preview-url.txt
         shell: bash
         run: |
-          npm install --prefix "$RUNNER_TEMP/bouncer-browser" --no-save --no-audit --no-fund playwright-core
+          npm install --prefix "$RUNNER_TEMP/bouncer-browser" --no-save --no-audit --no-fund playwright-core@1.64.1
           set +e
           node bouncer/scripts/test-public-web-preview.mjs 2>&1 | tee "$RUNNER_TEMP/web-browser.log"
           result=${PIPESTATUS[0]}

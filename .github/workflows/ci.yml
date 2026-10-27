@@ -18,8 +18,20 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - run: npm install
+      - run: npm ci --no-audit --no-fund
       - run: npm test
+      - name: Check the committed wallet bundle matches its source
+        run: npm run build:web && git diff --exit-code -- web/wallet.bundle.js
+      - name: Test onboarding, mobile layout and testnet wallet UI
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BOUNCER_PLAYWRIGHT_PATH: ${{ runner.temp }}/bouncer-browser/node_modules/playwright-core/index.mjs
+          BOUNCER_METEOR_EXECUTOR: ${{ runner.temp }}/meteor-executor.js
+        run: |
+          npm install --prefix "$RUNNER_TEMP/bouncer-browser" --no-save --no-audit --no-fund playwright-core@1.64.1
+          # Public, pinned vendor executor; test verifies its SHA-256 before use.
+          gh api repos/Meteor-Wallet/meteor_wallet_sdk/git/blobs/b76fb93ff5d47064845d09313173b6eddbfa64e3 --jq .content | base64 -d > "$BOUNCER_METEOR_EXECUTOR"
+          node scripts/test-web-browser.mjs
 
   contract-tests:
     name: Rust contract tests
@@ -104,7 +116,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - run: npm install --prefix bouncer --no-audit --no-fund
+      - run: npm ci --prefix bouncer --no-audit --no-fund
       # Keys live only on this ephemeral runner and are never uploaded.
       - run: node bouncer/demo-all.mjs
 
@@ -125,7 +137,60 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - run: npm install --prefix bouncer --no-audit --no-fund
+      - run: npm ci --prefix bouncer --no-audit --no-fund
       # Uses the NEAR testnet token factory; only synthetic testnet FTs.
       # Keys and journal stay on the ephemeral runner; nothing is uploaded.
       - run: node bouncer/demo-multi-resource.mjs
+
+  mcp-clients:
+    name: Real AI-client MCP handshake smoke
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[mcp-clients]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      - name: Install pinned CLI clients in disposable runner storage
+        run: npm install --prefix "$RUNNER_TEMP/bouncer-clients" --no-save --no-audit --no-fund @google/gemini-cli@0.65.0 @anthropic-ai/claude-code@2.1.311
+      - name: Verify Claude Code and Gemini CLI stdio connection (no account or inference)
+        shell: bash
+        env:
+          BOUNCER_GEMINI_BIN: ${{ runner.temp }}/bouncer-clients/node_modules/.bin/gemini
+          BOUNCER_CLAUDE_BIN: ${{ runner.temp }}/bouncer-clients/node_modules/.bin/claude
+        run: |
+          set +e
+          node bouncer/scripts/test-mcp-clients.mjs 2>&1 | tee "$RUNNER_TEMP/mcp-clients.log"
+          result=${PIPESTATUS[0]}
+          if [ "$result" -ne 0 ]; then
+            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-2500).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=MCP client check failed::"+s)' "$RUNNER_TEMP/mcp-clients.log"
+          fi
+          exit "$result"
+
+  mcp-testnet:
+    name: Live read-only MCP policy check
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[mcp-testnet]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      - name: Inspect v4 policy through a real MCP client and testnet RPC
+        shell: bash
+        run: |
+          set +e
+          node bouncer/scripts/test-mcp-testnet.mjs 2>&1 | tee "$RUNNER_TEMP/mcp-testnet.log"
+          result=${PIPESTATUS[0]}
+          if [ "$result" -ne 0 ]; then
+            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-2500).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=Live MCP check failed::"+s)' "$RUNNER_TEMP/mcp-testnet.log"
+          fi
+          exit "$result"

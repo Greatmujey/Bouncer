@@ -4,6 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#f5f7f3">
+  <!-- Set only to the exact HTTPS origin of a dedicated deployment you control. -->
+  <meta name="bouncer-wallet-origin" content="">
   <meta name="description" content="See how Bouncer helps an agent request compute, storage and API services while protecting its budget on NEAR testnet.">
   <title>Bouncer — An agent that can get what it needs</title>
   <link rel="icon" type="image/svg+xml" href="./favicon.svg">
@@ -31,6 +33,7 @@
       <div class="side-label">WORKSPACE</div>
       <nav class="side-nav">
         <a class="side-link active" href="#overview"><svg><use href="#i-grid"/></svg> Overview <span class="nav-dot"></span></a>
+        <a class="side-link" href="#connect"><svg><use href="#i-lock"/></svg> Wallet &amp; AI access</a>
         <a class="side-link" href="#how-it-works"><svg><use href="#i-activity"/></svg> How it works</a>
         <a class="side-link" href="#run-story"><svg><use href="#i-cpu"/></svg> See the real run</a>
         <a class="side-link" href="#guardrails"><svg><use href="#i-shield"/></svg> Guardrails</a>
@@ -38,8 +41,8 @@
         <a class="side-link" href="#proof"><svg><use href="#i-external"/></svg> Verification</a>
       </nav>
       <div class="side-bottom">
-        <div class="side-status"><span class="status-dot"></span><div><b>NEAR Testnet</b><small>Read-only preview</small></div></div>
-        <p>This is an early prototype.<br>No real funds, no wallet needed.</p>
+        <div class="side-status"><span class="status-dot"></span><div><b>NEAR Testnet</b><small>No purchases on this page</small></div></div>
+        <p>Early prototype. No real funds.<br>Wallet connection is optional.</p>
       </div>
     </aside>
 
@@ -47,14 +50,35 @@
       <header class="topbar">
         <a href="#overview" class="mobile-brand"><span class="brand-mark">b<span>.</span></span><strong>bouncer<span>.</span></strong></a>
         <div class="breadcrumb"><span>Workspace</span><span class="slash">/</span><strong>Overview</strong></div>
-        <div class="top-actions"><span class="network"><span class="status-dot"></span> TESTNET</span><a class="top-proof" href="https://testnet.nearblocks.io/address/bouncer-42dcdfb7.testnet" target="_blank" rel="noopener noreferrer">View contract <svg><use href="#i-external"/></svg></a></div>
+        <div class="top-actions"><button class="tour-link" type="button" data-open-tour>Take a tour</button><span class="network"><span class="status-dot"></span> TESTNET</span><a class="top-proof" href="https://testnet.nearblocks.io/address/bouncer-42dcdfb7.testnet" target="_blank" rel="noopener noreferrer">View contract <svg><use href="#i-external"/></svg></a></div>
       </header>
-      <nav class="mobile-nav" aria-label="Page sections"><a href="#overview">Overview</a><a href="#how-it-works">How it works</a><a href="#run-story">Real run</a><a href="#guardrails">Safety</a><a href="#roadmap">What’s next</a></nav>
+      <nav class="mobile-nav" aria-label="Page sections"><a href="#overview">Overview</a><a href="#connect">Wallet &amp; AI</a><a href="#how-it-works">How it works</a><a href="#run-story">Real run</a><a href="#guardrails">Safety</a><a href="#roadmap">What’s next</a></nav>
 
       <main class="main" id="overview">
         <div class="intro-row"><div><div class="eyebrow"><span class="eyebrow-line"></span> THE MULTI-RESOURCE AGENT ON NEAR</div><h1>An agent needs resources.<br><span>Bouncer helps it get them.</span></h1><p class="intro-copy">Give Bouncer a prepared list of resource needs. It requests quotes, pays under your rules, and gets results—across compute, storage and APIs.</p><div class="intro-actions"><a href="#run-story" class="button primary">See what it actually did <svg><use href="#i-arrow"/></svg></a><a href="#how-it-works" class="button secondary">How it works</a></div></div><div class="hero-art" aria-hidden="true"><div class="hero-orbit orbit-one"></div><div class="hero-orbit orbit-two"></div><div class="hero-spark spark-one">✳</div><div class="hero-spark spark-two">✦</div><div class="hero-chip chip-top"><svg><use href="#i-cpu"/></svg></div><div class="hero-chip chip-right"><svg><use href="#i-api"/></svg></div><div class="hero-chip chip-bottom"><svg><use href="#i-storage"/></svg></div><div class="hero-shield"><svg><use href="#i-shield"/></svg></div><span class="hero-caption">POLICY PROTECTED</span></div></div>
 
-        <div class="snapshot-note"><span class="snapshot-icon"><svg><use href="#i-check"/></svg></span><div><strong>Verified testnet snapshot · not a running agent</strong><span> Recorded 27 Oct 2026. The agent runs from the command line; this page is read-only.</span></div><a href="#proof">View proof <svg><use href="#i-arrow"/></svg></a></div>
+        <div class="snapshot-note"><span class="snapshot-icon"><svg><use href="#i-check"/></svg></span><div><strong>Verified testnet snapshot · not a running agent</strong><span> Recorded 27 Oct 2026. The agent runs separately; this page cannot place purchases.</span></div><a href="#proof">View proof <svg><use href="#i-arrow"/></svg></a></div>
+
+        <section class="section connect-section" id="connect">
+          <div class="section-heading"><div><div class="section-kicker">GET STARTED SAFELY</div><h2>Your wallet. Your assistant<span>.</span></h2><p>Explore the prototype with an optional testnet wallet, or give an MCP-compatible assistant read-only access to Bouncer.</p></div></div>
+          <div class="connect-grid">
+            <article class="connect-card" aria-labelledby="wallet-heading">
+              <div class="connect-card-head"><span class="connect-icon"><svg aria-hidden="true"><use href="#i-lock"/></svg></span><div><h3 id="wallet-heading">Connect a testnet wallet</h3><p>Optional · identity only</p></div><span class="access-pill">TESTNET</span></div>
+              <p class="connect-description">See your wallet-reported account here. Connecting does not create a vault, grant an agent access, sign a transaction, or spend funds.</p>
+              <label for="wallet-choice">Choose a wallet</label>
+              <div class="wallet-actions"><select id="wallet-choice" disabled><option value="meteor-wallet">Meteor Wallet · web &amp; mobile</option><option value="nightly-wallet">Nightly Wallet · extension</option><option value="ledger">Ledger · hardware</option></select><button class="button primary" id="wallet-connect" type="button" disabled>Connect wallet</button><button class="button secondary" id="wallet-disconnect" type="button" hidden>Disconnect</button></div>
+              <p id="wallet-status" class="connection-status" role="status" aria-live="polite">Checking if this site is safe for wallet connections…</p>
+              <p class="security-note">Never enter a seed phrase or private key into Bouncer. Only use a testnet wallet. Wallet sign-in has not yet been independently verified end to end.</p>
+            </article>
+            <article class="connect-card" aria-labelledby="assistant-heading">
+              <div class="connect-card-head"><span class="connect-icon assistant-icon"><svg aria-hidden="true"><use href="#i-api"/></svg></span><div><h3 id="assistant-heading">Bring your AI assistant</h3><p>Model Context Protocol · MCP</p></div><span class="access-pill">READ ONLY</span></div>
+              <p class="connect-description">A compatible MCP client can inspect testnet policies and preview configured resource quotes. It cannot make payments or change your rules.</p>
+              <div class="assistant-list"><span>Claude</span><span>Gemini</span><span>ChatGPT</span><span>+ others</span></div>
+              <p class="security-note">Gemini CLI and Claude Code passed local connection checks. ChatGPT web and other hosted assistants need HTTPS and compatible authentication; that setup is not available yet. Model conversations have not been tested.</p>
+              <details class="setup-details"><summary>How to connect an MCP client</summary><p>Install the project dependencies and launch Gemini CLI or Claude Code from the repository root; review and approve the project server if prompted. Other local clients can run <code>node</code> with the absolute path to <code>bouncer/mcp/server.mjs</code>. See the <a href="https://github.com/abdullahimujeeb0505-stack/Bouncer/blob/arena/ebb614bb-near-hub/bouncer/docs/MCP.md" target="_blank" rel="noopener noreferrer">MCP setup guide</a> (private repository access required). No wallet secret is needed.</p></details>
+            </article>
+          </div>
+        </section>
 
         <section class="section explain-section" id="how-it-works">
           <div class="section-kicker">FIRST, THE BIG PICTURE</div>
@@ -113,10 +137,18 @@
 
         <section class="section" id="proof"><div class="proof-panel"><div class="proof-copy"><div class="proof-icon"><svg><use href="#i-shield"/></svg></div><div><div class="section-kicker">DON’T TAKE OUR WORD FOR IT</div><h2>Follow the receipts<span>.</span></h2><p>See the testnet contract and transactions. The complete CI run is in the private project repository (access required).</p></div></div><div class="proof-actions"><a class="button primary" href="https://testnet.nearblocks.io/address/bouncer-42dcdfb7.testnet" target="_blank" rel="noopener noreferrer">Open contract <svg><use href="#i-external"/></svg></a><a class="button secondary" href="https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40558301848" target="_blank" rel="noopener noreferrer">View CI run <svg><use href="#i-external"/></svg></a></div></div></section>
 
-        <footer class="footer"><div><strong>bouncer<span>.</span></strong><span>Resources for agents, with boundaries.</span></div><p>Testnet prototype · Unaudited · No wallet connected · Not for real funds</p></footer>
+        <footer class="footer"><div><strong>bouncer<span>.</span></strong><span>Resources for agents, with boundaries.</span></div><p>Testnet prototype · Unaudited · Not for real funds</p></footer>
       </main>
     </div>
   </div>
+  <dialog class="tour-dialog" id="welcome-tour" aria-labelledby="tour-title" aria-describedby="tour-description">
+    <div class="tour-topline"><span class="brand-mark">b<span>.</span></span><span class="tour-count" id="tour-count">STEP 1 OF 4</span><button type="button" class="tour-close" id="tour-skip" aria-label="Skip the tour">×</button></div>
+    <div class="tour-progress" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
+    <div class="tour-copy" aria-live="polite"><div class="section-kicker" id="tour-kicker">WELCOME TO BOUNCER</div><h2 id="tour-title">Meet your resource agent.</h2><p id="tour-description">Bouncer helps an agent get compute, storage and API services while your on-chain rules guard its spending.</p><div class="tour-callout" id="tour-callout">Today, a person prepares the requests. This is an early testnet prototype—not an autonomous AI marketplace yet.</div></div>
+    <div class="tour-actions"><button class="button secondary" type="button" id="tour-back" disabled>Back</button><button class="button primary" type="button" id="tour-next">Next <svg aria-hidden="true"><use href="#i-arrow"/></svg></button></div>
+    <p class="tour-footnote">You can reopen this tour anytime from the top of the page.</p>
+  </dialog>
   <script type="module" src="./app.mjs"></script>
+  <script type="module" src="./wallet.bundle.js"></script>
 </body>
 </html>

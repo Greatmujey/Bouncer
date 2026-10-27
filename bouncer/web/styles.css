@@ -43,3 +43,43 @@
 @media(max-width:650px){.explain-lead{font-size:12px}.journey-grid{gap:9px}.journey-step{padding:13px;min-height:141px}.journey-step strong{font-size:11px}.journey-step p{font-size:11px}.explain-foot{font-size:11px}.story-tabs{grid-template-columns:repeat(3,minmax(0,1fr))}.story-tab{gap:6px;padding:10px 4px;font-size:11px}.story-tab svg{width:15px;height:15px}.story-content{padding:17px 15px}.story-top h3{font-size:17px}.story-verified{font-size:8px;padding:6px}.story-row p{font-size:12px}.story-footer{align-items:flex-start;flex-direction:column;gap:11px}.story-footer .button{width:100%}.readiness-grid{grid-template-columns:1fr}.readiness-card{padding:16px}.readiness-card li{font-size:12px}.vision-card{padding:18px}.vision-card p{font-size:12px}.vision-label{font-size:8px}}
 @media(max-width:350px){.story-verified{white-space:normal;text-align:center;max-width:120px}.story-tab{font-size:10px}.tab-check{display:none}.journey-step{min-height:155px}}
 @media(max-width:650px){.intro-copy,.explain-lead,.journey-step p,.story-row p,.story-footer p,.readiness-card li,.vision-card p,.under-note{font-size:13px}.snapshot-note div,.explain-foot{font-size:12px}.journey-step strong,.story-row strong,.readiness-heading{font-size:12px}.journey-step{min-height:158px}.section-heading p,.panel-copy{font-size:12px}}
+
+/* Optional, identity-only wallet connection and local MCP entry point. */
+[hidden]{display:none!important}
+.tour-link{border:0;background:transparent;padding:8px 0;color:#597451;font-size:11px;font-weight:750;cursor:pointer;white-space:nowrap}
+.tour-link:hover{color:#2f5b34}
+.connect-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.connect-card{min-width:0;background:#fff;border:1px solid var(--line);border-radius:14px;padding:20px}
+.connect-card-head{display:flex;gap:11px;align-items:center}
+.connect-card-head>div{min-width:0;flex:1}
+.connect-card h3{margin:0;color:#344939;font-size:14px;letter-spacing:-.25px}
+.connect-card-head p{color:#8d9a8e;font-size:10px;margin-top:5px}
+.connect-icon{display:grid;place-items:center;flex-shrink:0;background:#edf7e4;color:#689447;border-radius:10px;width:39px;height:39px}
+.connect-icon svg{width:19px;height:19px}.assistant-icon{background:#edf0fb;color:#7284b5}
+.access-pill{font-size:8px;font-weight:800;letter-spacing:.5px;color:#729058;background:#f0f7eb;padding:6px 8px;border-radius:100px;white-space:nowrap}
+.connect-description{font-size:12px;line-height:1.7;color:#657568;margin:16px 0 14px}
+.connect-card label{display:block;font-size:11px;font-weight:700;color:#506454;margin:0 0 7px}
+.wallet-actions{display:flex;gap:8px;align-items:stretch}
+.wallet-actions select{min-width:0;flex:1;border:1px solid #dfe8db;background:#f8faf7;border-radius:8px;padding:0 10px;color:#405247;font:inherit;font-size:11px;min-height:40px}
+.wallet-actions select:focus-visible{outline:3px solid #7cad31;outline-offset:2px}
+.wallet-actions .button{min-height:40px;white-space:nowrap}
+.connection-status{font-size:11px;line-height:1.6;color:#526d4e;margin:11px 0 0;overflow-wrap:anywhere}
+.security-note{font-size:11px;line-height:1.65;color:#819083;margin:12px 0 0}
+.assistant-list{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 12px}
+.assistant-list span{border:1px solid #e4ebe3;background:#f9fbf8;color:#637665;border-radius:7px;font-size:10px;font-weight:700;padding:7px 9px}
+.setup-details{border-top:1px solid #edf1eb;margin-top:14px;padding-top:12px;font-size:11px;color:#637765;line-height:1.65}
+.setup-details summary{color:#567d43;font-weight:750;cursor:pointer}.setup-details p{margin-top:9px}.setup-details code{overflow-wrap:anywhere;color:#3b5d3e}.setup-details a{text-decoration:underline;text-underline-offset:2px}
+
+/* Native modal dialog keeps keyboard focus inside and supports Escape. */
+.tour-dialog{width:min(510px,calc(100vw - 32px));max-height:calc(100dvh - 32px);overflow:auto;border:1px solid #dfe9db;border-radius:18px;background:#fff;padding:23px 25px 21px;color:var(--ink);box-shadow:0 24px 80px #10241644}
+.tour-dialog::backdrop{background:rgba(17,31,21,.66)}
+.tour-topline{display:flex;align-items:center;gap:12px}.tour-topline .brand-mark{width:34px;height:34px;font-size:25px;border-radius:10px}
+.tour-count{font-size:10px;font-weight:800;letter-spacing:1px;color:#91a38e;flex:1}
+.tour-close{border:0;background:#f3f7f1;color:#60765e;border-radius:8px;width:36px;height:36px;font-size:23px;line-height:1;cursor:pointer}
+.tour-progress{display:flex;gap:6px;margin:22px 0 25px}.tour-progress span{height:4px;flex:1;background:#eaf0e7;border-radius:3px}.tour-progress span.active{background:#99c856}
+.tour-copy h2{font-size:27px;letter-spacing:-1px;margin:9px 0 11px}.tour-copy>p{font-size:14px;line-height:1.7;color:#647569}
+.tour-callout{margin-top:18px;border:1px solid #e4eddd;border-radius:10px;background:#f4f9ef;padding:13px 14px;font-size:12px;line-height:1.65;color:#5b7656}
+.tour-actions{display:flex;gap:9px;margin-top:23px}.tour-actions .button{min-height:42px;min-width:94px}.tour-actions #tour-next{margin-left:auto;min-width:115px}
+.tour-footnote{font-size:10px;line-height:1.5;color:#9aa99b;margin-top:14px}
+@media(max-width:900px){.top-actions{gap:15px}}
+@media(max-width:650px){.top-actions{gap:13px}.tour-link{font-size:11px}.connect-grid{grid-template-columns:1fr}.connect-card{padding:17px}.connect-description,.security-note,.connection-status,.setup-details{font-size:12px}.wallet-actions{flex-wrap:wrap}.wallet-actions select{flex-basis:100%;min-height:44px}.wallet-actions .button{min-height:44px;flex:1}.tour-dialog{padding:20px}.tour-copy h2{font-size:24px}.tour-copy>p{font-size:13px}.tour-callout{font-size:12px}}

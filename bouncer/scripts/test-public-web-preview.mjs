@@ -17,6 +17,13 @@ try {
   page.on('pageerror', error => pageErrors.push(error.message));
   const response = await page.goto(url, { waitUntil: 'networkidle', timeout: 45_000 });
   assert.equal(response.status(), 200);
+  assert.equal(await page.locator('#welcome-tour').evaluate(el => el.open), true);
+  assert.match(await page.locator('#tour-count').innerText(), /STEP 1 OF 4/);
+  await page.locator('#tour-next').click();
+  assert.match(await page.locator('#tour-title').innerText(), /need to a result/);
+  await page.locator('#tour-skip').click();
+  assert.equal(await page.locator('#wallet-connect').isDisabled(), true, 'shared-origin guest previews must not enable wallets');
+  assert.match(await page.locator('#wallet-status').innerText(), /disabled here/);
   assert.equal(await page.locator('.resource-card').count(), 3);
   assert.deepEqual(await page.locator('.resource-amount').allInnerTexts(), ['0.1 wNEAR', '1.5 storage credits', '2 API credits']);
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'mobile page overflows');
@@ -40,5 +47,5 @@ try {
   const status = await page.locator('#rpc-status').innerText();
   if (!/Current recorded vault balances loaded|Couldn’t reach the public testnet RPC/.test(status)) throw new Error(`Unexpected RPC status: ${status}`);
   console.log(`Mobile layout passed; browser RPC: ${status}`);
-  console.log(`::notice title=Bouncer mobile browser test::Three cards and interactive recorded results work without overflow. ${status}`);
+  console.log(`::notice title=Bouncer mobile browser test::Tour, shared-host wallet safety and interactive recorded results work without overflow. ${status}`);
 } finally { await browser.close(); }

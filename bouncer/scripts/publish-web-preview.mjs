@@ -13,7 +13,7 @@ const web = fileURLToPath(new URL('../web/', import.meta.url));
 const host = 'https://www.madethis.website';
 let ttlSeconds = 604800; // Prefer seven days; older hosts support only 24 hours.
 const zip = path.join(os.tmpdir(), `bouncer-web-preview-${process.pid}.zip`);
-const files = ['index.html', 'styles.css', 'favicon.svg', 'evidence.mjs', 'app.mjs'];
+const files = ['index.html', 'styles.css', 'favicon.svg', 'evidence.mjs', 'app.mjs', 'tour.mjs', 'wallet.bundle.js'];
 
 async function postJson(route, body) {
   const response = await fetch(`${host}${route}`, {
@@ -57,7 +57,7 @@ async function main() {
     throw new Error(`Unexpected preview host result: ${JSON.stringify(fin)}`);
   }
   const url = `${host}${fin.url}`;
-  for (const [file, expectedType] of [['', 'text/html'], ['styles.css', 'text/css'], ['app.mjs', 'javascript'], ['evidence.mjs', 'javascript']]) {
+  for (const [file, expectedType] of [['', 'text/html'], ['styles.css', 'text/css'], ['app.mjs', 'javascript'], ['evidence.mjs', 'javascript'], ['tour.mjs', 'javascript'], ['wallet.bundle.js', 'javascript']]) {
     const response = await fetch(url + file, { signal: AbortSignal.timeout(30_000) });
     if (!response.ok || !response.headers.get('content-type')?.includes(expectedType)) {
       throw new Error(`Preview ${file || 'index.html'} is not reachable with the expected content type (HTTP ${response.status})`);

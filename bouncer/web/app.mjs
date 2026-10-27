@@ -1,4 +1,7 @@
 import { RUN, explorerTx, formatUnits, readCurrentBalances, shortId } from './evidence.mjs';
+import { setupTour } from './tour.mjs';
+
+setupTour();
 
 const grid = document.querySelector('#resource-grid');
 const status = document.querySelector('#rpc-status');

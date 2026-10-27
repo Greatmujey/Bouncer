@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "bouncer": {
+      "command": "node",
+      "args": ["bouncer/mcp/server.mjs"],
+      "trust": false
+    }
+  }
+}
