@@ -10,6 +10,9 @@ jobs:
   js-tests:
     name: JavaScript tests
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: bouncer
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -17,10 +20,8 @@ jobs:
           node-version: '22'
           cache: 'npm'
           cache-dependency-path: bouncer/package-lock.json
-      - working-directory: bouncer
-        run: npm ci
-      - working-directory: bouncer
-        run: npm test
+      - run: npm ci || npm install
+      - run: npm test
 
   build-contract:
     name: Build Rust contract (wasm)
@@ -32,10 +33,11 @@ jobs:
           rustup update stable --no-self-update
           rustup target add wasm32-unknown-unknown
           rustup component add rustfmt clippy
+          rustc --version && cargo --version
       - name: Build wasm (release, opt-level=z)
         working-directory: bouncer/contracts/bouncer
-        run: cargo build --release --target wasm32-unknown-unknown
-      - name: Run Rust tests
+        run: RUSTFLAGS="-C link-arg=-s" cargo build --release --target wasm32-unknown-unknown -v
+      - name: Run Rust unit tests
         working-directory: bouncer/contracts/bouncer
         run: cargo test --lib
       - name: Copy wasm to artifact dir
