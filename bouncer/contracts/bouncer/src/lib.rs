@@ -5,15 +5,6 @@ use near_sdk::{env, ext_contract, near, AccountId, Gas, NearToken, PanicOnDefaul
 const ONE_YOCTO: NearToken = NearToken::from_yoctonear(1);
 const GAS_FOR_FT_TRANSFER: Gas = Gas::from_tgas(20);
 
-#[near(serializers = [json])]
-#[derive(Clone)]
-pub struct Policy {
-    pub label: String,
-    pub token: AccountId,
-    pub per_tx_cap: u128,
-    pub payee_allowlist: Vec<AccountId>,
-}
-
 #[ext_contract(ext_ft)]
 trait ExtFt {
     fn ft_transfer(&mut self, receiver_id: AccountId, amount: U128, memo: Option<String>);
@@ -23,7 +14,8 @@ trait ExtFt {
 #[derive(PanicOnDefault)]
 pub struct Bouncer {
     owner: AccountId,
-    policies: LookupMap<String, Policy>,
+    token: LookupMap<String, AccountId>,
+    cap: LookupMap<String, u128>,
     balances: LookupMap<AccountId, u128>,
 }
 
@@ -34,21 +26,19 @@ impl Bouncer {
         assert!(!owner.as_str().is_empty());
         Self {
             owner,
-            policies: LookupMap::new(b"p"),
+            token: LookupMap::new(b"t"),
+            cap: LookupMap::new(b"c"),
             balances: LookupMap::new(b"b"),
         }
     }
 
     #[payable]
-    pub fn set_policy(&mut self, policy_id: String, policy: Policy) {
-        assert!(env::attached_deposit() == ONE_YOCTO, "requires 1 yoctoNEAR (full-access only)");
-        assert!(env::predecessor_account_id() == self.owner, "owner only");
-        assert!(policy.per_tx_cap > 0, "cap must be > 0");
-        self.policies.insert(policy_id, policy);
-    }
-
-    pub fn get_policy(&self, policy_id: String) -> Option<Policy> {
-        self.policies.get(&policy_id).cloned()
+    pub fn set_policy(&mut self, policy_id: String, token: AccountId, per_tx_cap: U128) {
+        assert!(env::attached_deposit() == ONE_YOCTO, "requires 1 yoctoNEAR");
+        assert!(env::predecessor_account_id() == self.owner);
+        assert!(per_tx_cap.0 > 0);
+        self.token.insert(policy_id.clone(), token);
+        self.cap.insert(policy_id, per_tx_cap.0);
     }
 
     pub fn vault_balance(&self, token: AccountId) -> U128 {
@@ -79,29 +69,22 @@ impl Bouncer {
 
     pub fn execute(&mut self, policy_id: String, payee: AccountId, amount: U128, memo: String) -> Promise {
         let amt = amount.0;
-        let p = self.policies.get(&policy_id).cloned().expect("no such policy");
-        assert!(amt > 0 && amt <= p.per_tx_cap, "amount out of range");
-        if !p.payee_allowlist.is_empty() {
-            assert!(p.payee_allowlist.contains(&payee), "payee not in allowlist");
-        }
-        let bal = self.balances.get(&p.token).cloned().unwrap_or(0);
-        assert!(bal >= amt, "insufficient balance");
-        self.balances.insert(p.token.clone(), bal - amt);
-        ext_ft::ext(p.token)
+        let c = self.cap.get(&policy_id).cloned().expect("no policy");
+        let t = self.token.get(&policy_id).cloned().expect("no policy token");
+        assert!(amt > 0 && amt <= c, "amount out of range");
+        let bal = self.balances.get(&t).cloned().unwrap_or(0);
+        assert!(bal >= amt, "insufficient");
+        self.balances.insert(t.clone(), bal - amt);
+        ext_ft::ext(t)
             .with_attached_deposit(ONE_YOCTO)
             .with_static_gas(GAS_FOR_FT_TRANSFER)
             .ft_transfer(payee, amount, Some(memo))
     }
 
-    pub fn check(&self, policy_id: String, payee: AccountId, amount: U128) -> (bool, String) {
-        let p = match self.policies.get(&policy_id) { Some(x) => x.clone(), None => return (false, "no such policy".into()) };
-        if amount.0 == 0 { return (false, "zero".into()); }
-        if amount.0 > p.per_tx_cap { return (false, "over cap".into()); }
-        if !p.payee_allowlist.is_empty() && !p.payee_allowlist.contains(&payee) {
-            return (false, "payee not in allowlist".into());
-        }
-        let bal = self.balances.get(&p.token).cloned().unwrap_or(0);
-        if bal < amount.0 { return (false, format!("vault {}; need {}", bal, amount.0)); }
+    pub fn check(&self, policy_id: String, amount: U128) -> (bool, String) {
+        let c = self.cap.get(&policy_id).cloned().unwrap_or(0);
+        if c == 0 { return (false, "no policy".into()); }
+        if amount.0 > c { return (false, "over cap".into()); }
         (true, "ok".into())
     }
 }
