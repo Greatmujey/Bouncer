@@ -1,4 +1,6 @@
 # BOUNCER v2 — MULTI-TRACK WIN PLAN
+
+> **Planning document:** This describes the intended product, not verified current functionality. See the [current status](../../README.md) and [threat model](THREAT_MODEL.md).
 ## The on-chain comptroller for AI agents
 
 **The one-sentence pitch:**

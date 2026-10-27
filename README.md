@@ -6,6 +6,12 @@ owner-defined spending policies. The current prototype implements the vault and
 policy checks; the multi-resource agent and restricted-key flow are **still in
 progress**. It is unaudited testnet software, not suitable for real funds.
 
+## Target tracks
+
+The planned multi-resource agent targets Autonomous Business, AI Security &
+Defense, and Agent Economy first. Real-World Money, Unstoppable DeFi and
+AI Swarms are potential extensions, not completed integrations.
+
 ## What works in the current contract
 
 - Accepts NEP-141 token deposits through `ft_transfer_call`.
