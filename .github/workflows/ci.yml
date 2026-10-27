@@ -24,36 +24,32 @@ jobs:
   build-contract:
     name: Build Rust contract (wasm)
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
-      - name: Build & find wasm
+      - name: Build
         run: |
-          set -x
           cd bouncer/contracts/bouncer
-          pwd
-          ls
-          RUSTFLAGS="-C link-arg=-s" cargo build --target wasm32-unknown-unknown -v 2>&1 | tee /tmp/build.log | tail -200
-          echo "=== FIND WASM ==="
-          find /home/runner -name "*.wasm" 2>&1 | head -30
-          ls target/ 2>&1 || true
-          ls target/wasm32-unknown-unknown/ 2>&1 || true
-          ls target/wasm32-unknown-unknown/debug/ 2>&1 || true
-          mkdir -p /home/runner/work/_dist
-          find /home/runner -name "bouncer.wasm" | head -1 | xargs -I{} cp {} /home/runner/work/_dist/bouncer.wasm
-          ls -la /home/runner/work/_dist/
-          wc -c /home/runner/work/_dist/bouncer.wasm || echo "NO WASM"
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: bouncer-wasm
-          path: /home/runner/work/_dist/bouncer.wasm
-          if-no-files-found: error
-      - uses: actions/upload-artifact@v4
-        if: failure()
-        with:
-          name: build-log
-          path: /tmp/build.log
-          if-no-files-found: ignore
+          RUSTFLAGS="-C link-arg=-s" cargo build --target wasm32-unknown-unknown -v 2>&1 | tail -100
+          cp target/wasm32-unknown-unknown/debug/bouncer.wasm ../../../bouncer.wasm
+          ls -la ../../../bouncer.wasm
+          cd ../../..
+          ls -la bouncer.wasm
+          wc -c bouncer.wasm
+      - name: Commit wasm back to branch
+        run: |
+          git config user.name "CI Bot"
+          git config user.email "ci@bouncer.local"
+          git add bouncer.wasm -f
+          if git diff --cached --quiet; then
+            echo "No change to bouncer.wasm"
+          else
+            git commit -m "chore(ci): attach bouncer.wasm build artifact"
+            git push
+          fi
