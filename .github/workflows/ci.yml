@@ -35,9 +35,9 @@ jobs:
         working-directory: bouncer/contracts/bouncer
         run: cargo check --target wasm32-unknown-unknown --message-format=short 2>&1 | tail -80
         continue-on-error: true
-      - name: Build wasm (release, opt-level=z)
+      - name: Build wasm (release)
         working-directory: bouncer/contracts/bouncer
-        run: RUSTFLAGS="-C link-arg=-s" cargo build --release --target wasm32-unknown-unknown
+        run: cargo build --release --target wasm32-unknown-unknown
       - name: Copy wasm to artifact dir
         run: |
           mkdir -p bouncer/contracts/bouncer/res
