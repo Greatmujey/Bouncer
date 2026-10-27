@@ -1,25 +1,28 @@
 // one-shot deploy: creates a funded testnet account via the NEAR helper (faucet),
 // deploys bouncer.wasm from the repo root, and initializes. No login or faucet website needed.
 //
-// Run from the repo root (Codespaces default):  node bouncer/deploy.mjs
+// Run from ANY directory in the repo:  node bouncer/deploy.mjs
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { fileURLToPath } from 'url';
 import crypto from 'crypto';
 import nearApi from 'near-api-js';
 
 const { KeyPair, keyStores, InMemorySigner, Account, Connection, JsonRpcProvider } = nearApi;
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const REPO_ROOT = path.resolve(__dirname, '..');
+
 const NETWORK = 'testnet';
 const RPC = 'https://rpc.testnet.near.org';
 const HELPER = 'https://helper.testnet.near.org';
-const WASM_PATH = path.resolve('bouncer.wasm');
+const WASM_PATH = path.join(REPO_ROOT, 'bouncer.wasm');
 
 if (!fs.existsSync(WASM_PATH)) {
-  console.error('bouncer.wasm not found in repo root. Run from repo root.');
+  console.error('bouncer.wasm not found at', WASM_PATH, '- are you in the repo?');
   process.exit(1);
 }
 const WASM = fs.readFileSync(WASM_PATH);
-
 const suffix = crypto.randomBytes(3).toString('hex');
 const ACCOUNT_ID = `bouncer-${suffix}.testnet`;
 const keystore = new keyStores.InMemoryKeyStore();
@@ -32,6 +35,13 @@ async function http(url, opts = {}) {
   });
   const txt = await res.text();
   try { return JSON.parse(txt); } catch { return txt; }
+}
+
+function toHash(id) {
+  // near-api-js returns outcome id as Uint8Array; convert to base58
+  return nearApi.utils.serialize.base_decode
+    ? nearApi.utils.serialize.base_encode(id)
+    : (typeof id === 'string' ? id : id.toString('base64'));
 }
 
 (async () => {
@@ -54,7 +64,7 @@ async function http(url, opts = {}) {
 
   console.log(`==> Deploying bouncer.wasm (${WASM.length} bytes)...`);
   const dtx = await account.deployContract(WASM);
-  console.log('    deploy tx:', Buffer.from(dtx.transaction_outcome.id).toString('hex'));
+  console.log('    deploy tx:', dtx.transaction_outcome.id);
 
   console.log(`==> Initializing new({owner:"${ACCOUNT_ID}"})...`);
   const itx = await account.functionCall({
@@ -64,7 +74,7 @@ async function http(url, opts = {}) {
     attachedDeposit: BigInt(0),
     gas: BigInt('100000000000000'),
   });
-  console.log('    init tx:', Buffer.from(itx.transaction_outcome.id).toString('hex'));
+  console.log('    init tx:', itx.transaction_outcome.id);
 
   const bal = await account.viewFunction({
     contractId: ACCOUNT_ID,
@@ -73,7 +83,7 @@ async function http(url, opts = {}) {
   });
   console.log('    vault_balance(usdc):', bal);
 
-  // persist key to ~/.near-credentials so `near` CLI and other scripts can sign
+  // persist key to ~/.near-credentials so other scripts can sign
   const keyDir = path.join(os.homedir(), '.near-credentials', NETWORK);
   fs.mkdirSync(keyDir, { recursive: true });
   fs.writeFileSync(path.join(keyDir, `${ACCOUNT_ID}.json`), JSON.stringify({
@@ -82,8 +92,7 @@ async function http(url, opts = {}) {
     private_key: keyPair.toString(),
   }, null, 2));
 
-  // stash the contract id for demo scripts
-  fs.writeFileSync('/tmp/bouncer_id', ACCOUNT_ID);
+  // stash contract id for demo script
   fs.writeFileSync(path.join(os.homedir(), '.bouncer_id'), ACCOUNT_ID);
 
   console.log();
@@ -92,4 +101,8 @@ async function http(url, opts = {}) {
   console.log(`Explorer:  https://testnet.nearblocks.io/address/${ACCOUNT_ID}`);
   console.log(`Key saved: ~/.near-credentials/testnet/${ACCOUNT_ID}.json`);
   console.log(`Next:      node bouncer/demo.mjs`);
-})().catch(e => { console.error(e); process.exit(1); });
+})().catch(e => {
+  console.error('\n!!! DEPLOY FAILED !!!');
+  console.error(e && e.message ? e.message : e);
+  process.exit(1);
+});
