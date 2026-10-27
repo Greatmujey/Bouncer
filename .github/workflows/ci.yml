@@ -24,32 +24,43 @@ jobs:
   build-contract:
     name: Build Rust contract (wasm)
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
-      - name: Build and upload log
+      - name: Build
         run: |
-          set +e
           cd bouncer/contracts/bouncer
           rm -f .cargo/config.toml
           RUSTFLAGS="-C link-arg=-s" cargo build --target wasm32-unknown-unknown -v > /tmp/build.log 2>&1
           EC=$?
-          echo "exit=$EC"
-          echo "== tail of build log =="
-          tail -80 /tmp/build.log
-          echo "== find wasm =="
+          echo "build exit code: $EC"
+          echo "--- last 150 lines of build log ---"
+          tail -150 /tmp/build.log
+          echo "--- searching for wasm ---"
           find /home/runner -name "*.wasm" 2>&1 | head -30
-          echo "== list target dir =="
-          ls -la target/ 2>&1
-          ls -la target/wasm32-unknown-unknown/ 2>&1 || true
-          ls -la target/wasm32-unknown-unknown/debug/ 2>&1 || true
-          echo "=="
+          echo "--- ls target ---"
+          ls -la target/wasm32-unknown-unknown/debug/ 2>&1 | head -30
           exit $EC
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: build-log
-          path: /tmp/build.log
-          if-no-files-found: ignore
+      - name: Copy + wasm-opt + commit
+        run: |
+          set -e
+          # Find wasm
+          WASM=$(find /home/runner/work -name "bouncer.wasm" | head -1)
+          if [ -z "$WASM" ]; then WASM=$(find /home/runner -name "bouncer.wasm" | head -1); fi
+          echo "WASM=$WASM"
+          test -n "$WASM"
+          cp "$WASM" ./bouncer.wasm
+          sudo apt-get update -qq && sudo apt-get install -y binaryen
+          wasm-opt -Os -o bouncer.opt.wasm bouncer.wasm && mv bouncer.opt.wasm bouncer.wasm
+          ls -lh bouncer.wasm
+          git config user.name "CI Bot"
+          git config user.email "ci@bouncer.local"
+          git add bouncer.wasm -f
+          if ! git diff --cached --quiet; then
+            git commit -m "chore(ci): attach bouncer.wasm"
+            git push
+          fi
