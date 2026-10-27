@@ -9,6 +9,11 @@ This is unaudited testnet software, not suitable for real funds.
 
 ## Website preview (read-only)
 
+**[Open Bouncer](https://www.madethis.website/s/fvp6jvpr/)** — a public,
+temporary preview hosted by madethis.website, expiring **3 November 2026 at
+18:36 UTC**. Anyone with the link can view it. It is a snapshot, not a
+production deployment, and the private repository remains private.
+
 `bouncer/web/` is a mobile-friendly static view of a **recorded** v4 testnet
 run, with links to the three payment transactions and the separate refund test.
 The two credit tokens are synthetic and fulfillment was self-hosted. The site
