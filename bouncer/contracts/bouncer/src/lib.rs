@@ -7,9 +7,13 @@ const GAS_FOR_FT_TRANSFER: Gas = Gas::from_tgas(15);
 const GAS_FOR_RESOLVE: Gas = Gas::from_tgas(15);
 const HOUR_NS: u64 = 3_600_000_000_000;
 const DAY_HOURS: u64 = 24;
+const DAY_NS: u64 = HOUR_NS * DAY_HOURS;
 
 #[ext_contract(ext_ft)]
-trait ExtFt { fn ft_transfer(&mut self, receiver_id: AccountId, amount: U128, memo: Option<String>); }
+trait ExtFt {
+    fn ft_transfer(&mut self, receiver_id: AccountId, amount: U128, memo: Option<String>);
+}
+
 #[ext_contract(ext_self)]
 trait ExtSelf {
     fn after_execute(&mut self, token: AccountId, amount: U128);
@@ -23,25 +27,35 @@ pub struct Bouncer {
     token_of: LookupMap<String, AccountId>,
     cap_of: LookupMap<String, u128>,
     daily_limit_of: LookupMap<String, u128>,
+    // allow: "policy_id:payee" -> true
     allow: LookupMap<String, bool>,
     allow_count: LookupMap<String, u32>,
     balances: LookupMap<AccountId, u128>,
+    // bucket_key "policy_id:hour_bucket" -> amount spent in that hour
     hourly_spend: LookupMap<String, u128>,
 }
 
-fn allow_key(pid: &str, p: &str) -> String { format!("{}:{}", pid, p) }
-fn bucket_key(pid: &str, b: u64) -> String { format!("{}:b{}", pid, b) }
+fn allow_key(policy_id: &str, payee: &str) -> String { format!("{}:{}", policy_id, payee) }
+fn bucket_key(policy_id: &str, bucket: u64) -> String { format!("{}:b{}", policy_id, bucket) }
 
-fn rolling_24h(s: &LookupMap<String, u128>, pid: &str, now: u64) -> u128 {
-    let cur = now / HOUR_NS;
-    let mut t = 0u128;
-    for i in 0..DAY_HOURS { if let Some(v) = s.get(&bucket_key(pid, cur.saturating_sub(i))) { t = t.saturating_add(*v); } }
-    t
+/// Sum the last 24 hourly buckets; prune older ones lazily.
+fn rolling_24h_spent(store: &LookupMap<String, u128>, policy_id: &str, now_ns: u64) -> u128 {
+    let cur_bucket = now_ns / HOUR_NS;
+    let mut total: u128 = 0;
+    for i in 0..DAY_HOURS {
+        let b = cur_bucket.saturating_sub(i);
+        if let Some(v) = store.get(&bucket_key(policy_id, b)) {
+            total = total.saturating_add(*v);
+        }
+    }
+    total
 }
-fn credit_hour(s: &mut LookupMap<String, u128>, pid: &str, now: u64, amt: u128) {
-    let k = bucket_key(pid, now / HOUR_NS);
-    let p = s.get(&k).cloned().unwrap_or(0);
-    s.insert(k, p.saturating_add(amt));
+
+fn credit_hour(store: &mut LookupMap<String, u128>, policy_id: &str, now_ns: u64, amt: u128) {
+    let b = now_ns / HOUR_NS;
+    let k = bucket_key(policy_id, b);
+    let prev = store.get(&k).cloned().unwrap_or(0);
+    store.insert(k, prev.saturating_add(amt));
 }
 
 #[near]
@@ -51,27 +65,40 @@ impl Bouncer {
         assert!(!owner.as_str().is_empty());
         Self {
             owner,
-            token_of: LookupMap::new(b"t"), cap_of: LookupMap::new(b"c"), daily_limit_of: LookupMap::new(b"d"),
-            allow: LookupMap::new(b"a"), allow_count: LookupMap::new(b"n"),
-            balances: LookupMap::new(b"b"), hourly_spend: LookupMap::new(b"h"),
+            token_of: LookupMap::new(b"t"),
+            cap_of: LookupMap::new(b"c"),
+            daily_limit_of: LookupMap::new(b"d"),
+            allow: LookupMap::new(b"a"),
+            allow_count: LookupMap::new(b"n"),
+            balances: LookupMap::new(b"b"),
+            hourly_spend: LookupMap::new(b"h"),
         }
     }
 
     #[payable]
-    pub fn set_policy(&mut self, policy_id: String, token: AccountId, per_tx_cap: U128, daily_limit: Option<U128>) {
-        assert!(env::attached_deposit() == ONE_YOCTO, "requires 1 yoctoNEAR (full-access only)");
-        assert!(env::predecessor_account_id() == self.owner);
+    pub fn set_policy(
+        &mut self,
+        policy_id: String,
+        token: AccountId,
+        per_tx_cap: U128,
+        daily_limit: Option<U128>,
+    ) {
+        assert!(env::attached_deposit() == ONE_YOCTO, "requires 1 yoctoNEAR (full-access key only)");
+        assert!(env::predecessor_account_id() == self.owner, "owner only");
         assert!(per_tx_cap.0 > 0);
         self.token_of.insert(policy_id.clone(), token);
         self.cap_of.insert(policy_id.clone(), per_tx_cap.0);
-        if let Some(dl) = daily_limit { assert!(dl.0 > 0); self.daily_limit_of.insert(policy_id, dl.0); }
+        if let Some(dl) = daily_limit {
+            assert!(dl.0 > 0);
+            self.daily_limit_of.insert(policy_id, dl.0);
+        }
     }
 
     #[payable]
     pub fn allow_payee(&mut self, policy_id: String, payee: AccountId) {
         assert!(env::attached_deposit() == ONE_YOCTO);
         assert!(env::predecessor_account_id() == self.owner);
-        assert!(self.cap_of.contains_key(&policy_id));
+        assert!(self.cap_of.contains_key(&policy_id), "no such policy");
         let k = allow_key(&policy_id, payee.as_str());
         if self.allow.get(&k).is_none() {
             let n = self.allow_count.get(&policy_id).cloned().unwrap_or(0);
@@ -91,33 +118,47 @@ impl Bouncer {
         }
     }
 
-    pub fn vault_balance(&self, token: AccountId) -> U128 { U128(self.balances.get(&token).cloned().unwrap_or(0)) }
-    pub fn daily_spent(&self, policy_id: String) -> U128 { U128(rolling_24h(&self.hourly_spend, &policy_id, env::block_timestamp())) }
+    pub fn vault_balance(&self, token: AccountId) -> U128 {
+        U128(self.balances.get(&token).cloned().unwrap_or(0))
+    }
+
+    pub fn daily_spent(&self, policy_id: String) -> U128 {
+        U128(rolling_24h_spent(&self.hourly_spend, &policy_id, env::block_timestamp()))
+    }
 
     pub fn ft_on_transfer(&mut self, sender_id: AccountId, amount: U128, msg: String) -> U128 {
         let token = env::predecessor_account_id();
+        let amt = amount.0;
         let bal = self.balances.get(&token).cloned().unwrap_or(0);
-        self.balances.insert(token.clone(), bal + amount.0);
-        env::log_str(&format!("BOUNCER deposit {} from {} amt {} msg {}", token, sender_id, amount.0, msg));
+        self.balances.insert(token.clone(), bal + amt);
+        env::log_str(&format!("BOUNCER deposit {} from {} amt {} msg {}", token, sender_id, amt, msg));
         U128(0)
     }
 
     #[payable]
     pub fn withdraw(&mut self, token: AccountId, amount: U128) -> Promise {
         assert!(env::attached_deposit() == ONE_YOCTO);
-        assert!(env::predecessor_account_id() == self.owner);
+        assert!(env::predecessor_account_id() == self.owner, "owner only");
+        let amt = amount.0;
         let bal = self.balances.get(&token).cloned().unwrap_or(0);
-        assert!(amount.0 <= bal);
-        self.balances.insert(token.clone(), bal - amount.0);
-        ext_ft::ext(token.clone()).with_attached_deposit(ONE_YOCTO).with_static_gas(GAS_FOR_FT_TRANSFER)
+        assert!(amt <= bal, "insufficient");
+        self.balances.insert(token.clone(), bal - amt);
+        ext_ft::ext(token.clone())
+            .with_attached_deposit(ONE_YOCTO)
+            .with_static_gas(GAS_FOR_FT_TRANSFER)
             .ft_transfer(self.owner.clone(), amount, Some("bouncer:withdraw".into()))
-            .then(ext_self::ext(env::current_account_id()).with_static_gas(GAS_FOR_RESOLVE).after_withdraw(token, amount))
+            .then(
+                ext_self::ext(env::current_account_id())
+                    .with_static_gas(GAS_FOR_RESOLVE)
+                    .after_withdraw(token, amount),
+            )
     }
 
     pub fn execute(&mut self, policy_id: String, payee: AccountId, amount: U128, memo: String) -> Promise {
+        let amt = amount.0;
         let cap = self.cap_of.get(&policy_id).cloned().expect("no policy");
         let token = self.token_of.get(&policy_id).cloned().expect("no token");
-        assert!(amount.0 > 0 && amount.0 <= cap, "amount out of per-tx range");
+        assert!(amt > 0 && amt <= cap, "amount out of per-tx range");
         let n = self.allow_count.get(&policy_id).cloned().unwrap_or(0);
         if n > 0 {
             let k = allow_key(&policy_id, payee.as_str());
@@ -125,31 +166,41 @@ impl Bouncer {
         }
         let now = env::block_timestamp();
         if let Some(limit) = self.daily_limit_of.get(&policy_id).cloned() {
-            let spent = rolling_24h(&self.hourly_spend, &policy_id, now);
-            assert!(spent.saturating_add(amount.0) <= limit, "over 24h limit");
+            let spent = rolling_24h_spent(&self.hourly_spend, &policy_id, now);
+            assert!(spent.saturating_add(amt) <= limit, "over 24h limit");
         }
         let bal = self.balances.get(&token).cloned().unwrap_or(0);
-        assert!(bal >= amount.0, "insufficient vault balance");
-        self.balances.insert(token.clone(), bal - amount.0);
-        credit_hour(&mut self.hourly_spend, &policy_id, now, amount.0);
-        ext_ft::ext(token).with_attached_deposit(ONE_YOCTO).with_static_gas(GAS_FOR_FT_TRANSFER)
+        assert!(bal >= amt, "insufficient vault balance");
+        self.balances.insert(token.clone(), bal - amt);
+        credit_hour(&mut self.hourly_spend, &policy_id, now, amt);
+        ext_ft::ext(token.clone())
+            .with_attached_deposit(ONE_YOCTO)
+            .with_static_gas(GAS_FOR_FT_TRANSFER)
             .ft_transfer(payee, amount, Some(memo))
-            .then(ext_self::ext(env::current_account_id()).with_static_gas(GAS_FOR_RESOLVE).after_execute(token, amount))
+            .then(
+                ext_self::ext(env::current_account_id())
+                    .with_static_gas(GAS_FOR_RESOLVE)
+                    .after_execute(token, amount),
+            )
     }
 
     #[private]
     pub fn after_execute(&mut self, token: AccountId, amount: U128) {
-        if !matches!(env::promise_result(0), near_sdk::PromiseResult::Successful(_)) {
+        let success = matches!(env::promise_result(0), near_sdk::PromiseResult::Successful(_));
+        if !success {
             let bal = self.balances.get(&token).cloned().unwrap_or(0);
             self.balances.insert(token, bal + amount.0);
             env::log_str("BOUNCER ft_transfer failed; refunded vault");
         }
     }
+
     #[private]
     pub fn after_withdraw(&mut self, token: AccountId, amount: U128) {
-        if !matches!(env::promise_result(0), near_sdk::PromiseResult::Successful(_)) {
+        let success = matches!(env::promise_result(0), near_sdk::PromiseResult::Successful(_));
+        if !success {
             let bal = self.balances.get(&token).cloned().unwrap_or(0);
             self.balances.insert(token, bal + amount.0);
+            env::log_str("BOUNCER withdraw failed; refunded vault");
         }
     }
 
@@ -161,13 +212,17 @@ impl Bouncer {
         let n = self.allow_count.get(&policy_id).cloned().unwrap_or(0);
         if n > 0 {
             let k = allow_key(&policy_id, payee.as_str());
-            if self.allow.get(&k) != Some(&true) { return (false, format!("payee {} not in allowlist", payee)); }
+            if self.allow.get(&k) != Some(&true) {
+                return (false, format!("payee {} not in allowlist", payee));
+            }
         }
         let bal = self.balances.get(&token).cloned().unwrap_or(0);
         if bal < amount.0 { return (false, format!("vault holds {}; need {}", bal, amount.0)); }
         if let Some(limit) = self.daily_limit_of.get(&policy_id).cloned() {
-            let spent = rolling_24h(&self.hourly_spend, &policy_id, env::block_timestamp());
-            if spent.saturating_add(amount.0) > limit { return (false, format!("would exceed 24h limit (spent {}/{})", spent, limit)); }
+            let spent = rolling_24h_spent(&self.hourly_spend, &policy_id, env::block_timestamp());
+            if spent.saturating_add(amount.0) > limit {
+                return (false, format!("would exceed 24h limit (spent {}/{} )", spent, limit));
+            }
         }
         (true, "ok".into())
     }
