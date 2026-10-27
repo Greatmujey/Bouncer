@@ -33,22 +33,18 @@ jobs:
           targets: wasm32-unknown-unknown
       - name: Install binaryen
         run: sudo apt-get update -qq && sudo apt-get install -y binaryen
-      - name: Build (plain cargo, no cargo-near complications)
+      - name: Build debug (debug build is proven to work; we shrink with wasm-opt afterwards)
         working-directory: bouncer/contracts/bouncer
         shell: bash {0}
         run: |
-          # Exact recipe from near-sdk.io: cargo build --target wasm32-unknown-unknown with link-arg=-s in cargo config
           mkdir -p .cargo
-          cat > .cargo/config.toml <<EOF
+          cat > .cargo/config.toml <<'EOF'
           [target.wasm32-unknown-unknown]
-          rustflags = ["-C", "link-arg=-s"]
           EOF
-          cat .cargo/config.toml
-          cargo build --target wasm32-unknown-unknown --release
-          echo "=== find wasm ==="
+          RUSTFLAGS="-C link-arg=-s" cargo build --target wasm32-unknown-unknown
           find target -name "*.wasm"
-          ls -la target/wasm32-unknown-unknown/release/bouncer.wasm
-          cp target/wasm32-unknown-unknown/release/bouncer.wasm ${{ github.workspace }}/bouncer.wasm
+          ls -la target/wasm32-unknown-unknown/debug/bouncer.wasm
+          cp target/wasm32-unknown-unknown/debug/bouncer.wasm ${{ github.workspace }}/bouncer.wasm
       - name: Optimize & commit
         run: |
           ls -lh bouncer.wasm
@@ -58,6 +54,6 @@ jobs:
           git config user.email "ci@bouncer.local"
           git add bouncer.wasm -f
           if ! git diff --cached --quiet; then
-            git commit -m "chore(ci): attach bouncer.wasm (release build)"
+            git commit -m "chore(ci): attach bouncer.wasm (debug+wasm-opt)"
             git push
           fi
