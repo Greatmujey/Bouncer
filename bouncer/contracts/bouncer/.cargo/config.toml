@@ -1,1 +1,2 @@
-# Do not pass extra link args by default; release profile already optimizes.
+[build]
+target = "wasm32-unknown-unknown"

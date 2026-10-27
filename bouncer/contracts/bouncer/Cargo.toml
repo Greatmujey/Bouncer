@@ -2,22 +2,20 @@
 name = "bouncer"
 version = "0.1.0"
 edition = "2021"
-description = "Policy-enforced spending vault (comptroller) for AI agents on NEAR"
+description = "On-chain comptroller for AI agents on NEAR"
 repository = "https://github.com/abdullahimujeeb0505-stack/Bouncer"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-near-sdk = { version = "5.14", features = ["legacy"] }
-
-[dev-dependencies]
-near-sdk = { version = "5.14", features = ["legacy", "unit-testing"] }
+near-sdk = { version = "5.14", default-features = false }
 
 [profile.release]
 codegen-units = 1
-opt-level = "s"
-lto = false
+opt-level = "z"
+lto = true
 debug = false
 panic = "abort"
 overflow-checks = true
+strip = true
