@@ -36,9 +36,12 @@ jobs:
       - name: Build
         run: |
           cd bouncer/contracts/bouncer
-          RUSTFLAGS="-C link-arg=-s" cargo build --target wasm32-unknown-unknown -v 2>&1 | tail -100
+          ls
+          # Plain build, no tail; capture full exit code
+          RUSTFLAGS="-C link-arg=-s" cargo build --target wasm32-unknown-unknown
+          echo "=== listing target ==="
+          ls target/wasm32-unknown-unknown/debug/ | head -40
           cp target/wasm32-unknown-unknown/debug/bouncer.wasm ../../../bouncer.wasm
-          ls -la ../../../bouncer.wasm
           cd ../../..
           ls -la bouncer.wasm
           wc -c bouncer.wasm
