@@ -20,6 +20,6 @@
     "url": "https://github.com/USERNAME/near-bouncer"
   },
   "dependencies": {
-    "near-api-js": "^6.0.0"
+    "near-api-js": "^6.5.1"
   }
 }
