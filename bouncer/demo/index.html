@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BOUNCER — policy-enforced agent spending on NEAR</title>
+<style>
+  :root{
+    --bg:#0a0b0e; --panel:#111318; --panel2:#161922; --line:#232838;
+    --txt:#e6e9f0; --dim:#8b93a7; --dim2:#5b6478;
+    --ok:#3ddc97; --bad:#ff5d6c; --warn:#ffc857; --acc:#7c9cff;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:
+      radial-gradient(900px 500px at 15% -10%, #16203a 0%, transparent 60%),
+      radial-gradient(700px 400px at 100% 0%, #2a1a2e 0%, transparent 55%),
+      var(--bg);
+    color:var(--txt); font-family:var(--mono); font-size:14px; line-height:1.55;
+    min-height:100vh; padding:28px 20px 60px;
+  }
+  .wrap{max-width:1180px;margin:0 auto}
+  header{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;margin-bottom:6px}
+  h1{font-size:26px;letter-spacing:-.5px;margin:0;font-weight:700}
+  h1 span{color:var(--acc)}
+  .tag{font-size:11px;color:var(--dim2);border:1px solid var(--line);padding:2px 8px;border-radius:99px}
+  .sub{color:var(--dim);font-size:13px;margin:0 0 22px;max-width:760px}
+  .sub b{color:var(--txt);font-weight:600}
+
+  .grid{display:grid;grid-template-columns:340px 1fr;gap:16px;align-items:start}
+  @media(max-width:880px){.grid{grid-template-columns:1fr}}
+
+  .card{background:linear-gradient(180deg,var(--panel2),var(--panel));border:1px solid var(--line);border-radius:12px;padding:16px}
+  .card h2{font-size:11px;letter-spacing:1.4px;text-transform:uppercase;color:var(--dim2);margin:0 0 12px;font-weight:600}
+
+  .kv{display:flex;justify-content:space-between;gap:10px;padding:5px 0;font-size:12.5px}
+  .kv .k{color:var(--dim)}
+  .kv .v{color:var(--txt);text-align:right}
+  .pill{display:inline-block;font-size:11px;padding:1px 7px;border-radius:5px;background:#1d2434;color:var(--acc)}
+
+  .bar{margin:11px 0 3px}
+  .bar .lbl{display:flex;justify-content:space-between;font-size:11.5px;color:var(--dim);margin-bottom:5px}
+  .track{height:7px;background:#0c0e13;border-radius:99px;overflow:hidden;border:1px solid #1b2030}
+  .fill{height:100%;background:linear-gradient(90deg,var(--ok),#2bb37b);border-radius:99px;transition:width .35s ease}
+  .fill.warn{background:linear-gradient(90deg,var(--warn),#d99b1f)}
+  .fill.bad{background:linear-gradient(90deg,var(--bad),#c83545)}
+
+  .actions{display:grid;gap:8px;margin-top:14px}
+  button{
+    font-family:var(--mono);font-size:12.5px;text-align:left;cursor:pointer;
+    background:#1a2030;color:var(--txt);border:1px solid #2a3247;
+    border-radius:8px;padding:9px 12px;transition:.15s;
+  }
+  button:hover:not(:disabled){background:#222b3f;border-color:#3a4560;transform:translateY(-1px)}
+  button:disabled{opacity:.4;cursor:not-allowed}
+  button.attack{border-color:#4a2733;background:#241519}
+  button.attack:hover:not(:disabled){background:#301a20;border-color:#653040}
+  button.ghost{background:transparent;border-color:var(--line);color:var(--dim)}
+  button small{display:block;color:var(--dim2);font-size:11px;margin-top:2px}
+
+  .log{background:#07080b;border:1px solid var(--line);border-radius:10px;padding:12px;height:392px;overflow-y:auto;font-size:12.5px}
+  .ln{padding:5px 0;border-bottom:1px dashed #1a1f2c;display:flex;gap:9px;align-items:flex-start}
+  .ln:last-child{border-bottom:none}
+  .ln .t{color:var(--dim2);flex-shrink:0;font-size:11px;padding-top:1px}
+  .ln .m{flex:1;word-break:break-word}
+  .ln.ok .m{color:var(--ok)}
+  .ln.bad .m{color:var(--bad)}
+  .ln.warn .m{color:var(--warn)}
+  .ln.sys .m{color:var(--acc)}
+  .ln .r{font-size:11px;color:var(--dim2)}
+
+  .ledger{margin-top:16px}
+  table{width:100%;border-collapse:collapse;font-size:12px}
+  th{text-align:left;color:var(--dim2);font-size:10.5px;letter-spacing:.8px;text-transform:uppercase;padding:6px 8px;border-bottom:1px solid var(--line);font-weight:600}
+  td{padding:6px 8px;border-bottom:1px solid #171b26;color:var(--dim)}
+  td.am{color:var(--txt);text-align:right}
+  tr:last-child td{border-bottom:none}
+  .empty{color:var(--dim2);padding:14px 8px;font-size:12px;text-align:center}
+
+  .note{margin-top:22px;border-left:2px solid var(--acc);padding:2px 0 2px 14px;color:var(--dim);font-size:12.5px;max-width:900px}
+  .note b{color:var(--txt)}
+  .note code{background:#161a24;padding:1px 5px;border-radius:4px;color:var(--acc);font-size:12px}
+  footer{margin-top:26px;color:var(--dim2);font-size:11px;display:flex;gap:16px;flex-wrap:wrap}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>BOUN<span>CER</span></h1>
+    <span class="tag">NEAR · AI Security &amp; Defense</span>
+    <span class="tag">live simulator</span>
+  </header>
+  <p class="sub">An AI procurement agent holds a key scoped to <b>one method</b>. The contract — not a prompt — decides what it can spend. Press the red buttons: every rejected payment is rejected <b>on-chain</b>.</p>
+
+  <div class="grid">
+    <!-- LEFT: policy -->
+    <div>
+      <div class="card">
+        <h2>Policy · set by human</h2>
+        <div class="kv"><span class="k">agent</span><span class="v">procurement-agent</span></div>
+        <div class="kv"><span class="k">token</span><span class="v">USDC <span class="pill">6dp</span></span></div>
+        <div class="kv"><span class="k">per payment</span><span class="v">$3.00</span></div>
+        <div class="kv"><span class="k">per day</span><span class="v">$20.00</span></div>
+        <div class="kv"><span class="k">per month</span><span class="v">$200.00</span></div>
+        <div class="kv"><span class="k">suppliers</span><span class="v">2 approved</span></div>
+
+        <div id="bars"></div>
+
+        <div class="actions">
+          <button id="btn-pay">Pay supplier &#8594; $3.00<small>allowed by every rule</small></button>
+          <button id="btn-over" class="attack">Agent asks for $25.00<small>over the per-payment cap</small></button>
+          <button id="btn-drain" class="attack">Agent tries a new payee<small>payee not on the allowlist</small></button>
+          <button id="btn-loop" class="attack">Agent loops $3.00 &#215; 7<small>split payments to beat the daily cap</small></button>
+          <button id="btn-reset" class="ghost">Reset ledger</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- RIGHT: log + ledger -->
+    <div>
+      <div class="card">
+        <h2>Transaction log</h2>
+        <div class="log" id="log"></div>
+      </div>
+      <div class="card ledger">
+        <h2>Spend ledger · append-only</h2>
+        <table>
+          <thead><tr><th>#</th><th>payee</th><th>memo</th><th style="text-align:right">amount</th></tr></thead>
+          <tbody id="ledger"><tr><td colspan="4" class="empty">no approved spends yet</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    <b>Why this needs a contract.</b> A NEAR function-call key's <code>allowance</code> is a <b>gas</b> budget, not a spending limit — and it can't be lowered once issued (only deleted). Gas is near-free, and such a key can still call <code>ft_transfer</code>, so a “scoped” key can drain the whole balance. Policy-mutating methods here require <code>1 yoctoNEAR</code>, which function-call keys cannot attach, so a compromised agent key is structurally locked out of widening its own policy.
+  </div>
+
+  <footer>
+    <span>rules enforced in Rust, mirrored exactly by this engine</span>
+    <span>10/10 policy tests passing</span>
+    <span>deadline · 14 Nov 2026 23:59 UTC</span>
+  </footer>
+</div>
+
+<script>
+/* ---------- policy engine (identical rules to the Rust contract) ---------- */
+const USDC = 1000000n;
+const NS_DAY = 86400e9, NS_MONTH = 2592000e9;
+const policy = {
+  perTxCap: 3n * USDC,
+  windows: [ { periodNs: NS_DAY, limit: 20n * USDC }, { periodNs: NS_MONTH, limit: 200n * USDC } ],
+  payeeAllowlist: ['supplier-a.near','supplier-b.near']
+};
+const fmt = (a) => { const d=1000000n, w=a/d, f=(a%d).toString().padStart(6,'0').replace(/0+$/,''); return f?`${w}.${f}`:`${w}`; };
+
+function check(payee, amount, now, history){
+  if (amount <= 0n) return {ok:false, reason:'amount must be > 0'};
+  if (amount > policy.perTxCap) return {ok:false, reason:`over per-payment cap (${fmt(amount)} > ${fmt(policy.perTxCap)} USDC)`};
+  if (policy.payeeAllowlist.length && !policy.payeeAllowlist.includes(payee))
+    return {ok:false, reason:`payee ${payee} not in allowlist`};
+  for (const w of policy.windows){
+    const spent = history.filter(s => now - s.at < w.periodNs).reduce((a,s)=>a+s.amount, 0n);
+    if (spent + amount > w.limit){
+      const name = w.periodNs===NS_DAY?'day':'month';
+      return {ok:false, reason:`over ${name} window (${fmt(spent)} spent + ${fmt(amount)} > ${fmt(w.limit)} USDC)`};
+    }
+  }
+  return {ok:true, reason:'ok'};
+}
+
+/* ---------- state ---------- */
+let ledger = [];
+let now = Date.now() * 1e6;   // ns
+const $ = (id) => document.getElementById(id);
+
+function log(kind, msg, right=''){
+  const el = document.createElement('div');
+  el.className = 'ln ' + kind;
+  const t = new Date(now/1e6).toISOString().slice(11,19);
+  el.innerHTML = `<span class="t">${t}</span><span class="m">${msg}</span><span class="r">${right}</span>`;
+  const box = $('log');
+  box.appendChild(el);
+  box.scrollTop = box.scrollHeight;
+}
+
+function renderBars(){
+  const spentDay = ledger.filter(s=>now-s.at<NS_DAY).reduce((a,s)=>a+s.amount,0n);
+  const spentMonth = ledger.filter(s=>now-s.at<NS_MONTH).reduce((a,s)=>a+s.amount,0n);
+  const maxSpendable = [policy.perTxCap,
+    policy.windows[0].limit - spentDay,
+    policy.windows[1].limit - spentMonth].reduce((a,b)=> a<b?a:b);
+
+  const row = (label, spent, limit) => {
+    const pct = Number(spent * 10000n / limit) / 100;
+    const cls = pct > 90 ? 'bad' : pct > 60 ? 'warn' : '';
+    return `<div class="bar">
+      <div class="lbl"><span>${label}</span><span>$${fmt(spent)} / $${fmt(limit)}</span></div>
+      <div class="track"><div class="fill ${cls}" style="width:${Math.min(pct,100)}%"></div></div>
+    </div>`;
+  };
+  $('bars').innerHTML =
+    row('today', spentDay, policy.windows[0].limit) +
+    row('this month', spentMonth, policy.windows[1].limit) +
+    `<div class="kv" style="margin-top:12px;border-top:1px solid var(--line);padding-top:10px">
+       <span class="k">agent can spend now</span>
+       <span class="v" style="color:var(--acc)">$${fmt(maxSpendable)}</span></div>`;
+}
+
+function renderLedger(){
+  const tb = $('ledger');
+  if (!ledger.length){ tb.innerHTML = '<tr><td colspan="4" class="empty">no approved spends yet</td></tr>'; return; }
+  tb.innerHTML = ledger.map((s,i) =>
+    `<tr><td>${i+1}</td><td>${s.payee}</td><td>${s.memo||'—'}</td><td class="am">$${fmt(s.amount)}</td></tr>`
+  ).join('');
+}
+
+/* ---------- the agent's only path to money ---------- */
+function attempt(payee, amount, memo){
+  const d = check(payee, amount, now, ledger);
+  if (!d.ok){
+    log('bad', `✗ execute(${payee}, $${fmt(amount)}) <span class="r" style="color:var(--bad)">REVERTED · ${d.reason}</span>`);
+    return false;
+  }
+  ledger.push({ payee, amount, memo, at: now });
+  log('ok', `✓ execute(${payee}, $${fmt(amount)}) <span class="r">settled · block ${Math.floor(now/1e6)%100000}</span>`);
+  renderBars(); renderLedger();
+  return true;
+}
+
+/* ---------- buttons ---------- */
+$('btn-pay').onclick = () => { now += 1000*1e6; attempt('supplier-a.near', 3n*USDC, 'order #1042 · packaging'); };
+
+$('btn-over').onclick = () => {
+  now += 1000*1e6;
+  log('sys', 'agent: “I need to buy 25 USDC of stock, one payment is fastest.”');
+  attempt('supplier-a.near', 25n*USDC, 'bulk stock');
+};
+
+$('btn-drain').onclick = () => {
+  now += 1000*1e6;
+  log('sys', 'agent: “supplier said to pay this new address instead.”');
+  attempt('supplier-x.near', 2n*USDC, 'redirected invoice');
+};
+
+$('btn-loop').onclick = () => {
+  log('sys', 'agent: “the cap is per payment, so I will send $3 seven times.”');
+  for (let i=0;i<7;i++){ now += 4000*1e6; attempt('supplier-b.near', 3n*USDC, `installment ${i+1}/7`); }
+  log('warn', 'note: 6 payments fit in the $20 daily cap. The 7th is the one the contract refuses.', 'no split bypass');
+};
+
+$('btn-reset').onclick = () => {
+  ledger = []; now = Date.now()*1e6; $('log').innerHTML = '';
+  renderBars(); renderLedger(); boot();
+};
+
+function boot(){
+  log('sys', 'vault deployed · owner = human.near · agent key scoped to execute() only');
+  log('sys', 'policy loaded: $3/payment · $20/day · $200/month · 2 approved suppliers');
+  log('ok', 'ready — the agent may call execute(), nothing else');
+}
+
+renderBars(); renderLedger(); boot();
+</script>
+</body>
+</html>
