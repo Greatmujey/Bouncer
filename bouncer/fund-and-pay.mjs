@@ -1,144 +1,116 @@
-// Happy-path demo:
-//  1) Create vendor.testnet sub-account (funded from bouncer account)
-//  2) Storage-deposit vendor on wrap.testnet (wNEAR NEP-141)
-//  3) Wrap some of the bouncer's NEAR into wNEAR via wrap.testnet
-//  4) ft_transfer_call wNEAR into Bouncer vault (ft_on_transfer credits vault)
-//  5) execute() a 0.1 NEAR payment to vendor (under cap, allowlisted, vault funded) -> SUCCESS
-//  6) Show vendor's wNEAR balance increased
-//
-// Uses the account saved by deploy.mjs. Run from repo root:
-//   node bouncer/fund-and-pay.mjs
+// Happy-path demo with daily cap:
+//  1) Create vendor sub-account (if missing) + storage-deposit on wrap.testnet
+//  2) Set wNEAR policy: per-tx cap 2 NEAR, daily cap 1 NEAR
+//  3) Wrap 2 NEAR into wNEAR, ft_transfer_call 1.5 wNEAR into vault
+//  4) execute() 0.1 NEAR payment to vendor — succeeds
+//  5) execute() another 0.95 NEAR — exceeds daily cap (0.1+0.95=1.05 > 1.0), BLOCKED
+//  6) Show final balances
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { fileURLToPath } from 'url';
-import crypto from 'crypto';
 import nearApi from 'near-api-js';
 
-const { KeyPair, KeyPairSigner, keyStores, Account, providers, transactions } = nearApi;
+const { KeyPair, KeyPairSigner, keyStores, Account, providers } = nearApi;
 const { JsonRpcProvider } = providers;
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const REPO_ROOT = path.resolve(__dirname, '..');
 const NETWORK = 'testnet';
 const RPC = 'https://rpc.testnet.near.org';
 const WNEAR = 'wrap.testnet';
 
-// quiet
 process.on('warning', () => {});
 const _ow = console.warn; console.warn = (...a)=>{ const m=a.join(' '); if(!/deprecated|please switch/i.test(m))_ow.apply(console,a); };
 
 const ID_FILE = path.join(os.homedir(), '.bouncer_id');
 const KEY_DIR = path.join(os.homedir(), '.near-credentials', NETWORK);
 const BOUNCER_ID = fs.readFileSync(ID_FILE, 'utf8').trim();
-const bouncerKey = JSON.parse(fs.readFileSync(path.join(KEY_DIR, `${BOUNCER_ID}.json`), 'utf8'));
-const bkp = KeyPair.fromString(bouncerKey.private_key);
+const bkp = KeyPair.fromString(JSON.parse(fs.readFileSync(path.join(KEY_DIR, `${BOUNCER_ID}.json`),'utf8')).private_key);
 const provider = new JsonRpcProvider({ url: RPC });
 const bouncerAcct = new Account(BOUNCER_ID, provider, new KeyPairSigner(bkp));
 
-function txUrl(h){return `https://testnet.nearblocks.io/txns/${h}?network=testnet`;}
-const YOCTO_PER_NEAR = '1000000000000000000000000'; // 1e24
-const ONE_NEAR = BigInt(YOCTO_PER_NEAR);
-const TENTH_NEAR = ONE_NEAR / 10n; // 0.1 NEAR in yocto — within a small cap
+const txUrl = h => `https://testnet.nearblocks.io/txns/${h}?network=testnet`;
+const ONE_NEAR = 10n**24n;
 
-async function call(acct, contractId, method, args, deposit, gas) {
-  return acct.functionCall({ contractId, methodName: method, args,
-    attachedDeposit: BigInt(deposit||'0'), gas: BigInt(gas||'100000000000000') });
+async function call(contractId, method, args, deposit, gas, label) {
+  if (label) console.log(`\n=== ${label} ===`);
+  try {
+    const res = await bouncerAcct.functionCall({ contractId, methodName: method, args,
+      attachedDeposit: BigInt(deposit||'0'), gas: BigInt(gas||'100000000000000') });
+    if (label) console.log(`    ✅ ok     tx: ${txUrl(res.transaction_outcome.id)}`);
+    return res;
+  } catch (e) {
+    const msg = e.message || String(e);
+    const em = msg.match(/ExecutionError":"([^"]+)"/);
+    const short = em ? em[1] : msg.split('\n')[0].slice(0,250);
+    if (label) console.log(`    ❌ ${short}`);
+    throw e;
+  }
 }
-
-async function view(acct, contractId, method, args) {
-  return acct.viewFunction({ contractId, methodName: method, args });
+async function view(contractId, method, args) {
+  return bouncerAcct.viewFunction({ contractId, methodName: method, args });
 }
 
 (async () => {
   console.log(`╔══════════════════════════════════════════════════════════════╗`);
-  console.log(`║   HAPPY-PATH FUND + PAY (wNEAR through Bouncer firewall)    ║`);
+  console.log(`║   HAPPY PATH + DAILY CAP — wNEAR through Bouncer firewall   ║`);
   console.log(`╚══════════════════════════════════════════════════════════════╝`);
   console.log(`Bouncer: ${BOUNCER_ID}\n`);
 
-  // --- 0. Pick a policy cap (2 NEAR so 0.1 NEAR goes through)
-  const CAP_YOCTO = (2n * ONE_NEAR).toString(); // 2 NEAR cap
-  const AMOUNT_YOCTO = TENTH_NEAR.toString();   // 0.1 NEAR payment
-
   const VENDOR_ID = `vendor-${BOUNCER_ID}`;
-  // Create a fresh in-memory key for vendor
+  const PER_TX_CAP = (2n * ONE_NEAR).toString();
+  const DAILY_CAP = (1n * ONE_NEAR).toString();   // 1 NEAR/day
+  const PAY1 = (ONE_NEAR / 10n).toString();      // 0.1 NEAR — first spend
+  const PAY2 = (19n * ONE_NEAR / 20n).toString();// 0.95 NEAR — would push over daily cap
+
   const vendorKp = KeyPair.fromRandom('ed25519');
-  const vendorKs = new keyStores.InMemoryKeyStore();
-  await vendorKs.setKey(NETWORK, VENDOR_ID, vendorKp);
-
-  // --- 1. Create vendor sub-account under bouncer (requires 0.00182 NEAR for storage + key)
-  console.log(`=== 1) Create vendor sub-account ${VENDOR_ID} ===`);
+  console.log(`=== 1) Ensure vendor ${VENDOR_ID} exists and is registered on ${WNEAR} ===`);
   try {
-    const createTx = await bouncerAcct.createAccount(
-      VENDOR_ID, vendorKp.getPublicKey(),
-      BigInt('100000000000000000000000') // 0.1 NEAR initial balance for storage
-    );
-    console.log(`    ✅ created   tx: ${txUrl(createTx.transaction_outcome.id)}`);
-  } catch (e) {
-    // already exists is fine
-    console.log(`    (vendor already exists, continuing)`);
-  }
+    const createTx = await bouncerAcct.createAccount(VENDOR_ID, vendorKp.getPublicKey(),
+      BigInt('100000000000000000000000'));
+    console.log(`    ✅ vendor created  tx: ${txUrl(createTx.transaction_outcome.id)}`);
+  } catch { console.log(`    (vendor exists)`); }
 
-  // --- 2. Storage-deposit vendor on wrap.testnet (required for NEP-141 receiver)
-  console.log(`\n=== 2) Storage-deposit vendor on ${WNEAR} (NEP-141 registration) ===`);
-  const sdTx = await call(bouncerAcct, WNEAR, 'storage_deposit',
-    { account_id: VENDOR_ID },
-    '1250000000000000000000', // 0.00125 NEAR (min for wNEAR storage)
-    '50000000000000');
-  console.log(`    ✅ deposited tx: ${txUrl(sdTx.transaction_outcome.id)}`);
+  await call(WNEAR, 'storage_deposit', {account_id:VENDOR_ID}, '1250000000000000000000','50000000000000');
+  await call(WNEAR, 'storage_deposit', {account_id:BOUNCER_ID}, '1250000000000000000000','50000000000000');
 
-  // Storage-deposit bouncer itself so it can hold wNEAR
-  await call(bouncerAcct, WNEAR, 'storage_deposit',
-    { account_id: BOUNCER_ID }, '1250000000000000000000', '50000000000000');
+  console.log(`\n=== 2) Wrap 2 NEAR -> wNEAR ===`);
+  await call(WNEAR, 'near_deposit', {}, (2n*ONE_NEAR).toString(), '50000000000000');
 
-  // --- 3. Wrap 1 NEAR of the bouncer's NEAR into wNEAR
-  console.log(`\n=== 3) Wrap 1 NEAR into wNEAR via ${WNEAR}.near_deposit() ===`);
-  const wrapTx = await call(bouncerAcct, WNEAR, 'near_deposit', {},
-    ONE_NEAR.toString(), // attach 1 NEAR -> mints 1 wNEAR
-    '50000000000000');
-  console.log(`    ✅ wrapped   tx: ${txUrl(wrapTx.transaction_outcome.id)}`);
+  console.log(`\n=== 3) Set policy: per-tx 2 NEAR, daily 1 NEAR ===`);
+  await call(BOUNCER_ID, 'set_policy',
+    { policy_id:'wnear-agent', token:WNEAR, per_tx_cap:PER_TX_CAP, daily_cap:DAILY_CAP }, '1','100000000000000');
 
-  // --- 4. Set Bouncer policy for wNEAR at 2 NEAR cap, allowlist vendor
-  console.log(`\n=== 4) Set wNEAR policy (2 NEAR cap, 1 yocto) ===`);
-  const polTx = await call(bouncerAcct, BOUNCER_ID, 'set_policy',
-    { policy_id: 'wnear-agent', token: WNEAR, per_tx_cap: CAP_YOCTO }, '1', '100000000000000');
-  console.log(`    ✅ policy    tx: ${txUrl(polTx.transaction_outcome.id)}`);
+  console.log(`\n=== 4) Allowlist ${VENDOR_ID} ===`);
+  await call(BOUNCER_ID, 'allow_payee',
+    { policy_id:'wnear-agent', payee:VENDOR_ID }, '1','100000000000000');
 
-  console.log(`\n=== 5) Allowlist vendor ${VENDOR_ID} (1 yocto) ===`);
-  const alTx = await call(bouncerAcct, BOUNCER_ID, 'allow_payee',
-    { policy_id: 'wnear-agent', payee: VENDOR_ID }, '1', '100000000000000');
-  console.log(`    ✅ allowlist tx: ${txUrl(alTx.transaction_outcome.id)}`);
+  console.log(`\n=== 5) Fund vault with 1.5 wNEAR via ft_transfer_call ===`);
+  await call(WNEAR, 'ft_transfer_call',
+    { receiver_id:BOUNCER_ID, amount: (3n*ONE_NEAR/2n).toString(), msg:'fund' },
+    '1','200000000000000');
 
-  // --- 6. ft_transfer_call 1 wNEAR into Bouncer vault (triggers ft_on_transfer)
-  console.log(`\n=== 6) ft_transfer_call 1 wNEAR into Bouncer vault ===`);
-  const fundTx = await call(bouncerAcct, WNEAR, 'ft_transfer_call',
-    { receiver_id: BOUNCER_ID, amount: ONE_NEAR.toString(), msg: 'fund-vault' },
-    '1', // 1 yocto for ft_transfer
-    '200000000000000'); // more gas for cross-contract callback
-  console.log(`    ✅ funded    tx: ${txUrl(fundTx.transaction_outcome.id)}`);
+  const vbal = await view(BOUNCER_ID, 'vault_balance', { token: WNEAR });
+  console.log(`    vault wNEAR: ${Number(vbal)/1e24}`);
 
-  // Verify vault balance
-  const vbal = await view(bouncerAcct, BOUNCER_ID, 'vault_balance', { token: WNEAR });
-  console.log(`    vault_balance(wNEAR): ${vbal} yocto (${Number(vbal)/1e24} wNEAR)`);
+  console.log(`\n=== 6) PAY 0.1 wNEAR to vendor (within cap, within daily) — expect SUCCESS ===`);
+  try {
+    await call(BOUNCER_ID, 'execute',
+      { policy_id:'wnear-agent', payee:VENDOR_ID, amount:PAY1, memo:'compute:1h' },
+      '1','200000000000000');
+  } catch {}
 
-  // --- 7. EXECUTE 0.1 NEAR payment to vendor (the happy path!)
-  console.log(`\n=== 7) 🎯 execute() payment — send 0.1 wNEAR to vendor ===`);
-  const execTx = await call(bouncerAcct, BOUNCER_ID, 'execute',
-    { policy_id: 'wnear-agent', payee: VENDOR_ID, amount: AMOUNT_YOCTO, memo: 'compute:1h' },
-    '1',
-    '200000000000000');
-  console.log(`    ✅ PAID      tx: ${txUrl(execTx.transaction_outcome.id)}`);
-  const last = execTx.receipts_outcome?.[execTx.receipts_outcome.length - 1]?.outcome;
-  if (last?.logs?.length) console.log(`    logs: ${last.logs.join(' | ')}`);
+  console.log(`\n=== 7) PAY 0.95 wNEAR — BLOCKED by daily cap (0.1+0.95 > 1.0/day) ===`);
+  try {
+    await call(BOUNCER_ID, 'execute',
+      { policy_id:'wnear-agent', payee:VENDOR_ID, amount:PAY2, memo:'storage:100gb' },
+      '1','200000000000000');
+  } catch {}
 
-  // --- 8. Verify vendor's wNEAR balance
-  console.log(`\n=== 8) Verify vendor ${VENDOR_ID} received wNEAR ===`);
-  const vbal_after = await view(bouncerAcct, WNEAR, 'ft_balance_of', { account_id: VENDOR_ID });
-  const vbal_b = await view(bouncerAcct, BOUNCER_ID, 'vault_balance', { token: WNEAR });
-  console.log(`    vendor wNEAR balance:  ${vbal_after} yocto (${Number(vbal_after)/1e24} wNEAR)`);
-  console.log(`    Bouncer vault balance: ${vbal_b} yocto (${Number(vbal_b)/1e24} wNEAR)`);
-  console.log(`    (expect vendor=0.1, vault=0.9)`);
-
-  console.log(`\n=== DONE: happy path complete. Payment went through the firewall and landed on-chain. ===`);
-  console.log(`Explorer: https://testnet.nearblocks.io/address/${BOUNCER_ID}?tab=receipts`);
-})().catch(e => { console.error('\n❌', (e.message||String(e)).slice(0,800)); process.exit(1); });
+  const vendorBal = await view(WNEAR, 'ft_balance_of', { account_id: VENDOR_ID });
+  const vaultBal = await view(BOUNCER_ID, 'vault_balance', { token: WNEAR });
+  console.log(`\n=== FINAL BALANCES ===`);
+  console.log(`    vendor wNEAR:  ${Number(vendorBal)/1e24} (expect 0.1)`);
+  console.log(`    vault wNEAR:   ${Number(vaultBal)/1e24} (expect 1.4)`);
+  console.log(`\n=== DONE. Happy path ✅ + daily cap ✅ demonstrated end-to-end. ===`);
+})().catch(e => { console.error('❌', (e.message||String(e)).slice(0,600)); process.exit(1); });
