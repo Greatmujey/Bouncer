@@ -44,7 +44,9 @@ jobs:
           set -e
           cp bouncer/contracts/bouncer/target/wasm32-unknown-unknown/release/bouncer.wasm ./bouncer.wasm
           ls -lh bouncer.wasm
-          wasm-opt -Os -o bouncer.opt.wasm bouncer.wasm && mv bouncer.opt.wasm bouncer.wasm
+          # wasm-opt -Os folds panic paths to a single `unreachable` opcode and strips messages.
+          # Use -O1 with --strip-debug so on-chain error strings stay readable.
+          wasm-opt -O1 --strip-debug -o bouncer.opt.wasm bouncer.wasm && mv bouncer.opt.wasm bouncer.wasm
           ls -lh bouncer.wasm
           git config user.name "CI Bot"
           git config user.email "ci@bouncer.local"
