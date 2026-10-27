@@ -1,13 +1,20 @@
 use near_sdk::json_types::U128;
 use near_sdk::store::LookupMap;
-use near_sdk::{env, ext_contract, near, AccountId, Gas, NearToken, PanicOnDefault, Promise};
+use near_sdk::{env, ext_contract, near, AccountId, Gas, NearToken, PanicOnDefault, Promise, PromiseOrValue};
 
 const ONE_YOCTO: NearToken = NearToken::from_yoctonear(1);
-const GAS_FOR_FT_TRANSFER: Gas = Gas::from_tgas(20);
+const GAS_FOR_FT_TRANSFER: Gas = Gas::from_tgas(15);
+const GAS_FOR_RESOLVE: Gas = Gas::from_tgas(15);
 
 #[ext_contract(ext_ft)]
 trait ExtFt {
     fn ft_transfer(&mut self, receiver_id: AccountId, amount: U128, memo: Option<String>);
+}
+
+#[ext_contract(ext_self)]
+trait ExtSelf {
+    fn after_execute(&mut self, token: AccountId, amount: U128);
+    fn after_withdraw(&mut self, token: AccountId, amount: U128);
 }
 
 #[near(contract_state)]
@@ -17,7 +24,6 @@ pub struct Bouncer {
     token_of: LookupMap<String, AccountId>,
     cap_of: LookupMap<String, u128>,
     // composite key "policy_id:payee" -> true if allowed.
-    // If no entry exists for a policy, all payees are allowed.
     allow: LookupMap<String, bool>,
     // policy_id -> count of allowlisted payees (0 = allow any)
     allow_count: LookupMap<String, u32>,
@@ -52,7 +58,6 @@ impl Bouncer {
         self.cap_of.insert(policy_id, per_tx_cap.0);
     }
 
-    /// Add a payee to a policy's allowlist. Once at least one payee is added, only listed payees are allowed.
     #[payable]
     pub fn allow_payee(&mut self, policy_id: String, payee: AccountId) {
         assert!(env::attached_deposit() == ONE_YOCTO);
@@ -73,8 +78,7 @@ impl Bouncer {
         let k = allow_key(&policy_id, payee.as_str());
         if self.allow.remove(&k).is_some() {
             let n = self.allow_count.get(&policy_id).cloned().unwrap_or(1);
-            let next = n.saturating_sub(1);
-            self.allow_count.insert(policy_id, next);
+            self.allow_count.insert(policy_id, n.saturating_sub(1));
         }
     }
 
@@ -99,10 +103,15 @@ impl Bouncer {
         let bal = self.balances.get(&token).cloned().unwrap_or(0);
         assert!(amt <= bal, "insufficient");
         self.balances.insert(token.clone(), bal - amt);
-        ext_ft::ext(token)
+        ext_ft::ext(token.clone())
             .with_attached_deposit(ONE_YOCTO)
             .with_static_gas(GAS_FOR_FT_TRANSFER)
             .ft_transfer(self.owner.clone(), amount, Some("bouncer:withdraw".into()))
+            .then(
+                ext_self::ext(env::current_account_id())
+                    .with_static_gas(GAS_FOR_RESOLVE)
+                    .after_withdraw(token, amount),
+            )
     }
 
     pub fn execute(&mut self, policy_id: String, payee: AccountId, amount: U128, memo: String) -> Promise {
@@ -118,10 +127,35 @@ impl Bouncer {
         let bal = self.balances.get(&token).cloned().unwrap_or(0);
         assert!(bal >= amt, "insufficient vault balance");
         self.balances.insert(token.clone(), bal - amt);
-        ext_ft::ext(token)
+        ext_ft::ext(token.clone())
             .with_attached_deposit(ONE_YOCTO)
             .with_static_gas(GAS_FOR_FT_TRANSFER)
             .ft_transfer(payee, amount, Some(memo))
+            .then(
+                ext_self::ext(env::current_account_id())
+                    .with_static_gas(GAS_FOR_RESOLVE)
+                    .after_execute(token, amount),
+            )
+    }
+
+    #[private]
+    pub fn after_execute(&mut self, token: AccountId, amount: U128) {
+        let success = matches!(env::promise_result(0), near_sdk::PromiseResult::Successful(_));
+        if !success {
+            let bal = self.balances.get(&token).cloned().unwrap_or(0);
+            self.balances.insert(token, bal + amount.0);
+            env::log_str("BOUNCER ft_transfer failed; refunded vault");
+        }
+    }
+
+    #[private]
+    pub fn after_withdraw(&mut self, token: AccountId, amount: U128) {
+        let success = matches!(env::promise_result(0), near_sdk::PromiseResult::Successful(_));
+        if !success {
+            let bal = self.balances.get(&token).cloned().unwrap_or(0);
+            self.balances.insert(token, bal + amount.0);
+            env::log_str("BOUNCER withdraw failed; refunded vault");
+        }
     }
 
     pub fn check(&self, policy_id: String, payee: AccountId, amount: U128) -> (bool, String) {
