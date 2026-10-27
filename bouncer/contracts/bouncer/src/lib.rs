@@ -269,8 +269,8 @@ impl Bouncer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use near_sdk::test_utils::{testing_env_with_promise_results, VMContext, VMContextBuilder};
-    use near_sdk::{testing_env, CurveType, PromiseResult};
+    use near_sdk::test_utils::{testing_env_with_promise_results, VMContextBuilder};
+    use near_sdk::{testing_env, CurveType, PromiseResult, VMContext};
 
     fn id(value: &str) -> AccountId { value.parse().unwrap() }
     fn key(byte: u8) -> PublicKey {
