@@ -28,43 +28,30 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          path: repo
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
-      - name: Show versions
-        run: |
-          rustc -vV
-          cargo -vV
-          which rust-lld || echo "no rust-lld"
-          ls ~/.rustup/toolchains/*/lib/rustlib/wasm32-unknown-unknown/lib/ 2>&1 | head -20 || true
-      - name: Cargo build (debug, verbose)
-        working-directory: bouncer/contracts/bouncer
+      - name: Build in repo dir
+        working-directory: repo/bouncer/contracts/bouncer
         run: |
           RUSTFLAGS="-C link-arg=-s" cargo build --target wasm32-unknown-unknown -v 2>&1 | tail -200
-      - name: List output
+          ls target/wasm32-unknown-unknown/debug/ | head -30
+          cp target/wasm32-unknown-unknown/debug/bouncer.wasm /home/runner/bouncer.wasm
+      - name: List root & commit wasm
+        working-directory: repo
         run: |
-          ls -la bouncer/target/wasm32-unknown-unknown/debug/ 2>&1 | head -30
-          ls -la bouncer/contracts/bouncer/target/wasm32-unknown-unknown/debug/ 2>&1 | head -30
-      - name: Release (upload + commit)
-        run: |
-          # Look for wasm in both candidate locations
-          if [ -f bouncer/contracts/bouncer/target/wasm32-unknown-unknown/debug/bouncer.wasm ]; then
-            cp bouncer/contracts/bouncer/target/wasm32-unknown-unknown/debug/bouncer.wasm ./bouncer.wasm
-          elif [ -f bouncer/target/wasm32-unknown-unknown/debug/bouncer.wasm ]; then
-            cp bouncer/target/wasm32-unknown-unknown/debug/bouncer.wasm ./bouncer.wasm
-          fi
-          if [ -f ./bouncer.wasm ]; then
-            ls -lh ./bouncer.wasm
-            git config user.name "CI Bot"
-            git config user.email "ci@bouncer.local"
-            git add bouncer.wasm -f
-            if ! git diff --cached --quiet; then
-              git commit -m "chore(ci): attach bouncer.wasm"
-              git push || echo "push failed (may be expected due to concurrent runs)"
-            else
-              echo "no wasm change"
-            fi
+          ls -la /home/runner/bouncer.wasm
+          wc -c /home/runner/bouncer.wasm
+          cp /home/runner/bouncer.wasm ./bouncer.wasm
+          ls -la ./bouncer.wasm
+          git config user.name "CI Bot"
+          git config user.email "ci@bouncer.local"
+          git add bouncer.wasm -f
+          if ! git diff --cached --quiet; then
+            git commit -m "chore(ci): attach bouncer.wasm"
+            git push
           else
-            echo "NO WASM FOUND anywhere"
-            exit 1
+            echo "no change"
           fi
