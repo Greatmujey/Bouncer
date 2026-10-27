@@ -5,8 +5,8 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "test": "node --test packages/policy/policy.test.mjs",
-    "test:all": "node --test packages/policy/policy.test.mjs",
+    "test": "node --test packages/policy/policy.test.mjs tests/*.test.mjs",
+    "test:all": "node --test packages/policy/policy.test.mjs tests/*.test.mjs",
     "build": "bash scripts/build.sh",
     "agent": "node agent/procurement.mjs",
     "solver": "node agent/solver.mjs",

@@ -55,3 +55,20 @@ jobs:
             git commit -m "chore(ci): attach bouncer.wasm"
             git push
           fi
+
+  testnet-smoke:
+    name: Manual live testnet smoke test
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install --prefix bouncer --no-audit --no-fund
+      # Testnet accounts and keys exist only on this ephemeral runner. No keys
+      # are printed or uploaded. This creates real testnet transactions.
+      - run: node bouncer/demo-all.mjs
