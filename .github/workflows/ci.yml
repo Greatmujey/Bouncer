@@ -32,26 +32,14 @@ jobs:
       - name: Cargo build
         working-directory: bouncer/contracts/bouncer
         run: |
-          set -euxo pipefail
+          pwd
           ls
-          RUSTFLAGS="-C link-arg=-s" cargo build --target wasm32-unknown-unknown -v 2>&1 | tail -80
-          echo "--- ls target/wasm32-unknown-unknown/debug ---"
-          ls -la ../../target/wasm32-unknown-unknown/debug/ 2>&1 | head -30 || true
-          echo "--- ls target ---"
-          ls target/wasm32-unknown-unknown/debug/ 2>&1 | head -30 || true
-      - name: Copy wasm to repo
-        run: |
-          mkdir -p bouncer/contracts/bouncer
-          ls bouncer/target/wasm32-unknown-unknown/debug/ 2>&1 || true
-          find bouncer -name "bouncer.wasm" 2>&1
-          if [ -f bouncer/target/wasm32-unknown-unknown/debug/bouncer.wasm ]; then
-            cp bouncer/target/wasm32-unknown-unknown/debug/bouncer.wasm ./bouncer.wasm
-          else
-            find . -name "bouncer.wasm" -exec cp {} ./bouncer.wasm \;
-          fi
-          ls -lh ./bouncer.wasm || echo "STILL NO WASM"
+          RUSTFLAGS="-C link-arg=-s" cargo build --target wasm32-unknown-unknown
+          ls -la ../../target/wasm32-unknown-unknown/debug/
+          cp ../../target/wasm32-unknown-unknown/debug/bouncer.wasm ./bouncer.wasm
+          ls -lh ./bouncer.wasm
       - uses: actions/upload-artifact@v4
         with:
           name: bouncer-wasm
-          path: bouncer.wasm
+          path: bouncer/contracts/bouncer/bouncer.wasm
           if-no-files-found: error
