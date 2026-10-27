@@ -6,6 +6,13 @@ const ONE_YOCTO: NearToken = NearToken::from_yoctonear(1);
 const GAS_FOR_FT_TRANSFER: Gas = Gas::from_tgas(15);
 const GAS_FOR_RESOLVE: Gas = Gas::from_tgas(15);
 
+// Internal helper: near-sdk 5.x with panic=abort + LTO sometimes truncates format-string
+// assert!() messages to an `unreachable` opcode in wasm. Using env::panic_str (which takes
+// a plain &str) keeps the message visible on-chain and in nearblocks receipts.
+fn require(cond: bool, msg: &str) {
+    if !cond { env::panic_str(msg); }
+}
+
 #[ext_contract(ext_ft)]
 trait ExtFt {
     fn ft_transfer(&mut self, receiver_id: AccountId, amount: U128, memo: Option<String>);
@@ -27,13 +34,19 @@ pub struct Bouncer {
     balances: LookupMap<AccountId, u128>,
 }
 
-fn allow_key(pid: &str, p: &str) -> String { format!("{}:{}", pid, p) }
+fn allow_key(pid: &str, p: &str) -> String {
+    let mut s = String::with_capacity(pid.len() + 1 + p.len());
+    s.push_str(pid);
+    s.push(':');
+    s.push_str(p);
+    s
+}
 
 #[near]
 impl Bouncer {
     #[init]
     pub fn new(owner: AccountId) -> Self {
-        assert!(!owner.as_str().is_empty());
+        require(!owner.as_str().is_empty(), "owner must not be empty");
         Self {
             owner,
             token_of: LookupMap::new(b"t"), cap_of: LookupMap::new(b"c"),
@@ -44,18 +57,18 @@ impl Bouncer {
 
     #[payable]
     pub fn set_policy(&mut self, policy_id: String, token: AccountId, per_tx_cap: U128) {
-        assert!(env::attached_deposit() == ONE_YOCTO, "requires 1 yoctoNEAR (full-access key only)");
-        assert!(env::predecessor_account_id() == self.owner, "owner only");
-        assert!(per_tx_cap.0 > 0);
+        require(env::attached_deposit() == ONE_YOCTO, "requires exactly 1 yoctoNEAR (owner-only, full-access key required)");
+        require(env::predecessor_account_id() == self.owner, "owner only");
+        require(per_tx_cap.0 > 0, "per_tx_cap must be > 0");
         self.token_of.insert(policy_id.clone(), token);
         self.cap_of.insert(policy_id, per_tx_cap.0);
     }
 
     #[payable]
     pub fn allow_payee(&mut self, policy_id: String, payee: AccountId) {
-        assert!(env::attached_deposit() == ONE_YOCTO);
-        assert!(env::predecessor_account_id() == self.owner);
-        assert!(self.cap_of.contains_key(&policy_id));
+        require(env::attached_deposit() == ONE_YOCTO, "requires 1 yoctoNEAR");
+        require(env::predecessor_account_id() == self.owner, "owner only");
+        require(self.cap_of.contains_key(&policy_id), "policy does not exist");
         let k = allow_key(&policy_id, payee.as_str());
         if self.allow.get(&k).is_none() {
             let n = self.allow_count.get(&policy_id).cloned().unwrap_or(0);
@@ -66,8 +79,8 @@ impl Bouncer {
 
     #[payable]
     pub fn revoke_payee(&mut self, policy_id: String, payee: AccountId) {
-        assert!(env::attached_deposit() == ONE_YOCTO);
-        assert!(env::predecessor_account_id() == self.owner);
+        require(env::attached_deposit() == ONE_YOCTO, "requires 1 yoctoNEAR");
+        require(env::predecessor_account_id() == self.owner, "owner only");
         let k = allow_key(&policy_id, payee.as_str());
         if self.allow.remove(&k).is_some() {
             let n = self.allow_count.get(&policy_id).cloned().unwrap_or(1);
@@ -83,16 +96,17 @@ impl Bouncer {
         let token = env::predecessor_account_id();
         let bal = self.balances.get(&token).cloned().unwrap_or(0);
         self.balances.insert(token.clone(), bal + amount.0);
-        env::log_str(&format!("BOUNCER deposit {} from {} amt {} msg {}", token, sender_id, amount.0, msg));
+        env::log_str("BOUNCER deposit received");
+        let _ = (sender_id, msg);
         U128(0)
     }
 
     #[payable]
     pub fn withdraw(&mut self, token: AccountId, amount: U128) -> Promise {
-        assert!(env::attached_deposit() == ONE_YOCTO);
-        assert!(env::predecessor_account_id() == self.owner);
+        require(env::attached_deposit() == ONE_YOCTO, "requires 1 yoctoNEAR");
+        require(env::predecessor_account_id() == self.owner, "owner only");
         let bal = self.balances.get(&token).cloned().unwrap_or(0);
-        assert!(amount.0 <= bal, "insufficient");
+        require(amount.0 <= bal, "insufficient vault balance");
         self.balances.insert(token.clone(), bal - amount.0);
         ext_ft::ext(token.clone())
             .with_attached_deposit(ONE_YOCTO).with_static_gas(GAS_FOR_FT_TRANSFER)
@@ -100,21 +114,31 @@ impl Bouncer {
             .then(ext_self::ext(env::current_account_id()).with_static_gas(GAS_FOR_RESOLVE).after_withdraw(token, amount))
     }
 
+    #[payable]
     pub fn execute(&mut self, policy_id: String, payee: AccountId, amount: U128, memo: String) -> Promise {
-        let cap = self.cap_of.get(&policy_id).cloned().expect("no policy");
-        let token = self.token_of.get(&policy_id).cloned().expect("no token");
-        assert!(amount.0 > 0 && amount.0 <= cap, "amount out of per-tx range");
+        require(env::attached_deposit() == ONE_YOCTO, "execute requires 1 yoctoNEAR");
+        let cap = match self.cap_of.get(&policy_id) {
+            Some(c) => *c,
+            None => env::panic_str("no such policy"),
+        };
+        let token = match self.token_of.get(&policy_id) {
+            Some(t) => t.clone(),
+            None => env::panic_str("policy has no token"),
+        };
+        require(amount.0 > 0, "amount must be > 0");
+        require(amount.0 <= cap, "BLOCKED: amount exceeds per-tx cap");
         let n = self.allow_count.get(&policy_id).cloned().unwrap_or(0);
         if n > 0 {
             let k = allow_key(&policy_id, payee.as_str());
-            assert!(self.allow.get(&k) == Some(&true), "payee not in allowlist");
+            require(self.allow.get(&k) == Some(&true), "BLOCKED: payee not in allowlist");
         }
         let bal = self.balances.get(&token).cloned().unwrap_or(0);
-        assert!(bal >= amount.0, "insufficient vault balance");
+        require(bal >= amount.0, "insufficient vault balance (fund the vault first)");
         self.balances.insert(token.clone(), bal - amount.0);
+        let _ = memo;
         ext_ft::ext(token.clone())
             .with_attached_deposit(ONE_YOCTO).with_static_gas(GAS_FOR_FT_TRANSFER)
-            .ft_transfer(payee, amount, Some(memo))
+            .ft_transfer(payee, amount, None)
             .then(ext_self::ext(env::current_account_id()).with_static_gas(GAS_FOR_RESOLVE).after_execute(token, amount))
     }
 
@@ -123,7 +147,7 @@ impl Bouncer {
         if !matches!(env::promise_result(0), near_sdk::PromiseResult::Successful(_)) {
             let bal = self.balances.get(&token).cloned().unwrap_or(0);
             self.balances.insert(token, bal + amount.0);
-            env::log_str("BOUNCER ft_transfer failed; refunded vault");
+            env::log_str("BOUNCER ft_transfer failed; vault refunded");
         }
     }
     #[private]
