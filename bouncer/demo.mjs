@@ -7,7 +7,9 @@ import os from 'os';
 import { fileURLToPath } from 'url';
 import nearApi from 'near-api-js';
 
-const { KeyPair, keyStores, InMemorySigner, Account, JsonRpcProvider } = nearApi;
+const { KeyPair, KeyPairSigner, keyStores, Account, providers } = nearApi;
+const { JsonRpcProvider } = providers;
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const NETWORK = 'testnet';
@@ -19,11 +21,10 @@ console.log(`Contract: ${ID}\n`);
 
 const keyPath = path.join(os.homedir(), '.near-credentials', NETWORK, `${ID}.json`);
 const cred = JSON.parse(fs.readFileSync(keyPath, 'utf8'));
-const keystore = new keyStores.InMemoryKeyStore();
-await keystore.setKey(NETWORK, ID, KeyPair.fromString(cred.private_key));
+const kp = KeyPair.fromString(cred.private_key);
 
 const provider = new JsonRpcProvider({ url: RPC });
-const signer = new InMemorySigner(keystore);
+const signer = new KeyPairSigner(kp);
 const me = new Account(ID, provider, signer);
 
 function txUrl(txHash) {

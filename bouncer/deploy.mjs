@@ -9,7 +9,10 @@ import { fileURLToPath } from 'url';
 import crypto from 'crypto';
 import nearApi from 'near-api-js';
 
-const { KeyPair, keyStores, InMemorySigner, Account, JsonRpcProvider } = nearApi;
+// near-api-js v6 exports — providers live under `providers`, KeyPairSigner wraps a KeyPair
+const { KeyPair, KeyPairSigner, keyStores, Account, providers } = nearApi;
+const { JsonRpcProvider } = providers;
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..');
 
@@ -46,10 +49,10 @@ async function helperCreate(accountId, publicKey) {
   const kp = KeyPair.fromRandom('ed25519');
   await keystore.setKey(NETWORK, ACCOUNT_ID, kp);
   const created = await helperCreate(ACCOUNT_ID, kp.getPublicKey().toString());
-  console.log('    helper ok:', JSON.stringify(created).slice(0, 160));
+  console.log('    helper ok: tx', created?.transaction_outcome?.id || '(executed optimistically)');
 
   const provider = new JsonRpcProvider({ url: RPC });
-  const signer = new InMemorySigner(keystore);
+  const signer = new KeyPairSigner(kp);
   const account = new Account(ACCOUNT_ID, provider, signer);
 
   console.log(`==> Deploying bouncer.wasm (${WASM.length} bytes)...`);
