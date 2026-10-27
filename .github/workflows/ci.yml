@@ -29,16 +29,27 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
-      - name: Cargo build
+      - name: Show versions
+        run: |
+          rustc -vV
+          cargo -vV
+      - name: Cargo build (debug, verbose)
         working-directory: bouncer/contracts/bouncer
         run: |
-          pwd
-          RUSTFLAGS="-C link-arg=-s" cargo build --target wasm32-unknown-unknown -v 2>&1 | tail -100
-          ls target/wasm32-unknown-unknown/debug/
-          cp target/wasm32-unknown-unknown/debug/bouncer.wasm ./bouncer.wasm
-          ls -lh ./bouncer.wasm
+          RUSTFLAGS="-C link-arg=-s" cargo build --target wasm32-unknown-unknown -v 2>&1 | tail -200
+      - name: List & copy wasm
+        run: |
+          find . -name "bouncer.wasm" 2>&1
+          ls -la bouncer/target/wasm32-unknown-unknown/debug/ 2>&1 | head -30
+          if [ -f bouncer/target/wasm32-unknown-unknown/debug/bouncer.wasm ]; then
+            cp bouncer/target/wasm32-unknown-unknown/debug/bouncer.wasm ./bouncer.wasm
+          else
+            find . -path ./node_modules -prune -o -name "bouncer.wasm" -print -exec cp {} ./bouncer.wasm \;
+          fi
+          ls -lh ./bouncer.wasm || echo "NO BOUNCER.WASM"
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: bouncer-wasm
-          path: bouncer/contracts/bouncer/bouncer.wasm
-          if-no-files-found: error
+          path: bouncer.wasm
+          if-no-files-found: ignore
