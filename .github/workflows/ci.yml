@@ -35,22 +35,35 @@ jobs:
         run: |
           rustc -vV
           cargo -vV
-          which rust-lld || echo "no rust-lld"
-      - name: Cargo build (debug, verbose)
-        working-directory: bouncer/contracts/bouncer
+      - name: Cargo build
         run: |
-          RUSTFLAGS="-C link-arg=-s" cargo build --target wasm32-unknown-unknown -v 2>&1 | tail -200
-      - name: List & copy wasm (target is relative to Cargo.toml)
-        run: |
-          echo "==="
+          echo "--- env ---"
+          env | grep -iE "cargo|target|rust" | head -20
+          echo "--- dirs ---"
           pwd
-          ls -la bouncer/contracts/bouncer/target/wasm32-unknown-unknown/debug/ 2>&1 | head -30
-          cp bouncer/contracts/bouncer/target/wasm32-unknown-unknown/debug/bouncer.wasm ./bouncer.wasm
-          ls -lh ./bouncer.wasm
-          wc -c ./bouncer.wasm
+          ls bouncer/contracts/bouncer/
+          echo "--- build ---"
+          unset CARGO_TARGET_DIR
+          cd bouncer/contracts/bouncer
+          # Remove any cargo config that might redirect target dir
+          rm -f .cargo/config.toml
+          RUSTFLAGS="-C link-arg=-s" cargo build --target wasm32-unknown-unknown -v 2>&1 | tail -150
+          echo "--- find ---"
+          find . -name "bouncer.wasm" 2>&1
+          find /home/runner -name "bouncer.wasm" 2>&1 | head -20
+      - name: Copy wasm (find it wherever it landed)
+        run: |
+          set -e
+          WASM=$(find /home/runner -name "bouncer.wasm" -not -path "*/node_modules/*" | head -1)
+          echo "WASM=$WASM"
+          test -n "$WASM"
+          mkdir -p /tmp/wasmout
+          cp "$WASM" /tmp/wasmout/bouncer.wasm
+          ls -la /tmp/wasmout/
       - name: Install binaryen & shrink
         run: |
           sudo apt-get update -qq && sudo apt-get install -y binaryen
+          cp /tmp/wasmout/bouncer.wasm ./bouncer.wasm
           wasm-opt -Os -o bouncer.opt.wasm bouncer.wasm && mv bouncer.opt.wasm bouncer.wasm
           ls -lh bouncer.wasm
       - name: Commit wasm
@@ -61,6 +74,4 @@ jobs:
           if ! git diff --cached --quiet; then
             git commit -m "chore(ci): attach bouncer.wasm"
             git push
-          else
-            echo "no change"
           fi
