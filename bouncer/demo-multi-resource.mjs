@@ -13,6 +13,7 @@ import nearApi from 'near-api-js';
 import { FileJournal } from './agent/procurement.mjs';
 import { createResourceProvider } from './services/resource-provider.mjs';
 import { httpResourceProvider, runResourceAgent } from './agent/resource-agent.mjs';
+import { createModelClient, planObjective } from './agent/goal-planner.mjs';
 
 const { Account, KeyPair, KeyPairSigner, providers, transactions } = nearApi;
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -98,6 +99,39 @@ async function main() {
   const funderId = `bouncer-ft-${suffix}.testnet`;
   const userId = `user.${bid}`;
   const vendorIds = { compute: `compute.${bid}`, storage: `storage.${bid}`, api: `api.${bid}` };
+  const storageSymbol = `BS${suffix}`.toUpperCase();
+  const apiSymbol = `BA${suffix}`.toUpperCase();
+  let aiGoals;
+  if (process.env.BOUNCER_DEMO_AI === '1') {
+    // Do inference and independently check the requested literals BEFORE
+    // creating/funding accounts. The model cannot set any financial fields.
+    const expectedInputs = {
+      compute: { text: 'near-hub compute job', rounds: 1000 },
+      storage: { name: 'bouncer-note', content: 'Persisted by the Bouncer testnet provider.' },
+      api: { text: 'actual testnet resource API' },
+    };
+    const limits = [
+      ['compute', 'compute-wnear', WNEAR, N / 10n],
+      ['storage', 'storage-credit', `${storageSymbol.toLowerCase()}.${FACTORY}`, 3n * CREDIT / 2n],
+      ['api', 'api-credit', `${apiSymbol.toLowerCase()}.${FACTORY}`, 2n * CREDIT],
+    ];
+    const config = { version: 1, contract_id: bid, owner_account_id: bid, provider_url: 'http://127.0.0.1:8787',
+      max_tasks: 3, required_resources: ['compute', 'storage', 'api'], resources: Object.fromEntries(limits.map(([resource, policyId, token, amount]) => [resource, {
+        policy_id: policyId, token, payee: vendorIds[resource], max_amount: amount.toString(), max_tasks: 1, max_total_amount: amount.toString(),
+      }])) };
+    const objective = 'Perform these three tasks: Hash the text "near-hub compute job" for exactly 1000 SHA-256 rounds. Store the exact content "Persisted by the Bouncer testnet provider." with the name "bouncer-note". Count the words and bytes in "actual testnet resource API".';
+    console.log('=== 0) Ask the configured model to plan the three resource tasks ===');
+    const modelClient = createModelClient({ endpoint: process.env.BOUNCER_LLM_URL, model: process.env.BOUNCER_LLM_MODEL, apiKey: process.env.BOUNCER_LLM_API_KEY || undefined });
+    const result = await planObjective({ objective, config, modelClient });
+    for (const goal of result.goals) {
+      if (JSON.stringify(goal.input) !== JSON.stringify(expectedInputs[goal.resource])) {
+        // The objective and planned inputs in this demo are public synthetic text.
+        throw new Error(`model did not reproduce the requested ${goal.resource} inputs: ${JSON.stringify(goal.input)}`);
+      }
+    }
+    aiGoals = result.goals;
+    console.log('    ✅ Model proposed the three requested inputs; owner-pinned policies, tokens, payees and budgets remain outside its control.');
+  }
   const bouncerKey = KeyPair.fromRandom('ed25519');
   const funderKey = KeyPair.fromRandom('ed25519');
   console.log(`=== 1) Create funded Bouncer ${bid} and test-token funder ===`);
@@ -126,8 +160,6 @@ async function main() {
   }
 
   console.log('\n=== 3) Create two separate 6-decimal testnet credit tokens ===');
-  const storageSymbol = `BS${suffix}`.toUpperCase();
-  const apiSymbol = `BA${suffix}`.toUpperCase();
   const storageToken = await createToken(funder, userId, storageSymbol, 'Bouncer Test Storage Credits');
   const apiToken = await createToken(funder, userId, apiSymbol, 'Bouncer Test API Credits');
 
@@ -179,20 +211,35 @@ async function main() {
   const products = Object.fromEntries(resources.map(r => [r.resource, {
     policy_id: r.policy, token: r.token, payee: r.vendor, amount: r.payment.toString(),
   }]));
-  const goals = resources.map(r => ({
+  const configuredGoals = resources.map(r => ({
     id: `${r.resource}-1`, resource: r.resource, input: r.input,
     policy_id: r.policy, token: r.token, payee: r.vendor, max_amount: r.payment.toString(),
   }));
+  // The optional AI path uses the model-generated input and independently
+  // checked owner-pinned financial fields. Default mode remains deterministic.
+  const goals = aiGoals || configuredGoals;
+  if (aiGoals) {
+    for (const expected of configuredGoals) {
+      const actual = aiGoals.find(goal => goal.id === expected.id);
+      if (JSON.stringify(actual) !== JSON.stringify(expected)) throw new Error('AI goal no longer matches the configured testnet authority');
+    }
+  }
   const dataDir = path.join(RUN_DIR, `${bid}.provider`);
   const providerFile = path.join(RUN_DIR, `${bid}.provider.json`);
   const goalsFile = path.join(RUN_DIR, `${bid}.goals.json`);
+  const ownerFile = path.join(RUN_DIR, `${bid}.owner.json`);
   const providerConfig = { contract_id: bid, data_dir: dataDir, port: 8787, products };
   const goalsConfig = { contract_id: bid, owner_account_id: bid, provider_url: 'http://127.0.0.1:8787', journal_path: journalPath, goals };
-  for (const [file, config] of [[providerFile, providerConfig], [goalsFile, goalsConfig]]) {
+  // A reusable owner catalog for later natural-language tasks; each new run
+  // remains constrained by both these maxima and the on-chain policies.
+  const ownerConfig = { version: 1, contract_id: bid, owner_account_id: bid, provider_url: 'http://127.0.0.1:8787', max_tasks: 3,
+    resources: Object.fromEntries(resources.map(r => [r.resource, { policy_id: r.policy, token: r.token, payee: r.vendor,
+      max_amount: r.payment.toString(), max_tasks: 1, max_total_amount: r.payment.toString() }])) };
+  for (const [file, config] of [[providerFile, providerConfig], [goalsFile, goalsConfig], [ownerFile, ownerConfig]]) {
     fs.writeFileSync(file, JSON.stringify(config, null, 2) + '\n', { mode: 0o600 });
     fs.chmodSync(file, 0o600);
   }
-  console.log(`    Provider config: ${providerFile}\n    Goals config: ${goalsFile}`);
+  console.log(`    Provider config: ${providerFile}\n    Goals config: ${goalsFile}\n    Owner planning config: ${ownerFile}`);
   const devProvider = createResourceProvider({ rpcProvider: provider, contractId: bid, products, dataDir });
   await new Promise((resolve, reject) => {
     devProvider.server.once('error', reject);
@@ -265,7 +312,11 @@ async function main() {
   }
   console.log('\n✅ Three real testnet FT payments and self-hosted resource services verified.');
   console.log('Services are development examples, not commercial vendors or production infrastructure.');
-  if (process.env.GITHUB_ACTIONS === 'true') console.log(`::notice title=Testnet multi-resource proof::contract=${bid}; ${proof}`);
+  if (aiGoals) console.log('The resource inputs were planned by the configured model and checked against the synthetic objective before payment.');
+  if (process.env.GITHUB_ACTIONS === 'true') {
+    const label = aiGoals ? 'AI-planned testnet multi-resource proof' : 'Testnet multi-resource proof';
+    console.log(`::notice title=${label}::contract=${bid}; ${proof}`);
+  }
   console.log(`Contract: ${bid}`);
   console.log(`Explorer: https://testnet.nearblocks.io/address/${bid}?tab=receipts`);
 }

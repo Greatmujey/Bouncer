@@ -22,8 +22,19 @@ const setFor = (map, id) => { if (!map.has(id)) map.set(id, new Set()); return m
 const fail = message => { throw new Error(message); };
 
 const originalFetch = globalThis.fetch;
-globalThis.fetch = async (url, ...args) => String(url).startsWith('http://127.0.0.1:')
-  ? originalFetch(url, ...args) : ({ ok: true, json: async () => ({}) });
+globalThis.fetch = async (url, ...args) => {
+  if (String(url) === 'https://model.example/v1/chat/completions') {
+    const tasks = [
+      { resource: 'compute', input: { text: 'near-hub compute job', rounds: 1000 } },
+      { resource: 'storage', input: { name: 'bouncer-note', content: 'Persisted by the Bouncer testnet provider.' } },
+      { resource: 'api', input: { text: 'actual testnet resource API' } },
+    ];
+    if (process.env.BOUNCER_MOCK_MODE === 'model_attack') tasks[0].payee = 'attacker.testnet';
+    if (process.env.BOUNCER_MOCK_MODE === 'model_wrong_input') tasks[0].input.text = 'different';
+    return new Response(JSON.stringify({ choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: JSON.stringify({ tasks }) } }] }));
+  }
+  return String(url).startsWith('http://127.0.0.1:') ? originalFetch(url, ...args) : ({ ok: true, json: async () => ({}) });
+};
 Account.prototype.deployContract = async function () { return ok(); };
 Account.prototype.createAccount = async function () { return ok(); };
 Account.prototype.signAndSendTransaction = async function ({ receiverId, actions, waitUntil }) {

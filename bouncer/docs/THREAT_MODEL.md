@@ -56,12 +56,15 @@ all possible callback or token failure cases.
    denominated in token units, not USD; there is no price oracle. Rebinding a
    policy to another token retains numeric spend history in the old units. Use
    a new policy for each token rather than changing an existing policy's token.
-7. **Development-only provider and no cross-chain settlement.** The agent can
-   fetch fixed quotes and pay pinned test vendors; the local provider performs
-   SHA-256 work, local-file storage and text statistics. It is not an independent
-   commercial provider or AI marketplace. The multi-token test uses synthetic
-   testnet FTs, not USDC. The old solver is disabled because it previously used
-   fake fill hashes; the standalone quote comparator does not settle anything.
+7. **Untrusted model and development-only provider.** An optional model can
+   propose resource inputs but not financial authority. Injection or errors can
+   still produce an unwanted task within an authorized budget; review output
+   before spending. Objectives go to the configured model. The local provider
+   performs SHA-256 work, local-file storage and text statistics; it is not an
+   independent commercial provider or marketplace. The multi-token test uses
+   synthetic testnet FTs, not USDC. There is no cross-chain settlement. The old
+   solver is disabled because it previously used fake fill hashes; the standalone
+   quote comparator does not settle anything.
 8. **Local journal is not exactly-once settlement.** It blocks automatic retries
    of uncertain payments in one local journal, but a different or deleted
    journal, multiple hosts, or power loss can bypass that protection. Operators

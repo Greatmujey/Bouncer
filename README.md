@@ -5,7 +5,10 @@ storage, and API credits — using different NEAR fungible tokens, subject to
 owner-defined spending policies. The current prototype implements the vault and
 policy checks. The v4 prototype has passed a three-token testnet quote → payment
 → self-hosted delivery check and a separate restricted-key security/refund check.
-This is unaudited testnet software, not suitable for real funds.
+An optional model adapter now translates natural-language objectives into tasks
+within an owner-controlled catalog; see [AI agent setup and limits](bouncer/docs/AI_AGENT.md).
+No model or inference service is bundled. This is unaudited testnet software,
+not suitable for real funds.
 
 ## Website preview (read-only)
 
@@ -17,8 +20,8 @@ production deployment, and the private repository remains private.
 `bouncer/web/` explains the prototype's request → quote → guarded payment →
 fulfillment flow with a newcomer tour and an interactive walkthrough of three
 real, **recorded** testnet requests and results. It links to the payment transactions
-and separate refund test, and distinguishes what works today from planned AI
-planning and commercial integrations.
+and separate refund test, and distinguishes the recorded deterministic flow from the then-planned AI
+planner and commercial integrations. This snapshot predates the new model adapter.
 The two credit tokens are synthetic and fulfillment was self-hosted. The site
 is not a live agent dashboard or commercial marketplace. It includes an
 optional, identity-only testnet wallet connection on an isolated top-level
@@ -51,7 +54,7 @@ Gemini CLI and Claude Code have passed local stdio connection checks without a
 model conversation; project configuration is included. ChatGPT web and other
 remote clients need a separately hosted HTTPS endpoint and compatible
 authentication; an OAuth deployment is not supplied or verified. MCP connects
-tools—it does not provide AI planning or a model.
+tools—it does not itself provide a model or access to the new planning/execution path.
 
 ## Target tracks
 
@@ -97,9 +100,9 @@ Offline mocks are not proof of on-chain behavior.
 - A self-hosted development provider can verify a payment and perform a small
   compute job, store a local file, or serve a text-statistics API. It is not a
   commercial provider. The agent fetches fixed quotes from this provider and
-  validates owner-pinned constraints, but is not an AI or a marketplace.
-  Independent vendors, invoices, stablecoin flows and NEAR Intents remain
-  unfinished.
+  validates owner-pinned constraints. An optional model adapter proposes tasks;
+  it requires a separately supplied model and is not a marketplace. Independent
+  vendors, invoices, stablecoin flows and NEAR Intents remain unfinished.
 - Token trust is not enforced; configure policies only for trusted FTs. Changing
   a policy's token retains its numeric spend history even if the new token has
   different units; create a new policy for a different token instead. Key
@@ -179,10 +182,22 @@ The separately tested [failed-transfer refund](https://testnet.nearblocks.io/txn
 restored the recorded vault balance and daily budget. These are testnet results,
 not commercial resource purchases.
 
+### Natural-language planning
+
+The optional [AI agent](bouncer/docs/AI_AGENT.md) accepts an objective and a
+trusted owner catalog, then can preview or explicitly execute the resulting
+resource tasks through the same guarded runner. The model cannot set payment
+addresses, policy, token or budget. AI output can still be wrong; review it
+before spending. A local model server or another explicitly configured
+OpenAI-compatible endpoint is required. The opt-in `[ai-multi-resource]` CI job
+is designed to exercise real local inference followed by real testnet payments;
+check the actual run result before treating it as verified. The original run
+linked above used deterministic inputs.
+
 ### Run the resource agent again
 
-The multi-token script also writes `<account>.provider.json` and
-`<account>.goals.json` alongside its plan and journal. The goals file points to
+The multi-token script also writes `<account>.provider.json`,
+`<account>.owner.json` and `<account>.goals.json` alongside its plan and journal. The goals file points to
 the **same journal** used for the original payments; retaining it is essential
 to avoid paying twice. It also contains the resource inputs, so treat it as
 private. To start the local development provider and preview those goals after
@@ -258,6 +273,7 @@ real testnet transactions. To build locally with Rust and the wasm target, run
 - `bouncer/demo-multi-resource.mjs` — testnet wNEAR plus synthetic FT check.
 - `bouncer/agent/procurement.mjs` — plan-driven, testnet-only procurement runner.
 - `bouncer/agent/resource-agent.mjs` — quote, guarded payment, fulfillment orchestration.
+- `bouncer/agent/goal-planner.mjs`, `autonomous.mjs` — model proposals constrained by the owner catalog.
 - `bouncer/services/resource-provider.mjs` — self-hosted test-only resource provider.
 - `bouncer/demo/index.html` — clearly labelled offline simulation only; it sends
   no transactions and does not exactly match contract behavior.

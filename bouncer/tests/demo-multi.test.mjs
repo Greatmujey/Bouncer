@@ -7,11 +7,12 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-function run(mode = '') {
+function run(mode = '', ai = false) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'bouncer-multi-test-'));
   try {
     const child = spawnSync(process.execPath, ['--import=./bouncer/tests/mock-multi-near.mjs', 'bouncer/demo-multi-resource.mjs'], {
-      cwd: repo, env: { ...process.env, HOME: home, BOUNCER_MOCK_MODE: mode }, encoding: 'utf8', timeout: 30_000,
+      cwd: repo, env: { ...process.env, HOME: home, BOUNCER_MOCK_MODE: mode, BOUNCER_DEMO_AI: ai ? '1' : '',
+        BOUNCER_LLM_URL: 'https://model.example/v1/chat/completions', BOUNCER_LLM_MODEL: 'mock-model' }, encoding: 'utf8', timeout: 30_000,
     });
     const dir = path.join(home, '.bouncer', 'testnet');
     const files = fs.existsSync(dir) ? fs.readdirSync(dir) : [];
@@ -21,9 +22,11 @@ function run(mode = '') {
     const plan = planFile ? JSON.parse(fs.readFileSync(path.join(dir, planFile), 'utf8')) : null;
     const goalsFile = files.find(file => file.endsWith('.goals.json'));
     const providerFile = files.find(file => file.endsWith('.provider.json'));
+    const ownerFile = files.find(file => file.endsWith('.owner.json'));
     const goals = goalsFile ? JSON.parse(fs.readFileSync(path.join(dir, goalsFile), 'utf8')) : null;
     const provider = providerFile ? JSON.parse(fs.readFileSync(path.join(dir, providerFile), 'utf8')) : null;
-    return { ...child, journal, plan, goals, provider };
+    const owner = ownerFile ? JSON.parse(fs.readFileSync(path.join(dir, ownerFile), 'utf8')) : null;
+    return { ...child, journal, plan, goals, provider, owner };
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
 }
 
@@ -37,12 +40,34 @@ test('multi-token setup and real procurement runner complete using a mock transp
   assert.match(result.goals.journal_path, /\.bouncer-journal\.json$/);
   assert.equal(result.goals.goals.length, 3);
   assert.equal(Object.keys(result.provider.products).length, 3);
+  assert.equal(Object.keys(result.owner.resources).length, 3);
+  assert.equal(result.owner.resources.compute.token, 'wrap.testnet');
+  assert.equal(result.owner.resources.storage.max_amount, result.provider.products.storage.amount);
   assert.equal(result.journal.entries.filter(e => e.status === 'completed').length, 3);
   assert.equal((result.stdout.match(/\[procurement\] PAID /g) || []).length, 3);
   assert.equal((result.stdout.match(/\[procurement\] SKIP /g) || []).length, 3);
   assert.equal((result.stdout.match(/\[resource-agent\] FULFILLED /g) || []).length, 6);
   assert.equal((result.stdout.match(/VERIFIED /g) || []).length, 3);
   assert.match(result.stdout, /Provider rejected a changed order/);
+});
+
+test('model-planned multi-resource path completes with a mocked model and mocked testnet', () => {
+  const result = run('', true);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Model proposed the three requested inputs/);
+  assert.match(result.stdout, /resource inputs were planned by the configured model/);
+  assert.deepEqual(result.goals.goals.map(g => g.resource), ['compute', 'storage', 'api']);
+  assert.equal(result.journal.entries.filter(e => e.status === 'completed').length, 3);
+});
+
+test('a malicious or inaccurate model plan fails before any testnet setup', () => {
+  for (const mode of ['model_attack', 'model_wrong_input']) {
+    const result = run(mode, true);
+    assert.equal(result.status, 1);
+    assert.doesNotMatch(result.stdout, /Create funded Bouncer|PAID|FULFILLED/);
+    assert.equal(result.journal, null);
+    assert.equal(result.plan, null);
+  }
 });
 
 test('a token factory failure stops the multi-token run, without claiming success', () => {
