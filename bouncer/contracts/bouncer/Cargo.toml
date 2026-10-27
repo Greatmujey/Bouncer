@@ -17,8 +17,8 @@ near-sdk = { version = "5.14", default-features = false, features = ["unit-testi
 [profile.release]
 codegen-units = 1
 opt-level = "z"
-lto = true
+lto = false
 debug = false
 panic = "abort"
 overflow-checks = true
-strip = true
+strip = false
