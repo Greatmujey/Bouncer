@@ -58,7 +58,18 @@ credit tokens, and creates real testnet transactions. Never copy or commit the
 keys, generated goals, inputs or journals. The original demo has already spent
 some of the vault and rolling budget, so later requests may be blocked.
 
-Start a model server **you trust** separately. It must expose the OpenAI-style
+Start a model server **you trust** separately. On Linux x86_64,
+`bash bouncer/scripts/local-model.sh` offers the same pinned Qwen2.5 1.5B CPU
+model used by the live test. On first use it downloads approximately **1.12 GB**
+of model weights and a 23 MB runtime into `~/.cache/bouncer-local-model/`,
+verifies their SHA-256 hashes and listens on loopback only. It does not require
+an account or paid inference API. Keep it running in a separate terminal, then
+set `BOUNCER_LLM_URL=http://127.0.0.1:17890/v1/chat/completions` and
+`BOUNCER_LLM_MODEL=bouncer-local-qwen` for the agent command. The local server
+is unauthenticated; other processes on the same machine may reach it. The script
+and downloads are third-party code and weights, not a security audit.
+
+Alternatively use another compatible server. It must expose the OpenAI-style
 `POST /v1/chat/completions` endpoint and support schema-constrained JSON output;
 HTTP is allowed only on loopback, HTTPS is required otherwise, and redirects are
 not followed. The software does not bundle a model, model server or inference
@@ -153,10 +164,13 @@ Apache-2.0 Qwen2.5 1.5B model and a pinned llama.cpp CPU server to the **ephemer
 runner**, verifies their SHA-256 hashes, runs actual local inference, and, only
 if the model correctly extracts the synthetic objectives, creates fresh testnet
 accounts and performs the three-token payment and self-hosted delivery check.
-It is also configured to purchase a public GitHub-data lookup using the API
-credit policy; verify that newer step's result separately. This synthetic demo
-checks the requested repository literally and can ask the model once for a
-correction before setup; malformed or unauthorized output still fails closed.
+It also purchases a public GitHub-data lookup using the API credit policy. The
+[AI job in run 40581368718](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40581368718/job/122462232919)
+passed that additional step with a real testnet payment and a second independent
+GitHub read; the same workflow's separate security job failed on an RPC nonce
+error. This synthetic demo checks the repository literally and can ask the model
+once for a correction before setup; malformed or unauthorized output still fails
+closed.
 [Run 40579499294](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40579499294)
 passed with contract `bouncer-ff7d41d8.testnet`: model inference, three real
 synthetic/testnet-token payments and all local deliveries. It used text

@@ -16,8 +16,9 @@ import { fetchPublicRepository } from './services/github-data.mjs';
 import { httpResourceProvider, runResourceAgent } from './agent/resource-agent.mjs';
 import { createModelClient, planObjective } from './agent/goal-planner.mjs';
 import { validateRpcEndpoint } from './shared/rpc-endpoint.mjs';
+import { MonotonicAccount } from './agent/near-account.mjs';
 
-const { Account, KeyPair, KeyPairSigner, providers, transactions } = nearApi;
+const { KeyPair, KeyPairSigner, providers, transactions } = nearApi;
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const KEY_DIR = path.join(os.homedir(), '.near-credentials', 'testnet');
 const RUN_DIR = path.join(os.homedir(), '.bouncer', 'testnet');
@@ -35,7 +36,7 @@ const GAS300 = 300n * T;
 const STORAGE_WNEAR = 1_250_000_000_000_000_000_000n;
 const ICON = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
 const provider = new providers.JsonRpcProvider({ url: validateRpcEndpoint(RPC) });
-const account = (id, key) => new Account(id, provider, new KeyPairSigner(key));
+const account = (id, key) => new MonotonicAccount(id, provider, new KeyPairSigner(key));
 const txUrl = hash => `https://testnet.nearblocks.io/txns/${hash}?network=testnet`;
 const view = (id, method, args) => provider.callFunction(id, method, args, { finality: 'final' });
 

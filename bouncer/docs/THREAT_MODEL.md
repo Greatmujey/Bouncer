@@ -69,10 +69,13 @@ all possible callback or token failure cases.
    synthetic testnet FTs, not USDC. There is no cross-chain settlement. The old
    solver is disabled because it previously used fake fill hashes; the standalone
    quote comparator does not settle anything.
-8. **Local journal is not exactly-once settlement.** It blocks automatic retries
-   of uncertain payments in one local journal, but a different or deleted
-   journal, multiple hosts, or power loss can bypass that protection. Operators
-   must reconcile pending transactions manually.
+8. **Local journal and nonce tracker are not distributed coordination.** The
+   journal blocks automatic retries of uncertain payments in one local file,
+   but a different/deleted journal, multiple hosts or power loss can bypass it.
+   The signer keeps its own process's nonces monotonic to mitigate stale RPC
+   reads; it does not coordinate concurrent processes using the same key or
+   retry a failed send. Use one writer per key and reconcile pending payments
+   manually.
 9. **Provider verification and operations are not trustless.** The provider
    trusts its configured RPC, Bouncer deployment/code and token contracts. It
    verifies transaction arguments and receipts, but cannot protect against a

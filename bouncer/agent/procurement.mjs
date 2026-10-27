@@ -9,8 +9,9 @@ import crypto from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import nearApi from 'near-api-js';
 import { validateRpcEndpoint } from '../shared/rpc-endpoint.mjs';
+import { MonotonicAccount } from './near-account.mjs';
 
-const { Account, KeyPair, KeyPairSigner, providers } = nearApi;
+const { KeyPair, KeyPairSigner, providers } = nearApi;
 const DEFAULT_RPC = 'https://test.rpc.fastnear.com';
 const CONTRACT_VERSION = 'bouncer-agent-v4';
 const U128_MAX = (1n << 128n) - 1n;
@@ -243,7 +244,7 @@ export function createRuntime({ plan: rawPlan, keyFile, rpc }) {
   }
   const key = KeyPair.fromString(credentials.private_key);
   const provider = new providers.JsonRpcProvider({ url: rpcUrl });
-  const account = new Account(plan.owner_account_id, provider, new KeyPairSigner(key));
+  const account = new MonotonicAccount(plan.owner_account_id, provider, new KeyPairSigner(key));
   return { provider, account, publicKey: key.getPublicKey() };
 }
 

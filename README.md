@@ -193,11 +193,16 @@ trusted owner catalog, then can preview or explicitly execute the resulting
 resource tasks through the same guarded runner. The model cannot set payment
 addresses, policy, token or budget. AI output can still be wrong; review it
 before spending. A local model server or another explicitly configured
-OpenAI-compatible endpoint is required. In the [AI-planned testnet run](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40579499294),
+OpenAI-compatible endpoint is required. An optional Linux x86_64 bootstrap
+script downloads and verifies a pinned local model; it is not bundled. In the [AI-planned testnet run](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40579499294),
 a local Qwen2.5 1.5B model generated the three synthetic tasks; Bouncer checked
 them, paid three testnet FTs and verified the local deliveries. The model's
 inputs were checked against the requested literals before any accounts were
-created. The original v4 run linked above used deterministic inputs. Both use
+created. A [later AI job](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40581368718/job/122462232919)
+also paid synthetic API credits for live public GitHub repository data and
+checked the result against a second GitHub read. That workflow's separate
+security job failed on an RPC nonce error; it is not evidence of a security
+pass. The original v4 run linked above used deterministic inputs. These are
 self-hosted development services, not commercial vendors.
 
 ### Run the resource agent again

@@ -160,23 +160,13 @@ jobs:
         with:
           node-version: '22'
       - run: npm ci --prefix bouncer --no-audit --no-fund
-      - name: Download pinned local inference runtime and model into temporary runner storage
+      - name: Prepare pinned local model with the user bootstrap script
         shell: bash
+        env:
+          BOUNCER_MODEL_CACHE: ${{ runner.temp }}/bouncer-local-model
         run: |
           set +e
-          (
-            set -euo pipefail
-            mkdir -p "$RUNNER_TEMP/llama"
-            curl -fsSL --retry 3 --connect-timeout 30 --max-time 600 \
-              'https://github.com/ggml-org/llama.cpp/releases/download/b11932/llama-b11932-bin-ubuntu-x64.tar.gz' \
-              -o "$RUNNER_TEMP/llama.tar.gz"
-            echo "dd5370127e82d15130f76876615dcca7fe80d5c451297c37ad4029df0abc84ba  $RUNNER_TEMP/llama.tar.gz" | sha256sum -c -
-            tar -xzf "$RUNNER_TEMP/llama.tar.gz" -C "$RUNNER_TEMP/llama"
-            curl -fsSL --retry 3 --connect-timeout 30 --max-time 600 \
-              'https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/91cad51170dc346986eccefdc2dd33a9da36ead9/qwen2.5-1.5b-instruct-q4_k_m.gguf' \
-              -o "$RUNNER_TEMP/bouncer-model.gguf"
-            echo "6a1a2eb6d15622bf3c96857206351ba97e1af16c30d7a74ee38970e434e9407e  $RUNNER_TEMP/bouncer-model.gguf" | sha256sum -c -
-          ) 2>&1 | tee "$RUNNER_TEMP/ai-download.log"
+          bash bouncer/scripts/local-model.sh --prepare 2>&1 | tee "$RUNNER_TEMP/ai-download.log"
           result=${PIPESTATUS[0]}
           if [ "$result" -ne 0 ]; then
             node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-2500).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=Model download failed::"+s)' "$RUNNER_TEMP/ai-download.log"
@@ -189,13 +179,10 @@ jobs:
           BOUNCER_DEMO_PUBLIC_DATA: '1'
           BOUNCER_LLM_URL: http://127.0.0.1:17890/v1/chat/completions
           BOUNCER_LLM_MODEL: bouncer-local-qwen
+          BOUNCER_MODEL_CACHE: ${{ runner.temp }}/bouncer-local-model
         run: |
           set -euo pipefail
-          server=$(find "$RUNNER_TEMP/llama" -type f -name llama-server -print -quit)
-          test -n "$server"
-          export LD_LIBRARY_PATH="$(dirname "$server"):${LD_LIBRARY_PATH:-}"
-          "$server" -m "$RUNNER_TEMP/bouncer-model.gguf" --host 127.0.0.1 --port 17890 \
-            --threads 2 --ctx-size 4096 --parallel 1 --alias "$BOUNCER_LLM_MODEL" > "$RUNNER_TEMP/llama-server.log" 2>&1 &
+          bash bouncer/scripts/local-model.sh > "$RUNNER_TEMP/llama-server.log" 2>&1 &
           server_pid=$!
           trap 'kill "$server_pid" 2>/dev/null || true' EXIT
           if ! curl -fsS --retry 45 --retry-delay 2 --retry-connrefused 'http://127.0.0.1:17890/health'; then

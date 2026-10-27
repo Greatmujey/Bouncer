@@ -9,8 +9,9 @@ import { fileURLToPath } from 'node:url';
 import crypto from 'node:crypto';
 import nearApi from 'near-api-js';
 import { validateRpcEndpoint } from './shared/rpc-endpoint.mjs';
+import { MonotonicAccount } from './agent/near-account.mjs';
 
-const { KeyPair, KeyPairSigner, Account, providers, transactions } = nearApi;
+const { KeyPair, KeyPairSigner, providers, transactions } = nearApi;
 const { JsonRpcProvider } = providers;
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const NETWORK = 'testnet';
@@ -31,7 +32,7 @@ const YOCTO = 1n;
 const COMPUTE_POLICY = 'wnear-compute';
 const STORAGE_POLICY = 'wnear-storage'; // same token: policy isolation, not a second FT
 const txUrl = hash => `https://testnet.nearblocks.io/txns/${hash}?network=testnet`;
-const accountFor = (id, key) => new Account(id, provider, new KeyPairSigner(key));
+const accountFor = (id, key) => new MonotonicAccount(id, provider, new KeyPairSigner(key));
 
 function saveKey(id, key, label = '') {
   fs.mkdirSync(KEY_DIR, { recursive: true, mode: 0o700 });
