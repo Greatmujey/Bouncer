@@ -101,3 +101,15 @@ test('only the deliberately unregistered refund probe retries one explicit Expir
   assert.match(timeout.stderr, /RPC timed out/);
   assert.doesNotMatch(timeout.stderr, /retrying once/);
 });
+
+
+test('negative probes retry only explicit Expired errors and still require the expected rejection', () => {
+  const recovered = runDemo('rejection_expired_once');
+  assert.equal(recovered.status, 0, recovered.stderr);
+  assert.match(recovered.stderr, /Test-only daily cap: expired transaction; retrying once/);
+  assert.match(recovered.stdout, /daily cap: rejected as expected/);
+  const repeated = runDemo('rejection_expired_twice');
+  assert.equal(repeated.status, 1);
+  assert.match(repeated.stderr, /daily cap: expected .*Transaction has expired/);
+  assert.doesNotMatch(repeated.stdout, /All checks passed/);
+});

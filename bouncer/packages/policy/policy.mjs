@@ -1,6 +1,7 @@
 /**
  * Independent, offline policy simulation. Unlike the on-chain contract, this
- * uses rolling windows and does not check vault balance or agent-key grants.
+ * uses exact rolling windows (not the contract's conservative hourly buckets)
+ * and does not check vault balance or agent-key grants.
  * It is not authoritative; the contract makes the final spending decision.
  *
  * @typedef {{periodNs: number, limit: bigint}} Window

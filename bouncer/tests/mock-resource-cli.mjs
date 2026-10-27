@@ -20,7 +20,7 @@ globalThis.fetch = async (url, options) => {
 };
 providers.JsonRpcProvider.prototype.viewAccessKey = async () => ({ permission: { FunctionCall: { receiver_id: 'bouncer.testnet', method_names: ['execute'] } } });
 providers.JsonRpcProvider.prototype.callFunction = async (_id, method) => {
-  if (method === 'contract_version') return 'bouncer-agent-v3';
+  if (method === 'contract_version') return 'bouncer-agent-v4';
   if (method === 'get_policy') return { token: 'wrap.testnet' };
   if (method === 'is_agent_key_allowed') return true;
   if (method === 'check') return process.env.MOCK_BLOCKED ? [false, 'blocked'] : [true, 'ok'];

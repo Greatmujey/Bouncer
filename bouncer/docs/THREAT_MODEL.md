@@ -14,10 +14,12 @@ It has not been audited and must not hold valuable funds.
   revoke agent keys, change payees, and withdraw. Function-call keys cannot
   attach deposits under the NEAR protocol. Grants are contract-level state;
   they do not create or limit a protocol access key.
-- Per-transaction and fixed UTC daily caps, the token vault balance, and a
-  fail-closed payee allowlist are checked atomically before a debit.
+- Per-transaction caps, a conservative rolling daily budget, the token vault
+  balance, and a fail-closed payee allowlist are checked atomically before a
+  debit. The current hour plus 24 prior hourly buckets prevent early expiry;
+  some spend remains counted for up to one hour beyond 24 hours.
 - The contract pays the token transfer's required 1 yoctoNEAR itself. A private
-  callback attempts to restore the vault and the **original** daily bucket if
+  callback attempts to restore the vault and the **original** hourly bucket if
   the token transfer fails. The demo inspects receipts and exact token balances
   rather than trusting a successful callback status alone.
 
@@ -29,7 +31,7 @@ Actions or Codespaces result before treating those behaviors as verified.
 
 1. **No audit or guaranteed callback recovery.** If the callback itself fails,
    the recorded balance may remain debited even if a transfer failed. The native
-   test for a failed transfer and day-boundary refund is not an adversarial
+   test for a failed transfer and hour-boundary refund is not an adversarial
    test of all live cross-contract failures.
 2. **Token trust is not enforced.** `ft_on_transfer` accepts its predecessor as
    a token without an owner-approved registry. Malicious or non-standard FT
@@ -63,9 +65,10 @@ Actions or Codespaces result before treating those behaviors as verified.
    and lock are single-process, storage is plaintext and publicly retrievable,
    and there is no authentication, transport security or multi-host replay
    protection. Orders are sent to the provider; their hashes are on chain.
-10. **Prior contracts are unsafe to upgrade without migration.** This branch
-   adds an agent-grants field to contract state. The old contracts retain their
-   original unauthenticated behavior and cannot read the new state layout.
+10. **Prior contracts are unsafe to upgrade without migration.** Older contracts
+   have different state and authorization; v3 and v4 also interpret budget bucket
+   keys differently. Deploy v4 fresh. Hourly spend buckets are not pruned and
+   incur ongoing state/storage costs; the 25 reads per check also consume gas.
 
 The owner key, NEAR protocol, token implementation, callback availability and
 software correctness are trust assumptions. Offline JavaScript mocks are not

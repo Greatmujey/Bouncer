@@ -21,8 +21,11 @@ AI Swarms are potential extensions, not completed integrations.
   The owner separately creates a NEAR function-call key limited to `execute`.
   Each signed request includes the expected token, checked on chain against the
   policy to prevent a token substitution between preview and execution.
-- Per-transaction and UTC-aligned 24-hour bucket caps, and fail-closed payee
-  allowlists. Revoking the final payee blocks all payments on that policy.
+- Per-transaction caps, a conservative rolling daily budget and fail-closed
+  payee allowlists. The daily budget sums the current hour and 24 previous
+  hourly buckets: spending less than 24 hours old cannot expire early, but may
+  remain counted for up to one extra hour. Revoking the final payee blocks all
+  payments on that policy. `daily_spent` reports the current budget usage.
 - Policy changes, agent-key grants/revocations, payee changes and withdrawals
   require the owner and exactly **1 yoctoNEAR**.
 - A transfer failure callback attempts to refund the vault and the original
@@ -39,8 +42,9 @@ offline mocks are not proof of on-chain behavior.
 
 - These changes only apply to **newly deployed contracts**. Earlier deployments,
   including `bouncer-a958bd.testnet`, still have the older unauthenticated
-  `execute` and a different state layout. Do not upgrade them without a migration
-  or use them for valuable funds. The script creates a fresh account.
+  `execute` and a different state layout. The v4 rolling-budget bucket semantics
+  also differ from v3. Do not upgrade older deployments without a migration or
+  use them for valuable funds. The script creates a fresh account.
 - The security check uses **one token (wNEAR)**. The separate multi-token check
   creates two synthetic testnet credit FTs and sends payments to three vendor
   accounts. It is not a USDC/stablecoin demonstration.
@@ -90,9 +94,8 @@ Every successful operation prints a transaction link. The script exits with a
 nonzero status on unexpected rejection, unexpected success, failed downstream
 receipt, or a balance mismatch. Testnet RPC/helper outages or faucet limits can
 also stop a run; their errors are printed rather than hidden. Set
-`NEAR_TESTNET_RPC` to override the default FastNEAR testnet RPC. The daily cap uses
-UTC-aligned buckets, so a run crossing a bucket boundary can invalidate that
-particular test.
+`NEAR_TESTNET_RPC` to override the default FastNEAR testnet RPC. Daily budget
+tracking uses conservative hourly buckets rather than resetting at midnight.
 
 GitHub Actions also has an opt-in testnet smoke job, triggered manually or by a
 push whose commit message contains `[testnet-smoke]`. It creates real testnet
@@ -122,7 +125,9 @@ A [live testnet CI run](https://github.com/abdullahimujeeb0505-stack/Bouncer/act
 passed the restricted-key security and three-token payment checks. A
 [separate run](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40556175783)
 passed the complete quote → payment → local delivery check using the self-hosted
-provider. Neither run demonstrates a commercial resource purchase.
+provider. These runs used the prior v3 contract; the rolling-budget v4 contract
+requires a fresh deployment and its own live verification. Neither run
+demonstrates a commercial resource purchase.
 
 ### Run the resource agent again
 
@@ -189,11 +194,12 @@ npm install --prefix bouncer
 npm test --prefix bouncer
 ```
 
-The JavaScript policy simulation uses rolling windows and is not identical to
-the contract's fixed daily buckets. Offline demo tests use a mocked NEAR
-transport; neither proves live blockchain behavior. CI also runs native Rust
+The JavaScript policy simulation uses exact rolling windows and is not identical
+to the contract's conservative hourly buckets. Offline demo tests use a mocked
+NEAR transport; neither proves live blockchain behavior. CI also runs native Rust
 contract tests, and the opt-in Actions job or Codespaces command above exercises
-real testnet transactions.
+real testnet transactions. To build locally with Rust and the wasm target, run
+`bash bouncer/scripts/build.sh`; CI additionally uses `wasm-opt -O1`.
 
 ## Main files
 

@@ -14,6 +14,7 @@ let owner;
 let vault = 0n;
 let tx = 0;
 let refundAttempts = 0;
+let rejectionAttempts = 0;
 
 const outcome = (logs = []) => ({
   transaction_outcome: { id: `mock-tx-${++tx}` },
@@ -105,6 +106,9 @@ Account.prototype.callFunctionRaw = async function ({ contractId, methodName, ar
       if (!allowlists.get(args.policy_id)?.has(args.payee)) fail('BLOCKED: payee not in allowlist');
       if (args.expected_token !== policy.token) fail('BLOCKED: policy token does not match expected token');
       if (amount + (spent.get(args.policy_id) || 0n) > BigInt(policy.daily_cap)) {
+        rejectionAttempts++;
+        if (process.env.BOUNCER_MOCK_MODE === 'rejection_expired_twice' ||
+            (process.env.BOUNCER_MOCK_MODE === 'rejection_expired_once' && rejectionAttempts === 1)) fail('Transaction has expired', 'Expired');
         if (process.env.BOUNCER_MOCK_MODE === 'wrong_rejection') fail('RPC warning: connection lost');
         if (process.env.BOUNCER_MOCK_MODE !== 'allow_daily') fail('BLOCKED: daily cap exceeded for this policy');
       }
@@ -139,7 +143,7 @@ Account.prototype.callFunctionRaw = async function ({ contractId, methodName, ar
   }
 };
 providers.JsonRpcProvider.prototype.callFunction = async function (contractId, method, args) {
-  if (method === 'contract_version') return 'bouncer-agent-v3';
+  if (method === 'contract_version') return 'bouncer-agent-v4';
   if (method === 'get_policy') { const p = policies.get(args.policy_id); return p ? { token: p.token, per_tx_cap: p.per_tx_cap, daily_cap: p.daily_cap } : null; }
   if (method === 'vault_balance') return vault.toString();
   if (method === 'storage_balance_of') return null;

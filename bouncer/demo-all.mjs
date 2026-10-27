@@ -77,17 +77,25 @@ async function callFrom(account, contractId, method, args, deposit = 0n, gas = G
 }
 
 async function expectRejection(description, expected, operation) {
-  try {
-    await operation();
-  } catch (error) {
-    const detail = `${error.message || String(error)} ${util.inspect(error, { depth: 6 })}`;
-    const matched = typeof expected === 'string' ? detail.includes(expected) : expected.test(detail);
-    if (!matched) throw new Error(`${description}: expected ${expected}, got: ${detail}`, { cause: error });
-    console.log(`    ✅ ${description}: rejected as expected`);
-    if (error.transaction_outcome?.id) console.log(`       tx: ${txUrl(error.transaction_outcome.id)}`);
-    return;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try { await operation(); }
+    catch (error) {
+      // These are deliberately invalid TEST transactions, not payments. A
+      // stale-block Expired response is not the rejection being tested. Retry
+      // it once only; ambiguous timeouts and actual receipt outcomes never retry.
+      if (attempt === 0 && error.type === 'Expired' && !error.transaction_outcome) {
+        console.warn(`    Test-only ${description}: expired transaction; retrying once.`);
+        continue;
+      }
+      const detail = `${error.message || String(error)} ${util.inspect(error, { depth: 6 })}`;
+      const matched = typeof expected === 'string' ? detail.includes(expected) : expected.test(detail);
+      if (!matched) throw new Error(`${description}: expected ${expected}, got: ${detail}`, { cause: error });
+      console.log(`    ✅ ${description}: rejected as expected`);
+      if (error.transaction_outcome?.id) console.log(`       tx: ${txUrl(error.transaction_outcome.id)}`);
+      return;
+    }
+    throw new Error(`${description}: transaction unexpectedly succeeded`);
   }
-  throw new Error(`${description}: transaction unexpectedly succeeded`);
 }
 
 const view = (contractId, method, args) => provider.callFunction(contractId, method, args, { finality: 'final' });
@@ -144,7 +152,7 @@ async function main() {
   let version;
   try { version = await view(bouncerId, 'contract_version', {}); }
   catch (error) { throw new Error('The deployed wasm is stale; wait for the CI wasm build and git pull again.', { cause: error }); }
-  if (version !== 'bouncer-agent-v3') throw new Error(`Unsupported contract version: ${version}`);
+  if (version !== 'bouncer-agent-v4') throw new Error(`Unsupported contract version: ${version}`);
 
   console.log('\n=== 3) Create user and vendor sub-accounts ===');
   const userKey = KeyPair.fromRandom('ed25519');

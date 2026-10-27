@@ -38,7 +38,7 @@ test('dry-run quotes and preflights but never pays or redeems', async () => {
   const provider = {
     async viewAccessKey() { return { permission: { FunctionCall: { receiver_id: 'bouncer.testnet', method_names: ['execute'] } } }; },
     async callFunction(_contract, method) {
-      if (method === 'contract_version') return 'bouncer-agent-v3';
+      if (method === 'contract_version') return 'bouncer-agent-v4';
       if (method === 'get_policy') return { token: 'wrap.testnet' };
       if (method === 'is_agent_key_allowed') return true;
       if (method === 'check') return [true, 'ok'];
@@ -81,7 +81,7 @@ test('a delivery outage after payment is recoverable without a duplicate payment
   const provider = {
     async viewAccessKey() { return { permission: { FunctionCall: { receiver_id: 'bouncer.testnet', method_names: ['execute'] } } }; },
     async callFunction(_contract, method) {
-      if (method === 'contract_version') return 'bouncer-agent-v3';
+      if (method === 'contract_version') return 'bouncer-agent-v4';
       if (method === 'get_policy') return { token: 'wrap.testnet' };
       if (method === 'is_agent_key_allowed') return true;
       if (method === 'check') return [true, 'ok'];

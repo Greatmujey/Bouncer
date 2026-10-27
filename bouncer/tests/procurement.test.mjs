@@ -35,7 +35,7 @@ function fixture() {
       };
     },
     async callFunction(contract, method, args) {
-      if (method === 'contract_version') return 'bouncer-agent-v3';
+      if (method === 'contract_version') return 'bouncer-agent-v4';
       if (method === 'get_policy') return policies[args.policy_id] || null;
       if (method === 'is_agent_key_allowed') return mode !== 'not_granted';
       if (method === 'check') return mode === 'blocked' ? [false, 'over cap'] : [true, 'ok'];

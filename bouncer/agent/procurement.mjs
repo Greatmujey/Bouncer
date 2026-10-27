@@ -11,7 +11,7 @@ import nearApi from 'near-api-js';
 
 const { Account, KeyPair, KeyPairSigner, providers } = nearApi;
 const DEFAULT_RPC = 'https://test.rpc.fastnear.com';
-const CONTRACT_VERSION = 'bouncer-agent-v3';
+const CONTRACT_VERSION = 'bouncer-agent-v4';
 const U128_MAX = (1n << 128n) - 1n;
 const GAS = 200_000_000_000_000n;
 const EXPLORER = hash => `https://testnet.nearblocks.io/txns/${hash}?network=testnet`;

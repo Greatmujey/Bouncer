@@ -6,7 +6,10 @@ const ONE_YOCTO: NearToken = NearToken::from_yoctonear(1);
 const ZERO_NEAR: NearToken = NearToken::from_yoctonear(0);
 const GAS_FOR_FT_TRANSFER: Gas = Gas::from_tgas(15);
 const GAS_FOR_RESOLVE: Gas = Gas::from_tgas(15);
-const NS_PER_DAY: u64 = 24 * 60 * 60 * 1_000_000_000;
+const NS_PER_HOUR: u64 = 60 * 60 * 1_000_000_000;
+const WINDOW_HOURS: u64 = 24;
+#[cfg(test)]
+const NS_PER_DAY: u64 = WINDOW_HOURS * NS_PER_HOUR;
 
 // Preserve readable errors in optimized WASM; use a normal panic in native tests.
 #[cfg(target_arch = "wasm32")]
@@ -72,6 +75,19 @@ fn daily_key(pid: &str, bucket: u64) -> String {
     s
 }
 
+// Sum the current hour and 24 preceding hours. Including the oldest bucket
+// makes this conservative: no spend less than 24 hours old can fall out of
+// the budget; some spend may remain counted for up to one additional hour.
+fn rolling_spent(s: &Bouncer, policy_id: &str, current_hour: u64) -> u128 {
+    let mut total = 0u128;
+    for offset in 0..=WINDOW_HOURS {
+        let Some(hour) = current_hour.checked_sub(offset) else { break; };
+        let spent = s.daily_spent.get(&daily_key(policy_id, hour)).copied().unwrap_or(0);
+        total = total.saturating_add(spent);
+    }
+    total
+}
+
 fn validate(
     s: &Bouncer, policy_id: &str, payee: &AccountId, amount: u128,
 ) -> Result<(AccountId, u128), String> {
@@ -86,9 +102,9 @@ fn validate(
     }
     let daily = s.daily_of.get(policy_id).cloned().unwrap_or(0);
     if daily > 0 {
-        let bucket = env::block_timestamp() / NS_PER_DAY;
-        let spent = s.daily_spent.get(&daily_key(policy_id, bucket)).cloned().unwrap_or(0);
-        if spent.saturating_add(amount) > daily {
+        let bucket = env::block_timestamp() / NS_PER_HOUR;
+        let spent = rolling_spent(s, policy_id, bucket);
+        if spent.checked_add(amount).map_or(true, |next| next > daily) {
             return Err("BLOCKED: daily cap exceeded for this policy".into());
         }
     }
@@ -174,7 +190,7 @@ impl Bouncer {
         }
     }
 
-    pub fn contract_version(&self) -> &'static str { "bouncer-agent-v3" }
+    pub fn contract_version(&self) -> &'static str { "bouncer-agent-v4" }
 
     pub fn get_policy(&self, policy_id: String) -> Option<PolicyView> {
         Some(PolicyView {
@@ -186,6 +202,12 @@ impl Bouncer {
 
     pub fn vault_balance(&self, token: AccountId) -> U128 {
         U128(self.balances.get(&token).cloned().unwrap_or(0))
+    }
+
+    /// Conservative rolling 24-hour spend; hour buckets can retain a spend
+    /// for up to one extra hour. Zero/disabled limits still track spend.
+    pub fn daily_spent(&self, policy_id: String) -> U128 {
+        U128(rolling_spent(self, &policy_id, env::block_timestamp() / NS_PER_HOUR))
     }
 
     pub fn ft_on_transfer(&mut self, sender_id: AccountId, amount: U128, msg: String) -> U128 {
@@ -224,7 +246,7 @@ impl Bouncer {
         // Bind the signed payment to the token the agent reviewed, even if the
         // owner changes the policy between preflight and transaction execution.
         require(token == expected_token, "BLOCKED: policy token does not match expected token");
-        let bucket = env::block_timestamp() / NS_PER_DAY;
+        let bucket = env::block_timestamp() / NS_PER_HOUR;
         let dk = daily_key(&policy_id, bucket);
         let spent = self.daily_spent.get(&dk).cloned().unwrap_or(0);
         let next_spent = spent.checked_add(amount.0).unwrap_or_else(|| abort_with("daily spend overflow"));
@@ -244,7 +266,7 @@ impl Bouncer {
             let bal = self.balances.get(&token).cloned().unwrap_or(0);
             let updated = bal.checked_add(amount.0).unwrap_or_else(|| abort_with("refund balance overflow"));
             self.balances.insert(token.clone(), updated);
-            // Use the original execution bucket even if the callback crosses midnight.
+            // Use the original execution hour even if the callback crosses a boundary.
             let dk = daily_key(&policy_id, bucket);
             if let Some(s) = self.daily_spent.get(&dk).cloned() {
                 self.daily_spent.insert(dk, s.saturating_sub(amount.0));
@@ -328,7 +350,7 @@ mod tests {
         testing_env!(owner_context(&agent, 0, NS_PER_DAY));
         drop(contract.execute("compute".into(), id("vendor.testnet"), U128(100), None, id("token.testnet")));
         assert_eq!(contract.vault_balance(id("token.testnet")).0, 900);
-        assert_eq!(*contract.daily_spent.get(&daily_key("compute", 1)).unwrap(), 100);
+        assert_eq!(*contract.daily_spent.get(&daily_key("compute", WINDOW_HOURS)).unwrap(), 100);
     }
 
     #[test]
@@ -417,6 +439,39 @@ mod tests {
     }
 
     #[test]
+    fn rolling_budget_does_not_reset_at_midnight_or_release_early() {
+        let (mut contract, agent) = fixture();
+        let start = 40 * NS_PER_HOUR + 59 * 60 * 1_000_000_000;
+        testing_env!(owner_context(&agent, 0, start));
+        drop(contract.execute("compute".into(), id("vendor.testnet"), U128(200), None, id("token.testnet")));
+        // Midnight and just under 24 hours later must both retain the spend.
+        for timestamp in [48 * NS_PER_HOUR + 1, start + NS_PER_DAY - 1, 65 * NS_PER_HOUR - 1] {
+            testing_env!(owner_context(&agent, 0, timestamp));
+            assert_eq!(contract.daily_spent("compute".into()).0, 200);
+            assert_eq!(contract.check("compute".into(), id("vendor.testnet"), U128(101)).1,
+                "BLOCKED: daily cap exceeded for this policy");
+        }
+        // The conservative oldest hour expires on the next hour boundary.
+        testing_env!(owner_context(&agent, 0, 65 * NS_PER_HOUR));
+        assert_eq!(contract.daily_spent("compute".into()).0, 0);
+        assert!(contract.check("compute".into(), id("vendor.testnet"), U128(101)).0);
+    }
+
+    #[test]
+    fn earliest_hour_is_counted_once_and_budget_addition_cannot_overflow() {
+        let (mut contract, agent) = fixture();
+        testing_env!(owner_context(&agent, 0, 0));
+        contract.daily_spent.insert(daily_key("compute", 0), 200);
+        assert!(contract.check("compute".into(), id("vendor.testnet"), U128(100)).0);
+        testing_env!(owner_context(&key(1), 1, 0));
+        contract.set_policy("compute".into(), id("token.testnet"), U128(u128::MAX), Some(U128(u128::MAX)));
+        contract.daily_spent.insert(daily_key("compute", 0), u128::MAX);
+        testing_env!(owner_context(&agent, 0, 0));
+        assert_eq!(contract.check("compute".into(), id("vendor.testnet"), U128(1)).1,
+            "BLOCKED: daily cap exceeded for this policy");
+    }
+
+    #[test]
     #[should_panic(expected = "BLOCKED: policy token does not match expected token")]
     fn cannot_spend_when_policy_token_differs_from_signed_request() {
         let (mut contract, agent) = fixture();
@@ -440,12 +495,12 @@ mod tests {
         let (mut contract, agent) = fixture();
         testing_env!(owner_context(&agent, 0, NS_PER_DAY));
         drop(contract.execute("compute".into(), id("vendor.testnet"), U128(100), None, id("token.testnet")));
-        contract.daily_spent.insert(daily_key("compute", 2), 75);
-        let callback_context = context("bouncer.testnet", "bouncer.testnet", &agent, 0, 2 * NS_PER_DAY);
+        contract.daily_spent.insert(daily_key("compute", WINDOW_HOURS + 1), 75);
+        let callback_context = context("bouncer.testnet", "bouncer.testnet", &agent, 0, NS_PER_DAY + NS_PER_HOUR);
         testing_env_with_promise_results(callback_context, PromiseResult::Failed);
-        contract.after_execute("compute".into(), id("token.testnet"), U128(100), 1);
+        contract.after_execute("compute".into(), id("token.testnet"), U128(100), WINDOW_HOURS);
         assert_eq!(contract.vault_balance(id("token.testnet")).0, 1_000);
-        assert_eq!(*contract.daily_spent.get(&daily_key("compute", 1)).unwrap(), 0);
-        assert_eq!(*contract.daily_spent.get(&daily_key("compute", 2)).unwrap(), 75);
+        assert_eq!(*contract.daily_spent.get(&daily_key("compute", WINDOW_HOURS)).unwrap(), 0);
+        assert_eq!(*contract.daily_spent.get(&daily_key("compute", WINDOW_HOURS + 1)).unwrap(), 75);
     }
 }
