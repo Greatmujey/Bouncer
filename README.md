@@ -76,7 +76,8 @@ node bouncer/demo-all.mjs
 The script creates a contract, a depositor and a vendor, wraps 2 NEAR into
 wNEAR, funds the vault with 1.5 wNEAR, and tries one allowed payment plus
 several disallowed operations using a restricted key. It checks expected rejection
-reasons, examines transaction receipts, and verifies exact on-chain balances:
+reasons, exercises a failed FT transfer and refund callback, checks the restored
+vault and daily budget, examines receipts, and verifies exact on-chain balances:
 
 ```
 user:   0.5 wNEAR

@@ -108,6 +108,17 @@ Account.prototype.callFunctionRaw = async function ({ contractId, methodName, ar
         if (process.env.BOUNCER_MOCK_MODE !== 'allow_daily') fail('BLOCKED: daily cap exceeded for this policy');
       }
       if (amount > vault) fail('BLOCKED: insufficient vault balance');
+      if (args.payee.startsWith('unregistered-')) {
+        const refunded = outcome();
+        refunded.receipts_outcome = [
+          { outcome: { executor_id: owner, status: { SuccessValue: '' }, logs: ['BOUNCER payment initiated'] } },
+          { outcome: { executor_id: 'wrap.testnet', status: process.env.BOUNCER_MOCK_MODE === 'missing_ft_failure' ? { SuccessValue: '' } : { Failure: { error: 'not registered' } }, logs: [] } },
+          { outcome: { executor_id: owner, status: { SuccessValue: '' }, logs: process.env.BOUNCER_MOCK_MODE === 'missing_refund_log' ? [] : ['BOUNCER ft_transfer failed; vault refunded'] } },
+        ];
+        if (process.env.BOUNCER_MOCK_MODE === 'broken_refund') vault -= amount;
+        if (['broken_refund', 'broken_daily_refund'].includes(process.env.BOUNCER_MOCK_MODE)) spent.set(args.policy_id, (spent.get(args.policy_id) || 0n) + amount);
+        return refunded;
+      }
       if (process.env.BOUNCER_MOCK_MODE === 'payment_refund') {
         const refunded = outcome(['BOUNCER ft_transfer failed; vault refunded']);
         refunded.receipts_outcome.push({ outcome: { status: { Failure: { error: 'transfer failed' } }, logs: [] } });
@@ -126,6 +137,12 @@ providers.JsonRpcProvider.prototype.callFunction = async function (contractId, m
   if (method === 'contract_version') return 'bouncer-agent-v3';
   if (method === 'get_policy') { const p = policies.get(args.policy_id); return p ? { token: p.token, per_tx_cap: p.per_tx_cap, daily_cap: p.daily_cap } : null; }
   if (method === 'vault_balance') return vault.toString();
+  if (method === 'storage_balance_of') return null;
+  if (method === 'check') {
+    const policy = policies.get(args.policy_id);
+    return [!!policy && allowlists.get(args.policy_id)?.has(args.payee) && BigInt(args.amount) <= BigInt(policy.per_tx_cap) &&
+      BigInt(args.amount) + (spent.get(args.policy_id) || 0n) <= BigInt(policy.daily_cap) && BigInt(args.amount) <= vault, 'mock verdict'];
+  }
   if (method === 'ft_balance_of') return (tokenBalances.get(args.account_id) || 0n).toString();
   if (method === 'is_agent_key_allowed') return agentGrants.get(args.policy_id)?.has(args.public_key) || false;
   fail(`unexpected view ${contractId}.${method}`);

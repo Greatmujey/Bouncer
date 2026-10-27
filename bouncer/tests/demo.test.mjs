@@ -34,6 +34,7 @@ test('full demo uses gas units, runs with quiet preload, and verifies settlement
   assert.match(result.stdout, /restricted key \(execute\)/);
   assert.match(result.stdout, /one-yocto policy escalation \(NEAR protocol\): rejected as expected/);
   assert.match(result.stdout, /payment signed by a restricted agent key/);
+  assert.match(result.stdout, /Failed transfer refunded vault and daily budget/);
 });
 
 test('storage errors containing warning stay visible instead of recursing on stderr', () => {
@@ -68,4 +69,19 @@ test('a missing protocol deposit guard is not reported as a security success', (
   assert.equal(result.status, 1);
   assert.match(result.stderr, /one-yocto policy escalation \(NEAR protocol\): transaction unexpectedly succeeded/);
   assert.doesNotMatch(result.stdout, /All checks passed/);
+});
+
+
+test('refund proof rejects a missing failed receipt, missing callback, or unrefunded vault', () => {
+  for (const [mode, error] of [
+    ['missing_ft_failure', /expected failed wNEAR receipt/],
+    ['missing_refund_log', /expected failed wNEAR receipt/],
+    ['broken_refund', /recorded vault after refund/],
+    ['broken_daily_refund', /failed transfer did not restore daily budget/],
+  ]) {
+    const result = runDemo(mode);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, error);
+    assert.doesNotMatch(result.stdout, /All checks passed/);
+  }
 });

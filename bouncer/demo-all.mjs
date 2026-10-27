@@ -125,6 +125,8 @@ async function main() {
   const bouncerId = `bouncer-${suffix}.testnet`;
   const userId = `user-${suffix}.${bouncerId}`;
   const vendorId = `vendor-${suffix}.${bouncerId}`;
+  // Deliberately not registered with wNEAR, to force a downstream FT failure.
+  const unregisteredId = `unregistered-${suffix}.${bouncerId}`;
 
   console.log(`=== 1) Create funded contract account: ${bouncerId} ===`);
   const bouncerKey = KeyPair.fromRandom('ed25519');
@@ -206,6 +208,33 @@ async function main() {
   console.log('\n=== 9) Restricted agent pays vendor 0.1 wNEAR with zero deposit ===');
   await execute(agent, COMPUTE_POLICY, vendorId, ONE_NEAR / 10n, 'compute:1h');
 
+  console.log('\n=== 9b) Force an FT failure and verify the on-chain refund callback ===');
+  if (await view(WNEAR, 'storage_balance_of', { account_id: unregisteredId }) !== null) {
+    throw new Error('refund test account is unexpectedly registered');
+  }
+  await callFrom(bouncer, bouncerId, 'allow_payee', { policy_id: COMPUTE_POLICY, payee: unregisteredId }, YOCTO);
+  const beforeRefund = BigInt(await view(bouncerId, 'vault_balance', { token: WNEAR }));
+  const failedTransfer = await agent.callFunctionRaw({
+    contractId: bouncerId, methodName: 'execute',
+    args: { policy_id: COMPUTE_POLICY, payee: unregisteredId, amount: (ONE_NEAR / 5n).toString(),
+      memo: 'test:refund', expected_token: WNEAR },
+    deposit: 0n, gas: GAS_200, waitUntil: 'FINAL',
+  });
+  const receipts = failedTransfer.receipts_outcome || [];
+  const tokenFailed = receipts.some(r => r.outcome?.executor_id === WNEAR && r.outcome.status?.Failure);
+  const callbackRefunded = receipts.some(r => r.outcome?.executor_id === bouncerId &&
+    r.outcome.logs?.includes('BOUNCER ft_transfer failed; vault refunded') && Object.hasOwn(r.outcome.status || {}, 'SuccessValue'));
+  const unexpectedFailure = receipts.some(r => r.outcome?.executor_id !== WNEAR && r.outcome?.status?.Failure);
+  if (!tokenFailed || !callbackRefunded || unexpectedFailure) throw new Error('expected failed wNEAR receipt and successful refund callback');
+  assertAmount(await view(bouncerId, 'vault_balance', { token: WNEAR }), beforeRefund, 'recorded vault after refund');
+  assertAmount(await view(WNEAR, 'ft_balance_of', { account_id: bouncerId }), beforeRefund, 'actual vault after refund');
+  const refundBudget = await view(bouncerId, 'check', {
+    policy_id: COMPUTE_POLICY, payee: vendorId, amount: (9n * ONE_NEAR / 10n).toString(),
+  });
+  if (!Array.isArray(refundBudget) || refundBudget[0] !== true) throw new Error('failed transfer did not restore daily budget');
+  await callFrom(bouncer, bouncerId, 'revoke_payee', { policy_id: COMPUTE_POLICY, payee: unregisteredId }, YOCTO);
+  console.log(`    ✅ Failed transfer refunded vault and daily budget  tx: ${txUrl(failedTransfer.transaction_outcome.id)}`);
+
   console.log('\n=== 10) Reject policy breaches from the actual agent key ===');
   await expectRejection('daily cap', 'BLOCKED: daily cap exceeded',
     () => execute(agent, COMPUTE_POLICY, vendorId, 19n * ONE_NEAR / 20n, 'storage:100gb'));
@@ -269,6 +298,7 @@ async function main() {
   console.log(`    vendor: ${formatNear(vendorBalance)} wNEAR`);
   console.log(`    vault:  ${formatNear(vaultBalance)} wNEAR (matches token contract)`);
   console.log('\n✅ All checks passed. One token; payment signed by a restricted agent key.');
+  if (process.env.GITHUB_ACTIONS === 'true') console.log(`::notice title=Testnet security and refund proof::contract=${bouncerId}; refund_tx=${failedTransfer.transaction_outcome.id}`);
   console.log(`Contract: ${bouncerId}`);
   console.log(`Explorer: https://testnet.nearblocks.io/address/${bouncerId}?tab=receipts`);
 }

@@ -3,7 +3,8 @@
 The project overview, current limitations, and testnet instructions are in the
 [root README](../README.md). The goal is a multi-resource procurement agent
 using on-chain spending policies. The new contract source supports zero-deposit,
-policy-scoped function-call keys; the testnet check currently uses one token.
+policy-scoped function-call keys. The security check uses one token; a separate
+integration check covers three testnet tokens and self-hosted development services.
 
 **Do not use this prototype with real funds.** It is unaudited, and older
 deployments do not gain the new authorization checks. See the
