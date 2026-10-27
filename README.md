@@ -76,9 +76,10 @@ also stop a run; their errors are printed rather than hidden. The daily cap uses
 UTC-aligned buckets, so a run crossing a bucket boundary can invalidate that
 particular test.
 
-GitHub Actions also has a **manual** `workflow_dispatch` testnet smoke job. It
-creates real testnet accounts with ephemeral keys on the runner; it does not
-upload those keys. Ordinary CI runs do not create testnet accounts.
+GitHub Actions also has an opt-in testnet smoke job, triggered manually or by a
+push whose commit message contains `[testnet-smoke]`. It creates real testnet
+accounts with ephemeral keys on the runner; it does not upload those keys.
+Ordinary CI runs do not create testnet accounts.
 
 ## Local tests
 
