@@ -1,0 +1,25 @@
+{
+  "name": "near-bouncer",
+  "version": "0.1.0",
+  "description": "Bouncer — the on-chain comptroller for AI agents on NEAR (policy-enforced spending, invoices, cross-chain settlement)",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "test": "node --test packages/policy/policy.test.mjs",
+    "test:all": "node --test packages/policy/policy.test.mjs",
+    "build": "bash scripts/build.sh",
+    "agent": "node agent/procurement.mjs",
+    "solver": "node agent/solver.mjs",
+    "quote": "node agent/intents.mjs quote",
+    "market": "node agent/intents.mjs market",
+    "demo": "echo \"open demo/index.html in a browser, or serve: npx http-server -p 8080 demo/\""
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/USERNAME/near-bouncer"
+  },
+  "dependencies": {
+    "near-api-js": "^6.0.0"
+  }
+}

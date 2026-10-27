@@ -1,0 +1,9 @@
+node_modules/
+target/
+contracts/bouncer/res/
+contracts/bouncer/.near/
+.env
+.env.*
+*.log
+.DS_Store
+package-lock.json
