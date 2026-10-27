@@ -34,24 +34,28 @@ jobs:
           rustc -vV
           cargo -vV
       - name: Cargo build (debug, verbose)
-        working-directory: bouncer/contracts/bouncer
         run: |
+          echo "PWD=$(pwd)"
+          ls bouncer/contracts/bouncer/
+          cd bouncer/contracts/bouncer
+          echo "now at $(pwd)"
+          ls
           RUSTFLAGS="-C link-arg=-s" cargo build --target wasm32-unknown-unknown -v 2>&1 | tail -200
+          echo "---target---"
+          ls target/wasm32-unknown-unknown/debug/ | head -40
       - name: Locate wasm & copy
         run: |
           set -euo pipefail
           mkdir -p dist
-          # With working-directory set above, `cargo build` puts target in bouncer/contracts/bouncer/target/
           echo "--- listing all wasm files ---"
           find . -name "*.wasm" -not -path "*/node_modules/*"
-          SRC="bouncer/contracts/bouncer/target/wasm32-unknown-unknown/debug/bouncer.wasm"
-          if [ ! -f "$SRC" ]; then
-            SRC="bouncer/target/wasm32-unknown-unknown/debug/bouncer.wasm"
-          fi
-          echo "using source: $SRC"
-          ls -la "$SRC"
+          SRC=""
+          for cand in bouncer/contracts/bouncer/target/wasm32-unknown-unknown/debug/bouncer.wasm bouncer/target/wasm32-unknown-unknown/debug/bouncer.wasm target/wasm32-unknown-unknown/debug/bouncer.wasm; do
+            if [ -f "$cand" ]; then SRC="$cand"; break; fi
+          done
+          echo "SRC=$SRC"
+          test -n "$SRC"
           cp "$SRC" dist/bouncer.wasm
-          echo "--- dist ---"
           ls -la dist/bouncer.wasm
           wc -c dist/bouncer.wasm
       - uses: actions/upload-artifact@v4
