@@ -74,9 +74,9 @@ test('remaining() and maxSpendable() report the true ceiling', () => {
   assert.equal(maxSpendable(policy, heavy, T0), 1n * USDC); // now the day binds
 });
 
-test('empty allowlist means unrestricted — documented footgun', () => {
-  const lax = { ...policy, payeeAllowlist: [] };
-  assert.equal(check(lax, [], 'anyone.near', 1n * USDC, T0).ok, true);
+test('empty allowlist blocks all payees', () => {
+  const empty = { ...policy, payeeAllowlist: [] };
+  assert.equal(check(empty, [], 'anyone.near', 1n * USDC, T0).ok, false);
 });
 
 test('rejects zero and nonsense amounts', () => {

@@ -1,0 +1,69 @@
+// A short first-visit orientation. It never opens a wallet or starts an agent.
+const steps = [
+  {
+    kicker: 'WELCOME TO BOUNCER', title: 'Meet your resource agent.',
+    description: 'Bouncer helps an agent get compute, storage and API services while your on-chain rules guard its spending.',
+    callout: 'Today, a person prepares the requests. This is an early testnet prototype—not an autonomous AI marketplace yet.',
+  },
+  {
+    kicker: 'SEE THE WHOLE JOURNEY', title: 'From a need to a result.',
+    description: 'A prepared request gets a quote, passes policy checks, pays on NEAR testnet, and is fulfilled by a development provider.',
+    callout: 'Explore the three recorded examples on this page. They are historical results, not new orders.',
+  },
+  {
+    kicker: 'YOU STAY IN CONTROL', title: 'Your wallet, your rules.',
+    description: 'Optionally connect a testnet wallet on an isolated site. Connection displays an account; it does not approve spending or set up a vault.',
+    callout: 'The contract requires exactly 1 yoctoNEAR for owner-only policy changes. Never share a private key or seed phrase.',
+  },
+  {
+    kicker: 'BRING AN ASSISTANT', title: 'Connect through MCP.',
+    description: 'Compatible MCP clients can inspect policies and preview quotes using the local Bouncer server—without signing or paying.',
+    callout: 'A hosted connection for web AI apps and an AI planner are still to be built. This tour and website do not run purchases.',
+  },
+];
+
+export function setupTour(doc = document, storage) {
+  if (!storage) { try { storage = globalThis.localStorage; } catch { /* storage is optional */ } }
+  const dialog = doc.querySelector('#welcome-tour');
+  if (!dialog || typeof dialog.showModal !== 'function') return;
+  const title = doc.querySelector('#tour-title'), description = doc.querySelector('#tour-description');
+  const kicker = doc.querySelector('#tour-kicker'), callout = doc.querySelector('#tour-callout');
+  const count = doc.querySelector('#tour-count'), back = doc.querySelector('#tour-back'), next = doc.querySelector('#tour-next');
+  const dots = [...doc.querySelectorAll('.tour-progress span')];
+  let index = 0, opener;
+  function render() {
+    const step = steps[index];
+    title.textContent = step.title; description.textContent = step.description;
+    kicker.textContent = step.kicker; callout.textContent = step.callout;
+    count.textContent = `STEP ${index + 1} OF ${steps.length}`;
+    back.disabled = index === 0;
+    next.textContent = index === steps.length - 1 ? 'Finish tour' : 'Next →';
+    dots.forEach((dot, i) => dot.classList.toggle('active', i <= index));
+  }
+  function open(openerElement) {
+    if (dialog.open) return;
+    opener = openerElement; index = 0; render(); dialog.showModal();
+    next.focus();
+  }
+  function close() {
+    try { storage?.setItem('bouncer:tour:v1', 'seen'); } catch { /* optional preference */ }
+    dialog.close();
+    if (opener && typeof opener.focus === 'function') opener.focus();
+  }
+  doc.querySelectorAll('[data-open-tour]').forEach(button => button.addEventListener('click', () => open(button)));
+  doc.querySelector('#tour-skip').addEventListener('click', close);
+  dialog.addEventListener('cancel', event => { event.preventDefault(); close(); });
+  dialog.addEventListener('keydown', event => {
+    if (event.key !== 'Tab') return;
+    const focusable = [...dialog.querySelectorAll('button:not([disabled]), a[href], select:not([disabled]), [tabindex]:not([tabindex="-1"])')];
+    if (!focusable.length) { event.preventDefault(); return; }
+    const first = focusable[0], last = focusable[focusable.length - 1];
+    if (event.shiftKey && doc.activeElement === first) { event.preventDefault(); last.focus(); }
+    else if (!event.shiftKey && doc.activeElement === last) { event.preventDefault(); first.focus(); }
+  });
+  back.addEventListener('click', () => { if (index > 0) { index--; render(); } });
+  next.addEventListener('click', () => { if (index === steps.length - 1) close(); else { index++; render(); } });
+  let seen = false;
+  try { seen = storage?.getItem('bouncer:tour:v1') === 'seen'; } catch { /* tour still works without storage */ }
+  if (!seen) open();
+}

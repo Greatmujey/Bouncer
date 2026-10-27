@@ -1,0 +1,2 @@
+# Bundled vendor code contains literal template strings with upstream whitespace.
+bouncer/web/wallet.bundle.js whitespace=-blank-at-eol

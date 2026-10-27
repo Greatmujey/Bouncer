@@ -1,4 +1,6 @@
 # BOUNCER v2 — MULTI-TRACK WIN PLAN
+
+> **Historical planning document:** Ideas below are not verified current functionality. See the [current status](../../README.md) and [threat model](THREAT_MODEL.md). Never substitute fake transactions for real settlement; record only after the complete intended flow is verified.
 ## The on-chain comptroller for AI agents
 
 **The one-sentence pitch:**
@@ -78,7 +80,7 @@ That's **five solid tracks + one stretch track** = up to six shots at a prize sl
   - **Invoices** (file a fake vendor invoice with one click; watch the agent pay it)
   - **Cross-chain demo** (pay 0.5 USDC to a Base address; watch the solver fill it live, tx hash links to the explorer on the destination chain)
   - **Security proof** ("Try it — use the agent key to call set_policy". Button sends that tx. Shows the `DepositWithFunctionCall` protocol-level failure. This is our killer frame.)
-- Wired to testnet for NEP-141 flows; cross-chain can be testnet-mocked OR $1 mainnet (see decision below)
+- Wired to testnet for NEP-141 flows; cross-chain settlement remains unimplemented; a mock is not proof of a fill
 
 **6. Tests**
 - Rust: ~15–20 unit tests, including:
@@ -115,7 +117,7 @@ That's **five solid tracks + one stretch track** = up to six shots at a prize sl
 
 ### Deployment target
 - **Primary:** NEAR testnet for all NEP-141 flows (free, safe, judges can replay)
-- **Cross-chain:** either (a) a single $1 mainnet 1Click demo the judge can click to see a real cross-chain tx, OR (b) a mocked relayer that posts a fake-but-plausible tx record. Real > mock, but mainnet spending requires you to fund a wallet. We'll do (a) with your consent for ≤ $5 total spend.
+- **Cross-chain:** not implemented. Any future demonstration must use real, independently verifiable settlement; do not submit fake transaction records. Mainnet spending requires explicit user consent.
 
 ---
 

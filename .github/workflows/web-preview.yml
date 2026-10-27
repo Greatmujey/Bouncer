@@ -1,0 +1,46 @@
+name: One-shot public website preview
+
+on:
+  push:
+    branches: [arena/ebb614bb-near-hub]
+
+# This job only runs on an explicit marker. The guest upload is public and
+# temporary; it never changes the visibility of the private repository.
+jobs:
+  public-preview:
+    if: contains(github.event.head_commit.message, '[publish-web-preview]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Test snapshot and optional read-only RPC client
+        run: node --test bouncer/tests/web.test.mjs
+      - name: Upload only the static website
+        env:
+          BOUNCER_PREVIEW_URL_FILE: ${{ runner.temp }}/bouncer-preview-url.txt
+        run: |
+          set +e
+          node bouncer/scripts/publish-web-preview.mjs 2>&1 | tee "$RUNNER_TEMP/publish-preview.log"
+          result=${PIPESTATUS[0]}
+          if [ "$result" -ne 0 ]; then
+            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-2000).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=Preview publish failed::"+s)' "$RUNNER_TEMP/publish-preview.log"
+          fi
+          exit "$result"
+      - name: Verify the public page in a phone-sized browser
+        env:
+          BOUNCER_PREVIEW_URL_FILE: ${{ runner.temp }}/bouncer-preview-url.txt
+        shell: bash
+        run: |
+          npm install --prefix "$RUNNER_TEMP/bouncer-browser" --no-save --no-audit --no-fund playwright-core@1.64.1
+          set +e
+          node bouncer/scripts/test-public-web-preview.mjs 2>&1 | tee "$RUNNER_TEMP/web-browser.log"
+          result=${PIPESTATUS[0]}
+          if [ "$result" -ne 0 ]; then
+            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-2000).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=Public browser test failed::"+s)' "$RUNNER_TEMP/web-browser.log"
+          fi
+          exit "$result"

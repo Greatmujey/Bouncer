@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f5f7f3">
+  <!-- Set only to the exact HTTPS origin of a dedicated deployment you control. -->
+  <meta name="bouncer-wallet-origin" content="">
+  <meta name="description" content="See how Bouncer helps an agent request compute, storage and API services while protecting its budget on NEAR testnet.">
+  <title>Bouncer — An agent that can get what it needs</title>
+  <link rel="icon" type="image/svg+xml" href="./favicon.svg">
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <svg class="svg-defs" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+    <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.5"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 2.8 19.2 5.5v5.6c0 4.9-3.1 8.3-7.2 10.1-4.1-1.8-7.2-5.2-7.2-10.1V5.5L12 2.8Z"/><path d="m8.8 11.9 2.1 2.1 4.5-4.6"/></symbol>
+    <symbol id="i-activity" viewBox="0 0 24 24"><path d="M3 12h4l2.2-5 4 10 2.2-5H21"/></symbol>
+    <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></symbol>
+    <symbol id="i-external" viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-9 9"/><path d="M19 13v6H5V5h6"/></symbol>
+    <symbol id="i-cpu" viewBox="0 0 24 24"><rect x="6.5" y="6.5" width="11" height="11" rx="2"/><path d="M9 3v3.5M15 3v3.5M9 17.5V21M15 17.5V21M3 9h3.5M3 15h3.5M17.5 9H21M17.5 15H21M10 10h4v4h-4z"/></symbol>
+    <symbol id="i-storage" viewBox="0 0 24 24"><path d="M5 4.5h14v6H5zM5 13.5h14v6H5z"/><path d="M8 7.5h.01M8 16.5h.01M11 7.5h5M11 16.5h5"/></symbol>
+    <symbol id="i-api" viewBox="0 0 24 24"><path d="m8.5 7-5 5 5 5M15.5 7l5 5-5 5M13.5 4l-3 16"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="11" height="11" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M5.5 9a7 7 0 0 1 12-2L20 12M4 12l2.5 5a7 7 0 0 0 12-2"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v3"/></symbol>
+  </svg>
+
+  <div class="shell">
+    <aside class="sidebar" aria-label="Main navigation">
+      <a href="#overview" class="brand" aria-label="Bouncer overview"><span class="brand-mark">b<span>.</span></span><span>bouncer<span class="brand-dot">.</span><small>THE RESOURCE AGENT</small></span></a>
+      <div class="side-label">WORKSPACE</div>
+      <nav class="side-nav">
+        <a class="side-link active" href="#overview"><svg><use href="#i-grid"/></svg> Overview <span class="nav-dot"></span></a>
+        <a class="side-link" href="#connect"><svg><use href="#i-lock"/></svg> Wallet &amp; AI access</a>
+        <a class="side-link" href="#how-it-works"><svg><use href="#i-activity"/></svg> How it works</a>
+        <a class="side-link" href="#run-story"><svg><use href="#i-cpu"/></svg> See the real run</a>
+        <a class="side-link" href="#guardrails"><svg><use href="#i-shield"/></svg> Guardrails</a>
+        <a class="side-link" href="#roadmap"><svg><use href="#i-arrow"/></svg> What’s next</a>
+        <a class="side-link" href="#proof"><svg><use href="#i-external"/></svg> Verification</a>
+      </nav>
+      <div class="side-bottom">
+        <div class="side-status"><span class="status-dot"></span><div><b>NEAR Testnet</b><small>No purchases on this page</small></div></div>
+        <p>Early prototype. No real funds.<br>Wallet connection is optional.</p>
+      </div>
+    </aside>
+
+    <div class="content">
+      <header class="topbar">
+        <a href="#overview" class="mobile-brand"><span class="brand-mark">b<span>.</span></span><strong>bouncer<span>.</span></strong></a>
+        <div class="breadcrumb"><span>Workspace</span><span class="slash">/</span><strong>Overview</strong></div>
+        <div class="top-actions"><button class="tour-link" type="button" data-open-tour>Take a tour</button><span class="network"><span class="status-dot"></span> TESTNET</span><a class="top-proof" href="https://testnet.nearblocks.io/address/bouncer-42dcdfb7.testnet" target="_blank" rel="noopener noreferrer">View contract <svg><use href="#i-external"/></svg></a></div>
+      </header>
+      <nav class="mobile-nav" aria-label="Page sections"><a href="#overview">Overview</a><a href="#connect">Wallet &amp; AI</a><a href="#how-it-works">How it works</a><a href="#run-story">Real run</a><a href="#guardrails">Safety</a><a href="#roadmap">What’s next</a></nav>
+
+      <main class="main" id="overview">
+        <div class="intro-row"><div><div class="eyebrow"><span class="eyebrow-line"></span> THE MULTI-RESOURCE AGENT ON NEAR</div><h1>An agent needs resources.<br><span>Bouncer helps it get them.</span></h1><p class="intro-copy">Give Bouncer a prepared list of resource needs. It requests quotes, pays under your rules, and gets results—across compute, storage and APIs.</p><div class="intro-actions"><a href="#run-story" class="button primary">See what it actually did <svg><use href="#i-arrow"/></svg></a><a href="#how-it-works" class="button secondary">How it works</a></div></div><div class="hero-art" aria-hidden="true"><div class="hero-orbit orbit-one"></div><div class="hero-orbit orbit-two"></div><div class="hero-spark spark-one">✳</div><div class="hero-spark spark-two">✦</div><div class="hero-chip chip-top"><svg><use href="#i-cpu"/></svg></div><div class="hero-chip chip-right"><svg><use href="#i-api"/></svg></div><div class="hero-chip chip-bottom"><svg><use href="#i-storage"/></svg></div><div class="hero-shield"><svg><use href="#i-shield"/></svg></div><span class="hero-caption">POLICY PROTECTED</span></div></div>
+
+        <div class="snapshot-note"><span class="snapshot-icon"><svg><use href="#i-check"/></svg></span><div><strong>Verified testnet snapshot · not a running agent</strong><span> Recorded 27 Oct 2026. The agent runs separately; this page cannot place purchases.</span></div><a href="#proof">View proof <svg><use href="#i-arrow"/></svg></a></div>
+
+        <section class="section connect-section" id="connect">
+          <div class="section-heading"><div><div class="section-kicker">GET STARTED SAFELY</div><h2>Your wallet. Your assistant<span>.</span></h2><p>Explore the prototype with an optional testnet wallet, or give an MCP-compatible assistant read-only access to Bouncer.</p></div></div>
+          <div class="connect-grid">
+            <article class="connect-card" aria-labelledby="wallet-heading">
+              <div class="connect-card-head"><span class="connect-icon"><svg aria-hidden="true"><use href="#i-lock"/></svg></span><div><h3 id="wallet-heading">Connect a testnet wallet</h3><p>Optional · identity only</p></div><span class="access-pill">TESTNET</span></div>
+              <p class="connect-description">See your wallet-reported account here. Connecting does not create a vault, grant an agent access, sign a transaction, or spend funds.</p>
+              <label for="wallet-choice">Choose a wallet</label>
+              <div class="wallet-actions"><select id="wallet-choice" disabled><option value="meteor-wallet">Meteor Wallet · web &amp; mobile</option><option value="nightly-wallet">Nightly Wallet · extension</option><option value="ledger">Ledger · hardware</option></select><button class="button primary" id="wallet-connect" type="button" disabled>Connect wallet</button><button class="button secondary" id="wallet-disconnect" type="button" hidden>Disconnect</button></div>
+              <p id="wallet-status" class="connection-status" role="status" aria-live="polite">Checking if this site is safe for wallet connections…</p>
+              <p class="security-note">Never enter a seed phrase or private key into Bouncer. Only use a testnet wallet. Wallet sign-in has not yet been independently verified end to end.</p>
+            </article>
+            <article class="connect-card" aria-labelledby="assistant-heading">
+              <div class="connect-card-head"><span class="connect-icon assistant-icon"><svg aria-hidden="true"><use href="#i-api"/></svg></span><div><h3 id="assistant-heading">Bring your AI assistant</h3><p>Model Context Protocol · MCP</p></div><span class="access-pill">READ ONLY</span></div>
+              <p class="connect-description">A compatible MCP client can inspect testnet policies and preview configured resource quotes. It cannot make payments or change your rules.</p>
+              <div class="assistant-list"><span>Claude</span><span>Gemini</span><span>ChatGPT</span><span>+ others</span></div>
+              <p class="security-note">Gemini CLI and Claude Code passed local connection checks. ChatGPT web and other hosted assistants need HTTPS and compatible authentication; that setup is not available yet. Model conversations have not been tested.</p>
+              <details class="setup-details"><summary>How to connect an MCP client</summary><p>Install the project dependencies and launch Gemini CLI or Claude Code from the repository root; review and approve the project server if prompted. Other local clients can run <code>node</code> with the absolute path to <code>bouncer/mcp/server.mjs</code>. See the <a href="https://github.com/abdullahimujeeb0505-stack/Bouncer/blob/arena/ebb614bb-near-hub/bouncer/docs/MCP.md" target="_blank" rel="noopener noreferrer">MCP setup guide</a> (private repository access required). No wallet secret is needed.</p></details>
+            </article>
+          </div>
+        </section>
+
+        <section class="section explain-section" id="how-it-works">
+          <div class="section-kicker">FIRST, THE BIG PICTURE</div>
+          <h2>What does Bouncer actually do<span>?</span></h2>
+          <p class="explain-lead">Think of it as a purchasing assistant for an agent. You set the boundaries; Bouncer helps the agent get the resources on its list without spending outside those rules.</p>
+          <div class="journey-grid">
+            <div class="journey-step"><span class="journey-number">01</span><span class="journey-icon"><svg><use href="#i-grid"/></svg></span><strong>You set the plan</strong><p>Choose the resources, allowed payees, tokens and spending limits.</p></div>
+            <div class="journey-step"><span class="journey-number">02</span><span class="journey-icon"><svg><use href="#i-activity"/></svg></span><strong>The agent gets quotes</strong><p>It requests and checks quotes against your prepared instructions.</p></div>
+            <div class="journey-step"><span class="journey-number">03</span><span class="journey-icon"><svg><use href="#i-shield"/></svg></span><strong>Bouncer checks &amp; pays</strong><p>A NEAR contract enforces the token, payee and spending rules.</p></div>
+            <div class="journey-step"><span class="journey-number">04</span><span class="journey-icon"><svg><use href="#i-check"/></svg></span><strong>The service delivers</strong><p>After verifying payment, the development provider fulfills the request.</p></div>
+          </div>
+          <p class="explain-foot"><span class="mini-icon">i</span> Today, requests are prepared by a person. Bouncer is not yet an AI planner or an open marketplace.</p>
+        </section>
+
+        <section class="section" id="run-story">
+          <div class="section-heading"><div><div class="section-kicker">A REAL TESTNET RUN · 27 OCT 2026</div><h2>From request to result<span>.</span></h2><p>Explore the three separate requests the prototype actually processed. Tap each one to see the input, payment and delivered result.</p></div></div>
+          <div class="story-shell">
+            <div class="story-tabs" role="tablist" aria-label="Choose a recorded resource request">
+              <button id="story-tab-compute" class="story-tab active" type="button" role="tab" aria-selected="true" aria-controls="story-panel" data-story-tab="compute"><svg><use href="#i-cpu"/></svg><span>Compute</span><span class="tab-check">✓</span></button>
+              <button id="story-tab-storage" class="story-tab" type="button" role="tab" aria-selected="false" aria-controls="story-panel" data-story-tab="storage" tabindex="-1"><svg><use href="#i-storage"/></svg><span>Storage</span><span class="tab-check">✓</span></button>
+              <button id="story-tab-api" class="story-tab" type="button" role="tab" aria-selected="false" aria-controls="story-panel" data-story-tab="api" tabindex="-1"><svg><use href="#i-api"/></svg><span>API</span><span class="tab-check">✓</span></button>
+            </div>
+            <div class="story-content" id="story-panel" role="tabpanel" aria-labelledby="story-tab-compute" tabindex="0">
+              <div class="story-top"><div><span class="story-small-label">RECORDED REQUEST</span><h3 id="story-title">Compute a hash</h3></div><span class="story-verified">✓ TESTNET PAYMENT VERIFIED</span></div>
+              <div class="story-rows"><div class="story-row"><span class="story-step-icon">1</span><div><strong>What was requested</strong><p id="story-request">Run 1,000 rounds of SHA-256 on “near-hub compute job”.</p></div></div><div class="story-row"><span class="story-step-icon">2</span><div><strong>What Bouncer paid</strong><p id="story-payment">0.1 wNEAR on NEAR testnet, within the owner’s rules.</p></div></div><div class="story-row"><span class="story-step-icon">3</span><div><strong>What was delivered</strong><p id="story-result">SHA-256 result: ad9458759e0093580ac1f7aa669deb8447571a5531691b53972ca1789b4e690c</p></div></div></div>
+              <div class="story-footer"><p><span class="story-footer-icon">✓</span> Payment is on-chain; delivery was verified in the CI run using a self-hosted provider.</p><a id="story-transaction" class="button primary" href="https://testnet.nearblocks.io/txns/6VELBm5bCbTF2jv88q2R4omrSJkvj8Ytr4aqa1FCtdTv" target="_blank" rel="noopener noreferrer">View payment proof <svg><use href="#i-external"/></svg></a></div>
+            </div>
+          </div>
+          <div class="under-note"><span class="mini-icon">i</span> These are completed historical results, not a live demo. The storage and API tokens are synthetic; the services are self-hosted development examples.</div>
+        </section>
+
+        <section class="metrics" aria-label="Verified run summary">
+          <div class="metric"><div class="metric-label">RESOURCE PAYMENTS <span>↗</span></div><div class="metric-value">03<span class="metric-suffix"> / 03</span></div><div class="metric-foot"><span class="small-check">✓</span> Verified on testnet</div></div>
+          <div class="metric"><div class="metric-label">TOKENS USED <span>↗</span></div><div class="metric-value">03</div><div class="metric-foot">wNEAR + 2 test credits</div></div>
+          <div class="metric"><div class="metric-label">PROTECTED ACTIONS <span>↗</span></div><div class="metric-value">1 <span class="metric-word">yocto</span></div><div class="metric-foot">Required for policy changes</div></div>
+          <div class="metric"><div class="metric-label">SPENDING WINDOW <span>↗</span></div><div class="metric-value">24<span class="metric-word">h+</span></div><div class="metric-foot">Conservative rolling budget</div></div>
+        </section>
+
+        <section class="section" id="resources">
+          <div class="section-heading"><div><div class="section-kicker">ONE RUN. THREE RESOURCES.</div><h2>The payments behind the results<span>.</span></h2><p>Each payment went through its own token policy before the development service was delivered.</p></div><div class="section-actions"><button class="button light refresh-button" id="refresh-balances" type="button"><svg><use href="#i-refresh"/></svg> Check current vaults</button></div></div>
+          <div id="rpc-status" class="rpc-status" role="status" aria-live="polite">Vault figures are from the verified run, not live balances.</div>
+          <div class="resource-grid" id="resource-grid"></div>
+          <div class="under-note"><span class="mini-icon">i</span> Storage and API credits are newly created testnet tokens. Services are self-hosted development examples, not commercial vendors.</div>
+        </section>
+
+        <section class="section two-columns" id="guardrails">
+          <div class="panel guardrail-panel"><div class="panel-head"><div><div class="section-kicker">THE BOUNCER RULEBOOK</div><h2>Built to say no<span>.</span></h2></div><span class="shield-badge"><svg><use href="#i-shield"/></svg></span></div><p class="panel-copy">The agent can ask to spend. The on-chain policy decides whether that payment is allowed.</p><div class="guard-list"><div><span class="guard-icon"><svg><use href="#i-lock"/></svg></span><p><strong>Owner-only policy changes</strong><small>Changing rules needs exactly 1 yoctoNEAR. A function-call key can’t attach it.</small></p></div><div><span class="guard-icon"><svg><use href="#i-activity"/></svg></span><p><strong>Caps that follow every payment</strong><small>Per-transaction limits and a conservative rolling daily budget.</small></p></div><div><span class="guard-icon"><svg><use href="#i-check"/></svg></span><p><strong>Approved payees only</strong><small>Unknown payees and ungranted agent keys are rejected.</small></p></div></div><a class="text-link" href="https://testnet.nearblocks.io/txns/GkQL6ZNHC7gGmRmCHc9uFv7fSsNdeJkTZaHtNPcxfhtw" target="_blank" rel="noopener noreferrer">View the separate refund test <svg><use href="#i-external"/></svg></a></div>
+          <div class="panel flow-panel"><div class="panel-head"><div><div class="section-kicker">FROM REQUEST TO RESULT</div><h2>A safer flow<span>.</span></h2></div><span class="flow-tag">TESTNET RUN</span></div><p class="panel-copy">An actual check of the quote-to-delivery path, with proof for the payments.</p><div class="timeline"><div class="timeline-row"><span class="timeline-number">01</span><div><strong>Request a quote</strong><p>The agent asks the development provider for a resource.</p></div><span class="timeline-done">✓</span></div><div class="timeline-row"><span class="timeline-number">02</span><div><strong>Check the policy</strong><p>The token, budget and payee must match the owner’s rules.</p></div><span class="timeline-done">✓</span></div><div class="timeline-row"><span class="timeline-number">03</span><div><strong>Pay on NEAR</strong><p>An execute-only key submits a real testnet transaction.</p></div><span class="timeline-done">✓</span></div><div class="timeline-row"><span class="timeline-number">04</span><div><strong>Deliver the result</strong><p>The local provider verifies payment before fulfilling the order.</p></div><span class="timeline-done">✓</span></div></div></div>
+        </section>
+
+        <section class="section" id="roadmap">
+          <div class="section-heading"><div><div class="section-kicker">HONESTLY, WHERE WE ARE</div><h2>Working today. Building toward more<span>.</span></h2><p>Bouncer is an early testnet prototype—not an autonomous marketplace or production service yet.</p></div></div>
+          <div class="readiness-grid"><div class="readiness-card ready"><div class="readiness-heading"><span class="ready-dot"></span><strong>Working in the prototype</strong><span>TESTNET</span></div><ul><li>Process a prepared list of resource requests.</li><li>Request and validate quotes from a development provider.</li><li>Pay in three testnet tokens under on-chain rules.</li><li>Verify payment and deliver small compute, storage and API tasks.</li></ul></div><div class="readiness-card upcoming"><div class="readiness-heading"><span class="upcoming-dot"></span><strong>Still to build</strong><span>NOT LIVE</span></div><ul><li>An AI planner that turns a plain-English goal into a plan.</li><li>Discovery and purchasing from independent commercial providers.</li><li>Production-ready wallet, recovery and security/audit work.</li><li>Stablecoins and NEAR Intents integration.</li></ul></div></div>
+          <div class="vision-card"><div><span class="vision-label">THE FUTURE WE’RE BUILDING TOWARD · NOT AVAILABLE YET</span><h3>Imagine asking: “Prepare a market report.”</h3><p>One day, an agent could buy data from an API, use compute to analyze it, and store the report—all while Bouncer keeps its spending inside your rules. This is a goal, not a completed demo.</p></div><span class="vision-arrow" aria-hidden="true">↗</span></div>
+        </section>
+
+        <section class="section" id="proof"><div class="proof-panel"><div class="proof-copy"><div class="proof-icon"><svg><use href="#i-shield"/></svg></div><div><div class="section-kicker">DON’T TAKE OUR WORD FOR IT</div><h2>Follow the receipts<span>.</span></h2><p>See the testnet contract and transactions. The complete CI run is in the private project repository (access required).</p></div></div><div class="proof-actions"><a class="button primary" href="https://testnet.nearblocks.io/address/bouncer-42dcdfb7.testnet" target="_blank" rel="noopener noreferrer">Open contract <svg><use href="#i-external"/></svg></a><a class="button secondary" href="https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40558301848" target="_blank" rel="noopener noreferrer">View CI run <svg><use href="#i-external"/></svg></a></div></div></section>
+
+        <footer class="footer"><div><strong>bouncer<span>.</span></strong><span>Resources for agents, with boundaries.</span></div><p>Testnet prototype · Unaudited · Not for real funds</p></footer>
+      </main>
+    </div>
+  </div>
+  <dialog class="tour-dialog" id="welcome-tour" aria-labelledby="tour-title" aria-describedby="tour-description">
+    <div class="tour-topline"><span class="brand-mark">b<span>.</span></span><span class="tour-count" id="tour-count">STEP 1 OF 4</span><button type="button" class="tour-close" id="tour-skip" aria-label="Skip the tour">×</button></div>
+    <div class="tour-progress" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
+    <div class="tour-copy" aria-live="polite"><div class="section-kicker" id="tour-kicker">WELCOME TO BOUNCER</div><h2 id="tour-title">Meet your resource agent.</h2><p id="tour-description">Bouncer helps an agent get compute, storage and API services while your on-chain rules guard its spending.</p><div class="tour-callout" id="tour-callout">Today, a person prepares the requests. This is an early testnet prototype—not an autonomous AI marketplace yet.</div></div>
+    <div class="tour-actions"><button class="button secondary" type="button" id="tour-back" disabled>Back</button><button class="button primary" type="button" id="tour-next">Next <svg aria-hidden="true"><use href="#i-arrow"/></svg></button></div>
+    <p class="tour-footnote">You can reopen this tour anytime from the top of the page.</p>
+  </dialog>
+  <script type="module" src="./app.mjs"></script>
+  <script type="module" src="./wallet.bundle.js"></script>
+</body>
+</html>

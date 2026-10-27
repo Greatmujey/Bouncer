@@ -1,0 +1,6 @@
+# Local preview/browser tooling and screenshots; not application source.
+/.arena/
+
+# Per-user AI-client settings are not project configuration.
+/.claude/settings.local.json
+/.gemini/settings.local.json

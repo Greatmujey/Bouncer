@@ -1,73 +1,267 @@
 #!/usr/bin/env node
-// BOUNCER procurement agent demo.
-//
-// A tiny AI-agent-shaped loop:
-//  1. Poll open invoices against policy `agent`.
-//  2. For each, call check() to see if the payment is allowed.
-//  3. If yes, pay_invoice(); if rejected, log the reason and move on.
-//
-// The agent holds a function-call key only. It has no ability to raise caps
-// or pay unknown payees — see THREAT_MODEL for the structural proof.
-//
-// Usage:
-//   AGENT_ID=agent.xxx.testnet AGENT_KEY=ed25519:... BOUNCER_CONTRACT=bouncer.xxx.testnet \
-//     node agent/procurement.mjs
-//
-// If AGENT_KEY is unset, runs in DRY-RUN mode (checks only, no pays).
+// Deterministic, plan-driven procurement runner. It pays configured vendors;
+// it does not claim to deliver compute, storage or API services, or perform AI
+// quote discovery. Default mode is read-only. --execute sends real testnet txs.
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import { pathToFileURL } from 'node:url';
+import nearApi from 'near-api-js';
 
-import { BouncerClient, fmt } from '../packages/client.mjs';
+const { Account, KeyPair, KeyPairSigner, providers } = nearApi;
+const DEFAULT_RPC = 'https://test.rpc.fastnear.com';
+const CONTRACT_VERSION = 'bouncer-agent-v4';
+const U128_MAX = (1n << 128n) - 1n;
+const GAS = 200_000_000_000_000n;
+const EXPLORER = hash => `https://testnet.nearblocks.io/txns/${hash}?network=testnet`;
 
-const POLL_MS = parseInt(process.env.POLL_MS || '6000', 10);
-const POLICY_ID = process.env.POLICY_ID || 'procurement';
-
-async function main() {
-  const contractId = process.env.BOUNCER_CONTRACT;
-  const agentId = process.env.AGENT_ID;
-  const agentKey = process.env.AGENT_KEY;
-  const networkId = process.env.NEAR_NETWORK || 'testnet';
-  const dryRun = !agentKey;
-
-  if (!contractId) {
-    console.error('set BOUNCER_CONTRACT=<bouncer account id>');
-    process.exit(1);
+function text(value, name, max = 128) {
+  if (typeof value !== 'string' || !value.trim() || Buffer.byteLength(value) > max) {
+    throw new Error(`${name} must be a nonempty string of at most ${max} bytes`);
   }
-  const effectiveAgentId = agentId || ('dryrun-agent.' + contractId.split('.').slice(-2).join('.'));
-  const client = new BouncerClient({
-    contractId, networkId,
-    accountId: effectiveAgentId,
-    privateKey: agentKey,
-  });
+  return value;
+}
 
-  console.log(`[procurement] watching policy="${POLICY_ID}" on ${contractId} as ${effectiveAgentId}`);
-  console.log(`[procurement] mode: ${dryRun ? 'DRY RUN (no agent key set — checks only)' : 'LIVE (key present)'}`);
-
-  const seen = new Set();
-  while (true) {
-    try {
-      const invoices = await client.listInvoices(POLICY_ID, true);
-      for (const inv of invoices) {
-        if (seen.has(inv.id) || inv.paid) continue;
-        seen.add(inv.id);
-        const label = `#${inv.id} ${fmt(inv.amount)} to ${inv.payee} ("${inv.memo}")`;
-        const [ok, reason] = await client.check(POLICY_ID, inv.payee, inv.amount.toString());
-        if (!ok) {
-          console.log(`[procurement] REFUSE ${label} — ${reason}`);
-          continue;
-        }
-        console.log(`[procurement] ALLOW  ${label}`);
-        if (dryRun) { console.log(`[procurement] (dry run; not sending pay_invoice)`); continue; }
-        const res = await client.payInvoice(POLICY_ID, inv.id);
-        if (res.ok) {
-          console.log(`[procurement] PAID   ${label} (tx ${res.txHash})`);
-        } else {
-          console.log(`[procurement] FAIL   ${label} — ${res.error}`);
-        }
-      }
-    } catch (e) {
-      console.log('[procurement] poll error:', e.message);
+export function validatePlan(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('plan must be an object');
+  const contractId = text(input.contract_id, 'contract_id', 64);
+  const ownerId = text(input.owner_account_id, 'owner_account_id', 64);
+  // This prototype intentionally refuses mainnet. Both account IDs are
+  // explicitly testnet accounts; token IDs may also be implicit accounts.
+  if (!contractId.endsWith('.testnet') || !ownerId.endsWith('.testnet')) {
+    throw new Error('only .testnet contract and owner accounts are supported');
+  }
+  if (!Array.isArray(input.requests) || input.requests.length === 0 || input.requests.length > 100) {
+    throw new Error('requests must be a nonempty array of at most 100 entries');
+  }
+  const ids = new Set();
+  const requests = input.requests.map((request, index) => {
+    if (!request || typeof request !== 'object' || Array.isArray(request)) throw new Error(`request ${index} must be an object`);
+    const id = text(request.id, `requests[${index}].id`, 64);
+    if (!/^[A-Za-z0-9_-]+$/.test(id) || ids.has(id)) throw new Error(`invalid or duplicate request id: ${id}`);
+    ids.add(id);
+    const resource = text(request.resource, `${id}.resource`, 64);
+    const policyId = text(request.policy_id, `${id}.policy_id`, 128);
+    const token = text(request.token, `${id}.token`, 64);
+    const payee = text(request.payee, `${id}.payee`, 64);
+    if (typeof request.amount !== 'string' || !/^[0-9]+$/.test(request.amount)) {
+      throw new Error(`${id}.amount must be a decimal string in the token's smallest units`);
     }
-    await new Promise(r => setTimeout(r, POLL_MS));
+    const amount = BigInt(request.amount);
+    if (amount <= 0n || amount > U128_MAX) throw new Error(`${id}.amount is outside the supported range`);
+    const memo = request.memo === undefined ? `bouncer:${resource}:${id}` : text(request.memo, `${id}.memo`, 256);
+    if (Buffer.byteLength(memo) > 256) throw new Error(`${id}.memo must be at most 256 bytes`);
+    return { id, resource, policy_id: policyId, token, payee, amount: amount.toString(), memo };
+  });
+  return { contract_id: contractId, owner_account_id: ownerId, requests };
+}
+
+function fingerprint(request) {
+  return crypto.createHash('sha256').update(JSON.stringify(request)).digest('hex');
+}
+function assertSuccessfulReceipts(result, token) {
+  if (result.status?.Failure) throw new Error(`transaction failed: ${JSON.stringify(result.status.Failure)}`);
+  if (!Array.isArray(result.receipts_outcome) || result.receipts_outcome.length === 0) {
+    throw new Error('no transaction receipt outcomes returned');
+  }
+  const failed = result.receipts_outcome.find(receipt => receipt.outcome?.status?.Failure);
+  if (failed) throw new Error(`receipt failed: ${JSON.stringify(failed.outcome.status.Failure)}`);
+  if (!result.receipts_outcome.some(receipt => receipt.outcome?.executor_id === token)) {
+    throw new Error('no receipt from the expected token contract');
+  }
+  if (!result.transaction_outcome?.id) throw new Error('transaction hash missing');
+}
+
+/**
+ * Run preflight checks and optionally execute a plan. `journal` exposes
+ * get(id) and put(id, entry); every live payment is marked pending BEFORE it
+ * is sent. An unresolved pending entry is never retried automatically.
+ */
+export async function runProcurement({ plan: rawPlan, provider, account, publicKey, journal, execute = false, log = console.log }) {
+  const plan = validatePlan(rawPlan);
+  if (!account || account.accountId !== plan.owner_account_id) throw new Error('agent key account does not match the plan owner');
+  if (execute && !journal) throw new Error('a journal is required for live execution');
+  const version = await provider.callFunction(plan.contract_id, 'contract_version', {}, { finality: 'final' });
+  if (version !== CONTRACT_VERSION) throw new Error(`unsupported contract version: ${version || 'unknown'}`);
+  const access = await provider.viewAccessKey(plan.owner_account_id, publicKey, { finality: 'final' });
+  const permission = access.permission?.FunctionCall;
+  if (!permission || permission.receiver_id !== plan.contract_id ||
+      JSON.stringify(permission.method_names) !== JSON.stringify(['execute'])) {
+    throw new Error('agent key must be a function-call key scoped ONLY to execute on this contract');
+  }
+
+  const totals = { paid: 0, blocked: 0, skipped: 0, ready: 0 };
+  for (const request of plan.requests) {
+    const hash = fingerprint(request);
+    const previous = journal?.get(request.id);
+    if (previous && previous.fingerprint !== hash) throw new Error(`${request.id}: journal entry does not match the request`);
+    if (previous?.status === 'completed') {
+      log(`[procurement] SKIP ${request.id}: already paid (${previous.tx_hash})`);
+      totals.skipped++;
+      continue;
+    }
+    if (previous) {
+      throw new Error(`${request.id}: unresolved pending payment; inspect the chain and journal before retrying`);
+    }
+
+    const policy = await provider.callFunction(plan.contract_id, 'get_policy', { policy_id: request.policy_id }, { finality: 'final' });
+    if (!policy || policy.token !== request.token) {
+      throw new Error(`${request.id}: expected token does not match the on-chain policy`);
+    }
+    const allowed = await provider.callFunction(plan.contract_id, 'is_agent_key_allowed', {
+      policy_id: request.policy_id, public_key: publicKey.toString(),
+    }, { finality: 'final' });
+    if (allowed !== true) throw new Error(`${request.id}: agent key is not granted to this policy`);
+    const decision = await provider.callFunction(plan.contract_id, 'check', {
+      policy_id: request.policy_id, payee: request.payee, amount: request.amount,
+    }, { finality: 'final' });
+    if (!Array.isArray(decision) || typeof decision[0] !== 'boolean') throw new Error(`${request.id}: invalid policy verdict`);
+    if (!decision[0]) {
+      log(`[procurement] BLOCKED ${request.id} (${request.resource}): ${decision[1]}`);
+      totals.blocked++;
+      continue;
+    }
+    if (!execute) {
+      log(`[procurement] READY ${request.id} (${request.resource}): ${request.amount} ${request.token} → ${request.payee} (dry run)`);
+      totals.ready++;
+      continue;
+    }
+    const before = BigInt(await provider.callFunction(request.token, 'ft_balance_of', { account_id: request.payee }, { finality: 'final' }));
+    const pending = { fingerprint: hash, status: 'pending', started_at: new Date().toISOString() };
+    journal.put(request.id, pending);
+    let txHash;
+    try {
+      const result = await account.callFunctionRaw({
+        contractId: plan.contract_id,
+        methodName: 'execute',
+        args: { policy_id: request.policy_id, payee: request.payee, amount: request.amount,
+          memo: request.memo, expected_token: request.token },
+        deposit: 0n, gas: GAS, waitUntil: 'FINAL',
+      });
+      txHash = result.transaction_outcome?.id;
+      if (txHash) journal.put(request.id, { ...pending, tx_hash: txHash });
+      assertSuccessfulReceipts(result, request.token);
+      const after = BigInt(await provider.callFunction(request.token, 'ft_balance_of', { account_id: request.payee }, { finality: 'final' }));
+      if (after !== before + BigInt(request.amount)) throw new Error('vendor balance delta did not match the payment');
+      journal.put(request.id, { fingerprint: hash, status: 'completed', tx_hash: txHash, completed_at: new Date().toISOString() });
+      log(`[procurement] PAID ${request.id} (${request.resource}): ${request.amount} ${request.token} → ${request.payee} ${EXPLORER(txHash)}`);
+      totals.paid++;
+    } catch (error) {
+      // A network timeout or failure may happen after broadcast. Keep pending:
+      // retrying blindly could pay twice. The owner must reconcile manually.
+      if (!txHash && error.transaction_outcome?.id) {
+        txHash = error.transaction_outcome.id;
+        journal.put(request.id, { ...pending, tx_hash: txHash });
+      }
+      const reference = txHash ? ` (tx ${txHash})` : '';
+      throw new Error(`${request.id}: payment could not be confirmed${reference}; journal remains pending, do not retry automatically: ${error.message}`, { cause: error });
+    }
+  }
+  return totals;
+}
+
+/** Atomic local journal and exclusive lock; not a distributed idempotency system. */
+export class FileJournal {
+  constructor(file, contractId, ownerId) {
+    this.file = path.resolve(file);
+    this.lockFile = `${this.file}.lock`;
+    fs.mkdirSync(path.dirname(this.file), { recursive: true, mode: 0o700 });
+    this.lockFd = fs.openSync(this.lockFile, 'wx', 0o600);
+    try {
+      this.data = fs.existsSync(this.file)
+        ? JSON.parse(fs.readFileSync(this.file, 'utf8'))
+        : { version: 1, contract_id: contractId, owner_account_id: ownerId, entries: [] };
+      if (this.data.version !== 1 || this.data.contract_id !== contractId ||
+          this.data.owner_account_id !== ownerId || !Array.isArray(this.data.entries)) {
+        throw new Error('journal belongs to a different contract/account or has an invalid format');
+      }
+      const ids = new Set();
+      for (const entry of this.data.entries) {
+        if (!entry || typeof entry.id !== 'string' || ids.has(entry.id) ||
+            !['pending', 'completed'].includes(entry.status) || typeof entry.fingerprint !== 'string' ||
+            (entry.status === 'completed' && typeof entry.tx_hash !== 'string')) {
+          throw new Error('journal contains invalid or duplicate entries');
+        }
+        ids.add(entry.id);
+      }
+    } catch (error) {
+      this.close();
+      throw error;
+    }
+  }
+  get(id) { return this.data.entries.find(entry => entry.id === id); }
+  put(id, entry) {
+    const index = this.data.entries.findIndex(item => item.id === id);
+    const next = { id, ...entry };
+    if (index === -1) this.data.entries.push(next); else this.data.entries[index] = next;
+    const temp = `${this.file}.${crypto.randomBytes(6).toString('hex')}.tmp`;
+    try {
+      fs.writeFileSync(temp, JSON.stringify(this.data, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
+      fs.renameSync(temp, this.file);
+      fs.chmodSync(this.file, 0o600);
+    } finally {
+      if (fs.existsSync(temp)) fs.unlinkSync(temp);
+    }
+  }
+  close() {
+    if (this.lockFd !== null) {
+      fs.closeSync(this.lockFd);
+      this.lockFd = null;
+      fs.unlinkSync(this.lockFile);
+    }
   }
 }
 
-main().catch(e => { console.error(e); process.exit(1); });
+function parseArgs(args) {
+  const out = { execute: false };
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === '--execute') out.execute = true;
+    else if (arg === '--help') out.help = true;
+    else if (['--plan', '--key', '--state', '--rpc'].includes(arg) && args[i + 1] && !args[i + 1].startsWith('--')) {
+      out[arg.slice(2)] = args[++i];
+    } else throw new Error(`unknown or incomplete argument: ${arg}`);
+  }
+  return out;
+}
+function expandHome(value) { return value.startsWith('~/') ? path.join(os.homedir(), value.slice(2)) : value; }
+export function createRuntime({ plan: rawPlan, keyFile, rpc }) {
+  const plan = validatePlan(rawPlan);
+  const credentials = JSON.parse(fs.readFileSync(expandHome(keyFile), 'utf8'));
+  if (credentials.account_id !== plan.owner_account_id || typeof credentials.private_key !== 'string') {
+    throw new Error('agent key file does not match owner_account_id');
+  }
+  const key = KeyPair.fromString(credentials.private_key);
+  const provider = new providers.JsonRpcProvider({ url: rpc || process.env.NEAR_TESTNET_RPC || DEFAULT_RPC });
+  const account = new Account(plan.owner_account_id, provider, new KeyPairSigner(key));
+  return { provider, account, publicKey: key.getPublicKey() };
+}
+
+async function main() {
+  const options = parseArgs(process.argv.slice(2));
+  if (options.help) {
+    console.log('Usage: node bouncer/agent/procurement.mjs --plan PLAN.json --key AGENT_KEY.json [--state JOURNAL.json] [--rpc URL] [--execute]');
+    console.log('Dry run by default. --execute submits real testnet payments.');
+    return;
+  }
+  if (!options.plan || !options.key) throw new Error('provide --plan and --key; use --help for usage');
+  const planPath = path.resolve(expandHome(options.plan));
+  const plan = validatePlan(JSON.parse(fs.readFileSync(planPath, 'utf8')));
+  const { provider, account, publicKey } = createRuntime({ plan, keyFile: options.key, rpc: options.rpc });
+  const journalPath = path.resolve(expandHome(options.state || `${planPath}.bouncer-journal.json`));
+  const journal = options.execute ? new FileJournal(journalPath, plan.contract_id, plan.owner_account_id) : null;
+  try {
+    console.log(`[procurement] ${options.execute ? 'LIVE TESTNET' : 'DRY RUN'} on ${plan.contract_id}; ${plan.requests.length} request(s)`);
+    const totals = await runProcurement({ plan, provider, account, publicKey, journal, execute: options.execute });
+    console.log(`[procurement] paid=${totals.paid} blocked=${totals.blocked} skipped=${totals.skipped} ready=${totals.ready}`);
+    if (options.execute) console.log(`[procurement] journal: ${journalPath}`);
+    if (totals.blocked > 0) process.exitCode = 2;
+  } finally {
+    journal?.close();
+  }
+}
+
+if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url) {
+  main().catch(error => { console.error(`[procurement] ERROR: ${error.message}`); process.exitCode = 1; });
+}

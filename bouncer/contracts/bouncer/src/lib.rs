@@ -1,23 +1,45 @@
 use near_sdk::json_types::U128;
 use near_sdk::store::LookupMap;
-use near_sdk::{env, ext_contract, near, AccountId, Gas, NearToken, PanicOnDefault, Promise};
+use near_sdk::{env, ext_contract, near, AccountId, Gas, NearToken, PanicOnDefault, Promise, PublicKey};
 
 const ONE_YOCTO: NearToken = NearToken::from_yoctonear(1);
+const ZERO_NEAR: NearToken = NearToken::from_yoctonear(0);
 const GAS_FOR_FT_TRANSFER: Gas = Gas::from_tgas(15);
 const GAS_FOR_RESOLVE: Gas = Gas::from_tgas(15);
-const HOUR_NS: u64 = 3_600_000_000_000;
-const DAY_HOURS: u64 = 24;
-const DAY_NS: u64 = HOUR_NS * DAY_HOURS;
+const NS_PER_HOUR: u64 = 60 * 60 * 1_000_000_000;
+const WINDOW_HOURS: u64 = 24;
+#[cfg(test)]
+const NS_PER_DAY: u64 = WINDOW_HOURS * NS_PER_HOUR;
+
+// Preserve readable errors in optimized WASM; use a normal panic in native tests.
+#[cfg(target_arch = "wasm32")]
+#[link(wasm_import_module = "env")]
+extern "C" { fn panic_utf8(len: u64, ptr: u64) -> !; }
+#[cfg(target_arch = "wasm32")]
+fn abort_with(msg: &str) -> ! {
+    unsafe { panic_utf8(msg.len() as u64, msg.as_ptr() as u64); }
+}
+#[cfg(not(target_arch = "wasm32"))]
+fn abort_with(msg: &str) -> ! { panic!("{}", msg); }
+fn require(cond: bool, msg: &str) { if !cond { abort_with(msg); } }
 
 #[ext_contract(ext_ft)]
 trait ExtFt {
     fn ft_transfer(&mut self, receiver_id: AccountId, amount: U128, memo: Option<String>);
 }
-
 #[ext_contract(ext_self)]
 trait ExtSelf {
-    fn after_execute(&mut self, token: AccountId, amount: U128);
+    fn after_execute(&mut self, policy_id: String, token: AccountId, amount: U128, bucket: u64);
     fn after_withdraw(&mut self, token: AccountId, amount: U128);
+}
+
+#[derive(near_sdk::serde::Serialize)]
+#[serde(crate = "near_sdk::serde")]
+pub struct PolicyView {
+    pub token: AccountId,
+    pub per_tx_cap: U128,
+    /// Zero means that the daily cap is disabled.
+    pub daily_cap: U128,
 }
 
 #[near(contract_state)]
@@ -26,79 +48,130 @@ pub struct Bouncer {
     owner: AccountId,
     token_of: LookupMap<String, AccountId>,
     cap_of: LookupMap<String, u128>,
-    daily_limit_of: LookupMap<String, u128>,
-    // allow: "policy_id:payee" -> true
+    daily_of: LookupMap<String, u128>,
     allow: LookupMap<String, bool>,
     allow_count: LookupMap<String, u32>,
     balances: LookupMap<AccountId, u128>,
-    // bucket_key "policy_id:hour_bucket" -> amount spent in that hour
-    hourly_spend: LookupMap<String, u128>,
+    daily_spent: LookupMap<String, u128>,
+    // The signing key is explicitly authorized per policy, not merely by account.
+    agents: LookupMap<(String, PublicKey), bool>,
 }
 
-fn allow_key(policy_id: &str, payee: &str) -> String { format!("{}:{}", policy_id, payee) }
-fn bucket_key(policy_id: &str, bucket: u64) -> String { format!("{}:b{}", policy_id, bucket) }
+fn allow_key(pid: &str, p: &str) -> String {
+    let mut s = String::with_capacity(pid.len() + 1 + p.len());
+    s.push_str(pid); s.push(':'); s.push_str(p); s
+}
+fn daily_key(pid: &str, bucket: u64) -> String {
+    let mut s = String::with_capacity(pid.len() + 22);
+    s.push_str(pid); s.push('|');
+    let mut b = bucket;
+    let mut digits = [0u8; 20];
+    let mut i = 0;
+    if b == 0 { digits[i] = b'0'; i += 1; } else {
+        while b > 0 { digits[i] = b'0' + (b % 10) as u8; b /= 10; i += 1; }
+        digits[..i].reverse();
+    }
+    for d in digits.iter().take(i) { s.push(*d as char); }
+    s
+}
 
-/// Sum the last 24 hourly buckets; prune older ones lazily.
-fn rolling_24h_spent(store: &LookupMap<String, u128>, policy_id: &str, now_ns: u64) -> u128 {
-    let cur_bucket = now_ns / HOUR_NS;
-    let mut total: u128 = 0;
-    for i in 0..DAY_HOURS {
-        let b = cur_bucket.saturating_sub(i);
-        if let Some(v) = store.get(&bucket_key(policy_id, b)) {
-            total = total.saturating_add(*v);
-        }
+// Sum the current hour and 24 preceding hours. Including the oldest bucket
+// makes this conservative: no spend less than 24 hours old can fall out of
+// the budget; some spend may remain counted for up to one additional hour.
+fn rolling_spent(s: &Bouncer, policy_id: &str, current_hour: u64) -> u128 {
+    let mut total = 0u128;
+    for offset in 0..=WINDOW_HOURS {
+        let Some(hour) = current_hour.checked_sub(offset) else { break; };
+        let spent = s.daily_spent.get(&daily_key(policy_id, hour)).copied().unwrap_or(0);
+        total = total.saturating_add(spent);
     }
     total
 }
 
-fn credit_hour(store: &mut LookupMap<String, u128>, policy_id: &str, now_ns: u64, amt: u128) {
-    let b = now_ns / HOUR_NS;
-    let k = bucket_key(policy_id, b);
-    let prev = store.get(&k).cloned().unwrap_or(0);
-    store.insert(k, prev.saturating_add(amt));
+fn validate(
+    s: &Bouncer, policy_id: &str, payee: &AccountId, amount: u128,
+) -> Result<(AccountId, u128), String> {
+    let cap = *s.cap_of.get(policy_id).ok_or("no such policy")?;
+    let token = s.token_of.get(policy_id).cloned().ok_or("policy missing token")?;
+    if amount == 0 { return Err("amount must be > 0".into()); }
+    if amount > cap { return Err("BLOCKED: amount exceeds per-tx cap".into()); }
+    // Fail closed: a policy with no allowed payees cannot spend.
+    let k = allow_key(policy_id, payee.as_str());
+    if s.allow.get(&k) != Some(&true) {
+        return Err("BLOCKED: payee not in allowlist".into());
+    }
+    let daily = s.daily_of.get(policy_id).cloned().unwrap_or(0);
+    if daily > 0 {
+        let bucket = env::block_timestamp() / NS_PER_HOUR;
+        let spent = rolling_spent(s, policy_id, bucket);
+        if spent.checked_add(amount).map_or(true, |next| next > daily) {
+            return Err("BLOCKED: daily cap exceeded for this policy".into());
+        }
+    }
+    let bal = s.balances.get(&token).cloned().unwrap_or(0);
+    if bal < amount { return Err("BLOCKED: insufficient vault balance (fund first)".into()); }
+    Ok((token, bal))
+}
+
+fn require_owner(s: &Bouncer, attached: NearToken) -> Result<(), String> {
+    if attached != ONE_YOCTO {
+        return Err("ESCALATION BLOCKED: owner-only method requires exactly 1 yoctoNEAR".into());
+    }
+    if env::predecessor_account_id() != s.owner {
+        return Err("ESCALATION BLOCKED: caller is not owner".into());
+    }
+    Ok(())
 }
 
 #[near]
 impl Bouncer {
     #[init]
     pub fn new(owner: AccountId) -> Self {
-        assert!(!owner.as_str().is_empty());
+        if owner.as_str().is_empty() { abort_with("owner must not be empty"); }
         Self {
             owner,
-            token_of: LookupMap::new(b"t"),
-            cap_of: LookupMap::new(b"c"),
-            daily_limit_of: LookupMap::new(b"d"),
-            allow: LookupMap::new(b"a"),
-            allow_count: LookupMap::new(b"n"),
+            token_of: LookupMap::new(b"t"), cap_of: LookupMap::new(b"c"),
+            daily_of: LookupMap::new(b"d"),
+            allow: LookupMap::new(b"a"), allow_count: LookupMap::new(b"n"),
             balances: LookupMap::new(b"b"),
-            hourly_spend: LookupMap::new(b"h"),
+            daily_spent: LookupMap::new(b"s"),
+            agents: LookupMap::new(b"k"),
         }
     }
 
     #[payable]
-    pub fn set_policy(
-        &mut self,
-        policy_id: String,
-        token: AccountId,
-        per_tx_cap: U128,
-        daily_limit: Option<U128>,
-    ) {
-        assert!(env::attached_deposit() == ONE_YOCTO, "requires 1 yoctoNEAR (full-access key only)");
-        assert!(env::predecessor_account_id() == self.owner, "owner only");
-        assert!(per_tx_cap.0 > 0);
+    pub fn set_policy(&mut self, policy_id: String, token: AccountId, per_tx_cap: U128, daily_cap: Option<U128>) {
+        require_owner(self, env::attached_deposit()).unwrap_or_else(|m| abort_with(&m));
+        if per_tx_cap.0 == 0 { abort_with("per_tx_cap must be > 0"); }
         self.token_of.insert(policy_id.clone(), token);
         self.cap_of.insert(policy_id.clone(), per_tx_cap.0);
-        if let Some(dl) = daily_limit {
-            assert!(dl.0 > 0);
-            self.daily_limit_of.insert(policy_id, dl.0);
-        }
+        self.daily_of.insert(policy_id, daily_cap.map(|u| u.0).unwrap_or(0));
+    }
+
+    /// Authorize a public key belonging to the owner account for one policy.
+    /// The owner must separately install it as a function-call access key scoped
+    /// to execute; an entry here alone does not create a NEAR access key.
+    #[payable]
+    pub fn grant_agent_key(&mut self, policy_id: String, public_key: PublicKey) {
+        require_owner(self, env::attached_deposit()).unwrap_or_else(|m| abort_with(&m));
+        require(self.cap_of.contains_key(&policy_id), "policy does not exist");
+        self.agents.insert((policy_id, public_key), true);
+    }
+
+    #[payable]
+    pub fn revoke_agent_key(&mut self, policy_id: String, public_key: PublicKey) {
+        require_owner(self, env::attached_deposit()).unwrap_or_else(|m| abort_with(&m));
+        self.agents.remove(&(policy_id, public_key));
+    }
+
+    pub fn is_agent_key_allowed(&self, policy_id: String, public_key: PublicKey) -> bool {
+        self.agents.get(&(policy_id, public_key)) == Some(&true)
     }
 
     #[payable]
     pub fn allow_payee(&mut self, policy_id: String, payee: AccountId) {
-        assert!(env::attached_deposit() == ONE_YOCTO);
-        assert!(env::predecessor_account_id() == self.owner);
-        assert!(self.cap_of.contains_key(&policy_id), "no such policy");
+        require_owner(self, env::attached_deposit()).unwrap_or_else(|m| abort_with(&m));
+        if !self.cap_of.contains_key(&policy_id) { abort_with("policy does not exist"); }
         let k = allow_key(&policy_id, payee.as_str());
         if self.allow.get(&k).is_none() {
             let n = self.allow_count.get(&policy_id).cloned().unwrap_or(0);
@@ -109,8 +182,7 @@ impl Bouncer {
 
     #[payable]
     pub fn revoke_payee(&mut self, policy_id: String, payee: AccountId) {
-        assert!(env::attached_deposit() == ONE_YOCTO);
-        assert!(env::predecessor_account_id() == self.owner);
+        require_owner(self, env::attached_deposit()).unwrap_or_else(|m| abort_with(&m));
         let k = allow_key(&policy_id, payee.as_str());
         if self.allow.remove(&k).is_some() {
             let n = self.allow_count.get(&policy_id).cloned().unwrap_or(1);
@@ -118,112 +190,317 @@ impl Bouncer {
         }
     }
 
+    pub fn contract_version(&self) -> &'static str { "bouncer-agent-v4" }
+
+    pub fn get_policy(&self, policy_id: String) -> Option<PolicyView> {
+        Some(PolicyView {
+            token: self.token_of.get(&policy_id)?.clone(),
+            per_tx_cap: U128(*self.cap_of.get(&policy_id)?),
+            daily_cap: U128(self.daily_of.get(&policy_id).copied().unwrap_or(0)),
+        })
+    }
+
     pub fn vault_balance(&self, token: AccountId) -> U128 {
         U128(self.balances.get(&token).cloned().unwrap_or(0))
     }
 
+    /// Conservative rolling 24-hour spend; hour buckets can retain a spend
+    /// for up to one extra hour. Zero/disabled limits still track spend.
     pub fn daily_spent(&self, policy_id: String) -> U128 {
-        U128(rolling_24h_spent(&self.hourly_spend, &policy_id, env::block_timestamp()))
+        U128(rolling_spent(self, &policy_id, env::block_timestamp() / NS_PER_HOUR))
     }
 
     pub fn ft_on_transfer(&mut self, sender_id: AccountId, amount: U128, msg: String) -> U128 {
         let token = env::predecessor_account_id();
-        let amt = amount.0;
         let bal = self.balances.get(&token).cloned().unwrap_or(0);
-        self.balances.insert(token.clone(), bal + amt);
-        env::log_str(&format!("BOUNCER deposit {} from {} amt {} msg {}", token, sender_id, amt, msg));
+        let updated = bal.checked_add(amount.0).unwrap_or_else(|| abort_with("vault balance overflow"));
+        self.balances.insert(token.clone(), updated);
+        env::log_str("BOUNCER deposit received");
+        let _ = (sender_id, msg);
         U128(0)
     }
 
     #[payable]
     pub fn withdraw(&mut self, token: AccountId, amount: U128) -> Promise {
-        assert!(env::attached_deposit() == ONE_YOCTO);
-        assert!(env::predecessor_account_id() == self.owner, "owner only");
-        let amt = amount.0;
+        require_owner(self, env::attached_deposit()).unwrap_or_else(|m| abort_with(&m));
         let bal = self.balances.get(&token).cloned().unwrap_or(0);
-        assert!(amt <= bal, "insufficient");
-        self.balances.insert(token.clone(), bal - amt);
+        if amount.0 > bal { abort_with("insufficient vault balance"); }
+        self.balances.insert(token.clone(), bal - amount.0);
         ext_ft::ext(token.clone())
-            .with_attached_deposit(ONE_YOCTO)
-            .with_static_gas(GAS_FOR_FT_TRANSFER)
+            .with_attached_deposit(ONE_YOCTO).with_static_gas(GAS_FOR_FT_TRANSFER)
             .ft_transfer(self.owner.clone(), amount, Some("bouncer:withdraw".into()))
-            .then(
-                ext_self::ext(env::current_account_id())
-                    .with_static_gas(GAS_FOR_RESOLVE)
-                    .after_withdraw(token, amount),
-            )
+            .then(ext_self::ext(env::current_account_id()).with_static_gas(GAS_FOR_RESOLVE).after_withdraw(token, amount))
     }
 
-    pub fn execute(&mut self, policy_id: String, payee: AccountId, amount: U128, memo: String) -> Promise {
-        let amt = amount.0;
-        let cap = self.cap_of.get(&policy_id).cloned().expect("no policy");
-        let token = self.token_of.get(&policy_id).cloned().expect("no token");
-        assert!(amt > 0 && amt <= cap, "amount out of per-tx range");
-        let n = self.allow_count.get(&policy_id).cloned().unwrap_or(0);
-        if n > 0 {
-            let k = allow_key(&policy_id, payee.as_str());
-            assert!(self.allow.get(&k) == Some(&true), "payee not in allowlist");
-        }
-        let now = env::block_timestamp();
-        if let Some(limit) = self.daily_limit_of.get(&policy_id).cloned() {
-            let spent = rolling_24h_spent(&self.hourly_spend, &policy_id, now);
-            assert!(spent.saturating_add(amt) <= limit, "over 24h limit");
-        }
-        let bal = self.balances.get(&token).cloned().unwrap_or(0);
-        assert!(bal >= amt, "insufficient vault balance");
-        self.balances.insert(token.clone(), bal - amt);
-        credit_hour(&mut self.hourly_spend, &policy_id, now, amt);
+    #[payable]
+    pub fn execute(&mut self, policy_id: String, payee: AccountId, amount: U128, memo: Option<String>, expected_token: AccountId) -> Promise {
+        // Only direct transactions signed by the owner account may invoke execute.
+        // The signing key must also be explicitly granted for this policy.
+        require(env::attached_deposit() == ZERO_NEAR, "BLOCKED: execute requires zero deposit");
+        require(env::predecessor_account_id() == self.owner && env::signer_account_id() == self.owner,
+            "BLOCKED: caller is not the owner account");
+        let signing_key = env::signer_account_pk();
+        require(self.agents.get(&(policy_id.clone(), signing_key)) == Some(&true),
+            "BLOCKED: signing key is not authorized for this policy");
+        let (token, bal) = validate(self, &policy_id, &payee, amount.0).unwrap_or_else(|m| abort_with(&m));
+        // Bind the signed payment to the token the agent reviewed, even if the
+        // owner changes the policy between preflight and transaction execution.
+        require(token == expected_token, "BLOCKED: policy token does not match expected token");
+        let bucket = env::block_timestamp() / NS_PER_HOUR;
+        let dk = daily_key(&policy_id, bucket);
+        let spent = self.daily_spent.get(&dk).cloned().unwrap_or(0);
+        let next_spent = spent.checked_add(amount.0).unwrap_or_else(|| abort_with("daily spend overflow"));
+        self.balances.insert(token.clone(), bal - amount.0);
+        self.daily_spent.insert(dk, next_spent);
+        env::log_str("BOUNCER payment initiated");
+        // The contract, not the function-call key, pays the required 1 yoctoNEAR.
         ext_ft::ext(token.clone())
-            .with_attached_deposit(ONE_YOCTO)
-            .with_static_gas(GAS_FOR_FT_TRANSFER)
-            .ft_transfer(payee, amount, Some(memo))
-            .then(
-                ext_self::ext(env::current_account_id())
-                    .with_static_gas(GAS_FOR_RESOLVE)
-                    .after_execute(token, amount),
-            )
+            .with_attached_deposit(ONE_YOCTO).with_static_gas(GAS_FOR_FT_TRANSFER)
+            .ft_transfer(payee, amount, memo)
+            .then(ext_self::ext(env::current_account_id()).with_static_gas(GAS_FOR_RESOLVE).after_execute(policy_id, token, amount, bucket))
     }
 
     #[private]
-    pub fn after_execute(&mut self, token: AccountId, amount: U128) {
-        let success = matches!(env::promise_result(0), near_sdk::PromiseResult::Successful(_));
-        if !success {
+    pub fn after_execute(&mut self, policy_id: String, token: AccountId, amount: U128, bucket: u64) {
+        if !matches!(env::promise_result(0), near_sdk::PromiseResult::Successful(_)) {
             let bal = self.balances.get(&token).cloned().unwrap_or(0);
-            self.balances.insert(token, bal + amount.0);
-            env::log_str("BOUNCER ft_transfer failed; refunded vault");
+            let updated = bal.checked_add(amount.0).unwrap_or_else(|| abort_with("refund balance overflow"));
+            self.balances.insert(token.clone(), updated);
+            // Use the original execution hour even if the callback crosses a boundary.
+            let dk = daily_key(&policy_id, bucket);
+            if let Some(s) = self.daily_spent.get(&dk).cloned() {
+                self.daily_spent.insert(dk, s.saturating_sub(amount.0));
+            }
+            env::log_str("BOUNCER ft_transfer failed; vault refunded");
         }
     }
-
     #[private]
     pub fn after_withdraw(&mut self, token: AccountId, amount: U128) {
-        let success = matches!(env::promise_result(0), near_sdk::PromiseResult::Successful(_));
-        if !success {
+        if !matches!(env::promise_result(0), near_sdk::PromiseResult::Successful(_)) {
             let bal = self.balances.get(&token).cloned().unwrap_or(0);
-            self.balances.insert(token, bal + amount.0);
-            env::log_str("BOUNCER withdraw failed; refunded vault");
+            let updated = bal.checked_add(amount.0).unwrap_or_else(|| abort_with("refund balance overflow"));
+            self.balances.insert(token, updated);
         }
     }
 
     pub fn check(&self, policy_id: String, payee: AccountId, amount: U128) -> (bool, String) {
-        let cap = match self.cap_of.get(&policy_id) { Some(c) => *c, None => return (false, "no such policy".into()) };
-        let token = match self.token_of.get(&policy_id) { Some(t) => t.clone(), None => return (false, "policy missing token".into()) };
-        if amount.0 == 0 { return (false, "amount must be > 0".into()); }
-        if amount.0 > cap { return (false, format!("over per-tx cap (max {})", cap)); }
-        let n = self.allow_count.get(&policy_id).cloned().unwrap_or(0);
-        if n > 0 {
-            let k = allow_key(&policy_id, payee.as_str());
-            if self.allow.get(&k) != Some(&true) {
-                return (false, format!("payee {} not in allowlist", payee));
-            }
+        match validate(self, &policy_id, &payee, amount.0) {
+            Ok(_) => (true, "ok: within cap, payee allowed, daily ok, vault funded".into()),
+            Err(e) => (false, e),
         }
-        let bal = self.balances.get(&token).cloned().unwrap_or(0);
-        if bal < amount.0 { return (false, format!("vault holds {}; need {}", bal, amount.0)); }
-        if let Some(limit) = self.daily_limit_of.get(&policy_id).cloned() {
-            let spent = rolling_24h_spent(&self.hourly_spend, &policy_id, env::block_timestamp());
-            if spent.saturating_add(amount.0) > limit {
-                return (false, format!("would exceed 24h limit (spent {}/{} )", spent, limit));
-            }
+    }
+    pub fn try_execute(&self, policy_id: String, payee: AccountId, amount: U128) -> (bool, String) {
+        match validate(self, &policy_id, &payee, amount.0) {
+            Ok(_) => (true, "policy satisfied; caller authorization not checked".into()),
+            Err(e) => (false, e),
         }
-        (true, "ok".into())
+    }
+    pub fn try_set_policy(&self, attached_yoctos: U128, predecessor: AccountId, per_tx_cap: U128) -> (bool, String) {
+        let deposit = NearToken::from_yoctonear(attached_yoctos.0);
+        if deposit != ONE_YOCTO {
+            return (false, "BLOCKED: requires exactly 1 yoctoNEAR (owner-only guard)".into());
+        }
+        if predecessor != self.owner {
+            return (false, "BLOCKED: caller is not owner".into());
+        }
+        if per_tx_cap.0 == 0 { return (false, "per_tx_cap must be > 0".into()); }
+        (true, "set_policy would succeed".into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use near_sdk::test_utils::{testing_env_with_promise_results, VMContextBuilder};
+    use near_sdk::{testing_env, CurveType, PromiseResult, VMContext};
+
+    fn id(value: &str) -> AccountId { value.parse().unwrap() }
+    fn key(byte: u8) -> PublicKey {
+        PublicKey::from_parts(CurveType::ED25519, vec![byte; 32]).unwrap()
+    }
+    fn context(predecessor: &str, signer: &str, pk: &PublicKey, deposit: u128, timestamp: u64) -> VMContext {
+        let mut b = VMContextBuilder::new();
+        b.current_account_id(id("bouncer.testnet"))
+            .predecessor_account_id(id(predecessor))
+            .signer_account_id(id(signer))
+            .signer_account_pk(pk.clone())
+            .attached_deposit(NearToken::from_yoctonear(deposit))
+            .block_timestamp(timestamp)
+            .prepaid_gas(Gas::from_tgas(300));
+        b.build()
+    }
+    fn owner_context(pk: &PublicKey, deposit: u128, timestamp: u64) -> VMContext {
+        context("bouncer.testnet", "bouncer.testnet", pk, deposit, timestamp)
+    }
+    fn fixture() -> (Bouncer, PublicKey) {
+        let owner_key = key(1);
+        let agent_key = key(2);
+        testing_env!(owner_context(&owner_key, 1, NS_PER_DAY));
+        let mut contract = Bouncer::new(id("bouncer.testnet"));
+        contract.set_policy("compute".into(), id("token.testnet"), U128(200), Some(U128(300)));
+        contract.grant_agent_key("compute".into(), agent_key.clone());
+        contract.allow_payee("compute".into(), id("vendor.testnet"));
+        contract.balances.insert(id("token.testnet"), 1_000);
+        (contract, agent_key)
+    }
+
+    #[test]
+    fn authorized_agent_can_execute_without_deposit() {
+        let (mut contract, agent) = fixture();
+        testing_env!(owner_context(&agent, 0, NS_PER_DAY));
+        drop(contract.execute("compute".into(), id("vendor.testnet"), U128(100), None, id("token.testnet")));
+        assert_eq!(contract.vault_balance(id("token.testnet")).0, 900);
+        assert_eq!(*contract.daily_spent.get(&daily_key("compute", WINDOW_HOURS)).unwrap(), 100);
+    }
+
+    #[test]
+    #[should_panic(expected = "BLOCKED: caller is not the owner account")]
+    fn unrelated_account_cannot_execute() {
+        let (mut contract, agent) = fixture();
+        testing_env!(context("attacker.testnet", "attacker.testnet", &agent, 0, NS_PER_DAY));
+        drop(contract.execute("compute".into(), id("vendor.testnet"), U128(100), None, id("token.testnet")));
+    }
+
+    #[test]
+    #[should_panic(expected = "BLOCKED: signing key is not authorized for this policy")]
+    fn another_key_on_owner_account_is_not_automatically_authorized() {
+        let (mut contract, _) = fixture();
+        testing_env!(owner_context(&key(3), 0, NS_PER_DAY));
+        drop(contract.execute("compute".into(), id("vendor.testnet"), U128(100), None, id("token.testnet")));
+    }
+
+    #[test]
+    #[should_panic(expected = "BLOCKED: signing key is not authorized for this policy")]
+    fn agent_key_cannot_spend_under_another_policy() {
+        let (mut contract, agent) = fixture();
+        testing_env!(owner_context(&key(1), 1, NS_PER_DAY));
+        contract.set_policy("storage".into(), id("token.testnet"), U128(200), Some(U128(300)));
+        contract.allow_payee("storage".into(), id("vendor.testnet"));
+        testing_env!(owner_context(&agent, 0, NS_PER_DAY));
+        drop(contract.execute("storage".into(), id("vendor.testnet"), U128(100), None, id("token.testnet")));
+    }
+
+    #[test]
+    #[should_panic(expected = "BLOCKED: execute requires zero deposit")]
+    fn execute_refuses_a_deposit() {
+        let (mut contract, agent) = fixture();
+        testing_env!(owner_context(&agent, 1, NS_PER_DAY));
+        drop(contract.execute("compute".into(), id("vendor.testnet"), U128(100), None, id("token.testnet")));
+    }
+
+    #[test]
+    #[should_panic(expected = "owner-only method requires exactly 1 yoctoNEAR")]
+    fn agent_cannot_grant_itself_another_policy_without_deposit() {
+        let (mut contract, agent) = fixture();
+        testing_env!(owner_context(&agent, 0, NS_PER_DAY));
+        contract.grant_agent_key("compute".into(), agent);
+    }
+
+    #[test]
+    #[should_panic(expected = "ESCALATION BLOCKED: caller is not owner")]
+    fn non_owner_cannot_grant_even_with_one_yocto() {
+        let (mut contract, agent) = fixture();
+        testing_env!(context("attacker.testnet", "attacker.testnet", &agent, 1, NS_PER_DAY));
+        contract.grant_agent_key("compute".into(), agent);
+    }
+
+    #[test]
+    #[should_panic(expected = "BLOCKED: signing key is not authorized for this policy")]
+    fn revoked_agent_key_cannot_execute() {
+        let (mut contract, agent) = fixture();
+        testing_env!(owner_context(&key(1), 1, NS_PER_DAY));
+        contract.revoke_agent_key("compute".into(), agent.clone());
+        assert!(!contract.is_agent_key_allowed("compute".into(), agent.clone()));
+        testing_env!(owner_context(&agent, 0, NS_PER_DAY));
+        drop(contract.execute("compute".into(), id("vendor.testnet"), U128(100), None, id("token.testnet")));
+    }
+
+    #[test]
+    fn an_empty_allowlist_fails_closed_after_revocation() {
+        let (mut contract, agent) = fixture();
+        testing_env!(owner_context(&key(1), 1, NS_PER_DAY));
+        contract.revoke_payee("compute".into(), id("vendor.testnet"));
+        testing_env!(owner_context(&agent, 0, NS_PER_DAY));
+        let (ok, reason) = contract.check("compute".into(), id("vendor.testnet"), U128(100));
+        assert!(!ok);
+        assert_eq!(reason, "BLOCKED: payee not in allowlist");
+    }
+
+    #[test]
+    fn limits_and_balance_are_checked_for_each_policy() {
+        let (mut contract, agent) = fixture();
+        testing_env!(owner_context(&agent, 0, NS_PER_DAY));
+        assert!(contract.check("compute".into(), id("vendor.testnet"), U128(200)).0);
+        assert_eq!(contract.check("compute".into(), id("vendor.testnet"), U128(201)).1,
+            "BLOCKED: amount exceeds per-tx cap");
+        drop(contract.execute("compute".into(), id("vendor.testnet"), U128(200), None, id("token.testnet")));
+        assert_eq!(contract.check("compute".into(), id("vendor.testnet"), U128(101)).1,
+            "BLOCKED: daily cap exceeded for this policy");
+    }
+
+    #[test]
+    fn rolling_budget_does_not_reset_at_midnight_or_release_early() {
+        let (mut contract, agent) = fixture();
+        let start = 40 * NS_PER_HOUR + 59 * 60 * 1_000_000_000;
+        testing_env!(owner_context(&agent, 0, start));
+        drop(contract.execute("compute".into(), id("vendor.testnet"), U128(200), None, id("token.testnet")));
+        // Midnight and just under 24 hours later must both retain the spend.
+        for timestamp in [48 * NS_PER_HOUR + 1, start + NS_PER_DAY - 1, 65 * NS_PER_HOUR - 1] {
+            testing_env!(owner_context(&agent, 0, timestamp));
+            assert_eq!(contract.daily_spent("compute".into()).0, 200);
+            assert_eq!(contract.check("compute".into(), id("vendor.testnet"), U128(101)).1,
+                "BLOCKED: daily cap exceeded for this policy");
+        }
+        // The conservative oldest hour expires on the next hour boundary.
+        testing_env!(owner_context(&agent, 0, 65 * NS_PER_HOUR));
+        assert_eq!(contract.daily_spent("compute".into()).0, 0);
+        assert!(contract.check("compute".into(), id("vendor.testnet"), U128(101)).0);
+    }
+
+    #[test]
+    fn earliest_hour_is_counted_once_and_budget_addition_cannot_overflow() {
+        let (mut contract, agent) = fixture();
+        testing_env!(owner_context(&agent, 0, 0));
+        contract.daily_spent.insert(daily_key("compute", 0), 200);
+        assert!(contract.check("compute".into(), id("vendor.testnet"), U128(100)).0);
+        testing_env!(owner_context(&key(1), 1, 0));
+        contract.set_policy("compute".into(), id("token.testnet"), U128(u128::MAX), Some(U128(u128::MAX)));
+        contract.daily_spent.insert(daily_key("compute", 0), u128::MAX);
+        testing_env!(owner_context(&agent, 0, 0));
+        assert_eq!(contract.check("compute".into(), id("vendor.testnet"), U128(1)).1,
+            "BLOCKED: daily cap exceeded for this policy");
+    }
+
+    #[test]
+    #[should_panic(expected = "BLOCKED: policy token does not match expected token")]
+    fn cannot_spend_when_policy_token_differs_from_signed_request() {
+        let (mut contract, agent) = fixture();
+        testing_env!(owner_context(&agent, 0, NS_PER_DAY));
+        drop(contract.execute("compute".into(), id("vendor.testnet"), U128(100), None, id("other-token.testnet")));
+    }
+
+    #[test]
+    fn policy_view_reports_the_token_and_limits() {
+        let (contract, _) = fixture();
+        let policy = contract.get_policy("compute".into()).unwrap();
+        assert_eq!(policy.token, id("token.testnet"));
+        assert_eq!(policy.per_tx_cap.0, 200);
+        assert_eq!(policy.daily_cap.0, 300);
+        assert!(contract.get_policy("unknown".into()).is_none());
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn failed_transfer_refunds_original_bucket_even_across_midnight() {
+        let (mut contract, agent) = fixture();
+        testing_env!(owner_context(&agent, 0, NS_PER_DAY));
+        drop(contract.execute("compute".into(), id("vendor.testnet"), U128(100), None, id("token.testnet")));
+        contract.daily_spent.insert(daily_key("compute", WINDOW_HOURS + 1), 75);
+        let callback_context = context("bouncer.testnet", "bouncer.testnet", &agent, 0, NS_PER_DAY + NS_PER_HOUR);
+        testing_env_with_promise_results(callback_context, PromiseResult::Failed);
+        contract.after_execute("compute".into(), id("token.testnet"), U128(100), WINDOW_HOURS);
+        assert_eq!(contract.vault_balance(id("token.testnet")).0, 1_000);
+        assert_eq!(*contract.daily_spent.get(&daily_key("compute", WINDOW_HOURS)).unwrap(), 0);
+        assert_eq!(*contract.daily_spent.get(&daily_key("compute", WINDOW_HOURS + 1)).unwrap(), 75);
     }
 }

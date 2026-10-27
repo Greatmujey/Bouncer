@@ -1,0 +1,51 @@
+// Run only in the opt-in guest-publication job. Chromium and playwright-core
+// are provided by the GitHub runner, not needed for normal development.
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+const url = fs.readFileSync(process.env.BOUNCER_PREVIEW_URL_FILE, 'utf8').trim();
+if (!/^https:\/\/www\.madethis\.website\/s\/[a-z2-9]{6,16}\/$/.test(url)) throw new Error('Unexpected public preview URL');
+const playwright = await import(pathToFileURL(path.join(process.env.RUNNER_TEMP, 'bouncer-browser/node_modules/playwright-core/index.mjs')));
+const candidates = ['/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/usr/bin/chromium', '/usr/bin/chromium-browser'];
+const executablePath = candidates.find(candidate => fs.existsSync(candidate));
+if (!executablePath) throw new Error('No Chromium executable on the GitHub runner');
+const browser = await playwright.chromium.launch({ executablePath, args: ['--no-sandbox'], headless: true });
+try {
+  const page = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  const pageErrors = [];
+  page.on('pageerror', error => pageErrors.push(error.message));
+  const response = await page.goto(url, { waitUntil: 'networkidle', timeout: 45_000 });
+  assert.equal(response.status(), 200);
+  assert.equal(await page.locator('#welcome-tour').evaluate(el => el.open), true);
+  assert.match(await page.locator('#tour-count').innerText(), /STEP 1 OF 4/);
+  await page.locator('#tour-next').click();
+  assert.match(await page.locator('#tour-title').innerText(), /need to a result/);
+  await page.locator('#tour-skip').click();
+  assert.equal(await page.locator('#wallet-connect').isDisabled(), true, 'shared-origin guest previews must not enable wallets');
+  assert.match(await page.locator('#wallet-status').innerText(), /disabled here/);
+  assert.equal(await page.locator('.resource-card').count(), 3);
+  assert.deepEqual(await page.locator('.resource-amount').allInnerTexts(), ['0.1 wNEAR', '1.5 storage credits', '2 API credits']);
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'mobile page overflows');
+  assert.match(await page.locator('.snapshot-note').innerText(), /not a running agent/);
+  assert.deepEqual(pageErrors, []);
+  const writes = [];
+  page.on('request', request => { if (request.method() !== 'GET' && request.method() !== 'HEAD') writes.push(request.url()); });
+  await page.locator('[data-story-tab="storage"]').click();
+  assert.equal(await page.locator('#story-title').innerText(), 'Store and retrieve a note');
+  assert.match(await page.locator('#story-result').innerText(), /stored and retrieved \(42 bytes\)/);
+  assert.match(await page.locator('#story-transaction').getAttribute('href'), /2oCD4escgD2JEnYRbTAKCRS3zNB13iafqsRPuEsqTQVB$/);
+  assert.equal(await page.locator('[data-story-tab="storage"]').getAttribute('aria-selected'), 'true');
+  await page.locator('[data-story-tab="api"]').click();
+  assert.match(await page.locator('#story-result').innerText(), /4 words and 27 bytes/);
+  assert.match(await page.locator('#story-transaction').getAttribute('href'), /4HL53bUj6G8u1ZEKy8Wuj52sC5h2kzYAgzaREHL5M4sd$/);
+  await page.locator('[data-story-tab="api"]').press('Home');
+  assert.equal(await page.locator('[data-story-tab="compute"]').getAttribute('aria-selected'), 'true');
+  assert.deepEqual(writes, [], 'exploring a past run must not send requests or transactions');
+  await page.locator('#refresh-balances').click();
+  await page.waitForFunction(() => !document.querySelector('#refresh-balances').disabled, null, { timeout: 25_000 });
+  const status = await page.locator('#rpc-status').innerText();
+  if (!/Current recorded vault balances loaded|Couldn’t reach the public testnet RPC/.test(status)) throw new Error(`Unexpected RPC status: ${status}`);
+  console.log(`Mobile layout passed; browser RPC: ${status}`);
+  console.log(`::notice title=Bouncer mobile browser test::Tour, shared-host wallet safety and interactive recorded results work without overflow. ${status}`);
+} finally { await browser.close(); }

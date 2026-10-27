@@ -89,9 +89,9 @@
   <header>
     <h1>BOUN<span>CER</span></h1>
     <span class="tag">NEAR · AI Security &amp; Defense</span>
-    <span class="tag">live simulator</span>
+    <span class="tag">OFFLINE SIMULATION · NOT ON-CHAIN</span>
   </header>
-  <p class="sub">An AI procurement agent holds a key scoped to <b>one method</b>. The contract — not a prompt — decides what it can spend. Press the red buttons: every rejected payment is rejected <b>on-chain</b>.</p>
+  <p class="sub">This is an <b>offline illustration</b>, not a live NEAR demo. Buttons only modify in-memory sample data; no transaction is sent. The monthly and exact rolling-window examples differ from the contract.</p>
 
   <div class="grid">
     <!-- LEFT: policy -->
@@ -120,11 +120,11 @@
     <!-- RIGHT: log + ledger -->
     <div>
       <div class="card">
-        <h2>Transaction log</h2>
+        <h2>Simulated events · no transactions</h2>
         <div class="log" id="log"></div>
       </div>
       <div class="card ledger">
-        <h2>Spend ledger · append-only</h2>
+        <h2>In-memory example ledger</h2>
         <table>
           <thead><tr><th>#</th><th>payee</th><th>memo</th><th style="text-align:right">amount</th></tr></thead>
           <tbody id="ledger"><tr><td colspan="4" class="empty">no approved spends yet</td></tr></tbody>
@@ -138,14 +138,14 @@
   </div>
 
   <footer>
-    <span>rules enforced in Rust, mirrored exactly by this engine</span>
-    <span>10/10 policy tests passing</span>
+    <span>offline illustration; not authoritative contract rules</span>
+    <span>no wallet or network connection</span>
     <span>deadline · 14 Nov 2026 23:59 UTC</span>
   </footer>
 </div>
 
 <script>
-/* ---------- policy engine (identical rules to the Rust contract) ---------- */
+/* ---------- example-only policy engine; not identical to the contract ---------- */
 const USDC = 1000000n;
 const NS_DAY = 86400e9, NS_MONTH = 2592000e9;
 const policy = {
@@ -158,7 +158,7 @@ const fmt = (a) => { const d=1000000n, w=a/d, f=(a%d).toString().padStart(6,'0')
 function check(payee, amount, now, history){
   if (amount <= 0n) return {ok:false, reason:'amount must be > 0'};
   if (amount > policy.perTxCap) return {ok:false, reason:`over per-payment cap (${fmt(amount)} > ${fmt(policy.perTxCap)} USDC)`};
-  if (policy.payeeAllowlist.length && !policy.payeeAllowlist.includes(payee))
+  if (!policy.payeeAllowlist.includes(payee))
     return {ok:false, reason:`payee ${payee} not in allowlist`};
   for (const w of policy.windows){
     const spent = history.filter(s => now - s.at < w.periodNs).reduce((a,s)=>a+s.amount, 0n);
@@ -220,11 +220,11 @@ function renderLedger(){
 function attempt(payee, amount, memo){
   const d = check(payee, amount, now, ledger);
   if (!d.ok){
-    log('bad', `✗ execute(${payee}, $${fmt(amount)}) <span class="r" style="color:var(--bad)">REVERTED · ${d.reason}</span>`);
+    log('bad', `✗ execute(${payee}, $${fmt(amount)}) <span class="r" style="color:var(--bad)">SIMULATED BLOCK · ${d.reason}</span>`);
     return false;
   }
   ledger.push({ payee, amount, memo, at: now });
-  log('ok', `✓ execute(${payee}, $${fmt(amount)}) <span class="r">settled · block ${Math.floor(now/1e6)%100000}</span>`);
+  log('ok', `✓ execute(${payee}, $${fmt(amount)}) <span class="r">SIMULATED APPROVAL · no transaction</span>`);
   renderBars(); renderLedger();
   return true;
 }
@@ -256,9 +256,9 @@ $('btn-reset').onclick = () => {
 };
 
 function boot(){
-  log('sys', 'vault deployed · owner = human.near · agent key scoped to execute() only');
+  log('sys', 'offline simulation only · no vault deployed and no key connected');
   log('sys', 'policy loaded: $3/payment · $20/day · $200/month · 2 approved suppliers');
-  log('ok', 'ready — the agent may call execute(), nothing else');
+  log('ok', 'ready — sample actions only; nothing is sent to NEAR');
 }
 
 renderBars(); renderLedger(); boot();

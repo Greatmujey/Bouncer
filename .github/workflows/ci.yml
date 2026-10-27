@@ -2,7 +2,7 @@ name: Build & Test Bouncer
 
 on:
   push:
-    branches: [arena/3419a30c-near-hub]
+    branches: [arena/ebb614bb-near-hub]
   pull_request:
   workflow_dispatch:
 
@@ -18,8 +18,39 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - run: npm install
+      - run: npm ci --no-audit --no-fund
       - run: npm test
+      - name: Check the committed wallet bundle matches its source
+        run: npm run build:web && git diff --exit-code -- web/wallet.bundle.js
+      - name: Test onboarding, mobile layout and testnet wallet UI
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BOUNCER_PLAYWRIGHT_PATH: ${{ runner.temp }}/bouncer-browser/node_modules/playwright-core/index.mjs
+          BOUNCER_METEOR_EXECUTOR: ${{ runner.temp }}/meteor-executor.js
+        run: |
+          npm install --prefix "$RUNNER_TEMP/bouncer-browser" --no-save --no-audit --no-fund playwright-core@1.64.1
+          # Public, pinned vendor executor; test verifies its SHA-256 before use.
+          gh api repos/Meteor-Wallet/meteor_wallet_sdk/git/blobs/b76fb93ff5d47064845d09313173b6eddbfa64e3 --jq .content | base64 -d > "$BOUNCER_METEOR_EXECUTOR"
+          node scripts/test-web-browser.mjs
+
+  contract-tests:
+    name: Rust contract tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Test policy, authorization and refund logic
+        working-directory: bouncer/contracts/bouncer
+        shell: bash
+        run: |
+          set +e
+          CARGO_TERM_COLOR=never CARGO_PROFILE_DEV_DEBUG=0 cargo test --lib 2>&1 | tee "$RUNNER_TEMP/rust-test.log"
+          result=${PIPESTATUS[0]}
+          if [ "$result" -ne 0 ]; then
+            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-3000).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=Rust tests failed::"+s)' "$RUNNER_TEMP/rust-test.log"
+          fi
+          exit "$result"
 
   build-contract:
     name: Build Rust contract (wasm)
@@ -33,25 +64,162 @@ jobs:
           targets: wasm32-unknown-unknown
       - name: Install binaryen
         run: sudo apt-get update -qq && sudo apt-get install -y binaryen
-      - name: Cargo check wasm
+      - name: Cargo check and build wasm
         working-directory: bouncer/contracts/bouncer
-        run: cargo check --target wasm32-unknown-unknown
-      - name: Cargo build wasm (release)
-        working-directory: bouncer/contracts/bouncer
-        run: RUSTFLAGS="-C link-arg=-s" cargo build --target wasm32-unknown-unknown --release
-      - name: Shrink & commit wasm
+        shell: bash
+        run: |
+          set +e
+          (cargo check --target wasm32-unknown-unknown && RUSTFLAGS="-C link-arg=-s" cargo build --target wasm32-unknown-unknown --release) 2>&1 | tee "$RUNNER_TEMP/wasm-build.log"
+          result=${PIPESTATUS[0]}
+          if [ "$result" -ne 0 ]; then
+            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-3000).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=Wasm build failed::"+s)' "$RUNNER_TEMP/wasm-build.log"
+          fi
+          exit "$result"
+      - name: Optimize wasm
         run: |
           set -e
           cp bouncer/contracts/bouncer/target/wasm32-unknown-unknown/release/bouncer.wasm ./bouncer.wasm
+          # -Os can strip panic messages; -O1 keeps errors readable.
+          wasm-opt -O1 --strip-debug -o bouncer.opt.wasm bouncer.wasm && mv bouncer.opt.wasm bouncer.wasm
           ls -lh bouncer.wasm
-          wasm-opt -Os -o bouncer.opt.wasm bouncer.wasm && mv bouncer.opt.wasm bouncer.wasm
-          ls -lh bouncer.wasm
+      - name: Save the exact build for the testnet job
+        uses: actions/upload-artifact@v4
+        with:
+          name: bouncer-wasm
+          path: bouncer.wasm
+          if-no-files-found: error
+      - name: Commit built wasm on branch pushes
+        if: github.event_name == 'push' && github.ref == 'refs/heads/arena/ebb614bb-near-hub'
+        run: |
           git config user.name "CI Bot"
           git config user.email "ci@bouncer.local"
           git add bouncer.wasm -f
           if ! git diff --cached --quiet; then
             git commit -m "chore(ci): attach bouncer.wasm"
             git push
-          else
-            echo "no change"
           fi
+
+  testnet-smoke:
+    name: Live testnet restricted-key smoke test
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && contains(github.event.head_commit.message, '[testnet-smoke]'))
+    needs: build-contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: bouncer-wasm
+          path: .
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      # Keys live only on this ephemeral runner and are never uploaded.
+      - run: node bouncer/demo-all.mjs
+
+  testnet-multi:
+    name: Live testnet multi-token procurement check
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[multi-resource-smoke]')
+    needs: build-contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: bouncer-wasm
+          path: .
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      # Uses the NEAR testnet token factory; only synthetic testnet FTs.
+      # Keys and journal stay on the ephemeral runner; nothing is uploaded.
+      - run: node bouncer/demo-multi-resource.mjs
+
+  wallet-probe:
+    name: Real Meteor testnet login UI probe
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[wallet-probe]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Probe the real wallet UI without credentials or signing
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BOUNCER_PLAYWRIGHT_PATH: ${{ runner.temp }}/bouncer-browser/node_modules/playwright-core/index.mjs
+          BOUNCER_METEOR_EXECUTOR: ${{ runner.temp }}/meteor-executor.js
+        run: |
+          npm install --prefix "$RUNNER_TEMP/bouncer-browser" --no-save --no-audit --no-fund playwright-core@1.64.1
+          gh api repos/Meteor-Wallet/meteor_wallet_sdk/git/blobs/b76fb93ff5d47064845d09313173b6eddbfa64e3 --jq .content | base64 -d > "$BOUNCER_METEOR_EXECUTOR"
+          set +e
+          node bouncer/scripts/probe-meteor-login.mjs 2>&1 | tee "$RUNNER_TEMP/wallet-probe.log"
+          result=${PIPESTATUS[0]}
+          if [ "$result" -ne 0 ]; then
+            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-2500).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=Wallet UI probe failed::"+s)' "$RUNNER_TEMP/wallet-probe.log"
+          fi
+          exit "$result"
+
+  mcp-clients:
+    name: Real AI-client MCP handshake smoke
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[mcp-clients]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      - name: Install pinned CLI clients in disposable runner storage
+        run: npm install --prefix "$RUNNER_TEMP/bouncer-clients" --no-save --no-audit --no-fund @google/gemini-cli@0.65.0 @anthropic-ai/claude-code@2.1.311
+      - name: Verify Claude Code and Gemini CLI stdio connection (no account or inference)
+        shell: bash
+        env:
+          BOUNCER_GEMINI_BIN: ${{ runner.temp }}/bouncer-clients/node_modules/.bin/gemini
+          BOUNCER_CLAUDE_BIN: ${{ runner.temp }}/bouncer-clients/node_modules/.bin/claude
+        run: |
+          set +e
+          node bouncer/scripts/test-mcp-clients.mjs 2>&1 | tee "$RUNNER_TEMP/mcp-clients.log"
+          result=${PIPESTATUS[0]}
+          if [ "$result" -ne 0 ]; then
+            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-2500).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=MCP client check failed::"+s)' "$RUNNER_TEMP/mcp-clients.log"
+          fi
+          exit "$result"
+
+  mcp-testnet:
+    name: Live read-only MCP policy and quote checks
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[mcp-testnet]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      - name: Inspect and preview three resources via MCP and testnet RPC
+        shell: bash
+        run: |
+          set +e
+          node bouncer/scripts/test-mcp-testnet.mjs 2>&1 | tee "$RUNNER_TEMP/mcp-testnet.log"
+          result=${PIPESTATUS[0]}
+          if [ "$result" -ne 0 ]; then
+            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-2500).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=Live MCP check failed::"+s)' "$RUNNER_TEMP/mcp-testnet.log"
+          fi
+          exit "$result"

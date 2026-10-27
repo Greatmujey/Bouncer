@@ -1,25 +1,35 @@
 {
   "name": "near-bouncer",
   "version": "0.1.0",
-  "description": "Bouncer — the on-chain comptroller for AI agents on NEAR (policy-enforced spending, invoices, cross-chain settlement)",
+  "description": "Bouncer — testnet multi-resource procurement with on-chain spending policies (unaudited prototype)",
   "type": "module",
   "private": true,
   "scripts": {
-    "test": "node --test packages/policy/policy.test.mjs",
-    "test:all": "node --test packages/policy/policy.test.mjs",
+    "test": "node --test packages/policy/policy.test.mjs tests/*.test.mjs",
+    "test:all": "node --test packages/policy/policy.test.mjs tests/*.test.mjs",
     "build": "bash scripts/build.sh",
     "agent": "node agent/procurement.mjs",
     "solver": "node agent/solver.mjs",
     "quote": "node agent/intents.mjs quote",
     "market": "node agent/intents.mjs market",
-    "demo": "echo \"open demo/index.html in a browser, or serve: npx http-server -p 8080 demo/\""
+    "demo": "node demo-multi-resource.mjs",
+    "simulation": "echo \"Offline simulation only: open demo/index.html; no transactions are sent.\"",
+    "build:web": "node scripts/build-web.mjs",
+    "mcp": "node mcp/server.mjs"
   },
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/USERNAME/near-bouncer"
+    "url": "https://github.com/abdullahimujeeb0505-stack/Bouncer"
   },
   "dependencies": {
-    "near-api-js": "^6.0.0"
+    "@hot-labs/near-connect": "0.12.0",
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "express": "5.2.1",
+    "near-api-js": "6.5.1",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
   }
 }
