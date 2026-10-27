@@ -31,29 +31,36 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
-      - name: Install binaryen
-        run: sudo apt-get update -qq && sudo apt-get install -y binaryen
-      - name: Build debug (debug build is proven to work; we shrink with wasm-opt afterwards)
+      - name: Show versions
+        run: |
+          rustc -vV
+          cargo -vV
+          which rust-lld || echo "no rust-lld"
+      - name: Cargo build (debug, verbose)
         working-directory: bouncer/contracts/bouncer
-        shell: bash {0}
         run: |
-          mkdir -p .cargo
-          cat > .cargo/config.toml <<'EOF'
-          [target.wasm32-unknown-unknown]
-          EOF
-          RUSTFLAGS="-C link-arg=-s" cargo build --target wasm32-unknown-unknown
-          find target -name "*.wasm"
-          ls -la target/wasm32-unknown-unknown/debug/bouncer.wasm
-          cp target/wasm32-unknown-unknown/debug/bouncer.wasm ${{ github.workspace }}/bouncer.wasm
-      - name: Optimize & commit
+          RUSTFLAGS="-C link-arg=-s" cargo build --target wasm32-unknown-unknown -v 2>&1 | tail -200
+      - name: List & copy wasm (target is relative to Cargo.toml)
         run: |
-          ls -lh bouncer.wasm
+          echo "==="
+          pwd
+          ls -la bouncer/contracts/bouncer/target/wasm32-unknown-unknown/debug/ 2>&1 | head -30
+          cp bouncer/contracts/bouncer/target/wasm32-unknown-unknown/debug/bouncer.wasm ./bouncer.wasm
+          ls -lh ./bouncer.wasm
+          wc -c ./bouncer.wasm
+      - name: Install binaryen & shrink
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y binaryen
           wasm-opt -Os -o bouncer.opt.wasm bouncer.wasm && mv bouncer.opt.wasm bouncer.wasm
           ls -lh bouncer.wasm
+      - name: Commit wasm
+        run: |
           git config user.name "CI Bot"
           git config user.email "ci@bouncer.local"
           git add bouncer.wasm -f
           if ! git diff --cached --quiet; then
-            git commit -m "chore(ci): attach bouncer.wasm (debug+wasm-opt)"
+            git commit -m "chore(ci): attach bouncer.wasm"
             git push
+          else
+            echo "no change"
           fi
