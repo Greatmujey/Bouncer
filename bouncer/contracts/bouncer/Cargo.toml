@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [lib]
-crate-type = ["cdylib", "rlib"]
+crate-type = ["cdylib"]
 
 [dependencies]
 near-sdk = "5.14"
@@ -12,3 +12,8 @@ near-sdk = "5.14"
 [profile.release]
 panic = "abort"
 overflow-checks = true
+codegen-units = 1
+opt-level = "z"
+lto = true
+debug = false
+strip = true
