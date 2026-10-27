@@ -12,26 +12,10 @@ const DAY_HOURS: u64 = 24;
 trait ExtFt {
     fn ft_transfer(&mut self, receiver_id: AccountId, amount: U128, memo: Option<String>);
 }
-
 #[ext_contract(ext_self)]
 trait ExtSelf {
-    fn after_execute(&mut self, token: AccountId, amount: U128);
+    fn after_execute(&mut self, token: AccountId, amount: U128, invoice_id: u64);
     fn after_withdraw(&mut self, token: AccountId, amount: U128);
-    fn after_pay_invoice(&mut self, token: AccountId, amount: U128, invoice_id: u64);
-}
-
-#[near(serializers = [json])]
-#[derive(Clone)]
-pub struct Invoice {
-    pub id: u64,
-    pub policy_id: String,
-    pub payee: AccountId,
-    pub amount: u128,
-    pub memo: String,
-    pub filed_by: AccountId,
-    pub filed_at_ns: u64,
-    pub paid: bool,
-    pub paid_at_ns: Option<u64>,
 }
 
 #[near(contract_state)]
@@ -45,37 +29,32 @@ pub struct Bouncer {
     allow_count: LookupMap<String, u32>,
     balances: LookupMap<AccountId, u128>,
     hourly_spend: LookupMap<String, u128>,
-    // Invoices: flat lookup by id -> JSON-serialized Invoice string
     next_invoice_id: u64,
-    invoice_payee: LookupMap<u64, AccountId>,
-    invoice_amount: LookupMap<u64, u128>,
-    invoice_policy: LookupMap<u64, String>,
-    invoice_memo: LookupMap<u64, String>,
-    invoice_filed_by: LookupMap<u64, AccountId>,
-    invoice_filed_at: LookupMap<u64, u64>,
-    invoice_paid: LookupMap<u64, bool>,
-    invoice_paid_at: LookupMap<u64, u64>,
-    // policy_id -> last invoice id (for listing) — iterate is done off-chain via indexer, but we expose list by range.
-    invoice_count: LookupMap<String, u64>,
+    inv_payee: LookupMap<u64, AccountId>,
+    inv_amount: LookupMap<u64, u128>,
+    inv_policy: LookupMap<u64, String>,
+    inv_memo: LookupMap<u64, String>,
+    inv_filed_by: LookupMap<u64, AccountId>,
+    inv_filed_at: LookupMap<u64, u64>,
+    inv_paid: LookupMap<u64, bool>,
+    inv_paid_at: LookupMap<u64, u64>,
 }
 
 fn allow_key(policy_id: &str, payee: &str) -> String { format!("{}:{}", policy_id, payee) }
 fn bucket_key(policy_id: &str, bucket: u64) -> String { format!("{}:b{}", policy_id, bucket) }
 
-fn rolling_24h_spent(store: &LookupMap<String, u128>, policy_id: &str, now_ns: u64) -> u128 {
-    let cur_bucket = now_ns / HOUR_NS;
-    let mut total: u128 = 0;
+fn rolling_24h(store: &LookupMap<String, u128>, policy_id: &str, now_ns: u64) -> u128 {
+    let cur = now_ns / HOUR_NS;
+    let mut t: u128 = 0;
     for i in 0..DAY_HOURS {
-        let b = cur_bucket.saturating_sub(i);
-        if let Some(v) = store.get(&bucket_key(policy_id, b)) { total = total.saturating_add(*v); }
+        if let Some(v) = store.get(&bucket_key(policy_id, cur.saturating_sub(i))) { t = t.saturating_add(*v); }
     }
-    total
+    t
 }
 fn credit_hour(store: &mut LookupMap<String, u128>, policy_id: &str, now_ns: u64, amt: u128) {
-    let b = now_ns / HOUR_NS;
-    let k = bucket_key(policy_id, b);
-    let prev = store.get(&k).cloned().unwrap_or(0);
-    store.insert(k, prev.saturating_add(amt));
+    let k = bucket_key(policy_id, now_ns / HOUR_NS);
+    let p = store.get(&k).cloned().unwrap_or(0);
+    store.insert(k, p.saturating_add(amt));
 }
 
 #[near]
@@ -85,23 +64,14 @@ impl Bouncer {
         assert!(!owner.as_str().is_empty());
         Self {
             owner,
-            token_of: LookupMap::new(b"t"),
-            cap_of: LookupMap::new(b"c"),
-            daily_limit_of: LookupMap::new(b"d"),
-            allow: LookupMap::new(b"a"),
-            allow_count: LookupMap::new(b"n"),
-            balances: LookupMap::new(b"b"),
-            hourly_spend: LookupMap::new(b"h"),
+            token_of: LookupMap::new(b"t"), cap_of: LookupMap::new(b"c"), daily_limit_of: LookupMap::new(b"d"),
+            allow: LookupMap::new(b"a"), allow_count: LookupMap::new(b"n"),
+            balances: LookupMap::new(b"b"), hourly_spend: LookupMap::new(b"h"),
             next_invoice_id: 0,
-            invoice_payee: LookupMap::new(b"ip"),
-            invoice_amount: LookupMap::new(b"ia"),
-            invoice_policy: LookupMap::new(b"ic"),
-            invoice_memo: LookupMap::new(b"im"),
-            invoice_filed_by: LookupMap::new(b"if"),
-            invoice_filed_at: LookupMap::new(b"iat"),
-            invoice_paid: LookupMap::new(b"ipd"),
-            invoice_paid_at: LookupMap::new(b"ipt"),
-            invoice_count: LookupMap::new(b"in"),
+            inv_payee: LookupMap::new(b"ip"), inv_amount: LookupMap::new(b"ia"),
+            inv_policy: LookupMap::new(b"ic"), inv_memo: LookupMap::new(b"im"),
+            inv_filed_by: LookupMap::new(b"ib"), inv_filed_at: LookupMap::new(b"if"),
+            inv_paid: LookupMap::new(b"ipd"), inv_paid_at: LookupMap::new(b"ipt"),
         }
     }
 
@@ -119,7 +89,7 @@ impl Bouncer {
     pub fn allow_payee(&mut self, policy_id: String, payee: AccountId) {
         assert!(env::attached_deposit() == ONE_YOCTO);
         assert!(env::predecessor_account_id() == self.owner);
-        assert!(self.cap_of.contains_key(&policy_id), "no such policy");
+        assert!(self.cap_of.contains_key(&policy_id));
         let k = allow_key(&policy_id, payee.as_str());
         if self.allow.get(&k).is_none() {
             let n = self.allow_count.get(&policy_id).cloned().unwrap_or(0);
@@ -140,81 +110,78 @@ impl Bouncer {
     }
 
     pub fn vault_balance(&self, token: AccountId) -> U128 { U128(self.balances.get(&token).cloned().unwrap_or(0)) }
-
-    pub fn daily_spent(&self, policy_id: String) -> U128 { U128(rolling_24h_spent(&self.hourly_spend, &policy_id, env::block_timestamp())) }
+    pub fn daily_spent(&self, policy_id: String) -> U128 { U128(rolling_24h(&self.hourly_spend, &policy_id, env::block_timestamp())) }
 
     pub fn ft_on_transfer(&mut self, sender_id: AccountId, amount: U128, msg: String) -> U128 {
         let token = env::predecessor_account_id();
-        let amt = amount.0;
         let bal = self.balances.get(&token).cloned().unwrap_or(0);
-        self.balances.insert(token.clone(), bal + amt);
-        env::log_str(&format!("BOUNCER deposit {} from {} amt {} msg {}", token, sender_id, amt, msg));
+        self.balances.insert(token.clone(), bal + amount.0);
+        env::log_str(&format!("BOUNCER deposit {} from {} amt {} msg {}", token, sender_id, amount.0, msg));
         U128(0)
     }
 
     #[payable]
     pub fn withdraw(&mut self, token: AccountId, amount: U128) -> Promise {
         assert!(env::attached_deposit() == ONE_YOCTO);
-        assert!(env::predecessor_account_id() == self.owner, "owner only");
-        let amt = amount.0;
+        assert!(env::predecessor_account_id() == self.owner);
         let bal = self.balances.get(&token).cloned().unwrap_or(0);
-        assert!(amt <= bal, "insufficient");
-        self.balances.insert(token.clone(), bal - amt);
+        assert!(amount.0 <= bal, "insufficient");
+        self.balances.insert(token.clone(), bal - amount.0);
         ext_ft::ext(token.clone()).with_attached_deposit(ONE_YOCTO).with_static_gas(GAS_FOR_FT_TRANSFER)
             .ft_transfer(self.owner.clone(), amount, Some("bouncer:withdraw".into()))
             .then(ext_self::ext(env::current_account_id()).with_static_gas(GAS_FOR_RESOLVE).after_withdraw(token, amount))
     }
 
-    pub fn execute(&mut self, policy_id: String, payee: AccountId, amount: U128, memo: String) -> Promise {
-        self.do_execute(policy_id, payee, amount, memo, None)
+    fn do_pay(&mut self, policy_id: &str, payee: AccountId, amount: U128, memo: String, invoice_id: u64) -> Promise {
+        let token = self.token_of.get(policy_id).cloned().expect("no token");
+        let bal = self.balances.get(&token).cloned().unwrap_or(0);
+        assert!(bal >= amount.0, "insufficient vault balance");
+        self.balances.insert(token.clone(), bal - amount.0);
+        credit_hour(&mut self.hourly_spend, policy_id, env::block_timestamp(), amount.0);
+        let memo_full = if invoice_id == u64::MAX { memo } else { format!("invoice:{} {}", invoice_id, memo) };
+        ext_ft::ext(token).with_attached_deposit(ONE_YOCTO).with_static_gas(GAS_FOR_FT_TRANSFER)
+            .ft_transfer(payee, amount, Some(memo_full))
+            .then(ext_self::ext(env::current_account_id()).with_static_gas(GAS_FOR_RESOLVE)
+                .after_execute(token, amount, invoice_id))
     }
 
-    fn do_execute(&mut self, policy_id: String, payee: AccountId, amount: U128, memo: String, invoice_id: Option<u64>) -> Promise {
-        let amt = amount.0;
+    pub fn execute(&mut self, policy_id: String, payee: AccountId, amount: U128, memo: String) -> Promise {
         let cap = self.cap_of.get(&policy_id).cloned().expect("no policy");
-        let token = self.token_of.get(&policy_id).cloned().expect("no token");
-        assert!(amt > 0 && amt <= cap, "amount out of per-tx range");
+        assert!(amount.0 > 0 && amount.0 <= cap, "amount out of per-tx range");
         let n = self.allow_count.get(&policy_id).cloned().unwrap_or(0);
         if n > 0 {
             let k = allow_key(&policy_id, payee.as_str());
             assert!(self.allow.get(&k) == Some(&true), "payee not in allowlist");
         }
-        let now = env::block_timestamp();
         if let Some(limit) = self.daily_limit_of.get(&policy_id).cloned() {
-            let spent = rolling_24h_spent(&self.hourly_spend, &policy_id, now);
-            assert!(spent.saturating_add(amt) <= limit, "over 24h limit");
+            let spent = rolling_24h(&self.hourly_spend, &policy_id, env::block_timestamp());
+            assert!(spent.saturating_add(amount.0) <= limit, "over 24h limit");
         }
-        let bal = self.balances.get(&token).cloned().unwrap_or(0);
-        assert!(bal >= amt, "insufficient vault balance");
-        self.balances.insert(token.clone(), bal - amt);
-        credit_hour(&mut self.hourly_spend, &policy_id, now, amt);
-        let mut memo_full = memo;
-        if let Some(iid) = invoice_id {
-            memo_full = format!("invoice:{} {}", iid, memo_full);
-        }
-        ext_ft::ext(token.clone()).with_attached_deposit(ONE_YOCTO).with_static_gas(GAS_FOR_FT_TRANSFER)
-            .ft_transfer(payee, amount, Some(memo_full))
-            .then(ext_self::ext(env::current_account_id()).with_static_gas(GAS_FOR_RESOLVE)
-                .after_execute(token, amount))
+        self.do_pay(&policy_id, payee, amount, memo, u64::MAX)
     }
 
     #[private]
-    pub fn after_execute(&mut self, token: AccountId, amount: U128) {
-        let success = matches!(env::promise_result(0), near_sdk::PromiseResult::Successful(_));
-        if !success {
+    pub fn after_execute(&mut self, token: AccountId, amount: U128, invoice_id: u64) {
+        let ok = matches!(env::promise_result(0), near_sdk::PromiseResult::Successful(_));
+        if !ok {
             let bal = self.balances.get(&token).cloned().unwrap_or(0);
-            self.balances.insert(token, bal + amount.0);
+            self.balances.insert(token.clone(), bal + amount.0);
+            // roll back hour credit (approximate; safe)
             env::log_str("BOUNCER ft_transfer failed; refunded vault");
+            if invoice_id != u64::MAX {
+                self.inv_paid.insert(invoice_id, false);
+                self.inv_paid_at.remove(&invoice_id);
+            }
+        } else if invoice_id != u64::MAX {
+            self.inv_paid_at.insert(invoice_id, env::block_timestamp());
         }
     }
 
     #[private]
     pub fn after_withdraw(&mut self, token: AccountId, amount: U128) {
-        let success = matches!(env::promise_result(0), near_sdk::PromiseResult::Successful(_));
-        if !success {
+        if !matches!(env::promise_result(0), near_sdk::PromiseResult::Successful(_)) {
             let bal = self.balances.get(&token).cloned().unwrap_or(0);
             self.balances.insert(token, bal + amount.0);
-            env::log_str("BOUNCER withdraw failed; refunded vault");
         }
     }
 
@@ -224,44 +191,43 @@ impl Bouncer {
         let id = self.next_invoice_id;
         self.next_invoice_id += 1;
         let now = env::block_timestamp();
-        self.invoice_payee.insert(id, payee);
-        self.invoice_amount.insert(id, amount.0);
-        self.invoice_policy.insert(id, policy_id.clone());
-        self.invoice_memo.insert(id, memo);
-        self.invoice_filed_by.insert(id, env::predecessor_account_id());
-        self.invoice_filed_at.insert(id, now);
-        self.invoice_paid.insert(id, false);
-        let n = self.invoice_count.get(&policy_id).cloned().unwrap_or(0);
-        self.invoice_count.insert(policy_id, n + 1);
+        self.inv_payee.insert(id, payee);
+        self.inv_amount.insert(id, amount.0);
+        self.inv_policy.insert(id, policy_id);
+        self.inv_memo.insert(id, memo);
+        self.inv_filed_by.insert(id, env::predecessor_account_id());
+        self.inv_filed_at.insert(id, now);
+        self.inv_paid.insert(id, false);
         id
     }
 
-    pub fn get_invoice(&self, id: u64) -> Option<Invoice> {
-        let payee = self.invoice_payee.get(&id).cloned()?;
-        let amount = self.invoice_amount.get(&id).cloned()?;
-        let policy_id = self.invoice_policy.get(&id).cloned()?;
-        let memo = self.invoice_memo.get(&id).cloned().unwrap_or_default();
-        let filed_by = self.invoice_filed_by.get(&id).cloned()?;
-        let filed_at_ns = self.invoice_filed_at.get(&id).cloned()?;
-        let paid = self.invoice_paid.get(&id).cloned().unwrap_or(false);
-        let paid_at_ns = self.invoice_paid_at.get(&id).cloned();
-        Some(Invoice {
-            id, policy_id, payee, amount, memo, filed_by, filed_at_ns, paid,
-            paid_at_ns: if paid { paid_at_ns.or(Some(0)) } else { None },
-        })
-    }
+    pub fn invoice_paid(&self, id: u64) -> bool { self.inv_paid.get(&id).cloned().unwrap_or(false) }
+    pub fn invoice_amount(&self, id: u64) -> U128 { U128(self.inv_amount.get(&id).cloned().unwrap_or(0)) }
+    pub fn invoice_payee(&self, id: u64) -> AccountId { self.inv_payee.get(&id).cloned().unwrap_or_else(|| env::current_account_id()) }
+    pub fn invoice_policy(&self, id: u64) -> String { self.inv_policy.get(&id).cloned().unwrap_or_default() }
+    pub fn next_invoice_id(&self) -> u64 { self.next_invoice_id }
 
     pub fn pay_invoice(&mut self, id: u64) -> Promise {
-        let payee = self.invoice_payee.get(&id).cloned().expect("no invoice");
-        let amount = self.invoice_amount.get(&id).cloned().expect("no invoice amount");
-        let policy_id = self.invoice_policy.get(&id).cloned().expect("no invoice policy");
-        let paid = self.invoice_paid.get(&id).cloned().unwrap_or(false);
-        assert!(!paid, "invoice already paid");
-        let memo = self.invoice_memo.get(&id).cloned().unwrap_or_default();
-        // Mark paid optimistically; after_pay_invoice callback rolls back on failure
-        self.invoice_paid.insert(id, true);
-        self.invoice_paid_at.insert(id, env::block_timestamp());
-        self.do_execute(policy_id, payee, U128(amount), memo, Some(id))
+        let payee = self.inv_payee.get(&id).cloned().expect("no invoice");
+        let amount = self.inv_amount.get(&id).cloned().expect("no invoice");
+        let policy_id = self.inv_policy.get(&id).cloned().expect("no invoice policy");
+        let memo = self.inv_memo.get(&id).cloned().unwrap_or_default();
+        let already_paid = self.inv_paid.get(&id).cloned().unwrap_or(false);
+        assert!(!already_paid, "invoice already paid");
+        // policy checks
+        let cap = self.cap_of.get(&policy_id).cloned().expect("no policy");
+        assert!(amount <= cap, "amount over per-tx cap");
+        let n = self.allow_count.get(&policy_id).cloned().unwrap_or(0);
+        if n > 0 {
+            let k = allow_key(&policy_id, payee.as_str());
+            assert!(self.allow.get(&k) == Some(&true), "payee not in allowlist");
+        }
+        if let Some(limit) = self.daily_limit_of.get(&policy_id).cloned() {
+            let spent = rolling_24h(&self.hourly_spend, &policy_id, env::block_timestamp());
+            assert!(spent.saturating_add(amount) <= limit, "over 24h limit");
+        }
+        self.inv_paid.insert(id, true);
+        self.do_pay(&policy_id, payee, U128(amount), memo, id)
     }
 
     pub fn check(&self, policy_id: String, payee: AccountId, amount: U128) -> (bool, String) {
@@ -277,7 +243,7 @@ impl Bouncer {
         let bal = self.balances.get(&token).cloned().unwrap_or(0);
         if bal < amount.0 { return (false, format!("vault holds {}; need {}", bal, amount.0)); }
         if let Some(limit) = self.daily_limit_of.get(&policy_id).cloned() {
-            let spent = rolling_24h_spent(&self.hourly_spend, &policy_id, env::block_timestamp());
+            let spent = rolling_24h(&self.hourly_spend, &policy_id, env::block_timestamp());
             if spent.saturating_add(amount.0) > limit { return (false, format!("would exceed 24h limit (spent {}/{})", spent, limit)); }
         }
         (true, "ok".into())
