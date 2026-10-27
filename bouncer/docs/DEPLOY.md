@@ -9,7 +9,7 @@ The security check exercises a restricted-key wNEAR payment, policy isolation
 and a deliberately failed FT transfer/refund. The separate
 [multi-token check](../../README.md#multi-token-procurement-check-testnet-only)
 uses wNEAR and two synthetic credits; the resource provider is self-hosted and
-not a commercial vendor. The v3 quote-to-delivery check passed on testnet;
-the newer v4 rolling-budget contract needs its own fresh live verification.
+not a commercial vendor. The v4 rolling-budget contract passed its fresh
+[testnet security, refund and quote-to-delivery checks](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40558301848).
 Real cross-chain settlement remains work in progress. See the [threat model](THREAT_MODEL.md)
 before experimenting. No real funds should be used.

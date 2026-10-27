@@ -23,9 +23,10 @@ It has not been audited and must not hold valuable funds.
   the token transfer fails. The demo inspects receipts and exact token balances
   rather than trusting a successful callback status alone.
 
-The updated testnet check is intended to prove a restricted-key payment and
-both the contract and protocol sides of the escalation guard. Confirm its live
-Actions or Codespaces result before treating those behaviors as verified.
+A [v4 testnet run](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40558301848)
+verified a restricted-key payment, both escalation-guard layers and a failed FT
+transfer whose callback restored the vault and daily budget. It does not prove
+all possible callback or token failure cases.
 
 ## Remaining risks
 

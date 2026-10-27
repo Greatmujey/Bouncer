@@ -1,6 +1,6 @@
 # BOUNCER — the enforcement layer for AI money
 
-> **Planning document:** This describes the intended product, not verified current functionality. See the [current status](../../README.md) and [threat model](THREAT_MODEL.md).
+> **Historical planning document:** This describes the intended product, not verified functionality. See the [current status](../../README.md) and [threat model](THREAT_MODEL.md). Record only after the complete intended flow is verified.
 
 **NEAR HACKATHON: Build Beyond Boundaries — submission target**
 Tracks: `security` (AI Security & Defense) + `agents` (Agent Economy) + `realworld` (Real-World Money)

@@ -3,9 +3,9 @@
 Bouncer aims to let an AI agent buy several resources — such as compute,
 storage, and API credits — using different NEAR fungible tokens, subject to
 owner-defined spending policies. The current prototype implements the vault and
-policy checks. A plan-driven runner has passed a three-token testnet payment
-check; the quote-to-delivery integration is being validated separately. This is
-unaudited testnet software, not suitable for real funds.
+policy checks. The v4 prototype has passed a three-token testnet quote → payment
+→ self-hosted delivery check and a separate restricted-key security/refund check.
+This is unaudited testnet software, not suitable for real funds.
 
 ## Target tracks
 
@@ -34,9 +34,9 @@ AI Swarms are potential extensions, not completed integrations.
 The updated check is designed to use a real restricted key to pay wNEAR, deny
 other callers and policies, revoke a payee and a key, and test both layers of
 the 1-yocto guard with a separate deliberately limited probe key. A zero-deposit
-policy mutation should fail in the contract; a one-yocto attempt should fail at
-the NEAR protocol layer. Results must be verified by the live testnet run;
-offline mocks are not proof of on-chain behavior.
+policy mutation fails in the contract; a one-yocto attempt fails at the NEAR
+protocol layer. Both were verified in the [v4 live testnet run](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40558301848).
+Offline mocks are not proof of on-chain behavior.
 
 ### Important prototype limitations
 
@@ -123,13 +123,15 @@ This requires the NEAR testnet token factory and creates real testnet
 transactions. It stores a reusable plan, journal, provider redemption state and
 local objects under `~/.bouncer/testnet/`; private keys are stored separately
 under `~/.near-credentials/testnet/`. The testnet credits have no monetary value.
-A [live testnet CI run](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40555110181)
-passed the restricted-key security and three-token payment checks. A
-[separate run](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40556175783)
-passed the complete quote → payment → local delivery check using the self-hosted
-provider. These runs used the prior v3 contract; the rolling-budget v4 contract
-requires a fresh deployment and its own live verification. Neither run
-demonstrates a commercial resource purchase.
+The [v4 live testnet run](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40558301848)
+passed both the restricted-key security/refund check and the full quote →
+payment → local delivery check. The three payment transactions are
+[compute/wNEAR](https://testnet.nearblocks.io/txns/6VELBm5bCbTF2jv88q2R4omrSJkvj8Ytr4aqa1FCtdTv),
+[storage credits](https://testnet.nearblocks.io/txns/2oCD4escgD2JEnYRbTAKCRS3zNB13iafqsRPuEsqTQVB), and
+[API credits](https://testnet.nearblocks.io/txns/4HL53bUj6G8u1ZEKy8Wuj52sC5h2kzYAgzaREHL5M4sd).
+The separately tested [failed-transfer refund](https://testnet.nearblocks.io/txns/GkQL6ZNHC7gGmRmCHc9uFv7fSsNdeJkTZaHtNPcxfhtw)
+restored the recorded vault balance and daily budget. These are testnet results,
+not commercial resource purchases.
 
 ### Run the resource agent again
 

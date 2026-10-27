@@ -1,4 +1,6 @@
 # BOUNCER — DEEP COMPETITIVE ANALYSIS & WIN STRATEGY
+
+> Historical planning notes, not verified current product status. See the [README](README.md). Do not record until the complete intended flow is verified, and do not use fake transactions as proof.
 **Date: 26 Oct 2026 · 6 days to hackathon start · Solo builder, Nigeria**
 
 ---

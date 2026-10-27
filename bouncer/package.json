@@ -21,6 +21,6 @@
     "url": "https://github.com/abdullahimujeeb0505-stack/Bouncer"
   },
   "dependencies": {
-    "near-api-js": "^6.5.1"
+    "near-api-js": "6.5.1"
   }
 }
