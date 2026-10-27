@@ -172,7 +172,7 @@ jobs:
           exit "$result"
 
   mcp-testnet:
-    name: Live read-only MCP policy check
+    name: Live read-only MCP policy and quote checks
     if: github.event_name == 'push' && contains(github.event.head_commit.message, '[mcp-testnet]')
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -184,7 +184,7 @@ jobs:
         with:
           node-version: '22'
       - run: npm ci --prefix bouncer --no-audit --no-fund
-      - name: Inspect v4 policy through a real MCP client and testnet RPC
+      - name: Inspect and preview three resources via MCP and testnet RPC
         shell: bash
         run: |
           set +e
