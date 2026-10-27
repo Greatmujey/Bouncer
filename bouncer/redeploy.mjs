@@ -4,9 +4,10 @@
 // Run from ANY directory:  node bouncer/redeploy.mjs
 
 // Silence near-api-js v6 deprecation warnings for clean recording.
+process.env.NODE_NO_WARNINGS = '1';
+process.on('warning', () => {});
 const _origWarn = console.warn;
 console.warn = (...a) => { const m = a.join(' '); if (!/deprecated|please switch|It will be removed/i.test(m)) _origWarn.apply(console, a); };
-process.on('warning', () => {});
 
 import fs from 'fs';
 import path from 'path';
