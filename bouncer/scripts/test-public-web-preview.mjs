@@ -22,10 +22,23 @@ try {
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'mobile page overflows');
   assert.match(await page.locator('.snapshot-note').innerText(), /not a running agent/);
   assert.deepEqual(pageErrors, []);
+  const writes = [];
+  page.on('request', request => { if (request.method() !== 'GET' && request.method() !== 'HEAD') writes.push(request.url()); });
+  await page.locator('[data-story-tab="storage"]').click();
+  assert.equal(await page.locator('#story-title').innerText(), 'Store and retrieve a note');
+  assert.match(await page.locator('#story-result').innerText(), /stored and retrieved \(42 bytes\)/);
+  assert.match(await page.locator('#story-transaction').getAttribute('href'), /2oCD4escgD2JEnYRbTAKCRS3zNB13iafqsRPuEsqTQVB$/);
+  assert.equal(await page.locator('[data-story-tab="storage"]').getAttribute('aria-selected'), 'true');
+  await page.locator('[data-story-tab="api"]').click();
+  assert.match(await page.locator('#story-result').innerText(), /4 words and 27 bytes/);
+  assert.match(await page.locator('#story-transaction').getAttribute('href'), /4HL53bUj6G8u1ZEKy8Wuj52sC5h2kzYAgzaREHL5M4sd$/);
+  await page.locator('[data-story-tab="api"]').press('Home');
+  assert.equal(await page.locator('[data-story-tab="compute"]').getAttribute('aria-selected'), 'true');
+  assert.deepEqual(writes, [], 'exploring a past run must not send requests or transactions');
   await page.locator('#refresh-balances').click();
   await page.waitForFunction(() => !document.querySelector('#refresh-balances').disabled, null, { timeout: 25_000 });
   const status = await page.locator('#rpc-status').innerText();
   if (!/Current recorded vault balances loaded|Couldn’t reach the public testnet RPC/.test(status)) throw new Error(`Unexpected RPC status: ${status}`);
   console.log(`Mobile layout passed; browser RPC: ${status}`);
-  console.log(`::notice title=Bouncer mobile browser test::Three cards rendered without overflow. ${status}`);
+  console.log(`::notice title=Bouncer mobile browser test::Three cards and interactive recorded results work without overflow. ${status}`);
 } finally { await browser.close(); }

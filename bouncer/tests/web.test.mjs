@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { createHash } from 'node:crypto';
 import { RUN, explorerAccount, explorerTx, formatUnits, readCurrentBalances, shortId } from '../web/evidence.mjs';
 
 test('recorded website evidence describes the real multi-token run and separate security account', () => {
@@ -20,6 +21,24 @@ test('recorded website evidence describes the real multi-token run and separate 
   }
   assert.equal(explorerAccount(RUN.account), `https://testnet.nearblocks.io/address/${RUN.account}`);
   assert.match(explorerTx(RUN.securityRefundTx), /GkQL6ZNHC7gGmRmCHc9uFv7fSsNdeJkTZaHtNPcxfhtw$/);
+});
+
+test('recorded story inputs and service outputs match the real integration script', () => {
+  const [compute, storage, api] = RUN.resources;
+  let hash = Buffer.from('near-hub compute job');
+  for (let i = 0; i < 1000; i++) hash = createHash('sha256').update(hash).digest();
+  assert.equal(compute.story.result, `SHA-256 result: ${hash.toString('hex')}`);
+  assert.match(compute.story.request, /1,000 rounds/);
+  const note = 'Persisted by the Bouncer testnet provider.';
+  assert.equal(Buffer.byteLength(note), 42);
+  assert.ok(storage.story.result.includes(note));
+  assert.match(storage.story.result, /stored and retrieved \(42 bytes\)/);
+  const text = 'actual testnet resource API';
+  assert.equal(text.split(/\s+/u).length, 4);
+  assert.equal(Buffer.byteLength(text), 27);
+  assert.match(api.story.result, /4 words and 27 bytes/);
+  const script = fs.readFileSync(new URL('../demo-multi-resource.mjs', import.meta.url), 'utf8');
+  for (const input of ['near-hub compute job', note, text]) assert.ok(script.includes(input));
 });
 
 test('token formatting is exact, validates inputs, and does not use floats', () => {
@@ -76,4 +95,9 @@ test('website discloses snapshot, synthetic credits, self-hosted services, and t
   assert.match(html, /Unaudited/);
   assert.match(html, /separate refund test/);
   assert.doesNotMatch(html, /Connect wallet|Start buying/i);
+  assert.match(html, /requests are prepared by a person/i);
+  assert.match(html, /not yet an AI planner/i);
+  assert.match(html, /FUTURE WE’RE BUILDING TOWARD · NOT AVAILABLE YET/);
+  assert.match(html, /goal, not a completed demo/i);
+  assert.equal((html.match(/data-story-tab=/g) || []).length, 3);
 });

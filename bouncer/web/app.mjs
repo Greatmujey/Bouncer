@@ -49,3 +49,37 @@ refresh.addEventListener('click', async () => {
     refresh.disabled = false;
   }
 });
+
+// Interactive evidence explorer: these tabs switch between recorded examples;
+// clicking them does not place an order, run a job, or send a transaction.
+const storyTabs = [...document.querySelectorAll('[data-story-tab]')];
+function selectStory(id, focus = false) {
+  const resource = RUN.resources.find(item => item.id === id);
+  if (!resource) return;
+  for (const tab of storyTabs) {
+    const active = tab.dataset.storyTab === id;
+    tab.classList.toggle('active', active);
+    tab.setAttribute('aria-selected', String(active));
+    tab.tabIndex = active ? 0 : -1;
+    if (active && focus) tab.focus();
+  }
+  document.querySelector('#story-panel').setAttribute('aria-labelledby', `story-tab-${id}`);
+  document.querySelector('#story-title').textContent = resource.story.title;
+  document.querySelector('#story-request').textContent = resource.story.request;
+  document.querySelector('#story-payment').textContent = `${formatUnits(resource.amount, resource.decimals)} ${resource.tokenLabel} on NEAR testnet, within the owner’s rules.`;
+  document.querySelector('#story-result').textContent = resource.story.result;
+  document.querySelector('#story-transaction').href = explorerTx(resource.tx);
+}
+for (const [index, tab] of storyTabs.entries()) {
+  tab.addEventListener('click', () => selectStory(tab.dataset.storyTab));
+  tab.addEventListener('keydown', event => {
+    let next;
+    if (event.key === 'ArrowRight') next = (index + 1) % storyTabs.length;
+    else if (event.key === 'ArrowLeft') next = (index + storyTabs.length - 1) % storyTabs.length;
+    else if (event.key === 'Home') next = 0;
+    else if (event.key === 'End') next = storyTabs.length - 1;
+    else return;
+    event.preventDefault();
+    selectStory(storyTabs[next].dataset.storyTab, true);
+  });
+}

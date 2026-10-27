@@ -7,9 +7,46 @@ export const RUN = Object.freeze({
   securityRefundTx: 'GkQL6ZNHC7gGmRmCHc9uFv7fSsNdeJkTZaHtNPcxfhtw',
   actionUrl: 'https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40558301848',
   resources: [
-    { id: 'compute', title: 'Compute', service: 'SHA-256 compute job', vendor: 'compute.bouncer-42dcdfb7.testnet', policy: 'compute-wnear', token: 'wrap.testnet', tokenLabel: 'wNEAR', decimals: 24, amount: '100000000000000000000000', funded: '1000000000000000000000000', vault: '900000000000000000000000', perTx: '500000000000000000000000', daily: '1000000000000000000000000', tx: '6VELBm5bCbTF2jv88q2R4omrSJkvj8Ytr4aqa1FCtdTv', note: '1,000 rounds of SHA-256 were computed by the local provider.' },
-    { id: 'storage', title: 'Storage', service: 'Local file storage', vendor: 'storage.bouncer-42dcdfb7.testnet', policy: 'storage-credit', token: 'bs42dcdfb7.token.primitives.testnet', tokenLabel: 'storage credits', decimals: 6, amount: '1500000', funded: '10000000', vault: '8500000', perTx: '5000000', daily: '10000000', tx: '2oCD4escgD2JEnYRbTAKCRS3zNB13iafqsRPuEsqTQVB', note: 'A file was stored and retrieved from the local provider.' },
-    { id: 'api', title: 'API', service: 'Text statistics API', vendor: 'api.bouncer-42dcdfb7.testnet', policy: 'api-credit', token: 'ba42dcdfb7.token.primitives.testnet', tokenLabel: 'API credits', decimals: 6, amount: '2000000', funded: '10000000', vault: '8000000', perTx: '5000000', daily: '10000000', tx: '4HL53bUj6G8u1ZEKy8Wuj52sC5h2kzYAgzaREHL5M4sd', note: 'The local API returned statistics for the supplied text.' },
+    {
+      id: 'compute', title: 'Compute', service: 'SHA-256 compute job',
+      vendor: 'compute.bouncer-42dcdfb7.testnet', policy: 'compute-wnear',
+      token: 'wrap.testnet', tokenLabel: 'wNEAR', decimals: 24,
+      amount: '100000000000000000000000', funded: '1000000000000000000000000',
+      vault: '900000000000000000000000', perTx: '500000000000000000000000', daily: '1000000000000000000000000',
+      tx: '6VELBm5bCbTF2jv88q2R4omrSJkvj8Ytr4aqa1FCtdTv',
+      note: '1,000 rounds of SHA-256 were computed by the local provider.',
+      story: {
+        title: 'Compute a hash',
+        request: 'Run 1,000 rounds of SHA-256 on “near-hub compute job”.',
+        result: 'SHA-256 result: ad9458759e0093580ac1f7aa669deb8447571a5531691b53972ca1789b4e690c',
+      },
+    },
+    {
+      id: 'storage', title: 'Storage', service: 'Local file storage',
+      vendor: 'storage.bouncer-42dcdfb7.testnet', policy: 'storage-credit',
+      token: 'bs42dcdfb7.token.primitives.testnet', tokenLabel: 'storage credits', decimals: 6,
+      amount: '1500000', funded: '10000000', vault: '8500000', perTx: '5000000', daily: '10000000',
+      tx: '2oCD4escgD2JEnYRbTAKCRS3zNB13iafqsRPuEsqTQVB',
+      note: 'A file was stored and retrieved from the local provider.',
+      story: {
+        title: 'Store and retrieve a note',
+        request: 'Store a note named “bouncer-note” with the supplied text.',
+        result: '“Persisted by the Bouncer testnet provider.” was stored and retrieved (42 bytes).',
+      },
+    },
+    {
+      id: 'api', title: 'API', service: 'Text statistics API',
+      vendor: 'api.bouncer-42dcdfb7.testnet', policy: 'api-credit',
+      token: 'ba42dcdfb7.token.primitives.testnet', tokenLabel: 'API credits', decimals: 6,
+      amount: '2000000', funded: '10000000', vault: '8000000', perTx: '5000000', daily: '10000000',
+      tx: '4HL53bUj6G8u1ZEKy8Wuj52sC5h2kzYAgzaREHL5M4sd',
+      note: 'The local API returned statistics for the supplied text.',
+      story: {
+        title: 'Analyze a piece of text',
+        request: 'Get text statistics for “actual testnet resource API”.',
+        result: 'The API returned 4 words and 27 bytes.',
+      },
+    },
   ],
 });
 export const explorerTx = hash => `https://testnet.nearblocks.io/txns/${hash}`;

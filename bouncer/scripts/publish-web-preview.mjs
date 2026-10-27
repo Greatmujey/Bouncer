@@ -63,7 +63,7 @@ async function main() {
       throw new Error(`Preview ${file || 'index.html'} is not reachable with the expected content type (HTTP ${response.status})`);
     }
     // Ensure the published document is the site we intended, not an interstitial.
-    if (!file && !(await response.text()).includes('Your agent can pay.')) throw new Error('Preview homepage was replaced by another page');
+    if (!file && !(await response.text()).includes('Bouncer helps it get them.')) throw new Error('Preview homepage was replaced by another page');
   }
   const expires = new Date(fin.expiresAt).toISOString();
   const urlFile = process.env.BOUNCER_PREVIEW_URL_FILE;
