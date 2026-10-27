@@ -42,9 +42,13 @@ jobs:
       - name: List output
         run: |
           ls -la bouncer/target/wasm32-unknown-unknown/debug/ 2>&1 | head -30
+      - name: Copy wasm
+        working-directory: bouncer/contracts/bouncer
+        run: |
+          cp ../../target/wasm32-unknown-unknown/debug/bouncer.wasm ./bouncer.wasm
+          ls -lh ./bouncer.wasm
       - uses: actions/upload-artifact@v4
-        if: always()
         with:
           name: bouncer-wasm
-          path: bouncer/target/wasm32-unknown-unknown/debug/bouncer.wasm
-          if-no-files-found: ignore
+          path: bouncer/contracts/bouncer/bouncer.wasm
+          if-no-files-found: error
