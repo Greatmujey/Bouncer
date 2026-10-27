@@ -24,54 +24,32 @@ jobs:
   build-contract:
     name: Build Rust contract (wasm)
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
-      - name: Show versions
+      - name: Build and upload log
         run: |
-          rustc -vV
-          cargo -vV
-      - name: Cargo build
-        run: |
-          echo "--- env ---"
-          env | grep -iE "cargo|target|rust" | head -20
-          echo "--- dirs ---"
-          pwd
-          ls bouncer/contracts/bouncer/
-          echo "--- build ---"
-          unset CARGO_TARGET_DIR
+          set +e
           cd bouncer/contracts/bouncer
-          # Remove any cargo config that might redirect target dir
           rm -f .cargo/config.toml
-          RUSTFLAGS="-C link-arg=-s" cargo build --target wasm32-unknown-unknown -v 2>&1 | tail -150
-          echo "--- find ---"
-          find . -name "bouncer.wasm" 2>&1
-          find /home/runner -name "bouncer.wasm" 2>&1 | head -20
-      - name: Copy wasm (find it wherever it landed)
-        run: |
-          set -e
-          WASM=$(find /home/runner -name "bouncer.wasm" -not -path "*/node_modules/*" | head -1)
-          echo "WASM=$WASM"
-          test -n "$WASM"
-          mkdir -p /tmp/wasmout
-          cp "$WASM" /tmp/wasmout/bouncer.wasm
-          ls -la /tmp/wasmout/
-      - name: Install binaryen & shrink
-        run: |
-          sudo apt-get update -qq && sudo apt-get install -y binaryen
-          cp /tmp/wasmout/bouncer.wasm ./bouncer.wasm
-          wasm-opt -Os -o bouncer.opt.wasm bouncer.wasm && mv bouncer.opt.wasm bouncer.wasm
-          ls -lh bouncer.wasm
-      - name: Commit wasm
-        run: |
-          git config user.name "CI Bot"
-          git config user.email "ci@bouncer.local"
-          git add bouncer.wasm -f
-          if ! git diff --cached --quiet; then
-            git commit -m "chore(ci): attach bouncer.wasm"
-            git push
-          fi
+          RUSTFLAGS="-C link-arg=-s" cargo build --target wasm32-unknown-unknown -v > /tmp/build.log 2>&1
+          EC=$?
+          echo "exit=$EC"
+          echo "== tail of build log =="
+          tail -80 /tmp/build.log
+          echo "== find wasm =="
+          find /home/runner -name "*.wasm" 2>&1 | head -30
+          echo "== list target dir =="
+          ls -la target/ 2>&1
+          ls -la target/wasm32-unknown-unknown/ 2>&1 || true
+          ls -la target/wasm32-unknown-unknown/debug/ 2>&1 || true
+          echo "=="
+          exit $EC
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: build-log
+          path: /tmp/build.log
+          if-no-files-found: ignore
