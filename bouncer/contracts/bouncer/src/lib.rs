@@ -7,11 +7,8 @@ const GAS_FOR_FT_TRANSFER: Gas = Gas::from_tgas(15);
 const GAS_FOR_RESOLVE: Gas = Gas::from_tgas(15);
 const NS_PER_DAY: u64 = 24 * 60 * 60 * 1_000_000_000;
 
-// Direct host-function import so panic messages are surfaced verbatim by near-vm-runner.
 #[link(wasm_import_module = "env")]
-extern "C" {
-    fn panic_utf8(len: u64, ptr: u64) -> !;
-}
+extern "C" { fn panic_utf8(len: u64, ptr: u64) -> !; }
 fn abort_with(msg: &str) -> ! {
     unsafe { panic_utf8(msg.len() as u64, msg.as_ptr() as u64); }
 }
@@ -32,12 +29,11 @@ trait ExtSelf {
 pub struct Bouncer {
     owner: AccountId,
     token_of: LookupMap<String, AccountId>,
-    cap_of: LookupMap<String, u128>,          // per-tx cap
-    daily_of: LookupMap<String, u128>,         // daily cap (0 = unlimited)
+    cap_of: LookupMap<String, u128>,
+    daily_of: LookupMap<String, u128>,
     allow: LookupMap<String, bool>,
     allow_count: LookupMap<String, u32>,
     balances: LookupMap<AccountId, u128>,
-    // daily spend tracking — composite key "pid:<bucket_index>" -> u128 spent in bucket
     daily_spent: LookupMap<String, u128>,
 }
 
@@ -46,10 +42,8 @@ fn allow_key(pid: &str, p: &str) -> String {
     s.push_str(pid); s.push(':'); s.push_str(p); s
 }
 fn daily_key(pid: &str, bucket: u64) -> String {
-    // decimal bucket index avoids borsh/serde
     let mut s = String::with_capacity(pid.len() + 22);
     s.push_str(pid); s.push('|');
-    // write bucket as ascii decimal
     let mut b = bucket;
     let mut digits = [0u8; 20];
     let mut i = 0;
@@ -65,30 +59,29 @@ fn validate(
     s: &Bouncer, policy_id: &str, payee: &AccountId, amount: u128, attached: NearToken,
 ) -> Result<(AccountId, u128), String> {
     if attached != ONE_YOCTO {
-        return Err("ESCALATION BLOCKED: owner-only / execute method requires exactly 1 yoctoNEAR".into());
+        return Err("BLOCKED: requires exactly 1 yoctoNEAR (owner-only guard)".into());
     }
-    let cap = *s.cap_of.get(policy_id).ok_or_else(|| "no such policy".to_string())?;
-    let token = s.token_of.get(policy_id).cloned().ok_or_else(|| "policy missing token".to_string())?;
+    let cap = *s.cap_of.get(policy_id).ok_or("no such policy")?;
+    let token = s.token_of.get(policy_id).cloned().ok_or("policy missing token")?;
     if amount == 0 { return Err("amount must be > 0".into()); }
-    if amount > cap { return Err(format!("BLOCKED: amount {} exceeds per-tx cap {}", amount, cap)); }
+    if amount > cap { return Err("BLOCKED: amount exceeds per-tx cap".into()); }
     let n = s.allow_count.get(policy_id).cloned().unwrap_or(0);
     if n > 0 {
         let k = allow_key(policy_id, payee.as_str());
         if s.allow.get(&k) != Some(&true) {
-            return Err(format!("BLOCKED: payee {} not in allowlist", payee));
+            return Err(format!("BLOCKED: payee not in allowlist ({})", payee));
         }
     }
-    // daily cap (rolling 24h bucket)
     let daily = s.daily_of.get(policy_id).cloned().unwrap_or(0);
     if daily > 0 {
         let bucket = env::block_timestamp() / NS_PER_DAY;
         let spent = s.daily_spent.get(&daily_key(policy_id, bucket)).cloned().unwrap_or(0);
-        if spent + amount > daily {
-            return Err(format!("BLOCKED: daily cap {} exceeded (spent {} today, would add {})", daily, spent, amount));
+        if spent.saturating_add(amount) > daily {
+            return Err("BLOCKED: daily cap exceeded for this policy".into());
         }
     }
     let bal = s.balances.get(&token).cloned().unwrap_or(0);
-    if bal < amount { return Err(format!("insufficient vault balance (have {}, need {})", bal, amount)); }
+    if bal < amount { return Err("BLOCKED: insufficient vault balance (fund first)".into()); }
     Ok((token, bal))
 }
 
@@ -97,7 +90,7 @@ fn require_owner(s: &Bouncer, attached: NearToken) -> Result<(), String> {
         return Err("ESCALATION BLOCKED: owner-only method requires exactly 1 yoctoNEAR".into());
     }
     if env::predecessor_account_id() != s.owner {
-        return Err("ESCALATION BLOCKED: owner only".into());
+        return Err("ESCALATION BLOCKED: caller is not owner".into());
     }
     Ok(())
 }
@@ -177,14 +170,12 @@ impl Bouncer {
     pub fn execute(&mut self, policy_id: String, payee: AccountId, amount: U128, memo: Option<String>) -> Promise {
         let attached = env::attached_deposit();
         let (token, bal) = validate(self, &policy_id, &payee, amount.0, attached).unwrap_or_else(|m| abort_with(&m));
-        // debit vault
         self.balances.insert(token.clone(), bal - amount.0);
-        // credit daily bucket
         let bucket = env::block_timestamp() / NS_PER_DAY;
         let dk = daily_key(&policy_id, bucket);
         let spent = self.daily_spent.get(&dk).cloned().unwrap_or(0);
         self.daily_spent.insert(dk, spent + amount.0);
-        env::log_str(&format!("BOUNCER paid {} to {} policy {}", amount.0, payee, policy_id));
+        env::log_str("BOUNCER payment executed");
         ext_ft::ext(token.clone())
             .with_attached_deposit(ONE_YOCTO).with_static_gas(GAS_FOR_FT_TRANSFER)
             .ft_transfer(payee, amount, memo)
@@ -196,7 +187,6 @@ impl Bouncer {
         if !matches!(env::promise_result(0), near_sdk::PromiseResult::Successful(_)) {
             let bal = self.balances.get(&token).cloned().unwrap_or(0);
             self.balances.insert(token.clone(), bal + amount.0);
-            // refund daily bucket
             let bucket = env::block_timestamp() / NS_PER_DAY;
             let dk = daily_key(&policy_id, bucket);
             if let Some(s) = self.daily_spent.get(&dk).cloned() {
@@ -213,32 +203,27 @@ impl Bouncer {
         }
     }
 
-    // ---------- views ----------
     pub fn check(&self, policy_id: String, payee: AccountId, amount: U128) -> (bool, String) {
         match validate(self, &policy_id, &payee, amount.0, ONE_YOCTO) {
-            Ok(_) => (true, "ok: within cap, payee allowed, daily cap ok, vault funded".into()),
+            Ok(_) => (true, "ok: within cap, payee allowed, daily ok, vault funded".into()),
             Err(e) => (false, e),
         }
     }
-
     pub fn try_execute(&self, policy_id: String, payee: AccountId, amount: U128) -> (bool, String) {
         match validate(self, &policy_id, &payee, amount.0, ONE_YOCTO) {
             Ok(_) => (true, "would execute: policy satisfied".into()),
             Err(e) => (false, e),
         }
     }
-
     pub fn try_set_policy(&self, attached_yoctos: U128, predecessor: AccountId, per_tx_cap: U128) -> (bool, String) {
         let deposit = NearToken::from_yoctonear(attached_yoctos.0);
         if deposit != ONE_YOCTO {
-            return (false, "ESCALATION BLOCKED: requires exactly 1 yoctoNEAR (owner-only guard)".into());
+            return (false, "BLOCKED: requires exactly 1 yoctoNEAR (owner-only guard)".into());
         }
         if predecessor != self.owner {
-            return (false, "ESCALATION BLOCKED: caller is not owner".into());
+            return (false, "BLOCKED: caller is not owner".into());
         }
-        if per_tx_cap.0 == 0 {
-            return (false, "per_tx_cap must be > 0".into());
-        }
+        if per_tx_cap.0 == 0 { return (false, "per_tx_cap must be > 0".into()); }
         (true, "set_policy would succeed".into())
     }
 }
