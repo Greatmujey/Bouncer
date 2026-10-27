@@ -29,6 +29,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
-      - name: Cargo build (no pipe — surface real error)
+      - name: Cargo check first (cheap, catches type errors)
         working-directory: bouncer/contracts/bouncer
-        run: RUSTFLAGS="-C link-arg=-s" cargo build --target wasm32-unknown-unknown
+        run: cargo check --target wasm32-unknown-unknown
+      - name: Cargo build (release, no debug overhead)
+        working-directory: bouncer/contracts/bouncer
+        run: RUSTFLAGS="-C link-arg=-s" cargo build --target wasm32-unknown-unknown --release
