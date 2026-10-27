@@ -7,8 +7,9 @@ It has not been audited and must not hold valuable funds.
 
 - `execute` accepts zero deposit and checks both predecessor and transaction
   signer are the owner account. Its signer public key must be explicitly granted
-  to the selected policy. The owner should create a separate NEAR function-call
-  key, scoped only to the contract's `execute` method.
+  to the selected policy. The signed request also names its expected token;
+  the contract rejects it if the policy's token differs. The owner should create
+  a separate NEAR function-call key scoped only to the contract's `execute`.
 - The owner and exactly 1 yoctoNEAR are required to change policies, grant or
   revoke agent keys, change payees, and withdraw. Function-call keys cannot
   attach deposits under the NEAR protocol. Grants are contract-level state;
@@ -46,10 +47,15 @@ Actions or Codespaces result before treating those behaviors as verified.
 6. **Policies and tokens are shared.** Policy-specific key grants isolate which
    policy a key may use, but policies may share the same token vault. Caps are
    denominated in token units, not USD; there is no price oracle.
-7. **No complete invoices, multi-token procurement, on-chain fill verification
-   or live Intents settlement.** Old agent/solver examples and placeholder
-   quotes/hashes do not demonstrate completed settlement.
-8. **Prior contracts are unsafe to upgrade without migration.** This branch
+7. **No real resource fulfillment or cross-chain settlement.** The plan-driven
+   agent pays configured vendors; it does not perform AI quote discovery or
+   deliver compute, storage or API services. The multi-token test uses synthetic
+   testnet FTs, not USDC. The old solver remains unfinished.
+8. **Local journal is not exactly-once settlement.** It blocks automatic retries
+   of uncertain payments in one local journal, but a different or deleted
+   journal, multiple hosts, or power loss can bypass that protection. Operators
+   must reconcile pending transactions manually.
+9. **Prior contracts are unsafe to upgrade without migration.** This branch
    adds an agent-grants field to contract state. The old contracts retain their
    original unauthenticated behavior and cannot read the new state layout.
 

@@ -7,3 +7,8 @@ contracts/bouncer/.near/
 *.log
 .DS_Store
 package-lock.json
+
+# Local payment journals can contain transaction/account metadata.
+*.bouncer-journal.json
+*.bouncer-journal.json.lock
+*.bouncer-journal.json.*.tmp

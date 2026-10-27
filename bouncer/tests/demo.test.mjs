@@ -30,7 +30,7 @@ test('full demo uses gas units, runs with quiet preload, and verifies settlement
   assert.match(result.stdout, /user:\s+0\.5 wNEAR/);
   assert.match(result.stdout, /vendor:\s+0\.1 wNEAR/);
   assert.match(result.stdout, /vault:\s+1\.4 wNEAR \(matches token contract\)/);
-  assert.equal((result.stdout.match(/rejected as expected/g) || []).length, 9);
+  assert.equal((result.stdout.match(/rejected as expected/g) || []).length, 10);
   assert.match(result.stdout, /restricted key \(execute\)/);
   assert.match(result.stdout, /one-yocto policy escalation \(NEAR protocol\): rejected as expected/);
   assert.match(result.stdout, /payment signed by a restricted agent key/);

@@ -25,9 +25,11 @@ const setFor = (map, name) => { if (!map.has(name)) map.set(name, new Set()); re
 globalThis.fetch = async () => ({ ok: true, json: async () => ({}) });
 Account.prototype.deployContract = async function () { return outcome(); };
 Account.prototype.createAccount = async function () { return outcome(); };
-Account.prototype.addFunctionCallAccessKey = async function ({ publicKey, contractId, methodNames, allowance }) {
-  if (this.accountId !== owner || allowance <= 0n) fail('invalid access key setup');
-  accessKeys.set(publicKey.toString(), { receiver_id: contractId, method_names: methodNames });
+Account.prototype.signAndSendTransaction = async function ({ receiverId, actions, waitUntil }) {
+  const added = actions?.[0]?.addKey;
+  const permission = added?.accessKey?.permission?.functionCall;
+  if (receiverId !== this.accountId || this.accountId !== owner || waitUntil !== 'FINAL' || !permission) fail('invalid access key action');
+  accessKeys.set(added.publicKey.toString(), { receiver_id: permission.receiverId, method_names: permission.methodNames });
   return outcome();
 };
 Account.prototype.deleteKey = async function (publicKey) {
@@ -100,6 +102,7 @@ Account.prototype.callFunctionRaw = async function ({ contractId, methodName, ar
       const policy = policies.get(args.policy_id);
       if (amount > BigInt(policy.per_tx_cap)) fail('BLOCKED: amount exceeds per-tx cap');
       if (!allowlists.get(args.policy_id)?.has(args.payee)) fail('BLOCKED: payee not in allowlist');
+      if (args.expected_token !== policy.token) fail('BLOCKED: policy token does not match expected token');
       if (amount + (spent.get(args.policy_id) || 0n) > BigInt(policy.daily_cap)) {
         if (process.env.BOUNCER_MOCK_MODE === 'wrong_rejection') fail('RPC warning: connection lost');
         if (process.env.BOUNCER_MOCK_MODE !== 'allow_daily') fail('BLOCKED: daily cap exceeded for this policy');
@@ -120,7 +123,8 @@ Account.prototype.callFunctionRaw = async function ({ contractId, methodName, ar
   }
 };
 providers.JsonRpcProvider.prototype.callFunction = async function (contractId, method, args) {
-  if (method === 'contract_version') return 'bouncer-agent-v2';
+  if (method === 'contract_version') return 'bouncer-agent-v3';
+  if (method === 'get_policy') { const p = policies.get(args.policy_id); return p ? { token: p.token, per_tx_cap: p.per_tx_cap, daily_cap: p.daily_cap } : null; }
   if (method === 'vault_balance') return vault.toString();
   if (method === 'ft_balance_of') return (tokenBalances.get(args.account_id) || 0n).toString();
   if (method === 'is_agent_key_allowed') return agentGrants.get(args.policy_id)?.has(args.public_key) || false;

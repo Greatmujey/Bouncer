@@ -3,9 +3,9 @@
 Bouncer aims to let an AI agent buy several resources — such as compute,
 storage, and API credits — using different NEAR fungible tokens, subject to
 owner-defined spending policies. The current prototype implements the vault and
-policy checks. The restricted-key contract and its testnet check are being
-validated; a multi-resource procurement runtime remains in progress. This is
-unaudited testnet software, not suitable for real funds.
+policy checks. This branch also contains a plan-driven procurement runner and
+a multi-token testnet check; their live integration must be verified before
+claiming completion. This is unaudited testnet software, not suitable for real funds.
 
 ## Target tracks
 
@@ -19,6 +19,8 @@ AI Swarms are potential extensions, not completed integrations.
 - A direct `execute` call must come from the owner account, with **zero**
   attached deposit and a signing public key explicitly granted to that policy.
   The owner separately creates a NEAR function-call key limited to `execute`.
+  Each signed request includes the expected token, checked on chain against the
+  policy to prevent a token substitution between preview and execution.
 - Per-transaction and UTC-aligned 24-hour bucket caps, and fail-closed payee
   allowlists. Revoking the final payee blocks all payments on that policy.
 - Policy changes, agent-key grants/revocations, payee changes and withdrawals
@@ -39,12 +41,13 @@ offline mocks are not proof of on-chain behavior.
   including `bouncer-a958bd.testnet`, still have the older unauthenticated
   `execute` and a different state layout. Do not upgrade them without a migration
   or use them for valuable funds. The script creates a fresh account.
-- The check uses **one token (wNEAR)**. Its compute and storage policy names
-  demonstrate key/policy isolation, not purchases of two real resources or
-  payments with distinct fungible tokens.
-- The older procurement/solver scripts are not integrated with this contract.
-  Invoices, stablecoin flows, genuine multi-token purchasing and NEAR Intents
-  settlement remain unfinished.
+- The security check uses **one token (wNEAR)**. The separate multi-token check
+  creates two synthetic testnet credit FTs and sends resource-labelled payments
+  to three vendor accounts. This does **not** provide compute, storage, or API
+  services, and is not a USDC/stablecoin demonstration.
+- The procurement runner executes a supplied plan; it is not yet an AI planner,
+  quote-discovery service, or vendor integration. Invoices, stablecoin flows,
+  actual resource delivery and NEAR Intents settlement remain unfinished.
 - Token trust is not enforced; configure policies only for trusted FTs. Key
   grants do not themselves create or restrict NEAR access keys. The owner must
   create correctly scoped function-call keys and keep full-access keys private.
@@ -93,6 +96,54 @@ push whose commit message contains `[testnet-smoke]`. It creates real testnet
 accounts with ephemeral keys on the runner; it does not upload those keys.
 Ordinary CI runs do not create testnet accounts.
 
+## Multi-token procurement check (testnet only)
+
+After CI has attached the matching `bouncer.wasm`, this optional script creates
+new testnet accounts, wNEAR plus **two synthetic testnet credit tokens**, three
+vendor accounts, policies and an execute-only key. It runs the procurement
+runner against all three and verifies each token's recorded vault, actual vault
+and vendor balances. It does not claim real services were delivered.
+
+```sh
+node bouncer/demo-multi-resource.mjs
+```
+
+This requires the NEAR testnet token factory and creates real testnet
+transactions. It stores a reusable plan and a local journal under
+`~/.bouncer/testnet/`; private keys are stored separately under
+`~/.near-credentials/testnet/`. The testnet credits have no monetary value.
+The testnet run, not the offline mock, determines whether this integration works.
+
+### Run a supplied procurement plan
+
+The runner defaults to a read-only preview. `--execute` explicitly submits
+real testnet transactions; it rejects full-access or over-broad keys. Request
+amounts are **strings in the token's smallest units**, not USD or floats.
+
+```json
+{
+  "contract_id": "bouncer-example.testnet",
+  "owner_account_id": "bouncer-example.testnet",
+  "requests": [{
+    "id": "compute-1", "resource": "compute", "policy_id": "compute-wnear",
+    "token": "wrap.testnet", "payee": "vendor.bouncer-example.testnet",
+    "amount": "100000000000000000000000", "memo": "compute:1h"
+  }]
+}
+```
+
+```sh
+node bouncer/agent/procurement.mjs --plan /path/to/plan.json --key /path/to/agent-key.json
+# Only after reviewing the plan and dry-run output:
+node bouncer/agent/procurement.mjs --plan /path/to/plan.json --key /path/to/agent-key.json --execute
+```
+
+The journal is local, not a distributed exactly-once mechanism. Before sending,
+requests are marked pending; if confirmation is uncertain the runner refuses to
+retry automatically. Inspect the chain and reconcile the journal manually. Do
+not delete or change journals to bypass this safety check. Keys must be kept
+private, and different journal paths cannot prevent duplicate payments.
+
 ## Local tests
 
 ```sh
@@ -109,7 +160,9 @@ real testnet transactions.
 ## Main files
 
 - `bouncer/contracts/bouncer/src/lib.rs` — current vault and policy contract.
-- `bouncer/demo-all.mjs` — fresh-deployment, single-token testnet check.
+- `bouncer/demo-all.mjs` — fresh-deployment restricted-key security check.
+- `bouncer/demo-multi-resource.mjs` — testnet wNEAR plus synthetic FT check.
+- `bouncer/agent/procurement.mjs` — plan-driven, testnet-only procurement runner.
 - `bouncer/tests/` — offline regression tests for the demo script.
 - `bouncer/packages/policy/` — independent JavaScript policy simulation.
 - `.github/workflows/ci.yml` — JavaScript tests, contract build, and optional
@@ -123,10 +176,10 @@ contract without an explicit migration. The demo deploys a fresh contract.
 
 1. Validate the new restricted-key and policy isolation flow on testnet,
    including the 1-yocto protection with real restricted keys.
-2. Demonstrate multiple resource purchases with distinct NEP-141 tokens and
-   vendor accounts, then connect a working procurement agent.
-3. Add verifiable receipts/invoices and real, explicitly verified NEAR Intents
-   settlement. Add per-agent policies and stronger failure/recovery tests.
+2. Validate the three-token testnet procurement flow end to end; integrate real
+   resource vendors and independently verifiable fulfillment.
+3. Add verifiable receipts/invoices, stablecoin flows and real, explicitly
+   verified NEAR Intents settlement. Strengthen failure/recovery tests.
 4. Record the submission demo only after the complete flow works end to end.
 
 MIT license.

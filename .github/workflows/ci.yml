@@ -107,3 +107,25 @@ jobs:
       - run: npm install --prefix bouncer --no-audit --no-fund
       # Keys live only on this ephemeral runner and are never uploaded.
       - run: node bouncer/demo-all.mjs
+
+  testnet-multi:
+    name: Live testnet multi-token procurement check
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[multi-resource-smoke]')
+    needs: build-contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: bouncer-wasm
+          path: .
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install --prefix bouncer --no-audit --no-fund
+      # Uses the NEAR testnet token factory; only synthetic testnet FTs.
+      # Keys and journal stay on the ephemeral runner; nothing is uploaded.
+      - run: node bouncer/demo-multi-resource.mjs

@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import crypto from 'node:crypto';
 import nearApi from 'near-api-js';
 
-const { KeyPair, KeyPairSigner, Account, providers } = nearApi;
+const { KeyPair, KeyPairSigner, Account, providers, transactions } = nearApi;
 const { JsonRpcProvider } = providers;
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const NETWORK = 'testnet';
@@ -90,7 +90,7 @@ async function expectRejection(description, expected, operation) {
   throw new Error(`${description}: transaction unexpectedly succeeded`);
 }
 
-const view = (contractId, method, args) => provider.callFunction(contractId, method, args);
+const view = (contractId, method, args) => provider.callFunction(contractId, method, args, { finality: 'final' });
 function assertAmount(actual, expected, description) {
   if (BigInt(actual) !== expected) throw new Error(`${description}: expected ${expected}, got ${actual}`);
 }
@@ -101,11 +101,12 @@ function formatNear(amount) {
 }
 
 async function addRestrictedKey(owner, contractId, key, methods) {
-  const result = await owner.addFunctionCallAccessKey({
-    publicKey: key.getPublicKey(), contractId, methodNames: methods, allowance: ONE_NEAR,
+  const result = await owner.signAndSendTransaction({
+    receiverId: owner.accountId, waitUntil: 'FINAL',
+    actions: [transactions.addKey(key.getPublicKey(), transactions.functionCallAccessKey(contractId, methods, ONE_NEAR))],
   });
   assertReceiptsSucceeded(result, 'add restricted key');
-  const access = await provider.viewAccessKey(owner.accountId, key.getPublicKey());
+  const access = await provider.viewAccessKey(owner.accountId, key.getPublicKey(), { finality: 'final' });
   const permission = access.permission?.FunctionCall;
   if (!permission || permission.receiver_id !== contractId ||
       JSON.stringify(permission.method_names) !== JSON.stringify(methods)) {
@@ -141,7 +142,7 @@ async function main() {
   let version;
   try { version = await view(bouncerId, 'contract_version', {}); }
   catch (error) { throw new Error('The deployed wasm is stale; wait for the CI wasm build and git pull again.', { cause: error }); }
-  if (version !== 'bouncer-agent-v2') throw new Error(`Unsupported contract version: ${version}`);
+  if (version !== 'bouncer-agent-v3') throw new Error(`Unsupported contract version: ${version}`);
 
   console.log('\n=== 3) Create user and vendor sub-accounts ===');
   const userKey = KeyPair.fromRandom('ed25519');
@@ -198,8 +199,8 @@ async function main() {
   assertAmount(deposited, 3n * ONE_NEAR / 2n, 'vault after deposit');
   console.log(`    Verified vault balance: ${formatNear(deposited)} wNEAR`);
 
-  const execute = (account, policy, payee, amount, memo) => callFrom(account, bouncerId, 'execute', {
-    policy_id: policy, payee, amount: amount.toString(), memo,
+  const execute = (account, policy, payee, amount, memo, expectedToken = WNEAR) => callFrom(account, bouncerId, 'execute', {
+    policy_id: policy, payee, amount: amount.toString(), memo, expected_token: expectedToken,
   }, 0n, GAS_200);
 
   console.log('\n=== 9) Restricted agent pays vendor 0.1 wNEAR with zero deposit ===');
@@ -218,6 +219,8 @@ async function main() {
     () => execute(user, COMPUTE_POLICY, vendorId, ONE_NEAR / 10n, 'unauthorized'));
   await expectRejection('agent key not granted to storage policy', 'BLOCKED: signing key is not authorized for this policy',
     () => execute(agent, STORAGE_POLICY, vendorId, ONE_NEAR / 10n, 'wrong policy'));
+  await expectRejection('signed token mismatch', 'BLOCKED: policy token does not match expected token',
+    () => execute(agent, COMPUTE_POLICY, vendorId, ONE_NEAR / 10n, 'wrong token', 'other-token.testnet'));
 
   console.log('\n=== 12) Prove the 1-yocto guard using a restricted probe key ===');
   // This intentionally broader TEST key can invoke set_policy, isolating the

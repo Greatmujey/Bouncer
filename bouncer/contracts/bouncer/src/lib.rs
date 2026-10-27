@@ -30,6 +30,15 @@ trait ExtSelf {
     fn after_withdraw(&mut self, token: AccountId, amount: U128);
 }
 
+#[derive(near_sdk::serde::Serialize)]
+#[serde(crate = "near_sdk::serde")]
+pub struct PolicyView {
+    pub token: AccountId,
+    pub per_tx_cap: U128,
+    /// Zero means that the daily cap is disabled.
+    pub daily_cap: U128,
+}
+
 #[near(contract_state)]
 #[derive(PanicOnDefault)]
 pub struct Bouncer {
@@ -165,7 +174,15 @@ impl Bouncer {
         }
     }
 
-    pub fn contract_version(&self) -> &'static str { "bouncer-agent-v2" }
+    pub fn contract_version(&self) -> &'static str { "bouncer-agent-v3" }
+
+    pub fn get_policy(&self, policy_id: String) -> Option<PolicyView> {
+        Some(PolicyView {
+            token: self.token_of.get(&policy_id)?.clone(),
+            per_tx_cap: U128(*self.cap_of.get(&policy_id)?),
+            daily_cap: U128(self.daily_of.get(&policy_id).copied().unwrap_or(0)),
+        })
+    }
 
     pub fn vault_balance(&self, token: AccountId) -> U128 {
         U128(self.balances.get(&token).cloned().unwrap_or(0))
@@ -194,7 +211,7 @@ impl Bouncer {
     }
 
     #[payable]
-    pub fn execute(&mut self, policy_id: String, payee: AccountId, amount: U128, memo: Option<String>) -> Promise {
+    pub fn execute(&mut self, policy_id: String, payee: AccountId, amount: U128, memo: Option<String>, expected_token: AccountId) -> Promise {
         // Only direct transactions signed by the owner account may invoke execute.
         // The signing key must also be explicitly granted for this policy.
         require(env::attached_deposit() == ZERO_NEAR, "BLOCKED: execute requires zero deposit");
@@ -204,6 +221,9 @@ impl Bouncer {
         require(self.agents.get(&(policy_id.clone(), signing_key)) == Some(&true),
             "BLOCKED: signing key is not authorized for this policy");
         let (token, bal) = validate(self, &policy_id, &payee, amount.0).unwrap_or_else(|m| abort_with(&m));
+        // Bind the signed payment to the token the agent reviewed, even if the
+        // owner changes the policy between preflight and transaction execution.
+        require(token == expected_token, "BLOCKED: policy token does not match expected token");
         let bucket = env::block_timestamp() / NS_PER_DAY;
         let dk = daily_key(&policy_id, bucket);
         let spent = self.daily_spent.get(&dk).cloned().unwrap_or(0);
@@ -306,7 +326,7 @@ mod tests {
     fn authorized_agent_can_execute_without_deposit() {
         let (mut contract, agent) = fixture();
         testing_env!(owner_context(&agent, 0, NS_PER_DAY));
-        drop(contract.execute("compute".into(), id("vendor.testnet"), U128(100), None));
+        drop(contract.execute("compute".into(), id("vendor.testnet"), U128(100), None, id("token.testnet")));
         assert_eq!(contract.vault_balance(id("token.testnet")).0, 900);
         assert_eq!(*contract.daily_spent.get(&daily_key("compute", 1)).unwrap(), 100);
     }
@@ -316,7 +336,7 @@ mod tests {
     fn unrelated_account_cannot_execute() {
         let (mut contract, agent) = fixture();
         testing_env!(context("attacker.testnet", "attacker.testnet", &agent, 0, NS_PER_DAY));
-        drop(contract.execute("compute".into(), id("vendor.testnet"), U128(100), None));
+        drop(contract.execute("compute".into(), id("vendor.testnet"), U128(100), None, id("token.testnet")));
     }
 
     #[test]
@@ -324,7 +344,7 @@ mod tests {
     fn another_key_on_owner_account_is_not_automatically_authorized() {
         let (mut contract, _) = fixture();
         testing_env!(owner_context(&key(3), 0, NS_PER_DAY));
-        drop(contract.execute("compute".into(), id("vendor.testnet"), U128(100), None));
+        drop(contract.execute("compute".into(), id("vendor.testnet"), U128(100), None, id("token.testnet")));
     }
 
     #[test]
@@ -335,7 +355,7 @@ mod tests {
         contract.set_policy("storage".into(), id("token.testnet"), U128(200), Some(U128(300)));
         contract.allow_payee("storage".into(), id("vendor.testnet"));
         testing_env!(owner_context(&agent, 0, NS_PER_DAY));
-        drop(contract.execute("storage".into(), id("vendor.testnet"), U128(100), None));
+        drop(contract.execute("storage".into(), id("vendor.testnet"), U128(100), None, id("token.testnet")));
     }
 
     #[test]
@@ -343,7 +363,7 @@ mod tests {
     fn execute_refuses_a_deposit() {
         let (mut contract, agent) = fixture();
         testing_env!(owner_context(&agent, 1, NS_PER_DAY));
-        drop(contract.execute("compute".into(), id("vendor.testnet"), U128(100), None));
+        drop(contract.execute("compute".into(), id("vendor.testnet"), U128(100), None, id("token.testnet")));
     }
 
     #[test]
@@ -370,7 +390,7 @@ mod tests {
         contract.revoke_agent_key("compute".into(), agent.clone());
         assert!(!contract.is_agent_key_allowed("compute".into(), agent.clone()));
         testing_env!(owner_context(&agent, 0, NS_PER_DAY));
-        drop(contract.execute("compute".into(), id("vendor.testnet"), U128(100), None));
+        drop(contract.execute("compute".into(), id("vendor.testnet"), U128(100), None, id("token.testnet")));
     }
 
     #[test]
@@ -391,9 +411,27 @@ mod tests {
         assert!(contract.check("compute".into(), id("vendor.testnet"), U128(200)).0);
         assert_eq!(contract.check("compute".into(), id("vendor.testnet"), U128(201)).1,
             "BLOCKED: amount exceeds per-tx cap");
-        drop(contract.execute("compute".into(), id("vendor.testnet"), U128(200), None));
+        drop(contract.execute("compute".into(), id("vendor.testnet"), U128(200), None, id("token.testnet")));
         assert_eq!(contract.check("compute".into(), id("vendor.testnet"), U128(101)).1,
             "BLOCKED: daily cap exceeded for this policy");
+    }
+
+    #[test]
+    #[should_panic(expected = "BLOCKED: policy token does not match expected token")]
+    fn cannot_spend_when_policy_token_differs_from_signed_request() {
+        let (mut contract, agent) = fixture();
+        testing_env!(owner_context(&agent, 0, NS_PER_DAY));
+        drop(contract.execute("compute".into(), id("vendor.testnet"), U128(100), None, id("other-token.testnet")));
+    }
+
+    #[test]
+    fn policy_view_reports_the_token_and_limits() {
+        let (contract, _) = fixture();
+        let policy = contract.get_policy("compute".into()).unwrap();
+        assert_eq!(policy.token, id("token.testnet"));
+        assert_eq!(policy.per_tx_cap.0, 200);
+        assert_eq!(policy.daily_cap.0, 300);
+        assert!(contract.get_policy("unknown".into()).is_none());
     }
 
     #[test]
@@ -401,7 +439,7 @@ mod tests {
     fn failed_transfer_refunds_original_bucket_even_across_midnight() {
         let (mut contract, agent) = fixture();
         testing_env!(owner_context(&agent, 0, NS_PER_DAY));
-        drop(contract.execute("compute".into(), id("vendor.testnet"), U128(100), None));
+        drop(contract.execute("compute".into(), id("vendor.testnet"), U128(100), None, id("token.testnet")));
         contract.daily_spent.insert(daily_key("compute", 2), 75);
         let callback_context = context("bouncer.testnet", "bouncer.testnet", &agent, 0, 2 * NS_PER_DAY);
         testing_env_with_promise_results(callback_context, PromiseResult::Failed);
