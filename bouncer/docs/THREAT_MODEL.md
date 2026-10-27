@@ -45,8 +45,12 @@ all possible callback or token failure cases.
    Grant only an execute-only function-call key and revoke both the contract
    grant and NEAR access key when removing an agent.
 5. **Views are policy previews, not authorization checks.** `check` and
-   `try_execute` do not identify a transaction signing key and cannot guarantee
-   that a later signed call will be authorized or still within budget.
+   `try_execute` do not identify a transaction signing key. V4 has no owner
+   view, so a preflight cannot verify that the supplied signer account is the
+   owner; execution still enforces it on-chain. The CLI dry-run checks each
+   request independently, so several individually ready requests may exceed a
+   shared budget or vault together. MCP makes tentative aggregate reservations,
+   but neither path reads an atomic snapshot or guarantees later authorization.
 6. **Policies and tokens are shared.** Policy-specific key grants isolate which
    policy a key may use, but policies may share the same token vault. Caps are
    denominated in token units, not USD; there is no price oracle. Rebinding a

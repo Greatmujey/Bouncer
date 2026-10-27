@@ -66,6 +66,20 @@ try {
   assert.deepEqual(preview.structuredContent.checks.map(c => c.status), ['READY', 'READY', 'READY']);
   assert.deepEqual(preview.structuredContent.plan.requests.map(r => r.resource), ['compute', 'storage', 'api']);
 
+  // Two individually affordable quotes would overuse the recorded shared
+  // wNEAR vault or rolling budget together, so the second must be reserved out.
+  products.compute.amount = RUN.resources[0].perTx;
+  const combined = await client.callTool({ name: 'bouncer_preview_goals', arguments: {
+    ...args, goals: [
+      { ...goals[0], id: 'combined-one', max_amount: products.compute.amount },
+      { ...goals[0], id: 'combined-two', max_amount: products.compute.amount },
+    ],
+  } });
+  if (combined.isError) throw new Error(combined.content?.[0]?.text || 'MCP combined preflight failed');
+  assert.equal(combined.structuredContent.summary.ready, 1);
+  assert.equal(combined.structuredContent.summary.blocked, 1);
+  assert.match(combined.structuredContent.checks[1].reason, /Combined preview would exceed/);
+
   // Quote one unit above the actual per-transaction cap; the same on-chain
   // check must block the preview instead of marking it ready.
   const overCap = (BigInt(RUN.resources[0].perTx) + 1n).toString();
@@ -78,8 +92,8 @@ try {
   assert.deepEqual(blocked.structuredContent.checks.map(c => c.status), ['BLOCKED']);
   const balancesAfter = await Promise.all(RUN.resources.map(r => rpc.callFunction(RUN.account, 'vault_balance', { token: r.token }, { finality: 'final' })));
   assert.deepEqual(balancesAfter, balancesBefore, 'read-only previews must not change recorded vault balances');
-  console.log('Live MCP policy read and three-resource quote/preflight passed; an over-cap quote was blocked. No transaction sent.');
-  console.log('::notice title=Bouncer live MCP check::Testnet policy, three-resource quote/preflight and over-cap rejection passed; no transaction or private key was used.');
+  console.log('Live MCP policy read and three-resource quote/preflight passed; an over-cap quote was blocked. Shared-budget/vault overuse was also blocked. No transaction sent.');
+  console.log('::notice title=Bouncer live MCP check::Testnet policy, three-resource quote/preflight, shared-limit and over-cap rejection passed; no transaction or private key was used.');
 } finally {
   if (client) await client.close();
   if (devProvider) await new Promise((resolve, reject) => devProvider.server.close(error => error ? reject(error) : resolve()));

@@ -46,7 +46,7 @@ pushes do not trigger it. See [website and wallet notes](bouncer/docs/WEB.md).
 
 The [MCP server](bouncer/docs/MCP.md) exposes policy inspection and configured
 quote/preflight tools over local stdio or authenticated loopback HTTP. These
-are read-only testnet tools: no keys, policy changes, payments or deliveries.
+are read-only testnet tools: no private keys, policy changes, payments or deliveries.
 Gemini CLI and Claude Code have passed local stdio connection checks without a
 model conversation; project configuration is included. ChatGPT web and other
 remote clients need a separately hosted HTTPS endpoint and compatible

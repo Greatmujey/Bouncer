@@ -15,8 +15,12 @@ existing CLI is the only implemented payment path, and remains testnet-only.
 - `bouncer_preview_goals`: send resource inputs to the **operator-configured**
   quote provider, validate its quotes and preflight a public execute-only agent
   key and the on-chain policy. It returns a dry run; it neither pays nor
-  delivers. The assistant's supplied token, payee and max price are **not**
-  owner approval, and the snapshot could change before any later CLI execution.
+  delivers. It tentatively reserves shared daily budgets and token-vault
+  balances across the proposed goals to avoid marking an unaffordable batch as
+  jointly ready. The assistant's supplied token, payee and max price are
+  **not** owner approval. V4 has no public owner view, so preflight cannot
+  verify that the supplied account is the contract owner; execution enforces
+  that on-chain. Views are non-atomic and can change before any later payment.
 
 Goals sent to a quote tool are disclosed to the configured provider and the MCP
 client. Chain data and quotes are untrusted data, not instructions. Do not put
@@ -118,10 +122,11 @@ transports, authentication failures, dry-run preflight, malicious quotes, wrong
 network/version/key, and the absence of payment tools. The opt-in
 `[mcp-clients]` CI marker checks actual Gemini CLI and Claude Code local
 connection health with a disposable home and no AI credentials. The
-`[mcp-testnet]` marker queries the existing v4 testnet contract through an MCP
-client without a key or transaction. The [live read-only check](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40569317234)
-passed against the recorded v4 deployment. Mock tests are not live-chain
-evidence.
+`[mcp-testnet]` marker queries the existing v4 testnet contract and previews
+three resource quotes through an MCP client, including an over-cap rejection.
+The [live read-only check](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40570147486)
+passed against the recorded v4 deployment with a local development provider;
+no private key or transaction was used. Mock tests are not live-chain evidence.
 
 Unaudited software. RPC, quote provider, client, reverse proxy, dependencies and
 host are trust boundaries. Static bearer auth and basic rate limits are not a

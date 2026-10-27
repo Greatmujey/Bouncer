@@ -28,9 +28,9 @@ function mockProvider(options = {}) {
     async callFunction(contract, method, _args, final) {
       assert.equal(contract, 'bouncer.testnet'); assert.deepEqual(final, { finality: 'final' });
       if (method === 'contract_version') return options.version || 'bouncer-agent-v4';
-      if (method === 'get_policy') return { token: 'wrap.testnet', per_tx_cap: '100', daily_cap: '1000' };
-      if (method === 'daily_spent') return '200';
-      if (method === 'vault_balance') return '800';
+      if (method === 'get_policy') return { token: 'wrap.testnet', per_tx_cap: options.cap || '100', daily_cap: options.daily || '1000' };
+      if (method === 'daily_spent') return options.spent || '200';
+      if (method === 'vault_balance') return options.vault || '800';
       if (method === 'is_agent_key_allowed') return options.allowed !== false;
       if (method === 'check') return options.blocked ? [false, 'BLOCKED: payee not in allowlist'] : [true, 'ok'];
       throw new Error(`unexpected view ${method}`);
@@ -90,7 +90,46 @@ test('goal preview invokes the real quote and preflight path without a signer or
     assert.deepEqual(out.structuredContent.checks, [{ id: 'one', status: 'READY' }]);
     assert.equal(out.structuredContent.plan.requests[0].memo, orderMemo('compute', exampleGoal().input));
     assert.match(out.structuredContent.warning, /not owner approval/);
+    assert.match(out.structuredContent.warning, /does not expose its owner/);
   } finally { await close(); }
+});
+
+test('preview reserves combined daily budgets and shared token vault balances', async () => {
+  const two = () => ({ ...args(), goals: [exampleGoal(), { ...exampleGoal(), id: 'two' }] });
+  const daily = await memoryClient({ provider: mockProvider({ daily: '250', spent: '100' }), getQuote: async order => quote(order) });
+  try {
+    const out = await daily.client.callTool({ name: 'bouncer_preview_goals', arguments: two() });
+    assert.deepEqual(out.structuredContent.summary, { paid: 0, blocked: 1, skipped: 0, ready: 1 });
+    assert.equal(out.structuredContent.checks[0].status, 'READY');
+    assert.match(out.structuredContent.checks[1].reason, /Combined.*rolling daily budget/);
+  } finally { await daily.close(); }
+
+  // Two policies can draw from the same token vault; neither may reuse the
+  // other preview's tentative balance even though their budgets are separate.
+  const vault = await memoryClient({
+    provider: mockProvider({ daily: '1000', spent: '0', vault: '150' }),
+    getQuote: async order => ({ ...quote(order), policy_id: order.input.text === 'second' ? 'other-policy' : 'compute' }),
+  });
+  try {
+    const input = two();
+    input.goals[1] = { ...input.goals[1], policy_id: 'other-policy', input: { text: 'second', rounds: 2 } };
+    const out = await vault.client.callTool({ name: 'bouncer_preview_goals', arguments: input });
+    assert.deepEqual(out.structuredContent.summary, { paid: 0, blocked: 1, skipped: 0, ready: 1 });
+    assert.match(out.structuredContent.checks[1].reason, /Combined.*token vault balance/);
+  } finally { await vault.close(); }
+
+  const changing = mockProvider();
+  const original = changing.callFunction;
+  let policyReads = 0;
+  changing.callFunction = async (...params) => {
+    const value = await original(...params);
+    if (params[1] === 'get_policy' && ++policyReads > 1) return { ...value, token: 'changed.testnet' };
+    return value;
+  };
+  const unstable = await memoryClient({ provider: changing, getQuote: async order => quote(order) });
+  try {
+    assert.equal((await unstable.client.callTool({ name: 'bouncer_preview_goals', arguments: args() })).isError, true, 'policy changes fail closed');
+  } finally { await unstable.close(); }
 });
 
 test('quote mismatches, unauthorized keys and blocked policies do not turn into purchases', async () => {
