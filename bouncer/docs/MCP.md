@@ -123,8 +123,8 @@ network/version/key, and the absence of payment tools. The opt-in
 `[mcp-clients]` CI marker checks actual Gemini CLI and Claude Code local
 connection health with a disposable home and no AI credentials. The
 `[mcp-testnet]` marker queries the existing v4 testnet contract and previews
-three resource quotes through an MCP client, including an over-cap rejection.
-The [live read-only check](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40570147486)
+three resource quotes through an MCP client, including shared-limit and
+per-transaction-cap rejections. The [live read-only check](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40570662179)
 passed against the recorded v4 deployment with a local development provider;
 no private key or transaction was used. Mock tests are not live-chain evidence.
 
