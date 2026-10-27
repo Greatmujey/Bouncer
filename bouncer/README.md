@@ -8,8 +8,10 @@ Every "secure AI agent wallet" today is a prompt and a promise. Bouncer is the s
 
 - **On-chain, not in-script.** Spending policy is enforced in a Rust contract on NEAR, not in a TypeScript guard beside the key. If the agent's key leaks, the attacker inherits exactly the policy — not the full wallet.
 - **Structural escalation lock, not a software check.** Every policy-mutating method requires exactly 1 yoctoNEAR (10⁻²⁴ NEAR). Function-call access keys cannot attach any deposit, so NEAR rejects an escalation tx at the protocol level (`DepositWithFunctionCall`) before our code runs. No bug in our contract can bypass this. See THREAT_MODEL.
-- **Invoices, not just raw spends.** Vendors file invoices; the agent pays them under policy. A business can give an auditor a complete tamper-proof ledger.
-- **Cross-chain via NEAR Intents.** Agent opens a payment to a contractor on Base/Solana/Ethereum; solver bots compete to fill it; best bid wins. Demo settles through the live 1Click API.
+- **Payee allowlists.** Agent can only pay addresses the owner explicitly approved. Wildcard "*" (empty allowlist) for unrestricted policies is supported.
+- **Per-transaction caps.** Even if an attacker drains the agent key, they cannot move more per tx than the cap.
+- **Vault model.** Funds sit in the contract, held in escrow until `execute` matches policy, then ft_transfer'd out. No approval flow needed — policy is code.
+- *(Invoices + daily windows + cross-chain Intents are staged as green CI commits post-submission; current release builds with core policy, allowlist, NEP-141 custody, and the 1-yocto guard — enough for the 90s demo.)*
 
 ## The problem it fixes
 

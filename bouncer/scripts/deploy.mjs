@@ -33,7 +33,8 @@ if (!DEPLOYER_ID || !DEPLOYER_KEY || !CONTRACT_ID) {
   process.exit(1);
 }
 
-const WASM_PATH = path.join(ROOT, 'contracts', 'bouncer', 'res', 'bouncer.wasm');
+// CI commits bouncer.wasm to the repo root after building.
+const WASM_PATH = path.join(ROOT, '..', 'bouncer.wasm');
 if (!fs.existsSync(WASM_PATH)) {
   console.error(`wasm not found at ${WASM_PATH}; run npm run build first`);
   process.exit(1);
@@ -61,7 +62,7 @@ async function makeAccount(accountId, keyStr) {
 
   // 1. Create sub-account if needed (create account + transfer 30 NEAR + add key).
   try {
-    await deployer.viewFunction({ contractId: CONTRACT_ID, methodName: 'get_policy', args: { policy_id: '__ping' } });
+    await deployer.viewFunction({ contractId: CONTRACT_ID, methodName: 'vault_balance', args: { token: 'noop.near' } });
     console.log(`    contract account ${CONTRACT_ID} exists; skipping create`);
   } catch {
     console.log(`    creating sub-account ${CONTRACT_ID}...`);
