@@ -39,17 +39,18 @@ jobs:
           RUSTFLAGS="-C link-arg=-s" cargo build --target wasm32-unknown-unknown -v 2>&1 | tail -200
       - name: List & copy wasm
         run: |
-          find . -name "bouncer.wasm" 2>&1
+          echo "PWD=$(pwd)"
+          find /home/runner -name "bouncer.wasm" 2>&1 | head -20
           ls -la bouncer/target/wasm32-unknown-unknown/debug/ 2>&1 | head -30
           if [ -f bouncer/target/wasm32-unknown-unknown/debug/bouncer.wasm ]; then
-            cp bouncer/target/wasm32-unknown-unknown/debug/bouncer.wasm ./bouncer.wasm
+            cp bouncer/target/wasm32-unknown-unknown/debug/bouncer.wasm ${{ github.workspace }}/bouncer.wasm
           else
-            find . -path ./node_modules -prune -o -name "bouncer.wasm" -print -exec cp {} ./bouncer.wasm \;
+            find /home/runner/work -name "bouncer.wasm" -exec cp {} ${{ github.workspace }}/bouncer.wasm \;
           fi
-          ls -lh ./bouncer.wasm || echo "NO BOUNCER.WASM"
+          ls -lh ${{ github.workspace }}/bouncer.wasm
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: bouncer-wasm
-          path: bouncer.wasm
-          if-no-files-found: ignore
+          path: ${{ github.workspace }}/bouncer.wasm
+          if-no-files-found: error
