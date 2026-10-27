@@ -28,20 +28,24 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.head_ref }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
-      - name: Build
+      - name: Install cargo-near (the standard NEAR build tool)
         run: |
+          set -e
+          curl --proto '=https' --tlsv1.2 -LsSf https://github.com/near/cargo-near/releases/latest/download/cargo-near-installer.sh | sh
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+      - name: Build with cargo-near
+        run: |
+          set -eux
           cd bouncer/contracts/bouncer
-          ls
-          # Plain build, no tail; capture full exit code
-          RUSTFLAGS="-C link-arg=-s" cargo build --target wasm32-unknown-unknown
-          echo "=== listing target ==="
-          ls target/wasm32-unknown-unknown/debug/ | head -40
-          cp target/wasm32-unknown-unknown/debug/bouncer.wasm ../../../bouncer.wasm
+          which cargo-near
+          cargo-near --version
+          cargo-near build --no-docker
+          # cargo-near outputs to target/wasm32-unknown-unknown/release/bouncer.wasm
+          ls -la target/wasm32-unknown-unknown/release/
+          cp target/wasm32-unknown-unknown/release/bouncer.wasm ../../../bouncer.wasm
           cd ../../..
           ls -la bouncer.wasm
           wc -c bouncer.wasm
