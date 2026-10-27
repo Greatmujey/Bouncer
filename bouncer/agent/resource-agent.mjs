@@ -3,8 +3,11 @@
  * This is a deterministic testnet agent, not an AI or a vendor marketplace.
  * The caller explicitly pins each trusted policy, token, payee and max price.
  */
-import { runProcurement, validatePlan } from './procurement.mjs';
-import { normalizeOrder, orderMemo } from '../services/resource-provider.mjs';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { createRuntime, FileJournal, runProcurement, validatePlan } from './procurement.mjs';
+import { normalizeOrder, orderMemo, startConfiguredProvider } from '../services/resource-provider.mjs';
 
 function positiveAmount(value, label) {
   if (typeof value !== 'string' || !/^[1-9][0-9]*$/.test(value) || BigInt(value) > (1n << 128n) - 1n) throw new Error(`${label} must be a positive U128 string`);
@@ -44,10 +47,11 @@ export async function planFromQuotes({ contractId, ownerAccountId, goals, getQuo
  * same order again. The provider must implement its own replay protection.
  */
 export async function runResourceAgent({ contractId, ownerAccountId, goals, getQuote, fulfill, onPlan = () => {},
-  provider, account, publicKey, journal, execute = false, log = console.log }) {
+  provider, account, publicKey, runtimeFactory, journal, execute = false, log = console.log }) {
   if (execute && (typeof fulfill !== 'function' || !journal)) throw new Error('live execution requires a journal and fulfillment source');
   const plan = await planFromQuotes({ contractId, ownerAccountId, goals, getQuote });
   await onPlan(plan);
+  if (runtimeFactory) ({ provider, account, publicKey } = await runtimeFactory(plan));
   const payments = await runProcurement({ plan, provider, account, publicKey, journal, execute, log });
   const deliveries = [];
   if (execute) {
@@ -81,4 +85,70 @@ export function httpResourceProvider(baseUrl, fetchImpl = globalThis.fetch) {
     async getQuote(order) { return (await post('/quote', order)).quote; },
     async fulfill(order) { return (await post('/redeem', order)).result; },
   };
+}
+
+
+const USAGE = `Usage: node bouncer/agent/resource-agent.mjs --goals goals.json --key agent-key.json [--journal journal.json] [--local-provider provider.json] [--execute]
+
+Quote a configured provider and preflight owner-pinned resource goals.
+Default is read-only; --execute sends real testnet payments and requests fulfillment.
+Use a function-call access key scoped only to the Bouncer execute method.
+Amounts are strings in each token's smallest units. Never use real funds.
+`;
+function parseCli(args) {
+  const options = { execute: false };
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === '--help') return { help: true };
+    if (arg === '--execute') { options.execute = true; continue; }
+    if (['--goals', '--key', '--journal', '--local-provider'].includes(arg) && args[i + 1] && !args[i + 1].startsWith('--')) {
+      const key = arg.slice(2);
+      if (options[key]) throw new Error(`duplicate ${arg}`);
+      options[key] = args[++i];
+    } else throw new Error(`unknown or incomplete argument: ${arg}`);
+  }
+  if (!options.goals || !options.key) throw new Error('--goals and --key are required');
+  return options;
+}
+async function main() {
+  const options = parseCli(process.argv.slice(2));
+  if (options.help) { console.log(USAGE); return; }
+  const config = JSON.parse(fs.readFileSync(options.goals, 'utf8'));
+  if (!config || typeof config !== 'object' || Array.isArray(config)) throw new Error('invalid goals file');
+  // Validate the configured origin before starting any provider or spending.
+  const configuredClient = httpResourceProvider(config.provider_url);
+  let journal, local;
+  try {
+    let providerUrl = config.provider_url;
+    if (options['local-provider']) {
+      const localConfig = JSON.parse(fs.readFileSync(options['local-provider'], 'utf8'));
+      if (localConfig.contract_id !== config.contract_id) throw new Error('local provider contract does not match the goals file');
+      local = await startConfiguredProvider(localConfig);
+      const configured = new URL(providerUrl);
+      const ephemeral = localConfig.port === 0 && configured.origin === 'http://127.0.0.1:0';
+      if (configured.origin !== local.url && !ephemeral) throw new Error('local provider URL does not match the goals file');
+      providerUrl = local.url;
+      console.log(`[resource-agent] Local development provider: ${providerUrl}`);
+    }
+    const client = local ? httpResourceProvider(providerUrl) : configuredClient;
+    if (options.execute) {
+      const journalPath = options.journal || config.journal_path || `${options.goals}.bouncer-journal.json`;
+      journal = new FileJournal(journalPath, config.contract_id, config.owner_account_id);
+      console.log(`[resource-agent] Journal: ${path.resolve(journalPath)}`);
+    }
+    const result = await runResourceAgent({
+      contractId: config.contract_id, ownerAccountId: config.owner_account_id, goals: config.goals,
+      getQuote: client.getQuote, fulfill: client.fulfill, journal, execute: options.execute,
+      onPlan: plan => console.log(`[resource-agent] Validated quote plan:\n${JSON.stringify(plan, null, 2)}`),
+      runtimeFactory: plan => createRuntime({ plan, keyFile: options.key }),
+    });
+    console.log(`[resource-agent] ${options.execute ? 'Finished' : 'Dry run only'}: ${JSON.stringify(result.payments)}; deliveries=${result.deliveries.length}`);
+    if (result.payments.blocked) process.exitCode = 2;
+  } finally {
+    journal?.close();
+    if (local) await new Promise(resolve => local.server.close(resolve));
+  }
+}
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch(error => { console.error(`[resource-agent] ERROR: ${error.message}`); process.exitCode = 1; });
 }

@@ -119,9 +119,32 @@ transactions. It stores a reusable plan, journal, provider redemption state and
 local objects under `~/.bouncer/testnet/`; private keys are stored separately
 under `~/.near-credentials/testnet/`. The testnet credits have no monetary value.
 A [live testnet CI run](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40555110181)
-passed the security and three-token **payment** checks before the local provider
-was added. The full quote-to-delivery integration requires its own live run; an
-offline mock alone does not prove it.
+passed the restricted-key security and three-token payment checks. A
+[separate run](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40556175783)
+passed the complete quote → payment → local delivery check using the self-hosted
+provider. Neither run demonstrates a commercial resource purchase.
+
+### Run the resource agent again
+
+The multi-token script also writes `<account>.provider.json` and
+`<account>.goals.json` alongside its plan and journal. The goals file points to
+the **same journal** used for the original payments; retaining it is essential
+to avoid paying twice. It also contains the resource inputs, so treat it as
+private. To start the local development provider and preview those goals after
+running the demo locally:
+
+```sh
+cd /workspaces/Bouncer
+ID=$(cat "$HOME/.bouncer_id")
+node bouncer/agent/resource-agent.mjs --goals "$HOME/.bouncer/testnet/$ID.goals.json" --key "$HOME/.near-credentials/testnet/$ID.agent.json" --local-provider "$HOME/.bouncer/testnet/$ID.provider.json"
+```
+
+The agent defaults to a dry run. Add `--execute` only after reviewing the
+quotes; completed orders in the configured journal are skipped and the
+provider returns their existing results. Using a different or deleted journal
+can cause repeat payments. `--local-provider` starts the loopback-only development
+provider for this command and shuts it down afterwards. Both programs support
+`--help`.
 
 ### Run a supplied procurement plan
 

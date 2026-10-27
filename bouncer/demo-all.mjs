@@ -214,12 +214,22 @@ async function main() {
   }
   await callFrom(bouncer, bouncerId, 'allow_payee', { policy_id: COMPUTE_POLICY, payee: unregisteredId }, YOCTO);
   const beforeRefund = BigInt(await view(bouncerId, 'vault_balance', { token: WNEAR }));
-  const failedTransfer = await agent.callFunctionRaw({
+  const refundProbe = () => agent.callFunctionRaw({
     contractId: bouncerId, methodName: 'execute',
     args: { policy_id: COMPUTE_POLICY, payee: unregisteredId, amount: (ONE_NEAR / 5n).toString(),
       memo: 'test:refund', expected_token: WNEAR },
     deposit: 0n, gas: GAS_200, waitUntil: 'FINAL',
   });
+  let failedTransfer;
+  try { failedTransfer = await refundProbe(); }
+  catch (error) {
+    // This special test payee is deliberately unregistered and cannot receive
+    // wNEAR. Retry once only for an explicit pre-admission Expired RPC error;
+    // never generalize this to ordinary payments or ambiguous timeouts.
+    if (error.type !== 'Expired' || error.transaction_outcome) throw error;
+    console.warn('    Test-only refund probe: expired transaction; retrying once.');
+    failedTransfer = await refundProbe();
+  }
   const receipts = failedTransfer.receipts_outcome || [];
   const tokenFailed = receipts.some(r => r.outcome?.executor_id === WNEAR && r.outcome.status?.Failure);
   const callbackRefunded = receipts.some(r => r.outcome?.executor_id === bouncerId &&

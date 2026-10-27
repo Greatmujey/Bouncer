@@ -226,6 +226,18 @@ function parseArgs(args) {
   return out;
 }
 function expandHome(value) { return value.startsWith('~/') ? path.join(os.homedir(), value.slice(2)) : value; }
+export function createRuntime({ plan: rawPlan, keyFile, rpc }) {
+  const plan = validatePlan(rawPlan);
+  const credentials = JSON.parse(fs.readFileSync(expandHome(keyFile), 'utf8'));
+  if (credentials.account_id !== plan.owner_account_id || typeof credentials.private_key !== 'string') {
+    throw new Error('agent key file does not match owner_account_id');
+  }
+  const key = KeyPair.fromString(credentials.private_key);
+  const provider = new providers.JsonRpcProvider({ url: rpc || process.env.NEAR_TESTNET_RPC || DEFAULT_RPC });
+  const account = new Account(plan.owner_account_id, provider, new KeyPairSigner(key));
+  return { provider, account, publicKey: key.getPublicKey() };
+}
+
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   if (options.help) {
@@ -236,18 +248,12 @@ async function main() {
   if (!options.plan || !options.key) throw new Error('provide --plan and --key; use --help for usage');
   const planPath = path.resolve(expandHome(options.plan));
   const plan = validatePlan(JSON.parse(fs.readFileSync(planPath, 'utf8')));
-  const keyFile = JSON.parse(fs.readFileSync(expandHome(options.key), 'utf8'));
-  if (keyFile.account_id !== plan.owner_account_id || typeof keyFile.private_key !== 'string') {
-    throw new Error('agent key file does not match owner_account_id');
-  }
-  const key = KeyPair.fromString(keyFile.private_key);
-  const provider = new providers.JsonRpcProvider({ url: options.rpc || process.env.NEAR_TESTNET_RPC || DEFAULT_RPC });
-  const account = new Account(plan.owner_account_id, provider, new KeyPairSigner(key));
+  const { provider, account, publicKey } = createRuntime({ plan, keyFile: options.key, rpc: options.rpc });
   const journalPath = path.resolve(expandHome(options.state || `${planPath}.bouncer-journal.json`));
   const journal = options.execute ? new FileJournal(journalPath, plan.contract_id, plan.owner_account_id) : null;
   try {
     console.log(`[procurement] ${options.execute ? 'LIVE TESTNET' : 'DRY RUN'} on ${plan.contract_id}; ${plan.requests.length} request(s)`);
-    const totals = await runProcurement({ plan, provider, account, publicKey: key.getPublicKey(), journal, execute: options.execute });
+    const totals = await runProcurement({ plan, provider, account, publicKey, journal, execute: options.execute });
     console.log(`[procurement] paid=${totals.paid} blocked=${totals.blocked} skipped=${totals.skipped} ready=${totals.ready}`);
     if (options.execute) console.log(`[procurement] journal: ${journalPath}`);
     if (totals.blocked > 0) process.exitCode = 2;

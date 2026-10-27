@@ -85,3 +85,19 @@ test('refund proof rejects a missing failed receipt, missing callback, or unrefu
     assert.doesNotMatch(result.stdout, /All checks passed/);
   }
 });
+
+
+test('only the deliberately unregistered refund probe retries one explicit Expired error', () => {
+  const recovered = runDemo('probe_expired_once');
+  assert.equal(recovered.status, 0, recovered.stderr);
+  assert.match(recovered.stderr, /Test-only refund probe: expired transaction; retrying once/);
+  assert.match(recovered.stdout, /Failed transfer refunded vault and daily budget/);
+  const repeated = runDemo('probe_expired_twice');
+  assert.equal(repeated.status, 1);
+  assert.match(repeated.stderr, /Transaction has expired/);
+  assert.doesNotMatch(repeated.stdout, /All checks passed/);
+  const timeout = runDemo('probe_timeout');
+  assert.equal(timeout.status, 1);
+  assert.match(timeout.stderr, /RPC timed out/);
+  assert.doesNotMatch(timeout.stderr, /retrying once/);
+});

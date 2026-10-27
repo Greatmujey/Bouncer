@@ -8,6 +8,8 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import nearApi from 'near-api-js';
 
 const digest = value => crypto.createHash('sha256').update(value).digest('hex');
 const plainObject = value => value && typeof value === 'object' && !Array.isArray(value);
@@ -177,4 +179,45 @@ export function createResourceProvider({ rpcProvider, contractId, products, data
     }
   });
   return { server, redeem };
+}
+
+
+const USAGE = `Usage: node bouncer/services/resource-provider.mjs --config provider.json
+
+Starts the development resource provider on 127.0.0.1 only, with local storage.
+The config pins a testnet Bouncer account, three products, data_dir and port.
+No authentication, TLS or commercial hosting is provided. Do not use real funds.
+`;
+export async function startConfiguredProvider(config) {
+  if (!plainObject(config) || typeof config.contract_id !== 'string' || !config.contract_id.endsWith('.testnet') ||
+      typeof config.data_dir !== 'string' || !config.data_dir || !plainObject(config.products)) {
+    throw new Error('config requires a testnet contract_id, data_dir and products');
+  }
+  for (const resource of ['compute', 'storage', 'api']) {
+    const p = config.products[resource];
+    if (!plainObject(p) || typeof p.token !== 'string' || !p.token.endsWith('.testnet') ||
+        typeof p.payee !== 'string' || !p.payee.endsWith('.testnet')) throw new Error(`${resource} must use testnet token and payee accounts`);
+  }
+  if (config.host !== undefined && config.host !== '127.0.0.1') throw new Error('development provider only binds to 127.0.0.1');
+  const port = config.port ?? 8787;
+  if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('invalid provider port');
+  const rpcProvider = new nearApi.providers.JsonRpcProvider({ url: process.env.NEAR_TESTNET_RPC || 'https://test.rpc.fastnear.com' });
+  const provider = createResourceProvider({ rpcProvider, contractId: config.contract_id, products: config.products, dataDir: config.data_dir });
+  await new Promise((resolve, reject) => {
+    provider.server.once('error', reject);
+    provider.server.listen(port, '127.0.0.1', resolve);
+  });
+  return { ...provider, url: `http://127.0.0.1:${provider.server.address().port}` };
+}
+async function main() {
+  const args = process.argv.slice(2);
+  if (args.length === 1 && args[0] === '--help') { console.log(USAGE); return; }
+  if (args.length !== 2 || args[0] !== '--config') throw new Error('provide --config FILE or --help');
+  const config = JSON.parse(fs.readFileSync(args[1], 'utf8'));
+  const provider = await startConfiguredProvider(config);
+  console.log(`[resource-provider] Listening on ${provider.url} (development only)`);
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch(error => { console.error(`[resource-provider] ERROR: ${error.message}`); process.exitCode = 1; });
 }

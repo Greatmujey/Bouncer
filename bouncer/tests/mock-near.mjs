@@ -13,6 +13,7 @@ const spent = new Map();
 let owner;
 let vault = 0n;
 let tx = 0;
+let refundAttempts = 0;
 
 const outcome = (logs = []) => ({
   transaction_outcome: { id: `mock-tx-${++tx}` },
@@ -109,6 +110,10 @@ Account.prototype.callFunctionRaw = async function ({ contractId, methodName, ar
       }
       if (amount > vault) fail('BLOCKED: insufficient vault balance');
       if (args.payee.startsWith('unregistered-')) {
+        refundAttempts++;
+        if (process.env.BOUNCER_MOCK_MODE === 'probe_timeout') fail('RPC timed out', 'Timeout');
+        if (process.env.BOUNCER_MOCK_MODE === 'probe_expired_twice' ||
+            (process.env.BOUNCER_MOCK_MODE === 'probe_expired_once' && refundAttempts === 1)) fail('Transaction has expired', 'Expired');
         const refunded = outcome();
         refunded.receipts_outcome = [
           { outcome: { executor_id: owner, status: { SuccessValue: '' }, logs: ['BOUNCER payment initiated'] } },

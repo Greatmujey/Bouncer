@@ -183,7 +183,17 @@ async function main() {
     id: `${r.resource}-1`, resource: r.resource, input: r.input,
     policy_id: r.policy, token: r.token, payee: r.vendor, max_amount: r.payment.toString(),
   }));
-  const devProvider = createResourceProvider({ rpcProvider: provider, contractId: bid, products, dataDir: path.join(RUN_DIR, `${bid}.provider`) });
+  const dataDir = path.join(RUN_DIR, `${bid}.provider`);
+  const providerFile = path.join(RUN_DIR, `${bid}.provider.json`);
+  const goalsFile = path.join(RUN_DIR, `${bid}.goals.json`);
+  const providerConfig = { contract_id: bid, data_dir: dataDir, port: 8787, products };
+  const goalsConfig = { contract_id: bid, owner_account_id: bid, provider_url: 'http://127.0.0.1:8787', journal_path: journalPath, goals };
+  for (const [file, config] of [[providerFile, providerConfig], [goalsFile, goalsConfig]]) {
+    fs.writeFileSync(file, JSON.stringify(config, null, 2) + '\n', { mode: 0o600 });
+    fs.chmodSync(file, 0o600);
+  }
+  console.log(`    Provider config: ${providerFile}\n    Goals config: ${goalsFile}`);
+  const devProvider = createResourceProvider({ rpcProvider: provider, contractId: bid, products, dataDir });
   await new Promise((resolve, reject) => {
     devProvider.server.once('error', reject);
     devProvider.server.listen(0, '127.0.0.1', resolve);

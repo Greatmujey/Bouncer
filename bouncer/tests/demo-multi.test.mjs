@@ -19,7 +19,11 @@ function run(mode = '') {
     const journal = journalFile ? JSON.parse(fs.readFileSync(path.join(dir, journalFile), 'utf8')) : null;
     const planFile = files.find(file => file.endsWith('.plan.json'));
     const plan = planFile ? JSON.parse(fs.readFileSync(path.join(dir, planFile), 'utf8')) : null;
-    return { ...child, journal, plan };
+    const goalsFile = files.find(file => file.endsWith('.goals.json'));
+    const providerFile = files.find(file => file.endsWith('.provider.json'));
+    const goals = goalsFile ? JSON.parse(fs.readFileSync(path.join(dir, goalsFile), 'utf8')) : null;
+    const provider = providerFile ? JSON.parse(fs.readFileSync(path.join(dir, providerFile), 'utf8')) : null;
+    return { ...child, journal, plan, goals, provider };
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
 }
 
@@ -30,6 +34,9 @@ test('multi-token setup and real procurement runner complete using a mock transp
   assert.match(result.stdout, /self-hosted development provider, not commercial/);
   assert.deepEqual(result.plan.requests.map(r => r.resource), ['compute', 'storage', 'api']);
   assert.equal(new Set(result.plan.requests.map(r => r.token)).size, 3);
+  assert.match(result.goals.journal_path, /\.bouncer-journal\.json$/);
+  assert.equal(result.goals.goals.length, 3);
+  assert.equal(Object.keys(result.provider.products).length, 3);
   assert.equal(result.journal.entries.filter(e => e.status === 'completed').length, 3);
   assert.equal((result.stdout.match(/\[procurement\] PAID /g) || []).length, 3);
   assert.equal((result.stdout.match(/\[procurement\] SKIP /g) || []).length, 3);
