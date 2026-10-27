@@ -9,13 +9,16 @@ This is unaudited testnet software, not suitable for real funds.
 
 ## Website preview (read-only)
 
-**[Open Bouncer](https://www.madethis.website/s/fvp6jvpr/)** — a public,
+**[Open Bouncer](https://www.madethis.website/s/z5sue6y4/)** — a public,
 temporary preview hosted by madethis.website, expiring **3 November 2026 at
-18:36 UTC**. Anyone with the link can view it. It is a snapshot, not a
+18:48 UTC**. Anyone with the link can view it. It is a snapshot, not a
 production deployment, and the private repository remains private.
 
-`bouncer/web/` is a mobile-friendly static view of a **recorded** v4 testnet
-run, with links to the three payment transactions and the separate refund test.
+`bouncer/web/` explains the prototype's request → quote → guarded payment →
+fulfillment flow and provides an interactive walkthrough of three real,
+**recorded** testnet requests and results. It links to the payment transactions
+and separate refund test, and distinguishes what works today from planned AI
+planning and commercial integrations.
 The two credit tokens are synthetic and fulfillment was self-hosted. The site
 is not a wallet, live agent dashboard, or commercial marketplace. It can try
 an optional public-RPC read of the contract’s current vault balances; if that
