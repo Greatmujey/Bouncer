@@ -33,30 +33,30 @@ jobs:
         run: |
           rustc -vV
           cargo -vV
-          which rust-lld || echo "no rust-lld"
-          ls ~/.rustup/toolchains/*/lib/rustlib/wasm32-unknown-unknown/lib/ 2>&1 | head -20 || true
       - name: Cargo build (debug, verbose)
         working-directory: bouncer/contracts/bouncer
         run: |
           RUSTFLAGS="-C link-arg=-s" cargo build --target wasm32-unknown-unknown -v 2>&1 | tail -200
-      - name: Find wasm
+      - name: Locate wasm & copy
         run: |
-          echo "FIND:"
-          find . -name "bouncer.wasm" 2>&1
-          ls -la bouncer/target/wasm32-unknown-unknown/debug/ 2>&1 | head -30 || echo "no outer bouncer/target"
-          ls -la bouncer/contracts/bouncer/target/wasm32-unknown-unknown/debug/ 2>&1 | head -30 || echo "no inner target"
-      - name: Copy wasm
-        run: |
+          set -euo pipefail
           mkdir -p dist
-          if [ -f bouncer/contracts/bouncer/target/wasm32-unknown-unknown/debug/bouncer.wasm ]; then
-            cp bouncer/contracts/bouncer/target/wasm32-unknown-unknown/debug/bouncer.wasm dist/bouncer.wasm
-          elif [ -f bouncer/target/wasm32-unknown-unknown/debug/bouncer.wasm ]; then
-            cp bouncer/target/wasm32-unknown-unknown/debug/bouncer.wasm dist/bouncer.wasm
+          # With working-directory set above, `cargo build` puts target in bouncer/contracts/bouncer/target/
+          echo "--- listing all wasm files ---"
+          find . -name "*.wasm" -not -path "*/node_modules/*"
+          SRC="bouncer/contracts/bouncer/target/wasm32-unknown-unknown/debug/bouncer.wasm"
+          if [ ! -f "$SRC" ]; then
+            SRC="bouncer/target/wasm32-unknown-unknown/debug/bouncer.wasm"
           fi
-          ls -la dist/
+          echo "using source: $SRC"
+          ls -la "$SRC"
+          cp "$SRC" dist/bouncer.wasm
+          echo "--- dist ---"
+          ls -la dist/bouncer.wasm
+          wc -c dist/bouncer.wasm
       - uses: actions/upload-artifact@v4
-        if: always()
         with:
           name: bouncer-wasm
           path: dist/bouncer.wasm
-          if-no-files-found: ignore
+          if-no-files-found: error
+          compression-level: 0
