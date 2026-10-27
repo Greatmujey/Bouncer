@@ -33,10 +33,10 @@ jobs:
         shell: bash
         run: |
           set +e
-          CARGO_PROFILE_DEV_DEBUG=0 cargo test --lib 2>&1 | tee "$RUNNER_TEMP/rust-test.log"
+          CARGO_TERM_COLOR=never CARGO_PROFILE_DEV_DEBUG=0 cargo test --lib 2>&1 | tee "$RUNNER_TEMP/rust-test.log"
           result=${PIPESTATUS[0]}
           if [ "$result" -ne 0 ]; then
-            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-22000).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=Rust tests failed::"+s)' "$RUNNER_TEMP/rust-test.log"
+            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-3000).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=Rust tests failed::"+s)' "$RUNNER_TEMP/rust-test.log"
           fi
           exit "$result"
 
@@ -60,7 +60,7 @@ jobs:
           (cargo check --target wasm32-unknown-unknown && RUSTFLAGS="-C link-arg=-s" cargo build --target wasm32-unknown-unknown --release) 2>&1 | tee "$RUNNER_TEMP/wasm-build.log"
           result=${PIPESTATUS[0]}
           if [ "$result" -ne 0 ]; then
-            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-22000).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=Wasm build failed::"+s)' "$RUNNER_TEMP/wasm-build.log"
+            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-3000).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=Wasm build failed::"+s)' "$RUNNER_TEMP/wasm-build.log"
           fi
           exit "$result"
       - name: Optimize wasm
