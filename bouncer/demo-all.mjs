@@ -125,6 +125,7 @@ async function addRestrictedKey(owner, contractId, key, methods) {
 
 async function main() {
   if (!fs.existsSync(WASM_PATH)) throw new Error(`bouncer.wasm missing at ${WASM_PATH}`);
+  if ((await provider.viewNodeStatus())?.chain_id !== 'testnet') throw new Error('RPC must report the NEAR testnet chain');
   const wasm = fs.readFileSync(WASM_PATH);
   console.log('BOUNCER — restricted-agent payments firewall (NEAR testnet)');
   console.log('Fresh deploy • real wNEAR • policy-scoped key • 1-yocto guard\n');

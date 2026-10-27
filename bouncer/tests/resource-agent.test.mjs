@@ -36,6 +36,7 @@ test('untrusted quote cannot swap policy, token, payee, payload or exceed max', 
 test('dry-run quotes and preflights but never pays or redeems', async () => {
   const g = goal(); let paid = 0, redeemed = 0, observedPlan;
   const provider = {
+    async viewNodeStatus() { return { chain_id: 'testnet' }; },
     async viewAccessKey() { return { permission: { FunctionCall: { receiver_id: 'bouncer.testnet', method_names: ['execute'] } } }; },
     async callFunction(_contract, method) {
       if (method === 'contract_version') return 'bouncer-agent-v4';
@@ -81,6 +82,7 @@ test('a delivery outage after payment is recoverable without a duplicate payment
   const entries = new Map();
   const journal = { get: id => entries.get(id), put: (id, value) => entries.set(id, { ...value }) };
   const provider = {
+    async viewNodeStatus() { return { chain_id: 'testnet' }; },
     async viewAccessKey() { return { permission: { FunctionCall: { receiver_id: 'bouncer.testnet', method_names: ['execute'] } } }; },
     async callFunction(_contract, method) {
       if (method === 'contract_version') return 'bouncer-agent-v4';

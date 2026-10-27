@@ -186,6 +186,7 @@ jobs:
         shell: bash
         env:
           BOUNCER_DEMO_AI: '1'
+          BOUNCER_DEMO_PUBLIC_DATA: '1'
           BOUNCER_LLM_URL: http://127.0.0.1:17890/v1/chat/completions
           BOUNCER_LLM_MODEL: bouncer-local-qwen
         run: |

@@ -98,8 +98,9 @@ Offline mocks are not proof of on-chain behavior.
   creates two synthetic testnet credit FTs and sends payments to three vendor
   accounts. It is not a USDC/stablecoin demonstration.
 - A self-hosted development provider can verify a payment and perform a small
-  compute job, store a local file, or serve a text-statistics API. It is not a
-  commercial provider. The agent fetches fixed quotes from this provider and
+  compute job, store a local file, count text or fetch public GitHub repository
+  metadata. GitHub data is live, unauthenticated third-party data; availability
+  is not guaranteed. The provider is not commercial. The agent fetches fixed quotes and
   validates owner-pinned constraints. An optional model adapter proposes tasks;
   it requires a separately supplied model and is not a marketplace. Independent
   vendors, invoices, stablecoin flows and NEAR Intents remain unfinished.
@@ -189,10 +190,12 @@ trusted owner catalog, then can preview or explicitly execute the resulting
 resource tasks through the same guarded runner. The model cannot set payment
 addresses, policy, token or budget. AI output can still be wrong; review it
 before spending. A local model server or another explicitly configured
-OpenAI-compatible endpoint is required. The opt-in `[ai-multi-resource]` CI job
-is designed to exercise real local inference followed by real testnet payments;
-check the actual run result before treating it as verified. The original run
-linked above used deterministic inputs.
+OpenAI-compatible endpoint is required. In the [AI-planned testnet run](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40579499294),
+a local Qwen2.5 1.5B model generated the three synthetic tasks; Bouncer checked
+them, paid three testnet FTs and verified the local deliveries. The model's
+inputs were checked against the requested literals before any accounts were
+created. The original v4 run linked above used deterministic inputs. Both use
+self-hosted development services, not commercial vendors.
 
 ### Run the resource agent again
 

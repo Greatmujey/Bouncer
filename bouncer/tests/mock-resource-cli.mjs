@@ -18,6 +18,7 @@ globalThis.fetch = async (url, options) => {
   if (String(url).endsWith('/redeem')) return { ok: true, async json() { return { ok: true, result: { type: body.resource, result: 'fake-test-result' } }; } };
   throw new Error('unexpected HTTP request');
 };
+providers.JsonRpcProvider.prototype.viewNodeStatus = async () => ({ chain_id: process.env.BOUNCER_MOCK_MODE === 'wrong_chain' ? 'mainnet' : (process.env.MOCK_CHAIN || 'testnet') });
 providers.JsonRpcProvider.prototype.viewAccessKey = async () => ({ permission: { FunctionCall: { receiver_id: 'bouncer.testnet', method_names: ['execute'] } } });
 providers.JsonRpcProvider.prototype.callFunction = async (_id, method) => {
   if (method === 'contract_version') return 'bouncer-agent-v4';

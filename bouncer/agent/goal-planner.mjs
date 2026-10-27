@@ -95,6 +95,7 @@ export const TASK_SCHEMA = {
       inputSchema('compute', { text: { type: 'string' }, rounds: { type: 'integer' } }, ['text', 'rounds']),
       inputSchema('storage', { name: { type: 'string' }, content: { type: 'string' } }, ['name', 'content']),
       inputSchema('api', { text: { type: 'string' } }, ['text']),
+      inputSchema('api', { repo: { type: 'string' } }, ['repo']),
     ] } },
   },
 };
@@ -113,7 +114,8 @@ export function goalsFromModel(raw, ownerConfig) {
     }
     const { resource } = task;
     const limits = config.resources[resource];
-    const inputKeys = resource === 'compute' ? ['text', 'rounds'] : resource === 'storage' ? ['name', 'content'] : ['text'];
+    const inputKeys = resource === 'compute' ? ['text', 'rounds'] : resource === 'storage' ? ['name', 'content'] :
+      (plainObject(task.input) && Object.hasOwn(task.input, 'repo') ? ['repo'] : ['text']);
     if (!keysExactly(task.input, inputKeys)) throw new Error('model proposed invalid or unauthorized input fields');
     // normalizeOrder enforces the provider's byte/CPU/name limits.
     const input = normalizeOrder(resource, task.input);
@@ -175,18 +177,26 @@ export function createModelClient({ endpoint, model, apiKey, fetchImpl = globalT
     const examples = [];
     if (allowedResources.includes('compute')) examples.push({ resource: 'compute', input: { text: 'sample text', rounds: 5 } });
     if (allowedResources.includes('storage')) examples.push({ resource: 'storage', input: { name: 'sample', content: 'sample note' } });
-    if (allowedResources.includes('api')) examples.push({ resource: 'api', input: { text: 'sample words' } });
+    if (allowedResources.includes('api')) {
+      // This only selects an illustrative shape; it neither selects the task
+      // nor grants authority, and all model output is independently validated.
+      const repoHint = /\b(?:github|repo|repository)\b/i.test(objective);
+      examples.push(repoHint ? { resource: 'api', input: { repo: 'sample-org/sample-project' } } : { resource: 'api', input: { text: 'sample words' } });
+    }
     const system = [
       'Translate the objective into resource tasks. Return only JSON matching the schema.',
       'Make a separate task for each supported action actually requested; do not omit requested tasks.',
       'Use only the listed resource types and only requested tasks; return an empty tasks array if unable to plan.',
       'compute hashes input.text using input.rounds SHA-256 rounds (1 to 20000).',
       'storage stores input.content under input.name (lowercase letters, digits, hyphen or underscore).',
-      'api counts words and bytes in input.text. Preserve requested literal text exactly.',
+      'api counts words and bytes in input.text OR fetches public GitHub repository metadata with input.repo as owner/name; choose one field only.',
+      'Preserve requested literal text and repository names exactly.',
       'Never add accounts, policy, payee, price, token, commands, URLs, or other fields.',
       `Available resource types: ${allowedResources.join(', ')}.`,
       `Task shape examples, not the objective: ${JSON.stringify({ tasks: examples })}.`,
     ].join(' ');
+    const branches = TASK_SCHEMA.properties.tasks.items.anyOf.filter(branch => allowedResources.includes(branch.properties.resource.enum[0]));
+    const schema = { ...TASK_SCHEMA, properties: { tasks: { ...TASK_SCHEMA.properties.tasks, items: { anyOf: branches } } } };
     const headers = { 'content-type': 'application/json' };
     if (apiKey) headers.authorization = `Bearer ${apiKey}`;
     let response;
@@ -195,7 +205,7 @@ export function createModelClient({ endpoint, model, apiKey, fetchImpl = globalT
         method: 'POST', headers, redirect: 'error', signal: AbortSignal.timeout(timeoutMs),
         body: JSON.stringify({ model, messages: [{ role: 'system', content: system }, { role: 'user', content: objective }],
           temperature: 0, max_tokens: 900, stream: false,
-          response_format: { type: 'json_schema', json_schema: { name: 'bouncer_resource_tasks', strict: true, schema: TASK_SCHEMA } } }),
+          response_format: { type: 'json_schema', json_schema: { name: 'bouncer_resource_tasks', strict: true, schema } } }),
       });
     } catch { throw new Error('model request failed or timed out'); }
     if (!response.ok) throw new Error(`model request failed (HTTP ${response.status})`);

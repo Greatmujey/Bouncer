@@ -37,6 +37,13 @@ test('full demo uses gas units, runs with quiet preload, and verifies settlement
   assert.match(result.stdout, /Failed transfer refunded vault and daily budget/);
 });
 
+test('security demo refuses a non-testnet RPC before creating accounts', () => {
+  const result = runDemo('wrong_chain');
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /RPC must report the NEAR testnet chain/);
+  assert.doesNotMatch(result.stdout, /Create funded contract account/);
+});
+
 test('storage errors containing warning stay visible instead of recursing on stderr', () => {
   const result = runDemo('storage_failure');
   assert.equal(result.status, 1);

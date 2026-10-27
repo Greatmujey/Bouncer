@@ -66,6 +66,16 @@ test('prompt-injected or malformed output cannot change financial authority or a
   assert.throws(() => goalsFromModel(jsonAttack, c), /input fields/);
 });
 
+test('model can request only safe fixed-origin public repository data', () => {
+  const p = proposal();
+  p.tasks[2].input = { repo: 'near/near-api-js' };
+  assert.deepEqual(goalsFromModel(p, config()).goals[2].input, { repo: 'near/near-api-js' });
+  p.tasks[2].input = { repo: 'https://evil.example/secret' };
+  assert.throws(() => goalsFromModel(p, config()), /repository/);
+  p.tasks[2].input = { repo: 'near/near-api-js', url: 'http://evil.example' };
+  assert.throws(() => goalsFromModel(p, config()), /input fields/);
+});
+
 test('task caps, duplicate prevention and worst-case aggregate maxima are fail closed', () => {
   const c = config(); c.required_resources = []; c.max_tasks = 3;
   c.resources.compute.max_tasks = 3; c.resources.compute.max_total_amount = '199';
@@ -133,6 +143,17 @@ test('model transport sends only objective and capability names, prohibits redir
   assert.throws(() => createModelClient({ endpoint: 'https://evil.example/path?key=secret', model: 'x' }), /query/);
   assert.throws(() => createModelClient({ endpoint: 'http://localhost:1234/', model: 'x' }), /path/);
   assert.throws(() => createModelClient({ endpoint: 'http://localhost:1234/v1', model: 'x', apiKey: 'x\nheader: y' }), /API key/);
+});
+
+test('model schema is restricted to operator-available resource types', async () => {
+  let sent;
+  const client = createModelClient({ endpoint: 'http://127.0.0.1:1234/v1/chat/completions', model: 'x', fetchImpl: async (_url, options) => {
+    sent = JSON.parse(options.body); return completion({ tasks: [{ resource: 'api', input: { repo: 'near/near-api-js' } }] });
+  } });
+  await client({ objective: 'Get a public repository', allowedResources: ['api'] });
+  const branches = sent.response_format.json_schema.schema.properties.tasks.items.anyOf;
+  assert.equal(branches.length, 2);
+  assert.ok(branches.every(branch => branch.properties.resource.enum[0] === 'api'));
 });
 
 test('model refusal, truncation, invalid JSON and oversized bodies never become plans', async () => {

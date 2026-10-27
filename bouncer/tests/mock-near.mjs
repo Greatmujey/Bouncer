@@ -38,6 +38,7 @@ Account.prototype.deleteKey = async function (publicKey) {
   if (!accessKeys.delete(publicKey.toString())) fail('unknown key');
   return outcome();
 };
+providers.JsonRpcProvider.prototype.viewNodeStatus = async () => ({ chain_id: process.env.BOUNCER_MOCK_MODE === 'wrong_chain' ? 'mainnet' : (process.env.MOCK_CHAIN || 'testnet') });
 providers.JsonRpcProvider.prototype.viewAccessKey = async function (_accountId, publicKey) {
   const permission = accessKeys.get(publicKey.toString());
   if (!permission) fail('access key not found');

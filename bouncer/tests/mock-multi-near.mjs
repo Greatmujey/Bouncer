@@ -25,7 +25,9 @@ const fail = message => { throw new Error(message); };
 const originalFetch = globalThis.fetch;
 globalThis.fetch = async (url, ...args) => {
   if (String(url) === 'https://model.example/v1/chat/completions') {
-    const tasks = [
+    const request = JSON.parse(args[0].body);
+    const publicData = request.messages[1].content.includes('public GitHub repository metadata');
+    const tasks = publicData ? [{ resource: 'api', input: { repo: 'near/near-api-js' } }] : [
       { resource: 'compute', input: { text: 'near-hub compute job', rounds: 1000 } },
       { resource: 'storage', input: { name: 'bouncer-note', content: 'Persisted by the Bouncer testnet provider.' } },
       { resource: 'api', input: { text: 'actual testnet resource API' } },
@@ -33,6 +35,10 @@ globalThis.fetch = async (url, ...args) => {
     if (process.env.BOUNCER_MOCK_MODE === 'model_attack') tasks[0].payee = 'attacker.testnet';
     if (process.env.BOUNCER_MOCK_MODE === 'model_wrong_input') tasks[0].input.text = 'different';
     return new Response(JSON.stringify({ choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: JSON.stringify({ tasks }) } }] }));
+  }
+  if (String(url) === 'https://api.github.com/repos/near/near-api-js') {
+    return new Response(JSON.stringify({ private: false, full_name: 'near/near-api-js', id: 184860689,
+      description: 'Mock public data', stargazers_count: 10, forks_count: 3, open_issues_count: 2, license: { spdx_id: 'MIT' } }));
   }
   return String(url).startsWith('http://127.0.0.1:') ? originalFetch(url, ...args) : ({ ok: true, json: async () => ({}) });
 };
@@ -45,6 +51,7 @@ Account.prototype.signAndSendTransaction = async function ({ receiverId, actions
   accessKeys.set(added.publicKey.toString(), { receiver_id: permission.receiverId, method_names: permission.methodNames });
   return ok();
 };
+providers.JsonRpcProvider.prototype.viewNodeStatus = async () => ({ chain_id: process.env.BOUNCER_MOCK_MODE === 'wrong_chain' ? 'mainnet' : (process.env.MOCK_CHAIN || 'testnet') });
 providers.JsonRpcProvider.prototype.viewAccessKey = async function (_id, publicKey) {
   return { permission: { FunctionCall: accessKeys.get(publicKey.toString()) } };
 };

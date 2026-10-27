@@ -82,6 +82,10 @@ export async function runProcurement({ plan: rawPlan, provider, account, publicK
   const plan = validatePlan(rawPlan);
   if (!account || account.accountId !== plan.owner_account_id) throw new Error('agent key account does not match the plan owner');
   if (execute && !journal) throw new Error('a journal is required for live execution');
+  // A .testnet-looking account ID is not proof of the RPC's chain. This is
+  // still a trust assumption: a malicious RPC can lie about its chain_id.
+  const status = await provider.viewNodeStatus();
+  if (status?.chain_id !== 'testnet') throw new Error('RPC must report the NEAR testnet chain');
   const version = await provider.callFunction(plan.contract_id, 'contract_version', {}, { finality: 'final' });
   if (version !== CONTRACT_VERSION) throw new Error(`unsupported contract version: ${version || 'unknown'}`);
   const access = await provider.viewAccessKey(plan.owner_account_id, publicKey, { finality: 'final' });

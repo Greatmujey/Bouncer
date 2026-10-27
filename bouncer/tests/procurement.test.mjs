@@ -29,6 +29,7 @@ function fixture() {
   const calls = [];
   let mode = '';
   const provider = {
+    async viewNodeStatus() { return { chain_id: 'testnet' }; },
     async viewAccessKey() {
       return mode === 'full_key' ? { permission: 'FullAccess' } : {
         permission: { FunctionCall: { receiver_id: 'bouncer.testnet', method_names: mode === 'extra_method' ? ['execute', 'set_policy'] : ['execute'] } },
@@ -77,6 +78,17 @@ test('runner submits three resource-labelled payments using a mock transport, th
 test('dry run performs preflight only and does not write journal entries', async () => {
   const f = fixture();
   assert.deepEqual(await run(f, { execute: false }), { paid: 0, blocked: 0, skipped: 0, ready: 3 });
+  assert.equal(f.calls.length, 0);
+  assert.equal(f.journal.entries.size, 0);
+});
+
+test('rejects an RPC that does not report testnet before reading policies or paying', async () => {
+  const f = fixture();
+  let otherCalls = 0;
+  f.provider.viewNodeStatus = async () => ({ chain_id: 'mainnet' });
+  f.provider.callFunction = async () => { otherCalls++; return 'bouncer-agent-v4'; };
+  await assert.rejects(() => run(f), /RPC must report the NEAR testnet chain/);
+  assert.equal(otherCalls, 0);
   assert.equal(f.calls.length, 0);
   assert.equal(f.journal.entries.size, 0);
 });

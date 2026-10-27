@@ -47,7 +47,8 @@ all possible callback or token failure cases.
 5. **Views are policy previews, not authorization checks.** `check` and
    `try_execute` do not identify a transaction signing key. V4 has no owner
    view, so a preflight cannot verify that the supplied signer account is the
-   owner; execution still enforces it on-chain. The raw procurement CLI checks
+   owner; execution still enforces it on-chain. The runner requires the RPC to
+   report `testnet`, but a malicious RPC can lie. The raw procurement CLI checks
    requests independently. The resource agent (and its MCP preview) makes
    tentative shared-budget and vault reservations and aborts a blocked batch
    before new payments, but views are not atomic and cannot guarantee later
@@ -61,8 +62,10 @@ all possible callback or token failure cases.
    propose resource inputs but not financial authority. Injection or errors can
    still produce an unwanted task within an authorized budget; review output
    before spending. Objectives go to the configured model. The local provider
-   performs SHA-256 work, local-file storage and text statistics; it is not an
-   independent commercial provider or marketplace. The multi-token test uses
+   performs SHA-256 work, local-file storage, text statistics and fixed-origin
+   unauthenticated GitHub data reads; it is not an independent commercial
+   provider or marketplace. GitHub data is untrusted and can be unavailable
+   after payment. The multi-token test uses
    synthetic testnet FTs, not USDC. There is no cross-chain settlement. The old
    solver is disabled because it previously used fake fill hashes; the standalone
    quote comparator does not settle anything.

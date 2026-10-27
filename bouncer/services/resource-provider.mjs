@@ -10,6 +10,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import nearApi from 'near-api-js';
+import { fetchPublicRepository, normalizeRepository } from './github-data.mjs';
 
 const digest = value => crypto.createHash('sha256').update(value).digest('hex');
 const plainObject = value => value && typeof value === 'object' && !Array.isArray(value);
@@ -31,8 +32,9 @@ export function normalizeOrder(resource, input) {
     return { name: input.name, content: input.content };
   }
   if (resource === 'api') {
-    if (typeof input.text !== 'string' || bytes(input.text) > 4096 || Object.keys(input).length !== 1) {
-      throw new Error('api needs text (max 4096 bytes)');
+    if (Object.keys(input).length === 1 && Object.hasOwn(input, 'repo')) return { repo: normalizeRepository(input.repo) };
+    if (typeof input.text !== 'string' || bytes(input.text) > 4096 || Object.keys(input).length !== 1 || !Object.hasOwn(input, 'text')) {
+      throw new Error('api needs text (max 4096 bytes) or a public GitHub owner/repository');
     }
     return { text: input.text };
   }
@@ -81,7 +83,7 @@ function atomicJson(file, value) {
   } finally { if (fs.existsSync(temporary)) fs.unlinkSync(temporary); }
 }
 
-function fulfill(resource, input, txHash, storageDir) {
+async function fulfill(resource, input, txHash, storageDir, dataFetch) {
   if (resource === 'compute') {
     let value = Buffer.from(input.text, 'utf8');
     for (let i = 0; i < input.rounds; i++) value = crypto.createHash('sha256').update(value).digest();
@@ -92,6 +94,7 @@ function fulfill(resource, input, txHash, storageDir) {
     fs.writeFileSync(path.join(storageDir, objectId), input.content, { mode: 0o600, flag: 'wx' });
     return { type: 'storage', object_id: objectId, sha256: digest(input.content), bytes: bytes(input.content) };
   }
+  if (Object.hasOwn(input, 'repo')) return fetchPublicRepository(input.repo, dataFetch);
   const words = input.text.trim() ? input.text.trim().split(/\s+/u).length : 0;
   return { type: 'api', operation: 'text-statistics', words, bytes: bytes(input.text) };
 }
@@ -101,7 +104,7 @@ function fulfill(resource, input, txHash, storageDir) {
  * expected policy, token, payee and exact amount. Data/receipts persist locally;
  * no authentication, transport security or multi-process locking is provided.
  */
-export function createResourceProvider({ rpcProvider, contractId, products, dataDir }) {
+export function createResourceProvider({ rpcProvider, contractId, products, dataDir, dataFetch = globalThis.fetch }) {
   if (!rpcProvider || typeof rpcProvider.viewTransactionStatus !== 'function' || typeof contractId !== 'string' || !plainObject(products)) throw new Error('provider configuration is invalid');
   for (const name of ['compute', 'storage', 'api']) {
     const p = products[name];
@@ -140,9 +143,15 @@ export function createResourceProvider({ rpcProvider, contractId, products, data
       }
       const outcome = await rpcProvider.viewTransactionStatus(txHash, contractId, 'FINAL');
       verifyPayment(outcome, { txHash, contractId, product, resource, input });
-      redemptions[txHash] = { status: 'pending', resource, memo };
-      persist();
-      const result = fulfill(resource, input, txHash, storageDir);
+      // A public GitHub GET is read-only and safe to repeat after an outage or
+      // crash; do not leave it irrecoverably pending before the GET succeeds.
+      // Compute and storage keep the stricter pending-before-side-effect rule.
+      const readOnlyData = resource === 'api' && Object.hasOwn(input, 'repo');
+      if (!readOnlyData) {
+        redemptions[txHash] = { status: 'pending', resource, memo };
+        persist();
+      }
+      const result = await fulfill(resource, input, txHash, storageDir, dataFetch);
       redemptions[txHash] = { status: 'completed', resource, memo, result };
       persist();
       return result;

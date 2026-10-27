@@ -7,11 +7,11 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-function run(mode = '', ai = false) {
+function run(mode = '', ai = false, publicData = false) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'bouncer-multi-test-'));
   try {
     const child = spawnSync(process.execPath, ['--import=./bouncer/tests/mock-multi-near.mjs', 'bouncer/demo-multi-resource.mjs'], {
-      cwd: repo, env: { ...process.env, HOME: home, BOUNCER_MOCK_MODE: mode, BOUNCER_DEMO_AI: ai ? '1' : '',
+      cwd: repo, env: { ...process.env, HOME: home, BOUNCER_MOCK_MODE: mode, BOUNCER_DEMO_AI: ai ? '1' : '', BOUNCER_DEMO_PUBLIC_DATA: publicData ? '1' : '',
         BOUNCER_LLM_URL: 'https://model.example/v1/chat/completions', BOUNCER_LLM_MODEL: 'mock-model' }, encoding: 'utf8', timeout: 30_000,
     });
     const dir = path.join(home, '.bouncer', 'testnet');
@@ -60,6 +60,16 @@ test('model-planned multi-resource path completes with a mocked model and mocked
   assert.equal(result.journal.entries.filter(e => e.status === 'completed').length, 3);
 });
 
+test('model-planned public data adds a fourth payment with replay safety using mocked transports', () => {
+  const result = run('', true, true);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Model also proposed the requested public GitHub data lookup/);
+  assert.match(result.stdout, /VERIFIED public GitHub data: near\/near-api-js, repository ID 184860689/);
+  assert.equal(result.journal.entries.filter(e => e.status === 'completed').length, 4);
+  assert.equal((result.stdout.match(/\[procurement\] PAID /g) || []).length, 4);
+  assert.equal((result.stdout.match(/\[procurement\] SKIP /g) || []).length, 4);
+});
+
 test('a malicious or inaccurate model plan fails before any testnet setup', () => {
   for (const mode of ['model_attack', 'model_wrong_input']) {
     const result = run(mode, true);
@@ -68,6 +78,13 @@ test('a malicious or inaccurate model plan fails before any testnet setup', () =
     assert.equal(result.journal, null);
     assert.equal(result.plan, null);
   }
+});
+
+test('multi-token setup refuses a non-testnet RPC before creating accounts', () => {
+  const result = run('wrong_chain');
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /RPC must report the NEAR testnet chain/);
+  assert.doesNotMatch(result.stdout, /Create funded Bouncer|PAID/);
 });
 
 test('a token factory failure stops the multi-token run, without claiming success', () => {

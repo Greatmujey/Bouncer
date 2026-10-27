@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 import nearApi from 'near-api-js';
 import { FileJournal } from './agent/procurement.mjs';
 import { createResourceProvider } from './services/resource-provider.mjs';
+import { fetchPublicRepository } from './services/github-data.mjs';
 import { httpResourceProvider, runResourceAgent } from './agent/resource-agent.mjs';
 import { createModelClient, planObjective } from './agent/goal-planner.mjs';
 
@@ -94,6 +95,7 @@ async function main() {
   console.log('wNEAR + two synthetic test tokens; fulfillment uses a self-hosted development provider, not commercial vendors.\n');
   const wasmPath = path.join(ROOT, 'bouncer.wasm');
   if (!fs.existsSync(wasmPath)) throw new Error('bouncer.wasm missing');
+  if ((await provider.viewNodeStatus())?.chain_id !== 'testnet') throw new Error('RPC must report the NEAR testnet chain');
   const suffix = crypto.randomBytes(4).toString('hex');
   const bid = `bouncer-${suffix}.testnet`;
   const funderId = `bouncer-ft-${suffix}.testnet`;
@@ -101,7 +103,9 @@ async function main() {
   const vendorIds = { compute: `compute.${bid}`, storage: `storage.${bid}`, api: `api.${bid}` };
   const storageSymbol = `BS${suffix}`.toUpperCase();
   const apiSymbol = `BA${suffix}`.toUpperCase();
-  let aiGoals;
+  let aiGoals, aiDataGoal;
+  const publicDataDemo = process.env.BOUNCER_DEMO_PUBLIC_DATA === '1';
+  if (publicDataDemo && process.env.BOUNCER_DEMO_AI !== '1') throw new Error('public-data demo requires model planning');
   if (process.env.BOUNCER_DEMO_AI === '1') {
     // Do inference and independently check the requested literals BEFORE
     // creating/funding accounts. The model cannot set any financial fields.
@@ -138,6 +142,19 @@ async function main() {
     }
     aiGoals = result.goals;
     console.log('    ✅ Model proposed the three requested inputs; owner-pinned policies, tokens, payees and budgets remain outside its control.');
+    if (publicDataDemo) {
+      const dataConfig = { ...config, max_tasks: 1, required_resources: ['api'], resources: { api: config.resources.api } };
+      const dataObjective = 'Fetch public GitHub repository metadata for the repository near/near-api-js.';
+      const dataPlan = await planObjective({ objective: dataObjective, config: dataConfig, modelClient });
+      const proposed = dataPlan.goals[0];
+      if (proposed.resource !== 'api' || JSON.stringify(proposed.input) !== JSON.stringify({ repo: 'near/near-api-js' })) {
+        throw new Error(`model did not select the requested public repository: ${JSON.stringify(proposed.input)}`);
+      }
+      // An owner-assigned ID avoids collision with the earlier API goal in the
+      // same journal. The model cannot choose IDs or payment destinations.
+      aiDataGoal = { ...proposed, id: 'api-github-1' };
+      console.log('    ✅ Model also proposed the requested public GitHub data lookup.');
+    }
   }
   const bouncerKey = KeyPair.fromRandom('ed25519');
   const funderKey = KeyPair.fromRandom('ed25519');
@@ -313,6 +330,35 @@ async function main() {
     if (!tamperBlocked) throw new Error('provider accepted a changed order with a used payment');
     console.log('    ✅ Provider rejected a changed order using an already redeemed transaction.');
     proof = resources.map(r => `${r.resource}: token=${r.token} tx=${journal.get(`${r.resource}-1`).tx_hash}`).join('; ');
+    if (aiDataGoal) {
+      console.log('\n=== 10) Pay for and retrieve model-requested public repository data ===');
+      const dataGoalsFile = path.join(RUN_DIR, `${bid}.public-data.goals.json`);
+      const dataPlanFile = path.join(RUN_DIR, `${bid}.public-data.plan.json`);
+      const dataGoalsConfig = { contract_id: bid, owner_account_id: bid, provider_url: 'http://127.0.0.1:8787', journal_path: journalPath, goals: [aiDataGoal] };
+      fs.writeFileSync(dataGoalsFile, JSON.stringify(dataGoalsConfig, null, 2) + '\n', { mode: 0o600 });
+      fs.chmodSync(dataGoalsFile, 0o600);
+      const dataRunner = { ...runner, goals: [aiDataGoal], onPlan: plan => {
+        fs.writeFileSync(dataPlanFile, JSON.stringify(plan, null, 2) + '\n', { mode: 0o600 });
+        fs.chmodSync(dataPlanFile, 0o600);
+      } };
+      const delivered = await runResourceAgent(dataRunner);
+      if (delivered.payments.paid !== 1 || delivered.payments.blocked || delivered.deliveries.length !== 1) throw new Error('public data payment or delivery did not complete');
+      const data = delivered.deliveries[0].result;
+      const independentlyRead = await fetchPublicRepository('near/near-api-js');
+      if (data.operation !== 'github-repository' || data.repository.toLowerCase() !== 'near/near-api-js' ||
+          data.repository_id !== independentlyRead.repository_id) throw new Error('public repository data did not match a fresh GitHub API read');
+      exact(await view(apiToken, 'ft_balance_of', { account_id: vendorIds.api }), 4n * CREDIT, 'API vendor after data purchase');
+      exact(await view(bid, 'vault_balance', { token: apiToken }), 6n * CREDIT, 'API vault after data purchase');
+      exact(await view(apiToken, 'ft_balance_of', { account_id: bid }), 6n * CREDIT, 'actual API vault after data purchase');
+      const replay = await runResourceAgent(dataRunner);
+      if (replay.payments.skipped !== 1 || replay.payments.paid || JSON.stringify(replay.deliveries) !== JSON.stringify(delivered.deliveries)) {
+        throw new Error('public data replay protection failed');
+      }
+      const hash = journal.get('api-github-1').tx_hash;
+      proof += `; public-data: token=${apiToken} tx=${hash} repo=${data.repository} id=${data.repository_id}`;
+      console.log(`    ✅ VERIFIED public GitHub data: ${data.repository}, repository ID ${data.repository_id}; no duplicate payment on replay.`);
+      console.log(`    Recovery goals: ${dataGoalsFile}`);
+    }
   } finally {
     journal?.close();
     await new Promise(resolve => devProvider.server.close(resolve));

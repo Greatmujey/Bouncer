@@ -17,6 +17,7 @@ function fixture({ daily = '1000', initialSpent = '0', vault = '1000', blocked =
   const entries = new Map();
   const journal = { get: id => entries.get(id), put: (id, value) => entries.set(id, value) };
   const provider = {
+    async viewNodeStatus() { return { chain_id: 'testnet' }; },
     async viewAccessKey() { return { permission: { FunctionCall: { receiver_id: 'bouncer.testnet', method_names: ['execute'] } } }; },
     async callFunction(id, method, args) {
       if (method === 'contract_version') return 'bouncer-agent-v4';

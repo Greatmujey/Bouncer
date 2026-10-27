@@ -16,10 +16,12 @@ cloud integration or audited software. Do not use real funds.
   keys, confidential data or other secrets in it. A remote model service can
   log or retain it. The local development resource provider also receives order
   contents; its storage is plaintext and unauthenticated.
-- Only the three built-in input shapes are accepted: a bounded SHA-256 job, a
-  bounded local text object with a safe name, or a text-statistics request. No
-  shell commands, arbitrary URLs, policy changes, extra fields or model-chosen
-  payment addresses are accepted. A malformed, truncated, refused, oversized,
+- Supported work is a bounded SHA-256 job, a bounded local text object with a
+  safe name, a text-statistics request, or public GitHub repository metadata.
+  The GitHub API request is an unauthenticated GET to a fixed HTTPS origin;
+  a model can supply `owner/repository`, but not an arbitrary URL. No shell
+  commands, policy changes, extra fields or model-chosen payment addresses are
+  accepted. A malformed, truncated, refused, oversized,
   duplicate or out-of-catalog plan is rejected; there is no fake fallback.
 - The trusted owner catalog sets the testnet contract, provider origin, policy,
   token, payee, per-task maximum, maximum task count and per-resource aggregate
@@ -61,7 +63,11 @@ Start a model server **you trust** separately. It must expose the OpenAI-style
 HTTP is allowed only on loopback, HTTPS is required otherwise, and redirects are
 not followed. The software does not bundle a model, model server or inference
 credits. Models may fail or misunderstand the objective; failure is not a
-successful demo. Set these environment variables for the commands below:
+successful demo. Public GitHub data is live third-party content, may contain
+untrusted text, and may be unavailable or rate-limited. If its read fails after
+a confirmed payment, the local provider can safely repeat that read using the
+same payment; it never automatically sends a second payment. Set these
+environment variables for the commands below:
 
 - `BOUNCER_LLM_URL`: full chat-completions URL, for example
   `http://127.0.0.1:17890/v1/chat/completions` for a local server.
@@ -145,9 +151,14 @@ failures and journal recovery. Mocks do not prove inference or blockchain use.
 The opt-in GitHub Actions marker `[ai-multi-resource]` downloads a pinned
 Apache-2.0 Qwen2.5 1.5B model and a pinned llama.cpp CPU server to the **ephemeral
 runner**, verifies their SHA-256 hashes, runs actual local inference, and, only
-if the model correctly extracts the synthetic objective, creates fresh testnet
+if the model correctly extracts the synthetic objectives, creates fresh testnet
 accounts and performs the three-token payment and self-hosted delivery check.
-It uses no paid inference API or user model key. Model weights and private keys
-are not committed or uploaded. Check the actual Actions result before claiming
-that this flow passed. The model and runtime are third-party dependencies; this
-optional job needs network access and can fail due to downloads or testnet RPC.
+It is also configured to purchase a public GitHub-data lookup using the API
+credit policy; verify that newer step's result separately.
+[Run 40579499294](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40579499294)
+passed with contract `bouncer-ff7d41d8.testnet`: model inference, three real
+synthetic/testnet-token payments and all local deliveries. It used text
+statistics, not the newer GitHub-data feature. It used no paid inference API or
+user model key; model weights and private keys were not committed or uploaded.
+The model and runtime are third-party dependencies; future runs can fail due to
+downloads, model output, or testnet RPC.

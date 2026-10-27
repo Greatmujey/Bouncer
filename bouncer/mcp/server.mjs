@@ -37,6 +37,7 @@ const goal = z.object({
     rounds: z.number().int().min(1).max(20000).optional(),
     name: z.string().max(40).optional(),
     content: z.string().max(4096).optional(),
+    repo: z.string().max(140).optional(),
   }).strict(),
 }).strict();
 const annotations = { readOnlyHint: true, destructiveHint: false, openWorldHint: true };
