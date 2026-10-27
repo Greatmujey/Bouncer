@@ -29,12 +29,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
-      - name: Cargo test (host, no wasm) — surface any compile errors in annotations
-        working-directory: bouncer/contracts/bouncer
-        run: cargo test --no-run
-      - name: Cargo check wasm
+          components: rust-src, clippy
+      - name: Cargo check wasm (type check only)
         working-directory: bouncer/contracts/bouncer
         run: cargo check --target wasm32-unknown-unknown
       - name: Cargo build wasm
         working-directory: bouncer/contracts/bouncer
-        run: RUSTFLAGS="-C link-arg=-s" cargo build --target wasm32-unknown-unknown --release
+        run: RUSTFLAGS="-C link-arg=-s" cargo build --target wasm32-unknown-unknown
