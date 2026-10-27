@@ -28,30 +28,42 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
-        with:
-          path: repo
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
-      - name: Build in repo dir
-        working-directory: repo/bouncer/contracts/bouncer
+      - name: Install cargo-near
         run: |
-          RUSTFLAGS="-C link-arg=-s" cargo build --target wasm32-unknown-unknown -v 2>&1 | tail -200
-          ls target/wasm32-unknown-unknown/debug/ | head -30
-          cp target/wasm32-unknown-unknown/debug/bouncer.wasm /home/runner/bouncer.wasm
-      - name: List root & commit wasm
-        working-directory: repo
+          # cargo-near provides the official build pipeline
+          curl --proto '=https' --tlsv1.2 -LsSf https://github.com/near/cargo-near/releases/latest/download/cargo-near-installer.sh | sh -s -- -y
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - name: Install binaryen for wasm-opt
+        run: sudo apt-get update -qq && sudo apt-get install -y binaryen
+      - name: Build with cargo near (non-reproducible, no ABI)
+        working-directory: bouncer/contracts/bouncer
         run: |
-          ls -la /home/runner/bouncer.wasm
-          wc -c /home/runner/bouncer.wasm
-          cp /home/runner/bouncer.wasm ./bouncer.wasm
-          ls -la ./bouncer.wasm
+          export PATH="$HOME/.cargo/bin:$PATH"
+          cargo near --version
+          # non-reproducible-wasm is the fast development build; --no-abi avoids ABI schema errors
+          cargo near build non-reproducible-wasm --no-abi
+          # cargo-near drops the wasm into target/near/<crate-name>/<crate-name>.wasm
+          ls -la target/near/bouncer/ 2>&1 || ls -la target/near/ 2>&1 || true
+          find target -name "*.wasm"
+      - name: Locate wasm & commit
+        run: |
+          set -euo pipefail
+          # Find the wasm that cargo-near produced
+          WASM=$(find bouncer/contracts/bouncer/target -name "bouncer.wasm" | head -1)
+          echo "Found wasm at: $WASM"
+          ls -la "$WASM"
+          cp "$WASM" ./bouncer.wasm
+          ls -lh ./bouncer.wasm
+          # Optimize with wasm-opt
+          wasm-opt -Os -o bouncer_opt.wasm ./bouncer.wasm && mv bouncer_opt.wasm ./bouncer.wasm
+          ls -lh ./bouncer.wasm
           git config user.name "CI Bot"
           git config user.email "ci@bouncer.local"
           git add bouncer.wasm -f
           if ! git diff --cached --quiet; then
-            git commit -m "chore(ci): attach bouncer.wasm"
+            git commit -m "chore(ci): attach bouncer.wasm (cargo-near build)"
             git push
-          else
-            echo "no change"
           fi
