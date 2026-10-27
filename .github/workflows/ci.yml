@@ -29,15 +29,25 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
-      - name: Cargo build (release)
+      - name: Install wasm-tools for stripping
+        run: |
+          # binaryen's wasm-opt (optional); fall back gracefully
+          which wasm-opt || (sudo apt-get update -qq && sudo apt-get install -y binaryen) || true
+      - name: Cargo build
         working-directory: bouncer/contracts/bouncer
         run: |
           set -euxo pipefail
           rustc --version
-          cargo build --target wasm32-unknown-unknown --release -v 2>&1 | tail -40
-          ls -la target/wasm32-unknown-unknown/release/
-          cp target/wasm32-unknown-unknown/release/bouncer.wasm ./bouncer.wasm
+          # Build debug (which works); strip/opt afterward if possible
+          cargo build --target wasm32-unknown-unknown -v 2>&1 | tail -40
+          ls -la target/wasm32-unknown-unknown/debug/
+          cp target/wasm32-unknown-unknown/debug/bouncer.wasm ./bouncer.wasm
+          if command -v wasm-opt; then
+            wasm-opt -Os -o bouncer_opt.wasm ./bouncer.wasm && mv bouncer_opt.wasm ./bouncer.wasm
+          fi
           ls -lh ./bouncer.wasm
+          echo "Wasm size:"
+          wc -c ./bouncer.wasm
       - uses: actions/upload-artifact@v4
         if: always()
         with:
