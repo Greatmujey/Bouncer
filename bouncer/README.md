@@ -8,10 +8,11 @@ Every "secure AI agent wallet" today is a prompt and a promise. Bouncer is the s
 
 - **On-chain, not in-script.** Spending policy is enforced in a Rust contract on NEAR, not in a TypeScript guard beside the key. If the agent's key leaks, the attacker inherits exactly the policy — not the full wallet.
 - **Structural escalation lock, not a software check.** Every policy-mutating method requires exactly 1 yoctoNEAR (10⁻²⁴ NEAR). Function-call access keys cannot attach any deposit, so NEAR rejects an escalation tx at the protocol level (`DepositWithFunctionCall`) before our code runs. No bug in our contract can bypass this. See THREAT_MODEL.
-- **Payee allowlists.** Agent can only pay addresses the owner explicitly approved. Wildcard "*" (empty allowlist) for unrestricted policies is supported.
-- **Per-transaction caps.** Even if an attacker drains the agent key, they cannot move more per tx than the cap.
+- **Per-tx caps.** Agent can't move more per tx than the cap, even if the key leaks and the attacker runs arbitrary calls.
+- **Per-24h rolling rate limits.** Hour-bucketed counters prevent a runaway agent from draining the vault within a day even if each call stays under the per-tx cap.
+- **Payee allowlists.** Agent can only pay addresses the owner explicitly approved. Empty allowlist (no payees added) = unrestricted policy.
+- **Atomic failure refunds.** If the downstream `ft_transfer` fails, the vault balance is restored in a callback — funds are never debited without being sent.
 - **Vault model.** Funds sit in the contract, held in escrow until `execute` matches policy, then ft_transfer'd out. No approval flow needed — policy is code.
-- *(Invoices + daily windows + cross-chain Intents are staged as green CI commits post-submission; current release builds with core policy, allowlist, NEP-141 custody, and the 1-yocto guard — enough for the 90s demo.)*
 
 ## The problem it fixes
 

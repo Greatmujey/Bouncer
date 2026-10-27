@@ -34,7 +34,7 @@ near deploy bouncer.YOURNAME.testnet --wasmFile bouncer.wasm \
 1. **Set a policy (requires 1 yoctoNEAR; works from full-access key):**
    ```bash
    near call $ID set_policy \
-     '{"policy_id":"usdc-agent","token":"usdc.fakes.testnet","per_tx_cap":"5000000"}' \
+     '{"policy_id":"usdc-agent","token":"usdc.fakes.testnet","per_tx_cap":"5000000","daily_limit":"20000000"}' \
      --accountId YOURNAME.testnet --depositYocto 1
    ```
 
@@ -47,19 +47,25 @@ near deploy bouncer.YOURNAME.testnet --wasmFile bouncer.wasm \
    near view $ID vault_balance '{"token":"usdc.fakes.testnet"}'
    ```
 
-3. **Allow a payee, execute a payment within cap (success), execute over cap (rejected), and try to escalate from an agent key without 1 yocto (rejected at protocol level):**
+3. **Allow a payee, execute a payment within cap (success), execute over cap (rejected), execute over daily limit (rejected), and try to escalate from an agent key without 1 yocto (rejected at protocol level):**
    ```bash
    near call $ID allow_payee '{"policy_id":"usdc-agent","payee":"vendor.testnet"}' \
      --accountId YOURNAME.testnet --depositYocto 1
 
-   # Within cap — succeeds
+   # Within cap — succeeds (shows 24h-spent tracking)
    near call $ID execute \
      '{"policy_id":"usdc-agent","payee":"vendor.testnet","amount":"3000000","memo":"thanks"}' \
      --accountId YOURNAME.testnet --depositYocto 1 --gas 100000000000000
+   near view $ID daily_spent '{"policy_id":"usdc-agent"}'
 
-   # Over cap — panics with "amount out of per-tx range"
+   # Over per-tx cap — panics
    near call $ID execute \
      '{"policy_id":"usdc-agent","payee":"vendor.testnet","amount":"10000000","memo":"too much"}' \
+     --accountId YOURNAME.testnet --depositYocto 1 --gas 100000000000000
+
+   # Non-allowlisted payee — panics
+   near call $ID execute \
+     '{"policy_id":"usdc-agent","payee":"attacker.testnet","amount":"1000000","memo":"x"}' \
      --accountId YOURNAME.testnet --depositYocto 1 --gas 100000000000000
    ```
 
