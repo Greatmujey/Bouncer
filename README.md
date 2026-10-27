@@ -83,7 +83,8 @@ vault:  1.4 wNEAR (matches token contract)
 Every successful operation prints a transaction link. The script exits with a
 nonzero status on unexpected rejection, unexpected success, failed downstream
 receipt, or a balance mismatch. Testnet RPC/helper outages or faucet limits can
-also stop a run; their errors are printed rather than hidden. The daily cap uses
+also stop a run; their errors are printed rather than hidden. Set
+`NEAR_TESTNET_RPC` to override the default FastNEAR testnet RPC. The daily cap uses
 UTC-aligned buckets, so a run crossing a bucket boundary can invalidate that
 particular test.
 
