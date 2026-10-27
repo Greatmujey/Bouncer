@@ -3,6 +3,12 @@
 // and runs the three-rejection demo so panic messages are visible.
 //
 // Run from ANY directory in the repo:  node bouncer/redeploy.mjs
+
+// Silence near-api-js v6 deprecation warnings during demo recording.
+const _origWarn = console.warn;
+console.warn = (...a) => { const m = a.join(' '); if (!/deprecated|please switch|It will be removed/i.test(m)) _origWarn.apply(console, a); };
+process.on('warning', () => {});
+
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
