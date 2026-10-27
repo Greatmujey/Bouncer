@@ -3,7 +3,7 @@
 The previous near-cli commands in this file were for an older CLI and contract
 API. Use the current [root README](README.md#run-the-wnear-testnet-check)
 instead. The supported check uses Node.js and `near-api-js`, creates fresh
-funded testnet accounts, and currently tests one wNEAR policy with an owner key.
+funded testnet accounts, and tests a restricted agent key with wNEAR.
 
 ```sh
 cd /workspaces/Bouncer

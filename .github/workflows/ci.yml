@@ -21,6 +21,25 @@ jobs:
       - run: npm install
       - run: npm test
 
+  contract-tests:
+    name: Rust contract tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Test policy, authorization and refund logic
+        working-directory: bouncer/contracts/bouncer
+        shell: bash
+        run: |
+          set +e
+          CARGO_PROFILE_DEV_DEBUG=0 cargo test --lib 2>&1 | tee "$RUNNER_TEMP/rust-test.log"
+          result=${PIPESTATUS[0]}
+          if [ "$result" -ne 0 ]; then
+            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-22000).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=Rust tests failed::"+s)' "$RUNNER_TEMP/rust-test.log"
+          fi
+          exit "$result"
+
   build-contract:
     name: Build Rust contract (wasm)
     runs-on: ubuntu-latest
@@ -33,21 +52,33 @@ jobs:
           targets: wasm32-unknown-unknown
       - name: Install binaryen
         run: sudo apt-get update -qq && sudo apt-get install -y binaryen
-      - name: Cargo check wasm
+      - name: Cargo check and build wasm
         working-directory: bouncer/contracts/bouncer
-        run: cargo check --target wasm32-unknown-unknown
-      - name: Cargo build wasm (release)
-        working-directory: bouncer/contracts/bouncer
-        run: RUSTFLAGS="-C link-arg=-s" cargo build --target wasm32-unknown-unknown --release
-      - name: Shrink & commit wasm
+        shell: bash
+        run: |
+          set +e
+          (cargo check --target wasm32-unknown-unknown && RUSTFLAGS="-C link-arg=-s" cargo build --target wasm32-unknown-unknown --release) 2>&1 | tee "$RUNNER_TEMP/wasm-build.log"
+          result=${PIPESTATUS[0]}
+          if [ "$result" -ne 0 ]; then
+            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-22000).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=Wasm build failed::"+s)' "$RUNNER_TEMP/wasm-build.log"
+          fi
+          exit "$result"
+      - name: Optimize wasm
         run: |
           set -e
           cp bouncer/contracts/bouncer/target/wasm32-unknown-unknown/release/bouncer.wasm ./bouncer.wasm
-          ls -lh bouncer.wasm
-          # wasm-opt -Os folds panic paths to a single `unreachable` opcode and strips messages.
-          # Use -O1 with --strip-debug so on-chain error strings stay readable.
+          # -Os can strip panic messages; -O1 keeps errors readable.
           wasm-opt -O1 --strip-debug -o bouncer.opt.wasm bouncer.wasm && mv bouncer.opt.wasm bouncer.wasm
           ls -lh bouncer.wasm
+      - name: Save the exact build for the testnet job
+        uses: actions/upload-artifact@v4
+        with:
+          name: bouncer-wasm
+          path: bouncer.wasm
+          if-no-files-found: error
+      - name: Commit built wasm on branch pushes
+        if: github.event_name == 'push' && github.ref == 'refs/heads/arena/ebb614bb-near-hub'
+        run: |
           git config user.name "CI Bot"
           git config user.email "ci@bouncer.local"
           git add bouncer.wasm -f
@@ -57,18 +88,22 @@ jobs:
           fi
 
   testnet-smoke:
-    name: Manual live testnet smoke test
+    name: Live testnet restricted-key smoke test
     if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && contains(github.event.head_commit.message, '[testnet-smoke]'))
+    needs: build-contract
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 18
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: bouncer-wasm
+          path: .
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
       - run: npm install --prefix bouncer --no-audit --no-fund
-      # Testnet accounts and keys exist only on this ephemeral runner. No keys
-      # are printed or uploaded. This creates real testnet transactions.
+      # Keys live only on this ephemeral runner and are never uploaded.
       - run: node bouncer/demo-all.mjs

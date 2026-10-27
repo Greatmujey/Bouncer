@@ -1,58 +1,59 @@
 # Bouncer prototype threat model
 
-This describes the current contract in `contracts/bouncer/src/lib.rs`, not the
-planned agent/solver architecture. It has not been audited and must not hold
-valuable funds.
+This describes the contract source in this branch, not older deployed versions.
+It has not been audited and must not hold valuable funds.
 
-## Implemented checks
+## Intended controls in the current source
 
-- Policy changes, allowlist changes and withdrawals require the configured
-  owner's predecessor account and exactly 1 yoctoNEAR.
-- `execute` checks the policy's per-transaction cap, optional fixed 24-hour
-  bucket limit, payee allowlist when nonempty, and recorded token balance.
-- `execute` debits the recorded balance before sending a token transfer. A
-  private callback attempts to restore the recorded balance and daily spend if
-  that transfer fails; a successful transaction status alone does not prove the
-  downstream transfer succeeded, so the demo inspects receipts and balances.
-- A function-call access key cannot attach a NEAR deposit. However, **the current
-  demo has not verified this with a real restricted key**: it calls the setter
-  without a deposit using the full-access owner key and observes the contract's
-  own rejection.
+- `execute` accepts zero deposit and checks both predecessor and transaction
+  signer are the owner account. Its signer public key must be explicitly granted
+  to the selected policy. The owner should create a separate NEAR function-call
+  key, scoped only to the contract's `execute` method.
+- The owner and exactly 1 yoctoNEAR are required to change policies, grant or
+  revoke agent keys, change payees, and withdraw. Function-call keys cannot
+  attach deposits under the NEAR protocol. Grants are contract-level state;
+  they do not create or limit a protocol access key.
+- Per-transaction and fixed UTC daily caps, the token vault balance, and a
+  fail-closed payee allowlist are checked atomically before a debit.
+- The contract pays the token transfer's required 1 yoctoNEAR itself. A private
+  callback attempts to restore the vault and the **original** daily bucket if
+  the token transfer fails. The demo inspects receipts and exact token balances
+  rather than trusting a successful callback status alone.
 
-## Critical gaps
+The updated testnet check is intended to prove a restricted-key payment and
+both the contract and protocol sides of the escalation guard. Confirm its live
+Actions or Codespaces result before treating those behaviors as verified.
 
-1. **Spender is unauthenticated.** Anyone able to attach 1 yoctoNEAR can call
-   `execute` and trigger transfers that pass the selected policy. Limits and
-   payee restrictions are not caller authorization.
-2. **Agent key cannot pay.** `execute` itself requires 1 yoctoNEAR, which a
-   function-call access key cannot attach. The restricted-key agent described
-   in earlier plans has not been implemented or demonstrated.
-3. **An empty allowlist is unrestricted.** Revoking the final payee opens the
-   policy to all payees, rather than blocking all payments.
-4. **Callback recovery is not guaranteed.** If the callback itself fails, the
-   recorded balance may remain debited. A failed transfer crossing a 24-hour
-   boundary may also refund spending against the callback's bucket rather than
-   the original payment's bucket. Recovery and boundary behavior need tests and
-   fixes.
-5. **Token trust is not enforced.** `ft_on_transfer` records a balance for its
-   predecessor without checking an owner-approved token registry. Policies
-   should be configured only for trusted token contracts.
-6. **No per-key/per-agent isolation.** Multiple policies are not bound to
-   individual agent keys. A future agent authorization design must enforce
-   scope, not rely on off-chain prompts or key names.
-7. **No complete invoices, on-chain fill verification or live Intents
-   settlement.** The old agent/solver examples and their placeholder quotes
-   or hashes do not demonstrate a completed settlement.
+## Remaining risks
+
+1. **No audit or guaranteed callback recovery.** If the callback itself fails,
+   the recorded balance may remain debited even if a transfer failed. The native
+   test for a failed transfer and day-boundary refund is not an adversarial
+   test of all live cross-contract failures.
+2. **Token trust is not enforced.** `ft_on_transfer` accepts its predecessor as
+   a token without an owner-approved registry. Malicious or non-standard FT
+   contracts can lie or consume storage. Use trusted FTs only.
+3. **Owner full-access key compromise.** A stolen owner key can change policy,
+   grant another key, or withdraw. Use a separate secure owner in any future
+   real deployment; this testnet script makes the contract account its owner.
+4. **Protocol access key must be scoped correctly.** Granting a key in the
+   contract does not constrain a full-access key or install an access key.
+   Grant only an execute-only function-call key and revoke both the contract
+   grant and NEAR access key when removing an agent.
+5. **Views are policy previews, not authorization checks.** `check` and
+   `try_execute` do not identify a transaction signing key and cannot guarantee
+   that a later signed call will be authorized or still within budget.
+6. **Policies and tokens are shared.** Policy-specific key grants isolate which
+   policy a key may use, but policies may share the same token vault. Caps are
+   denominated in token units, not USD; there is no price oracle.
+7. **No complete invoices, multi-token procurement, on-chain fill verification
+   or live Intents settlement.** Old agent/solver examples and placeholder
+   quotes/hashes do not demonstrate completed settlement.
+8. **Prior contracts are unsafe to upgrade without migration.** This branch
+   adds an agent-grants field to contract state. The old contracts retain their
+   original unauthenticated behavior and cannot read the new state layout.
 
 The owner key, NEAR protocol, token implementation, callback availability and
-software correctness are additional trust assumptions. Caps are in token units,
-not USD; there is no price oracle. The JavaScript tests are offline simulations
-and do not substitute for contract tests, an audit, or an adversarial testnet
-run.
-
-## Next security work
-
-Authenticate spenders, support a zero-deposit `execute` for a narrowly scoped
-function-call key, make allowlists fail closed, associate policies with the
-right agents, and test the guard using a real restricted key. Exercise failed
-transfers and bucket-boundary callbacks before describing refunds as reliable.
+software correctness are trust assumptions. Offline JavaScript mocks are not
+live blockchain proof; native unit tests and a live smoke test are useful but
+are not a substitute for a security review.

@@ -1,7 +1,7 @@
 /**
- * Pure policy engine. This is the SAME rule set the Rust contract enforces.
- * Kept dependency-free and side-effect-free so it can be (a) unit tested,
- * (b) used by agents to plan, and (c) diffed against contract tests.
+ * Independent, offline policy simulation. Unlike the on-chain contract, this
+ * uses rolling windows and does not check vault balance or agent-key grants.
+ * It is not authoritative; the contract makes the final spending decision.
  *
  * @typedef {{periodNs: number, limit: bigint}} Window
  * @typedef {{label: string, token: string, perTxCap: bigint, windows: Window[],
@@ -22,8 +22,8 @@ export function check(policy, history, payee, amount, nowNs) {
     return { ok: false, reason: `over per-tx cap (${amount} > ${policy.perTxCap})` };
   }
 
-  // Rule 2 — payee allowlist. Empty list means unrestricted (the dashboard warns).
-  if (policy.payeeAllowlist.length > 0 && !policy.payeeAllowlist.includes(payee)) {
+  // Rule 2 — fail closed when there are no explicitly allowed payees.
+  if (!policy.payeeAllowlist.includes(payee)) {
     return { ok: false, reason: `payee "${payee}" not in allowlist` };
   }
 

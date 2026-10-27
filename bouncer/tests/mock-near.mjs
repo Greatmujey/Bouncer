@@ -1,16 +1,17 @@
-// Test-only NEAR transport. Used with `node --import` to exercise the real demo
-// without accessing a network or pretending that these transactions are live.
+// Test-only NEAR transport for exercising the actual demo without a network.
+// These simulated calls are not evidence of live blockchain behavior.
 import nearApi from 'near-api-js';
 
 const { Account, providers } = nearApi;
-const ONE_NEAR = 10n ** 24n;
 const TGAS = 10n ** 12n;
 const tokenBalances = new Map();
 const policies = new Map();
 const allowlists = new Map();
+const agentGrants = new Map();
+const accessKeys = new Map();
+const spent = new Map();
 let owner;
 let vault = 0n;
-let spent = 0n;
 let tx = 0;
 
 const outcome = (logs = []) => ({
@@ -18,19 +19,41 @@ const outcome = (logs = []) => ({
   receipts_outcome: [{ outcome: { status: { SuccessValue: '' }, logs } }],
 });
 const credit = (id, delta) => tokenBalances.set(id, (tokenBalances.get(id) || 0n) + delta);
-const fail = message => { throw new Error(message); };
+const fail = (message, type) => { const error = new Error(message); if (type) error.type = type; throw error; };
+const setFor = (map, name) => { if (!map.has(name)) map.set(name, new Set()); return map.get(name); };
 
-// This preload is used only in subprocess tests; never in the live demo.
 globalThis.fetch = async () => ({ ok: true, json: async () => ({}) });
 Account.prototype.deployContract = async function () { return outcome(); };
 Account.prototype.createAccount = async function () { return outcome(); };
+Account.prototype.addFunctionCallAccessKey = async function ({ publicKey, contractId, methodNames, allowance }) {
+  if (this.accountId !== owner || allowance <= 0n) fail('invalid access key setup');
+  accessKeys.set(publicKey.toString(), { receiver_id: contractId, method_names: methodNames });
+  return outcome();
+};
+Account.prototype.deleteKey = async function (publicKey) {
+  if (!accessKeys.delete(publicKey.toString())) fail('unknown key');
+  return outcome();
+};
+providers.JsonRpcProvider.prototype.viewAccessKey = async function (_accountId, publicKey) {
+  const permission = accessKeys.get(publicKey.toString());
+  if (!permission) fail('access key not found');
+  return { permission: { FunctionCall: permission } };
+};
 Account.prototype.callFunctionRaw = async function ({ contractId, methodName, args, deposit, gas, waitUntil }) {
   if (typeof deposit !== 'bigint' || typeof gas !== 'bigint') fail('gas and deposit must be bigint');
   if (waitUntil !== 'FINAL') fail('demo must wait for final execution');
   const expectedGas = ['storage_deposit', 'near_deposit'].includes(methodName) ? 50n * TGAS
     : ['ft_transfer_call', 'execute'].includes(methodName) ? 200n * TGAS : 100n * TGAS;
   if (gas !== expectedGas) fail(`incorrect gas for ${methodName}: ${gas}`);
-
+  const signingKey = (await this.signer.getPublicKey()).toString();
+  const permission = accessKeys.get(signingKey);
+  if (permission) {
+    if (contractId !== permission.receiver_id) fail('ReceiverMismatch', 'ReceiverMismatch');
+    if (deposit !== 0n && process.env.BOUNCER_MOCK_MODE !== 'missing_protocol_guard') {
+      fail('DepositWithFunctionCall', 'DepositWithFunctionCall');
+    }
+    if (!permission.method_names.includes(methodName)) fail('MethodNameMismatch', 'MethodNameMismatch');
+  }
   switch (methodName) {
     case 'new': owner = args.owner; return outcome();
     case 'storage_deposit':
@@ -45,9 +68,21 @@ Account.prototype.callFunctionRaw = async function ({ contractId, methodName, ar
       if (this.accountId !== owner) fail('ESCALATION BLOCKED: caller is not owner');
       policies.set(args.policy_id, { ...args });
       return outcome();
+    case 'grant_agent_key':
+      if (deposit !== 1n || this.accountId !== owner) fail('not authorized');
+      setFor(agentGrants, args.policy_id).add(args.public_key);
+      return outcome();
+    case 'revoke_agent_key':
+      if (deposit !== 1n || this.accountId !== owner) fail('not authorized');
+      setFor(agentGrants, args.policy_id).delete(args.public_key);
+      return outcome();
     case 'allow_payee':
       if (deposit !== 1n || this.accountId !== owner) fail('not authorized');
-      allowlists.set(args.policy_id, new Set([args.payee]));
+      setFor(allowlists, args.policy_id).add(args.payee);
+      return outcome();
+    case 'revoke_payee':
+      if (deposit !== 1n || this.accountId !== owner) fail('not authorized');
+      setFor(allowlists, args.policy_id).delete(args.payee);
       return outcome();
     case 'ft_transfer_call': {
       if (deposit !== 1n) fail('wrong deposit');
@@ -58,12 +93,14 @@ Account.prototype.callFunctionRaw = async function ({ contractId, methodName, ar
       return outcome(['BOUNCER deposit received']);
     }
     case 'execute': {
-      if (deposit !== 1n) fail('wrong deposit');
+      if (deposit !== 0n) fail('BLOCKED: execute requires zero deposit');
+      if (this.accountId !== owner) fail('BLOCKED: caller is not the owner account');
+      if (!agentGrants.get(args.policy_id)?.has(signingKey)) fail('BLOCKED: signing key is not authorized for this policy');
       const amount = BigInt(args.amount);
       const policy = policies.get(args.policy_id);
       if (amount > BigInt(policy.per_tx_cap)) fail('BLOCKED: amount exceeds per-tx cap');
       if (!allowlists.get(args.policy_id)?.has(args.payee)) fail('BLOCKED: payee not in allowlist');
-      if (amount + spent > BigInt(policy.daily_cap)) {
+      if (amount + (spent.get(args.policy_id) || 0n) > BigInt(policy.daily_cap)) {
         if (process.env.BOUNCER_MOCK_MODE === 'wrong_rejection') fail('RPC warning: connection lost');
         if (process.env.BOUNCER_MOCK_MODE !== 'allow_daily') fail('BLOCKED: daily cap exceeded for this policy');
       }
@@ -74,16 +111,18 @@ Account.prototype.callFunctionRaw = async function ({ contractId, methodName, ar
         return refunded;
       }
       vault -= amount;
-      spent += amount;
+      spent.set(args.policy_id, (spent.get(args.policy_id) || 0n) + amount);
       credit(contractId, -amount);
       credit(args.payee, amount);
-      return outcome(['BOUNCER payment executed']);
+      return outcome(['BOUNCER payment initiated']);
     }
     default: fail(`unexpected method ${methodName}`);
   }
 };
 providers.JsonRpcProvider.prototype.callFunction = async function (contractId, method, args) {
+  if (method === 'contract_version') return 'bouncer-agent-v2';
   if (method === 'vault_balance') return vault.toString();
   if (method === 'ft_balance_of') return (tokenBalances.get(args.account_id) || 0n).toString();
+  if (method === 'is_agent_key_allowed') return agentGrants.get(args.policy_id)?.has(args.public_key) || false;
   fail(`unexpected view ${contractId}.${method}`);
 };

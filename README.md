@@ -3,8 +3,9 @@
 Bouncer aims to let an AI agent buy several resources — such as compute,
 storage, and API credits — using different NEAR fungible tokens, subject to
 owner-defined spending policies. The current prototype implements the vault and
-policy checks; the multi-resource agent and restricted-key flow are **still in
-progress**. It is unaudited testnet software, not suitable for real funds.
+policy checks. The restricted-key contract and its testnet check are being
+validated; a multi-resource procurement runtime remains in progress. This is
+unaudited testnet software, not suitable for real funds.
 
 ## Target tracks
 
@@ -12,39 +13,43 @@ The planned multi-resource agent targets Autonomous Business, AI Security &
 Defense, and Agent Economy first. Real-World Money, Unstoppable DeFi and
 AI Swarms are potential extensions, not completed integrations.
 
-## What works in the current contract
+## Contract capabilities in this branch
 
-- Accepts NEP-141 token deposits through `ft_transfer_call`.
-- Stores a token, per-transaction cap, optional fixed 24-hour bucket cap, and
-  payee allowlist for each policy.
-- Debits the vault before calling the token's `ft_transfer`, with a callback
-  intended to restore the balance and daily spend if the transfer fails.
-- Requires both the owner account and exactly 1 yoctoNEAR for policy changes,
-  allowlist changes and withdrawals.
+- NEP-141 deposits; token-specific vault balances and per-policy caps.
+- A direct `execute` call must come from the owner account, with **zero**
+  attached deposit and a signing public key explicitly granted to that policy.
+  The owner separately creates a NEAR function-call key limited to `execute`.
+- Per-transaction and UTC-aligned 24-hour bucket caps, and fail-closed payee
+  allowlists. Revoking the final payee blocks all payments on that policy.
+- Policy changes, agent-key grants/revocations, payee changes and withdrawals
+  require the owner and exactly **1 yoctoNEAR**.
+- A transfer failure callback attempts to refund the vault and the original
+  spend bucket. A failed callback can still leave a debit unresolved.
 
-The 1-yocto guard is significant because NEAR function-call keys cannot attach
-a deposit. The demo tests the **contract's zero-deposit rejection** using the
-owner's full-access key; it does **not yet** demonstrate a restricted key or a
-protocol-level `DepositWithFunctionCall` rejection.
+The updated check is designed to use a real restricted key to pay wNEAR, deny
+other callers and policies, revoke a payee and a key, and test both layers of
+the 1-yocto guard with a separate deliberately limited probe key. A zero-deposit
+policy mutation should fail in the contract; a one-yocto attempt should fail at
+the NEAR protocol layer. Results must be verified by the live testnet run;
+offline mocks are not proof of on-chain behavior.
 
 ### Important prototype limitations
 
-- `execute` currently requires 1 yoctoNEAR, so a restricted function-call key
-  cannot use it. The demo pays with the owner's full-access key. The agent
-  runtime and key authorization must be completed before the autonomous-agent
-  claim is demonstrated.
-- `execute` does not currently authenticate the caller. Anyone able to attach
-  1 yoctoNEAR can attempt payments allowed by the policy; limits and payees
-  constrain them, but this is not an authorization mechanism.
-- An empty allowlist permits any payee. Revoking the last allowlisted payee
-  therefore opens the policy to all payees. Set an allowlist and do not use
-  the current contract for valuable funds.
-- The one-command check below uses only **wNEAR**, one policy, and one vendor.
-  Although policy records can reference different NEP-141 tokens, distinct
-  tokens and resource purchases have not yet been demonstrated end to end.
-- Receipt logs, invoices, stablecoin flows, NEAR Intents settlement, and the
-  old example agent/solver scripts are not complete integrations with the
-  current contract. The JavaScript policy simulation is not an on-chain test.
+- These changes only apply to **newly deployed contracts**. Earlier deployments,
+  including `bouncer-a958bd.testnet`, still have the older unauthenticated
+  `execute` and a different state layout. Do not upgrade them without a migration
+  or use them for valuable funds. The script creates a fresh account.
+- The check uses **one token (wNEAR)**. Its compute and storage policy names
+  demonstrate key/policy isolation, not purchases of two real resources or
+  payments with distinct fungible tokens.
+- The older procurement/solver scripts are not integrated with this contract.
+  Invoices, stablecoin flows, genuine multi-token purchasing and NEAR Intents
+  settlement remain unfinished.
+- Token trust is not enforced; configure policies only for trusted FTs. Key
+  grants do not themselves create or restrict NEAR access keys. The owner must
+  create correctly scoped function-call keys and keep full-access keys private.
+- This code has not been audited. Contract callback failure, token behavior,
+  owner-key compromise and gas/balance exhaustion remain risks.
 
 ## Run the wNEAR testnet check
 
@@ -65,14 +70,14 @@ node bouncer/demo-all.mjs
 
 The script creates a contract, a depositor and a vendor, wraps 2 NEAR into
 wNEAR, funds the vault with 1.5 wNEAR, and tries one allowed payment plus
-several disallowed operations. It checks the reasons for each expected rejection,
-examines transaction receipts, and verifies exact on-chain balances:
+several disallowed operations using a restricted key. It checks expected rejection
+reasons, examines transaction receipts, and verifies exact on-chain balances:
 
 ```
 user:   0.5 wNEAR
 vendor: 0.1 wNEAR
 vault:  1.4 wNEAR (matches token contract)
-✅ All checks passed. This run uses one token and an owner key.
+✅ All checks passed. One token; payment signed by a restricted agent key.
 ```
 
 Every successful operation prints a transaction link. The script exits with a
@@ -94,10 +99,11 @@ npm install --prefix bouncer
 npm test --prefix bouncer
 ```
 
-The policy simulation has unit tests. Separate offline demo tests use a mocked
-NEAR transport to check gas units, logging, rejection handling and balance
-verification; they do **not** prove live blockchain behavior. The manual
-Actions job or the Codespaces command above performs the real testnet check.
+The JavaScript policy simulation uses rolling windows and is not identical to
+the contract's fixed daily buckets. Offline demo tests use a mocked NEAR
+transport; neither proves live blockchain behavior. CI also runs native Rust
+contract tests, and the opt-in Actions job or Codespaces command above exercises
+real testnet transactions.
 
 ## Main files
 
@@ -108,14 +114,14 @@ Actions job or the Codespaces command above performs the real testnet check.
 - `.github/workflows/ci.yml` — JavaScript tests, contract build, and optional
   manual live testnet smoke job.
 
-The original contract at [`bouncer-2dcd4e.testnet`](https://testnet.nearblocks.io/address/bouncer-2dcd4e.testnet?tab=receipts)
-uses an older state layout; do not upgrade it to the current contract without
-an explicit state migration. The demo deploys a fresh contract instead.
+All earlier deployments, including `bouncer-2dcd4e.testnet` and
+`bouncer-a958bd.testnet`, use older state layouts. Do not upgrade them to this
+contract without an explicit migration. The demo deploys a fresh contract.
 
 ## Roadmap
 
-1. Make `execute` usable by a properly scoped function-call key, authenticate
-   spenders, and prove the 1-yocto protection using real restricted keys.
+1. Validate the new restricted-key and policy isolation flow on testnet,
+   including the 1-yocto protection with real restricted keys.
 2. Demonstrate multiple resource purchases with distinct NEP-141 tokens and
    vendor accounts, then connect a working procurement agent.
 3. Add verifiable receipts/invoices and real, explicitly verified NEAR Intents

@@ -17,3 +17,6 @@ opt-level = "s"
 lto = false
 debug = false
 strip = "debuginfo"
+
+[dev-dependencies]
+near-sdk = { version = "5.14", features = ["unit-testing"] }
