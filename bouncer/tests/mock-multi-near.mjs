@@ -23,6 +23,7 @@ const setFor = (map, id) => { if (!map.has(id)) map.set(id, new Set()); return m
 const fail = message => { throw new Error(message); };
 
 const originalFetch = globalThis.fetch;
+let publicModelCalls = 0;
 globalThis.fetch = async (url, ...args) => {
   if (String(url) === 'https://model.example/v1/chat/completions') {
     const request = JSON.parse(args[0].body);
@@ -32,6 +33,12 @@ globalThis.fetch = async (url, ...args) => {
       { resource: 'storage', input: { name: 'bouncer-note', content: 'Persisted by the Bouncer testnet provider.' } },
       { resource: 'api', input: { text: 'actual testnet resource API' } },
     ];
+    if (publicData) {
+      publicModelCalls++;
+      if (process.env.BOUNCER_MOCK_MODE === 'wrong_repo_always' || (process.env.BOUNCER_MOCK_MODE === 'wrong_repo_once' && publicModelCalls === 1)) {
+        tasks[0].input.repo = 'near-api-js/near-api-js';
+      }
+    }
     if (process.env.BOUNCER_MOCK_MODE === 'model_attack') tasks[0].payee = 'attacker.testnet';
     if (process.env.BOUNCER_MOCK_MODE === 'model_wrong_input') tasks[0].input.text = 'different';
     return new Response(JSON.stringify({ choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: JSON.stringify({ tasks }) } }] }));

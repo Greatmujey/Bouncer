@@ -154,7 +154,9 @@ runner**, verifies their SHA-256 hashes, runs actual local inference, and, only
 if the model correctly extracts the synthetic objectives, creates fresh testnet
 accounts and performs the three-token payment and self-hosted delivery check.
 It is also configured to purchase a public GitHub-data lookup using the API
-credit policy; verify that newer step's result separately.
+credit policy; verify that newer step's result separately. This synthetic demo
+checks the requested repository literally and can ask the model once for a
+correction before setup; malformed or unauthorized output still fails closed.
 [Run 40579499294](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40579499294)
 passed with contract `bouncer-ff7d41d8.testnet`: model inference, three real
 synthetic/testnet-token payments and all local deliveries. It used text

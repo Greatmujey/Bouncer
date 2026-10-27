@@ -70,6 +70,18 @@ test('model-planned public data adds a fourth payment with replay safety using m
   assert.equal((result.stdout.match(/\[procurement\] SKIP /g) || []).length, 4);
 });
 
+test('one model-only correction is allowed before setup; repeated wrong repository fails closed', () => {
+  const corrected = run('wrong_repo_once', true, true);
+  assert.equal(corrected.status, 0, corrected.stderr);
+  assert.match(corrected.stdout, /requesting one correction before any testnet setup/);
+  assert.match(corrected.stdout, /VERIFIED public GitHub data/);
+  const repeated = run('wrong_repo_always', true, true);
+  assert.equal(repeated.status, 1);
+  assert.match(repeated.stderr, /model did not select the requested public repository/);
+  assert.doesNotMatch(repeated.stdout, /Create funded Bouncer|PAID/);
+  assert.equal(repeated.journal, null);
+});
+
 test('a malicious or inaccurate model plan fails before any testnet setup', () => {
   for (const mode of ['model_attack', 'model_wrong_input']) {
     const result = run(mode, true);

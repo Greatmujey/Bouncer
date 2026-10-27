@@ -8,6 +8,7 @@ import util from 'node:util';
 import { fileURLToPath } from 'node:url';
 import crypto from 'node:crypto';
 import nearApi from 'near-api-js';
+import { validateRpcEndpoint } from './shared/rpc-endpoint.mjs';
 
 const { KeyPair, KeyPairSigner, Account, providers, transactions } = nearApi;
 const { JsonRpcProvider } = providers;
@@ -18,7 +19,7 @@ const HELPER = 'https://helper.testnet.near.org';
 const WNEAR = 'wrap.testnet';
 const WASM_PATH = path.join(REPO_ROOT, 'bouncer.wasm');
 const KEY_DIR = path.join(os.homedir(), '.near-credentials', NETWORK);
-const provider = new JsonRpcProvider({ url: RPC });
+const provider = new JsonRpcProvider({ url: validateRpcEndpoint(RPC) });
 
 const ONE_NEAR = 10n ** 24n;
 const TGAS = 10n ** 12n;

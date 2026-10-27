@@ -8,6 +8,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import nearApi from 'near-api-js';
+import { validateRpcEndpoint } from '../shared/rpc-endpoint.mjs';
 
 const { Account, KeyPair, KeyPairSigner, providers } = nearApi;
 const DEFAULT_RPC = 'https://test.rpc.fastnear.com';
@@ -235,12 +236,13 @@ function parseArgs(args) {
 function expandHome(value) { return value.startsWith('~/') ? path.join(os.homedir(), value.slice(2)) : value; }
 export function createRuntime({ plan: rawPlan, keyFile, rpc }) {
   const plan = validatePlan(rawPlan);
+  const rpcUrl = validateRpcEndpoint(rpc || process.env.NEAR_TESTNET_RPC || DEFAULT_RPC);
   const credentials = JSON.parse(fs.readFileSync(expandHome(keyFile), 'utf8'));
   if (credentials.account_id !== plan.owner_account_id || typeof credentials.private_key !== 'string') {
     throw new Error('agent key file does not match owner_account_id');
   }
   const key = KeyPair.fromString(credentials.private_key);
-  const provider = new providers.JsonRpcProvider({ url: rpc || process.env.NEAR_TESTNET_RPC || DEFAULT_RPC });
+  const provider = new providers.JsonRpcProvider({ url: rpcUrl });
   const account = new Account(plan.owner_account_id, provider, new KeyPairSigner(key));
   return { provider, account, publicKey: key.getPublicKey() };
 }

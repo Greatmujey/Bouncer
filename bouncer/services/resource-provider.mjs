@@ -11,6 +11,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import nearApi from 'near-api-js';
 import { fetchPublicRepository, normalizeRepository } from './github-data.mjs';
+import { validateRpcEndpoint } from '../shared/rpc-endpoint.mjs';
 
 const digest = value => crypto.createHash('sha256').update(value).digest('hex');
 const plainObject = value => value && typeof value === 'object' && !Array.isArray(value);
@@ -210,7 +211,7 @@ export async function startConfiguredProvider(config) {
   if (config.host !== undefined && config.host !== '127.0.0.1') throw new Error('development provider only binds to 127.0.0.1');
   const port = config.port ?? 8787;
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('invalid provider port');
-  const rpcProvider = new nearApi.providers.JsonRpcProvider({ url: process.env.NEAR_TESTNET_RPC || 'https://test.rpc.fastnear.com' });
+  const rpcProvider = new nearApi.providers.JsonRpcProvider({ url: validateRpcEndpoint(process.env.NEAR_TESTNET_RPC || 'https://test.rpc.fastnear.com') });
   const provider = createResourceProvider({ rpcProvider, contractId: config.contract_id, products: config.products, dataDir: config.data_dir });
   await new Promise((resolve, reject) => {
     provider.server.once('error', reject);

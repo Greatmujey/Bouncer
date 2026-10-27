@@ -146,8 +146,11 @@ Every successful operation prints a transaction link. The script exits with a
 nonzero status on unexpected rejection, unexpected success, failed downstream
 receipt, or a balance mismatch. Testnet RPC/helper outages or faucet limits can
 also stop a run; their errors are printed rather than hidden. Set
-`NEAR_TESTNET_RPC` to override the default FastNEAR testnet RPC. Daily budget
-tracking uses conservative hourly buckets rather than resetting at midnight.
+`NEAR_TESTNET_RPC` to override the default FastNEAR testnet RPC. Remote RPCs
+must use HTTPS without URL credentials, query or fragment; loopback HTTP is
+allowed for local testing. The runner checks the reported chain ID, but still
+trusts the RPC. Daily budget tracking uses conservative hourly buckets rather
+than resetting at midnight.
 
 GitHub Actions also has an opt-in testnet smoke job, triggered manually or by a
 push whose commit message contains `[testnet-smoke]`. It creates real testnet

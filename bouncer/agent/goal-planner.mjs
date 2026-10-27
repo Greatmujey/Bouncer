@@ -8,6 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { normalizeOrder } from '../services/resource-provider.mjs';
 import { httpResourceProvider } from './resource-agent.mjs';
+import { readBoundedJson } from '../shared/bounded-json.mjs';
 
 const RESOURCE_TYPES = ['compute', 'storage', 'api'];
 const MAX_TASKS = 10;
@@ -146,25 +147,6 @@ function modelEndpoint(value) {
   return url;
 }
 
-async function boundedBody(response) {
-  const contentLength = response.headers?.get('content-length');
-  if (contentLength && /^\d+$/.test(contentLength) && BigInt(contentLength) > BigInt(MAX_RESPONSE_BYTES)) throw new Error('model response is too large');
-  if (!response.body) throw new Error('model returned no response body');
-  const reader = response.body.getReader();
-  const chunks = [];
-  let size = 0;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      size += value.byteLength;
-      if (size > MAX_RESPONSE_BYTES) { await reader.cancel(); throw new Error('model response is too large'); }
-      chunks.push(Buffer.from(value));
-    }
-  } finally { reader.releaseLock(); }
-  return Buffer.concat(chunks).toString('utf8');
-}
-
 /** OpenAI-compatible chat-completions client; never follows redirects. */
 export function createModelClient({ endpoint, model, apiKey, fetchImpl = globalThis.fetch, timeoutMs = 120_000 }) {
   const url = modelEndpoint(endpoint);
@@ -190,6 +172,7 @@ export function createModelClient({ endpoint, model, apiKey, fetchImpl = globalT
       'compute hashes input.text using input.rounds SHA-256 rounds (1 to 20000).',
       'storage stores input.content under input.name (lowercase letters, digits, hyphen or underscore).',
       'api counts words and bytes in input.text OR fetches public GitHub repository metadata with input.repo as owner/name; choose one field only.',
+      'For owner/name, preserve the owner before the slash and the repository after the slash. Do not repeat or replace either part.',
       'Preserve requested literal text and repository names exactly.',
       'Never add accounts, policy, payee, price, token, commands, URLs, or other fields.',
       `Available resource types: ${allowedResources.join(', ')}.`,
@@ -210,8 +193,8 @@ export function createModelClient({ endpoint, model, apiKey, fetchImpl = globalT
     } catch { throw new Error('model request failed or timed out'); }
     if (!response.ok) throw new Error(`model request failed (HTTP ${response.status})`);
     let envelope;
-    try { envelope = JSON.parse(await boundedBody(response)); } catch (error) {
-      if (error.message === 'model response is too large') throw error;
+    try { envelope = await readBoundedJson(response, { maxBytes: MAX_RESPONSE_BYTES, label: 'model' }); } catch (error) {
+      if (error.message === 'model response too large') throw error;
       throw new Error('model returned an invalid response');
     }
     if (!Array.isArray(envelope?.choices) || envelope.choices.length !== 1 || envelope.choices[0]?.finish_reason !== 'stop') {

@@ -9,6 +9,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRuntime, FileJournal, runProcurement, validatePlan } from './procurement.mjs';
 import { reservePreview } from './preflight.mjs';
+import { readBoundedJson } from '../shared/bounded-json.mjs';
 import { normalizeOrder, orderMemo, startConfiguredProvider } from '../services/resource-provider.mjs';
 
 function positiveAmount(value, label) {
@@ -102,8 +103,11 @@ export function httpResourceProvider(baseUrl, fetchImpl = globalThis.fetch) {
     const response = await fetchImpl(new URL(route, url), {
       method: 'POST', redirect: 'error', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(30_000),
     });
-    const data = await response.json();
-    if (!response.ok || data?.ok !== true) throw new Error(`provider ${route} failed: ${data?.error || response.status}`);
+    const data = await readBoundedJson(response, { label: 'provider' });
+    if (!response.ok || data?.ok !== true) {
+      const message = typeof data?.error === 'string' ? data.error.replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 200) : response.status;
+      throw new Error(`provider ${route} failed: ${message}`);
+    }
     return data;
   }
   return {

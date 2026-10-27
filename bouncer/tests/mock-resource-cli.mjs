@@ -9,13 +9,13 @@ globalThis.fetch = async (url, options) => {
   if (String(url).startsWith('http://127.0.0.1:')) return realFetch(url, options);
   const body = JSON.parse(options.body);
   if (String(url).endsWith('/quote')) {
-    return { ok: true, async json() { return { ok: true, quote: {
+    return new Response(JSON.stringify({ ok: true, quote: {
       resource: body.resource, policy_id: 'compute', token: 'wrap.testnet',
       payee: process.env.MOCK_BAD_QUOTE ? 'attacker.testnet' : 'vendor.testnet',
       amount: '80', memo: orderMemo(body.resource, body.input),
-    } }; } };
+    } }));
   }
-  if (String(url).endsWith('/redeem')) return { ok: true, async json() { return { ok: true, result: { type: body.resource, result: 'fake-test-result' } }; } };
+  if (String(url).endsWith('/redeem')) return new Response(JSON.stringify({ ok: true, result: { type: body.resource, result: 'fake-test-result' } }));
   throw new Error('unexpected HTTP request');
 };
 providers.JsonRpcProvider.prototype.viewNodeStatus = async () => ({ chain_id: process.env.BOUNCER_MOCK_MODE === 'wrong_chain' ? 'mainnet' : (process.env.MOCK_CHAIN || 'testnet') });

@@ -3,6 +3,8 @@
  * choose an owner/repository, not a URL, HTTP method, headers or credential.
  * This is untrusted third-party data, not an authenticated or permanent feed.
  */
+import { readBoundedJson } from '../shared/bounded-json.mjs';
+
 const MAX_BODY = 64 * 1024;
 const MAX_DESCRIPTION = 2048;
 
@@ -16,25 +18,6 @@ export function normalizeRepository(value) {
   return `${parts[0]}/${parts[1]}`;
 }
 
-async function boundedJson(response) {
-  const size = response.headers?.get('content-length');
-  if (size && /^\d+$/.test(size) && BigInt(size) > BigInt(MAX_BODY)) throw new Error('GitHub response too large');
-  if (!response.body) throw new Error('GitHub response has no body');
-  const reader = response.body.getReader();
-  const chunks = []; let total = 0;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      total += value.byteLength;
-      if (total > MAX_BODY) { await reader.cancel(); throw new Error('GitHub response too large'); }
-      chunks.push(Buffer.from(value));
-    }
-  } finally { reader.releaseLock(); }
-  try { return JSON.parse(Buffer.concat(chunks).toString('utf8')); }
-  catch { throw new Error('GitHub returned invalid JSON'); }
-}
-
 export async function fetchPublicRepository(repository, fetchImpl = globalThis.fetch) {
   const repo = normalizeRepository(repository);
   if (typeof fetchImpl !== 'function') throw new Error('GitHub data transport is unavailable');
@@ -46,7 +29,7 @@ export async function fetchPublicRepository(repository, fetchImpl = globalThis.f
       headers: { accept: 'application/vnd.github+json', 'user-agent': 'bouncer-testnet-resource-provider' } });
   } catch { throw new Error('GitHub public data request failed or timed out'); }
   if (!response.ok) throw new Error(`GitHub public data request failed (HTTP ${response.status})`);
-  const data = await boundedJson(response);
+  const data = await readBoundedJson(response, { maxBytes: MAX_BODY, label: 'GitHub' });
   const validNumber = value => Number.isSafeInteger(value) && value >= 0;
   const description = data?.description;
   const license = data?.license?.spdx_id ?? null;

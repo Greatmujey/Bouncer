@@ -78,6 +78,17 @@ test('bad model output, bad quotes, and missing execute key fail without a payme
   finally { fs.rmSync(f.dir, { recursive: true, force: true }); }
 });
 
+test('autonomous execution rejects a non-testnet RPC before submitting transactions', () => {
+  const f = fixture();
+  try {
+    const result = exec([...f.args, '--key', f.key, '--execute'], { MOCK_CHAIN: 'mainnet' });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /RPC must report the NEAR testnet chain/);
+    assert.doesNotMatch(result.stdout, /PAID|FULFILLED/);
+    assert.equal(fs.existsSync(`${f.output}.bouncer-journal.json`), false);
+  } finally { fs.rmSync(f.dir, { recursive: true, force: true }); }
+});
+
 test('autonomous CLI propagates a blocked dry run without payment', () => {
   const f = fixture();
   try {

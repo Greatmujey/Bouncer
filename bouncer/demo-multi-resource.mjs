@@ -15,6 +15,7 @@ import { createResourceProvider } from './services/resource-provider.mjs';
 import { fetchPublicRepository } from './services/github-data.mjs';
 import { httpResourceProvider, runResourceAgent } from './agent/resource-agent.mjs';
 import { createModelClient, planObjective } from './agent/goal-planner.mjs';
+import { validateRpcEndpoint } from './shared/rpc-endpoint.mjs';
 
 const { Account, KeyPair, KeyPairSigner, providers, transactions } = nearApi;
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -33,7 +34,7 @@ const GAS200 = 200n * T;
 const GAS300 = 300n * T;
 const STORAGE_WNEAR = 1_250_000_000_000_000_000_000n;
 const ICON = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
-const provider = new providers.JsonRpcProvider({ url: RPC });
+const provider = new providers.JsonRpcProvider({ url: validateRpcEndpoint(RPC) });
 const account = (id, key) => new Account(id, provider, new KeyPairSigner(key));
 const txUrl = hash => `https://testnet.nearblocks.io/txns/${hash}?network=testnet`;
 const view = (id, method, args) => provider.callFunction(id, method, args, { finality: 'final' });
@@ -144,12 +145,18 @@ async function main() {
     console.log('    ✅ Model proposed the three requested inputs; owner-pinned policies, tokens, payees and budgets remain outside its control.');
     if (publicDataDemo) {
       const dataConfig = { ...config, max_tasks: 1, required_resources: ['api'], resources: { api: config.resources.api } };
-      const dataObjective = 'Fetch public GitHub repository metadata for the repository near/near-api-js.';
-      const dataPlan = await planObjective({ objective: dataObjective, config: dataConfig, modelClient });
-      const proposed = dataPlan.goals[0];
-      if (proposed.resource !== 'api' || JSON.stringify(proposed.input) !== JSON.stringify({ repo: 'near/near-api-js' })) {
-        throw new Error(`model did not select the requested public repository: ${JSON.stringify(proposed.input)}`);
+      const dataObjective = 'Fetch public GitHub repository metadata. The owner is "near" and the repository name is "near-api-js". The exact owner/name is "near/near-api-js".';
+      let dataPlan = await planObjective({ objective: dataObjective, config: dataConfig, modelClient });
+      const correct = plan => plan.goals[0].resource === 'api' && JSON.stringify(plan.goals[0].input) === JSON.stringify({ repo: 'near/near-api-js' });
+      if (!correct(dataPlan)) {
+        // A single model-only correction is safe before account creation. Never
+        // retry malformed/unauthorized output or any transaction automatically.
+        console.log('    Model selected the wrong repository; requesting one correction before any testnet setup.');
+        const correction = `${dataObjective} The previous repository identifier was wrong. Retry: the entire input.repo must be exactly "near/near-api-js".`;
+        dataPlan = await planObjective({ objective: correction, config: dataConfig, modelClient });
       }
+      const proposed = dataPlan.goals[0];
+      if (!correct(dataPlan)) throw new Error(`model did not select the requested public repository: ${JSON.stringify(proposed.input)}`);
       // An owner-assigned ID avoids collision with the earlier API goal in the
       // same journal. The model cannot choose IDs or payment destinations.
       aiDataGoal = { ...proposed, id: 'api-github-1' };

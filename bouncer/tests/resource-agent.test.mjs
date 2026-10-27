@@ -67,14 +67,23 @@ test('HTTP helper rejects insecure remote providers and validates responses', as
   const requests = [];
   const client = httpResourceProvider('https://vendor.example', async (url, options) => {
     requests.push({ url: String(url), options });
-    return { ok: true, json: async () => ({ ok: true, quote: { amount: '80' }, result: { type: 'api' } }) };
+    return new Response(JSON.stringify({ ok: true, quote: { amount: '80' }, result: { type: 'api' } }));
   });
   assert.deepEqual(await client.getQuote({ resource: 'api' }), { amount: '80' });
   assert.deepEqual(await client.fulfill({ resource: 'api' }), { type: 'api' });
   assert.equal(requests[0].url, 'https://vendor.example/quote');
   assert.equal(requests[0].options.redirect, 'error');
-  const broken = httpResourceProvider('http://127.0.0.1:1234', async () => ({ ok: false, status: 400, json: async () => ({ ok: false, error: 'bad quote' }) }));
+  const broken = httpResourceProvider('http://127.0.0.1:1234', async () => new Response(JSON.stringify({ ok: false, error: 'bad quote' }), { status: 400 }));
   await assert.rejects(broken.getQuote({}), /bad quote/);
+});
+
+test('provider HTTP replies are bounded and error text cannot inject terminal controls', async () => {
+  const large = httpResourceProvider('https://provider.example', async () => new Response('x'.repeat(65_537)));
+  await assert.rejects(large.getQuote({}), /provider response too large/);
+  const invalid = httpResourceProvider('https://provider.example', async () => new Response('not JSON'));
+  await assert.rejects(invalid.getQuote({}), /provider returned invalid JSON/);
+  const malicious = httpResourceProvider('https://provider.example', async () => new Response(JSON.stringify({ ok: false, error: '\u001b[2J\nforged log' }), { status: 400 }));
+  await assert.rejects(malicious.getQuote({}), error => !/[\x00-\x1f\x7f]/.test(error.message) && error.message.includes('forged log'));
 });
 
 test('a delivery outage after payment is recoverable without a duplicate payment', async () => {
