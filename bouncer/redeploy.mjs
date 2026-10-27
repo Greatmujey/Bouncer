@@ -1,3 +1,7 @@
+// Disabled: this legacy entry point targets an obsolete contract/API.
+console.error('Legacy script disabled: use bouncer/demo-all.mjs or bouncer/demo-multi-resource.mjs with a fresh testnet deployment.');
+process.exit(1);
+
 // Redeploy + demo. Uses read-only try_* views for the three rejections so we see
 // clean human-readable messages (no panic-trap noise), plus two real mutating setup txs.
 //

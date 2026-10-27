@@ -27,12 +27,12 @@ let now = 1_700_000_000 * 1e9;
 function execute(payee, amount, memo) {
   const d = check(policy, ledger, payee, amount, now);
   if (!d.ok) {
-    line(`  ${C.bad}✗ REVERTED${C.off} ${C.dim}execute(${payee}, ${fmt(amount)})${C.off}`);
+    line(`  ${C.bad}✗ SIMULATED BLOCK${C.off} ${C.dim}execute(${payee}, ${fmt(amount)})${C.off}`);
     line(`    ${C.dim}reason: ${d.reason}${C.off}`);
     return false;
   }
   ledger.push({ payee, amount, memo, at: now });
-  line(`  ${C.ok}✓ SETTLED${C.off}  execute(${payee}, ${fmt(amount)}) ${C.dim}${memo}${C.off}`);
+  line(`  ${C.ok}✓ SIMULATED APPROVAL${C.off}  execute(${payee}, ${fmt(amount)}) ${C.dim}${memo}${C.off}`);
   return true;
 }
 
@@ -58,7 +58,7 @@ for (let i = 1; i <= 7; i++) {
   if (!ok) break;
 }
 
-step(5, 'Agent asks the contract what it can still do, then stops cleanly');
+step(5, 'The offline model checks the remaining sample budget');
 const r = remaining(policy, ledger, now);
 line(`  ${C.dim}remaining per-tx: ${fmt(r.perTx)} · today: ${fmt(r.day)} · month: ${fmt(r.month)}${C.off}`);
 line(`  ${C.dim}agent: budget exhausted for today, stopping instead of retrying${C.off}`);
@@ -68,4 +68,4 @@ now += NS.DAY;
 execute('supplier-a.near', 3n * USDC, 'order #1043 · next day');
 
 line();
-line(`${C.acc}audit${C.off} ${C.dim}${ledger.length} approved payments, ${fmt(ledger.reduce((a, s) => a + s.amount, 0n))} USDC total, every rejection above is on the record.${C.off}`);
+line(`${C.acc}audit${C.off} ${C.dim}${ledger.length} approved payments, ${fmt(ledger.reduce((a, s) => a + s.amount, 0n))} USDC total, in-memory simulation only; no transaction was sent.${C.off}`);

@@ -1,11 +1,12 @@
 #!/usr/bin/env node
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 /**
  * Live NEAR Intents integration via the 1Click API.
  *
  * Three jobs:
  *  1. `quote`  — fetch a real quote for an intent (what the vault would execute).
- *  2. `market` — collect bids from "solvers" and pick the best, exactly as the
- *                auction in the contract does, but with real market prices.
+ *  2. `market` — compare sampled off-chain quotes. No on-chain bids or fills.
  *  3. `getLiveQuote` — exported helper used by the solver bot.
  *
  * No API key needed for read-only quotes (a key removes the 0.2% fee).
@@ -30,17 +31,14 @@ const ASSET_BY_CHAIN = {
  * Get a live quote from 1Click for a cross-chain payment.
  * opts: { dest_chain (e.g. 'base'), dest_asset ('usdc'), amount_in (smallest unit, string), jwt? }
  * For the demo, origin is always NEAR USDC.
- * Returns { amount_out (bigint string), eta_seconds, ...raw } or a mock if quote fails.
+ * Returns a live quote, or throws on an unknown asset/network failure. It never
+ * substitutes a mock quote or performs settlement.
  */
 export async function getLiveQuote({ dest_chain, dest_asset = 'usdc', amount_in, jwt = null }) {
   const originAsset = ASSET_BY_CHAIN['near:usdc'];
   const destKey = `${dest_chain}:${dest_asset}`.toLowerCase();
   const destinationAsset = ASSET_BY_CHAIN[destKey];
-  if (!destinationAsset) {
-    // Fallback: pretend 0.3% bridge fee, 30s eta
-    const n = BigInt(amount_in);
-    return { amount_out: (n * 997n / 1000n).toString(), eta: 30, mocked: true, reason: `unknown asset ${destKey}` };
-  }
+  if (!destinationAsset) throw new Error(`unsupported quote asset ${destKey}`);
   try {
     const body = {
       dry: true,
@@ -63,16 +61,11 @@ export async function getLiveQuote({ dest_chain, dest_asset = 'usdc', amount_in,
     const r = await fetch(`${BASE}/quote`, { method: 'POST', headers, body: JSON.stringify(body) });
     if (!r.ok) throw new Error(`quote HTTP ${r.status}`);
     const q = await r.json();
-    return {
-      amount_out: q.quote?.amountOut || q.quote?.minAmountOut || '0',
-      eta: q.quote?.timeEstimate || 30,
-      raw: q,
-    };
-  } catch (e) {
-    // Quote failed (no key, network, etc.) — fall back to mock with 0.3% fee so
-    // the demo still works end-to-end.
-    const n = BigInt(amount_in);
-    return { amount_out: (n * 997n / 1000n).toString(), eta: 30, mocked: true, reason: e.message };
+    const amountOut = q.quote?.amountOut ?? q.quote?.minAmountOut;
+    if (typeof amountOut !== 'string' || !/^[0-9]+$/.test(amountOut)) throw new Error('quote response has no valid amount');
+    return { amount_out: amountOut, eta: q.quote?.timeEstimate ?? null, raw: q };
+  } catch (error) {
+    throw new Error(`1Click quote failed: ${error.message}`, { cause: error });
   }
 }
 
@@ -139,15 +132,13 @@ async function cmdQuote() {
 }
 
 /**
- * The auction. Each "solver" is a different real routing strategy; we price all of
- * them with live data and award the intent to the one that delivers the most,
- * subject to the human's floor — the same rule the contract's `bid` enforces.
+ * Compare sample routing quotes locally. This is not an on-chain auction or fill.
  */
 async function cmdMarket() {
   const amount = 2n * 10n ** 24n; // 2 wNEAR
   const FLOOR = 8_500_000n; // 8.5 USDC — human's minimum acceptable output
 
-  console.log(`${C.acc}intent auction · live prices, contract rules${C.off}`);
+  console.log(`${C.acc}off-chain sample quote comparison (no bids or settlement)${C.off}`);
   console.log(`${C.dim}intent: swap 2 wNEAR → USDC, floor 8.5 USDC, deadline 30m${C.off}\n`);
 
   const strategies = [
@@ -194,20 +185,22 @@ async function cmdMarket() {
 
   console.log();
   if (winner.amountOut < FLOOR) {
-    console.log(`  ${C.bad}✗ all bids below the human's floor — vault refuses to execute${C.off}`);
+    console.log(`  ${C.bad}✗ all bids below the human's floor — no sample meets the configured floor${C.off}`);
   } else {
     const spread = n(winner.amountOut) - n(bids[bids.length - 1].amountOut);
-    console.log(`  ${C.ok}✓ vault awards to ${winner.solver}${C.off} ${C.dim}· best bid beat worst by ${spread} (smallest unit)${C.off}`);
-    console.log(`  ${C.dim}every losing bid is logged on-chain, so "nobody could have paid more" is provable${C.off}`);
+    console.log(`  ${C.ok}✓ highest sampled quote: ${winner.solver}${C.off} ${C.dim}· best bid beat worst by ${spread} (smallest unit)${C.off}`);
+    console.log(`  ${C.dim}quotes are estimates only; no on-chain bid or fill was submitted${C.off}`);
   }
 }
 
-const cmd = process.argv[2] || 'quote';
-try {
-  if (cmd === 'quote') await cmdQuote();
-  else if (cmd === 'market') await cmdMarket();
-  else { console.error('usage: node agent/intents.mjs [quote|market]'); process.exit(1); }
-} catch (e) {
-  console.error(`${C.bad}error:${C.off} ${e.message}`);
-  process.exit(1);
+if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url) {
+  const cmd = process.argv[2] || 'quote';
+  try {
+    if (cmd === 'quote') await cmdQuote();
+    else if (cmd === 'market') await cmdMarket();
+    else { console.error('usage: node agent/intents.mjs [quote|market]'); process.exitCode = 1; }
+  } catch (e) {
+    console.error(`${C.bad}error:${C.off} ${e.message}`);
+    process.exitCode = 1;
+  }
 }

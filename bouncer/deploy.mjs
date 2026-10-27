@@ -1,3 +1,7 @@
+// Disabled: this legacy entry point targets an obsolete contract/API.
+console.error('Legacy script disabled: use bouncer/demo-all.mjs or bouncer/demo-multi-resource.mjs with a fresh testnet deployment.');
+process.exit(1);
+
 // one-shot deploy: creates a funded testnet account via the NEAR helper (faucet),
 // deploys bouncer.wasm from the repo root, and initializes. No login or faucet website needed.
 //

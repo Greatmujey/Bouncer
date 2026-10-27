@@ -54,7 +54,9 @@ offline mocks are not proof of on-chain behavior.
   validates owner-pinned constraints, but is not an AI or a marketplace.
   Independent vendors, invoices, stablecoin flows and NEAR Intents remain
   unfinished.
-- Token trust is not enforced; configure policies only for trusted FTs. Key
+- Token trust is not enforced; configure policies only for trusted FTs. Changing
+  a policy's token retains its numeric spend history even if the new token has
+  different units; create a new policy for a different token instead. Key
   grants do not themselves create or restrict NEAR access keys. The owner must
   create correctly scoped function-call keys and keep full-access keys private.
 - This code has not been audited. Contract callback failure, token behavior,
@@ -209,6 +211,8 @@ real testnet transactions. To build locally with Rust and the wasm target, run
 - `bouncer/agent/procurement.mjs` — plan-driven, testnet-only procurement runner.
 - `bouncer/agent/resource-agent.mjs` — quote, guarded payment, fulfillment orchestration.
 - `bouncer/services/resource-provider.mjs` — self-hosted test-only resource provider.
+- `bouncer/demo/index.html` — clearly labelled offline simulation only; it sends
+  no transactions and does not exactly match contract behavior.
 - `bouncer/tests/` — offline regression tests for the demo script.
 - `bouncer/packages/policy/` — independent JavaScript policy simulation.
 - `.github/workflows/ci.yml` — JavaScript tests, contract build, and optional

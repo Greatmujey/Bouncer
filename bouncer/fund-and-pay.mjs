@@ -1,3 +1,7 @@
+// Disabled: this legacy entry point targets an obsolete contract/API.
+console.error('Legacy script disabled: use bouncer/demo-all.mjs or bouncer/demo-multi-resource.mjs with a fresh testnet deployment.');
+process.exit(1);
+
 // Happy-path + daily-limit demo.
 //   1. Create "user" sub-account with 5 NEAR (simulates human depositor).
 //   2. Create "vendor" sub-account, NEP-141 register both + bouncer on wrap.testnet.

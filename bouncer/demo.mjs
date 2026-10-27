@@ -1,3 +1,7 @@
+// Disabled: this legacy entry point targets an obsolete contract/API.
+console.error('Legacy script disabled: use bouncer/demo-all.mjs or bouncer/demo-multi-resource.mjs with a fresh testnet deployment.');
+process.exit(1);
+
 // Bouncer demo: policy setup, allowlist, view check, and three on-chain rejections.
 // Uses the key saved by deploy.mjs in ~/.near-credentials/testnet/<account>.json.
 // Run from ANY directory in the repo:  node bouncer/demo.mjs
