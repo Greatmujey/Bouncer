@@ -24,15 +24,34 @@ jobs:
   build-contract:
     name: Build Rust contract (wasm)
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
-          components: rust-src, clippy
-      - name: Cargo check wasm (type check only)
+      - name: Install binaryen
+        run: sudo apt-get update -qq && sudo apt-get install -y binaryen
+      - name: Cargo check wasm
         working-directory: bouncer/contracts/bouncer
         run: cargo check --target wasm32-unknown-unknown
-      - name: Cargo build wasm
+      - name: Cargo build wasm (release)
         working-directory: bouncer/contracts/bouncer
-        run: RUSTFLAGS="-C link-arg=-s" cargo build --target wasm32-unknown-unknown
+        run: RUSTFLAGS="-C link-arg=-s" cargo build --target wasm32-unknown-unknown --release
+      - name: Shrink & commit wasm
+        run: |
+          set -e
+          cp bouncer/contracts/bouncer/target/wasm32-unknown-unknown/release/bouncer.wasm ./bouncer.wasm
+          ls -lh bouncer.wasm
+          wasm-opt -Os -o bouncer.opt.wasm bouncer.wasm && mv bouncer.opt.wasm bouncer.wasm
+          ls -lh bouncer.wasm
+          git config user.name "CI Bot"
+          git config user.email "ci@bouncer.local"
+          git add bouncer.wasm -f
+          if ! git diff --cached --quiet; then
+            git commit -m "chore(ci): attach bouncer.wasm"
+            git push
+          else
+            echo "no change"
+          fi
