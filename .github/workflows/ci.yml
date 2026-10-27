@@ -24,61 +24,40 @@ jobs:
   build-contract:
     name: Build Rust contract (wasm)
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: bouncer/contracts/bouncer
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
       - name: Install binaryen
         run: sudo apt-get update -qq && sudo apt-get install -y binaryen
-      - name: Install cargo-near via npm (reliable on Actions)
-        run: npm install -g cargo-near
-      - name: Build with cargo near
+      - name: Build (plain cargo, no cargo-near complications)
+        working-directory: bouncer/contracts/bouncer
+        shell: bash {0}
         run: |
-          export PATH="$(npm root -g)/cargo-near/bin:$HOME/.cargo/bin:$PATH"
-          which cargo-near || echo "no cargo-near in PATH"
-          cargo near --version || true
-          # Fall back to direct binary shipped by npm package
-          ls "$(npm root -g)/cargo-near/" 2>&1 || true
-          find "$(npm root -g)/cargo-near" -name "cargo-near*" -type f 2>&1 | head -10
-          # If cargo-near works, use it. Else fall back to plain cargo.
-          if cargo near build non-reproducible-wasm --no-abi 2>&1 | tee /tmp/build.log; then
-            echo "cargo-near ok"
-          else
-            echo "cargo-near failed; falling back to plain cargo"
-            RUSTFLAGS="-C link-arg=-s" cargo build --target wasm32-unknown-unknown
-          fi
+          # Exact recipe from near-sdk.io: cargo build --target wasm32-unknown-unknown with link-arg=-s in cargo config
+          mkdir -p .cargo
+          cat > .cargo/config.toml <<EOF
+          [target.wasm32-unknown-unknown]
+          rustflags = ["-C", "link-arg=-s"]
+          EOF
+          cat .cargo/config.toml
+          cargo build --target wasm32-unknown-unknown --release
           echo "=== find wasm ==="
-          find . -name "*.wasm" | grep -v node_modules
-      - name: Copy wasm to repo root & commit
-        working-directory: ${{ github.workspace }}
+          find target -name "*.wasm"
+          ls -la target/wasm32-unknown-unknown/release/bouncer.wasm
+          cp target/wasm32-unknown-unknown/release/bouncer.wasm ${{ github.workspace }}/bouncer.wasm
+      - name: Optimize & commit
         run: |
-          set -e
-          echo "PWD=$PWD"
-          ls bouncer/contracts/bouncer/
-          # Prefer cargo-near output location, then cargo target
-          SRC=$(find bouncer/contracts/bouncer -name "bouncer.wasm" -path "*near*" | head -1)
-          if [ -z "$SRC" ]; then
-            SRC=$(find bouncer/contracts/bouncer/target -name "bouncer.wasm" | head -1)
-          fi
-          echo "SRC=$SRC"
-          test -n "$SRC"
-          cp "$SRC" ./bouncer.wasm
-          ls -lh ./bouncer.wasm
-          wasm-opt -Os -o bouncer.opt.wasm ./bouncer.wasm && mv bouncer.opt.wasm ./bouncer.wasm
-          ls -lh ./bouncer.wasm
+          ls -lh bouncer.wasm
+          wasm-opt -Os -o bouncer.opt.wasm bouncer.wasm && mv bouncer.opt.wasm bouncer.wasm
+          ls -lh bouncer.wasm
           git config user.name "CI Bot"
           git config user.email "ci@bouncer.local"
           git add bouncer.wasm -f
           if ! git diff --cached --quiet; then
-            git commit -m "chore(ci): attach bouncer.wasm"
+            git commit -m "chore(ci): attach bouncer.wasm (release build)"
             git push
           fi
