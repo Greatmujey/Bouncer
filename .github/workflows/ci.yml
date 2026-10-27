@@ -2,7 +2,7 @@ name: Build & Test Bouncer
 
 on:
   push:
-    branches: [arena/3419a30c-near-hub]
+    branches: [arena/ebb614bb-near-hub]
   pull_request:
   workflow_dispatch:
 
@@ -52,6 +52,4 @@ jobs:
           if ! git diff --cached --quiet; then
             git commit -m "chore(ci): attach bouncer.wasm"
             git push
-          else
-            echo "no change"
           fi
