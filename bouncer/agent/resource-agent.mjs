@@ -1,12 +1,14 @@
 /**
  * Quote -> guarded payment -> fulfillment orchestration for supplied goals.
- * This is a deterministic testnet agent, not an AI or a vendor marketplace.
- * The caller explicitly pins each trusted policy, token, payee and max price.
+ * This runner handles supplied or separately model-proposed testnet goals; it
+ * is not a vendor marketplace. The caller pins policies, tokens, payees and
+ * maximum prices, and batch preflight is a non-atomic preview.
  */
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRuntime, FileJournal, runProcurement, validatePlan } from './procurement.mjs';
+import { reservePreview } from './preflight.mjs';
 import { normalizeOrder, orderMemo, startConfiguredProvider } from '../services/resource-provider.mjs';
 
 function positiveAmount(value, label) {
@@ -52,7 +54,30 @@ export async function runResourceAgent({ contractId, ownerAccountId, goals, getQ
   const plan = await planFromQuotes({ contractId, ownerAccountId, goals, getQuote });
   await onPlan(plan);
   if (runtimeFactory) ({ provider, account, publicKey } = await runtimeFactory(plan));
-  const payments = await runProcurement({ plan, provider, account, publicKey, journal, execute, log });
+  // Complete a read-only preflight for the ENTIRE batch before the first new
+  // payment, including tentative shared-budget and shared-vault reservations.
+  // The views are non-atomic: the contract still decides each real payment,
+  // and another actor can change state after this preview.
+  const checks = [], blockedReasons = new Map();
+  const preview = await runProcurement({ plan, provider, account, publicKey, journal, execute: false, log: () => {}, onCheck: check => {
+    checks.push({ id: check.id, status: check.status });
+    if (check.status === 'BLOCKED') blockedReasons.set(check.id, typeof check.reason === 'string' ? check.reason.replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 200) : 'Policy rejected the request.');
+  } });
+  const summary = await reservePreview(provider, plan, checks, preview);
+  let payments;
+  if (execute && !summary.blocked) {
+    log('[resource-agent] Batch preflight passed; these non-atomic views are not a guarantee.');
+    payments = await runProcurement({ plan, provider, account, publicKey, journal, execute: true, log });
+  } else {
+    for (let i = 0; i < checks.length; i++) {
+      const check = checks[i], request = plan.requests[i];
+      if (check.status === 'READY') log(`[procurement] READY ${request.id} (${request.resource}): ${request.amount} ${request.token} → ${request.payee} (dry run)`);
+      else if (check.status === 'BLOCKED') log(`[procurement] BLOCKED ${request.id} (${request.resource}): ${check.reason || blockedReasons.get(check.id) || 'Policy rejected the request.'}`);
+      else log(`[procurement] SKIP ${request.id}: already paid`);
+    }
+    if (execute && summary.blocked) log('[resource-agent] Batch preflight blocked: no new payments were submitted.');
+    payments = summary;
+  }
   const deliveries = [];
   if (execute) {
     for (const goal of goals) {
@@ -64,7 +89,7 @@ export async function runResourceAgent({ contractId, ownerAccountId, goals, getQ
       deliveries.push({ id: goal.id, result });
     }
   }
-  return { plan, payments, deliveries };
+  return { plan, payments, deliveries, checks };
 }
 
 /** HTTP helper: HTTPS for remote providers, or HTTP on loopback for this demo. */

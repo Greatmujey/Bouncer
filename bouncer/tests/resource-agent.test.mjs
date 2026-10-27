@@ -39,7 +39,9 @@ test('dry-run quotes and preflights but never pays or redeems', async () => {
     async viewAccessKey() { return { permission: { FunctionCall: { receiver_id: 'bouncer.testnet', method_names: ['execute'] } } }; },
     async callFunction(_contract, method) {
       if (method === 'contract_version') return 'bouncer-agent-v4';
-      if (method === 'get_policy') return { token: 'wrap.testnet' };
+      if (method === 'get_policy') return { token: 'wrap.testnet', per_tx_cap: '1000', daily_cap: '1000' };
+      if (method === 'daily_spent') return '0';
+      if (method === 'vault_balance') return '1000';
       if (method === 'is_agent_key_allowed') return true;
       if (method === 'check') return [true, 'ok'];
       throw new Error('unexpected view');
@@ -82,7 +84,9 @@ test('a delivery outage after payment is recoverable without a duplicate payment
     async viewAccessKey() { return { permission: { FunctionCall: { receiver_id: 'bouncer.testnet', method_names: ['execute'] } } }; },
     async callFunction(_contract, method) {
       if (method === 'contract_version') return 'bouncer-agent-v4';
-      if (method === 'get_policy') return { token: 'wrap.testnet' };
+      if (method === 'get_policy') return { token: 'wrap.testnet', per_tx_cap: '1000', daily_cap: '1000' };
+      if (method === 'daily_spent') return '0';
+      if (method === 'vault_balance') return '1000';
       if (method === 'is_agent_key_allowed') return true;
       if (method === 'check') return [true, 'ok'];
       if (method === 'ft_balance_of') return balance.toString();

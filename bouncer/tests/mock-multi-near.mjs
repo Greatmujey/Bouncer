@@ -6,6 +6,7 @@ const balances = new Map();
 const vault = new Map();
 const tokens = new Map([['wrap.testnet', { symbol: 'wNEAR', decimals: 24 }]]);
 const policies = new Map();
+const spent = new Map();
 const allowed = new Map();
 const grants = new Map();
 const accessKeys = new Map();
@@ -91,6 +92,7 @@ Account.prototype.callFunctionRaw = async function ({ contractId, methodName, ar
       if (policy?.token !== args.expected_token || !allowed.get(args.policy_id)?.has(args.payee) ||
           amount > BigInt(policy.per_tx_cap) || amount > (vault.get(policy.token) || 0n)) fail('policy rejected');
       vault.set(policy.token, vault.get(policy.token) - amount);
+      spent.set(args.policy_id, (spent.get(args.policy_id) || 0n) + amount);
       add(policy.token, contractId, -amount);
       add(policy.token, args.payee, amount);
       const result = ok(policy.token);
@@ -114,6 +116,7 @@ providers.JsonRpcProvider.prototype.callFunction = async function (id, method, a
     case 'ft_balance_of': return balance(id, args.account_id).toString();
     case 'vault_balance': return (vault.get(args.token) || 0n).toString();
     case 'get_policy': return policies.get(args.policy_id) || null;
+    case 'daily_spent': return (spent.get(args.policy_id) || 0n).toString();
     case 'is_agent_key_allowed': return grants.get(args.policy_id)?.has(args.public_key) || false;
     case 'check': {
       const policy = policies.get(args.policy_id);

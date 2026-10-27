@@ -29,6 +29,9 @@ cloud integration or audited software. Do not use real funds.
   are independently checked against the catalog. The contract then enforces the
   actual token, key grant, allowlist, per-transaction cap, rolling daily cap and
   vault balance at execution. A zero daily cap on chain disables that daily cap.
+  Before any new payment, the resource agent also previews the whole batch,
+  tentatively reserving shared policy budgets and token vault balances. If a
+  request is blocked in that preview, it submits no new payments in the batch.
 - `--execute` is an explicit opt-in to spending **testnet** funds. The runner
   rejects full-access and over-broad keys and uses the same pending-payment
   journal as the deterministic resource agent. Transactions are separate, not
@@ -79,8 +82,9 @@ node bouncer/agent/autonomous.mjs --config "$HOME/.bouncer/testnet/$ID.owner.jso
 ```
 
 The file is created with private permissions and is never overwritten. Inspect
-it and the printed quote/preflight output. A dry run does not pay or deliver;
-its individual on-chain checks do not reserve a shared vault or rolling budget.
+it and the printed quote/preflight output. A dry run does not pay or deliver.
+Shared-vault and daily-budget reservations are tentative local calculations,
+not atomic on-chain reservations; balances and policies can change afterward.
 After review, run the existing resource agent with **that exact goals file** and
 the same local provider, adding `--execute`:
 

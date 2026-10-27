@@ -47,10 +47,11 @@ all possible callback or token failure cases.
 5. **Views are policy previews, not authorization checks.** `check` and
    `try_execute` do not identify a transaction signing key. V4 has no owner
    view, so a preflight cannot verify that the supplied signer account is the
-   owner; execution still enforces it on-chain. The CLI dry-run checks each
-   request independently, so several individually ready requests may exceed a
-   shared budget or vault together. MCP makes tentative aggregate reservations,
-   but neither path reads an atomic snapshot or guarantees later authorization.
+   owner; execution still enforces it on-chain. The raw procurement CLI checks
+   requests independently. The resource agent (and its MCP preview) makes
+   tentative shared-budget and vault reservations and aborts a blocked batch
+   before new payments, but views are not atomic and cannot guarantee later
+   authorization or prevent partial execution if the chain changes.
 6. **Policies and tokens are shared.** Policy-specific key grants isolate which
    policy a key may use, but policies may share the same token vault. Caps are
    denominated in token units, not USD; there is no price oracle. Rebinding a

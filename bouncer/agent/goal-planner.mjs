@@ -172,14 +172,20 @@ export function createModelClient({ endpoint, model, apiKey, fetchImpl = globalT
   return async ({ objective, allowedResources }) => {
     validateObjective(objective);
     if (!Array.isArray(allowedResources) || !allowedResources.length || allowedResources.some(name => !RESOURCE_TYPES.includes(name))) throw new Error('invalid available resource types');
+    const examples = [];
+    if (allowedResources.includes('compute')) examples.push({ resource: 'compute', input: { text: 'sample text', rounds: 5 } });
+    if (allowedResources.includes('storage')) examples.push({ resource: 'storage', input: { name: 'sample', content: 'sample note' } });
+    if (allowedResources.includes('api')) examples.push({ resource: 'api', input: { text: 'sample words' } });
     const system = [
       'Translate the objective into resource tasks. Return only JSON matching the schema.',
+      'Make a separate task for each supported action actually requested; do not omit requested tasks.',
       'Use only the listed resource types and only requested tasks; return an empty tasks array if unable to plan.',
       'compute hashes input.text using input.rounds SHA-256 rounds (1 to 20000).',
       'storage stores input.content under input.name (lowercase letters, digits, hyphen or underscore).',
       'api counts words and bytes in input.text. Preserve requested literal text exactly.',
       'Never add accounts, policy, payee, price, token, commands, URLs, or other fields.',
       `Available resource types: ${allowedResources.join(', ')}.`,
+      `Task shape examples, not the objective: ${JSON.stringify({ tasks: examples })}.`,
     ].join(' ');
     const headers = { 'content-type': 'application/json' };
     if (apiKey) headers.authorization = `Bearer ${apiKey}`;

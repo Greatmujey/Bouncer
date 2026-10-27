@@ -78,7 +78,7 @@ function assertSuccessfulReceipts(result, token) {
  * get(id) and put(id, entry); every live payment is marked pending BEFORE it
  * is sent. An unresolved pending entry is never retried automatically.
  */
-export async function runProcurement({ plan: rawPlan, provider, account, publicKey, journal, execute = false, log = console.log }) {
+export async function runProcurement({ plan: rawPlan, provider, account, publicKey, journal, execute = false, log = console.log, onCheck = () => {} }) {
   const plan = validatePlan(rawPlan);
   if (!account || account.accountId !== plan.owner_account_id) throw new Error('agent key account does not match the plan owner');
   if (execute && !journal) throw new Error('a journal is required for live execution');
@@ -97,6 +97,7 @@ export async function runProcurement({ plan: rawPlan, provider, account, publicK
     const previous = journal?.get(request.id);
     if (previous && previous.fingerprint !== hash) throw new Error(`${request.id}: journal entry does not match the request`);
     if (previous?.status === 'completed') {
+      onCheck({ id: request.id, status: 'SKIPPED' });
       log(`[procurement] SKIP ${request.id}: already paid (${previous.tx_hash})`);
       totals.skipped++;
       continue;
@@ -118,11 +119,13 @@ export async function runProcurement({ plan: rawPlan, provider, account, publicK
     }, { finality: 'final' });
     if (!Array.isArray(decision) || typeof decision[0] !== 'boolean') throw new Error(`${request.id}: invalid policy verdict`);
     if (!decision[0]) {
+      onCheck({ id: request.id, status: 'BLOCKED', reason: decision[1] });
       log(`[procurement] BLOCKED ${request.id} (${request.resource}): ${decision[1]}`);
       totals.blocked++;
       continue;
     }
     if (!execute) {
+      onCheck({ id: request.id, status: 'READY' });
       log(`[procurement] READY ${request.id} (${request.resource}): ${request.amount} ${request.token} → ${request.payee} (dry run)`);
       totals.ready++;
       continue;

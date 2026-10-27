@@ -121,7 +121,14 @@ async function main() {
       }])) };
     const objective = 'Perform these three tasks: Hash the text "near-hub compute job" for exactly 1000 SHA-256 rounds. Store the exact content "Persisted by the Bouncer testnet provider." with the name "bouncer-note". Count the words and bytes in "actual testnet resource API".';
     console.log('=== 0) Ask the configured model to plan the three resource tasks ===');
-    const modelClient = createModelClient({ endpoint: process.env.BOUNCER_LLM_URL, model: process.env.BOUNCER_LLM_MODEL, apiKey: process.env.BOUNCER_LLM_API_KEY || undefined });
+    const localModel = createModelClient({ endpoint: process.env.BOUNCER_LLM_URL, model: process.env.BOUNCER_LLM_MODEL, apiKey: process.env.BOUNCER_LLM_API_KEY || undefined });
+    // This demo uses public synthetic text. Exposing its proposed inputs helps
+    // diagnose model failures; the general CLI never logs raw model output.
+    const modelClient = async request => {
+      const proposed = await localModel(request);
+      console.log(`    Model proposal for the synthetic demo: ${JSON.stringify(proposed).slice(0, 2000)}`);
+      return proposed;
+    };
     const result = await planObjective({ objective, config, modelClient });
     for (const goal of result.goals) {
       if (JSON.stringify(goal.input) !== JSON.stringify(expectedInputs[goal.resource])) {
