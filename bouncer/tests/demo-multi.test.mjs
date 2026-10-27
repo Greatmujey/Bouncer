@@ -26,18 +26,21 @@ function run(mode = '') {
 test('multi-token setup and real procurement runner complete using a mock transport', () => {
   const result = run();
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /Three real testnet FT payments verified/);
-  assert.match(result.stdout, /vendor services are not implemented/);
+  assert.match(result.stdout, /Three real testnet FT payments and self-hosted resource services verified/);
+  assert.match(result.stdout, /self-hosted development provider, not commercial/);
   assert.deepEqual(result.plan.requests.map(r => r.resource), ['compute', 'storage', 'api']);
   assert.equal(new Set(result.plan.requests.map(r => r.token)).size, 3);
   assert.equal(result.journal.entries.filter(e => e.status === 'completed').length, 3);
   assert.equal((result.stdout.match(/\[procurement\] PAID /g) || []).length, 3);
   assert.equal((result.stdout.match(/\[procurement\] SKIP /g) || []).length, 3);
+  assert.equal((result.stdout.match(/\[resource-agent\] FULFILLED /g) || []).length, 6);
+  assert.equal((result.stdout.match(/VERIFIED /g) || []).length, 3);
+  assert.match(result.stdout, /Provider rejected a changed order/);
 });
 
 test('a token factory failure stops the multi-token run, without claiming success', () => {
   const result = run('factory_failure');
   assert.equal(result.status, 1);
   assert.match(result.stderr, /factory unavailable/);
-  assert.doesNotMatch(result.stdout, /Three real testnet FT payments verified/);
+  assert.doesNotMatch(result.stdout, /Three real testnet FT payments and self-hosted resource services verified/);
 });

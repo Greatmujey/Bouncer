@@ -3,9 +3,9 @@
 Bouncer aims to let an AI agent buy several resources — such as compute,
 storage, and API credits — using different NEAR fungible tokens, subject to
 owner-defined spending policies. The current prototype implements the vault and
-policy checks. This branch also contains a plan-driven procurement runner and
-a multi-token testnet check; their live integration must be verified before
-claiming completion. This is unaudited testnet software, not suitable for real funds.
+policy checks. A plan-driven runner has passed a three-token testnet payment
+check; the quote-to-delivery integration is being validated separately. This is
+unaudited testnet software, not suitable for real funds.
 
 ## Target tracks
 
@@ -42,12 +42,14 @@ offline mocks are not proof of on-chain behavior.
   `execute` and a different state layout. Do not upgrade them without a migration
   or use them for valuable funds. The script creates a fresh account.
 - The security check uses **one token (wNEAR)**. The separate multi-token check
-  creates two synthetic testnet credit FTs and sends resource-labelled payments
-  to three vendor accounts. This does **not** provide compute, storage, or API
-  services, and is not a USDC/stablecoin demonstration.
-- The procurement runner executes a supplied plan; it is not yet an AI planner,
-  quote-discovery service, or vendor integration. Invoices, stablecoin flows,
-  actual resource delivery and NEAR Intents settlement remain unfinished.
+  creates two synthetic testnet credit FTs and sends payments to three vendor
+  accounts. It is not a USDC/stablecoin demonstration.
+- A self-hosted development provider can verify a payment and perform a small
+  compute job, store a local file, or serve a text-statistics API. It is not a
+  commercial provider. The agent fetches fixed quotes from this provider and
+  validates owner-pinned constraints, but is not an AI or a marketplace.
+  Independent vendors, invoices, stablecoin flows and NEAR Intents remain
+  unfinished.
 - Token trust is not enforced; configure policies only for trusted FTs. Key
   grants do not themselves create or restrict NEAR access keys. The owner must
   create correctly scoped function-call keys and keep full-access keys private.
@@ -100,19 +102,25 @@ Ordinary CI runs do not create testnet accounts.
 
 After CI has attached the matching `bouncer.wasm`, this optional script creates
 new testnet accounts, wNEAR plus **two synthetic testnet credit tokens**, three
-vendor accounts, policies and an execute-only key. It runs the procurement
-runner against all three and verifies each token's recorded vault, actual vault
-and vendor balances. It does not claim real services were delivered.
+vendor accounts, policies and an execute-only key. It fetches quotes, makes
+payments and verifies each token's recorded vault, actual vault and vendor
+balances. A local development provider then verifies each on-chain transaction
+and fulfills a small SHA-256 compute job, stores and retrieves a local file, and
+serves a text-statistics API. These are real operations on the machine running
+the demo, **not commercial cloud resources**.
 
 ```sh
 node bouncer/demo-multi-resource.mjs
 ```
 
 This requires the NEAR testnet token factory and creates real testnet
-transactions. It stores a reusable plan and a local journal under
-`~/.bouncer/testnet/`; private keys are stored separately under
-`~/.near-credentials/testnet/`. The testnet credits have no monetary value.
-The testnet run, not the offline mock, determines whether this integration works.
+transactions. It stores a reusable plan, journal, provider redemption state and
+local objects under `~/.bouncer/testnet/`; private keys are stored separately
+under `~/.near-credentials/testnet/`. The testnet credits have no monetary value.
+A [live testnet CI run](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40555110181)
+passed the security and three-token **payment** checks before the local provider
+was added. The full quote-to-delivery integration requires its own live run; an
+offline mock alone does not prove it.
 
 ### Run a supplied procurement plan
 
@@ -144,6 +152,12 @@ retry automatically. Inspect the chain and reconcile the journal manually. Do
 not delete or change journals to bypass this safety check. Keys must be kept
 private, and different journal paths cannot prevent duplicate payments.
 
+The development provider trusts its configured RPC, Bouncer account/code, and
+FT contracts; it is not a trustless payment proof. Its local redemption state
+is single-process only. It has no authentication, TLS, privacy or multi-host
+replay protection and must not be exposed publicly or used with real money.
+Order data is sent to the provider, and its hash is public in the payment memo.
+
 ## Local tests
 
 ```sh
@@ -163,6 +177,8 @@ real testnet transactions.
 - `bouncer/demo-all.mjs` — fresh-deployment restricted-key security check.
 - `bouncer/demo-multi-resource.mjs` — testnet wNEAR plus synthetic FT check.
 - `bouncer/agent/procurement.mjs` — plan-driven, testnet-only procurement runner.
+- `bouncer/agent/resource-agent.mjs` — quote, guarded payment, fulfillment orchestration.
+- `bouncer/services/resource-provider.mjs` — self-hosted test-only resource provider.
 - `bouncer/tests/` — offline regression tests for the demo script.
 - `bouncer/packages/policy/` — independent JavaScript policy simulation.
 - `.github/workflows/ci.yml` — JavaScript tests, contract build, and optional
@@ -176,7 +192,7 @@ contract without an explicit migration. The demo deploys a fresh contract.
 
 1. Validate the new restricted-key and policy isolation flow on testnet,
    including the 1-yocto protection with real restricted keys.
-2. Validate the three-token testnet procurement flow end to end; integrate real
+2. Validate the quote-to-delivery testnet flow end to end; integrate independent
    resource vendors and independently verifiable fulfillment.
 3. Add verifiable receipts/invoices, stablecoin flows and real, explicitly
    verified NEAR Intents settlement. Strengthen failure/recovery tests.

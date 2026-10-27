@@ -1,15 +1,18 @@
 // Optional REAL NEAR testnet multi-token integration check. It creates two
 // synthetic testnet credit tokens with the NEAR FT factory plus wNEAR, and
 // sends payments to three vendor accounts through the procurement runner.
-// Tokens and transfers are on-chain; the named vendors do not actually deliver
-// compute, storage or API services. This is not a stablecoin or mainnet demo.
+// Tokens and transfers are on-chain. A self-hosted development provider delivers
+// simple compute, local storage and a text API; it is not a commercial vendor.
+// This is not a stablecoin or mainnet demo.
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import nearApi from 'near-api-js';
-import { FileJournal, runProcurement } from './agent/procurement.mjs';
+import { FileJournal } from './agent/procurement.mjs';
+import { createResourceProvider } from './services/resource-provider.mjs';
+import { httpResourceProvider, runResourceAgent } from './agent/resource-agent.mjs';
 
 const { Account, KeyPair, KeyPairSigner, providers, transactions } = nearApi;
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -87,7 +90,7 @@ async function createToken(funder, ownerId, symbol, name) {
 
 async function main() {
   console.log('BOUNCER — REAL testnet multi-token payment check');
-  console.log('wNEAR + two newly created testnet credit tokens; vendor services are NOT delivered.\n');
+  console.log('wNEAR + two synthetic test tokens; fulfillment uses a self-hosted development provider, not commercial vendors.\n');
   const wasmPath = path.join(ROOT, 'bouncer.wasm');
   if (!fs.existsSync(wasmPath)) throw new Error('bouncer.wasm missing');
   const suffix = crypto.randomBytes(4).toString('hex');
@@ -155,11 +158,11 @@ async function main() {
   console.log(`    ✅ agent key ${txUrl(added.transaction_outcome.id)}`);
   const resources = [
     { resource: 'compute', policy: 'compute-wnear', token: WNEAR, vendor: vendorIds.compute,
-      per: N / 2n, daily: N, payment: N / 10n, memo: 'compute:1h (test)' },
+      per: N / 2n, daily: N, payment: N / 10n, input: { text: 'near-hub compute job', rounds: 1000 } },
     { resource: 'storage', policy: 'storage-credit', token: storageToken, vendor: vendorIds.storage,
-      per: 5n * CREDIT, daily: 10n * CREDIT, payment: 3n * CREDIT / 2n, memo: 'storage:100gb (test)' },
+      per: 5n * CREDIT, daily: 10n * CREDIT, payment: 3n * CREDIT / 2n, input: { name: 'bouncer-note', content: 'Persisted by the Bouncer testnet provider.' } },
     { resource: 'api', policy: 'api-credit', token: apiToken, vendor: vendorIds.api,
-      per: 5n * CREDIT, daily: 10n * CREDIT, payment: 2n * CREDIT, memo: 'api:1000-requests (test)' },
+      per: 5n * CREDIT, daily: 10n * CREDIT, payment: 2n * CREDIT, input: { text: 'actual testnet resource API' } },
   ];
   for (const r of resources) {
     await call(bouncer, bid, 'set_policy', { policy_id: r.policy, token: r.token,
@@ -168,40 +171,91 @@ async function main() {
     await call(bouncer, bid, 'grant_agent_key', { policy_id: r.policy, public_key: agentKey.getPublicKey().toString() }, 1n);
   }
 
-  console.log('\n=== 7) Run the procurement agent for three resource-labelled payments ===');
-  const plan = { contract_id: bid, owner_account_id: bid, requests: resources.map(r => ({
-    id: `${r.resource}-1`, resource: r.resource, policy_id: r.policy, token: r.token,
-    payee: r.vendor, amount: r.payment.toString(), memo: r.memo,
-  })) };
+  console.log('\n=== 7) Quote, pay and fulfill three orders with the resource agent ===');
   fs.mkdirSync(RUN_DIR, { recursive: true, mode: 0o700 });
   const planFile = path.join(RUN_DIR, `${bid}.plan.json`);
-  fs.writeFileSync(planFile, JSON.stringify(plan, null, 2) + '\n', { mode: 0o600 });
-  fs.chmodSync(planFile, 0o600);
   const journalPath = path.join(RUN_DIR, `${bid}.bouncer-journal.json`);
   console.log(`    Plan: ${planFile}\n    Journal: ${journalPath}\n    Agent key: ${agentFile}`);
-  const journal = new FileJournal(journalPath, bid, bid);
+  const products = Object.fromEntries(resources.map(r => [r.resource, {
+    policy_id: r.policy, token: r.token, payee: r.vendor, amount: r.payment.toString(),
+  }]));
+  const goals = resources.map(r => ({
+    id: `${r.resource}-1`, resource: r.resource, input: r.input,
+    policy_id: r.policy, token: r.token, payee: r.vendor, max_amount: r.payment.toString(),
+  }));
+  const devProvider = createResourceProvider({ rpcProvider: provider, contractId: bid, products, dataDir: path.join(RUN_DIR, `${bid}.provider`) });
+  await new Promise((resolve, reject) => {
+    devProvider.server.once('error', reject);
+    devProvider.server.listen(0, '127.0.0.1', resolve);
+  });
+  const baseUrl = `http://127.0.0.1:${devProvider.server.address().port}`;
+  const client = httpResourceProvider(baseUrl);
+  let journal;
+  let proof;
   try {
-    const runner = { plan, provider, account: account(bid, agentKey), publicKey: agentKey.getPublicKey(), journal, execute: true };
-    const first = await runProcurement(runner);
-    if (first.paid !== 3 || first.blocked || first.skipped) throw new Error(`unexpected agent result: ${JSON.stringify(first)}`);
-    const second = await runProcurement(runner);
-    if (second.skipped !== 3 || second.paid) throw new Error(`duplicate-run protection failed: ${JSON.stringify(second)}`);
-  } finally { journal.close(); }
+    journal = new FileJournal(journalPath, bid, bid);
+    const runner = {
+      contractId: bid, ownerAccountId: bid, goals, getQuote: client.getQuote, fulfill: client.fulfill,
+      onPlan: plan => {
+        fs.writeFileSync(planFile, JSON.stringify(plan, null, 2) + '\n', { mode: 0o600 });
+        fs.chmodSync(planFile, 0o600);
+      },
+      provider, account: account(bid, agentKey), publicKey: agentKey.getPublicKey(), journal, execute: true,
+    };
+    const first = await runResourceAgent(runner);
+    if (first.payments.paid !== 3 || first.payments.blocked || first.payments.skipped || first.deliveries.length !== 3) {
+      throw new Error(`unexpected agent result: ${JSON.stringify(first)}`);
+    }
+    const second = await runResourceAgent(runner);
+    if (second.payments.skipped !== 3 || second.payments.paid || JSON.stringify(second.deliveries) !== JSON.stringify(first.deliveries)) {
+      throw new Error(`duplicate-run protection failed: ${JSON.stringify(second)}`);
+    }
 
-  console.log('\n=== 8) Verify all vault and vendor balances against token contracts ===');
-  for (const [r, funded] of [[resources[0], N], [resources[1], 10n * CREDIT], [resources[2], 10n * CREDIT]]) {
-    const recorded = await view(bid, 'vault_balance', { token: r.token });
-    const actual = await view(r.token, 'ft_balance_of', { account_id: bid });
-    const paid = await view(r.token, 'ft_balance_of', { account_id: r.vendor });
-    exact(recorded, funded - r.payment, `${r.resource} recorded vault`);
-    exact(actual, funded - r.payment, `${r.resource} actual vault`);
-    exact(paid, r.payment, `${r.resource} vendor balance`);
-    console.log(`    ✅ ${r.resource}: vendor=${paid}, vault=${actual} smallest units (${r.token})`);
+    console.log('\n=== 8) Verify all vault and vendor balances against token contracts ===');
+    for (const [r, funded] of [[resources[0], N], [resources[1], 10n * CREDIT], [resources[2], 10n * CREDIT]]) {
+      const recorded = await view(bid, 'vault_balance', { token: r.token });
+      const actual = await view(r.token, 'ft_balance_of', { account_id: bid });
+      const paid = await view(r.token, 'ft_balance_of', { account_id: r.vendor });
+      exact(recorded, funded - r.payment, `${r.resource} recorded vault`);
+      exact(actual, funded - r.payment, `${r.resource} actual vault`);
+      exact(paid, r.payment, `${r.resource} vendor balance`);
+      console.log(`    ✅ ${r.resource}: vendor=${paid}, vault=${actual} smallest units (${r.token})`);
+    }
+    exact(await view(WNEAR, 'ft_balance_of', { account_id: userId }), N / 2n, 'user wNEAR');
+    exact(await view(storageToken, 'ft_balance_of', { account_id: userId }), 990n * CREDIT, 'user storage credits');
+    exact(await view(apiToken, 'ft_balance_of', { account_id: userId }), 990n * CREDIT, 'user API credits');
+
+    console.log('\n=== 9) Verify local service results and reject changed orders ===');
+    for (const item of resources) {
+      const result = first.deliveries.find(d => d.id === `${item.resource}-1`)?.result;
+      if (!result || result.type !== item.resource) throw new Error(`${item.resource}: missing service delivery`);
+      if (item.resource === 'compute') {
+        let hash = Buffer.from(item.input.text);
+        for (let i = 0; i < item.input.rounds; i++) hash = crypto.createHash('sha256').update(hash).digest();
+        if (result.result !== hash.toString('hex')) throw new Error('compute result mismatch');
+      } else if (item.resource === 'storage') {
+        const stored = await fetch(`${baseUrl}/storage/${result.object_id}`);
+        if (!stored.ok || await stored.text() !== item.input.content) throw new Error('stored content did not round-trip');
+      } else if (result.words !== 4) throw new Error('API result mismatch');
+      console.log(`    ✅ VERIFIED ${item.resource}: delivered local ${result.type} service`);
+    }
+    let tamperBlocked = false;
+    try {
+      await client.fulfill({ tx_hash: journal.get('compute-1').tx_hash, resource: 'compute', input: { ...resources[0].input, text: 'different order' } });
+    } catch (error) {
+      if (!/different order/.test(error.message)) throw error;
+      tamperBlocked = true;
+    }
+    if (!tamperBlocked) throw new Error('provider accepted a changed order with a used payment');
+    console.log('    ✅ Provider rejected a changed order using an already redeemed transaction.');
+    proof = resources.map(r => `${r.resource}: token=${r.token} tx=${journal.get(`${r.resource}-1`).tx_hash}`).join('; ');
+  } finally {
+    journal?.close();
+    await new Promise(resolve => devProvider.server.close(resolve));
   }
-  exact(await view(WNEAR, 'ft_balance_of', { account_id: userId }), N / 2n, 'user wNEAR');
-  exact(await view(storageToken, 'ft_balance_of', { account_id: userId }), 990n * CREDIT, 'user storage credits');
-  exact(await view(apiToken, 'ft_balance_of', { account_id: userId }), 990n * CREDIT, 'user API credits');
-  console.log('\n✅ Three real testnet FT payments verified; vendor services are not implemented.');
+  console.log('\n✅ Three real testnet FT payments and self-hosted resource services verified.');
+  console.log('Services are development examples, not commercial vendors or production infrastructure.');
+  if (process.env.GITHUB_ACTIONS === 'true') console.log(`::notice title=Testnet multi-resource proof::contract=${bid}; ${proof}`);
   console.log(`Contract: ${bid}`);
   console.log(`Explorer: https://testnet.nearblocks.io/address/${bid}?tab=receipts`);
 }

@@ -9,6 +9,7 @@ const policies = new Map();
 const allowed = new Map();
 const grants = new Map();
 const accessKeys = new Map();
+const transactionsByHash = new Map();
 let owner;
 let tx = 0;
 const ok = (executor = 'mock.testnet') => ({
@@ -20,7 +21,9 @@ const add = (token, id, delta) => balances.set(`${token}|${id}`, balance(token, 
 const setFor = (map, id) => { if (!map.has(id)) map.set(id, new Set()); return map.get(id); };
 const fail = message => { throw new Error(message); };
 
-globalThis.fetch = async () => ({ ok: true, json: async () => ({}) });
+const originalFetch = globalThis.fetch;
+globalThis.fetch = async (url, ...args) => String(url).startsWith('http://127.0.0.1:')
+  ? originalFetch(url, ...args) : ({ ok: true, json: async () => ({}) });
 Account.prototype.deployContract = async function () { return ok(); };
 Account.prototype.createAccount = async function () { return ok(); };
 Account.prototype.signAndSendTransaction = async function ({ receiverId, actions, waitUntil }) {
@@ -79,7 +82,14 @@ Account.prototype.callFunctionRaw = async function ({ contractId, methodName, ar
       vault.set(policy.token, vault.get(policy.token) - amount);
       add(policy.token, contractId, -amount);
       add(policy.token, args.payee, amount);
-      return ok(policy.token);
+      const result = ok(policy.token);
+      result.status = { SuccessValue: '' };
+      result.transaction = {
+        hash: result.transaction_outcome.id, signer_id: this.accountId, receiver_id: contractId,
+        actions: [{ FunctionCall: { method_name: methodName, deposit: deposit.toString(), args: Buffer.from(JSON.stringify(args)).toString('base64') } }],
+      };
+      transactionsByHash.set(result.transaction.hash, result);
+      return result;
     }
     default: fail(`unexpected method ${methodName}`);
   }
@@ -102,4 +112,9 @@ providers.JsonRpcProvider.prototype.callFunction = async function (id, method, a
     }
     default: fail(`unexpected view ${id}.${method}`);
   }
+};
+
+providers.JsonRpcProvider.prototype.viewTransactionStatus = async function (hash, accountId, waitUntil) {
+  if (accountId !== owner || waitUntil !== 'FINAL' || !transactionsByHash.has(hash)) fail('unknown transaction');
+  return transactionsByHash.get(hash);
 };

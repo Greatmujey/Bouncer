@@ -47,15 +47,23 @@ Actions or Codespaces result before treating those behaviors as verified.
 6. **Policies and tokens are shared.** Policy-specific key grants isolate which
    policy a key may use, but policies may share the same token vault. Caps are
    denominated in token units, not USD; there is no price oracle.
-7. **No real resource fulfillment or cross-chain settlement.** The plan-driven
-   agent pays configured vendors; it does not perform AI quote discovery or
-   deliver compute, storage or API services. The multi-token test uses synthetic
+7. **Development-only provider and no cross-chain settlement.** The agent can
+   fetch fixed quotes and pay pinned test vendors; the local provider performs
+   SHA-256 work, local-file storage and text statistics. It is not an independent
+   commercial provider or AI marketplace. The multi-token test uses synthetic
    testnet FTs, not USDC. The old solver remains unfinished.
 8. **Local journal is not exactly-once settlement.** It blocks automatic retries
    of uncertain payments in one local journal, but a different or deleted
    journal, multiple hosts, or power loss can bypass that protection. Operators
    must reconcile pending transactions manually.
-9. **Prior contracts are unsafe to upgrade without migration.** This branch
+9. **Provider verification and operations are not trustless.** The provider
+   trusts its configured RPC, Bouncer deployment/code and token contracts. It
+   verifies transaction arguments and receipts, but cannot protect against a
+   compromised or upgraded trusted contract, malicious RPC or token. Its state
+   and lock are single-process, storage is plaintext and publicly retrievable,
+   and there is no authentication, transport security or multi-host replay
+   protection. Orders are sent to the provider; their hashes are on chain.
+10. **Prior contracts are unsafe to upgrade without migration.** This branch
    adds an agent-grants field to contract state. The old contracts retain their
    original unauthenticated behavior and cannot read the new state layout.
 
