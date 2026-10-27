@@ -31,17 +31,16 @@ jobs:
           rustup update stable --no-self-update
           rustup target add wasm32-unknown-unknown
           rustc --version && cargo --version
-      - name: cargo check (wasm target) — print full errors
+      - name: Debug build (wasm) + capture full output
         working-directory: bouncer/contracts/bouncer
-        run: cargo check --target wasm32-unknown-unknown --message-format=short 2>&1 | tail -80
-        continue-on-error: true
-      - name: Build wasm (release)
+        run: cargo build --target wasm32-unknown-unknown 2>&1 | tee /tmp/build.log | tail -150; exit ${PIPESTATUS[0]}
+      - name: Release build (wasm)
         working-directory: bouncer/contracts/bouncer
-        run: cargo build --release --target wasm32-unknown-unknown
+        run: cargo build --release --target wasm32-unknown-unknown 2>&1 | tee /tmp/release.log | tail -150; exit ${PIPESTATUS[0]}
       - name: Copy wasm to artifact dir
         run: |
           mkdir -p bouncer/contracts/bouncer/res
-          cp bouncer/target/wasm32-unknown-unknown/release/bouncer.wasm bouncer/contracts/bouncer/res/bouncer.wasm
+          cp bouncer/target/wasm32-unknown-unknown/release/bouncer.wasm bouncer/contracts/bouncer/res/bouncer.wasm 2>/dev/null || cp bouncer/target/wasm32-unknown-unknown/debug/bouncer.wasm bouncer/contracts/bouncer/res/bouncer.wasm
           ls -la bouncer/contracts/bouncer/res/bouncer.wasm
           echo "wasm size: $(wc -c < bouncer/contracts/bouncer/res/bouncer.wasm) bytes"
       - name: Upload wasm as build artifact
