@@ -24,9 +24,6 @@ jobs:
   build-contract:
     name: Build Rust contract (wasm)
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        shell: bash
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust + wasm target
@@ -36,18 +33,17 @@ jobs:
           rustc --version && cargo --version
       - name: Cargo check (wasm)
         working-directory: bouncer/contracts/bouncer
-        shell: bash -euxo pipefail {0}
         run: |
+          exec 2>&1
           cargo check --target wasm32-unknown-unknown --message-format=short
       - name: Cargo build (wasm, debug)
         working-directory: bouncer/contracts/bouncer
-        shell: bash -euxo pipefail {0}
         run: |
+          exec 2>&1
           cargo build --target wasm32-unknown-unknown --message-format=short
           ls -la ../../target/wasm32-unknown-unknown/debug/bouncer.wasm
-          echo "wasm bytes: $(wc -c < ../../target/wasm32-unknown-unknown/debug/bouncer.wasm)"
-      - name: Upload wasm
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
+        if: success()
         with:
           name: bouncer-wasm
           path: bouncer/target/wasm32-unknown-unknown/debug/bouncer.wasm
