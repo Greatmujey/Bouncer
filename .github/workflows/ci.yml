@@ -29,22 +29,18 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
-      - name: Show versions
-        run: |
-          rustc -vV
-          cargo -vV
-          which rust-lld || echo "no rust-lld"
-          ls ~/.rustup/toolchains/*/lib/rustlib/wasm32-unknown-unknown/lib/ 2>&1 | head -20 || true
-      - name: Cargo build (debug, verbose)
+      - name: Cargo build (release)
         working-directory: bouncer/contracts/bouncer
         run: |
-          RUSTFLAGS="-C link-arg=-s" cargo build --target wasm32-unknown-unknown -v 2>&1 | tail -100
-      - name: List output
-        run: |
-          ls -la bouncer/target/wasm32-unknown-unknown/debug/ 2>&1 | head -30
+          set -euxo pipefail
+          rustc --version
+          cargo build --target wasm32-unknown-unknown --release -v 2>&1 | tail -40
+          ls -la target/wasm32-unknown-unknown/release/
+          cp target/wasm32-unknown-unknown/release/bouncer.wasm ./bouncer.wasm
+          ls -lh ./bouncer.wasm
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: bouncer-wasm
-          path: bouncer/target/wasm32-unknown-unknown/debug/bouncer.wasm
-          if-no-files-found: ignore
+          path: bouncer/contracts/bouncer/bouncer.wasm
+          if-no-files-found: error
