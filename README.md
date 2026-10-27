@@ -7,6 +7,28 @@ policy checks. The v4 prototype has passed a three-token testnet quote → payme
 → self-hosted delivery check and a separate restricted-key security/refund check.
 This is unaudited testnet software, not suitable for real funds.
 
+## Website preview (read-only)
+
+`bouncer/web/` is a mobile-friendly static view of a **recorded** v4 testnet
+run, with links to the three payment transactions and the separate refund test.
+The two credit tokens are synthetic and fulfillment was self-hosted. The site
+is not a wallet, live agent dashboard, or commercial marketplace. It can try
+an optional public-RPC read of the contract’s current vault balances; if that
+fails it clearly keeps the recorded snapshot.
+
+To view it locally from the repository root (Node is not required):
+
+```sh
+python3 -m http.server 4173 --bind 0.0.0.0 --directory bouncer/web
+```
+
+GitHub Pages is not configured for this private repository. The explicitly
+opt-in `[publish-web-preview]` workflow publishes **only the five static web
+files** to a public third-party guest host for a time-limited preview; it does
+not publish the repository, credentials or journals. The host controls
+availability and expiry. It is not a durable production deployment, and normal
+pushes do not trigger it.
+
 ## Target tracks
 
 The planned multi-resource agent targets Autonomous Business, AI Security &

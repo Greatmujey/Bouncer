@@ -1,0 +1,51 @@
+import { RUN, explorerTx, formatUnits, readCurrentBalances, shortId } from './evidence.mjs';
+
+const grid = document.querySelector('#resource-grid');
+const status = document.querySelector('#rpc-status');
+const refresh = document.querySelector('#refresh-balances');
+
+function resourceCard(resource) {
+  // Values here are fixed constants from evidence.mjs, not untrusted input.
+  const card = document.createElement('article');
+  card.className = `resource-card ${resource.id}`;
+  card.innerHTML = `
+    <div class="resource-head"><div class="resource-icon"><svg aria-hidden="true"><use href="#i-${resource.id === 'compute' ? 'cpu' : resource.id}"/></svg></div>
+      <div><div class="resource-title">${resource.title}</div><div class="resource-service">${resource.service}</div></div><span class="verified-pill">✓ VERIFIED</span></div>
+    <div class="resource-amount">${formatUnits(resource.amount, resource.decimals)} <span>${resource.tokenLabel}</span></div><div class="resource-caption">paid in the recorded run</div>
+    <div class="resource-divider"></div>
+    <dl class="resource-details"><div><dt>Per-transaction cap</dt><dd>${formatUnits(resource.perTx, resource.decimals)} ${resource.tokenLabel}</dd></div>
+      <div><dt>Daily cap</dt><dd>${formatUnits(resource.daily, resource.decimals)} ${resource.tokenLabel}</dd></div>
+      <div><dt>Vault balance <span class="balance-label" data-label="${resource.id}">(recorded)</span></dt><dd data-balance="${resource.id}">${formatUnits(resource.vault, resource.decimals)} ${resource.tokenLabel}</dd></div>
+      <div><dt>Testnet token</dt><dd title="${resource.token}">${shortId(resource.token, 11, 8)}</dd></div></dl>
+    <div class="resource-footer"><span>Development provider</span><a href="${explorerTx(resource.tx)}" target="_blank" rel="noopener noreferrer" aria-label="View ${resource.title} testnet transaction">View transaction <svg aria-hidden="true"><use href="#i-external"/></svg></a></div>`;
+  return card;
+}
+RUN.resources.forEach(resource => grid.append(resourceCard(resource)));
+
+refresh.addEventListener('click', async () => {
+  refresh.disabled = true;
+  status.className = 'rpc-status';
+  status.textContent = 'Checking current recorded vault balances through a public NEAR testnet RPC…';
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15000);
+  try {
+    const balances = await readCurrentBalances(fetch, controller.signal);
+    for (const resource of RUN.resources) {
+      document.querySelector(`[data-balance="${resource.id}"]`).textContent = `${formatUnits(balances[resource.id], resource.decimals)} ${resource.tokenLabel}`;
+      document.querySelector(`[data-label="${resource.id}"]`).textContent = '(current)';
+    }
+    status.className = 'rpc-status success';
+    status.textContent = 'Current recorded vault balances loaded from NEAR testnet. Payments and policy caps above remain the historical run.';
+  } catch {
+    // Never substitute mock or historical values and call them live.
+    for (const resource of RUN.resources) {
+      document.querySelector(`[data-balance="${resource.id}"]`).textContent = `${formatUnits(resource.vault, resource.decimals)} ${resource.tokenLabel}`;
+      document.querySelector(`[data-label="${resource.id}"]`).textContent = '(recorded)';
+    }
+    status.className = 'rpc-status error';
+    status.textContent = 'Couldn’t reach the public testnet RPC from this browser. Showing the recorded run instead.';
+  } finally {
+    clearTimeout(timer);
+    refresh.disabled = false;
+  }
+});
