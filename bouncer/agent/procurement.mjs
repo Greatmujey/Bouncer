@@ -183,7 +183,7 @@ export async function runProcurement({ plan: rawPlan, provider, account, publicK
         journal.put(request.id, { ...pending, tx_hash: txHash });
       }
       const reference = txHash ? ` (tx ${txHash})` : '';
-      throw new Error(`${request.id}: payment could not be confirmed${reference}; journal remains pending, do not retry automatically: ${error.message}`, { cause: error });
+      throw new Error(`${request.id}: payment could not be confirmed${reference}; journal may be pending or uncertain, do not retry automatically: ${error.message}`, { cause: error });
     }
   }
   return totals;
@@ -196,6 +196,7 @@ export class FileJournal {
     this.lockFile = `${this.file}.lock`;
     fs.mkdirSync(path.dirname(this.file), { recursive: true, mode: 0o700 });
     this.lockFd = fs.openSync(this.lockFile, 'wx', 0o600);
+    this.failed = false;
     try {
       this.data = fs.existsSync(this.file)
         ? JSON.parse(fs.readFileSync(this.file, 'utf8'))
@@ -227,16 +228,37 @@ export class FileJournal {
       throw error;
     }
   }
-  get(id) { return this.data.entries.find(entry => entry.id === id); }
+  assertAvailable() {
+    if (this.lockFd === null) throw new Error('journal is closed');
+    if (this.failed) throw new Error('journal has a failed write; close, reopen and reconcile it before continuing');
+  }
+  get(id) { this.assertAvailable(); return this.data.entries.find(entry => entry.id === id); }
   put(id, entry) {
+    this.assertAvailable();
     const index = this.data.entries.findIndex(item => item.id === id);
+    const entries = this.data.entries.slice();
     const next = { id, ...entry };
-    if (index === -1) this.data.entries.push(next); else this.data.entries[index] = next;
+    if (index === -1) entries.push(next); else entries[index] = next;
+    const data = { ...this.data, entries };
     const temp = `${this.file}.${crypto.randomBytes(6).toString('hex')}.tmp`;
     try {
-      fs.writeFileSync(temp, JSON.stringify(this.data, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
+      const fd = fs.openSync(temp, 'wx', 0o600);
+      try {
+        fs.fchmodSync(fd, 0o600);
+        fs.writeFileSync(fd, JSON.stringify(data, null, 2) + '\n');
+        fs.fsyncSync(fd);
+      } finally { fs.closeSync(fd); }
       fs.renameSync(temp, this.file);
-      fs.chmodSync(this.file, 0o600);
+      // Persist the directory entry too. If either sync fails, stop before the
+      // next broadcast; a renamed file may already contain the newer state.
+      const directoryFd = fs.openSync(path.dirname(this.file), 'r');
+      try { fs.fsyncSync(directoryFd); } finally { fs.closeSync(directoryFd); }
+      this.data = data;
+    } catch (error) {
+      // The rename may have succeeded even if directory synchronization did
+      // not. Never keep using a possibly stale in-memory journal after error.
+      this.failed = true;
+      throw error;
     } finally {
       if (fs.existsSync(temp)) fs.unlinkSync(temp);
     }

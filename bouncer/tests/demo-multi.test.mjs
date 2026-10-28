@@ -55,6 +55,31 @@ test('multi-token setup and real procurement runner complete using a mock transp
   assert.match(result.stdout, /Provider rejected a changed order/);
 });
 
+test('demo setup retries only an explicit pre-admission Expired error once', () => {
+  for (const mode of ['setup_expired_once', 'setup_policy_expired_once']) {
+    const result = run(mode);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stderr, /Testnet demo setup .* explicit expired transaction; retrying once/);
+    assert.equal((result.stderr.match(/retrying once/g) || []).length, 1);
+    assert.equal(result.journal.entries.filter(entry => entry.status === 'completed').length, 3);
+  }
+  for (const mode of ['setup_expired_twice', 'setup_timeout', 'setup_expired_with_outcome']) {
+    const result = run(mode);
+    assert.equal(result.status, 1);
+    assert.equal((result.stderr.match(/retrying once/g) || []).length, mode === 'setup_expired_twice' ? 1 : 0);
+    assert.equal(result.journal, null);
+  }
+});
+
+test('an expired procurement payment is never retried by the demo setup helper', () => {
+  const result = run('payment_expired');
+  assert.equal(result.status, 1);
+  assert.doesNotMatch(result.stderr, /retrying once/);
+  assert.match(result.stderr, /payment could not be confirmed/);
+  assert.equal(result.journal.entries.length, 1);
+  assert.equal(result.journal.entries[0].status, 'pending');
+});
+
 test('two approved local providers are compared and the cheaper is paid once with mocked testnet', () => {
   const result = run('', false, false, true);
   assert.equal(result.status, 0, result.stderr);

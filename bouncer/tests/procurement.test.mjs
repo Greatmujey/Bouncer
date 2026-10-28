@@ -123,7 +123,7 @@ test('a blocked preflight is visible and never submits a transaction', async () 
 
 test('a timeout leaves the request pending and a second run refuses to retry', async () => {
   const f = fixture(); f.setMode('timeout');
-  await assert.rejects(() => run(f), /journal remains pending/);
+  await assert.rejects(() => run(f), /journal may be pending or uncertain/);
   assert.equal(f.journal.get('compute-1').status, 'pending');
   f.setMode('');
   await assert.rejects(() => run(f), /unresolved pending payment/);
@@ -146,6 +146,65 @@ test('rejects duplicate IDs and unsafe amount representations', () => {
     const plan = basePlan(); plan.requests[0].amount = value;
     assert.throws(() => validatePlan(plan), /amount/);
   }
+});
+
+test('file journal syncs its file and containing directory before returning', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bouncer-journal-sync-'));
+  const journal = new FileJournal(path.join(dir, 'state.json'), 'bouncer.testnet', 'owner.testnet');
+  const sync = fs.fsyncSync, kinds = [];
+  try {
+    fs.fsyncSync = fd => { kinds.push(fs.fstatSync(fd).isDirectory() ? 'directory' : 'file'); return sync(fd); };
+    journal.put('order1', { fingerprint: 'abc', status: 'pending' });
+    assert.deepEqual(kinds, ['file', 'directory']);
+  } finally { fs.fsyncSync = sync; journal.close(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('journal sync failure blocks the first broadcast, even after an atomic rename', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bouncer-journal-fail-'));
+  const file = path.join(dir, 'state.json');
+  const journal = new FileJournal(file, 'bouncer.testnet', 'owner.testnet');
+  const f = fixture(); f.journal = journal;
+  const sync = fs.fsyncSync; let syncs = 0;
+  try {
+    fs.fsyncSync = fd => { if (++syncs === 2) throw new Error('directory sync failed'); return sync(fd); };
+    await assert.rejects(run(f), /directory sync failed/);
+    assert.equal(f.calls.length, 0);
+    assert.throws(() => journal.get('compute-1'), /failed write.*reopen/);
+    await assert.rejects(run(f), /failed write.*reopen/);
+    assert.equal(f.calls.length, 0, 'a poisoned in-memory journal cannot be reused to pay');
+  } finally { fs.fsyncSync = sync; journal.close(); }
+  try {
+    const reopened = new FileJournal(file, 'bouncer.testnet', 'owner.testnet');
+    assert.equal(reopened.get('compute-1').status, 'pending', 'a rename may have succeeded even if directory sync failed');
+    await assert.rejects(run({ ...f, journal: reopened }), /unresolved pending/);
+    assert.equal(f.calls.length, 0);
+    reopened.close();
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('a sync failure after payment poisons the journal; reopening never repays a recorded completion', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bouncer-journal-after-pay-'));
+  const file = path.join(dir, 'state.json');
+  const journal = new FileJournal(file, 'bouncer.testnet', 'owner.testnet');
+  const f = fixture(); f.journal = journal;
+  const one = basePlan(); one.requests = one.requests.slice(0, 1);
+  const sync = fs.fsyncSync; let syncs = 0;
+  try {
+    // Pending, transaction hash, then completed: fail after the final rename.
+    fs.fsyncSync = fd => { if (++syncs === 6) throw new Error('directory sync failed after payment'); return sync(fd); };
+    await assert.rejects(run(f, { plan: one }), /journal may be pending or uncertain/);
+    assert.equal(f.calls.length, 1);
+    await assert.rejects(run(f, { plan: one }), /failed write.*reopen/);
+    assert.equal(f.calls.length, 1);
+  } finally { fs.fsyncSync = sync; journal.close(); }
+  try {
+    const reopened = new FileJournal(file, 'bouncer.testnet', 'owner.testnet');
+    assert.equal(reopened.get('compute-1').status, 'completed');
+    const outcome = await run({ ...f, journal: reopened }, { plan: one });
+    assert.equal(outcome.skipped, 1); assert.equal(outcome.paid, 0);
+    assert.equal(f.calls.length, 1);
+    reopened.close();
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
 test('file journal persists atomically and blocks a concurrent runner', () => {

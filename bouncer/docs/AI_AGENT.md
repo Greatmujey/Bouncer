@@ -262,10 +262,16 @@ provider route, checked result, verification scope, local timestamp and a
 SHA-256 digest of the canonical result. The result hash is computed over the
 UTF-8 bytes of `bouncer-delivery-result-v1`, a NUL byte, and `JSON.stringify`
 of the fixed-order result. Results and metadata may be sensitive; the journal
-is created with mode 0600. It is a local, editable record, **not a signed
-invoice, independent attestation, or proof of a provider's future performance**.
-It trusts the host, configured RPC and deployed contract. The contract does not
-verify these results or guarantee a refund for a bad delivery.
+is created with mode 0600. The file journal synchronizes each new file and its
+containing directory before returning, including the pending record written
+before a payment. A sync error stops the run; after a rename, the journal may
+still show a pending entry even if nothing was sent, so reconcile it manually.
+This requires a filesystem supporting these sync operations and cannot protect
+against faulty hardware, loss of the journal or a compromised host. It is a
+local, editable record, **not a signed invoice, independent attestation, or
+proof of a provider's future performance**. It trusts the host, configured RPC
+and deployed contract. The contract does not verify these results or guarantee
+a refund for a bad delivery.
 
 An invalid response or failed readback never receives a verified receipt. The
 completed payment remains in the journal as completed, with delivery marked
@@ -286,7 +292,11 @@ claim of provider misconduct), observed rejection, and recovered with the same
 [compute transaction](https://testnet.nearblocks.io/txns/GewpbPFkGtbBnNzWbuFrwcmWqb6hCHFkqoaBBmN3u7eh)
 without a new quote or payment. The separate security/refund job passed in that
 run. Its AI-planned job failed before procurement while granting a policy key
-because a testnet setup transaction expired; it is not an AI delivery proof.
+because a testnet setup transaction expired; an [isolated retry](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40672397604/job/122762858060)
+failed earlier while creating a vendor account for the same reason. Neither is
+an AI delivery proof. Fresh testnet demo setup now retries an explicit
+pre-admission `Expired` RPC error once; timeouts, receipt outcomes and agent
+procurement payments are never retried by that helper.
 
 ## Verification
 

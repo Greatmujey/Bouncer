@@ -64,8 +64,19 @@ function assertReceipts(result, action) {
   const failure = result.receipts_outcome.find(item => item.outcome?.status?.Failure);
   if (failure) throw new Error(`${action}: receipt failed: ${JSON.stringify(failure.outcome.status.Failure)}`);
 }
+// This wrapper is used ONLY while constructing fresh testnet demo accounts,
+// tokens and policies. An explicit Expired RPC error means pre-admission
+// rejection. Never retry timeouts, receipt outcomes, or procurement payments.
+async function setupAttempt(description, operation) {
+  try { return await operation(); }
+  catch (error) {
+    if (error?.type !== 'Expired' || error.transaction_outcome !== undefined) throw error;
+    console.warn(`    Testnet demo setup ${description}: explicit expired transaction; retrying once.`);
+    return operation();
+  }
+}
 async function call(signer, contractId, methodName, args, deposit = 0n, gas = GAS100) {
-  const result = await signer.callFunctionRaw({ contractId, methodName, args, deposit, gas, waitUntil: 'FINAL' });
+  const result = await setupAttempt(methodName, () => signer.callFunctionRaw({ contractId, methodName, args, deposit, gas, waitUntil: 'FINAL' }));
   assertReceipts(result, methodName);
   console.log(`    ✅ ${methodName}  ${txUrl(result.transaction_outcome.id)}`);
   return result;
@@ -191,7 +202,7 @@ async function main() {
   const bouncer = await createFunded(bid, bouncerKey);
   const funder = await createFunded(funderId, funderKey);
   fs.writeFileSync(path.join(os.homedir(), '.bouncer_id'), bid);
-  const deploy = await bouncer.deployContract(fs.readFileSync(wasmPath));
+  const deploy = await setupAttempt('deploy', () => bouncer.deployContract(fs.readFileSync(wasmPath)));
   assertReceipts(deploy, 'deploy');
   console.log(`    ✅ deploy ${txUrl(deploy.transaction_outcome.id)}`);
   await call(bouncer, bid, 'new', { owner: bid });
@@ -200,14 +211,14 @@ async function main() {
   console.log(`\n=== 2) Create funded user and ${compareDemo ? 'four' : 'three'} development vendor accounts ===`);
   const userKey = KeyPair.fromRandom('ed25519');
   saveKey(userId, userKey);
-  const createdUser = await bouncer.createAccount(userId, userKey.getPublicKey(), 4n * N);
+  const createdUser = await setupAttempt('create user', () => bouncer.createAccount(userId, userKey.getPublicKey(), 4n * N));
   assertReceipts(createdUser, 'create user');
   console.log(`    ✅ ${userId} ${txUrl(createdUser.transaction_outcome.id)}`);
   const user = account(userId, userKey);
   for (const [kind, id] of Object.entries(vendorIds)) {
     const key = KeyPair.fromRandom('ed25519');
     saveKey(id, key);
-    const created = await bouncer.createAccount(id, key.getPublicKey(), N / 5n);
+    const created = await setupAttempt(`create ${kind} vendor`, () => bouncer.createAccount(id, key.getPublicKey(), N / 5n));
     assertReceipts(created, `create ${kind} vendor`);
     console.log(`    ✅ ${id} ${txUrl(created.transaction_outcome.id)}`);
   }
@@ -236,10 +247,10 @@ async function main() {
   console.log('\n=== 6) Install one execute-only key and grant it three token policies ===');
   const agentKey = KeyPair.fromRandom('ed25519');
   const agentFile = saveKey(bid, agentKey, 'agent');
-  const added = await bouncer.signAndSendTransaction({
+  const added = await setupAttempt('create agent key', () => bouncer.signAndSendTransaction({
     receiverId: bid, waitUntil: 'FINAL',
     actions: [transactions.addKey(agentKey.getPublicKey(), transactions.functionCallAccessKey(bid, ['execute'], N))],
-  });
+  }));
   assertReceipts(added, 'create agent key');
   console.log(`    ✅ agent key ${txUrl(added.transaction_outcome.id)}`);
   const resources = [

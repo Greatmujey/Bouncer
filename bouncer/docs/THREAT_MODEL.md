@@ -80,10 +80,12 @@ all possible callback or token failure cases.
    the original quote. Provider or independent-source outages can still block
    recovery. Preserve the original goals and journal rather than selecting again.
 8. **Local journal and nonce tracker are not distributed coordination.** The
-   journal blocks automatic retries of uncertain payments in one local file,
-   but a different/deleted journal, multiple hosts or power loss can bypass it.
-   The signer keeps its own process's nonces monotonic to mitigate stale RPC
-   reads; it does not coordinate concurrent processes using the same key or
+   file journal synchronizes its content and directory before returning, and
+   blocks automatic retries of uncertain payments in one local file. Sync
+   failures stop execution, but a different/deleted journal, multiple hosts or
+   unreliable storage can bypass the protection. The signer keeps its own
+   process's nonces monotonic to mitigate stale RPC reads; it does not coordinate
+   concurrent processes using the same key or
    retry a failed send. Use one writer per key and reconcile pending payments
    manually.
 9. **Provider verification and operations are not trustless.** The provider

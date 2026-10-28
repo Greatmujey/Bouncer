@@ -54,7 +54,17 @@ globalThis.fetch = async (url, ...args) => {
   return String(url).startsWith('http://127.0.0.1:') ? originalFetch(url, ...args) : ({ ok: true, json: async () => ({}) });
 };
 Account.prototype.deployContract = async function () { return ok(); };
-Account.prototype.createAccount = async function () { return ok(); };
+let accountAttempts = 0, setupAttempts = 0;
+const setupError = (type, withOutcome = false) => Object.assign(new Error(type === 'Expired' ? 'Transaction has expired' : 'RPC timeout'),
+  { type, ...(withOutcome ? { transaction_outcome: { id: 'known-outcome' } } : {}) });
+Account.prototype.createAccount = async function () {
+  accountAttempts++;
+  if ((process.env.BOUNCER_MOCK_MODE === 'setup_expired_once' && accountAttempts === 1) ||
+      process.env.BOUNCER_MOCK_MODE === 'setup_expired_twice') throw setupError('Expired');
+  if (process.env.BOUNCER_MOCK_MODE === 'setup_timeout') throw setupError('Timeout');
+  if (process.env.BOUNCER_MOCK_MODE === 'setup_expired_with_outcome') throw setupError('Expired', true);
+  return ok();
+};
 Account.prototype.signAndSendTransaction = async function ({ receiverId, actions, waitUntil }) {
   const added = actions?.[0]?.addKey;
   const permission = added?.accessKey?.permission?.functionCall;
@@ -70,6 +80,8 @@ Account.prototype.callFunctionRaw = async function ({ contractId, methodName, ar
   if (typeof gas !== 'bigint' || typeof deposit !== 'bigint' || waitUntil !== 'FINAL') fail('invalid call options');
   const pk = (await this.signer.getPublicKey()).toString();
   if (accessKeys.has(pk) && (methodName !== 'execute' || deposit !== 0n)) fail('restricted key misuse');
+  if (methodName === 'grant_agent_key' && process.env.BOUNCER_MOCK_MODE === 'setup_policy_expired_once' && setupAttempts++ === 0) throw setupError('Expired');
+  if (methodName === 'execute' && process.env.BOUNCER_MOCK_MODE === 'payment_expired') throw setupError('Expired');
   switch (methodName) {
     case 'new': owner = args.owner; return ok(contractId);
     case 'create_token': {
