@@ -28,9 +28,23 @@ async function main() {
     safe(outlayer, 'get_priced_projects', { from_index: 0, limit: 30 }),
     safe(circle, 'ft_metadata'), safe(ref, 'get_number_of_pools'),
   ]);
+  const slimMeta = result => result.ok ? { ok: true, value: { name: result.value?.name, symbol: result.value?.symbol, decimals: result.value?.decimals } } : result;
+  const fakeMeta = await safe('usdc.fakes.testnet', 'ft_metadata');
   const configuration = { outlayer_payment_token: paymentToken, priced_project_count: pricedCount,
-    priced_projects: pricedProjects, circle_testnet_metadata: circleMeta, ref_pool_count: total };
+    priced_projects: pricedProjects, circle_testnet_metadata: slimMeta(circleMeta),
+    outlayer_test_token_metadata: slimMeta(fakeMeta), ref_pool_count: total };
   notice('Read-only testnet provider configuration', configuration);
+  for (const project_id of ['connectors.outlayer.testnet/connector-probe', 'connectors.outlayer.testnet/github']) {
+    const [project, pricing] = await Promise.all([safe(outlayer, 'get_project', { project_id }),
+      safe(outlayer, 'get_project_pricing', { project_id })]);
+    const key = project.ok && project.value?.active_version;
+    const version = key ? await safe(outlayer, 'get_version', { project_id, version_key: key }) : null;
+    const select = new Set(['ping', 'whoami', 'fetch', 'refund', 'trap', 'status', 'repo_get', 'file_get']);
+    const rows = pricing.ok && Array.isArray(pricing.value?.operations)
+      ? pricing.value.operations.filter(row => select.has(row.operation)) : [];
+    notice('Independent priced project ' + project_id, { project, version, author: pricing.value?.author_account_id, selected_prices: rows,
+      pricing_error: pricing.ok ? undefined : pricing.error });
+  }
   if (!total.ok || !/^\d+$/.test(String(total.value))) throw new Error('cannot enumerate Ref testnet pools');
   const count = Number(total.value);
   if (!Number.isSafeInteger(count) || count < 0 || count > 100_000) throw new Error('unexpected Ref pool count');
