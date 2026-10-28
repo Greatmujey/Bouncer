@@ -1,8 +1,10 @@
 // LIVE TESTNET ONLY. Acquire a tiny amount of test USDC.e from an independent
 // Ref pool as owner setup; then use a restricted key to move a capped amount
-// from Bouncer to OutLayer's prepaid balance via the owner-pinned NEP-141 call.
-// A prepaid deposit is NOT a purchased/delivered API service. Circle USDC is a
-// different token and is not used here. Never retry an ambiguous payment.
+// from Bouncer to OutLayer's prepaid balance via an owner-pinned NEP-141 call,
+// then buy one pinned independent connectivity-probe execution under separate
+// native and prepaid policies. Circle USDC is a different token and is not
+// used here. This is a test connector, not a commercial API. Never retry an
+// ambiguous payment.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -14,6 +16,7 @@ import nearApi from 'near-api-js';
 import { MonotonicAccount } from './agent/near-account.mjs';
 import { FileJournal } from './agent/procurement.mjs';
 import { runFtCallGoal, recoverFtCallGoal } from './agent/ft-call.mjs';
+import { runProjectGoal, recoverProjectGoal } from './agent/outlayer-project.mjs';
 import { validateRpcEndpoint } from './shared/rpc-endpoint.mjs';
 
 const { KeyPair, KeyPairSigner, providers, transactions } = nearApi;
@@ -23,6 +26,12 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const ONE = 10n ** 24n, TGAS = 10n ** 12n;
 const TOKEN = 'usdc.fakes.testnet', WRAP = 'wrap.testnet', REF = 'ref-finance-101.testnet', OUTLAYER = 'outlayer.testnet';
 const MSG = '{"action":"deposit_balance"}', USD_AMOUNT = 15_000n, REFUND_AMOUNT = 10n ** 20n;
+const PROJECT = 'connectors.outlayer.testnet/connector-probe';
+// Published version and author reviewed via the live read-only catalog; never
+// silently follow the mutable active version or reprice after approval.
+const PROJECT_VERSION = '2d406ed8005a422c38aec0616990989970e2c444c1386d4f09d54cce59468fb9';
+const PROJECT_AUTHOR = 'zavodil.testnet';
+const PROJECT_NATIVE_MAX = ONE / 10n, PROJECT_NATIVE_FUNDING = 3n * PROJECT_NATIVE_MAX;
 const accountFor = (id, key) => new MonotonicAccount(id, provider, new KeyPairSigner(key));
 const view = (id, method, args = {}) => provider.callFunction(id, method, args, { finality: 'final' });
 const txUrl = hash => `https://testnet.nearblocks.io/txns/${hash}`;
@@ -89,7 +98,7 @@ async function main() {
   const meta = await view(TOKEN, 'ft_metadata');
   if (meta?.decimals !== 6) throw new Error('unexpected test token decimals');
   const contractKey = KeyPair.fromRandom('ed25519'), ownerKey = KeyPair.fromRandom('ed25519');
-  const agentKey = KeyPair.fromRandom('ed25519'), attackKey = KeyPair.fromRandom('ed25519');
+  const agentKey = KeyPair.fromRandom('ed25519'), attackKey = KeyPair.fromRandom('ed25519'), projectKey = KeyPair.fromRandom('ed25519');
   const suffix = crypto.randomBytes(4).toString('hex'), contractId = `bouncer-ft-${suffix}.testnet`, ownerId = `owner.${contractId}`;
   console.log(`Guarded NEP-141 integration: testnet contract=${contractId}; distinct owner=${ownerId}; fake test asset=${TOKEN}`);
   const contract = await createFunded(contractId, contractKey);
@@ -177,6 +186,61 @@ async function main() {
     if (afterProvider - beforeProvider !== USD_AMOUNT || BigInt(await view(contractId, 'vault_balance', { token: TOKEN })) !== 0n ||
         BigInt(await view(contractId, 'daily_spent', { policy_id: goal.policy_id })) !== USD_AMOUNT) throw new Error('provider balance and vault did not reconcile');
     console.log(`::notice title=Guarded independent test-token provider funding::contract=${contractId}; owner=${ownerId}; token=${TOKEN}; provider=${OUTLAYER}; tx=${tx}; amount_micro=${USD_AMOUNT}; provider_balance_delta=${afterProvider - beforeProvider}; owner_setup_ref_swap=${swap.transaction_outcome.id}; sends=${sends}; recovery=key-free; scope=prepaid_deposit_not_delivery`);
+    if (BigInt(await view(contractId, 'outlayer_prepaid_balance', { token: TOKEN })) !== USD_AMOUNT) throw new Error('conservative prepaid allowance was not recorded');
+
+    // Spend that recorded provider balance on ONE pinned, independently
+    // operated test connector. The native compute fee and prepaid test token
+    // have independent caps/budgets, plus an owner-reviewed exact project,
+    // version, input and fee. This is a connectivity probe, not a commercial API.
+    await call(owner, contractId, 'deposit_native', {}, PROJECT_NATIVE_FUNDING);
+    for (const [policy_id, token, cap] of [['project-native', 'native', PROJECT_NATIVE_MAX], ['project-token', TOKEN, USD_AMOUNT]]) {
+      await call(owner, contractId, 'set_policy', { policy_id, token, per_tx_cap: cap.toString(), daily_cap: cap.toString() }, 1n);
+      await call(owner, contractId, 'allow_payee', { policy_id, payee: OUTLAYER }, 1n);
+      await call(owner, contractId, 'grant_agent_key', { policy_id, public_key: projectKey.getPublicKey().toString() }, 1n);
+    }
+    const config = { project_id: PROJECT, version_key: PROJECT_VERSION, usd_policy_id: 'project-token', token: TOKEN,
+      attached_usd: USD_AMOUNT.toString(), input_data: '{"operation":"fetch"}', max_instructions: 1_000_000_000,
+      max_memory_mb: 256, max_execution_seconds: 60 };
+    const estimate = BigInt(await view(OUTLAYER, 'estimate_execution_cost', { resource_limits: { max_instructions: config.max_instructions,
+      max_memory_mb: config.max_memory_mb, max_execution_seconds: config.max_execution_seconds }, input_len: Buffer.byteLength(config.input_data) }));
+    if (estimate <= 0n || estimate > PROJECT_NATIVE_MAX) throw new Error('provider compute estimate exceeds the owner-approved native maximum');
+    await call(owner, contractId, 'set_outlayer_project', { native_policy_id: 'project-native', project: config }, 1n);
+    await addKey(owner, contractId, projectKey, ['execute_outlayer_project']);
+    const projectAgent = accountFor(ownerId, projectKey), projectRoute = await view(contractId, 'get_outlayer_project', { native_policy_id: 'project-native' });
+    const projectGoal = { id: 'paid-connectivity-probe', contract_id: contractId, owner_account_id: ownerId,
+      native_policy_id: 'project-native', amount: PROJECT_NATIVE_MAX.toString(), route: projectRoute, expected_author: PROJECT_AUTHOR };
+    const badRoute = structuredClone(projectRoute); badRoute.project.input_data = '{"operation":"other"}';
+    await expectRejection('agent-supplied project/input substitution', /OutLayer project route changed since review/, () => projectAgent.callFunctionRaw({
+      contractId, methodName: 'execute_outlayer_project', args: { native_policy_id: 'project-native', amount: PROJECT_NATIVE_MAX.toString(), expected_route: badRoute },
+      deposit: 0n, gas: 300n * TGAS, waitUntil: 'FINAL' }));
+    const projectPath = path.join(dir, 'project-goal.json');
+    fs.writeFileSync(projectPath, JSON.stringify(projectGoal, null, 2) + '\n', { mode: 0o600 });
+    let projectSends = 0, projectInject = true;
+    const projectFaulty = new Proxy(provider, { get(target, property) {
+      if (property === 'sendTransactionUntil') return async (...args) => { projectSends++; return target.sendTransactionUntil(...args); };
+      if (property === 'txStatusReceipts') return async (...args) => { const result = await target.txStatusReceipts(...args);
+        if (!projectInject) return result; projectInject = false; return { ...result, receipts: [] }; };
+      const value = Reflect.get(target, property, target); return typeof value === 'function' ? value.bind(target) : value;
+    } });
+    if ((await runProjectGoal({ goal: projectGoal, provider, account: projectAgent, publicKey: projectKey.getPublicKey(), journal })).status !== 'READY') throw new Error('paid project preflight did not become ready');
+    try {
+      await runProjectGoal({ goal: projectGoal, provider: projectFaulty, account: projectAgent, publicKey: projectKey.getPublicKey(), journal, execute: true });
+      throw new Error('injected project fault unexpectedly passed');
+    } catch (error) { if (!/paid project unresolved/.test(error.message)) throw error; }
+    const projectTx = journal.get(projectGoal.id)?.tx_hash;
+    if (!projectTx || projectSends !== 1 || journal.get(projectGoal.id)?.status !== 'pending') throw new Error('paid project was not journaled');
+    journal.close();
+    const projectCli = await util.promisify(execFile)(process.execPath, [path.join(ROOT, 'bouncer/agent/outlayer-project.mjs'),
+      '--goal', projectPath, '--state', state, '--rpc', RPC, '--recover'], { timeout: 90_000, maxBuffer: 64 * 1024 });
+    if (!projectCli.stdout.includes('REUSED') || !projectCli.stdout.includes(projectTx)) throw new Error('paid project key-free recovery did not reuse the transaction');
+    journal = new FileJournal(state, contractId, ownerId);
+    const projectResult = await recoverProjectGoal({ goal: projectGoal, provider, journal });
+    if (projectResult.delivery.prepaid_charged !== USD_AMOUNT.toString() || projectSends !== 1 ||
+        BigInt(await view(contractId, 'outlayer_prepaid_balance', { token: TOKEN })) !== 0n ||
+        BigInt(await view(OUTLAYER, 'get_user_stablecoin_balance', { account_id: contractId })) !== beforeProvider ||
+        BigInt(await view(contractId, 'daily_spent', { policy_id: 'project-token' })) !== USD_AMOUNT ||
+        BigInt(await view(contractId, 'daily_spent', { policy_id: 'project-native' })) !== PROJECT_NATIVE_MAX) throw new Error('paid project budgets, provider balance or result did not reconcile');
+    console.log(`::notice title=Guarded independent paid testnet connectivity probe::contract=${contractId}; owner=${ownerId}; tx=${projectTx}; project=${PROJECT}; version=${PROJECT_VERSION}; token=${TOKEN}; prepaid_charged=${projectResult.delivery.prepaid_charged}; author=${PROJECT_AUTHOR}; near_charge=${projectResult.delivery.near_charged}; near_refund=${projectResult.delivery.near_refunded_to_owner}; http_status=${projectResult.delivery.result.http_status}; sends=${projectSends}; recovery=key-free; scope=test_connector_probe_not_commercial_api`);
 
     // Independent receiver deliberately rejects wNEAR: NEP-141 must return all
     // unused tokens and the original budget. This verifies a real full refund.
@@ -191,12 +255,13 @@ async function main() {
         BigInt(await view(contractId, 'daily_spent', { policy_id: 'refund-test' })) !== 0n) throw new Error('rejected token was not fully restored');
     console.log(`::notice title=Guarded FT receiver rejection and refund::contract=${contractId}; tx=${refunded.settlement.tx_hash}; token=${WRAP}; used=0; unused=${REFUND_AMOUNT}; budget_restored=true`);
     await call(owner, contractId, 'withdraw', { token: WRAP, amount: REFUND_AMOUNT.toString() }, 1n);
+    await call(owner, contractId, 'withdraw_native', { amount: (PROJECT_NATIVE_FUNDING - PROJECT_NATIVE_MAX).toString() }, 1n);
     completed = true;
   } finally {
     journal.close();
     if (completed) fs.rmSync(dir, { recursive: true, force: true });
     else console.error(`Unresolved public testnet evidence preserved: ${dir}. Reconcile journal hashes; never resend automatically.`);
   }
-  console.log('Evidence scope: independent provider accepted a prepaid fake test-token balance; no paid API/storage delivery was demonstrated.');
+  console.log('Evidence scope: independent OutLayer test connector delivered a paid connectivity probe using fake test USDC.e and native NEAR. This is not a commercial API/storage purchase, Circle USDC, or independently verified HTTP/TEE proof.');
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

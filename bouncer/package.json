@@ -11,6 +11,7 @@
     "agent": "node agent/procurement.mjs",
     "outlayer": "node agent/outlayer.mjs",
     "ft-call": "node agent/ft-call.mjs",
+    "outlayer-project": "node agent/outlayer-project.mjs",
     "mission": "node agent/mixed-mission.mjs",
     "solver": "node agent/solver.mjs",
     "quote": "node agent/intents.mjs quote",
