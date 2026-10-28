@@ -89,8 +89,8 @@ async function main() {
   if (metadata?.spec !== 'ft-1.0.0' || metadata?.symbol !== 'USDC' || metadata?.decimals !== 6) throw new Error('unexpected Circle testnet USDC metadata');
   const quote = await selectOwnerSetupQuote(provider); // read only, before creating accounts
   const wasm = fs.readFileSync(path.join(ROOT, 'bouncer.wasm'));
-  // Avoid using the deliberately older root artifact by mistake. This marker
-  // is a sanity check only, NOT proof of deployed contract code integrity.
+  // Avoid using a stale root artifact by mistake. This marker is a sanity
+  // check only, NOT proof of deployed contract code integrity.
   if (!wasm.includes(Buffer.from('bouncer-agent-v7'))) throw new Error('demo requires the fresh v7 WASM artifact');
   const contractKey = KeyPair.fromRandom('ed25519'), ownerKey = KeyPair.fromRandom('ed25519');
   const vendorKey = KeyPair.fromRandom('ed25519'), agentKey = KeyPair.fromRandom('ed25519'), attackKey = KeyPair.fromRandom('ed25519');

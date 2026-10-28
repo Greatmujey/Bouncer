@@ -137,10 +137,11 @@ possible callback, provider or token failure cases.
    editable, depend on trusted host/RPC, and are not signed invoices or
    independent attestations.
 10. **Prior contracts are unsafe to upgrade without migration.** Older contracts
-   have different state and authorization; v3 and v4 also interpret budget bucket
-   keys differently; v5 adds state again. Deploy v5 fresh; no migration is
-   supplied. Hourly spend buckets are not pruned and incur ongoing state/storage
-   costs; the 25 reads per check also consume gas.
+   have different state and authorization; v3 and v4 interpret budget bucket
+   keys differently, and v5, both v6 layouts and v7 add incompatible state.
+   Deploy v7 fresh; no migration is supplied. A reported version is not proof
+   of code identity. Hourly spend buckets are not pruned and incur ongoing
+   state/storage costs; the 25 reads per check also consume gas.
 11. **OutLayer is a trusted independent service, not trustless compute.** Its
    payment is native NEAR rather than an FT. Provider/RPC availability,
    contract code, program hosting and the owner-pinned hash are assumptions;

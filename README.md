@@ -82,10 +82,11 @@ that all six are complete.
 The source in this branch reports v7 and needs a **fresh deployment**; no
 migration from older state is provided. Two incompatible earlier layouts both
 reported v6, so a version string alone does not establish upgrade safety. The
-checked-in `bouncer.wasm` remains v5 (SHA-256
-`ac6e5c8d73ef64e44ae1ecb84c9aa704ec542d0dbd3ffbce89f2a9b6e872bd15`);
-current v7 demo scripts will reject it as stale. The v7 testnet runs used the
-WASM built by CI, not this checked-in file.
+checked-in `bouncer.wasm` is the CI-built v7 artifact (SHA-256
+`65e11e3367cd792a74c9436b6c8b3db6341ddfb18205956a451cb165b38d9413`).
+CI checks that its version marker matches the source; this sanity check is not
+an audit or proof that a deployed contract has the same code. Earlier live
+runs used the fresh WASM built by their own CI jobs.
 
 - NEP-141 deposits; token-specific vault balances and per-policy caps.
 - A direct `execute` call must come from the owner account, with **zero**
@@ -301,17 +302,18 @@ transaction was recovered. See [setup, recovery and trust boundaries](bouncer/do
 
 ### Paid-provider mission and recovery
 
-In the [28 October 2026 test](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40689705483/job/122821855850),
+In the [28 October 2026 test](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40699116807/job/122854642930),
 Bouncer used separately scoped keys to [deposit 15,000 micro-units of fake
-USDC.e](https://testnet.nearblocks.io/txns/FxaPzzPT3muthwjgEzC3MogW4RRqKTcTPisxAh7SeHxM)
-and [pay for the pinned OutLayer test probe](https://testnet.nearblocks.io/txns/HyLbpyHyX3PELEcJ5p3GpypXZzcKd4w6L63ohtHu7XFK)
+USDC.e](https://testnet.nearblocks.io/txns/JA8TEBybh8Gj6JkfghyeopMrAvWNKYMv2nSU2NAnJ75d)
+and [pay for the pinned OutLayer test probe](https://testnet.nearblocks.io/txns/3WSS8Cma8SBqtnk9Krb6g7cNhSgpX2m7wpbKBdtiEuny)
 under fake-token and native-NEAR budgets. It returned HTTP **405**, not API data.
 The unified runner recovered those already-settled transactions and then paid
-and verified self-hosted [compute](https://testnet.nearblocks.io/txns/6Zf1iATqDXJYfC2i7R6jxvq8879SWnn7urWc9x4bayWq),
-[storage](https://testnet.nearblocks.io/txns/CM1Tfm4XnZtRnwhXJdLYHD6oTXT49tW3Ra4mjg2B9eo4)
-and [API](https://testnet.nearblocks.io/txns/66pQBQ3JMsXe28AhFW1PLCcXp95H8zoRAMNkMJGFYLvi)
-tasks in wNEAR. A locally corrupted compute result stopped later payments;
-recovery reused that same compute transaction before continuing. The unified
+and verified self-hosted [compute](https://testnet.nearblocks.io/txns/B9PLx9GQaaJc7im6VvmJ5rXoBSKm5N11ZRGNWA6EPPz5),
+[storage](https://testnet.nearblocks.io/txns/FCR2LtrGjjXAfWLK3XhEkkU6Mo8P9CFWLGs8NXXuBTau)
+and [API](https://testnet.nearblocks.io/txns/6GZ18f7y3H6vm8LXYrjKTfZccnfzLJHH8JvojHt3kXa9)
+tasks in wNEAR using the durable direct-payment path. A locally corrupted compute
+result stopped later payments; recovery reused that same compute transaction
+before continuing. The unified
 runner's initiation of *all* stages is covered offline, not yet proved live.
 Previews are non-atomic, and earlier payments cannot be rolled back. The
 preceding Ref swap was owner setup, not agent-guarded DeFi.

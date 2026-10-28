@@ -1,10 +1,12 @@
 # Guarded independent compute (testnet)
 
-Bouncer v5 can pay an independently operated provider, `outlayer.testnet`, for
-a **bounded random-number example**. This integration uses native testnet NEAR,
-not wNEAR, USDC or another fungible token. Storage, API/data and the other
-compute examples still use Bouncer's self-hosted development services. This is
-unaudited software; do not use real funds.
+Bouncer v5 and later can pay an independently operated provider, `outlayer.testnet`,
+for a **bounded random-number example**. That particular integration uses
+native testnet NEAR, not wNEAR, USDC or another fungible token. The current v7
+source also supports a separately guarded prepaid FT funding and priced
+connector path; its live test used fake USDC.e and returned HTTP 405, not useful
+API data. Storage, API/data and the other compute examples still use Bouncer's
+self-hosted development services. This is unaudited software; do not use real funds.
 
 ## What has been demonstrated
 
@@ -39,8 +41,9 @@ financial settings.
 This result trusts the configured RPC and the OutLayer contract. Checking a
 number is in range does **not** independently prove TEE attestation, correct
 execution, or statistical randomness. It does not establish any delivery SLA,
-production reliability, independent storage/API service, FT integration or
-stablecoin purchase. The local fault does not imply provider misconduct.
+production reliability, independent storage/API service, FT payment to this
+native compute example or a real-value stablecoin purchase. The local fault
+does not imply provider misconduct.
 
 ## Asset and policy semantics
 
@@ -77,7 +80,7 @@ stablecoin purchase. The local fault does not imply provider misconduct.
 
 ## Try the mixed mission
 
-The optional demo creates **fresh testnet accounts**, a v5 deployment, synthetic
+The optional demo creates **fresh testnet accounts**, a v7 deployment, synthetic
 FTs, local development services and a small native OutLayer budget. It uses two
 separate restricted keys and saves them privately in
 `~/.near-credentials/testnet/`; goals and journals are in `~/.bouncer/testnet/`.
