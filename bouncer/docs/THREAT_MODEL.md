@@ -67,8 +67,15 @@ all possible callback or token failure cases.
    provider or marketplace. GitHub data is untrusted and can be unavailable
    after payment. The multi-token test uses
    synthetic testnet FTs, not USDC. There is no cross-chain settlement. The old
-   solver is disabled because it previously used fake fill hashes; the standalone
-   quote comparator does not settle anything.
+   solver is disabled because it previously used fake fill hashes; the older
+   standalone quote comparator does not settle anything. The agent's optional
+   curated quote selection is separate: it contacts only owner-configured
+   endpoints, compares one token at a time, rejects mismatched or unavailable
+   quotes, and requotes the selected price before the guarded runner may pay.
+   It sends full order inputs to every candidate. A dishonest approved provider
+   may underbid and refuse delivery; unsigned quotes have no expiry or guarantee.
+   Repricing or an outage can block recovery even after payment. Preserve the
+   original goals and journal and reconcile rather than selecting again blindly.
 8. **Local journal and nonce tracker are not distributed coordination.** The
    journal blocks automatic retries of uncertain payments in one local file,
    but a different/deleted journal, multiple hosts or power loss can bypass it.

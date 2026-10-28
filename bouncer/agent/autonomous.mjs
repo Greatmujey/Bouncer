@@ -9,15 +9,18 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createModelClient, planObjective, saveGoals, validatePlanningConfig } from './goal-planner.mjs';
+import { compareApprovedQuotes } from './quote-comparison.mjs';
 
-const USAGE = `Usage: node bouncer/agent/autonomous.mjs --config owner.json --objective-file objective.txt --output new-goals.json [--key agent-key.json] [--local-provider provider.json] [--execute]
+const USAGE = `Usage: node bouncer/agent/autonomous.mjs --config owner.json --objective-file objective.txt --output new-goals.json [--compare-providers] [--key agent-key.json] [--local-provider provider.json] [--execute]
 
 Uses BOUNCER_LLM_URL (full chat-completions endpoint), BOUNCER_LLM_MODEL, and
 optionally BOUNCER_LLM_API_KEY. The objective is sent to that model; do not
 include secrets in it. The owner config, signing key and journal are not sent.
-Planning alone sends no transactions. Supplying --key also runs a read-only
-quote/policy preflight; --execute explicitly sends real TESTNET transactions.
-The output and its matching journal are private and must be kept for recovery.
+Planning alone sends no transactions. --compare-providers sends each order to
+all owner-approved quote endpoints; start them separately, not --local-provider.
+Supplying --key also runs a read-only quote/policy preflight; --execute
+explicitly sends real TESTNET transactions. The output and its matching journal
+are private and must be kept for recovery.
 Do not use real funds or a full-access key. See bouncer/docs/AI_AGENT.md.
 `;
 
@@ -26,9 +29,10 @@ function parseArgs(args) {
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === '--help') return { help: true };
-    if (arg === '--execute') {
-      if (options.execute) throw new Error('duplicate --execute');
-      options.execute = true; continue;
+    if (arg === '--execute' || arg === '--compare-providers') {
+      const name = arg.slice(2);
+      if (options[name]) throw new Error(`duplicate ${arg}`);
+      options[name] = true; continue;
     }
     if (['--config', '--objective-file', '--output', '--key', '--local-provider'].includes(arg) && args[i + 1] && !args[i + 1].startsWith('--')) {
       const name = arg.slice(2);
@@ -38,6 +42,7 @@ function parseArgs(args) {
   }
   if (!options.config || !options['objective-file'] || !options.output) throw new Error('--config, --objective-file and --output are required');
   if ((options.execute || options['local-provider']) && !options.key) throw new Error('--execute and --local-provider require --key');
+  if (options['compare-providers'] && options['local-provider']) throw new Error('--compare-providers requires separately running providers, not --local-provider');
   return options;
 }
 
@@ -70,12 +75,21 @@ async function main() {
   validatePlanningConfig(config);
   const objective = readBounded(options['objective-file'], 4000);
   const modelClient = createModelClient({ endpoint: process.env.BOUNCER_LLM_URL, model: process.env.BOUNCER_LLM_MODEL, apiKey: process.env.BOUNCER_LLM_API_KEY || undefined });
-  const goals = await planObjective({ objective, config, modelClient });
+  let goals = await planObjective({ objective, config, modelClient });
+  if (options['compare-providers']) {
+    goals = await compareApprovedQuotes({ config, proposedGoals: goals });
+    for (const comparison of goals.quote_comparisons) {
+      const quotes = comparison.quotes.map(q => `${q.provider_id}=${q.amount}`).join(', ');
+      console.log(`[autonomous] ${comparison.goal_id}: ${quotes} ${comparison.token}; selected ${comparison.selected_provider} (owner-order tie break)`);
+    }
+    console.log('[autonomous] Selected quotes will be rechecked exactly before payment; review the saved routes and work.');
+  }
   saveGoals(target, goals);
   console.log(`[autonomous] Saved ${goals.goals.length} validated model-proposed task(s) to ${target}`);
   console.log('[autonomous] Model output is untrusted. Review the objective, task inputs and owner limits; the model cannot set payees, tokens or policy.');
   if (!options.key) {
-    console.log('[autonomous] Planning only: no quotes, blockchain transactions or fulfillment.');
+    console.log(options['compare-providers'] ? '[autonomous] Quote comparison only: no blockchain transactions or fulfillment.' :
+      '[autonomous] Planning only: no quotes, blockchain transactions or fulfillment.');
     return;
   }
   const runner = path.join(path.dirname(fileURLToPath(import.meta.url)), 'resource-agent.mjs');

@@ -122,7 +122,7 @@ jobs:
 
   testnet-multi:
     name: Live testnet multi-token procurement check
-    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[multi-resource-smoke]')
+    if: github.event_name == 'push' && (contains(github.event.head_commit.message, '[multi-resource-smoke]') || contains(github.event.head_commit.message, '[provider-compare]'))
     needs: build-contract
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -139,8 +139,20 @@ jobs:
           node-version: '22'
       - run: npm ci --prefix bouncer --no-audit --no-fund
       # Uses the NEAR testnet token factory; only synthetic testnet FTs.
+      # The optional comparison uses two self-hosted development providers.
       # Keys and journal stay on the ephemeral runner; nothing is uploaded.
-      - run: node bouncer/demo-multi-resource.mjs
+      - name: Run testnet multi-resource and optional provider comparison
+        shell: bash
+        env:
+          BOUNCER_DEMO_COMPARE: ${{ contains(github.event.head_commit.message, '[provider-compare]') && '1' || '0' }}
+        run: |
+          set +e
+          node bouncer/demo-multi-resource.mjs 2>&1 | tee "$RUNNER_TEMP/multi-resource.log"
+          result=${PIPESTATUS[0]}
+          if [ "$result" -ne 0 ]; then
+            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-3500).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=Multi-resource check failed::"+s)' "$RUNNER_TEMP/multi-resource.log"
+          fi
+          exit "$result"
 
   ai-testnet:
     name: Local AI-planned multi-resource testnet flow

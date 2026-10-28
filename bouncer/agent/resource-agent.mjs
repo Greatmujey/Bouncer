@@ -1,8 +1,9 @@
 /**
  * Quote -> guarded payment -> fulfillment orchestration for supplied goals.
- * This runner handles supplied or separately model-proposed testnet goals; it
- * is not a vendor marketplace. The caller pins policies, tokens, payees and
- * maximum prices, and batch preflight is a non-atomic preview.
+ * This runner handles supplied or separately model-proposed testnet goals.
+ * The caller pins policies, tokens, payees and maximum prices; selected
+ * provider routes and quotes can also be pinned. It is not a public vendor
+ * marketplace, and batch preflight is a non-atomic preview.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -30,13 +31,17 @@ export async function planFromQuotes({ contractId, ownerAccountId, goals, getQuo
     const { id, resource, policy_id: policyId, token, payee } = goal;
     for (const [key, value] of Object.entries({ id, resource, policyId, token, payee })) validText(value, key);
     const max = positiveAmount(goal.max_amount, `${id} max_amount`);
+    const selectedAmount = goal.quote_amount === undefined ? undefined : positiveAmount(goal.quote_amount, `${id} selected quote amount`);
+    if (selectedAmount !== undefined && selectedAmount > max) throw new Error(`${id}: selected quote exceeds the owner-approved maximum`);
     const input = normalizeOrder(resource, goal.input);
-    const quote = await getQuote({ resource, input });
+    // Context is local routing metadata, not part of the provider request body.
+    const quote = await getQuote({ resource, input }, { goalId: id });
     if (!quote || quote.resource !== resource || quote.policy_id !== policyId || quote.token !== token || quote.payee !== payee) {
       throw new Error(`${id}: quote does not match the permitted resource, policy, token, or payee`);
     }
     const amount = positiveAmount(quote.amount, `${id} quote amount`);
     if (amount > max) throw new Error(`${id}: quote exceeds the owner-approved maximum`);
+    if (selectedAmount !== undefined && amount !== selectedAmount) throw new Error(`${id}: selected quote changed; review and reselect before payment`);
     const memo = orderMemo(resource, input);
     if (quote.memo !== memo) throw new Error(`${id}: quote is not bound to this exact order`);
     requests.push({ id, resource, policy_id: policyId, token, payee, amount: amount.toString(), memo });
@@ -84,7 +89,7 @@ export async function runResourceAgent({ contractId, ownerAccountId, goals, getQ
     for (const goal of goals) {
       const entry = journal.get(goal.id);
       if (!entry || entry.status !== 'completed' || !entry.tx_hash) continue;
-      const result = await fulfill({ tx_hash: entry.tx_hash, resource: goal.resource, input: normalizeOrder(goal.resource, goal.input) });
+      const result = await fulfill({ tx_hash: entry.tx_hash, resource: goal.resource, input: normalizeOrder(goal.resource, goal.input) }, { goalId: goal.id });
       if (!result || result.type !== goal.resource) throw new Error(`${goal.id}: invalid fulfillment response`);
       log(`[resource-agent] FULFILLED ${goal.id} (${goal.resource})`);
       deliveries.push({ id: goal.id, result });
@@ -116,10 +121,37 @@ export function httpResourceProvider(baseUrl, fetchImpl = globalThis.fetch) {
   };
 }
 
+/** Route each goal only to the origin pinned in its reviewed goals file. */
+export function routedResourceProvider({ providerUrl, goals, overrides = new Map(), fetchImpl = globalThis.fetch }) {
+  if (!Array.isArray(goals) || !goals.length || !(overrides instanceof Map)) throw new Error('valid goals and provider routes are required');
+  // Validate the default and every goal-specific origin before any HTTP calls.
+  httpResourceProvider(providerUrl, fetchImpl);
+  const routes = new Map();
+  for (const goal of goals) {
+    if (!goal || typeof goal !== 'object') throw new Error('invalid goal route');
+    const id = validText(goal.id, 'goal id');
+    if (routes.has(id)) throw new Error(`duplicate goal route: ${id}`);
+    const origin = goal.provider_url === undefined ? providerUrl : goal.provider_url;
+    if (typeof origin !== 'string') throw new Error(`${id}: invalid provider origin`);
+    httpResourceProvider(origin, fetchImpl);
+    const replacement = overrides.get(new URL(origin).origin);
+    const actual = replacement === undefined ? origin : replacement;
+    routes.set(id, httpResourceProvider(actual, fetchImpl));
+  }
+  function route(context) {
+    const client = routes.get(context?.goalId);
+    if (!client) throw new Error('missing approved goal provider route');
+    return client;
+  }
+  return {
+    getQuote: (order, context) => route(context).getQuote(order),
+    fulfill: (order, context) => route(context).fulfill(order),
+  };
+}
 
 const USAGE = `Usage: node bouncer/agent/resource-agent.mjs --goals goals.json --key agent-key.json [--journal journal.json] [--local-provider provider.json] [--execute]
 
-Quote a configured provider and preflight owner-pinned resource goals.
+Quote configured providers and preflight owner-pinned resource goals.
 Default is read-only; --execute sends real testnet payments and requests fulfillment.
 Use a function-call access key scoped only to the Bouncer execute method.
 Amounts are strings in each token's smallest units. Never use real funds.
@@ -145,10 +177,13 @@ async function main() {
   const config = JSON.parse(fs.readFileSync(options.goals, 'utf8'));
   if (!config || typeof config !== 'object' || Array.isArray(config)) throw new Error('invalid goals file');
   // Validate the configured origin before starting any provider or spending.
-  const configuredClient = httpResourceProvider(config.provider_url);
+  httpResourceProvider(config.provider_url);
+  // Check every selected route before starting a development provider.
+  routedResourceProvider({ providerUrl: config.provider_url, goals: config.goals });
   let journal, local;
   try {
     let providerUrl = config.provider_url;
+    const overrides = new Map();
     if (options['local-provider']) {
       const localConfig = JSON.parse(fs.readFileSync(options['local-provider'], 'utf8'));
       if (localConfig.contract_id !== config.contract_id) throw new Error('local provider contract does not match the goals file');
@@ -157,9 +192,10 @@ async function main() {
       const ephemeral = localConfig.port === 0 && configured.origin === 'http://127.0.0.1:0';
       if (configured.origin !== local.url && !ephemeral) throw new Error('local provider URL does not match the goals file');
       providerUrl = local.url;
+      overrides.set(configured.origin, providerUrl);
       console.log(`[resource-agent] Local development provider: ${providerUrl}`);
     }
-    const client = local ? httpResourceProvider(providerUrl) : configuredClient;
+    const client = routedResourceProvider({ providerUrl: config.provider_url, goals: config.goals, overrides });
     if (options.execute) {
       const journalPath = options.journal || config.journal_path || `${options.goals}.bouncer-journal.json`;
       journal = new FileJournal(journalPath, config.contract_id, config.owner_account_id);

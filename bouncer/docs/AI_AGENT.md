@@ -5,8 +5,10 @@ to turn a written objective into **compute, storage and API tasks**. It then
 binds those tasks to an owner-controlled catalog, obtains quotes and uses the
 existing restricted-key runner for testnet policy checks, payments and local
 delivery. The model proposes work; it does **not** choose a contract, policy,
-FT, payee, price limit, key or endpoint. This is not a marketplace, a commercial
-cloud integration or audited software. Do not use real funds.
+FT, payee, price limit, key or endpoint. An optional comparison selects the
+lowest valid quote among explicitly owner-approved providers for the same token.
+This is not a public marketplace, a commercial cloud integration or audited
+software. Do not use real funds.
 
 ## What is enforced
 
@@ -27,8 +29,12 @@ cloud integration or audited software. Do not use real funds.
   token, payee, per-task maximum, maximum task count and per-resource aggregate
   maximum. For each resource Bouncer reserves **the per-task maximum times the
   number of proposed tasks** against that aggregate maximum before fetching a
-  quote. This is deliberately conservative. Quote amounts and order-bound memos
-  are independently checked against the catalog. The contract then enforces the
+  quote. This is deliberately conservative. With `--compare-providers`, up to
+  four alternatives plus the primary are compared within the resource's one
+  pinned token. Every quote must match its owner-approved policy, payee, token,
+  order-bound memo and maximum; any invalid or unavailable quote stops the
+  comparison. Prices are exact integer smallest units; ties favor owner order.
+  The contract then enforces the
   actual token, key grant, allowlist, per-transaction cap, rolling daily cap and
   vault balance at execution. A zero daily cap on chain disables that daily cap.
   Before any new payment, the resource agent also previews the whole batch,
@@ -154,6 +160,69 @@ The payee, token and policy must also be configured and allowed on the fresh v4
 contract, and the quote provider must actually support that product. The model
 cannot make these changes. The example is a shape, not a deployed account.
 
+## Compare owner-approved providers
+
+Comparison is opt-in. Add an `alternatives` array to a resource entry in the
+trusted owner catalog; the top-level `provider_url` and that resource's original
+policy/payee remain the **primary**. For example, the `compute` entry above may
+also contain:
+
+```json
+"alternatives": [
+  {
+    "id": "alternative",
+    "provider_url": "http://127.0.0.1:8788",
+    "policy_id": "compute-wnear",
+    "payee": "compute-alt.bouncer-example.testnet",
+    "max_amount": "100000000000000000000000"
+  }
+]
+```
+
+These are illustrative accounts, not deployed services. Each alternative must
+already be approved in the owner file and on chain: its policy must use the
+resource's token, allow the payee, grant the restricted agent key and have
+sufficient caps and vault balance. The payee must be registered with the FT.
+An alternative may specify a **lower** per-task maximum but not a higher one.
+Do not put a `token` field in an alternative: all candidates for one resource
+inherit its single pinned FT. There is no exchange-rate lookup or cross-token
+price comparison. The full on-chain batch preflight runs *after* selection; if
+the chosen quote is not allowed on chain, the batch stops rather than silently
+falling back to another provider.
+
+Start all explicitly configured provider endpoints separately, then plan and
+compare without a signing key or payment:
+
+```sh
+node bouncer/agent/autonomous.mjs --config owner.json --objective-file objective.txt --output reviewed-goals.json --compare-providers
+```
+
+Review the saved task inputs, provider IDs, destinations, quote amounts and
+comparison summary before invoking `resource-agent.mjs` with that same goals
+file and a restricted key. Supplying `--key` to the command above additionally
+preflights the selected goals; adding `--execute` also opts into immediate,
+unreviewed testnet spending. `--compare-providers` cannot be combined with
+`--local-provider`: comparison needs all the providers running beforehand.
+Without the flag, the primary is used and alternatives are not contacted.
+
+Comparison sends each task's normalized **full input** to every approved
+candidate, which can retain it. No quote is sent to the model. All candidates
+must return an authorized, order-bound quote; one unavailable, over-cap or
+invalid response aborts the comparison with no selection or payment. The
+selected origin, policy, payee and **exact quote amount** are saved privately.
+The runner requotes that same provider before execution and refuses even a
+lower changed amount, avoiding a changed payment/journal fingerprint. A quote
+has no signature, expiry, guarantee of fulfillment or trusted quality rating;
+the cheapest provider might not deliver. This is a curated selector, not vendor
+discovery or a production marketplace. The contract remains the final spending
+authority and prices or chain state can change after a preflight.
+
+Preserve the selected goals file and its matching journal. If the provider
+reprices or becomes unavailable *after* a payment, automatic replay can stop at
+the requote stage. Do not delete the journal or generate a new selection to
+bypass this: reconcile the existing payment and restore the original provider
+quote/arrange delivery manually. A fresh selection can cause a second payment.
+
 ## Verification
 
 `npm test --prefix bouncer` includes mock-model/mock-chain tests for malicious
@@ -165,12 +234,15 @@ runner**, verifies their SHA-256 hashes, runs actual local inference, and, only
 if the model correctly extracts the synthetic objectives, creates fresh testnet
 accounts and performs the three-token payment and self-hosted delivery check.
 It also purchases a public GitHub-data lookup using the API credit policy. The
-[AI job in run 40581368718](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40581368718/job/122462232919)
+[AI job in run 40582306741](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40582306741/job/122465464986)
 passed that additional step with a real testnet payment and a second independent
-GitHub read; the same workflow's separate security job failed on an RPC nonce
-error. This synthetic demo checks the repository literally and can ask the model
-once for a correction before setup; malformed or unauthorized output still fails
-closed.
+GitHub read. The same run's separate [security/refund job](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40582306741/job/122465465014)
+also passed after adding a process-local stale-nonce mitigation. This synthetic
+demo checks the repository literally and can ask the model once for a correction
+before setup; malformed or unauthorized output still fails closed. The provider
+comparison has separate mock regression tests and an opt-in
+`[provider-compare]` live testnet job; see the latest job result rather than
+assuming a live run succeeded.
 [Run 40579499294](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40579499294)
 passed with contract `bouncer-ff7d41d8.testnet`: model inference, three real
 synthetic/testnet-token payments and all local deliveries. It used text

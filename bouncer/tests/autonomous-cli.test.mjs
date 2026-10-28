@@ -49,6 +49,57 @@ test('autonomous CLI only plans without a key, never overwrites, and preflights 
   } finally { fs.rmSync(f.dir, { recursive: true, force: true }); }
 });
 
+test('CLI compares approved providers, saves the selected route, rejects repricing, then pays and replays in mocks', () => {
+  const f = fixture();
+  try {
+    const configFile = f.args[1];
+    const c = JSON.parse(fs.readFileSync(configFile, 'utf8'));
+    c.resources.compute.alternatives = [{ id: 'second', provider_url: 'https://alternative.example', policy_id: 'compute-b', payee: 'vendor-b.testnet', max_amount: '100' }];
+    fs.writeFileSync(configFile, JSON.stringify(c));
+    const selected = exec([...f.args, '--compare-providers']);
+    assert.equal(selected.status, 0, selected.stderr);
+    assert.match(selected.stdout, /primary=80, second=70 wrap.testnet; selected second/);
+    assert.match(selected.stdout, /Quote comparison only/);
+    const saved = JSON.parse(fs.readFileSync(f.output, 'utf8'));
+    assert.equal(saved.goals[0].payee, 'vendor-b.testnet');
+    assert.equal(saved.goals[0].provider_url, 'https://alternative.example');
+    assert.equal(saved.goals[0].quote_amount, '70');
+    const runSaved = extra => spawnSync(process.execPath, ['bouncer/agent/resource-agent.mjs', '--goals', f.output, '--key', f.key, '--execute'], {
+      cwd: root, env: { ...process.env, ...baseEnv, ...extra }, encoding: 'utf8', timeout: 20_000,
+    });
+    const repriced = runSaved({ MOCK_ALT_AMOUNT: '71' });
+    assert.equal(repriced.status, 1);
+    assert.match(repriced.stderr, /selected quote changed/);
+    assert.doesNotMatch(repriced.stdout, /PAID|FULFILLED/);
+    assert.equal(fs.existsSync(saved.journal_path), false);
+    const paid = runSaved({});
+    assert.equal(paid.status, 0, paid.stderr);
+    assert.match(paid.stdout, /PAID compute-1.*vendor-b.testnet/);
+    assert.match(paid.stdout, /FULFILLED compute-1/);
+    const replay = runSaved({});
+    assert.equal(replay.status, 0, replay.stderr);
+    assert.match(replay.stdout, /SKIP compute-1/);
+    assert.doesNotMatch(replay.stdout, /PAID compute-1/);
+  } finally { fs.rmSync(f.dir, { recursive: true, force: true }); }
+});
+
+test('comparison aborts on an unauthorized alternative before writing goals or paying', () => {
+  const f = fixture();
+  try {
+    const configFile = f.args[1], c = JSON.parse(fs.readFileSync(configFile, 'utf8'));
+    c.resources.compute.alternatives = [{ id: 'second', provider_url: 'https://alternative.example', policy_id: 'compute-b', payee: 'vendor-b.testnet', max_amount: '100' }];
+    fs.writeFileSync(configFile, JSON.stringify(c));
+    const bad = exec([...f.args, '--compare-providers', '--key', f.key, '--execute'], { MOCK_ALT_BAD_QUOTE: '1' });
+    assert.equal(bad.status, 1);
+    assert.match(bad.stderr, /comparison failed.*does not match/);
+    assert.equal(fs.existsSync(f.output), false);
+    assert.doesNotMatch(bad.stdout, /PAID|FULFILLED/);
+    const local = exec([...f.args, '--compare-providers', '--key', f.key, '--local-provider', 'unused.json']);
+    assert.equal(local.status, 1);
+    assert.match(local.stderr, /separately running providers/);
+  } finally { fs.rmSync(f.dir, { recursive: true, force: true }); }
+});
+
 test('explicit execute uses guarded runner and stable journal with mocked transport', () => {
   const f = fixture();
   try {

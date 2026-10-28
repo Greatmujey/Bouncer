@@ -5,8 +5,9 @@ storage, and API credits — using different NEAR fungible tokens, subject to
 owner-defined spending policies. The current prototype implements the vault and
 policy checks. The v4 prototype has passed a three-token testnet quote → payment
 → self-hosted delivery check and a separate restricted-key security/refund check.
-An optional model adapter now translates natural-language objectives into tasks
-within an owner-controlled catalog; see [AI agent setup and limits](bouncer/docs/AI_AGENT.md).
+An optional model adapter translates natural-language objectives into tasks
+within an owner-controlled catalog, which can compare quotes from explicitly
+approved providers using the same token; see [AI agent setup and limits](bouncer/docs/AI_AGENT.md).
 No model or inference service is bundled. This is unaudited testnet software,
 not suitable for real funds.
 
@@ -100,10 +101,12 @@ Offline mocks are not proof of on-chain behavior.
 - A self-hosted development provider can verify a payment and perform a small
   compute job, store a local file, count text or fetch public GitHub repository
   metadata. GitHub data is live, unauthenticated third-party data; availability
-  is not guaranteed. The provider is not commercial. The agent fetches fixed quotes and
-  validates owner-pinned constraints. An optional model adapter proposes tasks;
-  it requires a separately supplied model and is not a marketplace. Independent
-  vendors, invoices, stablecoin flows and NEAR Intents remain unfinished.
+  is not guaranteed. The provider is not commercial. An optional selector
+  compares quotes from owner-approved endpoints only, within one token per
+  resource; every quote must match the approved constraints. The model proposes
+  tasks but cannot choose financial authority. It requires a separately supplied
+  model. This is not a public marketplace: independent vendors, invoices,
+  stablecoin flows and NEAR Intents remain unfinished.
 - Token trust is not enforced; configure policies only for trusted FTs. Changing
   a policy's token retains its numeric spend history even if the new token has
   different units; create a new policy for a different token instead. Key
@@ -201,9 +204,12 @@ inputs were checked against the requested literals before any accounts were
 created. A [later AI job](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40581368718/job/122462232919)
 also paid synthetic API credits for live public GitHub repository data and
 checked the result against a second GitHub read. That workflow's separate
-security job failed on an RPC nonce error; it is not evidence of a security
-pass. The original v4 run linked above used deterministic inputs. These are
-self-hosted development services, not commercial vendors.
+security job failed on an RPC nonce error. A [subsequent run](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40582306741)
+passed both the four-payment AI flow and its separate restricted-key security
+and refund job after a process-local nonce mitigation. That mitigation does not
+coordinate multiple writers or retry ambiguous sends. The original v4 run linked
+above used deterministic inputs. These are self-hosted development services,
+not commercial vendors.
 
 ### Run the resource agent again
 
@@ -285,6 +291,7 @@ real testnet transactions. To build locally with Rust and the wasm target, run
 - `bouncer/agent/procurement.mjs` — plan-driven, testnet-only procurement runner.
 - `bouncer/agent/resource-agent.mjs` — quote, guarded payment, fulfillment orchestration.
 - `bouncer/agent/goal-planner.mjs`, `autonomous.mjs` — model proposals constrained by the owner catalog.
+- `bouncer/agent/quote-comparison.mjs` — opt-in, same-token selection among owner-approved providers.
 - `bouncer/services/resource-provider.mjs` — self-hosted test-only resource provider.
 - `bouncer/demo/index.html` — clearly labelled offline simulation only; it sends
   no transactions and does not exactly match contract behavior.

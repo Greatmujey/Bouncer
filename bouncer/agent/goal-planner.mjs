@@ -54,15 +54,37 @@ export function validatePlanningConfig(input) {
   const resources = Object.create(null);
   for (const name of names) {
     const item = input.resources[name];
-    if (!keysExactly(item, ['policy_id', 'token', 'payee', 'max_amount', 'max_tasks', 'max_total_amount'])) throw new Error(`invalid ${name} catalog entry`);
+    if (!keysExactly(item, ['policy_id', 'token', 'payee', 'max_amount', 'max_tasks', 'max_total_amount'], ['alternatives'])) throw new Error(`invalid ${name} catalog entry`);
     if (typeof item.policy_id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(item.policy_id)) throw new Error(`invalid ${name} policy_id`);
     if (!testnetAccount(item.token) || !testnetAccount(item.payee)) throw new Error(`${name} token and payee must be valid .testnet accounts`);
     const maxAmount = positiveU128(item.max_amount, `${name} max_amount`);
     const maxTotal = positiveU128(item.max_total_amount, `${name} max_total_amount`);
     if (maxTotal < maxAmount) throw new Error(`${name} max_total_amount is below its per-task maximum`);
+    const alternatives = item.alternatives ?? [];
+    if (!Array.isArray(alternatives) || alternatives.length > 4) throw new Error(`${name} alternatives must contain at most four owner-approved providers`);
+    const ids = new Set(['primary']);
+    const approved = alternatives.map(offer => {
+      // A candidate never declares a token: it inherits this resource's one
+      // pinned FT. Reject even an apparently equivalent extra token field.
+      if (!keysExactly(offer, ['id', 'provider_url', 'policy_id', 'payee', 'max_amount']) ||
+          typeof offer.id !== 'string' || !/^[A-Za-z0-9_-]{1,32}$/.test(offer.id) || ids.has(offer.id)) {
+        throw new Error(`invalid or duplicate ${name} alternative`);
+      }
+      ids.add(offer.id);
+      if (typeof offer.provider_url !== 'string') throw new Error(`invalid ${name} alternative provider_url`);
+      httpResourceProvider(offer.provider_url); // validates without contacting it
+      if (typeof offer.policy_id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(offer.policy_id) || !testnetAccount(offer.payee)) {
+        throw new Error(`invalid ${name} alternative policy or payee`);
+      }
+      if (positiveU128(offer.max_amount, `${name} alternative max_amount`) > maxAmount) {
+        throw new Error(`${name} alternative maximum exceeds the resource maximum`);
+      }
+      return { id: offer.id, provider_url: offer.provider_url, policy_id: offer.policy_id, payee: offer.payee, max_amount: offer.max_amount };
+    });
     resources[name] = {
       policy_id: item.policy_id, token: item.token, payee: item.payee,
       max_amount: item.max_amount, max_tasks: boundedCount(item.max_tasks, `${name} max_tasks`), max_total_amount: item.max_total_amount,
+      ...(item.alternatives !== undefined ? { alternatives: approved } : {}),
     };
   }
   const required = input.required_resources ?? [];

@@ -13,8 +13,9 @@ import nearApi from 'near-api-js';
 import { FileJournal } from './agent/procurement.mjs';
 import { createResourceProvider } from './services/resource-provider.mjs';
 import { fetchPublicRepository } from './services/github-data.mjs';
-import { httpResourceProvider, runResourceAgent } from './agent/resource-agent.mjs';
-import { createModelClient, planObjective } from './agent/goal-planner.mjs';
+import { httpResourceProvider, routedResourceProvider, runResourceAgent } from './agent/resource-agent.mjs';
+import { createModelClient, goalsFromModel, planObjective } from './agent/goal-planner.mjs';
+import { compareApprovedQuotes } from './agent/quote-comparison.mjs';
 import { validateRpcEndpoint } from './shared/rpc-endpoint.mjs';
 import { MonotonicAccount } from './agent/near-account.mjs';
 
@@ -102,7 +103,9 @@ async function main() {
   const bid = `bouncer-${suffix}.testnet`;
   const funderId = `bouncer-ft-${suffix}.testnet`;
   const userId = `user.${bid}`;
-  const vendorIds = { compute: `compute.${bid}`, storage: `storage.${bid}`, api: `api.${bid}` };
+  const compareDemo = process.env.BOUNCER_DEMO_COMPARE === '1';
+  const vendorIds = { compute: `compute.${bid}`, storage: `storage.${bid}`, api: `api.${bid}`,
+    ...(compareDemo ? { computeAlt: `compute-alt.${bid}` } : {}) };
   const storageSymbol = `BS${suffix}`.toUpperCase();
   const apiSymbol = `BA${suffix}`.toUpperCase();
   let aiGoals, aiDataGoal;
@@ -176,7 +179,7 @@ async function main() {
   await call(bouncer, bid, 'new', { owner: bid });
   if (await view(bid, 'contract_version', {}) !== 'bouncer-agent-v4') throw new Error('stale wasm: wait for CI and git pull');
 
-  console.log('\n=== 2) Create funded user and three vendor accounts ===');
+  console.log(`\n=== 2) Create funded user and ${compareDemo ? 'four' : 'three'} development vendor accounts ===`);
   const userKey = KeyPair.fromRandom('ed25519');
   saveKey(userId, userKey);
   const createdUser = await bouncer.createAccount(userId, userKey.getPublicKey(), 4n * N);
@@ -199,6 +202,7 @@ async function main() {
   await call(user, WNEAR, 'storage_deposit', { account_id: userId }, STORAGE_WNEAR, GAS50);
   await call(bouncer, WNEAR, 'storage_deposit', { account_id: bid }, STORAGE_WNEAR, GAS50);
   await call(bouncer, WNEAR, 'storage_deposit', { account_id: vendorIds.compute }, STORAGE_WNEAR, GAS50);
+  if (compareDemo) await call(bouncer, WNEAR, 'storage_deposit', { account_id: vendorIds.computeAlt }, STORAGE_WNEAR, GAS50);
   for (const [token, vendor] of [[storageToken, vendorIds.storage], [apiToken, vendorIds.api]]) {
     await register(bouncer, token, bid);
     await register(bouncer, token, vendor);
@@ -233,6 +237,11 @@ async function main() {
       per_tx_cap: r.per.toString(), daily_cap: r.daily.toString() }, 1n);
     await call(bouncer, bid, 'allow_payee', { policy_id: r.policy, payee: r.vendor }, 1n);
     await call(bouncer, bid, 'grant_agent_key', { policy_id: r.policy, public_key: agentKey.getPublicKey().toString() }, 1n);
+  }
+  if (compareDemo) {
+    // Both compute offers use the same policy and FT. The owner explicitly
+    // allows the second payee with 1 yoctoNEAR before any comparison/payment.
+    await call(bouncer, bid, 'allow_payee', { policy_id: 'compute-wnear', payee: vendorIds.computeAlt }, 1n);
   }
 
   console.log('\n=== 7) Quote, pay and fulfill three orders with the resource agent ===');
@@ -279,8 +288,8 @@ async function main() {
   });
   const baseUrl = `http://127.0.0.1:${devProvider.server.address().port}`;
   const client = httpResourceProvider(baseUrl);
-  let journal;
-  let proof;
+  let journal, alternateProvider;
+  let proof, comparisonProof;
   try {
     journal = new FileJournal(journalPath, bid, bid);
     const runner = {
@@ -367,8 +376,63 @@ async function main() {
       console.log(`    ✅ VERIFIED public GitHub data: ${data.repository}, repository ID ${data.repository_id}; no duplicate payment on replay.`);
       console.log(`    Recovery goals: ${dataGoalsFile}`);
     }
+    if (compareDemo) {
+      console.log('\n=== 10) Compare two owner-approved development providers for the same FT ===');
+      const cheaper = 8n * N / 100n;
+      const alternativeProducts = { ...products, compute: { ...products.compute, payee: vendorIds.computeAlt, amount: cheaper.toString() } };
+      alternateProvider = createResourceProvider({ rpcProvider: provider, contractId: bid, products: alternativeProducts,
+        dataDir: path.join(RUN_DIR, `${bid}.alternative-provider`) });
+      await new Promise((resolve, reject) => {
+        alternateProvider.server.once('error', reject);
+        alternateProvider.server.listen(0, '127.0.0.1', resolve);
+      });
+      const alternateUrl = `http://127.0.0.1:${alternateProvider.server.address().port}`;
+      const comparisonConfig = { version: 1, contract_id: bid, owner_account_id: bid, provider_url: baseUrl,
+        max_tasks: 1, required_resources: ['compute'], resources: { compute: {
+          ...ownerConfig.resources.compute, alternatives: [{ id: 'alternative', provider_url: alternateUrl,
+            policy_id: 'compute-wnear', payee: vendorIds.computeAlt, max_amount: resources[0].payment.toString() }],
+        } } };
+      // This additional comparison task is explicitly supplied by the demo, not
+      // generated by the model. The separate AI flow above remains unchanged.
+      const input = { text: 'compare development providers', rounds: 3 };
+      const proposed = goalsFromModel({ tasks: [{ resource: 'compute', input }] }, comparisonConfig);
+      const chosen = await compareApprovedQuotes({ config: comparisonConfig, proposedGoals: proposed });
+      const goal = chosen.goals[0];
+      if (goal.provider_id !== 'alternative' || goal.payee !== vendorIds.computeAlt || goal.token !== WNEAR || goal.quote_amount !== cheaper.toString() ||
+          chosen.quote_comparisons[0].quotes[0].amount !== resources[0].payment.toString()) {
+        throw new Error('provider comparison did not select the cheaper owner-approved same-token quote');
+      }
+      // Owner-assigned ID avoids colliding with the previous compute-1 entry in
+      // the same journal; the model/provider never selects payment IDs.
+      goal.id = 'compute-market-1';
+      chosen.quote_comparisons[0].goal_id = goal.id;
+      const comparisonFile = path.join(RUN_DIR, `${bid}.comparison.goals.json`);
+      fs.writeFileSync(comparisonFile, JSON.stringify({ ...chosen, journal_path: journalPath }, null, 2) + '\n', { mode: 0o600 });
+      fs.chmodSync(comparisonFile, 0o600);
+      const routes = routedResourceProvider({ providerUrl: chosen.provider_url, goals: chosen.goals });
+      const comparisonRunner = { ...runner, goals: chosen.goals, getQuote: routes.getQuote, fulfill: routes.fulfill, onPlan: () => {} };
+      const delivered = await runResourceAgent(comparisonRunner);
+      if (delivered.payments.paid !== 1 || delivered.payments.blocked || delivered.deliveries.length !== 1) throw new Error('selected provider payment or fulfillment failed');
+      let hash = Buffer.from(input.text);
+      for (let i = 0; i < input.rounds; i++) hash = crypto.createHash('sha256').update(hash).digest();
+      if (delivered.deliveries[0].result.result !== hash.toString('hex')) throw new Error('selected provider delivered an incorrect compute result');
+      exact(await view(WNEAR, 'ft_balance_of', { account_id: vendorIds.compute }), resources[0].payment, 'original compute payee');
+      exact(await view(WNEAR, 'ft_balance_of', { account_id: vendorIds.computeAlt }), cheaper, 'selected compute payee');
+      exact(await view(bid, 'vault_balance', { token: WNEAR }), N - resources[0].payment - cheaper, 'compute vault after comparison');
+      exact(await view(WNEAR, 'ft_balance_of', { account_id: bid }), N - resources[0].payment - cheaper, 'actual compute vault after comparison');
+      exact(await view(bid, 'daily_spent', { policy_id: 'compute-wnear' }), resources[0].payment + cheaper, 'shared compute daily spend');
+      const replay = await runResourceAgent(comparisonRunner);
+      if (replay.payments.skipped !== 1 || replay.payments.paid || JSON.stringify(replay.deliveries) !== JSON.stringify(delivered.deliveries)) {
+        throw new Error('selected provider replay protection failed');
+      }
+      const tx = journal.get(goal.id).tx_hash;
+      comparisonProof = `contract=${bid}; token=${WNEAR}; primary=${resources[0].payment}; selected=${cheaper}; payee=${vendorIds.computeAlt}; tx=${tx}`;
+      console.log(`    ✅ VERIFIED owner-approved comparison: ${resources[0].payment} vs ${cheaper} ${WNEAR}; selected payee ${vendorIds.computeAlt}; replay made no second payment.`);
+      console.log('    Both compared endpoints are self-hosted development services, not independent commercial vendors.');
+    }
   } finally {
     journal?.close();
+    if (alternateProvider) await new Promise(resolve => alternateProvider.server.close(resolve));
     await new Promise(resolve => devProvider.server.close(resolve));
   }
   console.log('\n✅ Three real testnet FT payments and self-hosted resource services verified.');
@@ -377,6 +441,7 @@ async function main() {
   if (process.env.GITHUB_ACTIONS === 'true') {
     const label = aiGoals ? 'AI-planned testnet multi-resource proof' : 'Testnet multi-resource proof';
     console.log(`::notice title=${label}::contract=${bid}; ${proof}`);
+    if (comparisonProof) console.log(`::notice title=Owner-approved provider comparison proof::${comparisonProof}`);
   }
   console.log(`Contract: ${bid}`);
   console.log(`Explorer: https://testnet.nearblocks.io/address/${bid}?tab=receipts`);

@@ -7,12 +7,12 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-function run(mode = '', ai = false, publicData = false) {
+function run(mode = '', ai = false, publicData = false, compare = false) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'bouncer-multi-test-'));
   try {
     const child = spawnSync(process.execPath, ['--import=./bouncer/tests/mock-multi-near.mjs', 'bouncer/demo-multi-resource.mjs'], {
       cwd: repo, env: { ...process.env, HOME: home, BOUNCER_MOCK_MODE: mode, BOUNCER_DEMO_AI: ai ? '1' : '', BOUNCER_DEMO_PUBLIC_DATA: publicData ? '1' : '',
-        BOUNCER_LLM_URL: 'https://model.example/v1/chat/completions', BOUNCER_LLM_MODEL: 'mock-model' }, encoding: 'utf8', timeout: 30_000,
+        BOUNCER_DEMO_COMPARE: compare ? '1' : '', BOUNCER_LLM_URL: 'https://model.example/v1/chat/completions', BOUNCER_LLM_MODEL: 'mock-model' }, encoding: 'utf8', timeout: 30_000,
     });
     const dir = path.join(home, '.bouncer', 'testnet');
     const files = fs.existsSync(dir) ? fs.readdirSync(dir) : [];
@@ -20,13 +20,15 @@ function run(mode = '', ai = false, publicData = false) {
     const journal = journalFile ? JSON.parse(fs.readFileSync(path.join(dir, journalFile), 'utf8')) : null;
     const planFile = files.find(file => file.endsWith('.plan.json'));
     const plan = planFile ? JSON.parse(fs.readFileSync(path.join(dir, planFile), 'utf8')) : null;
-    const goalsFile = files.find(file => file.endsWith('.goals.json'));
+    const goalsFile = files.find(file => file.endsWith('.goals.json') && !file.endsWith('.comparison.goals.json') && !file.endsWith('.public-data.goals.json'));
+    const comparisonFile = files.find(file => file.endsWith('.comparison.goals.json'));
     const providerFile = files.find(file => file.endsWith('.provider.json'));
     const ownerFile = files.find(file => file.endsWith('.owner.json'));
     const goals = goalsFile ? JSON.parse(fs.readFileSync(path.join(dir, goalsFile), 'utf8')) : null;
     const provider = providerFile ? JSON.parse(fs.readFileSync(path.join(dir, providerFile), 'utf8')) : null;
     const owner = ownerFile ? JSON.parse(fs.readFileSync(path.join(dir, ownerFile), 'utf8')) : null;
-    return { ...child, journal, plan, goals, provider, owner };
+    const comparison = comparisonFile ? JSON.parse(fs.readFileSync(path.join(dir, comparisonFile), 'utf8')) : null;
+    return { ...child, journal, plan, goals, provider, owner, comparison };
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
 }
 
@@ -49,6 +51,20 @@ test('multi-token setup and real procurement runner complete using a mock transp
   assert.equal((result.stdout.match(/\[resource-agent\] FULFILLED /g) || []).length, 6);
   assert.equal((result.stdout.match(/VERIFIED /g) || []).length, 3);
   assert.match(result.stdout, /Provider rejected a changed order/);
+});
+
+test('two approved local providers are compared and the cheaper is paid once with mocked testnet', () => {
+  const result = run('', false, false, true);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /VERIFIED owner-approved comparison/);
+  assert.match(result.stdout, /Both compared endpoints are self-hosted development services/);
+  assert.equal(result.comparison.goals[0].provider_id, 'alternative');
+  assert.equal(result.comparison.goals[0].token, 'wrap.testnet');
+  assert.equal(result.comparison.goals[0].quote_amount, '80000000000000000000000');
+  assert.equal(result.comparison.quote_comparisons[0].quotes[0].amount, '100000000000000000000000');
+  assert.equal(result.journal.entries.filter(e => e.status === 'completed').length, 4);
+  assert.equal((result.stdout.match(/\[procurement\] PAID /g) || []).length, 4);
+  assert.equal((result.stdout.match(/\[procurement\] SKIP /g) || []).length, 4);
 });
 
 test('model-planned multi-resource path completes with a mocked model and mocked testnet', () => {
