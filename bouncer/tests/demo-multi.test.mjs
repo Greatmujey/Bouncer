@@ -86,6 +86,26 @@ test('model-planned public data adds a fourth payment with replay safety using m
   assert.equal((result.stdout.match(/\[procurement\] SKIP /g) || []).length, 4);
 });
 
+test('combined mock-model flow plans comparison work and pays the selected provider once', () => {
+  const result = run('', true, true, true);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Model also proposed the comparison compute task before testnet setup/);
+  assert.match(result.stdout, /VERIFIED public GitHub data/);
+  assert.match(result.stdout, /VERIFIED owner-approved comparison/);
+  assert.equal(result.comparison.goals[0].provider_id, 'alternative');
+  assert.equal(result.journal.entries.filter(e => e.status === 'completed').length, 5);
+  assert.equal((result.stdout.match(/\[procurement\] PAID /g) || []).length, 5);
+  assert.equal((result.stdout.match(/\[procurement\] SKIP /g) || []).length, 5);
+});
+
+test('an inaccurate model comparison task fails before any account setup', () => {
+  const result = run('comparison_wrong', true, true, true);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /model did not reproduce the comparison task/);
+  assert.doesNotMatch(result.stdout, /Create funded Bouncer|PAID|FULFILLED/);
+  assert.equal(result.journal, null);
+});
+
 test('one model-only correction is allowed before setup; repeated wrong repository fails closed', () => {
   const corrected = run('wrong_repo_once', true, true);
   assert.equal(corrected.status, 0, corrected.stderr);

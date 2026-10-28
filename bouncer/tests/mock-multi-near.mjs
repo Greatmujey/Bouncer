@@ -28,11 +28,14 @@ globalThis.fetch = async (url, ...args) => {
   if (String(url) === 'https://model.example/v1/chat/completions') {
     const request = JSON.parse(args[0].body);
     const publicData = request.messages[1].content.includes('public GitHub repository metadata');
-    const tasks = publicData ? [{ resource: 'api', input: { repo: 'near/near-api-js' } }] : [
-      { resource: 'compute', input: { text: 'near-hub compute job', rounds: 1000 } },
-      { resource: 'storage', input: { name: 'bouncer-note', content: 'Persisted by the Bouncer testnet provider.' } },
-      { resource: 'api', input: { text: 'actual testnet resource API' } },
-    ];
+    const comparison = request.messages[1].content.includes('compare development providers');
+    const tasks = publicData ? [{ resource: 'api', input: { repo: 'near/near-api-js' } }] : comparison ?
+      [{ resource: 'compute', input: { text: 'compare development providers', rounds: 3 } }] : [
+        { resource: 'compute', input: { text: 'near-hub compute job', rounds: 1000 } },
+        { resource: 'storage', input: { name: 'bouncer-note', content: 'Persisted by the Bouncer testnet provider.' } },
+        { resource: 'api', input: { text: 'actual testnet resource API' } },
+      ];
+    if (comparison && process.env.BOUNCER_MOCK_MODE === 'comparison_wrong') tasks[0].input.text = 'wrong';
     if (publicData) {
       publicModelCalls++;
       if (process.env.BOUNCER_MOCK_MODE === 'wrong_repo_always' || (process.env.BOUNCER_MOCK_MODE === 'wrong_repo_once' && publicModelCalls === 1)) {

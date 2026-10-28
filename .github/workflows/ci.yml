@@ -189,6 +189,7 @@ jobs:
         env:
           BOUNCER_DEMO_AI: '1'
           BOUNCER_DEMO_PUBLIC_DATA: '1'
+          BOUNCER_DEMO_COMPARE: ${{ contains(github.event.head_commit.message, '[ai-provider-compare]') && '1' || '0' }}
           BOUNCER_LLM_URL: http://127.0.0.1:17890/v1/chat/completions
           BOUNCER_LLM_MODEL: bouncer-local-qwen
           BOUNCER_MODEL_CACHE: ${{ runner.temp }}/bouncer-local-model
