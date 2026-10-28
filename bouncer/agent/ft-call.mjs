@@ -109,7 +109,12 @@ export function verifyFtCallSettlement(rawGoal, result, publicKey) {
   });
   if (callbacks.length !== 1 || String(callbacks[0].call.deposit) !== '0') throw new Error('missing unique settlement callback');
   const callbackArgs = decode(callbacks[0].call.args, 'settlement callback arguments');
-  if (!owns(callbackArgs, ['policy_id', 'token', 'amount', 'bucket', 'policy_revision']) || callbackArgs.policy_id !== goal.policy_id ||
+  const callbackFields = ['policy_id', 'token', 'amount', 'bucket', 'policy_revision'];
+  // Early v6 test deployments used the five-field callback. Current v6 also
+  // carries the pinned payee/message to account for OutLayer prepaid credit.
+  const legacyCallback = owns(callbackArgs, callbackFields);
+  const currentCallback = owns(callbackArgs, [...callbackFields, 'payee', 'msg']) && callbackArgs.payee === goal.payee && callbackArgs.msg === goal.msg;
+  if ((!legacyCallback && !currentCallback) || callbackArgs.policy_id !== goal.policy_id ||
       callbackArgs.token !== goal.token || callbackArgs.amount !== goal.amount || callbackArgs.policy_revision !== goal.policy_revision ||
       !Number.isSafeInteger(callbackArgs.bucket) || callbackArgs.bucket < 0) throw new Error('settlement callback does not match the payment');
   const callbackOutcome = result.receipts_outcome.filter(r => r.id === callbacks[0].receipt.receipt_id &&

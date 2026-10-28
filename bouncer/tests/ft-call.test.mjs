@@ -88,6 +88,14 @@ test('settlement uses NEP-141 amount USED and explicitly does not imply delivery
   assert.equal(verifyFtCallSettlement(goal, finalResult('100'), key).unused, '0');
 });
 
+test('new callback binds prepaid accounting to the reviewed payee and message, while legacy receipts remain recoverable', () => {
+  const current = finalResult();
+  current.receipts[1].receipt.Action.actions[0].FunctionCall.args = encode({ ...callbackArgs(), payee: goal.payee, msg: goal.msg });
+  assert.equal(verifyFtCallSettlement(goal, current, key).used, '60');
+  current.receipts[1].receipt.Action.actions[0].FunctionCall.args = encode({ ...callbackArgs(), payee: 'attacker.testnet', msg: goal.msg });
+  assert.throws(() => verifyFtCallSettlement(goal, current, key), /callback/);
+});
+
 test('mismatched, malformed or unbound transaction and callback evidence fail closed', () => {
   const mutations = [
     r => { r.final_execution_status = 'EXECUTED'; }, r => { r.status.SuccessValue = encode(null); },
