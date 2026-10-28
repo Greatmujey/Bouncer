@@ -278,6 +278,16 @@ goals and journal; if the provider cannot reproduce a correct result,
 manual resolution is required. Deleting or altering these files can allow
 repeat payments and local records are not tamper-proof.
 
+A [deterministic live test](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40671752050/job/122760598105)
+paid self-hosted services on contract `bouncer-8c5de354.testnet`, verified
+compute, one storage readback and text statistics, and persisted the matching
+local receipts. It then injected a wrong reply **locally after payment** (not a
+claim of provider misconduct), observed rejection, and recovered with the same
+[compute transaction](https://testnet.nearblocks.io/txns/GewpbPFkGtbBnNzWbuFrwcmWqb6hCHFkqoaBBmN3u7eh)
+without a new quote or payment. The separate security/refund job passed in that
+run. Its AI-planned job failed before procurement while granting a policy key
+because a testnet setup transaction expired; it is not an AI delivery proof.
+
 ## Verification
 
 `npm test --prefix bouncer` includes mock-model/mock-chain tests for malicious

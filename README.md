@@ -249,6 +249,15 @@ These are local, editable records—not signed
 invoices, generic compute proofs or guarantees of future storage. See the
 [verification and recovery details](bouncer/docs/AI_AGENT.md#delivery-checks-and-local-receipts).
 
+In the [live testnet verification job](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40671752050/job/122760598105),
+Bouncer paid the selected self-hosted compute provider, deliberately corrupted
+the reply locally, rejected it and recovered using the [same payment](https://testnet.nearblocks.io/txns/GewpbPFkGtbBnNzWbuFrwcmWqb6hCHFkqoaBBmN3u7eh)
+without requoting. The fault was injected by the demo, not evidence of provider
+misconduct. The job also checked storage readback, text statistics and receipts.
+A [separate security/refund job](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40671752050/job/122760598164)
+passed; the AI job in that run failed during policy setup on a testnet
+`Transaction has expired` error, before resource purchases.
+
 ### Run the resource agent again
 
 The multi-token script also writes `<account>.provider.json`,
