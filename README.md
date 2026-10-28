@@ -1,4 +1,4 @@
-# Bouncer — payments firewall for autonomous agents on NEAR
+# Bouncer — autonomous multi-resource procurement on NEAR
 
 Bouncer aims to let an AI agent buy several resources — such as compute,
 storage, and API credits — using different NEAR fungible tokens, subject to
@@ -257,7 +257,9 @@ Bouncer-compatible vendor. Search terms are sent to the marketplace; do not use
 secrets or private objectives. Listing text, availability, payment-method labels
 and reported metrics are untrusted, may contain prompt injection, and are not
 validated quotes or endorsements. They are not fed into the planner, allowlist
-or payment runner. An owner must independently vet any potential integration.
+or payment runner. An owner must independently vet any potential integration;
+the [experimental provider protocol](bouncer/docs/PROVIDER_PROTOCOL.md) documents
+the current testnet interface and its trust requirements.
 The advertised [x402 hiring flow](https://docs.market.near.ai/a2a/hire-agent-using-x402)
 uses direct delegated FT transfers, which would bypass the current Bouncer
 restricted-key policy. Bouncer deliberately does not perform that flow. The
@@ -283,7 +285,10 @@ a locally corrupted first reply halted the batch with both later vendor balances
 at zero; recovery reused the [first payment](https://testnet.nearblocks.io/txns/SVdv3Fc4dMwSxChpCfvijiVUDx3A4478U5gcwHAWjJV)
 and then verified the remaining deliveries. The fault was injected locally, not
 provider misconduct. That run's separate security smoke job failed on a testnet
-transaction expiry during account setup. These are local, editable records—not signed
+transaction expiry during account setup. The [next full run](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40676850305)
+passed the AI and deterministic flows with a separate policy owner, as well as
+the restricted-key security and [refund check](https://testnet.nearblocks.io/txns/APWAXeExseG1TMgNvVgo7xPKiHyne9VPWot2VWYQozTM).
+Both used self-hosted providers. These are local, editable records—not signed
 invoices, generic compute proofs or guarantees of future storage. See the
 [verification and recovery details](bouncer/docs/AI_AGENT.md#delivery-checks-and-local-receipts).
 

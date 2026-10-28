@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import nearApi from 'near-api-js';
 import { createResourceProvider, startConfiguredProvider, orderMemo, verifyPayment } from '../services/resource-provider.mjs';
+import { canonicalDelivery } from '../agent/verify-delivery.mjs';
 
 const contractId = 'bouncer.testnet';
 const products = Object.fromEntries(['compute', 'storage', 'api'].map(name => [name, {
@@ -38,6 +39,14 @@ test('memo commits to normalized resource input', () => {
   assert.notEqual(orderMemo('compute', { text: 'other work', rounds: 5 }), orderMemo('compute', inputs.compute));
   assert.throws(() => orderMemo('compute', { text: 'x', rounds: 20_001 }), /rounds/);
   assert.throws(() => orderMemo('storage', { name: '../x', content: 'x' }), /safe name/);
+});
+
+test('published compute protocol vector remains interoperable', () => {
+  const input = { text: 'Bouncer protocol test', rounds: 3 };
+  assert.equal(orderMemo('compute', input), 'bouncer-order-v1:compute:9a4ee52be36beeb6f4769901d9771c49076dfebf59a1e4b4bb19e09ecc24a516');
+  const result = { type: 'compute', algorithm: 'sha256-iterated', rounds: 3,
+    result: '0ce2813641f347d5e168547d5b4e598f0962e35d0cbc0b847c1a9bca991da1fe' };
+  assert.deepEqual(canonicalDelivery({ resource: 'compute', input, result, txHash: 'tx-vector' }), result);
 });
 
 test('provider requires trusted finalized execute with matching order and successful token receipt', () => {

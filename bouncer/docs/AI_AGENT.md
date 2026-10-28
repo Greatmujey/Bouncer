@@ -66,7 +66,9 @@ runner and standalone configured provider require an RPC reporting testnet,
 which can still lie. This is format support only; no USDC/stablecoin purchase
 has been tested. The development provider also accepts an explicit
 `owner_account_id` distinct from `contract_id`; it pins both for transaction
-verification. That arrangement currently has mock coverage, not a live proof.
+verification. The [AI-planned testnet job](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40676850305/job/122778129850)
+used owner `user.bouncer-d1e045d2.testnet` and contract `bouncer-d1e045d2.testnet`;
+the local provider verified [their separate-owner payment](https://testnet.nearblocks.io/txns/97y7bsxKLBRxYtpaN4cehKkdkecTxjWzDCbBK4nx1Cm).
 
 The development provider permits up to eight distinct in-flight redemptions and
 coalesces identical concurrent requests for the same transaction; excess work is
@@ -337,9 +339,16 @@ that the storage and API vendor balances remained zero before recovery. It then
 reused [that first transaction](https://testnet.nearblocks.io/txns/SVdv3Fc4dMwSxChpCfvijiVUDx3A4478U5gcwHAWjJV)
 and verified the remaining deliveries. The [deterministic job](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40675524400/job/122773587854)
 passed the same first-delivery gate. Both used self-hosted services; the fault
-was not provider misconduct. The workflow's separate security smoke job failed
+was not provider misconduct. That workflow's separate security smoke job failed
 on an explicit testnet expiry while creating a user account, before that smoke
 test reached its security probes.
+
+The [next full live run](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40676850305)
+passed AI-planned and deterministic three-token checks with a **separate owner**,
+the same first-delivery failure/recovery probe, plus the independent security
+smoke and [refund callback](https://testnet.nearblocks.io/txns/APWAXeExseG1TMgNvVgo7xPKiHyne9VPWot2VWYQozTM).
+The providers were still self-hosted, and the delivery fault was injected locally.
+This run does not test USDC or independent-provider hiring.
 
 ## Read-only market discovery
 
@@ -353,7 +362,9 @@ prompt injection or misleading claims. Never treat a listing as an allowlist
 entry, provider endorsement or payment authority. Any future integration needs
 separate owner approval, a compatible policy-enforced payment flow and real
 provider interoperability testing. The [live read-only probe](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40675524400/job/122772818985)
-returned three listings; no provider was vetted or hired.
+returned three listings; no provider was vetted or hired. The [experimental
+provider protocol](PROVIDER_PROTOCOL.md) describes the bounded testnet interface
+and a checked conformance vector for prospective integrators.
 
 ## Verification
 
