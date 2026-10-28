@@ -168,6 +168,22 @@ jobs:
           fi
           exit "$result"
 
+  ft-ecosystem-discovery:
+    name: Independent FT and testnet liquidity discovery (read only)
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[ft-ecosystem-probe]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      - name: Inspect independent testnet contracts without keys or payments
+        run: node bouncer/scripts/probe-ft-ecosystem.mjs
+
   independent-market-discovery:
     name: Independent marketplace catalog (read only)
     if: github.event_name == 'push' && contains(github.event.head_commit.message, '[independent-discovery]')
