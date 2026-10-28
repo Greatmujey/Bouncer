@@ -22,11 +22,19 @@ It has not been audited and must not hold valuable funds.
   callback attempts to restore the vault and the **original** hourly bucket if
   the token transfer fails. The demo inspects receipts and exact token balances
   rather than trusting a successful callback status alone.
+- V5 additionally tracks native NEAR and pins a bounded OutLayer program to a
+  native policy. The owner installs a separate `execute_outlayer`-only key. The
+  full maximum deposit is debited and budgeted up front, while any unused
+  accepted-execution refund is sent to the owner. A failed promise is never
+  treated as proof that the full native deposit returned to the vault.
 
 A [v4 testnet run](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40558301848)
 verified a restricted-key payment, both escalation-guard layers and a failed FT
-transfer whose callback restored the vault and daily budget. It does not prove
-all possible callback or token failure cases.
+transfer whose callback restored the vault and daily budget. A separate-owner
+[v5 OutLayer check](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40682550107/job/122797278579)
+verified one independently operated native-NEAR execution and owner refund; it
+checked output range, not TEE attestation or randomness. Neither run proves all
+possible callback, provider or token failure cases.
 
 ## Remaining risks
 
@@ -47,36 +55,96 @@ all possible callback or token failure cases.
 5. **Views are policy previews, not authorization checks.** `check` and
    `try_execute` do not identify a transaction signing key. V4 has no owner
    view, so a preflight cannot verify that the supplied signer account is the
-   owner; execution still enforces it on-chain. The CLI dry-run checks each
-   request independently, so several individually ready requests may exceed a
-   shared budget or vault together. MCP makes tentative aggregate reservations,
-   but neither path reads an atomic snapshot or guarantees later authorization.
+   owner; execution still enforces it on-chain. V5 exposes `get_owner` and the
+   OutLayer runner checks it; the older FT preflight still relies on the
+   on-chain signer check. The runner requires the RPC to
+   report `testnet`, but a malicious RPC can lie. The raw procurement CLI checks
+   requests independently. The resource agent (and its MCP preview) makes
+   tentative shared-budget and vault reservations and aborts a blocked batch
+   before new payments, but views are not atomic and cannot guarantee later
+   authorization or prevent partial execution if the chain changes. Each
+   newly paid delivery must pass its bounded checks and persist a receipt before
+   the resource runner submits another payment. Failure or an execution-time
+   policy block halts later unpaid goals, but cannot undo an earlier transfer.
 6. **Policies and tokens are shared.** Policy-specific key grants isolate which
    policy a key may use, but policies may share the same token vault. Caps are
    denominated in token units, not USD; there is no price oracle. Rebinding a
    policy to another token retains numeric spend history in the old units. Use
    a new policy for each token rather than changing an existing policy's token.
-7. **Development-only provider and no cross-chain settlement.** The agent can
-   fetch fixed quotes and pay pinned test vendors; the local provider performs
-   SHA-256 work, local-file storage and text statistics. It is not an independent
-   commercial provider or AI marketplace. The multi-token test uses synthetic
-   testnet FTs, not USDC. The old solver is disabled because it previously used
-   fake fill hashes; the standalone quote comparator does not settle anything.
-8. **Local journal is not exactly-once settlement.** It blocks automatic retries
-   of uncertain payments in one local journal, but a different or deleted
-   journal, multiple hosts, or power loss can bypass that protection. Operators
-   must reconcile pending transactions manually.
+7. **Untrusted model and development-only provider.** An optional model can
+   propose resource inputs but not financial authority. Injection or errors can
+   still produce an unwanted task within an authorized budget; review output
+   before spending. Objectives go to the configured model. The local provider
+   performs SHA-256 work, local-file storage, text statistics and fixed-origin
+   unauthenticated GitHub data reads; it is not an independent commercial
+   provider or marketplace. GitHub data is untrusted and can be unavailable
+   after payment. The multi-token test uses
+   synthetic testnet FTs, not USDC. There is no cross-chain settlement. The old
+   solver is disabled because it previously used fake fill hashes; the older
+   standalone quote comparator does not settle anything. The agent's optional
+   curated quote selection is separate: it contacts only owner-configured
+   endpoints, compares one token at a time, rejects mismatched or unavailable
+   quotes, and requotes the selected price before the guarded runner may pay.
+   It may send full order inputs to every candidate, with up to five requests
+   in flight. A failed quote stops queued work but cannot recall inputs already
+   sent. A dishonest approved provider may underbid and refuse delivery;
+   unsigned quotes have no expiry or guarantee.
+   A separate fixed-origin Agent Market discovery command reads a bounded public
+   catalog only: query terms are disclosed and listing text/metrics are untrusted
+   and can contain prompt injection. They never authorize payment or modify the
+   planner or allowlist. The marketplace's advertised mainnet x402 delegated FT
+   transfer is not controlled by the existing restricted-key policy and is not
+   implemented here. New-format entries record the payment request and provider route before
+   submission. Completed payments can recover without a fresh quote and reject
+   changed routes; legacy entries may lack either safeguard and still require
+   the original quote. Provider or independent-source outages can still block
+   recovery. Preserve the original goals and journal rather than selecting again.
+8. **Local journal and nonce tracker are not distributed coordination.** The
+   file journal synchronizes its content and directory before returning, and
+   blocks automatic retries of uncertain payments in one local file. Sync
+   failures stop execution, but a different/deleted journal, multiple hosts or
+   unreliable storage can bypass the protection. The signer keeps its own
+   process's nonces monotonic to mitigate stale RPC reads; it does not coordinate
+   concurrent processes using the same key or
+   retry a failed send. Use one writer per key and reconcile pending payments
+   manually. For OutLayer, the signed transaction hash is journaled before the
+   one broadcast and can be re-queried without a private key; an absent or
+   expired hash is still not automatically resent. FT payments use their own
+   existing journal path and do not yet pre-record the signed hash.
 9. **Provider verification and operations are not trustless.** The provider
    trusts its configured RPC, Bouncer deployment/code and token contracts. It
    verifies transaction arguments and receipts, but cannot protect against a
    compromised or upgraded trusted contract, malicious RPC or token. Its state
-   and lock are single-process, storage is plaintext and publicly retrievable,
-   and there is no authentication, transport security or multi-host replay
-   protection. Orders are sent to the provider; their hashes are on chain.
+   is single-process: up to eight independent redemptions can be in flight,
+   with same-transaction coalescing but no multi-process lock or replay protection.
+   Its local state writes do not provide fsync durability; a write error stops
+   the instance and requires manual reconciliation. Storage is plaintext and
+   publicly retrievable, and there is no authentication or transport security.
+   The configured provider checks that its RPC reports testnet, but the RPC can
+   lie; an implicit 64-hex token ID does not itself identify a network.
+   Orders are sent to the provider; their hashes are on chain.
+   Client-side verification occurs only after payment: it recomputes the bounded
+   SHA-256/text examples, reads storage back once from the same provider, and
+   checks GitHub repository identity only. It cannot guarantee future storage,
+   independently verify GitHub's other fields, or force delivery/refund. Local
+   receipts include results and hashes and may leak information; they are
+   editable, depend on trusted host/RPC, and are not signed invoices or
+   independent attestations.
 10. **Prior contracts are unsafe to upgrade without migration.** Older contracts
    have different state and authorization; v3 and v4 also interpret budget bucket
-   keys differently. Deploy v4 fresh. Hourly spend buckets are not pruned and
-   incur ongoing state/storage costs; the 25 reads per check also consume gas.
+   keys differently; v5 adds state again. Deploy v5 fresh; no migration is
+   supplied. Hourly spend buckets are not pruned and incur ongoing state/storage
+   costs; the 25 reads per check also consume gas.
+11. **OutLayer is a trusted independent service, not trustless compute.** Its
+   payment is native NEAR rather than an FT. Provider/RPC availability,
+   contract code, program hosting and the owner-pinned hash are assumptions;
+   output range alone does not establish randomness or verify TEE attestation.
+   The full maximum stays budgeted even after an owner refund. A rejection may
+   return untracked funds to the contract, while a failed accepted execution
+   may only partially refund the owner. The owner must inspect receipts and
+   reconcile; no generic failed-promise callback restores the maximum. Inputs
+   are public. OutLayer's prepaid FT key or direct x402 delegation would not be
+   protected by this per-call policy.
 
 The owner key, NEAR protocol, token implementation, callback availability and
 software correctness are trust assumptions. Offline JavaScript mocks are not

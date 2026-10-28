@@ -8,10 +8,14 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import nearApi from 'near-api-js';
+import { validateRpcEndpoint } from '../shared/rpc-endpoint.mjs';
+import { validateProviderOrigin } from '../shared/provider-origin.mjs';
+import { assertFinalPaymentReceipts } from '../shared/final-payment.mjs';
+import { MonotonicAccount } from './near-account.mjs';
 
-const { Account, KeyPair, KeyPairSigner, providers } = nearApi;
+const { KeyPair, KeyPairSigner, providers } = nearApi;
 const DEFAULT_RPC = 'https://test.rpc.fastnear.com';
-const CONTRACT_VERSION = 'bouncer-agent-v4';
+const CONTRACT_VERSIONS = new Set(['bouncer-agent-v4', 'bouncer-agent-v5', 'bouncer-agent-v6', 'bouncer-agent-v7']);
 const U128_MAX = (1n << 128n) - 1n;
 const GAS = 200_000_000_000_000n;
 const EXPLORER = hash => `https://testnet.nearblocks.io/txns/${hash}?network=testnet`;
@@ -44,6 +48,7 @@ export function validatePlan(input) {
     const resource = text(request.resource, `${id}.resource`, 64);
     const policyId = text(request.policy_id, `${id}.policy_id`, 128);
     const token = text(request.token, `${id}.token`, 64);
+    if (token === 'native') throw new Error(`${id}.token is native NEAR; use the dedicated OutLayer runner`);
     const payee = text(request.payee, `${id}.payee`, 64);
     if (typeof request.amount !== 'string' || !/^[0-9]+$/.test(request.amount)) {
       throw new Error(`${id}.amount must be a decimal string in the token's smallest units`);
@@ -57,33 +62,49 @@ export function validatePlan(input) {
   return { contract_id: contractId, owner_account_id: ownerId, requests };
 }
 
-function fingerprint(request) {
+/** Validate the locally pinned route attached to a resource payment. */
+export function normalizeProviderRoute(route) {
+  if (!route || typeof route !== 'object' || Array.isArray(route) || Object.keys(route).length !== 2 ||
+      !Object.hasOwn(route, 'provider_id') || !Object.hasOwn(route, 'provider_origin') ||
+      !(route.provider_id === null || (typeof route.provider_id === 'string' && /^[A-Za-z0-9_-]{1,32}$/.test(route.provider_id)))) {
+    throw new Error('invalid recorded provider route');
+  }
+  if (route.provider_origin !== null) validateProviderOrigin(route.provider_origin);
+  return { provider_id: route.provider_id, provider_origin: route.provider_origin };
+}
+
+/** Fingerprint a request already normalized by validatePlan. */
+export function requestFingerprint(request) {
   return crypto.createHash('sha256').update(JSON.stringify(request)).digest('hex');
 }
-function assertSuccessfulReceipts(result, token) {
-  if (result.status?.Failure) throw new Error(`transaction failed: ${JSON.stringify(result.status.Failure)}`);
-  if (!Array.isArray(result.receipts_outcome) || result.receipts_outcome.length === 0) {
-    throw new Error('no transaction receipt outcomes returned');
-  }
-  const failed = result.receipts_outcome.find(receipt => receipt.outcome?.status?.Failure);
-  if (failed) throw new Error(`receipt failed: ${JSON.stringify(failed.outcome.status.Failure)}`);
-  if (!result.receipts_outcome.some(receipt => receipt.outcome?.executor_id === token)) {
-    throw new Error('no receipt from the expected token contract');
-  }
-  if (!result.transaction_outcome?.id) throw new Error('transaction hash missing');
-}
+
 
 /**
  * Run preflight checks and optionally execute a plan. `journal` exposes
  * get(id) and put(id, entry); every live payment is marked pending BEFORE it
  * is sent. An unresolved pending entry is never retried automatically.
  */
-export async function runProcurement({ plan: rawPlan, provider, account, publicKey, journal, execute = false, log = console.log }) {
+export async function runProcurement({ plan: rawPlan, provider, account, publicKey, journal, journalRoutes, execute = false,
+  log = console.log, onCheck = () => {}, onPaid = async () => {}, stopOnBlocked = false }) {
   const plan = validatePlan(rawPlan);
+  if (typeof onPaid !== 'function' || typeof stopOnBlocked !== 'boolean') throw new Error('invalid procurement execution hooks');
+  let routes;
+  if (journalRoutes !== undefined) {
+    if (!(journalRoutes instanceof Map) || journalRoutes.size !== plan.requests.length) throw new Error('invalid payment journal routes');
+    routes = new Map();
+    for (const request of plan.requests) {
+      if (!journalRoutes.has(request.id)) throw new Error('missing payment journal route');
+      routes.set(request.id, normalizeProviderRoute(journalRoutes.get(request.id)));
+    }
+  }
   if (!account || account.accountId !== plan.owner_account_id) throw new Error('agent key account does not match the plan owner');
   if (execute && !journal) throw new Error('a journal is required for live execution');
+  // A .testnet-looking account ID is not proof of the RPC's chain. This is
+  // still a trust assumption: a malicious RPC can lie about its chain_id.
+  const status = await provider.viewNodeStatus();
+  if (status?.chain_id !== 'testnet') throw new Error('RPC must report the NEAR testnet chain');
   const version = await provider.callFunction(plan.contract_id, 'contract_version', {}, { finality: 'final' });
-  if (version !== CONTRACT_VERSION) throw new Error(`unsupported contract version: ${version || 'unknown'}`);
+  if (!CONTRACT_VERSIONS.has(version)) throw new Error(`unsupported contract version: ${version || 'unknown'}`);
   const access = await provider.viewAccessKey(plan.owner_account_id, publicKey, { finality: 'final' });
   const permission = access.permission?.FunctionCall;
   if (!permission || permission.receiver_id !== plan.contract_id ||
@@ -92,17 +113,25 @@ export async function runProcurement({ plan: rawPlan, provider, account, publicK
   }
 
   const totals = { paid: 0, blocked: 0, skipped: 0, ready: 0 };
+  let stopNewPayments = false;
   for (const request of plan.requests) {
-    const hash = fingerprint(request);
+    const hash = requestFingerprint(request);
     const previous = journal?.get(request.id);
     if (previous && previous.fingerprint !== hash) throw new Error(`${request.id}: journal entry does not match the request`);
     if (previous?.status === 'completed') {
+      onCheck({ id: request.id, status: 'SKIPPED' });
       log(`[procurement] SKIP ${request.id}: already paid (${previous.tx_hash})`);
       totals.skipped++;
       continue;
     }
     if (previous) {
       throw new Error(`${request.id}: unresolved pending payment; inspect the chain and journal before retrying`);
+    }
+    if (stopNewPayments) {
+      onCheck({ id: request.id, status: 'DEFERRED', reason: 'A previous execution-time policy check blocked the batch.' });
+      log(`[procurement] DEFERRED ${request.id}: no payment submitted after an earlier block`);
+      totals.deferred = (totals.deferred || 0) + 1;
+      continue;
     }
 
     const policy = await provider.callFunction(plan.contract_id, 'get_policy', { policy_id: request.policy_id }, { finality: 'final' });
@@ -118,17 +147,24 @@ export async function runProcurement({ plan: rawPlan, provider, account, publicK
     }, { finality: 'final' });
     if (!Array.isArray(decision) || typeof decision[0] !== 'boolean') throw new Error(`${request.id}: invalid policy verdict`);
     if (!decision[0]) {
+      onCheck({ id: request.id, status: 'BLOCKED', reason: decision[1] });
       log(`[procurement] BLOCKED ${request.id} (${request.resource}): ${decision[1]}`);
       totals.blocked++;
+      if (execute && stopOnBlocked) stopNewPayments = true;
       continue;
     }
     if (!execute) {
+      onCheck({ id: request.id, status: 'READY' });
       log(`[procurement] READY ${request.id} (${request.resource}): ${request.amount} ${request.token} → ${request.payee} (dry run)`);
       totals.ready++;
       continue;
     }
     const before = BigInt(await provider.callFunction(request.token, 'ft_balance_of', { account_id: request.payee }, { finality: 'final' }));
-    const pending = { fingerprint: hash, status: 'pending', started_at: new Date().toISOString() };
+    // Persist the exact normalized request before sending. This lets a later
+    // run recover fulfillment of a confirmed payment without asking a vendor
+    // for a new quote; an unresolved pending entry remains non-retryable.
+    const pending = { fingerprint: hash, status: 'pending', request,
+      ...(routes ? { provider_route: routes.get(request.id) } : {}), started_at: new Date().toISOString() };
     journal.put(request.id, pending);
     let txHash;
     try {
@@ -139,24 +175,31 @@ export async function runProcurement({ plan: rawPlan, provider, account, publicK
           memo: request.memo, expected_token: request.token },
         deposit: 0n, gas: GAS, waitUntil: 'FINAL',
       });
-      txHash = result.transaction_outcome?.id;
+      const candidateHash = result?.transaction_outcome?.id;
+      if (typeof candidateHash === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(candidateHash)) txHash = candidateHash;
       if (txHash) journal.put(request.id, { ...pending, tx_hash: txHash });
-      assertSuccessfulReceipts(result, request.token);
+      assertFinalPaymentReceipts(result, request.token);
+      if (typeof txHash !== 'string' || !/^[A-Za-z0-9_-]{1,100}$/.test(txHash)) throw new Error('invalid transaction hash');
       const after = BigInt(await provider.callFunction(request.token, 'ft_balance_of', { account_id: request.payee }, { finality: 'final' }));
       if (after !== before + BigInt(request.amount)) throw new Error('vendor balance delta did not match the payment');
-      journal.put(request.id, { fingerprint: hash, status: 'completed', tx_hash: txHash, completed_at: new Date().toISOString() });
+      journal.put(request.id, { ...pending, status: 'completed', tx_hash: txHash, completed_at: new Date().toISOString() });
       log(`[procurement] PAID ${request.id} (${request.resource}): ${request.amount} ${request.token} → ${request.payee} ${EXPLORER(txHash)}`);
       totals.paid++;
     } catch (error) {
       // A network timeout or failure may happen after broadcast. Keep pending:
       // retrying blindly could pay twice. The owner must reconcile manually.
-      if (!txHash && error.transaction_outcome?.id) {
-        txHash = error.transaction_outcome.id;
+      const errorHash = error?.transaction_outcome?.id;
+      if (!txHash && typeof errorHash === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(errorHash)) {
+        txHash = errorHash;
         journal.put(request.id, { ...pending, tx_hash: txHash });
       }
       const reference = txHash ? ` (tx ${txHash})` : '';
-      throw new Error(`${request.id}: payment could not be confirmed${reference}; journal remains pending, do not retry automatically: ${error.message}`, { cause: error });
+      throw new Error(`${request.id}: payment could not be confirmed${reference}; journal may be pending or uncertain, do not retry automatically: ${error.message}`, { cause: error });
     }
+    // Payment and its journal entry are already confirmed. Delivery failures
+    // must not be mislabeled as uncertain payments, and must stop the loop
+    // before any later request can be sent.
+    await onPaid({ id: request.id, tx_hash: txHash });
   }
   return totals;
 }
@@ -168,6 +211,7 @@ export class FileJournal {
     this.lockFile = `${this.file}.lock`;
     fs.mkdirSync(path.dirname(this.file), { recursive: true, mode: 0o700 });
     this.lockFd = fs.openSync(this.lockFile, 'wx', 0o600);
+    this.failed = false;
     try {
       this.data = fs.existsSync(this.file)
         ? JSON.parse(fs.readFileSync(this.file, 'utf8'))
@@ -183,6 +227,15 @@ export class FileJournal {
             (entry.status === 'completed' && typeof entry.tx_hash !== 'string')) {
           throw new Error('journal contains invalid or duplicate entries');
         }
+        if (entry.provider_route !== undefined) normalizeProviderRoute(entry.provider_route);
+        if (entry.request !== undefined) {
+          let recorded;
+          try { recorded = validatePlan({ contract_id: contractId, owner_account_id: ownerId, requests: [entry.request] }).requests[0]; }
+          catch { throw new Error('journal contains an invalid recorded request'); }
+          if (recorded.id !== entry.id || requestFingerprint(recorded) !== entry.fingerprint) {
+            throw new Error('journal recorded request does not match its fingerprint');
+          }
+        }
         ids.add(entry.id);
       }
     } catch (error) {
@@ -190,16 +243,37 @@ export class FileJournal {
       throw error;
     }
   }
-  get(id) { return this.data.entries.find(entry => entry.id === id); }
+  assertAvailable() {
+    if (this.lockFd === null) throw new Error('journal is closed');
+    if (this.failed) throw new Error('journal has a failed write; close, reopen and reconcile it before continuing');
+  }
+  get(id) { this.assertAvailable(); return this.data.entries.find(entry => entry.id === id); }
   put(id, entry) {
+    this.assertAvailable();
     const index = this.data.entries.findIndex(item => item.id === id);
+    const entries = this.data.entries.slice();
     const next = { id, ...entry };
-    if (index === -1) this.data.entries.push(next); else this.data.entries[index] = next;
+    if (index === -1) entries.push(next); else entries[index] = next;
+    const data = { ...this.data, entries };
     const temp = `${this.file}.${crypto.randomBytes(6).toString('hex')}.tmp`;
     try {
-      fs.writeFileSync(temp, JSON.stringify(this.data, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
+      const fd = fs.openSync(temp, 'wx', 0o600);
+      try {
+        fs.fchmodSync(fd, 0o600);
+        fs.writeFileSync(fd, JSON.stringify(data, null, 2) + '\n');
+        fs.fsyncSync(fd);
+      } finally { fs.closeSync(fd); }
       fs.renameSync(temp, this.file);
-      fs.chmodSync(this.file, 0o600);
+      // Persist the directory entry too. If either sync fails, stop before the
+      // next broadcast; a renamed file may already contain the newer state.
+      const directoryFd = fs.openSync(path.dirname(this.file), 'r');
+      try { fs.fsyncSync(directoryFd); } finally { fs.closeSync(directoryFd); }
+      this.data = data;
+    } catch (error) {
+      // The rename may have succeeded even if directory synchronization did
+      // not. Never keep using a possibly stale in-memory journal after error.
+      this.failed = true;
+      throw error;
     } finally {
       if (fs.existsSync(temp)) fs.unlinkSync(temp);
     }
@@ -228,13 +302,14 @@ function parseArgs(args) {
 function expandHome(value) { return value.startsWith('~/') ? path.join(os.homedir(), value.slice(2)) : value; }
 export function createRuntime({ plan: rawPlan, keyFile, rpc }) {
   const plan = validatePlan(rawPlan);
+  const rpcUrl = validateRpcEndpoint(rpc || process.env.NEAR_TESTNET_RPC || DEFAULT_RPC);
   const credentials = JSON.parse(fs.readFileSync(expandHome(keyFile), 'utf8'));
   if (credentials.account_id !== plan.owner_account_id || typeof credentials.private_key !== 'string') {
     throw new Error('agent key file does not match owner_account_id');
   }
   const key = KeyPair.fromString(credentials.private_key);
-  const provider = new providers.JsonRpcProvider({ url: rpc || process.env.NEAR_TESTNET_RPC || DEFAULT_RPC });
-  const account = new Account(plan.owner_account_id, provider, new KeyPairSigner(key));
+  const provider = new providers.JsonRpcProvider({ url: rpcUrl });
+  const account = new MonotonicAccount(plan.owner_account_id, provider, new KeyPairSigner(key));
   return { provider, account, publicKey: key.getPublicKey() };
 }
 

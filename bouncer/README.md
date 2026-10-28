@@ -9,9 +9,10 @@ integration check covers three testnet tokens and self-hosted development servic
 **Do not use this prototype with real funds.** It is unaudited, and older
 deployments do not gain the new authorization checks. See the
 [threat model](docs/THREAT_MODEL.md). The [website and wallet notes](docs/WEB.md)
-and [read-only MCP setup](docs/MCP.md) describe the new onboarding, testnet
-identity connection and AI-client integration, including unfinished hosted
-access and wallet verification.
+and [read-only MCP setup](docs/MCP.md) describe onboarding, testnet identity and
+AI-client integration, including unfinished hosted access and wallet verification.
+The optional [natural-language agent](docs/AI_AGENT.md) needs a separately
+configured model and operates under an owner-controlled testnet resource catalog.
 
 From the repository root, once CI has attached the matching wasm:
 

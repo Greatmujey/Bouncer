@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { orderMemo } from '../services/resource-provider.mjs';
 import { httpResourceProvider, planFromQuotes, runResourceAgent } from '../agent/resource-agent.mjs';
+import { computeResult } from './mock-delivery.mjs';
 
 const goal = () => ({
   id: 'compute-1', resource: 'compute', policy_id: 'compute', token: 'wrap.testnet', payee: 'vendor.testnet',
@@ -36,10 +37,13 @@ test('untrusted quote cannot swap policy, token, payee, payload or exceed max', 
 test('dry-run quotes and preflights but never pays or redeems', async () => {
   const g = goal(); let paid = 0, redeemed = 0, observedPlan;
   const provider = {
+    async viewNodeStatus() { return { chain_id: 'testnet' }; },
     async viewAccessKey() { return { permission: { FunctionCall: { receiver_id: 'bouncer.testnet', method_names: ['execute'] } } }; },
     async callFunction(_contract, method) {
       if (method === 'contract_version') return 'bouncer-agent-v4';
-      if (method === 'get_policy') return { token: 'wrap.testnet' };
+      if (method === 'get_policy') return { token: 'wrap.testnet', per_tx_cap: '1000', daily_cap: '1000' };
+      if (method === 'daily_spent') return '0';
+      if (method === 'vault_balance') return '1000';
       if (method === 'is_agent_key_allowed') return true;
       if (method === 'check') return [true, 'ok'];
       throw new Error('unexpected view');
@@ -64,14 +68,23 @@ test('HTTP helper rejects insecure remote providers and validates responses', as
   const requests = [];
   const client = httpResourceProvider('https://vendor.example', async (url, options) => {
     requests.push({ url: String(url), options });
-    return { ok: true, json: async () => ({ ok: true, quote: { amount: '80' }, result: { type: 'api' } }) };
+    return new Response(JSON.stringify({ ok: true, quote: { amount: '80' }, result: { type: 'api' } }));
   });
   assert.deepEqual(await client.getQuote({ resource: 'api' }), { amount: '80' });
   assert.deepEqual(await client.fulfill({ resource: 'api' }), { type: 'api' });
   assert.equal(requests[0].url, 'https://vendor.example/quote');
   assert.equal(requests[0].options.redirect, 'error');
-  const broken = httpResourceProvider('http://127.0.0.1:1234', async () => ({ ok: false, status: 400, json: async () => ({ ok: false, error: 'bad quote' }) }));
+  const broken = httpResourceProvider('http://127.0.0.1:1234', async () => new Response(JSON.stringify({ ok: false, error: 'bad quote' }), { status: 400 }));
   await assert.rejects(broken.getQuote({}), /bad quote/);
+});
+
+test('provider HTTP replies are bounded and error text cannot inject terminal controls', async () => {
+  const large = httpResourceProvider('https://provider.example', async () => new Response('x'.repeat(65_537)));
+  await assert.rejects(large.getQuote({}), /provider response too large/);
+  const invalid = httpResourceProvider('https://provider.example', async () => new Response('not JSON'));
+  await assert.rejects(invalid.getQuote({}), /provider returned invalid JSON/);
+  const malicious = httpResourceProvider('https://provider.example', async () => new Response(JSON.stringify({ ok: false, error: '\u001b[2J\nforged log' }), { status: 400 }));
+  await assert.rejects(malicious.getQuote({}), error => !/[\x00-\x1f\x7f]/.test(error.message) && error.message.includes('forged log'));
 });
 
 test('a delivery outage after payment is recoverable without a duplicate payment', async () => {
@@ -79,10 +92,13 @@ test('a delivery outage after payment is recoverable without a duplicate payment
   const entries = new Map();
   const journal = { get: id => entries.get(id), put: (id, value) => entries.set(id, { ...value }) };
   const provider = {
+    async viewNodeStatus() { return { chain_id: 'testnet' }; },
     async viewAccessKey() { return { permission: { FunctionCall: { receiver_id: 'bouncer.testnet', method_names: ['execute'] } } }; },
     async callFunction(_contract, method) {
       if (method === 'contract_version') return 'bouncer-agent-v4';
-      if (method === 'get_policy') return { token: 'wrap.testnet' };
+      if (method === 'get_policy') return { token: 'wrap.testnet', per_tx_cap: '1000', daily_cap: '1000' };
+      if (method === 'daily_spent') return '0';
+      if (method === 'vault_balance') return '1000';
       if (method === 'is_agent_key_allowed') return true;
       if (method === 'check') return [true, 'ok'];
       if (method === 'ft_balance_of') return balance.toString();
@@ -91,11 +107,11 @@ test('a delivery outage after payment is recoverable without a duplicate payment
   };
   const account = { accountId: 'bouncer.testnet', async callFunctionRaw() {
     paid++; balance += 80n;
-    return { transaction_outcome: { id: 'tx-1' }, receipts_outcome: [{ outcome: { executor_id: 'wrap.testnet', status: { SuccessValue: '' } } }] };
+    return { final_execution_status: 'FINAL', status: { SuccessValue: '' }, transaction_outcome: { id: 'tx-1' }, receipts_outcome: [{ outcome: { executor_id: 'wrap.testnet', status: { SuccessValue: '' } } }] };
   } };
   const opts = {
     contractId: 'bouncer.testnet', ownerAccountId: 'bouncer.testnet', goals: [g], getQuote: async () => quote(g),
-    fulfill: async () => { if (++redeemed === 1) throw new Error('vendor temporarily unavailable'); return { type: 'compute', result: 'done' }; },
+    fulfill: async () => { if (++redeemed === 1) throw new Error('vendor temporarily unavailable'); return computeResult(g.input); },
     provider, account, publicKey: { toString: () => 'ed25519:abc' }, journal, execute: true, log: () => {},
   };
   await assert.rejects(runResourceAgent(opts), /vendor temporarily unavailable/);

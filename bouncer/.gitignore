@@ -7,7 +7,8 @@ contracts/bouncer/.near/
 *.log
 .DS_Store
 
-# Local payment journals can contain transaction/account metadata.
+# Local generated goals and payment journals can contain private order data.
+*.bouncer-goals.json
 *.bouncer-journal.json
 *.bouncer-journal.json.lock
 *.bouncer-journal.json.*.tmp

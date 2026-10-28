@@ -2,7 +2,7 @@ name: Build & Test Bouncer
 
 on:
   push:
-    branches: [arena/ebb614bb-near-hub]
+    branches: [main, 'arena/**']
   pull_request:
   workflow_dispatch:
 
@@ -89,7 +89,7 @@ jobs:
           path: bouncer.wasm
           if-no-files-found: error
       - name: Commit built wasm on branch pushes
-        if: github.event_name == 'push' && github.ref == 'refs/heads/arena/ebb614bb-near-hub'
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/arena/') && !contains(github.event.head_commit.message, '[artifact-only]')
         run: |
           git config user.name "CI Bot"
           git config user.email "ci@bouncer.local"
@@ -98,6 +98,149 @@ jobs:
             git commit -m "chore(ci): attach bouncer.wasm"
             git push
           fi
+
+  ft-call-live:
+    name: Guarded independent FT funding, paid test connector and refund (testnet)
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[ft-call-live]')
+    needs: build-contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: bouncer-wasm
+          path: .
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      - name: Test pinned FT funding, paid independent probe and rejection refund
+        shell: bash
+        run: |
+          set +e
+          node bouncer/demo-ft-call.mjs 2>&1 | tee "$RUNNER_TEMP/ft-call-live.log"
+          result=${PIPESTATUS[0]}
+          if [ "$result" -ne 0 ]; then
+            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-4000).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=Guarded FT call live check failed::"+s)' "$RUNNER_TEMP/ft-call-live.log"
+          fi
+          exit "$result"
+      - name: Preserve unresolved public testnet journals
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ft-call-unresolved-journals
+          path: |
+            /tmp/bouncer-ftcall-*/journal.json
+            /tmp/bouncer-ftcall-*/goal.json
+            /tmp/bouncer-ftcall-*/refund-goal.json
+            /tmp/bouncer-ftcall-*/project-goal.json
+            /tmp/bouncer-ftcall-*/resource-goals.json
+            /tmp/bouncer-ftcall-*/development-provider/**
+          if-no-files-found: ignore
+          retention-days: 7
+
+  outlayer-guarded:
+    name: Guarded independent OutLayer testnet compute
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[outlayer-live]')
+    needs: build-contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: bouncer-wasm
+          path: .
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      # Fresh testnet-only account and keys, never uploaded. One guarded paid
+      # execution; intentionally corrupted local evidence is recovered by hash.
+      - name: Execute under Bouncer policy and verify independent delivery
+        shell: bash
+        run: |
+          set +e
+          node bouncer/demo-outlayer.mjs 2>&1 | tee "$RUNNER_TEMP/outlayer-live.log"
+          result=${PIPESTATUS[0]}
+          if [ "$result" -ne 0 ]; then
+            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-3500).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=Guarded OutLayer live check failed::"+s)' "$RUNNER_TEMP/outlayer-live.log"
+          fi
+          exit "$result"
+      # The journal has public testnet order/transaction data, never private
+      # keys. Preserve it on failure so an ambiguous payment can be reconciled.
+      - name: Preserve unresolved public payment journal
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: outlayer-unresolved-journal
+          path: |
+            /tmp/bouncer-outlayer-*/journal.json
+            /tmp/bouncer-outlayer-*/goal.json
+          if-no-files-found: ignore
+          retention-days: 14
+
+  outlayer-direct-research:
+    name: Independent OutLayer testnet research (not guarded)
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[outlayer-probe]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      # One small direct testnet-only payment from a fresh ephemeral account.
+      # This probes the provider; it is not a Bouncer policy integration.
+      - name: Probe provider availability and inspect returned result
+        shell: bash
+        run: |
+          set +e
+          node bouncer/scripts/probe-outlayer-direct.mjs 2>&1 | tee "$RUNNER_TEMP/outlayer-probe.log"
+          result=${PIPESTATUS[0]}
+          if [ "$result" -ne 0 ]; then
+            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-3000).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=OutLayer research probe failed::"+s)' "$RUNNER_TEMP/outlayer-probe.log"
+          fi
+          exit "$result"
+
+  ft-ecosystem-discovery:
+    name: Independent FT and testnet liquidity discovery (read only)
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[ft-ecosystem-probe]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      - name: Inspect independent testnet contracts without keys or payments
+        run: node bouncer/scripts/probe-ft-ecosystem.mjs
+
+  independent-market-discovery:
+    name: Independent marketplace catalog (read only)
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[independent-discovery]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Read public catalog (no credentials or payments)
+        run: node bouncer/scripts/probe-market-discovery.mjs
 
   testnet-smoke:
     name: Live testnet restricted-key smoke test
@@ -122,7 +265,7 @@ jobs:
 
   testnet-multi:
     name: Live testnet multi-token procurement check
-    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[multi-resource-smoke]')
+    if: github.event_name == 'push' && (contains(github.event.head_commit.message, '[multi-resource-smoke]') || contains(github.event.head_commit.message, '[provider-compare]') || contains(github.event.head_commit.message, '[delivery-verify]') || contains(github.event.head_commit.message, '[separate-owner]') || contains(github.event.head_commit.message, '[mixed-outlayer]'))
     needs: build-contract
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -139,11 +282,101 @@ jobs:
           node-version: '22'
       - run: npm ci --prefix bouncer --no-audit --no-fund
       # Uses the NEAR testnet token factory; only synthetic testnet FTs.
+      # The optional comparison uses two self-hosted development providers.
       # Keys and journal stay on the ephemeral runner; nothing is uploaded.
-      - run: node bouncer/demo-multi-resource.mjs
+      - name: Run testnet multi-resource and optional provider comparison
+        shell: bash
+        env:
+          BOUNCER_DEMO_COMPARE: ${{ (contains(github.event.head_commit.message, '[provider-compare]') || contains(github.event.head_commit.message, '[delivery-verify]')) && '1' || '0' }}
+          BOUNCER_DEMO_BAD_DELIVERY: ${{ contains(github.event.head_commit.message, '[delivery-verify]') && '1' || '0' }}
+          BOUNCER_DEMO_SEPARATE_OWNER: ${{ (contains(github.event.head_commit.message, '[separate-owner]') || contains(github.event.head_commit.message, '[mixed-outlayer]')) && '1' || '0' }}
+          BOUNCER_DEMO_OUTLAYER: ${{ contains(github.event.head_commit.message, '[mixed-outlayer]') && '1' || '0' }}
+        run: |
+          set +e
+          node bouncer/demo-multi-resource.mjs 2>&1 | tee "$RUNNER_TEMP/multi-resource.log"
+          result=${PIPESTATUS[0]}
+          if [ "$result" -ne 0 ]; then
+            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-3500).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=Multi-resource check failed::"+s)' "$RUNNER_TEMP/multi-resource.log"
+          fi
+          exit "$result"
+      - name: Preserve unresolved synthetic testnet journal
+        if: failure() && contains(github.event.head_commit.message, '[mixed-outlayer]')
+        uses: actions/upload-artifact@v4
+        with:
+          name: mixed-testnet-unresolved-journal
+          path: ~/.bouncer/testnet/*.bouncer-journal.json
+          if-no-files-found: ignore
+          retention-days: 14
+
+  ai-testnet:
+    name: Local AI-planned multi-resource testnet flow
+    if: github.event_name == 'push' && (contains(github.event.head_commit.message, '[ai-multi-resource]') || contains(github.event.head_commit.message, '[ai-provider-compare]') || contains(github.event.head_commit.message, '[ai-delivery-verify]'))
+    needs: build-contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: bouncer-wasm
+          path: .
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      - name: Prepare pinned local model with the user bootstrap script
+        shell: bash
+        env:
+          BOUNCER_MODEL_CACHE: ${{ runner.temp }}/bouncer-local-model
+        run: |
+          set +e
+          bash bouncer/scripts/local-model.sh --prepare 2>&1 | tee "$RUNNER_TEMP/ai-download.log"
+          result=${PIPESTATUS[0]}
+          if [ "$result" -ne 0 ]; then
+            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-2500).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=Model download failed::"+s)' "$RUNNER_TEMP/ai-download.log"
+          fi
+          exit "$result"
+      - name: Plan with the local model, then pay and fulfill on NEAR testnet
+        shell: bash
+        env:
+          BOUNCER_DEMO_AI: '1'
+          BOUNCER_DEMO_PUBLIC_DATA: '1'
+          BOUNCER_DEMO_COMPARE: ${{ (contains(github.event.head_commit.message, '[ai-provider-compare]') || contains(github.event.head_commit.message, '[ai-delivery-verify]')) && '1' || '0' }}
+          BOUNCER_DEMO_BAD_DELIVERY: ${{ contains(github.event.head_commit.message, '[ai-delivery-verify]') && '1' || '0' }}
+          BOUNCER_DEMO_SEPARATE_OWNER: ${{ (contains(github.event.head_commit.message, '[separate-owner]') || contains(github.event.head_commit.message, '[mixed-outlayer]')) && '1' || '0' }}
+          BOUNCER_DEMO_OUTLAYER: ${{ contains(github.event.head_commit.message, '[mixed-outlayer]') && '1' || '0' }}
+          BOUNCER_LLM_URL: http://127.0.0.1:17890/v1/chat/completions
+          BOUNCER_LLM_MODEL: bouncer-local-qwen
+          BOUNCER_MODEL_CACHE: ${{ runner.temp }}/bouncer-local-model
+        run: |
+          set -euo pipefail
+          bash bouncer/scripts/local-model.sh > "$RUNNER_TEMP/llama-server.log" 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          if ! curl -fsS --retry 45 --retry-delay 2 --retry-connrefused 'http://127.0.0.1:17890/health'; then
+            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-3000).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=Local model server failed::"+s)' "$RUNNER_TEMP/llama-server.log"
+            exit 1
+          fi
+          set +e
+          node bouncer/demo-multi-resource.mjs 2>&1 | tee "$RUNNER_TEMP/ai-testnet.log"
+          result=${PIPESTATUS[0]}
+          if [ "$result" -ne 0 ]; then
+            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-3500).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=AI testnet check failed::"+s)' "$RUNNER_TEMP/ai-testnet.log"
+          fi
+          exit "$result"
+      - name: Preserve unresolved synthetic AI testnet journal
+        if: failure() && contains(github.event.head_commit.message, '[mixed-outlayer]')
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-mixed-testnet-unresolved-journal
+          path: ~/.bouncer/testnet/*.bouncer-journal.json
+          if-no-files-found: ignore
+          retention-days: 14
 
   wallet-probe:
-    name: Real Meteor testnet login UI probe
+    name: External Meteor testnet page probe (no sign-in)
     if: github.event_name == 'push' && contains(github.event.head_commit.message, '[wallet-probe]')
     runs-on: ubuntu-latest
     timeout-minutes: 5

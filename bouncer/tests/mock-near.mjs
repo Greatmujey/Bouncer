@@ -26,7 +26,15 @@ const setFor = (map, name) => { if (!map.has(name)) map.set(name, new Set()); re
 
 globalThis.fetch = async () => ({ ok: true, json: async () => ({}) });
 Account.prototype.deployContract = async function () { return outcome(); };
-Account.prototype.createAccount = async function () { return outcome(); };
+let createAttempts = 0;
+Account.prototype.createAccount = async function () {
+  createAttempts++;
+  const mode = process.env.BOUNCER_MOCK_MODE;
+  if ((mode === 'setup_expired_once' && createAttempts === 1) || mode === 'setup_expired_twice') fail('Transaction has expired', 'Expired');
+  if (mode === 'setup_timeout') fail('RPC timed out', 'Timeout');
+  if (mode === 'setup_expired_with_outcome') throw Object.assign(new Error('Transaction has expired'), { type: 'Expired', transaction_outcome: { id: 'maybe-submitted' } });
+  return outcome();
+};
 Account.prototype.signAndSendTransaction = async function ({ receiverId, actions, waitUntil }) {
   const added = actions?.[0]?.addKey;
   const permission = added?.accessKey?.permission?.functionCall;
@@ -38,10 +46,10 @@ Account.prototype.deleteKey = async function (publicKey) {
   if (!accessKeys.delete(publicKey.toString())) fail('unknown key');
   return outcome();
 };
+providers.JsonRpcProvider.prototype.viewNodeStatus = async () => ({ chain_id: process.env.BOUNCER_MOCK_MODE === 'wrong_chain' ? 'mainnet' : (process.env.MOCK_CHAIN || 'testnet') });
 providers.JsonRpcProvider.prototype.viewAccessKey = async function (_accountId, publicKey) {
   const permission = accessKeys.get(publicKey.toString());
-  if (!permission) fail('access key not found');
-  return { permission: { FunctionCall: permission } };
+  return { permission: permission ? { FunctionCall: permission } : 'FullAccess' };
 };
 Account.prototype.callFunctionRaw = async function ({ contractId, methodName, args, deposit, gas, waitUntil }) {
   if (typeof deposit !== 'bigint' || typeof gas !== 'bigint') fail('gas and deposit must be bigint');
@@ -128,6 +136,7 @@ Account.prototype.callFunctionRaw = async function ({ contractId, methodName, ar
         if (['broken_refund', 'broken_daily_refund'].includes(process.env.BOUNCER_MOCK_MODE)) spent.set(args.policy_id, (spent.get(args.policy_id) || 0n) + amount);
         return refunded;
       }
+      if (process.env.BOUNCER_MOCK_MODE === 'payment_expired') fail('Transaction has expired', 'Expired');
       if (process.env.BOUNCER_MOCK_MODE === 'payment_refund') {
         const refunded = outcome(['BOUNCER ft_transfer failed; vault refunded']);
         refunded.receipts_outcome.push({ outcome: { status: { Failure: { error: 'transfer failed' } }, logs: [] } });
@@ -143,7 +152,7 @@ Account.prototype.callFunctionRaw = async function ({ contractId, methodName, ar
   }
 };
 providers.JsonRpcProvider.prototype.callFunction = async function (contractId, method, args) {
-  if (method === 'contract_version') return 'bouncer-agent-v4';
+  if (method === 'contract_version') return 'bouncer-agent-v7';
   if (method === 'get_policy') { const p = policies.get(args.policy_id); return p ? { token: p.token, per_tx_cap: p.per_tx_cap, daily_cap: p.daily_cap } : null; }
   if (method === 'vault_balance') return vault.toString();
   if (method === 'storage_balance_of') return null;

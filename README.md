@@ -1,11 +1,17 @@
-# Bouncer — payments firewall for autonomous agents on NEAR
+# Bouncer — autonomous multi-resource procurement on NEAR
 
-Bouncer aims to let an AI agent buy several resources — such as compute,
-storage, and API credits — using different NEAR fungible tokens, subject to
-owner-defined spending policies. The current prototype implements the vault and
-policy checks. The v4 prototype has passed a three-token testnet quote → payment
-→ self-hosted delivery check and a separate restricted-key security/refund check.
-This is unaudited testnet software, not suitable for real funds.
+Bouncer aims to let an AI agent buy compute, storage and API/data resources
+with owner-defined spending policies across NEAR assets. Its testnet prototype
+has paid three fungible tokens for self-hosted development services, and has
+also paid independently operated OutLayer for a bounded compute task using
+native NEAR through a restricted Bouncer key. The latter is **not** an FT or
+stablecoin purchase. An optional model translates objectives into tasks within
+an owner-controlled catalog; it does not choose financial authority. Bounded
+delivery checks and a local journal gate later payments. See
+[AI agent setup](bouncer/docs/AI_AGENT.md) and
+[guarded independent compute](bouncer/docs/OUTLAYER.md). A separate marketplace
+catalog search is read-only. No model or inference service is bundled. This is
+unaudited testnet software, not suitable for real funds.
 
 ## Website preview (read-only)
 
@@ -17,8 +23,8 @@ production deployment, and the private repository remains private.
 `bouncer/web/` explains the prototype's request → quote → guarded payment →
 fulfillment flow with a newcomer tour and an interactive walkthrough of three
 real, **recorded** testnet requests and results. It links to the payment transactions
-and separate refund test, and distinguishes what works today from planned AI
-planning and commercial integrations.
+and separate refund test, and distinguishes the recorded deterministic flow from the then-planned AI
+planner and commercial integrations. This snapshot predates the new model adapter.
 The two credit tokens are synthetic and fulfillment was self-hosted. The site
 is not a live agent dashboard or commercial marketplace. It includes an
 optional, identity-only testnet wallet connection on an isolated top-level
@@ -51,7 +57,7 @@ Gemini CLI and Claude Code have passed local stdio connection checks without a
 model conversation; project configuration is included. ChatGPT web and other
 remote clients need a separately hosted HTTPS endpoint and compatible
 authentication; an OAuth deployment is not supplied or verified. MCP connects
-tools—it does not provide AI planning or a model.
+tools—it does not itself provide a model or access to the new planning/execution path.
 
 ## Target tracks
 
@@ -60,6 +66,10 @@ Defense, and Agent Economy first. Real-World Money, Unstoppable DeFi and
 AI Swarms are potential extensions, not completed integrations.
 
 ## Contract capabilities in this branch
+
+The checked-in `bouncer.wasm` is built from v5 source (SHA-256
+`ac6e5c8d73ef64e44ae1ecb84c9aa704ec542d0dbd3ffbce89f2a9b6e872bd15`).
+V5 needs a fresh deployment; there is no migration from older state.
 
 - NEP-141 deposits; token-specific vault balances and per-policy caps.
 - A direct `execute` call must come from the owner account, with **zero**
@@ -74,8 +84,13 @@ AI Swarms are potential extensions, not completed integrations.
   payments on that policy. `daily_spent` reports the current budget usage.
 - Policy changes, agent-key grants/revocations, payee changes and withdrawals
   require the owner and exactly **1 yoctoNEAR**.
-- A transfer failure callback attempts to refund the vault and the original
+- An FT transfer failure callback attempts to refund the vault and the original
   spend bucket. A failed callback can still leave a debit unresolved.
+- V5 separately tracks native NEAR. An owner-pinned OutLayer program and an
+  `execute_outlayer`-only key can request a bounded testnet execution under the
+  same cap, budget and allowlist controls. The **full maximum deposit** remains
+  counted against the budget; OutLayer's unused deposit goes directly to the
+  owner, not back into the Bouncer vault. It is not an FT payment.
 
 The updated check is designed to use a real restricted key to pay wNEAR, deny
 other callers and policies, revoke a payee and a key, and test both layers of
@@ -90,18 +105,32 @@ Offline mocks are not proof of on-chain behavior.
   including `bouncer-a958bd.testnet`, still have the older unauthenticated
   `execute` and a different state layout. The v4 rolling-budget bucket semantics
   also differ from v3. Do not upgrade older deployments without a migration or
-  use them for valuable funds. The script creates a fresh account.
+  use them for valuable funds. V5 adds native state and also requires a fresh
+  deployment; no migration is provided. The scripts create fresh accounts.
 - The security check uses **one token (wNEAR)**. The separate multi-token check
   creates two synthetic testnet credit FTs and sends payments to three vendor
   accounts. It is not a USDC/stablecoin demonstration.
 - A self-hosted development provider can verify a payment and perform a small
-  compute job, store a local file, or serve a text-statistics API. It is not a
-  commercial provider. The agent fetches fixed quotes from this provider and
-  validates owner-pinned constraints, but is not an AI or a marketplace.
-  Independent vendors, invoices, stablecoin flows and NEAR Intents remain
-  unfinished.
-- Token trust is not enforced; configure policies only for trusted FTs. Changing
-  a policy's token retains its numeric spend history even if the new token has
+  compute job, store a local file, count text or fetch public GitHub repository
+  metadata. GitHub data is live, unauthenticated third-party data; availability
+  is not guaranteed. The provider is not commercial. It can handle up to eight
+  unrelated redemptions concurrently within one process and deduplicates the same
+  in-flight transaction, but has no multi-host coordination, authentication or
+  production durability. An optional selector compares quotes from owner-approved endpoints only, within one token per
+  resource; every quote must match the approved constraints. The model proposes
+  tasks but cannot choose financial authority. It requires a separately supplied
+  model. Delivery checks cover only the bounded example protocols: storage is
+  one readback from the same provider, and GitHub checking covers repository
+  identity only, not the truth or freshness of its other fields. Local receipts
+  are editable records, not signed invoices. The separate public catalog search
+  is read-only, not a purchasing integration. OutLayer is a separate native-NEAR
+  compute integration, not an adopter of this experimental FT-provider protocol;
+  independent storage/API purchases, invoices, stablecoin flows and NEAR Intents
+  remain unfinished.
+- Token trust is not enforced; configure policies only for trusted FTs. The
+  planner and configured development provider accept owner-pinned 64-hex token
+  IDs on a testnet-reported RPC, but no stablecoin purchase has been tested.
+  Changing a policy's token retains its numeric spend history even if the new token has
   different units; create a new policy for a different token instead. Key
   grants do not themselves create or restrict NEAR access keys. The owner must
   create correctly scoped function-call keys and keep full-access keys private.
@@ -142,8 +171,11 @@ Every successful operation prints a transaction link. The script exits with a
 nonzero status on unexpected rejection, unexpected success, failed downstream
 receipt, or a balance mismatch. Testnet RPC/helper outages or faucet limits can
 also stop a run; their errors are printed rather than hidden. Set
-`NEAR_TESTNET_RPC` to override the default FastNEAR testnet RPC. Daily budget
-tracking uses conservative hourly buckets rather than resetting at midnight.
+`NEAR_TESTNET_RPC` to override the default FastNEAR testnet RPC. Remote RPCs
+must use HTTPS without URL credentials, query or fragment; loopback HTTP is
+allowed for local testing. The runner checks the reported chain ID, but still
+trusts the RPC. Daily budget tracking uses conservative hourly buckets rather
+than resetting at midnight.
 
 GitHub Actions also has an opt-in testnet smoke job, triggered manually or by a
 push whose commit message contains `[testnet-smoke]`. It creates real testnet
@@ -179,10 +211,143 @@ The separately tested [failed-transfer refund](https://testnet.nearblocks.io/txn
 restored the recorded vault balance and daily budget. These are testnet results,
 not commercial resource purchases.
 
+### Natural-language planning
+
+The optional [AI agent](bouncer/docs/AI_AGENT.md) accepts an objective and a
+trusted owner catalog, then can preview or explicitly execute the resulting
+resource tasks through the same guarded runner. The model cannot set payment
+addresses, policy, token or budget. AI output can still be wrong; review it
+before spending. A local model server or another explicitly configured
+OpenAI-compatible endpoint is required. An optional Linux x86_64 bootstrap
+script downloads and verifies a pinned local model; it is not bundled. In the [AI-planned testnet run](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40579499294),
+a local Qwen2.5 1.5B model generated the three synthetic tasks; Bouncer checked
+them, paid three testnet FTs and verified the local deliveries. The model's
+inputs were checked against the requested literals before any accounts were
+created. A [later AI job](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40581368718/job/122462232919)
+also paid synthetic API credits for live public GitHub repository data and
+checked the result against a second GitHub read. That workflow's separate
+security job failed on an RPC nonce error. A [subsequent run](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40582306741)
+passed both the four-payment AI flow and its separate restricted-key security
+and refund job after a process-local nonce mitigation. That mitigation does not
+coordinate multiple writers or retry ambiguous sends. The original v4 run linked
+above used deterministic inputs. These are self-hosted development services,
+not commercial vendors.
+
+### Owner-approved provider comparison
+
+The optional `--compare-providers` path compares valid quotes only within the
+resource's owner-pinned token. It chooses the cheapest using exact integer
+amounts, saves the selected route and price, and rechecks that price before the
+normal on-chain policy preflight and payment. Up to five quotes are requested
+concurrently; an invalid or unavailable quote stops queued requests and the
+comparison fails without a partial selection. See [setup and recovery limits](bouncer/docs/AI_AGENT.md#compare-owner-approved-providers).
+
+In the [live comparison job](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40666249071/job/122742140751),
+two self-hosted development endpoints quoted 0.10 and 0.08 wNEAR for the same
+explicitly supplied compute task. Bouncer selected the approved cheaper payee,
+[paid it on testnet](https://testnet.nearblocks.io/txns/3ztdLNn4M91nDtqQNUSZZqgwEg3Fh9CaU3XP7BnD8T3S),
+verified the local result and replayed without a second payment. The comparison
+task was deterministic. A [later combined AI run](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40667233621/job/122745427128)
+used the local model to propose the comparison task, selected the same cheaper
+quote and [paid on testnet](https://testnet.nearblocks.io/txns/HbibFp8eUpNgdQUV4azi1jG9PVekEY9teupjHgHrDhki).
+That run also completed the three-resource and public-data purchases and replay
+checks. Both tests used self-hosted services, not independent commercial
+providers, and do not guarantee future delivery.
+
+### Guarded independent compute on testnet
+
+A separate-owner [live check](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40682550107/job/122797278579)
+used an `execute_outlayer`-only key to call the independently operated
+`outlayer.testnet` through a fresh Bouncer v5 deployment. In
+[transaction `HPYW…99rQ`](https://testnet.nearblocks.io/txns/HPYWoHrEozKWirbZdgiJkRDp9hShJBmzXSShJd2d99rQ),
+the 0.1 NEAR maximum produced a number in the requested 1–100 range. The
+provider charged 0.0010185 NEAR and the unused 0.0989815 NEAR was verified as
+refunded to the separate owner. The demo rejected over-cap and zero-deposit
+program-escalation attempts, injected a local evidence fault, and used a
+separate key-free CLI to recover the same transaction without a second payment.
+The maximum 0.1 NEAR remained in
+the rolling budget.
+
+The verifier trusts the configured RPC and OutLayer contract. An in-range output
+is **not** independent verification of TEE attestation or randomness quality.
+This is one bounded random-number program, paid in testnet native NEAR; it is
+not a general independent cloud marketplace or a USDC purchase. A mixed-mission
+runner can combine that owner-selected task with FT-backed resource goals; its
+previews are non-atomic and earlier payments cannot be rolled back if later
+work fails. In the [full mixed test](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40682550107/job/122797278689),
+the same separate-owner deployment paid [OutLayer](https://testnet.nearblocks.io/txns/5ShjrS8JiJ5yyQPKDvFGnwtobpL2vQUbXTFchPuGD53r)
+and then fulfilled AI-planned compute, storage, API and public-data goals using
+three FTs and self-hosted development providers. The model did not select the
+OutLayer task. An injected FT-result fault stopped later payments until the same
+transaction was recovered. See [setup, recovery and trust boundaries](bouncer/docs/OUTLAYER.md).
+
+### Read-only independent marketplace discovery
+
+```sh
+npm run discover --prefix bouncer -- --query research --limit 5
+```
+
+This optional command makes a bounded, fixed-origin GET to the public
+[NEAR Agent Market catalog](https://market.near.ai/v1/agents?limit=3). It has no
+wallet, credentials, model or policy access and cannot quote, hire or pay. The
+  catalog is for a **mainnet marketplace**, not proof of a testnet service or any
+Bouncer-compatible vendor. Search terms are sent to the marketplace; do not use
+secrets or private objectives. Listing text, availability, payment-method labels
+and reported metrics are untrusted, may contain prompt injection, and are not
+validated quotes or endorsements. They are not fed into the planner, allowlist
+or payment runner. An owner must independently vet any potential integration;
+the [experimental provider protocol](bouncer/docs/PROVIDER_PROTOCOL.md) documents
+the current testnet interface and its trust requirements.
+The advertised [x402 hiring flow](https://docs.market.near.ai/a2a/hire-agent-using-x402)
+uses direct delegated FT transfers, which would bypass the current Bouncer
+restricted-key policy. Bouncer deliberately does not perform that flow. The
+[read-only live check](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40675524400/job/122772818985)
+returned three public listings without credentials or payments; it did not
+validate, hire or transact with their providers.
+
+### Delivery checks and local receipts
+
+The resource agent recomputes bounded SHA-256 and text-statistics results,
+checks a single storage readback against the ordered bytes, and checks GitHub
+repository identity against a separate fixed-origin read. Other GitHub fields
+remain unverified. After a successful check, its private journal records the
+payment, result, verification scope and result hash. A bad or unavailable
+result leaves the payment completed and delivery unverified; a new-format
+journal can retry delivery with the same transaction without fetching a new
+quote or sending another payment; the recorded provider route must still match.
+After whole-batch preflight, each newly confirmed payment is fulfilled, checked
+and journaled **before** the next payment. An unverified delivery, receipt write
+failure or execution-time policy block stops later payments; previous payments
+cannot be rolled back. In the [AI-planned live test](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40675524400/job/122773588238),
+a locally corrupted first reply halted the batch with both later vendor balances
+at zero; recovery reused the [first payment](https://testnet.nearblocks.io/txns/SVdv3Fc4dMwSxChpCfvijiVUDx3A4478U5gcwHAWjJV)
+and then verified the remaining deliveries. The fault was injected locally, not
+provider misconduct. That run's separate security smoke job failed on a testnet
+transaction expiry during account setup. The [next full run](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40676850305)
+passed the AI and deterministic flows with a separate policy owner, as well as
+the restricted-key security and [refund check](https://testnet.nearblocks.io/txns/APWAXeExseG1TMgNvVgo7xPKiHyne9VPWot2VWYQozTM).
+Both used self-hosted providers. These are local, editable records—not signed
+invoices, generic compute proofs or guarantees of future storage. See the
+[verification and recovery details](bouncer/docs/AI_AGENT.md#delivery-checks-and-local-receipts).
+
+In the [live testnet verification job](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40671752050/job/122760598105),
+Bouncer paid the selected self-hosted compute provider, deliberately corrupted
+the reply locally, rejected it and recovered using the [same payment](https://testnet.nearblocks.io/txns/GewpbPFkGtbBnNzWbuFrwcmWqb6hCHFkqoaBBmN3u7eh)
+without requoting. The fault was injected by the demo, not evidence of provider
+misconduct. The job also checked storage readback, text statistics and receipts.
+A [separate security/refund job](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40671752050/job/122760598164)
+passed; the AI job in that run failed during setup on a testnet expiry error.
+A [subsequent combined AI job](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40673056154/job/122765249942)
+passed with the synced journal: the local model planned the tasks, all five
+payments completed, and the injected bad reply was rejected and recovered
+using the [same transaction](https://testnet.nearblocks.io/txns/5JnhhrRpWSfuSBVvfw25BSVrtQPQWRoyTnff2dKAayvf).
+The GitHub check verified repository identity only; the providers were still
+self-hosted development services.
+
 ### Run the resource agent again
 
-The multi-token script also writes `<account>.provider.json` and
-`<account>.goals.json` alongside its plan and journal. The goals file points to
+The multi-token script also writes `<account>.provider.json`,
+`<account>.owner.json` and `<account>.goals.json` alongside its plan and journal. The goals file points to
 the **same journal** used for the original payments; retaining it is essential
 to avoid paying twice. It also contains the resource inputs, so treat it as
 private. To start the local development provider and preview those goals after
@@ -258,6 +423,10 @@ real testnet transactions. To build locally with Rust and the wasm target, run
 - `bouncer/demo-multi-resource.mjs` — testnet wNEAR plus synthetic FT check.
 - `bouncer/agent/procurement.mjs` — plan-driven, testnet-only procurement runner.
 - `bouncer/agent/resource-agent.mjs` — quote, guarded payment, fulfillment orchestration.
+- `bouncer/agent/verify-delivery.mjs` — bounded result checks and local receipt validation.
+- `bouncer/agent/market-discovery.mjs` — isolated, read-only public catalog search.
+- `bouncer/agent/goal-planner.mjs`, `autonomous.mjs` — model proposals constrained by the owner catalog.
+- `bouncer/agent/quote-comparison.mjs` — opt-in, same-token selection among owner-approved providers.
 - `bouncer/services/resource-provider.mjs` — self-hosted test-only resource provider.
 - `bouncer/demo/index.html` — clearly labelled offline simulation only; it sends
   no transactions and does not exactly match contract behavior.

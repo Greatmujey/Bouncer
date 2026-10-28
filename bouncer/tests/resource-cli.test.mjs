@@ -43,6 +43,33 @@ test('resource CLI defaults to dry run; execution and retry use the local journa
   } finally { fs.rmSync(f.dir, { recursive: true, force: true }); }
 });
 
+test('resource CLI records a bad delivery and recovers after restart without another quote or payment', () => {
+  const f = fixture();
+  try {
+    const failed = exec([...f.args, '--execute'], { MOCK_BAD_DELIVERY: '1' });
+    assert.equal(failed.status, 1);
+    assert.match(failed.stdout, /PAID compute-1/);
+    assert.match(failed.stderr, /verification failed after confirmed payment/);
+    assert.doesNotMatch(failed.stdout, /FULFILLED compute-1/);
+    const first = JSON.parse(fs.readFileSync(f.journal, 'utf8')).entries[0];
+    assert.equal(first.status, 'completed');
+    assert.equal(first.delivery.status, 'unverified');
+    assert.equal(first.request.amount, '80');
+    assert.equal(fs.statSync(f.journal).mode & 0o777, 0o600);
+    // If a quote were requested, this mock would return an attacker payee.
+    const recovered = exec([...f.args, '--execute'], { MOCK_BAD_QUOTE: '1' });
+    assert.equal(recovered.status, 0, recovered.stderr);
+    assert.match(recovered.stdout, /SKIP compute-1/);
+    assert.match(recovered.stdout, /FULFILLED compute-1/);
+    assert.doesNotMatch(recovered.stdout, /PAID compute-1/);
+    const saved = JSON.parse(fs.readFileSync(f.journal, 'utf8')).entries[0];
+    assert.equal(saved.tx_hash, first.tx_hash);
+    assert.equal(saved.delivery.status, 'verified');
+    assert.equal(saved.delivery.receipt.tx_hash, first.tx_hash);
+    assert.equal(saved.delivery.receipt.verification.scope, 'iterated-sha256');
+  } finally { fs.rmSync(f.dir, { recursive: true, force: true }); }
+});
+
 test('resource CLI rejects an untrusted quote before payment or fulfillment', () => {
   const f = fixture();
   try {
@@ -103,5 +130,14 @@ test('resource CLI starts its local provider for dry run, payment and replay rec
     const mismatch = exec([...f.args, '--local-provider', providerFile]);
     assert.equal(mismatch.status, 1);
     assert.match(mismatch.stderr, /contract does not match/);
+    bad.contract_id = 'bouncer.testnet'; bad.owner_account_id = 'other.testnet';
+    fs.writeFileSync(providerFile, JSON.stringify(bad));
+    const ownerMismatch = exec([...f.args, '--local-provider', providerFile]);
+    assert.equal(ownerMismatch.status, 1); assert.match(ownerMismatch.stderr, /owner does not match/);
+    delete bad.owner_account_id;
+    fs.writeFileSync(providerFile, JSON.stringify(bad));
+    const wrongChain = exec([...f.args, '--local-provider', providerFile, '--execute'], { MOCK_CHAIN: 'mainnet' });
+    assert.equal(wrongChain.status, 1); assert.match(wrongChain.stderr, /provider RPC must report.*testnet/);
+    assert.doesNotMatch(wrongChain.stdout, /Local development provider|PAID/);
   } finally { fs.rmSync(f.dir, { recursive: true, force: true }); }
 });

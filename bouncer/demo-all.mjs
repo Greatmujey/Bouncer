@@ -8,8 +8,11 @@ import util from 'node:util';
 import { fileURLToPath } from 'node:url';
 import crypto from 'node:crypto';
 import nearApi from 'near-api-js';
+import { validateRpcEndpoint } from './shared/rpc-endpoint.mjs';
+import { waitForNewTestnetKey } from './shared/testnet-ready.mjs';
+import { MonotonicAccount } from './agent/near-account.mjs';
 
-const { KeyPair, KeyPairSigner, Account, providers, transactions } = nearApi;
+const { KeyPair, KeyPairSigner, providers, transactions } = nearApi;
 const { JsonRpcProvider } = providers;
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const NETWORK = 'testnet';
@@ -18,7 +21,7 @@ const HELPER = 'https://helper.testnet.near.org';
 const WNEAR = 'wrap.testnet';
 const WASM_PATH = path.join(REPO_ROOT, 'bouncer.wasm');
 const KEY_DIR = path.join(os.homedir(), '.near-credentials', NETWORK);
-const provider = new JsonRpcProvider({ url: RPC });
+const provider = new JsonRpcProvider({ url: validateRpcEndpoint(RPC) });
 
 const ONE_NEAR = 10n ** 24n;
 const TGAS = 10n ** 12n;
@@ -30,7 +33,7 @@ const YOCTO = 1n;
 const COMPUTE_POLICY = 'wnear-compute';
 const STORAGE_POLICY = 'wnear-storage'; // same token: policy isolation, not a second FT
 const txUrl = hash => `https://testnet.nearblocks.io/txns/${hash}?network=testnet`;
-const accountFor = (id, key) => new Account(id, provider, new KeyPairSigner(key));
+const accountFor = (id, key) => new MonotonicAccount(id, provider, new KeyPairSigner(key));
 
 function saveKey(id, key, label = '') {
   fs.mkdirSync(KEY_DIR, { recursive: true, mode: 0o700 });
@@ -49,7 +52,9 @@ async function helperCreate(id, publicKey) {
     signal: AbortSignal.timeout(30_000),
   });
   if (!response.ok) throw new Error(`testnet helper ${response.status}: ${await response.text()}`);
-  return response.json();
+  const body = await response.json();
+  await waitForNewTestnetKey(provider, id, publicKey);
+  return body;
 }
 
 // A callback can succeed after a failed ft_transfer. A successful top-level
@@ -108,11 +113,23 @@ function formatNear(amount) {
   return fraction ? `${value / ONE_NEAR}.${fraction}` : String(value / ONE_NEAR);
 }
 
+// Fresh-demo setup only: an explicit Expired response without a transaction
+// outcome is a pre-admission rejection. Never retry a timeout, an ambiguous
+// outcome or a procurement payment through this helper.
+async function setupAttempt(description, operation) {
+  try { return await operation(); }
+  catch (error) {
+    if (error?.type !== 'Expired' || error.transaction_outcome !== undefined) throw error;
+    console.warn(`    Testnet security setup ${description}: explicit expired transaction; retrying once.`);
+    return operation();
+  }
+}
+
 async function addRestrictedKey(owner, contractId, key, methods) {
-  const result = await owner.signAndSendTransaction({
+  const result = await setupAttempt('add restricted key', () => owner.signAndSendTransaction({
     receiverId: owner.accountId, waitUntil: 'FINAL',
     actions: [transactions.addKey(key.getPublicKey(), transactions.functionCallAccessKey(contractId, methods, ONE_NEAR))],
-  });
+  }));
   assertReceiptsSucceeded(result, 'add restricted key');
   const access = await provider.viewAccessKey(owner.accountId, key.getPublicKey(), { finality: 'final' });
   const permission = access.permission?.FunctionCall;
@@ -125,6 +142,7 @@ async function addRestrictedKey(owner, contractId, key, methods) {
 
 async function main() {
   if (!fs.existsSync(WASM_PATH)) throw new Error(`bouncer.wasm missing at ${WASM_PATH}`);
+  if ((await provider.viewNodeStatus())?.chain_id !== 'testnet') throw new Error('RPC must report the NEAR testnet chain');
   const wasm = fs.readFileSync(WASM_PATH);
   console.log('BOUNCER — restricted-agent payments firewall (NEAR testnet)');
   console.log('Fresh deploy • real wNEAR • policy-scoped key • 1-yocto guard\n');
@@ -152,17 +170,17 @@ async function main() {
   let version;
   try { version = await view(bouncerId, 'contract_version', {}); }
   catch (error) { throw new Error('The deployed wasm is stale; wait for the CI wasm build and git pull again.', { cause: error }); }
-  if (version !== 'bouncer-agent-v4') throw new Error(`Unsupported contract version: ${version}`);
+  if (version !== 'bouncer-agent-v7') throw new Error(`Unsupported contract version: ${version}`);
 
   console.log('\n=== 3) Create user and vendor sub-accounts ===');
   const userKey = KeyPair.fromRandom('ed25519');
   const vendorKey = KeyPair.fromRandom('ed25519');
   saveKey(userId, userKey);
   saveKey(vendorId, vendorKey);
-  const userTx = await bouncer.createAccount(userId, userKey.getPublicKey(), 5n * ONE_NEAR);
+  const userTx = await setupAttempt('create user', () => bouncer.createAccount(userId, userKey.getPublicKey(), 5n * ONE_NEAR));
   assertReceiptsSucceeded(userTx, 'create user');
   console.log(`    ✅ ${userId}  tx: ${txUrl(userTx.transaction_outcome.id)}`);
-  const vendorTx = await bouncer.createAccount(vendorId, vendorKey.getPublicKey(), ONE_NEAR / 2n);
+  const vendorTx = await setupAttempt('create vendor', () => bouncer.createAccount(vendorId, vendorKey.getPublicKey(), ONE_NEAR / 2n));
   assertReceiptsSucceeded(vendorTx, 'create vendor');
   console.log(`    ✅ ${vendorId}  tx: ${txUrl(vendorTx.transaction_outcome.id)}`);
   const user = accountFor(userId, userKey);
