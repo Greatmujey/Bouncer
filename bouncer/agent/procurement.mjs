@@ -15,7 +15,7 @@ import { MonotonicAccount } from './near-account.mjs';
 
 const { KeyPair, KeyPairSigner, providers } = nearApi;
 const DEFAULT_RPC = 'https://test.rpc.fastnear.com';
-const CONTRACT_VERSION = 'bouncer-agent-v4';
+const CONTRACT_VERSIONS = new Set(['bouncer-agent-v4', 'bouncer-agent-v5']);
 const U128_MAX = (1n << 128n) - 1n;
 const GAS = 200_000_000_000_000n;
 const EXPLORER = hash => `https://testnet.nearblocks.io/txns/${hash}?network=testnet`;
@@ -48,6 +48,7 @@ export function validatePlan(input) {
     const resource = text(request.resource, `${id}.resource`, 64);
     const policyId = text(request.policy_id, `${id}.policy_id`, 128);
     const token = text(request.token, `${id}.token`, 64);
+    if (token === 'native') throw new Error(`${id}.token is native NEAR; use the dedicated OutLayer runner`);
     const payee = text(request.payee, `${id}.payee`, 64);
     if (typeof request.amount !== 'string' || !/^[0-9]+$/.test(request.amount)) {
       throw new Error(`${id}.amount must be a decimal string in the token's smallest units`);
@@ -103,7 +104,7 @@ export async function runProcurement({ plan: rawPlan, provider, account, publicK
   const status = await provider.viewNodeStatus();
   if (status?.chain_id !== 'testnet') throw new Error('RPC must report the NEAR testnet chain');
   const version = await provider.callFunction(plan.contract_id, 'contract_version', {}, { finality: 'final' });
-  if (version !== CONTRACT_VERSION) throw new Error(`unsupported contract version: ${version || 'unknown'}`);
+  if (!CONTRACT_VERSIONS.has(version)) throw new Error(`unsupported contract version: ${version || 'unknown'}`);
   const access = await provider.viewAccessKey(plan.owner_account_id, publicKey, { finality: 'final' });
   const permission = access.permission?.FunctionCall;
   if (!permission || permission.receiver_id !== plan.contract_id ||

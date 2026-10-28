@@ -9,6 +9,7 @@
     "test:all": "node --test packages/policy/policy.test.mjs tests/*.test.mjs",
     "build": "bash scripts/build.sh",
     "agent": "node agent/procurement.mjs",
+    "outlayer": "node agent/outlayer.mjs",
     "solver": "node agent/solver.mjs",
     "quote": "node agent/intents.mjs quote",
     "discover": "node agent/market-discovery.mjs",

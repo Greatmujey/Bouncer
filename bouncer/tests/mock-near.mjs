@@ -153,7 +153,7 @@ Account.prototype.callFunctionRaw = async function ({ contractId, methodName, ar
   }
 };
 providers.JsonRpcProvider.prototype.callFunction = async function (contractId, method, args) {
-  if (method === 'contract_version') return 'bouncer-agent-v4';
+  if (method === 'contract_version') return 'bouncer-agent-v5';
   if (method === 'get_policy') { const p = policies.get(args.policy_id); return p ? { token: p.token, per_tx_cap: p.per_tx_cap, daily_cap: p.daily_cap } : null; }
   if (method === 'vault_balance') return vault.toString();
   if (method === 'storage_balance_of') return null;
