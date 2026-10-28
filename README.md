@@ -256,15 +256,16 @@ providers, and do not guarantee future delivery.
 
 ### Guarded independent compute on testnet
 
-A separate-owner [live check](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40681361587/job/122793284625)
+A separate-owner [live check](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40682550107/job/122797278579)
 used an `execute_outlayer`-only key to call the independently operated
 `outlayer.testnet` through a fresh Bouncer v5 deployment. In
-[transaction `7RDx…R7N9`](https://testnet.nearblocks.io/txns/7RDxWqUYd4GvC9dNLmq4Bgu3do93QcthZ7Hyj8rdR7N9),
+[transaction `HPYW…99rQ`](https://testnet.nearblocks.io/txns/HPYWoHrEozKWirbZdgiJkRDp9hShJBmzXSShJd2d99rQ),
 the 0.1 NEAR maximum produced a number in the requested 1–100 range. The
-provider charged 0.0010213 NEAR and the unused 0.0989787 NEAR was verified as
+provider charged 0.0010185 NEAR and the unused 0.0989815 NEAR was verified as
 refunded to the separate owner. The demo rejected over-cap and zero-deposit
-program-escalation attempts, injected a local evidence fault, and recovered the
-same transaction without a second payment. The maximum 0.1 NEAR remained in
+program-escalation attempts, injected a local evidence fault, and used a
+separate key-free CLI to recover the same transaction without a second payment.
+The maximum 0.1 NEAR remained in
 the rolling budget.
 
 The verifier trusts the configured RPC and OutLayer contract. An in-range output
@@ -273,8 +274,8 @@ This is one bounded random-number program, paid in testnet native NEAR; it is
 not a general independent cloud marketplace or a USDC purchase. A mixed-mission
 runner can combine that owner-selected task with FT-backed resource goals; its
 previews are non-atomic and earlier payments cannot be rolled back if later
-work fails. In the [full mixed test](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40681361587/job/122793284540),
-the same separate-owner deployment paid [OutLayer](https://testnet.nearblocks.io/txns/7pfoABwbLRBsEuhfrPnF2GgdNEn2Vc244t4punA3h98e)
+work fails. In the [full mixed test](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40682550107/job/122797278689),
+the same separate-owner deployment paid [OutLayer](https://testnet.nearblocks.io/txns/5ShjrS8JiJ5yyQPKDvFGnwtobpL2vQUbXTFchPuGD53r)
 and then fulfilled AI-planned compute, storage, API and public-data goals using
 three FTs and self-hosted development providers. The model did not select the
 OutLayer task. An injected FT-result fault stopped later payments until the same

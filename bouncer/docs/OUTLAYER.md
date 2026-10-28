@@ -8,7 +8,7 @@ unaudited software; do not use real funds.
 
 ## What has been demonstrated
 
-The [guarded live job](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40681361587/job/122793284625)
+The [guarded live job](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40682550107/job/122797278579)
 created a fresh contract and a **different owner**. The owner pinned a WASM
 URL and SHA-256, WASI target, instruction/memory/time limits, a native policy,
 OutLayer payee and caps. A separate function-call key could call only
@@ -16,18 +16,19 @@ OutLayer payee and caps. A separate function-call key could call only
 key's zero-deposit attempt to change the program was rejected, as was an
 execution above the per-transaction cap.
 
-The [guarded payment](https://testnet.nearblocks.io/txns/7RDxWqUYd4GvC9dNLmq4Bgu3do93QcthZ7Hyj8rdR7N9)
-attached a maximum of 0.1 testnet NEAR and returned `42` for the requested
-1–100 range. OutLayer reported a charge of `1021300000000000000000` yoctoNEAR
-(0.0010213 NEAR); the verifier found a successful transfer of the remaining
-`98978700000000000000000` yoctoNEAR (0.0989787 NEAR) to the separate owner.
-An intentionally corrupted **local** evidence response was rejected; the
-runner recovered from the same transaction without a private key and made no second payment. The
+The [guarded payment](https://testnet.nearblocks.io/txns/HPYWoHrEozKWirbZdgiJkRDp9hShJBmzXSShJd2d99rQ)
+attached a maximum of 0.1 testnet NEAR and returned `93` for the requested
+1–100 range. OutLayer reported a charge of `1018500000000000000000` yoctoNEAR
+(0.0010185 NEAR); the verifier found a successful transfer of the remaining
+`98981500000000000000000` yoctoNEAR (0.0989815 NEAR) to the separate owner.
+An intentionally corrupted **local** evidence response was rejected; a
+separate CLI process recovered the same transaction without a private key and
+made no second payment. The
 full maximum remained charged against the rolling budget, and the owner
 withdrew the remaining tracked native vault balance.
 
-The [AI-planned mixed mission](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40681361587/job/122793284540)
-then combined an owner-selected [independent OutLayer payment](https://testnet.nearblocks.io/txns/7pfoABwbLRBsEuhfrPnF2GgdNEn2Vc244t4punA3h98e)
+The [AI-planned mixed mission](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40682550107/job/122797278689)
+then combined an owner-selected [independent OutLayer payment](https://testnet.nearblocks.io/txns/5ShjrS8JiJ5yyQPKDvFGnwtobpL2vQUbXTFchPuGD53r)
 with model-proposed compute, storage, text API and GitHub-data tasks on the
 same separate-owner Bouncer deployment. The three FT assets were wNEAR and two
 synthetic credits; their providers were self-hosted development services.
