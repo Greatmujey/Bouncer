@@ -99,6 +99,46 @@ jobs:
             git push
           fi
 
+  ft-call-live:
+    name: Guarded independent FT provider funding and refund (testnet)
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[ft-call-live]')
+    needs: build-contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: bouncer-wasm
+          path: .
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      - name: Test a pinned FT call, independent provider credit and rejection refund
+        shell: bash
+        run: |
+          set +e
+          node bouncer/demo-ft-call.mjs 2>&1 | tee "$RUNNER_TEMP/ft-call-live.log"
+          result=${PIPESTATUS[0]}
+          if [ "$result" -ne 0 ]; then
+            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-4000).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=Guarded FT call live check failed::"+s)' "$RUNNER_TEMP/ft-call-live.log"
+          fi
+          exit "$result"
+      - name: Preserve unresolved public testnet journals
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ft-call-unresolved-journals
+          path: |
+            /tmp/bouncer-ftcall-*/journal.json
+            /tmp/bouncer-ftcall-*/goal.json
+            /tmp/bouncer-ftcall-*/refund-goal.json
+          if-no-files-found: ignore
+          retention-days: 7
+
   outlayer-guarded:
     name: Guarded independent OutLayer testnet compute
     if: github.event_name == 'push' && contains(github.event.head_commit.message, '[outlayer-live]')

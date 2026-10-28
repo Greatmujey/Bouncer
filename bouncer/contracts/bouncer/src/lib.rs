@@ -867,11 +867,44 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "BLOCKED: execute_ft_call requires zero deposit")]
+    fn ft_call_requires_zero_deposit_from_the_restricted_key() {
+        let (mut contract, agent) = ft_call_fixture();
+        testing_env!(owner_context(&agent, 1, NS_PER_DAY));
+        send_ft_call(&mut contract, 100);
+    }
+
+    #[test]
+    #[should_panic(expected = "FT receiver message is too large")]
+    fn owner_cannot_pin_an_unbounded_ft_message() {
+        let (mut contract, _) = ft_call_fixture();
+        testing_env!(owner_context(&key(1), 1, NS_PER_DAY));
+        contract.set_ft_call_message("compute".into(), id("vendor.testnet"), "x".repeat(MAX_FT_CALL_MESSAGE_BYTES + 1));
+    }
+
+    #[test]
+    #[should_panic(expected = "payee must already be allowed")]
+    fn owner_must_allow_a_payee_before_pinning_its_message() {
+        let (mut contract, _) = ft_call_fixture();
+        testing_env!(owner_context(&key(1), 1, NS_PER_DAY));
+        contract.set_ft_call_message("compute".into(), id("other.testnet"), "".into());
+    }
+
+    #[test]
     #[should_panic(expected = "BLOCKED: amount exceeds per-tx cap")]
     fn ft_call_cannot_exceed_the_policy_cap() {
         let (mut contract, agent) = ft_call_fixture();
         testing_env!(owner_context(&agent, 0, NS_PER_DAY));
         send_ft_call(&mut contract, 201);
+    }
+
+    #[test]
+    #[should_panic(expected = "BLOCKED: daily cap exceeded for this policy")]
+    fn ft_call_cannot_bypass_the_rolling_budget_with_small_calls() {
+        let (mut contract, agent) = ft_call_fixture();
+        testing_env!(owner_context(&agent, 0, NS_PER_DAY));
+        send_ft_call(&mut contract, 200);
+        send_ft_call(&mut contract, 101);
     }
 
     #[test]
