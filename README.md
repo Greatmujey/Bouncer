@@ -16,9 +16,9 @@ unaudited testnet software, not suitable for real funds.
 
 ## Website preview (read-only)
 
-**[Open Bouncer](https://www.madethis.website/s/nrqegcc3/)** — a public,
-temporary preview hosted by madethis.website, expiring **3 November 2026 at
-19:27 UTC**. Anyone with the link can view it. It is a snapshot, not a
+**[Open Bouncer](https://www.madethis.website/s/quy43ezm/)** — a public,
+temporary preview hosted by madethis.website, expiring **4 November 2026 at
+13:14 UTC**. Anyone with the link can view it. It is a snapshot, not a
 production deployment, and the private repository remains private.
 
 `bouncer/web/` explains the prototype's request → quote → guarded payment →
