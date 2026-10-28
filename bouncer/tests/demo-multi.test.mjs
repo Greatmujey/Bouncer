@@ -7,12 +7,13 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-function run(mode = '', ai = false, publicData = false, compare = false) {
+function run(mode = '', ai = false, publicData = false, compare = false, badDelivery = false) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'bouncer-multi-test-'));
   try {
     const child = spawnSync(process.execPath, ['--import=./bouncer/tests/mock-multi-near.mjs', 'bouncer/demo-multi-resource.mjs'], {
       cwd: repo, env: { ...process.env, HOME: home, BOUNCER_MOCK_MODE: mode, BOUNCER_DEMO_AI: ai ? '1' : '', BOUNCER_DEMO_PUBLIC_DATA: publicData ? '1' : '',
-        BOUNCER_DEMO_COMPARE: compare ? '1' : '', BOUNCER_LLM_URL: 'https://model.example/v1/chat/completions', BOUNCER_LLM_MODEL: 'mock-model' }, encoding: 'utf8', timeout: 30_000,
+        BOUNCER_DEMO_COMPARE: compare ? '1' : '', BOUNCER_DEMO_BAD_DELIVERY: badDelivery ? '1' : '',
+        BOUNCER_LLM_URL: 'https://model.example/v1/chat/completions', BOUNCER_LLM_MODEL: 'mock-model' }, encoding: 'utf8', timeout: 30_000,
     });
     const dir = path.join(home, '.bouncer', 'testnet');
     const files = fs.existsSync(dir) ? fs.readdirSync(dir) : [];
@@ -46,6 +47,7 @@ test('multi-token setup and real procurement runner complete using a mock transp
   assert.equal(result.owner.resources.compute.token, 'wrap.testnet');
   assert.equal(result.owner.resources.storage.max_amount, result.provider.products.storage.amount);
   assert.equal(result.journal.entries.filter(e => e.status === 'completed').length, 3);
+  assert.ok(result.journal.entries.every(e => e.delivery.receipt.provider_origin === result.goals.provider_url));
   assert.equal((result.stdout.match(/\[procurement\] PAID /g) || []).length, 3);
   assert.equal((result.stdout.match(/\[procurement\] SKIP /g) || []).length, 3);
   assert.equal((result.stdout.match(/\[resource-agent\] FULFILLED /g) || []).length, 6);
@@ -96,6 +98,19 @@ test('combined mock-model flow plans comparison work and pays the selected provi
   assert.equal(result.journal.entries.filter(e => e.status === 'completed').length, 5);
   assert.equal((result.stdout.match(/\[procurement\] PAID /g) || []).length, 5);
   assert.equal((result.stdout.match(/\[procurement\] SKIP /g) || []).length, 5);
+});
+
+test('mocked combined run rejects an injected bad delivery and recovers the same payment without requoting', () => {
+  const result = run('', true, true, true, true);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Injected an incorrect local reply after payment: rejected, then recovered with the same transaction and no requote/);
+  assert.match(result.stdout, /Private journal receipts bind payments to agent-checked results/);
+  assert.equal(result.journal.entries.filter(e => e.status === 'completed' && e.delivery?.status === 'verified').length, 5);
+  assert.equal(result.journal.entries.find(e => e.id === 'compute-market-1').delivery.receipt.verification.scope, 'iterated-sha256');
+  assert.equal(result.journal.entries.find(e => e.id === 'storage-1').delivery.receipt.verification.scope, 'single-read-content');
+  assert.equal(result.journal.entries.find(e => e.id === 'api-github-1').delivery.receipt.verification.scope, 'repository-identity-only');
+  assert.equal((result.stdout.match(/\[procurement\] PAID /g) || []).length, 5);
+  assert.equal((result.stdout.match(/\[procurement\] SKIP /g) || []).length, 6);
 });
 
 test('an inaccurate model comparison task fails before any account setup', () => {

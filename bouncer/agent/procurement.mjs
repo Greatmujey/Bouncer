@@ -9,6 +9,8 @@ import crypto from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import nearApi from 'near-api-js';
 import { validateRpcEndpoint } from '../shared/rpc-endpoint.mjs';
+import { validateProviderOrigin } from '../shared/provider-origin.mjs';
+import { assertFinalPaymentReceipts } from '../shared/final-payment.mjs';
 import { MonotonicAccount } from './near-account.mjs';
 
 const { KeyPair, KeyPairSigner, providers } = nearApi;
@@ -59,29 +61,39 @@ export function validatePlan(input) {
   return { contract_id: contractId, owner_account_id: ownerId, requests };
 }
 
-function fingerprint(request) {
+/** Validate the locally pinned route attached to a resource payment. */
+export function normalizeProviderRoute(route) {
+  if (!route || typeof route !== 'object' || Array.isArray(route) || Object.keys(route).length !== 2 ||
+      !Object.hasOwn(route, 'provider_id') || !Object.hasOwn(route, 'provider_origin') ||
+      !(route.provider_id === null || (typeof route.provider_id === 'string' && /^[A-Za-z0-9_-]{1,32}$/.test(route.provider_id)))) {
+    throw new Error('invalid recorded provider route');
+  }
+  if (route.provider_origin !== null) validateProviderOrigin(route.provider_origin);
+  return { provider_id: route.provider_id, provider_origin: route.provider_origin };
+}
+
+/** Fingerprint a request already normalized by validatePlan. */
+export function requestFingerprint(request) {
   return crypto.createHash('sha256').update(JSON.stringify(request)).digest('hex');
 }
-function assertSuccessfulReceipts(result, token) {
-  if (result.status?.Failure) throw new Error(`transaction failed: ${JSON.stringify(result.status.Failure)}`);
-  if (!Array.isArray(result.receipts_outcome) || result.receipts_outcome.length === 0) {
-    throw new Error('no transaction receipt outcomes returned');
-  }
-  const failed = result.receipts_outcome.find(receipt => receipt.outcome?.status?.Failure);
-  if (failed) throw new Error(`receipt failed: ${JSON.stringify(failed.outcome.status.Failure)}`);
-  if (!result.receipts_outcome.some(receipt => receipt.outcome?.executor_id === token)) {
-    throw new Error('no receipt from the expected token contract');
-  }
-  if (!result.transaction_outcome?.id) throw new Error('transaction hash missing');
-}
+
 
 /**
  * Run preflight checks and optionally execute a plan. `journal` exposes
  * get(id) and put(id, entry); every live payment is marked pending BEFORE it
  * is sent. An unresolved pending entry is never retried automatically.
  */
-export async function runProcurement({ plan: rawPlan, provider, account, publicKey, journal, execute = false, log = console.log, onCheck = () => {} }) {
+export async function runProcurement({ plan: rawPlan, provider, account, publicKey, journal, journalRoutes, execute = false, log = console.log, onCheck = () => {} }) {
   const plan = validatePlan(rawPlan);
+  let routes;
+  if (journalRoutes !== undefined) {
+    if (!(journalRoutes instanceof Map) || journalRoutes.size !== plan.requests.length) throw new Error('invalid payment journal routes');
+    routes = new Map();
+    for (const request of plan.requests) {
+      if (!journalRoutes.has(request.id)) throw new Error('missing payment journal route');
+      routes.set(request.id, normalizeProviderRoute(journalRoutes.get(request.id)));
+    }
+  }
   if (!account || account.accountId !== plan.owner_account_id) throw new Error('agent key account does not match the plan owner');
   if (execute && !journal) throw new Error('a journal is required for live execution');
   // A .testnet-looking account ID is not proof of the RPC's chain. This is
@@ -99,7 +111,7 @@ export async function runProcurement({ plan: rawPlan, provider, account, publicK
 
   const totals = { paid: 0, blocked: 0, skipped: 0, ready: 0 };
   for (const request of plan.requests) {
-    const hash = fingerprint(request);
+    const hash = requestFingerprint(request);
     const previous = journal?.get(request.id);
     if (previous && previous.fingerprint !== hash) throw new Error(`${request.id}: journal entry does not match the request`);
     if (previous?.status === 'completed') {
@@ -137,7 +149,11 @@ export async function runProcurement({ plan: rawPlan, provider, account, publicK
       continue;
     }
     const before = BigInt(await provider.callFunction(request.token, 'ft_balance_of', { account_id: request.payee }, { finality: 'final' }));
-    const pending = { fingerprint: hash, status: 'pending', started_at: new Date().toISOString() };
+    // Persist the exact normalized request before sending. This lets a later
+    // run recover fulfillment of a confirmed payment without asking a vendor
+    // for a new quote; an unresolved pending entry remains non-retryable.
+    const pending = { fingerprint: hash, status: 'pending', request,
+      ...(routes ? { provider_route: routes.get(request.id) } : {}), started_at: new Date().toISOString() };
     journal.put(request.id, pending);
     let txHash;
     try {
@@ -148,19 +164,22 @@ export async function runProcurement({ plan: rawPlan, provider, account, publicK
           memo: request.memo, expected_token: request.token },
         deposit: 0n, gas: GAS, waitUntil: 'FINAL',
       });
-      txHash = result.transaction_outcome?.id;
+      const candidateHash = result?.transaction_outcome?.id;
+      if (typeof candidateHash === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(candidateHash)) txHash = candidateHash;
       if (txHash) journal.put(request.id, { ...pending, tx_hash: txHash });
-      assertSuccessfulReceipts(result, request.token);
+      assertFinalPaymentReceipts(result, request.token);
+      if (typeof txHash !== 'string' || !/^[A-Za-z0-9_-]{1,100}$/.test(txHash)) throw new Error('invalid transaction hash');
       const after = BigInt(await provider.callFunction(request.token, 'ft_balance_of', { account_id: request.payee }, { finality: 'final' }));
       if (after !== before + BigInt(request.amount)) throw new Error('vendor balance delta did not match the payment');
-      journal.put(request.id, { fingerprint: hash, status: 'completed', tx_hash: txHash, completed_at: new Date().toISOString() });
+      journal.put(request.id, { ...pending, status: 'completed', tx_hash: txHash, completed_at: new Date().toISOString() });
       log(`[procurement] PAID ${request.id} (${request.resource}): ${request.amount} ${request.token} → ${request.payee} ${EXPLORER(txHash)}`);
       totals.paid++;
     } catch (error) {
       // A network timeout or failure may happen after broadcast. Keep pending:
       // retrying blindly could pay twice. The owner must reconcile manually.
-      if (!txHash && error.transaction_outcome?.id) {
-        txHash = error.transaction_outcome.id;
+      const errorHash = error?.transaction_outcome?.id;
+      if (!txHash && typeof errorHash === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(errorHash)) {
+        txHash = errorHash;
         journal.put(request.id, { ...pending, tx_hash: txHash });
       }
       const reference = txHash ? ` (tx ${txHash})` : '';
@@ -191,6 +210,15 @@ export class FileJournal {
             !['pending', 'completed'].includes(entry.status) || typeof entry.fingerprint !== 'string' ||
             (entry.status === 'completed' && typeof entry.tx_hash !== 'string')) {
           throw new Error('journal contains invalid or duplicate entries');
+        }
+        if (entry.provider_route !== undefined) normalizeProviderRoute(entry.provider_route);
+        if (entry.request !== undefined) {
+          let recorded;
+          try { recorded = validatePlan({ contract_id: contractId, owner_account_id: ownerId, requests: [entry.request] }).requests[0]; }
+          catch { throw new Error('journal contains an invalid recorded request'); }
+          if (recorded.id !== entry.id || requestFingerprint(recorded) !== entry.fingerprint) {
+            throw new Error('journal recorded request does not match its fingerprint');
+          }
         }
         ids.add(entry.id);
       }

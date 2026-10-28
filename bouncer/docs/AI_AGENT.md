@@ -40,6 +40,12 @@ software. Do not use real funds.
   Before any new payment, the resource agent also previews the whole batch,
   tentatively reserving shared policy budgets and token vault balances. If a
   request is blocked in that preview, it submits no new payments in the batch.
+- After a confirmed payment, the resource agent checks each bounded development
+  result before reporting fulfillment: it recomputes SHA-256 and text statistics,
+  reads stored content back from the same provider, and independently checks a
+  GitHub repository's identity. It records the result, verification scope and
+  payment details in the private journal. These checks have important limits
+  described below and cannot undo a payment.
 - `--execute` is an explicit opt-in to spending **testnet** funds. The runner
   rejects full-access and over-broad keys and uses the same pending-payment
   journal as the deterministic resource agent. Transactions are separate, not
@@ -118,10 +124,17 @@ node bouncer/agent/resource-agent.mjs --goals "$HOME/.bouncer/testnet/new-work.b
 ```
 
 The generated goals file stores its stable matching journal path. Preserve both.
-If fulfillment fails after a confirmed payment, rerunning this second command
-uses the existing payment rather than automatically paying again. A pending or
-ambiguous payment requires manual chain reconciliation; do not delete the journal
-or regenerate the goal to bypass it. As an alternative, adding `--execute` to the
+If fulfillment or verification fails after a confirmed payment, the journal
+keeps that payment and marks delivery `unverified`; rerunning this second command
+can request delivery again without sending another payment. For new journal
+entries, the exact request and reviewed provider ID/origin are recorded before
+submission; recovery does not need a fresh quote and rejects a changed route.
+Older entries without a recorded request still need the original quote and
+fingerprint to match; older entries also may not pin the provider route.
+Providers or independent data sources may still be
+unavailable, and a vendor may refuse to deliver or replay. A pending or ambiguous
+payment requires manual chain reconciliation; do not delete the journal or
+regenerate the goal to bypass it. As an alternative, adding `--execute` to the
 first command opts into **immediate, unreviewed** execution after the model plan;
 this can spend on a mistaken but permitted task and should not be used when the
 objective or model output is untrusted. Omitting `--key` produces the goal file
@@ -210,18 +223,60 @@ candidate, which can retain it. No quote is sent to the model. All candidates
 must return an authorized, order-bound quote; one unavailable, over-cap or
 invalid response aborts the comparison with no selection or payment. The
 selected origin, policy, payee and **exact quote amount** are saved privately.
-The runner requotes that same provider before execution and refuses even a
-lower changed amount, avoiding a changed payment/journal fingerprint. A quote
-has no signature, expiry, guarantee of fulfillment or trusted quality rating;
+Before a **new** payment, the runner requotes that same provider and refuses
+even a lower changed amount. For a confirmed payment with a recorded request,
+recovery reuses that request without requoting or paying again. A quote has no
+signature, expiry, guarantee of fulfillment or trusted quality rating;
 the cheapest provider might not deliver. This is a curated selector, not vendor
 discovery or a production marketplace. The contract remains the final spending
 authority and prices or chain state can change after a preflight.
 
-Preserve the selected goals file and its matching journal. If the provider
-reprices or becomes unavailable *after* a payment, automatic replay can stop at
-the requote stage. Do not delete the journal or generate a new selection to
-bypass this: reconcile the existing payment and restore the original provider
-quote/arrange delivery manually. A fresh selection can cause a second payment.
+Preserve the selected goals file and its matching journal. Confirmed new-format
+payments can be recovered without a fresh quote; **legacy** entries without a
+recorded request still require the original quote. Either way, the provider can
+be unavailable or refuse to redeem the original transaction. Do not delete the
+journal or generate a new selection to bypass a problem: a fresh selection can
+cause a second payment. Reconcile the existing payment and arrange delivery.
+
+## Delivery checks and local receipts
+
+The checks are deliberately specific to the current bounded development
+protocols, not a generic proof of any cloud service:
+
+- **Compute:** recompute the bounded iterated SHA-256 job locally and compare the
+  exact result. This costs the agent the same work; it does not verify arbitrary
+  remote workloads.
+- **Storage:** validate the order/transaction-bound object ID, byte count and
+  hash, then fetch up to 4096 bytes from the same pinned provider and compare
+  the exact content. This is one readback, not proof of persistence, replication
+  or future availability. The development provider has no authentication.
+- **Text API:** independently recompute word count and UTF-8 byte count.
+- **GitHub data:** make a separate, fixed-origin GitHub API request and compare
+  the repository name and ID. **Only identity is checked**; descriptions,
+  counters, license and timestamps remain untrusted and may be stale or wrong.
+  The extra GitHub request can be rate-limited or unavailable after payment.
+
+After a check succeeds, the same private journal contains a `delivery.receipt`
+with the contract, policy, token, payee, amount, order memo, transaction hash,
+provider route, checked result, verification scope, local timestamp and a
+SHA-256 digest of the canonical result. The result hash is computed over the
+UTF-8 bytes of `bouncer-delivery-result-v1`, a NUL byte, and `JSON.stringify`
+of the fixed-order result. Results and metadata may be sensitive; the journal
+is created with mode 0600. It is a local, editable record, **not a signed
+invoice, independent attestation, or proof of a provider's future performance**.
+It trusts the host, configured RPC and deployed contract. The contract does not
+verify these results or guarantee a refund for a bad delivery.
+
+An invalid response or failed readback never receives a verified receipt. The
+completed payment remains in the journal as completed, with delivery marked
+`unverified`; subsequent attempts reuse that payment. On a later run, already
+paid deliveries are rechecked before any new batch payments. On the **first**
+run, however, separate batch payments may already have completed before the
+first delivery is checked; there is no rollback. If an already verified result
+later changes, the agent refuses to overwrite its receipt. Keep the original
+goals and journal; if the provider cannot reproduce a correct result,
+manual resolution is required. Deleting or altering these files can allow
+repeat payments and local records are not tamper-proof.
 
 ## Verification
 

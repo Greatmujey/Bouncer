@@ -74,8 +74,11 @@ all possible callback or token failure cases.
    quotes, and requotes the selected price before the guarded runner may pay.
    It sends full order inputs to every candidate. A dishonest approved provider
    may underbid and refuse delivery; unsigned quotes have no expiry or guarantee.
-   Repricing or an outage can block recovery even after payment. Preserve the
-   original goals and journal and reconcile rather than selecting again blindly.
+   New-format entries record the payment request and provider route before
+   submission. Completed payments can recover without a fresh quote and reject
+   changed routes; legacy entries may lack either safeguard and still require
+   the original quote. Provider or independent-source outages can still block
+   recovery. Preserve the original goals and journal rather than selecting again.
 8. **Local journal and nonce tracker are not distributed coordination.** The
    journal blocks automatic retries of uncertain payments in one local file,
    but a different/deleted journal, multiple hosts or power loss can bypass it.
@@ -90,6 +93,13 @@ all possible callback or token failure cases.
    and lock are single-process, storage is plaintext and publicly retrievable,
    and there is no authentication, transport security or multi-host replay
    protection. Orders are sent to the provider; their hashes are on chain.
+   Client-side verification occurs only after payment: it recomputes the bounded
+   SHA-256/text examples, reads storage back once from the same provider, and
+   checks GitHub repository identity only. It cannot guarantee future storage,
+   independently verify GitHub's other fields, or force delivery/refund. Local
+   receipts include results and hashes and may leak information; they are
+   editable, depend on trusted host/RPC, and are not signed invoices or
+   independent attestations.
 10. **Prior contracts are unsafe to upgrade without migration.** Older contracts
    have different state and authorization; v3 and v4 also interpret budget bucket
    keys differently. Deploy v4 fresh. Hourly spend buckets are not pruned and

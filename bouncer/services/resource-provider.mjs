@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 import nearApi from 'near-api-js';
 import { fetchPublicRepository, normalizeRepository } from './github-data.mjs';
 import { validateRpcEndpoint } from '../shared/rpc-endpoint.mjs';
+import { assertFinalPaymentReceipts } from '../shared/final-payment.mjs';
 
 const digest = value => crypto.createHash('sha256').update(value).digest('hex');
 const plainObject = value => value && typeof value === 'object' && !Array.isArray(value);
@@ -56,7 +57,7 @@ export function orderMemo(resource, input) {
 export function verifyPayment(outcome, { txHash, contractId, product, resource, input }) {
   const tx = outcome?.transaction;
   if (tx?.hash !== txHash || tx.signer_id !== contractId || tx.receiver_id !== contractId) throw new Error('transaction is not from the trusted Bouncer account');
-  if (!outcome.status || !Object.hasOwn(outcome.status, 'SuccessValue')) throw new Error('transaction was not finalized successfully');
+  assertFinalPaymentReceipts(outcome, product.token);
   if (!Array.isArray(tx.actions) || tx.actions.length !== 1 || !tx.actions[0].FunctionCall) throw new Error('transaction must contain exactly one function call');
   const action = tx.actions[0].FunctionCall;
   if (action.method_name !== 'execute' || String(action.deposit) !== '0' || typeof action.args !== 'string') throw new Error('transaction is not a zero-deposit execute');
@@ -66,14 +67,7 @@ export function verifyPayment(outcome, { txHash, contractId, product, resource, 
       args.payee !== product.payee || args.amount !== product.amount || args.memo !== orderMemo(resource, input)) {
     throw new Error('payment does not match this order');
   }
-  if (!Array.isArray(outcome.receipts_outcome) || outcome.receipts_outcome.length === 0 ||
-      outcome.receipts_outcome.some(item => {
-        const status = item.outcome?.status;
-        return !status || (!Object.hasOwn(status, 'SuccessValue') && !Object.hasOwn(status, 'SuccessReceiptId'));
-      }) ||
-      !outcome.receipts_outcome.some(item => item.outcome.executor_id === product.token && Object.hasOwn(item.outcome.status, 'SuccessValue'))) {
-    throw new Error('payment has missing or failed receipts');
-  }
+
 }
 
 function atomicJson(file, value) {

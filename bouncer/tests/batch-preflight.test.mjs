@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { orderMemo } from '../services/resource-provider.mjs';
 import { runResourceAgent } from '../agent/resource-agent.mjs';
+import { computeResult } from './mock-delivery.mjs';
 
 const publicKey = { toString: () => 'ed25519:fake-agent' };
 const goal = (id, text, policy = 'shared') => ({
@@ -36,10 +37,10 @@ function fixture({ daily = '1000', initialSpent = '0', vault = '1000', blocked =
   };
   const account = { accountId: 'bouncer.testnet', async callFunctionRaw() {
     calls++; balance += 80n;
-    return { transaction_outcome: { id: `tx-${calls}` }, receipts_outcome: [{ outcome: { executor_id: 'wrap.testnet', status: { SuccessValue: '' } } }] };
+    return { final_execution_status: 'FINAL', status: { SuccessValue: '' }, transaction_outcome: { id: `tx-${calls}` }, receipts_outcome: [{ outcome: { executor_id: 'wrap.testnet', status: { SuccessValue: '' } } }] };
   } };
   const base = { contractId: 'bouncer.testnet', ownerAccountId: 'bouncer.testnet', goals: [goal('one', 'first'), goal('two', 'second')],
-    getQuote: async order => makeQuote(order), fulfill: async ({ resource }) => ({ type: resource }),
+    getQuote: async order => makeQuote(order), fulfill: async ({ input }) => computeResult(input),
     provider, account, publicKey, journal, execute: true, log: () => {} };
   return { base, get calls() { return calls; }, entries };
 }

@@ -1,6 +1,7 @@
 // TEST ONLY: fake RPC and provider. This never proves a live transaction.
 import nearApi from 'near-api-js';
 import { orderMemo } from '../services/resource-provider.mjs';
+import { computeResult } from './mock-delivery.mjs';
 const { Account, providers } = nearApi;
 let vendorBalance = 0n;
 const transactionsByHash = new Map();
@@ -16,7 +17,11 @@ globalThis.fetch = async (url, options) => {
       amount: alternative ? (process.env.MOCK_ALT_AMOUNT || '70') : '80', memo: orderMemo(body.resource, body.input),
     } }));
   }
-  if (String(url).endsWith('/redeem')) return new Response(JSON.stringify({ ok: true, result: { type: body.resource, result: 'fake-test-result' } }));
+  if (String(url).endsWith('/redeem')) {
+    const result = computeResult(body.input);
+    if (process.env.MOCK_BAD_DELIVERY) result.result = '0'.repeat(64);
+    return new Response(JSON.stringify({ ok: true, result }));
+  }
   throw new Error('unexpected HTTP request');
 };
 providers.JsonRpcProvider.prototype.viewNodeStatus = async () => ({ chain_id: process.env.BOUNCER_MOCK_MODE === 'wrong_chain' ? 'mainnet' : (process.env.MOCK_CHAIN || 'testnet') });
@@ -35,7 +40,7 @@ Account.prototype.callFunctionRaw = async function (options) {
   if (options.methodName !== 'execute' || options.deposit !== 0n || options.waitUntil !== 'FINAL') throw new Error('bad payment');
   vendorBalance += BigInt(options.args.amount);
   const result = {
-    status: { SuccessValue: '' }, transaction_outcome: { id: 'mock-payment' },
+    final_execution_status: 'FINAL', status: { SuccessValue: '' }, transaction_outcome: { id: 'mock-payment' },
     transaction: { hash: 'mock-payment', signer_id: this.accountId, receiver_id: options.contractId,
       actions: [{ FunctionCall: { method_name: options.methodName, deposit: '0', args: Buffer.from(JSON.stringify(options.args)).toString('base64') } }] },
     receipts_outcome: [{ outcome: { executor_id: 'wrap.testnet', status: { SuccessValue: '' } } }],

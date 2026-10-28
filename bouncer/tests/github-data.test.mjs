@@ -68,7 +68,7 @@ test('payment-bound public data is retryable after a read outage and replay uses
   let rpcCalls = 0, fetchCalls = 0;
   const rpcProvider = { async viewTransactionStatus(hash, id, wait) {
     rpcCalls++; assert.equal(id, contractId); assert.equal(wait, 'FINAL');
-    return { status: { SuccessValue: '' }, transaction: { hash, signer_id: contractId, receiver_id: contractId,
+    return { final_execution_status: 'FINAL', status: { SuccessValue: '' }, transaction: { hash, signer_id: contractId, receiver_id: contractId,
       actions: [{ FunctionCall: { method_name: 'execute', deposit: '0', args: Buffer.from(JSON.stringify(args)).toString('base64') } }] },
       receipts_outcome: [{ outcome: { executor_id: products.api.token, status: { SuccessValue: '' } } }] };
   } };

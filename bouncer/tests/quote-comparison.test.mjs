@@ -136,7 +136,7 @@ test('selected quote cannot change up or down between comparison and execution',
   let paid = 0, redeemed = 0;
   await assert.rejects(runResourceAgent({ contractId: result.contract_id, ownerAccountId: result.owner_account_id, goals: [goal],
     getQuote: async () => quote(amount + 1n), fulfill: async () => { redeemed++; },
-    provider: {}, account: { callFunctionRaw: () => { paid++; } }, publicKey: {}, journal: {}, execute: true }), /selected quote changed/);
+    provider: {}, account: { callFunctionRaw: () => { paid++; } }, publicKey: {}, journal: { get: () => undefined, put: () => {} }, execute: true }), /selected quote changed/);
   assert.equal(paid, 0); assert.equal(redeemed, 0);
 });
 
@@ -158,10 +158,23 @@ test('a catalog-approved but on-chain-disallowed selected payee blocks instead o
   const result = await runResourceAgent({ contractId: selected.contract_id, ownerAccountId: selected.owner_account_id, goals: [goal],
     getQuote: clientFactory(products(), calls)(goal.provider_url).getQuote,
     fulfill: async () => { redeemed++; }, provider, account: { accountId: 'bouncer.testnet', callFunctionRaw: () => { paid++; } },
-    publicKey: { toString: () => 'ed25519:test' }, journal: { get: () => undefined }, execute: true, log: () => {} });
+    publicKey: { toString: () => 'ed25519:test' }, journal: { get: () => undefined, put: () => {} }, execute: true, log: () => {} });
   assert.equal(result.payments.blocked, 1);
   assert.equal(paid, 0); assert.equal(redeemed, 0);
   assert.deepEqual(calls.map(call => call.url), ['https://alternative.example']);
+});
+
+test('storage readback is routed to the same goal-pinned origin', async () => {
+  const selected = await compare(); const urls = [];
+  const router = routedResourceProvider({ providerUrl: selected.provider_url, goals: selected.goals, fetchImpl: async (url, options) => {
+    urls.push([String(url), options.method, options.redirect]);
+    return new Response('stored');
+  } });
+  const objectId = 'b'.repeat(64);
+  const bytes = await router.readStorage(objectId, { goalId: 'storage-1' });
+  assert.equal(bytes.toString(), 'stored');
+  assert.deepEqual(urls, [[`https://primary.example/storage/${objectId}`, 'GET', 'error']]);
+  assert.throws(() => router.readStorage(objectId, { goalId: 'unknown' }), /missing approved/);
 });
 
 test('routed provider pins origins per goal, rejects unknown routes, and never forwards routing metadata', async () => {

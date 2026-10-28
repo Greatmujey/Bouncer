@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { orderMemo } from '../services/resource-provider.mjs';
 import { httpResourceProvider, planFromQuotes, runResourceAgent } from '../agent/resource-agent.mjs';
+import { computeResult } from './mock-delivery.mjs';
 
 const goal = () => ({
   id: 'compute-1', resource: 'compute', policy_id: 'compute', token: 'wrap.testnet', payee: 'vendor.testnet',
@@ -106,11 +107,11 @@ test('a delivery outage after payment is recoverable without a duplicate payment
   };
   const account = { accountId: 'bouncer.testnet', async callFunctionRaw() {
     paid++; balance += 80n;
-    return { transaction_outcome: { id: 'tx-1' }, receipts_outcome: [{ outcome: { executor_id: 'wrap.testnet', status: { SuccessValue: '' } } }] };
+    return { final_execution_status: 'FINAL', status: { SuccessValue: '' }, transaction_outcome: { id: 'tx-1' }, receipts_outcome: [{ outcome: { executor_id: 'wrap.testnet', status: { SuccessValue: '' } } }] };
   } };
   const opts = {
     contractId: 'bouncer.testnet', ownerAccountId: 'bouncer.testnet', goals: [g], getQuote: async () => quote(g),
-    fulfill: async () => { if (++redeemed === 1) throw new Error('vendor temporarily unavailable'); return { type: 'compute', result: 'done' }; },
+    fulfill: async () => { if (++redeemed === 1) throw new Error('vendor temporarily unavailable'); return computeResult(g.input); },
     provider, account, publicKey: { toString: () => 'ed25519:abc' }, journal, execute: true, log: () => {},
   };
   await assert.rejects(runResourceAgent(opts), /vendor temporarily unavailable/);

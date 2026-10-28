@@ -14,6 +14,7 @@ const transactionsByHash = new Map();
 let owner;
 let tx = 0;
 const ok = (executor = 'mock.testnet') => ({
+  final_execution_status: 'FINAL',
   transaction_outcome: { id: `mock-${++tx}` },
   receipts_outcome: [{ outcome: { executor_id: executor, status: { SuccessValue: '' }, logs: [] } }],
 });

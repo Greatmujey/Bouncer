@@ -7,7 +7,8 @@ policy checks. The v4 prototype has passed a three-token testnet quote → payme
 → self-hosted delivery check and a separate restricted-key security/refund check.
 An optional model adapter translates natural-language objectives into tasks
 within an owner-controlled catalog, which can compare quotes from explicitly
-approved providers using the same token; see [AI agent setup and limits](bouncer/docs/AI_AGENT.md).
+approved providers using the same token. The agent also checks the bounded
+example deliveries and saves local receipts; see [AI agent setup and limits](bouncer/docs/AI_AGENT.md).
 No model or inference service is bundled. This is unaudited testnet software,
 not suitable for real funds.
 
@@ -105,8 +106,11 @@ Offline mocks are not proof of on-chain behavior.
   compares quotes from owner-approved endpoints only, within one token per
   resource; every quote must match the approved constraints. The model proposes
   tasks but cannot choose financial authority. It requires a separately supplied
-  model. This is not a public marketplace: independent vendors, invoices,
-  stablecoin flows and NEAR Intents remain unfinished.
+  model. Delivery checks cover only the bounded example protocols: storage is
+  one readback from the same provider, and GitHub checking covers repository
+  identity only, not the truth or freshness of its other fields. Local receipts
+  are editable records, not signed invoices. This is not a public marketplace:
+  independent vendors, invoices, stablecoin flows and NEAR Intents remain unfinished.
 - Token trust is not enforced; configure policies only for trusted FTs. Changing
   a policy's token retains its numeric spend history even if the new token has
   different units; create a new policy for a different token instead. Key
@@ -231,6 +235,20 @@ That run also completed the three-resource and public-data purchases and replay
 checks. Both tests used self-hosted services, not independent commercial
 providers, and do not guarantee future delivery.
 
+### Delivery checks and local receipts
+
+The resource agent recomputes bounded SHA-256 and text-statistics results,
+checks a single storage readback against the ordered bytes, and checks GitHub
+repository identity against a separate fixed-origin read. Other GitHub fields
+remain unverified. After a successful check, its private journal records the
+payment, result, verification scope and result hash. A bad or unavailable
+result leaves the payment completed and delivery unverified; a new-format
+journal can retry delivery with the same transaction without fetching a new
+quote or sending another payment; the recorded provider route must still match.
+These are local, editable records—not signed
+invoices, generic compute proofs or guarantees of future storage. See the
+[verification and recovery details](bouncer/docs/AI_AGENT.md#delivery-checks-and-local-receipts).
+
 ### Run the resource agent again
 
 The multi-token script also writes `<account>.provider.json`,
@@ -310,6 +328,7 @@ real testnet transactions. To build locally with Rust and the wasm target, run
 - `bouncer/demo-multi-resource.mjs` — testnet wNEAR plus synthetic FT check.
 - `bouncer/agent/procurement.mjs` — plan-driven, testnet-only procurement runner.
 - `bouncer/agent/resource-agent.mjs` — quote, guarded payment, fulfillment orchestration.
+- `bouncer/agent/verify-delivery.mjs` — bounded result checks and local receipt validation.
 - `bouncer/agent/goal-planner.mjs`, `autonomous.mjs` — model proposals constrained by the owner catalog.
 - `bouncer/agent/quote-comparison.mjs` — opt-in, same-token selection among owner-approved providers.
 - `bouncer/services/resource-provider.mjs` — self-hosted test-only resource provider.

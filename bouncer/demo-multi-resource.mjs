@@ -11,7 +11,7 @@ import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import nearApi from 'near-api-js';
 import { FileJournal } from './agent/procurement.mjs';
-import { createResourceProvider } from './services/resource-provider.mjs';
+import { createResourceProvider, orderMemo } from './services/resource-provider.mjs';
 import { fetchPublicRepository } from './services/github-data.mjs';
 import { httpResourceProvider, routedResourceProvider, runResourceAgent } from './agent/resource-agent.mjs';
 import { createModelClient, goalsFromModel, planObjective } from './agent/goal-planner.mjs';
@@ -104,6 +104,8 @@ async function main() {
   const funderId = `bouncer-ft-${suffix}.testnet`;
   const userId = `user.${bid}`;
   const compareDemo = process.env.BOUNCER_DEMO_COMPARE === '1';
+  const badDeliveryDemo = process.env.BOUNCER_DEMO_BAD_DELIVERY === '1';
+  if (badDeliveryDemo && !compareDemo) throw new Error('delivery verification probe requires provider comparison');
   const vendorIds = { compute: `compute.${bid}`, storage: `storage.${bid}`, api: `api.${bid}`,
     ...(compareDemo ? { computeAlt: `compute-alt.${bid}` } : {}) };
   const storageSymbol = `BS${suffix}`.toUpperCase();
@@ -305,11 +307,13 @@ async function main() {
   const baseUrl = `http://127.0.0.1:${devProvider.server.address().port}`;
   const client = httpResourceProvider(baseUrl);
   let journal, alternateProvider;
-  let proof, comparisonProof;
+  let proof, comparisonProof, deliveryProof;
   try {
     journal = new FileJournal(journalPath, bid, bid);
     const runner = {
-      contractId: bid, ownerAccountId: bid, goals, getQuote: client.getQuote, fulfill: client.fulfill,
+      // Receipts bind the stable, reviewed origin in the saved goals file;
+      // this demo temporarily maps it to an ephemeral in-process server.
+      contractId: bid, ownerAccountId: bid, providerUrl: goalsConfig.provider_url, goals, getQuote: client.getQuote, fulfill: client.fulfill, readStorage: client.readStorage,
       onPlan: plan => {
         fs.writeFileSync(planFile, JSON.stringify(plan, null, 2) + '\n', { mode: 0o600 });
         fs.chmodSync(planFile, 0o600);
@@ -324,6 +328,16 @@ async function main() {
     if (second.payments.skipped !== 3 || second.payments.paid || JSON.stringify(second.deliveries) !== JSON.stringify(first.deliveries)) {
       throw new Error(`duplicate-run protection failed: ${JSON.stringify(second)}`);
     }
+    const scopes = { compute: 'iterated-sha256', storage: 'single-read-content', api: 'text-statistics' };
+    for (const delivery of first.deliveries) {
+      const entry = journal.get(delivery.id), receipt = entry?.delivery?.receipt, goal = goals.find(item => item.id === delivery.id);
+      const digest = crypto.createHash('sha256').update(`bouncer-delivery-result-v1\0${JSON.stringify(delivery.result)}`).digest('hex');
+      if (!goal || entry?.delivery?.status !== 'verified' || receipt?.tx_hash !== entry.tx_hash || receipt.result_sha256 !== digest ||
+          receipt.verification.scope !== scopes[delivery.result.type] || receipt.request.memo !== orderMemo(goal.resource, goal.input)) {
+        throw new Error(`${delivery.id}: verified journal receipt did not match the payment and result`);
+      }
+    }
+    console.log('    ✅ Private journal receipts bind payments to agent-checked results (storage uses same-provider readback).');
 
     console.log('\n=== 8) Verify all vault and vendor balances against token contracts ===');
     for (const [r, funded] of [[resources[0], N], [resources[1], 10n * CREDIT], [resources[2], 10n * CREDIT]]) {
@@ -377,6 +391,10 @@ async function main() {
       const delivered = await runResourceAgent(dataRunner);
       if (delivered.payments.paid !== 1 || delivered.payments.blocked || delivered.deliveries.length !== 1) throw new Error('public data payment or delivery did not complete');
       const data = delivered.deliveries[0].result;
+      const dataReceipt = journal.get('api-github-1')?.delivery?.receipt;
+      if (dataReceipt?.verification?.scope !== 'repository-identity-only' || dataReceipt.tx_hash !== journal.get('api-github-1').tx_hash) {
+        throw new Error('public data receipt did not accurately describe its verification scope');
+      }
       const independentlyRead = await fetchPublicRepository('near/near-api-js');
       if (data.operation !== 'github-repository' || data.repository.toLowerCase() !== 'near/near-api-js' ||
           data.repository_id !== independentlyRead.repository_id) throw new Error('public repository data did not match a fresh GitHub API read');
@@ -426,9 +444,40 @@ async function main() {
       fs.writeFileSync(comparisonFile, JSON.stringify({ ...chosen, journal_path: journalPath }, null, 2) + '\n', { mode: 0o600 });
       fs.chmodSync(comparisonFile, 0o600);
       const routes = routedResourceProvider({ providerUrl: chosen.provider_url, goals: chosen.goals });
-      const comparisonRunner = { ...runner, goals: chosen.goals, getQuote: routes.getQuote, fulfill: routes.fulfill, onPlan: () => {} };
-      const delivered = await runResourceAgent(comparisonRunner);
-      if (delivered.payments.paid !== 1 || delivered.payments.blocked || delivered.deliveries.length !== 1) throw new Error('selected provider payment or fulfillment failed');
+      const comparisonRunner = { ...runner, goals: chosen.goals, getQuote: routes.getQuote, fulfill: routes.fulfill, readStorage: routes.readStorage, onPlan: () => {} };
+      let delivered;
+      if (badDeliveryDemo) {
+        // This is a deliberately injected local transport fault AFTER a real
+        // testnet payment, not a claim that an independent vendor cheated.
+        let injected = 0, rejected = false;
+        const badRunner = { ...comparisonRunner, fulfill: async (...args) => {
+          const actual = await routes.fulfill(...args);
+          if (actual.result === '0'.repeat(64)) throw new Error('unexpected test fixture digest');
+          injected++;
+          return { ...actual, result: '0'.repeat(64) };
+        } };
+        try { await runResourceAgent(badRunner); }
+        catch (error) {
+          if (!/verification failed after confirmed payment.*independent recomputation/.test(error.message)) throw error;
+          rejected = true;
+        }
+        const pendingDelivery = journal.get(goal.id);
+        if (!rejected || injected !== 1 || pendingDelivery?.status !== 'completed' || pendingDelivery.delivery?.status !== 'unverified' ||
+            pendingDelivery.delivery.stage !== 'verification' || !pendingDelivery.request || !pendingDelivery.tx_hash) {
+          throw new Error('bad delivery was not safely recorded after the real payment');
+        }
+        const existingTx = pendingDelivery.tx_hash;
+        let requoted = 0;
+        delivered = await runResourceAgent({ ...comparisonRunner, getQuote: async () => { requoted++; throw new Error('quote deliberately unavailable'); } });
+        if (requoted || delivered.payments.skipped !== 1 || delivered.payments.paid || journal.get(goal.id).tx_hash !== existingTx) {
+          throw new Error('verified delivery recovery did not reuse the recorded payment without requoting');
+        }
+        console.log('    ✅ Injected an incorrect local reply after payment: rejected, then recovered with the same transaction and no requote.');
+      } else {
+        delivered = await runResourceAgent(comparisonRunner);
+      }
+      if ((badDeliveryDemo ? delivered.payments.skipped !== 1 : delivered.payments.paid !== 1) ||
+          delivered.payments.blocked || delivered.deliveries.length !== 1) throw new Error('selected provider payment or fulfillment failed');
       let hash = Buffer.from(input.text);
       for (let i = 0; i < input.rounds; i++) hash = crypto.createHash('sha256').update(hash).digest();
       if (delivered.deliveries[0].result.result !== hash.toString('hex')) throw new Error('selected provider delivered an incorrect compute result');
@@ -442,7 +491,12 @@ async function main() {
         throw new Error('selected provider replay protection failed');
       }
       const tx = journal.get(goal.id).tx_hash;
+      const receipt = journal.get(goal.id).delivery?.receipt;
+      if (receipt?.tx_hash !== tx || receipt.verification.scope !== 'iterated-sha256' || receipt.request.amount !== cheaper.toString()) {
+        throw new Error('recovered delivery receipt did not bind the verified result to the selected payment');
+      }
       comparisonProof = `contract=${bid}; planner=${aiComparisonInput ? 'model' : 'deterministic'}; token=${WNEAR}; primary=${resources[0].payment}; selected=${cheaper}; payee=${vendorIds.computeAlt}; tx=${tx}`;
+      if (badDeliveryDemo) deliveryProof = `contract=${bid}; tx=${tx}; locally-injected-bad-result=rejected; recovery=same-payment-no-requote; receipt=iterated-sha256; storage=single-read-content; api=text-statistics${aiDataGoal ? '; github=repository-identity-only' : ''}`;
       console.log(`    ✅ VERIFIED owner-approved comparison: ${resources[0].payment} vs ${cheaper} ${WNEAR}; selected payee ${vendorIds.computeAlt}; replay made no second payment.`);
       console.log('    Both compared endpoints are self-hosted development services, not independent commercial vendors.');
     }
@@ -458,6 +512,7 @@ async function main() {
     const label = aiGoals ? 'AI-planned testnet multi-resource proof' : 'Testnet multi-resource proof';
     console.log(`::notice title=${label}::contract=${bid}; ${proof}`);
     if (comparisonProof) console.log(`::notice title=Owner-approved provider comparison proof::${comparisonProof}`);
+    if (deliveryProof) console.log(`::notice title=Delivery verification and recovery proof::${deliveryProof}`);
   }
   console.log(`Contract: ${bid}`);
   console.log(`Explorer: https://testnet.nearblocks.io/address/${bid}?tab=receipts`);

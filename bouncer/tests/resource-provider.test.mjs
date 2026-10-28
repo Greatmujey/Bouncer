@@ -20,7 +20,7 @@ function payment(resource, txHash) {
   const args = { ...p, expected_token: p.token, memo: orderMemo(resource, inputs[resource]) };
   delete args.token;
   return {
-    status: { SuccessValue: '' },
+    final_execution_status: 'FINAL', status: { SuccessValue: '' },
     transaction: {
       hash: txHash, signer_id: contractId, receiver_id: contractId,
       actions: [{ FunctionCall: { method_name: 'execute', deposit: '0', args: Buffer.from(JSON.stringify(args)).toString('base64') } }],
@@ -42,8 +42,14 @@ test('memo commits to normalized resource input', () => {
 test('provider requires trusted finalized execute with matching order and successful token receipt', () => {
   const c = config();
   assert.doesNotThrow(() => verifyPayment(c.outcome, c));
+  const forwarded = structuredClone(c.outcome);
+  forwarded.receipts_outcome.unshift({ outcome: { executor_id: contractId, status: { SuccessReceiptId: 'next-receipt' } } });
+  assert.doesNotThrow(() => verifyPayment(forwarded, c));
   assert.throws(() => verifyPayment(c.outcome, { ...c, input: { text: 'changed', rounds: 5 } }), /does not match/);
   for (const mutate of [
+    x => { x.final_execution_status = 'EXECUTED_OPTIMISTIC'; },
+    x => { delete x.final_execution_status; },
+    x => { x.status = { SuccessValue: null }; },
     x => { x.status = { Failure: {} }; },
     x => { x.transaction.signer_id = 'attacker.testnet'; },
     x => { x.transaction.receiver_id = 'attacker.testnet'; },

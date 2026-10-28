@@ -54,9 +54,12 @@ function fixture() {
         const k = `${token}|${options.args.payee}`;
         balances.set(k, (balances.get(k) || 0n) + BigInt(options.args.amount));
       }
-      const receipts = [{ outcome: { executor_id: token, status: { SuccessValue: '' }, logs: [] } }];
+      const receiptStatus = mode === 'unknown_receipt' ? 'Unknown' : mode === 'unresolved_token_receipt' ? { SuccessReceiptId: 'next' } : { SuccessValue: '' };
+      const receipts = [{ outcome: { executor_id: token, status: receiptStatus, logs: [] } }];
       if (mode === 'refund') receipts.push({ outcome: { executor_id: token, status: { Failure: 'failed transfer' }, logs: [] } });
-      return { transaction_outcome: { id: `tx-${calls.length}` }, receipts_outcome: receipts };
+      return { final_execution_status: mode === 'not_final' ? 'EXECUTED_OPTIMISTIC' : mode === 'no_final_field' ? undefined : 'FINAL',
+        status: mode === 'missing_success' ? 'Unknown' : mode === 'invalid_success' ? { SuccessValue: null } : { SuccessValue: '' },
+        transaction_outcome: { id: `tx-${calls.length}` }, receipts_outcome: receipts };
     },
   };
   return { provider, account, calls, journal: new MemoryJournal(), setMode: value => { mode = value; } };
@@ -127,8 +130,8 @@ test('a timeout leaves the request pending and a second run refuses to retry', a
   assert.equal(f.calls.length, 1);
 });
 
-test('failed receipts and incorrect vendor balances stay pending with a transaction hash', async () => {
-  for (const mode of ['refund', 'wrong_balance']) {
+test('failed, incomplete or unknown receipts and incorrect balances remain pending with a transaction hash', async () => {
+  for (const mode of ['refund', 'wrong_balance', 'unknown_receipt', 'unresolved_token_receipt', 'not_final', 'no_final_field', 'missing_success', 'invalid_success']) {
     const f = fixture(); f.setMode(mode);
     await assert.rejects(() => run(f), /payment could not be confirmed/);
     assert.equal(f.journal.get('compute-1').status, 'pending');

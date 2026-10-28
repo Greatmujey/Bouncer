@@ -8,10 +8,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createRuntime, FileJournal, runProcurement, validatePlan } from './procurement.mjs';
+import { createRuntime, FileJournal, normalizeProviderRoute, requestFingerprint, runProcurement, validatePlan } from './procurement.mjs';
 import { reservePreview } from './preflight.mjs';
-import { readBoundedJson } from '../shared/bounded-json.mjs';
+import { readBoundedBytes, readBoundedJson } from '../shared/bounded-json.mjs';
+import { validateProviderOrigin } from '../shared/provider-origin.mjs';
 import { normalizeOrder, orderMemo, startConfiguredProvider } from '../services/resource-provider.mjs';
+import { checkDeliveryRecord, createDeliveryReceipt, deliveryResultHash, verifyDelivery } from './verify-delivery.mjs';
 
 function positiveAmount(value, label) {
   if (typeof value !== 'string' || !/^[1-9][0-9]*$/.test(value) || BigInt(value) > (1n << 128n) - 1n) throw new Error(`${label} must be a positive U128 string`);
@@ -23,7 +25,7 @@ function validText(value, label) {
 }
 
 /** Fetch a quote for each goal and validate it against owner-pinned constraints. */
-export async function planFromQuotes({ contractId, ownerAccountId, goals, getQuote }) {
+export async function planFromQuotes({ contractId, ownerAccountId, goals, getQuote, journal }) {
   if (!Array.isArray(goals) || !goals.length || typeof getQuote !== 'function') throw new Error('goals and a quote source are required');
   const requests = [];
   for (const goal of goals) {
@@ -34,7 +36,25 @@ export async function planFromQuotes({ contractId, ownerAccountId, goals, getQuo
     const selectedAmount = goal.quote_amount === undefined ? undefined : positiveAmount(goal.quote_amount, `${id} selected quote amount`);
     if (selectedAmount !== undefined && selectedAmount > max) throw new Error(`${id}: selected quote exceeds the owner-approved maximum`);
     const input = normalizeOrder(resource, goal.input);
-    // Context is local routing metadata, not part of the provider request body.
+    const memo = orderMemo(resource, input);
+    const previous = journal?.get(id);
+    if (previous && previous.status !== 'completed') throw new Error(`${id}: unresolved pending payment; inspect the chain and journal before retrying`);
+    if (previous?.request !== undefined) {
+      const raw = previous.request;
+      const expectedKeys = ['id', 'resource', 'policy_id', 'token', 'payee', 'amount', 'memo'];
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw) || Object.keys(raw).length !== expectedKeys.length ||
+          Object.keys(raw).some(key => !expectedKeys.includes(key))) throw new Error(`${id}: invalid recorded payment request`);
+      const request = validatePlan({ contract_id: contractId, owner_account_id: ownerAccountId, requests: [raw] }).requests[0];
+      if (request.id !== id || request.resource !== resource || request.policy_id !== policyId || request.token !== token ||
+          request.payee !== payee || request.memo !== memo || requestFingerprint(request) !== previous.fingerprint ||
+          BigInt(request.amount) > max || (selectedAmount !== undefined && BigInt(request.amount) !== selectedAmount)) {
+        throw new Error(`${id}: recorded payment does not match the reviewed goal`);
+      }
+      requests.push(request);
+      continue;
+    }
+    // Legacy journals without a recorded request still require the old exact
+    // quote/fingerprint check. Context never goes in the provider request body.
     const quote = await getQuote({ resource, input }, { goalId: id });
     if (!quote || quote.resource !== resource || quote.policy_id !== policyId || quote.token !== token || quote.payee !== payee) {
       throw new Error(`${id}: quote does not match the permitted resource, policy, token, or payee`);
@@ -42,7 +62,6 @@ export async function planFromQuotes({ contractId, ownerAccountId, goals, getQuo
     const amount = positiveAmount(quote.amount, `${id} quote amount`);
     if (amount > max) throw new Error(`${id}: quote exceeds the owner-approved maximum`);
     if (selectedAmount !== undefined && amount !== selectedAmount) throw new Error(`${id}: selected quote changed; review and reselect before payment`);
-    const memo = orderMemo(resource, input);
     if (quote.memo !== memo) throw new Error(`${id}: quote is not bound to this exact order`);
     requests.push({ id, resource, policy_id: policyId, token, payee, amount: amount.toString(), memo });
   }
@@ -54,10 +73,47 @@ export async function planFromQuotes({ contractId, ownerAccountId, goals, getQuo
  * completed but delivery failed, rerunning reuses that payment and requests the
  * same order again. The provider must implement its own replay protection.
  */
-export async function runResourceAgent({ contractId, ownerAccountId, goals, getQuote, fulfill, onPlan = () => {},
+export async function runResourceAgent({ contractId, ownerAccountId, goals, getQuote, fulfill, readStorage, repositoryLookup, providerUrl, onPlan = () => {},
   provider, account, publicKey, runtimeFactory, journal, execute = false, log = console.log }) {
-  if (execute && (typeof fulfill !== 'function' || !journal)) throw new Error('live execution requires a journal and fulfillment source');
-  const plan = await planFromQuotes({ contractId, ownerAccountId, goals, getQuote });
+  if (execute && (typeof fulfill !== 'function' || typeof journal?.get !== 'function' || typeof journal?.put !== 'function')) {
+    throw new Error('live execution requires a readable/writable journal and fulfillment source');
+  }
+  if (journal !== undefined && journal !== null && typeof journal.get !== 'function') throw new Error('invalid journal');
+  if (repositoryLookup !== undefined && typeof repositoryLookup !== 'function') throw new Error('invalid GitHub reference lookup');
+  if (execute && Array.isArray(goals) && goals.some(goal => goal?.resource === 'storage') && typeof readStorage !== 'function') {
+    throw new Error('live storage execution requires provider readback before payment');
+  }
+  // Receipt routing metadata is owner-supplied, never provider- or model-chosen.
+  // Validate it before quotes or payments; it is a local label, not attestation.
+  if (providerUrl !== undefined) {
+    if (typeof providerUrl !== 'string') throw new Error('invalid default provider origin');
+    httpResourceProvider(providerUrl);
+  }
+  const journalRoutes = new Map();
+  for (const goal of Array.isArray(goals) ? goals : []) {
+    if (goal?.provider_url !== undefined) {
+      if (typeof goal.provider_url !== 'string') throw new Error('invalid goal provider origin');
+      httpResourceProvider(goal.provider_url);
+    }
+    if (goal?.provider_id !== undefined && (typeof goal.provider_id !== 'string' || !/^[A-Za-z0-9_-]{1,32}$/.test(goal.provider_id))) {
+      throw new Error('invalid goal provider id');
+    }
+    const route = normalizeProviderRoute({ provider_id: goal?.provider_id ?? null, provider_origin: goal?.provider_url ?? providerUrl ?? null });
+    journalRoutes.set(goal?.id, route);
+    const previous = journal?.get(goal?.id);
+    if (previous?.provider_route !== undefined && JSON.stringify(normalizeProviderRoute(previous.provider_route)) !== JSON.stringify(route)) {
+      throw new Error(`${goal.id}: recorded provider route does not match the reviewed goal`);
+    }
+  }
+  const plan = await planFromQuotes({ contractId, ownerAccountId, goals, getQuote, journal });
+  // Reject corrupted or mismatched prior receipts before paying another goal.
+  for (let i = 0; i < plan.requests.length; i++) {
+    const request = plan.requests[i], goal = goals[i], entry = journal?.get(request.id);
+    if (entry?.status !== 'completed') continue;
+    if (typeof entry.tx_hash !== 'string' || !/^[A-Za-z0-9_-]{1,100}$/.test(entry.tx_hash)) throw new Error(`${request.id}: invalid recorded payment hash`);
+    checkDeliveryRecord({ delivery: entry.delivery, contractId, ownerAccountId, request, txHash: entry.tx_hash,
+      providerId: goal.provider_id, providerOrigin: goal.provider_url ?? providerUrl, input: goal.input });
+  }
   await onPlan(plan);
   if (runtimeFactory) ({ provider, account, publicKey } = await runtimeFactory(plan));
   // Complete a read-only preflight for the ENTIRE batch before the first new
@@ -65,15 +121,54 @@ export async function runResourceAgent({ contractId, ownerAccountId, goals, getQ
   // The views are non-atomic: the contract still decides each real payment,
   // and another actor can change state after this preview.
   const checks = [], blockedReasons = new Map();
-  const preview = await runProcurement({ plan, provider, account, publicKey, journal, execute: false, log: () => {}, onCheck: check => {
+  const preview = await runProcurement({ plan, provider, account, publicKey, journal, journalRoutes, execute: false, log: () => {}, onCheck: check => {
     checks.push({ id: check.id, status: check.status });
     if (check.status === 'BLOCKED') blockedReasons.set(check.id, typeof check.reason === 'string' ? check.reason.replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 200) : 'Policy rejected the request.');
   } });
   const summary = await reservePreview(provider, plan, checks, preview);
+  const delivered = new Map();
+  async function deliverPaid(i) {
+    const goal = goals[i], request = plan.requests[i], entry = journal.get(goal.id);
+    if (!entry || entry.status !== 'completed' || !entry.tx_hash) return;
+    const input = normalizeOrder(goal.resource, goal.input), context = { goalId: goal.id };
+    let stage = 'fulfillment', verified;
+    try {
+      const result = await fulfill({ tx_hash: entry.tx_hash, resource: goal.resource, input }, context);
+      stage = 'verification';
+      verified = await verifyDelivery({ resource: goal.resource, input, result, txHash: entry.tx_hash,
+        readStorage: readStorage && (objectId => readStorage(objectId, context)), repositoryLookup });
+    } catch (error) {
+      // Preserve a successful receipt if a later replay fails. Otherwise mark
+      // only the delivery unverified: the completed payment remains final and
+      // is never sent again by this journal. Do not persist untrusted errors.
+      if (entry.delivery?.status !== 'verified') journal.put(goal.id, { ...entry,
+        delivery: { status: 'unverified', stage, attempted_at: new Date().toISOString() } });
+      const message = String(error?.message || 'delivery failed').replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 200);
+      throw new Error(`${goal.id}: ${stage} failed after confirmed payment ${entry.tx_hash}; no automatic repayment: ${message}`, { cause: error });
+    }
+    const providerId = goal.provider_id, providerOrigin = goal.provider_url ?? providerUrl;
+    let receipt = entry.delivery?.receipt;
+    if (receipt) {
+      if (receipt.result_sha256 !== deliveryResultHash(verified.result)) {
+        throw new Error(`${goal.id}: replayed delivery differs from the existing receipt; reconcile manually`);
+      }
+    } else {
+      receipt = createDeliveryReceipt({ contractId, ownerAccountId, request, txHash: entry.tx_hash,
+        providerId, providerOrigin, result: verified.result, verification: verified.verification });
+      journal.put(goal.id, { ...entry, delivery: { status: 'verified', receipt } });
+    }
+    log(`[resource-agent] FULFILLED ${goal.id} (${goal.resource}); checked ${verified.verification.scope}; receipt in journal`);
+    delivered.set(goal.id, { id: goal.id, result: verified.result, receipt });
+  }
+  // Recheck/recover already-paid deliveries before spending on any new goal.
+  // A bad or unavailable earlier delivery aborts this run without new payments.
+  if (execute) {
+    for (let i = 0; i < checks.length; i++) if (checks[i].status === 'SKIPPED') await deliverPaid(i);
+  }
   let payments;
   if (execute && !summary.blocked) {
     log('[resource-agent] Batch preflight passed; these non-atomic views are not a guarantee.');
-    payments = await runProcurement({ plan, provider, account, publicKey, journal, execute: true, log });
+    payments = await runProcurement({ plan, provider, account, publicKey, journal, journalRoutes, execute: true, log });
   } else {
     for (let i = 0; i < checks.length; i++) {
       const check = checks[i], request = plan.requests[i];
@@ -84,26 +179,16 @@ export async function runResourceAgent({ contractId, ownerAccountId, goals, getQ
     if (execute && summary.blocked) log('[resource-agent] Batch preflight blocked: no new payments were submitted.');
     payments = summary;
   }
-  const deliveries = [];
   if (execute) {
-    for (const goal of goals) {
-      const entry = journal.get(goal.id);
-      if (!entry || entry.status !== 'completed' || !entry.tx_hash) continue;
-      const result = await fulfill({ tx_hash: entry.tx_hash, resource: goal.resource, input: normalizeOrder(goal.resource, goal.input) }, { goalId: goal.id });
-      if (!result || result.type !== goal.resource) throw new Error(`${goal.id}: invalid fulfillment response`);
-      log(`[resource-agent] FULFILLED ${goal.id} (${goal.resource})`);
-      deliveries.push({ id: goal.id, result });
-    }
+    for (let i = 0; i < goals.length; i++) if (!delivered.has(goals[i].id)) await deliverPaid(i);
   }
+  const deliveries = goals.map(goal => delivered.get(goal.id)).filter(Boolean);
   return { plan, payments, deliveries, checks };
 }
 
 /** HTTP helper: HTTPS for remote providers, or HTTP on loopback for this demo. */
 export function httpResourceProvider(baseUrl, fetchImpl = globalThis.fetch) {
-  const url = new URL(baseUrl);
-  const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
-  if (url.protocol !== 'https:' && !(url.protocol === 'http:' && loopback)) throw new Error('provider must use HTTPS or loopback HTTP');
-  if (url.username || url.password || url.pathname !== '/' || url.search || url.hash) throw new Error('provider URL must be a bare origin without credentials');
+  const url = validateProviderOrigin(baseUrl);
   async function post(route, body) {
     const response = await fetchImpl(new URL(route, url), {
       method: 'POST', redirect: 'error', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(30_000),
@@ -118,6 +203,14 @@ export function httpResourceProvider(baseUrl, fetchImpl = globalThis.fetch) {
   return {
     async getQuote(order) { return (await post('/quote', order)).quote; },
     async fulfill(order) { return (await post('/redeem', order)).result; },
+    async readStorage(objectId) {
+      if (typeof objectId !== 'string' || !/^[a-f0-9]{64}$/.test(objectId)) throw new Error('invalid storage object id');
+      const response = await fetchImpl(new URL(`/storage/${objectId}`, url), {
+        method: 'GET', redirect: 'error', signal: AbortSignal.timeout(30_000),
+      });
+      if (!response.ok) throw new Error(`provider storage readback failed (HTTP ${response.status})`);
+      return readBoundedBytes(response, { maxBytes: 4096, label: 'provider storage' });
+    },
   };
 }
 
@@ -146,15 +239,18 @@ export function routedResourceProvider({ providerUrl, goals, overrides = new Map
   return {
     getQuote: (order, context) => route(context).getQuote(order),
     fulfill: (order, context) => route(context).fulfill(order),
+    readStorage: (objectId, context) => route(context).readStorage(objectId),
   };
 }
 
 const USAGE = `Usage: node bouncer/agent/resource-agent.mjs --goals goals.json --key agent-key.json [--journal journal.json] [--local-provider provider.json] [--execute]
 
 Quote configured providers and preflight owner-pinned resource goals.
-Default is read-only; --execute sends real testnet payments and requests fulfillment.
-Use a function-call access key scoped only to the Bouncer execute method.
-Amounts are strings in each token's smallest units. Never use real funds.
+Default is read-only; --execute sends real testnet payments, checks bounded
+example deliveries and stores local receipts in the private journal. Checks
+happen after payment and do not guarantee delivery or refunds. Use a function-call
+key scoped only to Bouncer execute. Amounts are token smallest units, not USD.
+Never use real funds.
 `;
 function parseCli(args) {
   const options = { execute: false };
@@ -202,8 +298,8 @@ async function main() {
       console.log(`[resource-agent] Journal: ${path.resolve(journalPath)}`);
     }
     const result = await runResourceAgent({
-      contractId: config.contract_id, ownerAccountId: config.owner_account_id, goals: config.goals,
-      getQuote: client.getQuote, fulfill: client.fulfill, journal, execute: options.execute,
+      contractId: config.contract_id, ownerAccountId: config.owner_account_id, providerUrl: config.provider_url, goals: config.goals,
+      getQuote: client.getQuote, fulfill: client.fulfill, readStorage: client.readStorage, journal, execute: options.execute,
       onPlan: plan => console.log(`[resource-agent] Validated quote plan:\n${JSON.stringify(plan, null, 2)}`),
       runtimeFactory: plan => createRuntime({ plan, keyFile: options.key }),
     });
