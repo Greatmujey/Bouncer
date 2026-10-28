@@ -99,6 +99,32 @@ jobs:
             git push
           fi
 
+  outlayer-direct-research:
+    name: Independent OutLayer testnet research (not guarded)
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[outlayer-probe]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      # One small direct testnet-only payment from a fresh ephemeral account.
+      # This probes the provider; it is not a Bouncer policy integration.
+      - name: Probe provider availability and inspect returned result
+        shell: bash
+        run: |
+          set +e
+          node bouncer/scripts/probe-outlayer-direct.mjs 2>&1 | tee "$RUNNER_TEMP/outlayer-probe.log"
+          result=${PIPESTATUS[0]}
+          if [ "$result" -ne 0 ]; then
+            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-3000).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=OutLayer research probe failed::"+s)' "$RUNNER_TEMP/outlayer-probe.log"
+          fi
+          exit "$result"
+
   independent-market-discovery:
     name: Independent marketplace catalog (read only)
     if: github.event_name == 'push' && contains(github.event.head_commit.message, '[independent-discovery]')
