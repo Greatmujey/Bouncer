@@ -241,8 +241,13 @@ also passed after adding a process-local stale-nonce mitigation. This synthetic
 demo checks the repository literally and can ask the model once for a correction
 before setup; malformed or unauthorized output still fails closed. The provider
 comparison has separate mock regression tests and an opt-in
-`[provider-compare]` live testnet job; see the latest job result rather than
-assuming a live run succeeded.
+`[provider-compare]` live testnet job. In
+[run 40666249071](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40666249071/job/122742140751),
+two self-hosted development providers quoted 0.10 and 0.08 wNEAR for one
+explicitly supplied compute task; the agent selected the cheaper approved payee,
+[paid on testnet](https://testnet.nearblocks.io/txns/3ztdLNn4M91nDtqQNUSZZqgwEg3Fh9CaU3XP7BnD8T3S),
+verified the local result and replayed without another payment. That comparison
+task was deterministic, not model-generated; the providers were not commercial.
 [Run 40579499294](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40579499294)
 passed with contract `bouncer-ff7d41d8.testnet`: model inference, three real
 synthetic/testnet-token payments and all local deliveries. It used text

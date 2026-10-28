@@ -211,6 +211,22 @@ coordinate multiple writers or retry ambiguous sends. The original v4 run linked
 above used deterministic inputs. These are self-hosted development services,
 not commercial vendors.
 
+### Owner-approved provider comparison
+
+The optional `--compare-providers` path compares valid quotes only within the
+resource's owner-pinned token. It chooses the cheapest using exact integer
+amounts, saves the selected route and price, and rechecks that price before the
+normal on-chain policy preflight and payment. An invalid or unavailable quote
+stops the comparison. See [setup and recovery limits](bouncer/docs/AI_AGENT.md#compare-owner-approved-providers).
+
+In the [live comparison job](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40666249071/job/122742140751),
+two self-hosted development endpoints quoted 0.10 and 0.08 wNEAR for the same
+explicitly supplied compute task. Bouncer selected the approved cheaper payee,
+[paid it on testnet](https://testnet.nearblocks.io/txns/3ztdLNn4M91nDtqQNUSZZqgwEg3Fh9CaU3XP7BnD8T3S),
+verified the local result and replayed without a second payment. The comparison
+task was deterministic, not model-generated; this is not proof of independent
+commercial providers or guaranteed future delivery.
+
 ### Run the resource agent again
 
 The multi-token script also writes `<account>.provider.json`,
