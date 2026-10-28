@@ -1,5 +1,23 @@
-// A recorded public testnet run, not a wallet and not simulated settlement.
-// Source: https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40558301848
+// These are recorded public testnet runs, not a wallet or simulated settlement.
+// The latest paid-provider mission is separate from the earlier multi-token
+// resource example below. The site cannot run either mission.
+export const LATEST_MISSION = Object.freeze({
+  verifiedAt: '2026-10-28T12:46:12Z',
+  account: 'bouncer-ft-07c759b0.testnet',
+  owner: 'owner.bouncer-ft-07c759b0.testnet',
+  actionUrl: 'https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40689705483/job/122821855850',
+  aiActionUrl: 'https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40689705483/job/122821855839',
+  fundingTx: 'FxaPzzPT3muthwjgEzC3MogW4RRqKTcTPisxAh7SeHxM',
+  probeTx: 'HyLbpyHyX3PELEcJ5p3GpypXZzcKd4w6L63ohtHu7XFK',
+  refundTx: 'G4Fq5zkwDG3JH2A5djEDrcDQ5sgyeFPeA41b3rQCaNQK',
+  testToken: 'usdc.fakes.testnet', fundingMicro: '15000', probeHttpStatus: 405,
+  computeTx: '6Zf1iATqDXJYfC2i7R6jxvq8879SWnn7urWc9x4bayWq',
+  storageTx: 'CM1Tfm4XnZtRnwhXJdLYHD6oTXT49tW3Ra4mjg2B9eo4',
+  apiTx: '66pQBQ3JMsXe28AhFW1PLCcXp95H8zoRAMNkMJGFYLvi',
+});
+
+// Source of the earlier three-token walkthrough:
+// https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40558301848
 export const RUN = Object.freeze({
   verifiedAt: '2026-10-27T18:20:37Z',
   account: 'bouncer-42dcdfb7.testnet',

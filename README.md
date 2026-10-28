@@ -2,10 +2,11 @@
 
 Bouncer aims to let an AI agent buy compute, storage and API/data resources
 with owner-defined spending policies across NEAR assets. Its testnet prototype
-has paid three fungible tokens for self-hosted development services, and has
-also paid independently operated OutLayer for a bounded compute task using
-native NEAR through a restricted Bouncer key. The latter is **not** an FT or
-stablecoin purchase. An optional model translates objectives into tasks within
+has paid three fungible tokens for self-hosted development services. It has
+also paid independently operated OutLayer for bounded native-NEAR compute and
+for a connectivity probe funded with fake testnet USDC.e and native NEAR. The
+probe returned HTTP 405: a paid status response, not useful API data or a
+commercial service. An optional model translates objectives into tasks within
 an owner-controlled catalog; it does not choose financial authority. Bounded
 delivery checks and a local journal gate later payments. See
 [AI agent setup](bouncer/docs/AI_AGENT.md) and
@@ -21,11 +22,12 @@ temporary preview hosted by madethis.website, expiring **3 November 2026 at
 production deployment, and the private repository remains private.
 
 `bouncer/web/` explains the prototype's request → quote → guarded payment →
-fulfillment flow with a newcomer tour and an interactive walkthrough of three
-real, **recorded** testnet requests and results. It links to the payment transactions
-and separate refund test, and distinguishes the recorded deterministic flow from the then-planned AI
-planner and commercial integrations. This snapshot predates the new model adapter.
-The two credit tokens are synthetic and fulfillment was self-hosted. The site
+fulfillment flow and links to the latest paid-provider mission and recovery
+proof. It also retains an interactive walkthrough of three real, **recorded**
+requests from an earlier multi-token run. A separate test used a local AI model
+to propose tasks; the latest paid-provider mission used prepared goals. The
+two credit tokens in the earlier example are synthetic and fulfillment was
+self-hosted. The site
 is not a live agent dashboard or commercial marketplace. It includes an
 optional, identity-only testnet wallet connection on an isolated top-level
 origin; **wallet connection is disabled on the shared-origin guest preview**.
@@ -59,17 +61,30 @@ remote clients need a separately hosted HTTPS endpoint and compatible
 authentication; an OAuth deployment is not supplied or verified. MCP connects
 tools—it does not itself provide a model or access to the new planning/execution path.
 
-## Target tracks
+## Six-track roadmap: evidence and gaps
 
-The planned multi-resource agent targets Autonomous Business, AI Security &
-Defense, and Agent Economy first. Real-World Money, Unstoppable DeFi and
-AI Swarms are potential extensions, not completed integrations.
+Bouncer is a resource-buying agent; the on-chain firewall is its spending
+kernel, not the whole product. These are connections to the tracks, not claims
+that all six are complete.
+
+| Track | Evidence today | Still needed |
+| --- | --- | --- |
+| AI Security & Defense | 1-yocto owner guard, scoped keys, caps and delivery gating. | Independent audit and stronger prompt defenses. |
+| Agent Economy | Paid independent test probe and bounded FT resource purchases. | Useful commercial API/storage providers and signed receipts. |
+| Autonomous Business | AI task planning, approved-provider selection, payments and recovery. | Real customers, invoicing and production operations. |
+| Real-World Money | Fake testnet USDC.e-funded provider call. | Circle testnet USDC payments and real-money rails. |
+| Unstoppable DeFi | An owner-setup Ref testnet swap acquired fake tokens. | Agent-guarded swaps and cross-chain settlement. |
+| AI Swarms | One coordinator sequences multiple resources. | Multiple autonomous agents and secure handoffs. |
 
 ## Contract capabilities in this branch
 
-The checked-in `bouncer.wasm` is built from v5 source (SHA-256
-`ac6e5c8d73ef64e44ae1ecb84c9aa704ec542d0dbd3ffbce89f2a9b6e872bd15`).
-V5 needs a fresh deployment; there is no migration from older state.
+The source in this branch reports v7 and needs a **fresh deployment**; no
+migration from older state is provided. Two incompatible earlier layouts both
+reported v6, so a version string alone does not establish upgrade safety. The
+checked-in `bouncer.wasm` remains v5 (SHA-256
+`ac6e5c8d73ef64e44ae1ecb84c9aa704ec542d0dbd3ffbce89f2a9b6e872bd15`);
+current v7 demo scripts will reject it as stale. The v7 testnet runs used the
+WASM built by CI, not this checked-in file.
 
 - NEP-141 deposits; token-specific vault balances and per-policy caps.
 - A direct `execute` call must come from the owner account, with **zero**
@@ -105,8 +120,8 @@ Offline mocks are not proof of on-chain behavior.
   including `bouncer-a958bd.testnet`, still have the older unauthenticated
   `execute` and a different state layout. The v4 rolling-budget bucket semantics
   also differ from v3. Do not upgrade older deployments without a migration or
-  use them for valuable funds. V5 adds native state and also requires a fresh
-  deployment; no migration is provided. The scripts create fresh accounts.
+  use them for valuable funds. Later versions add state and also require a
+  fresh deployment; no migration is provided. The scripts create fresh accounts.
 - The security check uses **one token (wNEAR)**. The separate multi-token check
   creates two synthetic testnet credit FTs and sends payments to three vendor
   accounts. It is not a USDC/stablecoin demonstration.
@@ -123,13 +138,14 @@ Offline mocks are not proof of on-chain behavior.
   one readback from the same provider, and GitHub checking covers repository
   identity only, not the truth or freshness of its other fields. Local receipts
   are editable records, not signed invoices. The separate public catalog search
-  is read-only, not a purchasing integration. OutLayer is a separate native-NEAR
-  compute integration, not an adopter of this experimental FT-provider protocol;
-  independent storage/API purchases, invoices, stablecoin flows and NEAR Intents
-  remain unfinished.
+  is read-only, not a purchasing integration. OutLayer uses its own native and
+  prepaid FT interfaces, not this experimental FT-provider protocol. The paid
+  connector returned HTTP 405 rather than useful API data. Independent useful
+  storage/API purchases, invoices, Circle USDC and NEAR Intents remain unfinished.
 - Token trust is not enforced; configure policies only for trusted FTs. The
   planner and configured development provider accept owner-pinned 64-hex token
-  IDs on a testnet-reported RPC, but no stablecoin purchase has been tested.
+  IDs on a testnet-reported RPC. The independent probe used fake testnet
+  USDC.e, not Circle USDC or real-value stablecoin.
   Changing a policy's token retains its numeric spend history even if the new token has
   different units; create a new policy for a different token instead. Key
   grants do not themselves create or restrict NEAR access keys. The owner must
@@ -280,6 +296,23 @@ and then fulfilled AI-planned compute, storage, API and public-data goals using
 three FTs and self-hosted development providers. The model did not select the
 OutLayer task. An injected FT-result fault stopped later payments until the same
 transaction was recovered. See [setup, recovery and trust boundaries](bouncer/docs/OUTLAYER.md).
+
+### Paid-provider mission and recovery
+
+In the [28 October 2026 test](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40689705483/job/122821855850),
+Bouncer used separately scoped keys to [deposit 15,000 micro-units of fake
+USDC.e](https://testnet.nearblocks.io/txns/FxaPzzPT3muthwjgEzC3MogW4RRqKTcTPisxAh7SeHxM)
+and [pay for the pinned OutLayer test probe](https://testnet.nearblocks.io/txns/HyLbpyHyX3PELEcJ5p3GpypXZzcKd4w6L63ohtHu7XFK)
+under fake-token and native-NEAR budgets. It returned HTTP **405**, not API data.
+The unified runner recovered those already-settled transactions and then paid
+and verified self-hosted [compute](https://testnet.nearblocks.io/txns/6Zf1iATqDXJYfC2i7R6jxvq8879SWnn7urWc9x4bayWq),
+[storage](https://testnet.nearblocks.io/txns/CM1Tfm4XnZtRnwhXJdLYHD6oTXT49tW3Ra4mjg2B9eo4)
+and [API](https://testnet.nearblocks.io/txns/66pQBQ3JMsXe28AhFW1PLCcXp95H8zoRAMNkMJGFYLvi)
+tasks in wNEAR. A locally corrupted compute result stopped later payments;
+recovery reused that same compute transaction before continuing. The unified
+runner's initiation of *all* stages is covered offline, not yet proved live.
+Previews are non-atomic, and earlier payments cannot be rolled back. The
+preceding Ref swap was owner setup, not agent-guarded DeFi.
 
 ### Read-only independent marketplace discovery
 

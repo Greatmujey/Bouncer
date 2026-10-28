@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { createHash } from 'node:crypto';
-import { RUN, explorerAccount, explorerTx, formatUnits, readCurrentBalances, shortId } from '../web/evidence.mjs';
+import { RUN, LATEST_MISSION, explorerAccount, explorerTx, formatUnits, readCurrentBalances, shortId } from '../web/evidence.mjs';
 
 test('recorded website evidence describes the real multi-token run and separate security account', () => {
   assert.equal(RUN.account, 'bouncer-42dcdfb7.testnet');
@@ -86,6 +86,28 @@ test('current balance read fails closed on HTTP, RPC, and malformed values', asy
   }
 });
 
+test('latest paid-provider mission points to the verified separate-owner testnet run', () => {
+  assert.equal(LATEST_MISSION.account, 'bouncer-ft-07c759b0.testnet');
+  assert.equal(LATEST_MISSION.owner, 'owner.bouncer-ft-07c759b0.testnet');
+  assert.notEqual(LATEST_MISSION.account, LATEST_MISSION.owner);
+  assert.equal(LATEST_MISSION.testToken, 'usdc.fakes.testnet');
+  assert.equal(LATEST_MISSION.fundingMicro, '15000');
+  assert.equal(LATEST_MISSION.probeHttpStatus, 405);
+  const html = fs.readFileSync(new URL('../web/index.html', import.meta.url), 'utf8');
+  for (const key of ['fundingTx', 'probeTx', 'computeTx', 'storageTx', 'apiTx']) {
+    assert.match(LATEST_MISSION[key], /^[1-9A-HJ-NP-Za-km-z]{43,44}$/);
+    assert.ok(html.includes(explorerTx(LATEST_MISSION[key])), `missing link for ${key}`);
+  }
+  assert.ok(html.includes(LATEST_MISSION.actionUrl));
+  assert.ok(html.includes(LATEST_MISSION.aiActionUrl));
+  assert.match(html, /probe returned a status—not useful API data/);
+  assert.match(html, /fake testnet USDC\.e/);
+  assert.match(html, /already settled when the unified mission resumed/);
+  assert.match(html, /locally corrupted result blocked later payments/);
+  assert.match(html, /process is non-atomic/);
+  assert.equal((html.match(/class="track-card"/g) || []).length, 6);
+});
+
 test('website discloses snapshot, synthetic credits, self-hosted services, and testnet limitations', () => {
   const html = fs.readFileSync(new URL('../web/index.html', import.meta.url), 'utf8');
   assert.match(html, /Verified testnet snapshot/);
@@ -101,8 +123,8 @@ test('website discloses snapshot, synthetic credits, self-hosted services, and t
   assert.match(html, /ChatGPT web and other hosted assistants need HTTPS/i);
   assert.match(html, /Model conversations have not been tested/i);
   assert.match(html, /id="welcome-tour"/);
-  assert.match(html, /requests are prepared by a person/i);
-  assert.match(html, /not yet an AI planner/i);
+  assert.match(html, /local AI model to propose resource tasks/i);
+  assert.match(html, /not yet an open marketplace/i);
   assert.match(html, /FUTURE WE’RE BUILDING TOWARD · NOT AVAILABLE YET/);
   assert.match(html, /goal, not a completed demo/i);
   assert.equal((html.match(/data-story-tab=/g) || []).length, 3);

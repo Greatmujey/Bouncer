@@ -28,6 +28,11 @@ try {
   assert.deepEqual(await page.locator('.resource-amount').allInnerTexts(), ['0.1 wNEAR', '1.5 storage credits', '2 API credits']);
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'mobile page overflows');
   assert.match(await page.locator('.snapshot-note').innerText(), /not a running agent/);
+  assert.match(await page.locator('#latest-mission').innerText(), /405/);
+  assert.match(await page.locator('#latest-mission').innerText(), /fake testnet USDC\.e/);
+  assert.match(await page.locator('#latest-mission').innerText(), /already settled when the unified mission resumed/);
+  assert.match(await page.locator('#latest-mission a').first().getAttribute('href'), /FxaPzzPT3muthwjgEzC3MogW4RRqKTcTPisxAh7SeHxM$/);
+  assert.equal(await page.locator('.track-card').count(), 6);
   assert.deepEqual(pageErrors, []);
   const writes = [];
   page.on('request', request => { if (request.method() !== 'GET' && request.method() !== 'HEAD') writes.push(request.url()); });
