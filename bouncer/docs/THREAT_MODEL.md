@@ -102,9 +102,14 @@ all possible callback or token failure cases.
    trusts its configured RPC, Bouncer deployment/code and token contracts. It
    verifies transaction arguments and receipts, but cannot protect against a
    compromised or upgraded trusted contract, malicious RPC or token. Its state
-   and lock are single-process, storage is plaintext and publicly retrievable,
-   and there is no authentication, transport security or multi-host replay
-   protection. Orders are sent to the provider; their hashes are on chain.
+   is single-process: up to eight independent redemptions can be in flight,
+   with same-transaction coalescing but no multi-process lock or replay protection.
+   Its local state writes do not provide fsync durability; a write error stops
+   the instance and requires manual reconciliation. Storage is plaintext and
+   publicly retrievable, and there is no authentication or transport security.
+   The configured provider checks that its RPC reports testnet, but the RPC can
+   lie; an implicit 64-hex token ID does not itself identify a network.
+   Orders are sent to the provider; their hashes are on chain.
    Client-side verification occurs only after payment: it recomputes the bounded
    SHA-256/text examples, reads storage back once from the same provider, and
    checks GitHub repository identity only. It cannot guarantee future storage,

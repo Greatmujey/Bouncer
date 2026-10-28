@@ -130,5 +130,14 @@ test('resource CLI starts its local provider for dry run, payment and replay rec
     const mismatch = exec([...f.args, '--local-provider', providerFile]);
     assert.equal(mismatch.status, 1);
     assert.match(mismatch.stderr, /contract does not match/);
+    bad.contract_id = 'bouncer.testnet'; bad.owner_account_id = 'other.testnet';
+    fs.writeFileSync(providerFile, JSON.stringify(bad));
+    const ownerMismatch = exec([...f.args, '--local-provider', providerFile]);
+    assert.equal(ownerMismatch.status, 1); assert.match(ownerMismatch.stderr, /owner does not match/);
+    delete bad.owner_account_id;
+    fs.writeFileSync(providerFile, JSON.stringify(bad));
+    const wrongChain = exec([...f.args, '--local-provider', providerFile, '--execute'], { MOCK_CHAIN: 'mainnet' });
+    assert.equal(wrongChain.status, 1); assert.match(wrongChain.stderr, /provider RPC must report.*testnet/);
+    assert.doesNotMatch(wrongChain.stdout, /Local development provider|PAID/);
   } finally { fs.rmSync(f.dir, { recursive: true, force: true }); }
 });

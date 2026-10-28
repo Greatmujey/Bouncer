@@ -114,6 +114,8 @@ async function main() {
   const bid = `bouncer-${suffix}.testnet`;
   const funderId = `bouncer-ft-${suffix}.testnet`;
   const userId = `user.${bid}`;
+  const separateOwnerDemo = process.env.BOUNCER_DEMO_SEPARATE_OWNER === '1';
+  const ownerId = separateOwnerDemo ? userId : bid;
   const compareDemo = process.env.BOUNCER_DEMO_COMPARE === '1';
   const badDeliveryDemo = process.env.BOUNCER_DEMO_BAD_DELIVERY === '1';
   if (badDeliveryDemo && !compareDemo) throw new Error('delivery verification probe requires provider comparison');
@@ -137,7 +139,7 @@ async function main() {
       ['storage', 'storage-credit', `${storageSymbol.toLowerCase()}.${FACTORY}`, 3n * CREDIT / 2n],
       ['api', 'api-credit', `${apiSymbol.toLowerCase()}.${FACTORY}`, 2n * CREDIT],
     ];
-    const config = { version: 1, contract_id: bid, owner_account_id: bid, provider_url: 'http://127.0.0.1:8787',
+    const config = { version: 1, contract_id: bid, owner_account_id: ownerId, provider_url: 'http://127.0.0.1:8787',
       max_tasks: 3, required_resources: ['compute', 'storage', 'api'], resources: Object.fromEntries(limits.map(([resource, policyId, token, amount]) => [resource, {
         policy_id: policyId, token, payee: vendorIds[resource], max_amount: amount.toString(), max_tasks: 1, max_total_amount: amount.toString(),
       }])) };
@@ -205,7 +207,7 @@ async function main() {
   const deploy = await setupAttempt('deploy', () => bouncer.deployContract(fs.readFileSync(wasmPath)));
   assertReceipts(deploy, 'deploy');
   console.log(`    ✅ deploy ${txUrl(deploy.transaction_outcome.id)}`);
-  await call(bouncer, bid, 'new', { owner: bid });
+  await call(bouncer, bid, 'new', { owner: ownerId });
   if (await view(bid, 'contract_version', {}) !== 'bouncer-agent-v4') throw new Error('stale wasm: wait for CI and git pull');
 
   console.log(`\n=== 2) Create funded user and ${compareDemo ? 'four' : 'three'} development vendor accounts ===`);
@@ -215,6 +217,8 @@ async function main() {
   assertReceipts(createdUser, 'create user');
   console.log(`    ✅ ${userId} ${txUrl(createdUser.transaction_outcome.id)}`);
   const user = account(userId, userKey);
+  const owner = separateOwnerDemo ? user : bouncer;
+  if (separateOwnerDemo) console.log(`    Separate policy owner: ${ownerId}; contract: ${bid}`);
   for (const [kind, id] of Object.entries(vendorIds)) {
     const key = KeyPair.fromRandom('ed25519');
     saveKey(id, key);
@@ -246,9 +250,9 @@ async function main() {
 
   console.log('\n=== 6) Install one execute-only key and grant it three token policies ===');
   const agentKey = KeyPair.fromRandom('ed25519');
-  const agentFile = saveKey(bid, agentKey, 'agent');
-  const added = await setupAttempt('create agent key', () => bouncer.signAndSendTransaction({
-    receiverId: bid, waitUntil: 'FINAL',
+  const agentFile = saveKey(ownerId, agentKey, 'agent');
+  const added = await setupAttempt('create agent key', () => owner.signAndSendTransaction({
+    receiverId: ownerId, waitUntil: 'FINAL',
     actions: [transactions.addKey(agentKey.getPublicKey(), transactions.functionCallAccessKey(bid, ['execute'], N))],
   }));
   assertReceipts(added, 'create agent key');
@@ -262,15 +266,15 @@ async function main() {
       per: 5n * CREDIT, daily: 10n * CREDIT, payment: 2n * CREDIT, input: { text: 'actual testnet resource API' } },
   ];
   for (const r of resources) {
-    await call(bouncer, bid, 'set_policy', { policy_id: r.policy, token: r.token,
+    await call(owner, bid, 'set_policy', { policy_id: r.policy, token: r.token,
       per_tx_cap: r.per.toString(), daily_cap: r.daily.toString() }, 1n);
-    await call(bouncer, bid, 'allow_payee', { policy_id: r.policy, payee: r.vendor }, 1n);
-    await call(bouncer, bid, 'grant_agent_key', { policy_id: r.policy, public_key: agentKey.getPublicKey().toString() }, 1n);
+    await call(owner, bid, 'allow_payee', { policy_id: r.policy, payee: r.vendor }, 1n);
+    await call(owner, bid, 'grant_agent_key', { policy_id: r.policy, public_key: agentKey.getPublicKey().toString() }, 1n);
   }
   if (compareDemo) {
     // Both compute offers use the same policy and FT. The owner explicitly
     // allows the second payee with 1 yoctoNEAR before any comparison/payment.
-    await call(bouncer, bid, 'allow_payee', { policy_id: 'compute-wnear', payee: vendorIds.computeAlt }, 1n);
+    await call(owner, bid, 'allow_payee', { policy_id: 'compute-wnear', payee: vendorIds.computeAlt }, 1n);
   }
 
   console.log('\n=== 7) Quote, pay and fulfill three orders with the resource agent ===');
@@ -300,11 +304,11 @@ async function main() {
   const providerFile = path.join(RUN_DIR, `${bid}.provider.json`);
   const goalsFile = path.join(RUN_DIR, `${bid}.goals.json`);
   const ownerFile = path.join(RUN_DIR, `${bid}.owner.json`);
-  const providerConfig = { contract_id: bid, data_dir: dataDir, port: 8787, products };
-  const goalsConfig = { contract_id: bid, owner_account_id: bid, provider_url: 'http://127.0.0.1:8787', journal_path: journalPath, goals };
+  const providerConfig = { contract_id: bid, owner_account_id: ownerId, data_dir: dataDir, port: 8787, products };
+  const goalsConfig = { contract_id: bid, owner_account_id: ownerId, provider_url: 'http://127.0.0.1:8787', journal_path: journalPath, goals };
   // A reusable owner catalog for later natural-language tasks; each new run
   // remains constrained by both these maxima and the on-chain policies.
-  const ownerConfig = { version: 1, contract_id: bid, owner_account_id: bid, provider_url: 'http://127.0.0.1:8787', max_tasks: 3,
+  const ownerConfig = { version: 1, contract_id: bid, owner_account_id: ownerId, provider_url: 'http://127.0.0.1:8787', max_tasks: 3,
     resources: Object.fromEntries(resources.map(r => [r.resource, { policy_id: r.policy, token: r.token, payee: r.vendor,
       max_amount: r.payment.toString(), max_tasks: 1, max_total_amount: r.payment.toString() }])) };
   for (const [file, config] of [[providerFile, providerConfig], [goalsFile, goalsConfig], [ownerFile, ownerConfig]]) {
@@ -312,7 +316,7 @@ async function main() {
     fs.chmodSync(file, 0o600);
   }
   console.log(`    Provider config: ${providerFile}\n    Goals config: ${goalsFile}\n    Owner planning config: ${ownerFile}`);
-  const devProvider = createResourceProvider({ rpcProvider: provider, contractId: bid, products, dataDir });
+  const devProvider = createResourceProvider({ rpcProvider: provider, contractId: bid, ownerAccountId: ownerId, products, dataDir });
   await new Promise((resolve, reject) => {
     devProvider.server.once('error', reject);
     devProvider.server.listen(0, '127.0.0.1', resolve);
@@ -320,18 +324,18 @@ async function main() {
   const baseUrl = `http://127.0.0.1:${devProvider.server.address().port}`;
   const client = httpResourceProvider(baseUrl);
   let journal, alternateProvider;
-  let proof, comparisonProof, deliveryProof, gatedBatchProof;
+  let proof, comparisonProof, deliveryProof, gatedBatchProof, ownerProof;
   try {
-    journal = new FileJournal(journalPath, bid, bid);
+    journal = new FileJournal(journalPath, bid, ownerId);
     const runner = {
       // Receipts bind the stable, reviewed origin in the saved goals file;
       // this demo temporarily maps it to an ephemeral in-process server.
-      contractId: bid, ownerAccountId: bid, providerUrl: goalsConfig.provider_url, goals, getQuote: client.getQuote, fulfill: client.fulfill, readStorage: client.readStorage,
+      contractId: bid, ownerAccountId: ownerId, providerUrl: goalsConfig.provider_url, goals, getQuote: client.getQuote, fulfill: client.fulfill, readStorage: client.readStorage,
       onPlan: plan => {
         fs.writeFileSync(planFile, JSON.stringify(plan, null, 2) + '\n', { mode: 0o600 });
         fs.chmodSync(planFile, 0o600);
       },
-      provider, account: account(bid, agentKey), publicKey: agentKey.getPublicKey(), journal, execute: true,
+      provider, account: account(ownerId, agentKey), publicKey: agentKey.getPublicKey(), journal, execute: true,
     };
     let first;
     if (badDeliveryDemo) {
@@ -428,7 +432,7 @@ async function main() {
       console.log('\n=== 10) Pay for and retrieve model-requested public repository data ===');
       const dataGoalsFile = path.join(RUN_DIR, `${bid}.public-data.goals.json`);
       const dataPlanFile = path.join(RUN_DIR, `${bid}.public-data.plan.json`);
-      const dataGoalsConfig = { contract_id: bid, owner_account_id: bid, provider_url: 'http://127.0.0.1:8787', journal_path: journalPath, goals: [aiDataGoal] };
+      const dataGoalsConfig = { contract_id: bid, owner_account_id: ownerId, provider_url: 'http://127.0.0.1:8787', journal_path: journalPath, goals: [aiDataGoal] };
       fs.writeFileSync(dataGoalsFile, JSON.stringify(dataGoalsConfig, null, 2) + '\n', { mode: 0o600 });
       fs.chmodSync(dataGoalsFile, 0o600);
       const dataRunner = { ...runner, goals: [aiDataGoal], onPlan: plan => {
@@ -461,14 +465,14 @@ async function main() {
       console.log('\n=== 10) Compare two owner-approved development providers for the same FT ===');
       const cheaper = 8n * N / 100n;
       const alternativeProducts = { ...products, compute: { ...products.compute, payee: vendorIds.computeAlt, amount: cheaper.toString() } };
-      alternateProvider = createResourceProvider({ rpcProvider: provider, contractId: bid, products: alternativeProducts,
+      alternateProvider = createResourceProvider({ rpcProvider: provider, contractId: bid, ownerAccountId: ownerId, products: alternativeProducts,
         dataDir: path.join(RUN_DIR, `${bid}.alternative-provider`) });
       await new Promise((resolve, reject) => {
         alternateProvider.server.once('error', reject);
         alternateProvider.server.listen(0, '127.0.0.1', resolve);
       });
       const alternateUrl = `http://127.0.0.1:${alternateProvider.server.address().port}`;
-      const comparisonConfig = { version: 1, contract_id: bid, owner_account_id: bid, provider_url: baseUrl,
+      const comparisonConfig = { version: 1, contract_id: bid, owner_account_id: ownerId, provider_url: baseUrl,
         max_tasks: 1, required_resources: ['compute'], resources: { compute: {
           ...ownerConfig.resources.compute, alternatives: [{ id: 'alternative', provider_url: alternateUrl,
             policy_id: 'compute-wnear', payee: vendorIds.computeAlt, max_amount: resources[0].payment.toString() }],
@@ -547,6 +551,16 @@ async function main() {
       console.log(`    ✅ VERIFIED owner-approved comparison: ${resources[0].payment} vs ${cheaper} ${WNEAR}; selected payee ${vendorIds.computeAlt}; replay made no second payment.`);
       console.log('    Both compared endpoints are self-hosted development services, not independent commercial vendors.');
     }
+    if (separateOwnerDemo) {
+      const tx = journal.get('compute-1')?.tx_hash;
+      const outcome = await provider.viewTransactionStatus(tx, ownerId, 'FINAL');
+      if (ownerId === bid || outcome?.final_execution_status !== 'FINAL' || outcome.transaction?.signer_id !== ownerId ||
+          outcome.transaction?.receiver_id !== bid || outcome.transaction?.hash !== tx) {
+        throw new Error('separate owner transaction did not match the pinned signer and contract');
+      }
+      ownerProof = `contract=${bid}; owner=${ownerId}; tx=${tx}; signer=separate-owner; provider-verified=yes`;
+      console.log('    ✅ Separate owner signed the guarded payment; the local provider verified that owner and the contract.');
+    }
   } finally {
     journal?.close();
     if (alternateProvider) await new Promise(resolve => alternateProvider.server.close(resolve));
@@ -561,6 +575,7 @@ async function main() {
     if (comparisonProof) console.log(`::notice title=Owner-approved provider comparison proof::${comparisonProof}`);
     if (deliveryProof) console.log(`::notice title=Delivery verification and recovery proof::${deliveryProof}`);
     if (gatedBatchProof) console.log(`::notice title=Verify-before-next-payment proof::${gatedBatchProof}`);
+    if (ownerProof) console.log(`::notice title=Separate owner payment proof::${ownerProof}`);
   }
   console.log(`Contract: ${bid}`);
   console.log(`Explorer: https://testnet.nearblocks.io/address/${bid}?tab=receipts`);

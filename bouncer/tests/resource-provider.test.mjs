@@ -4,7 +4,8 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createResourceProvider, orderMemo, verifyPayment } from '../services/resource-provider.mjs';
+import nearApi from 'near-api-js';
+import { createResourceProvider, startConfiguredProvider, orderMemo, verifyPayment } from '../services/resource-provider.mjs';
 
 const contractId = 'bouncer.testnet';
 const products = Object.fromEntries(['compute', 'storage', 'api'].map(name => [name, {
@@ -64,6 +65,48 @@ test('provider requires trusted finalized execute with matching order and succes
   }
 });
 
+test('configured provider accepts owner-pinned implicit token IDs only after the RPC reports testnet', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'resource-token-test-'));
+  const proto = nearApi.providers.JsonRpcProvider.prototype, original = proto.viewNodeStatus;
+  const config = { contract_id: contractId, owner_account_id: 'owner.testnet', data_dir: path.join(dir, 'data'), port: 0,
+    products: Object.fromEntries(Object.entries(products).map(([key, product]) => [key, { ...product, token: 'a'.repeat(64) }])) };
+  let server;
+  try {
+    proto.viewNodeStatus = async () => ({ chain_id: 'mainnet' });
+    await assert.rejects(startConfiguredProvider(config), /provider RPC must report.*testnet/);
+    assert.equal(fs.existsSync(config.data_dir), false);
+    proto.viewNodeStatus = async () => ({ chain_id: 'testnet' });
+    server = await startConfiguredProvider(config);
+    assert.match(server.url, /^http:\/\/127\.0\.0\.1:\d+$/);
+  } finally {
+    if (server) await new Promise(resolve => server.server.close(resolve));
+    proto.viewNodeStatus = original;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('provider pins a separate owner signer and contract receiver; mismatched signers do not fulfill', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'resource-owner-test-'));
+  const ownerAccountId = 'owner.testnet';
+  try {
+    const rpcProvider = { async viewTransactionStatus(hash, signer, wait) {
+      assert.equal(signer, ownerAccountId); assert.equal(wait, 'FINAL');
+      const result = payment('compute', hash);
+      result.transaction.signer_id = hash === 'tx-good' ? ownerAccountId : 'attacker.testnet';
+      return result;
+    } };
+    const provider = createResourceProvider({ rpcProvider, contractId, ownerAccountId, products, dataDir: dir });
+    const order = { tx_hash: 'tx-good', resource: 'compute', input: inputs.compute };
+    const result = await provider.redeem(order);
+    assert.equal(result.type, 'compute');
+    await assert.rejects(provider.redeem({ ...order, tx_hash: 'tx-bad' }), /trusted Bouncer owner and contract/);
+    assert.equal(fs.readFileSync(path.join(dir, 'redemptions.json'), 'utf8').includes('tx-bad'), false);
+    const sameAccount = payment('compute', 'tx-same');
+    assert.throws(() => verifyPayment(sameAccount, { txHash: 'tx-same', contractId, ownerAccountId,
+      product: products.compute, resource: 'compute', input: inputs.compute }), /owner and contract/);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('real local compute, disk storage and data API require payment, survive restart, and reject replay tampering', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'resource-provider-test-'));
   let calls = 0;
@@ -101,6 +144,66 @@ test('pending redemptions are never fulfilled twice after a restart', async () =
     fs.writeFileSync(path.join(dir, 'redemptions.json'), JSON.stringify({ version: 1, redemptions: { 'tx-compute': { status: 'pending', memo, resource: 'compute' } } }));
     const provider = createResourceProvider({ rpcProvider: { viewTransactionStatus: () => { throw new Error('must not call'); } }, contractId, products, dataDir: dir });
     await assert.rejects(provider.redeem({ tx_hash: 'tx-compute', resource: 'compute', input: inputs.compute }), /manual reconciliation/);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('unrelated redemptions can progress while one RPC is slow; conflicting concurrent orders fail', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'resource-parallel-test-'));
+  let releaseSlow, slowStarted;
+  const started = new Promise(resolve => { slowStarted = resolve; });
+  const blocked = new Promise(resolve => { releaseSlow = resolve; });
+  try {
+    const rpcProvider = { async viewTransactionStatus(hash) {
+      if (hash === 'tx-slow') { slowStarted(); await blocked; return payment('storage', hash); }
+      return payment('compute', hash);
+    } };
+    const provider = createResourceProvider({ rpcProvider, contractId, products, dataDir: dir });
+    let slowFinished = false;
+    const slow = provider.redeem({ tx_hash: 'tx-slow', resource: 'storage', input: inputs.storage }).then(result => { slowFinished = true; return result; });
+    await started;
+    await assert.rejects(provider.redeem({ tx_hash: 'tx-slow', resource: 'storage', input: { ...inputs.storage, content: 'tampered' } }), /different order/);
+    const fast = await provider.redeem({ tx_hash: 'tx-fast', resource: 'compute', input: inputs.compute });
+    assert.equal(fast.type, 'compute'); assert.equal(slowFinished, false);
+    releaseSlow();
+    assert.equal((await slow).type, 'storage');
+  } finally { releaseSlow(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('redemption concurrency is bounded and duplicate callers share a single payment verification', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'resource-cap-test-'));
+  let releases = [], calls = 0;
+  try {
+    const rpcProvider = { async viewTransactionStatus(hash) {
+      calls++;
+      await new Promise(resolve => releases.push(resolve));
+      return payment('compute', hash);
+    } };
+    const provider = createResourceProvider({ rpcProvider, contractId, products, dataDir: dir });
+    const order = hash => ({ tx_hash: hash, resource: 'compute', input: inputs.compute });
+    const jobs = Array.from({ length: 8 }, (_, i) => provider.redeem(order(`tx-${i}`)));
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(calls, 8); assert.equal(releases.length, 8);
+    const duplicate = provider.redeem(order('tx-0'));
+    await assert.rejects(provider.redeem(order('tx-overflow')), /provider busy/);
+    releases.forEach(release => release()); releases = [];
+    const results = await Promise.all([...jobs, duplicate]);
+    assert.deepEqual(results[0], results[8]); assert.equal(calls, 8);
+    assert.ok(results.every(result => result.type === 'compute'));
+  } finally { releases.forEach(release => release()); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('a provider state write error poisons the instance rather than returning uncertain redemptions', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'resource-state-failure-test-'));
+  let calls = 0;
+  try {
+    const rpcProvider = { async viewTransactionStatus(hash) { calls++; return payment('compute', hash); } };
+    const provider = createResourceProvider({ rpcProvider, contractId, products, dataDir: dir });
+    fs.mkdirSync(path.join(dir, 'redemptions.json')); // makes the first atomic rename fail
+    const order = { tx_hash: 'tx-failed', resource: 'compute', input: inputs.compute };
+    await assert.rejects(provider.redeem(order), /state persistence failed.*reconcile/);
+    await assert.rejects(provider.redeem(order), /state persistence failed.*reconcile/);
+    await assert.rejects(provider.redeem({ ...order, tx_hash: 'tx-other' }), /state persistence failed.*reconcile/);
+    assert.equal(calls, 1);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 

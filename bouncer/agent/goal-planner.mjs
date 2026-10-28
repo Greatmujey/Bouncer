@@ -9,6 +9,7 @@ import path from 'node:path';
 import { normalizeOrder } from '../services/resource-provider.mjs';
 import { httpResourceProvider } from './resource-agent.mjs';
 import { readBoundedJson } from '../shared/bounded-json.mjs';
+import { isTestnetAccount, isTestnetToken } from '../shared/account-id.mjs';
 
 const RESOURCE_TYPES = ['compute', 'storage', 'api'];
 const MAX_TASKS = 10;
@@ -23,10 +24,7 @@ function keysExactly(value, required, optional = []) {
       Object.keys(value).some(key => !required.includes(key) && !optional.includes(key))) return false;
   return true;
 }
-function testnetAccount(value) {
-  return typeof value === 'string' && value.length <= 64 &&
-    /^[a-z0-9]+(?:[-_][a-z0-9]+)*(?:\.[a-z0-9]+(?:[-_][a-z0-9]+)*)*\.testnet$/.test(value);
-}
+const testnetAccount = isTestnetAccount;
 function positiveU128(value, label) {
   if (typeof value !== 'string' || !/^[1-9]\d{0,38}$/.test(value) || BigInt(value) > U128_MAX) {
     throw new Error(`${label} must be a positive U128 decimal string`);
@@ -56,7 +54,7 @@ export function validatePlanningConfig(input) {
     const item = input.resources[name];
     if (!keysExactly(item, ['policy_id', 'token', 'payee', 'max_amount', 'max_tasks', 'max_total_amount'], ['alternatives'])) throw new Error(`invalid ${name} catalog entry`);
     if (typeof item.policy_id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(item.policy_id)) throw new Error(`invalid ${name} policy_id`);
-    if (!testnetAccount(item.token) || !testnetAccount(item.payee)) throw new Error(`${name} token and payee must be valid .testnet accounts`);
+    if (!isTestnetToken(item.token) || !testnetAccount(item.payee)) throw new Error(`${name} token and payee must be valid testnet accounts`);
     const maxAmount = positiveU128(item.max_amount, `${name} max_amount`);
     const maxTotal = positiveU128(item.max_total_amount, `${name} max_total_amount`);
     if (maxTotal < maxAmount) throw new Error(`${name} max_total_amount is below its per-task maximum`);

@@ -26,7 +26,15 @@ const setFor = (map, name) => { if (!map.has(name)) map.set(name, new Set()); re
 
 globalThis.fetch = async () => ({ ok: true, json: async () => ({}) });
 Account.prototype.deployContract = async function () { return outcome(); };
-Account.prototype.createAccount = async function () { return outcome(); };
+let createAttempts = 0;
+Account.prototype.createAccount = async function () {
+  createAttempts++;
+  const mode = process.env.BOUNCER_MOCK_MODE;
+  if ((mode === 'setup_expired_once' && createAttempts === 1) || mode === 'setup_expired_twice') fail('Transaction has expired', 'Expired');
+  if (mode === 'setup_timeout') fail('RPC timed out', 'Timeout');
+  if (mode === 'setup_expired_with_outcome') throw Object.assign(new Error('Transaction has expired'), { type: 'Expired', transaction_outcome: { id: 'maybe-submitted' } });
+  return outcome();
+};
 Account.prototype.signAndSendTransaction = async function ({ receiverId, actions, waitUntil }) {
   const added = actions?.[0]?.addKey;
   const permission = added?.accessKey?.permission?.functionCall;
@@ -129,6 +137,7 @@ Account.prototype.callFunctionRaw = async function ({ contractId, methodName, ar
         if (['broken_refund', 'broken_daily_refund'].includes(process.env.BOUNCER_MOCK_MODE)) spent.set(args.policy_id, (spent.get(args.policy_id) || 0n) + amount);
         return refunded;
       }
+      if (process.env.BOUNCER_MOCK_MODE === 'payment_expired') fail('Transaction has expired', 'Expired');
       if (process.env.BOUNCER_MOCK_MODE === 'payment_refund') {
         const refunded = outcome(['BOUNCER ft_transfer failed; vault refunded']);
         refunded.receipts_outcome.push({ outcome: { status: { Failure: { error: 'transfer failed' } }, logs: [] } });

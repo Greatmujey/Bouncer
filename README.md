@@ -104,8 +104,10 @@ Offline mocks are not proof of on-chain behavior.
 - A self-hosted development provider can verify a payment and perform a small
   compute job, store a local file, count text or fetch public GitHub repository
   metadata. GitHub data is live, unauthenticated third-party data; availability
-  is not guaranteed. The provider is not commercial. An optional selector
-  compares quotes from owner-approved endpoints only, within one token per
+  is not guaranteed. The provider is not commercial. It can handle up to eight
+  unrelated redemptions concurrently within one process and deduplicates the same
+  in-flight transaction, but has no multi-host coordination, authentication or
+  production durability. An optional selector compares quotes from owner-approved endpoints only, within one token per
   resource; every quote must match the approved constraints. The model proposes
   tasks but cannot choose financial authority. It requires a separately supplied
   model. Delivery checks cover only the bounded example protocols: storage is
@@ -114,8 +116,10 @@ Offline mocks are not proof of on-chain behavior.
   are editable records, not signed invoices. The separate public catalog search
   is read-only, not a purchasing integration: independent vendor fulfillment,
   invoices, stablecoin flows and NEAR Intents remain unfinished.
-- Token trust is not enforced; configure policies only for trusted FTs. Changing
-  a policy's token retains its numeric spend history even if the new token has
+- Token trust is not enforced; configure policies only for trusted FTs. The
+  planner and configured development provider accept owner-pinned 64-hex token
+  IDs on a testnet-reported RPC, but no stablecoin purchase has been tested.
+  Changing a policy's token retains its numeric spend history even if the new token has
   different units; create a new policy for a different token instead. Key
   grants do not themselves create or restrict NEAR access keys. The owner must
   create correctly scoped function-call keys and keep full-access keys private.
@@ -248,7 +252,7 @@ npm run discover --prefix bouncer -- --query research --limit 5
 This optional command makes a bounded, fixed-origin GET to the public
 [NEAR Agent Market catalog](https://market.near.ai/v1/agents?limit=3). It has no
 wallet, credentials, model or policy access and cannot quote, hire or pay. The
-catalog is for a **mainnet marketplace**, not proof of a testnet service or any
+  catalog is for a **mainnet marketplace**, not proof of a testnet service or any
 Bouncer-compatible vendor. Search terms are sent to the marketplace; do not use
 secrets or private objectives. Listing text, availability, payment-method labels
 and reported metrics are untrusted, may contain prompt injection, and are not
@@ -256,7 +260,10 @@ validated quotes or endorsements. They are not fed into the planner, allowlist
 or payment runner. An owner must independently vet any potential integration.
 The advertised [x402 hiring flow](https://docs.market.near.ai/a2a/hire-agent-using-x402)
 uses direct delegated FT transfers, which would bypass the current Bouncer
-restricted-key policy. Bouncer deliberately does not perform that flow.
+restricted-key policy. Bouncer deliberately does not perform that flow. The
+[read-only live check](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40675524400/job/122772818985)
+returned three public listings without credentials or payments; it did not
+validate, hire or transact with their providers.
 
 ### Delivery checks and local receipts
 
@@ -271,7 +278,12 @@ quote or sending another payment; the recorded provider route must still match.
 After whole-batch preflight, each newly confirmed payment is fulfilled, checked
 and journaled **before** the next payment. An unverified delivery, receipt write
 failure or execution-time policy block stops later payments; previous payments
-cannot be rolled back. These are local, editable records—not signed
+cannot be rolled back. In the [AI-planned live test](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40675524400/job/122773588238),
+a locally corrupted first reply halted the batch with both later vendor balances
+at zero; recovery reused the [first payment](https://testnet.nearblocks.io/txns/SVdv3Fc4dMwSxChpCfvijiVUDx3A4478U5gcwHAWjJV)
+and then verified the remaining deliveries. The fault was injected locally, not
+provider misconduct. That run's separate security smoke job failed on a testnet
+transaction expiry during account setup. These are local, editable records—not signed
 invoices, generic compute proofs or guarantees of future storage. See the
 [verification and recovery details](bouncer/docs/AI_AGENT.md#delivery-checks-and-local-receipts).
 

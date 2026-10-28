@@ -110,11 +110,23 @@ function formatNear(amount) {
   return fraction ? `${value / ONE_NEAR}.${fraction}` : String(value / ONE_NEAR);
 }
 
+// Fresh-demo setup only: an explicit Expired response without a transaction
+// outcome is a pre-admission rejection. Never retry a timeout, an ambiguous
+// outcome or a procurement payment through this helper.
+async function setupAttempt(description, operation) {
+  try { return await operation(); }
+  catch (error) {
+    if (error?.type !== 'Expired' || error.transaction_outcome !== undefined) throw error;
+    console.warn(`    Testnet security setup ${description}: explicit expired transaction; retrying once.`);
+    return operation();
+  }
+}
+
 async function addRestrictedKey(owner, contractId, key, methods) {
-  const result = await owner.signAndSendTransaction({
+  const result = await setupAttempt('add restricted key', () => owner.signAndSendTransaction({
     receiverId: owner.accountId, waitUntil: 'FINAL',
     actions: [transactions.addKey(key.getPublicKey(), transactions.functionCallAccessKey(contractId, methods, ONE_NEAR))],
-  });
+  }));
   assertReceiptsSucceeded(result, 'add restricted key');
   const access = await provider.viewAccessKey(owner.accountId, key.getPublicKey(), { finality: 'final' });
   const permission = access.permission?.FunctionCall;
@@ -162,10 +174,10 @@ async function main() {
   const vendorKey = KeyPair.fromRandom('ed25519');
   saveKey(userId, userKey);
   saveKey(vendorId, vendorKey);
-  const userTx = await bouncer.createAccount(userId, userKey.getPublicKey(), 5n * ONE_NEAR);
+  const userTx = await setupAttempt('create user', () => bouncer.createAccount(userId, userKey.getPublicKey(), 5n * ONE_NEAR));
   assertReceiptsSucceeded(userTx, 'create user');
   console.log(`    ✅ ${userId}  tx: ${txUrl(userTx.transaction_outcome.id)}`);
-  const vendorTx = await bouncer.createAccount(vendorId, vendorKey.getPublicKey(), ONE_NEAR / 2n);
+  const vendorTx = await setupAttempt('create vendor', () => bouncer.createAccount(vendorId, vendorKey.getPublicKey(), ONE_NEAR / 2n));
   assertReceiptsSucceeded(vendorTx, 'create vendor');
   console.log(`    ✅ ${vendorId}  tx: ${txUrl(vendorTx.transaction_outcome.id)}`);
   const user = accountFor(userId, userKey);

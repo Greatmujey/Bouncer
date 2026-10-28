@@ -122,6 +122,17 @@ test('invalid owner authority fails before the model is contacted', async () => 
   assert.equal(validatePlanningConfig(config()).resources.compute.payee, 'compute.testnet');
 });
 
+test('the owner can pin a 64-hex implicit testnet token without letting the model choose it', () => {
+  const c = config(), implicit = 'a'.repeat(64);
+  c.resources.api.token = implicit;
+  const goals = goalsFromModel(proposal(), c);
+  assert.equal(goals.goals[2].token, implicit);
+  for (const invalid of ['a'.repeat(63), 'A'.repeat(64), 'g'.repeat(64), 'a'.repeat(65)]) {
+    c.resources.api.token = invalid;
+    assert.throws(() => validatePlanningConfig(c), /token and payee/);
+  }
+});
+
 test('model transport sends only objective and capability names, prohibits redirects and does not leak errors', async () => {
   const seen = [];
   const client = createModelClient({ endpoint: 'https://model.example/v1/chat/completions', model: 'model-a', apiKey: 'private-api-key', fetchImpl: async (url, options) => {

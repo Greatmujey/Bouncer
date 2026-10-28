@@ -94,6 +94,25 @@ test('refund proof rejects a missing failed receipt, missing callback, or unrefu
 });
 
 
+test('fresh security-demo account setup retries only one explicit pre-admission expiry', () => {
+  const recovered = runDemo('setup_expired_once');
+  assert.equal(recovered.status, 0, recovered.stderr);
+  assert.match(recovered.stderr, /Testnet security setup create user: explicit expired transaction; retrying once/);
+  assert.match(recovered.stdout, /All checks passed/);
+  for (const mode of ['setup_expired_twice', 'setup_timeout', 'setup_expired_with_outcome']) {
+    const result = runDemo(mode);
+    assert.equal(result.status, 1); assert.doesNotMatch(result.stdout, /All checks passed/);
+    assert.equal((result.stderr.match(/retrying once/g) || []).length, mode === 'setup_expired_twice' ? 1 : 0);
+  }
+});
+
+test('security demo never retries an expired allowed payment as setup', () => {
+  const result = runDemo('payment_expired');
+  assert.equal(result.status, 1); assert.match(result.stderr, /Transaction has expired/);
+  assert.doesNotMatch(result.stderr, /retrying once/);
+  assert.doesNotMatch(result.stdout, /All checks passed/);
+});
+
 test('only the deliberately unregistered refund probe retries one explicit Expired error', () => {
   const recovered = runDemo('probe_expired_once');
   assert.equal(recovered.status, 0, recovered.stderr);

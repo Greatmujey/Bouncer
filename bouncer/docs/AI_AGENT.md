@@ -7,8 +7,8 @@ existing restricted-key runner for testnet policy checks, payments and local
 delivery. The model proposes work; it does **not** choose a contract, policy,
 FT, payee, price limit, key or endpoint. An optional comparison selects the
 lowest valid quote among explicitly owner-approved providers for the same token.
-This is not a public marketplace, a commercial cloud integration or audited
-software. Do not use real funds.
+This is not a marketplace purchasing integration, a commercial cloud integration
+or audited software. Do not use real funds.
 
 ## What is enforced
 
@@ -59,6 +59,21 @@ model/provider endpoints, RPC, the host and deployed contract code must be trust
 A contract version string is not code attestation. Non-atomic previews can go
 stale. There is no distributed idempotency; deleting/changing a journal or using
 another host can cause duplicate payments. See [THREAT_MODEL.md](THREAT_MODEL.md).
+
+The planner can accept an owner-pinned 64-hex implicit token ID in addition to a
+`.testnet` token ID. Such an ID does not identify a network by itself: the
+runner and standalone configured provider require an RPC reporting testnet,
+which can still lie. This is format support only; no USDC/stablecoin purchase
+has been tested. The development provider also accepts an explicit
+`owner_account_id` distinct from `contract_id`; it pins both for transaction
+verification. That arrangement currently has mock coverage, not a live proof.
+
+The development provider permits up to eight distinct in-flight redemptions and
+coalesces identical concurrent requests for the same transaction; excess work is
+rejected, not queued. A state-write error stops that instance for manual
+reconciliation. This improves bounded single-process I/O concurrency only: it
+has synchronous CPU/filesystem work, no fsync guarantee, authentication, TLS or
+multi-process/distributed replay protection and is **not production infrastructure**.
 
 ## Use a prepared testnet deployment
 
@@ -316,6 +331,16 @@ JavaScript tests, Rust tests and wasm build also passed; its security job was
 not run. These are testnet payments to development services, not proof of an
 independent provider or future storage availability.
 
+A [later AI-planned live test](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40675524400/job/122773588238)
+paid the first compute task, injected an incorrect reply locally, and checked
+that the storage and API vendor balances remained zero before recovery. It then
+reused [that first transaction](https://testnet.nearblocks.io/txns/SVdv3Fc4dMwSxChpCfvijiVUDx3A4478U5gcwHAWjJV)
+and verified the remaining deliveries. The [deterministic job](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40675524400/job/122773587854)
+passed the same first-delivery gate. Both used self-hosted services; the fault
+was not provider misconduct. The workflow's separate security smoke job failed
+on an explicit testnet expiry while creating a user account, before that smoke
+test reached its security probes.
+
 ## Read-only market discovery
 
 `npm run discover --prefix bouncer -- --query research --limit 5` independently
@@ -327,7 +352,8 @@ names, descriptions, statistics and availability are untrusted: they can contain
 prompt injection or misleading claims. Never treat a listing as an allowlist
 entry, provider endorsement or payment authority. Any future integration needs
 separate owner approval, a compatible policy-enforced payment flow and real
-provider interoperability testing.
+provider interoperability testing. The [live read-only probe](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40675524400/job/122772818985)
+returned three listings; no provider was vetted or hired.
 
 ## Verification
 

@@ -302,6 +302,7 @@ async function main() {
     if (options['local-provider']) {
       const localConfig = JSON.parse(fs.readFileSync(options['local-provider'], 'utf8'));
       if (localConfig.contract_id !== config.contract_id) throw new Error('local provider contract does not match the goals file');
+      if ((localConfig.owner_account_id ?? localConfig.contract_id) !== config.owner_account_id) throw new Error('local provider owner does not match the goals file');
       local = await startConfiguredProvider(localConfig);
       const configured = new URL(providerUrl);
       const ephemeral = localConfig.port === 0 && configured.origin === 'http://127.0.0.1:0';

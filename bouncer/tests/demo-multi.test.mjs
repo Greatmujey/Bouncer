@@ -7,12 +7,12 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-function run(mode = '', ai = false, publicData = false, compare = false, badDelivery = false) {
+function run(mode = '', ai = false, publicData = false, compare = false, badDelivery = false, separateOwner = false) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'bouncer-multi-test-'));
   try {
     const child = spawnSync(process.execPath, ['--import=./bouncer/tests/mock-multi-near.mjs', 'bouncer/demo-multi-resource.mjs'], {
       cwd: repo, env: { ...process.env, HOME: home, BOUNCER_MOCK_MODE: mode, BOUNCER_DEMO_AI: ai ? '1' : '', BOUNCER_DEMO_PUBLIC_DATA: publicData ? '1' : '',
-        BOUNCER_DEMO_COMPARE: compare ? '1' : '', BOUNCER_DEMO_BAD_DELIVERY: badDelivery ? '1' : '',
+        BOUNCER_DEMO_COMPARE: compare ? '1' : '', BOUNCER_DEMO_BAD_DELIVERY: badDelivery ? '1' : '', BOUNCER_DEMO_SEPARATE_OWNER: separateOwner ? '1' : '',
         BOUNCER_LLM_URL: 'https://model.example/v1/chat/completions', BOUNCER_LLM_MODEL: 'mock-model' }, encoding: 'utf8', timeout: 30_000,
     });
     const dir = path.join(home, '.bouncer', 'testnet');
@@ -53,6 +53,18 @@ test('multi-token setup and real procurement runner complete using a mock transp
   assert.equal((result.stdout.match(/\[resource-agent\] FULFILLED /g) || []).length, 6);
   assert.equal((result.stdout.match(/VERIFIED /g) || []).length, 3);
   assert.match(result.stdout, /Provider rejected a changed order/);
+});
+
+test('distinct owner and contract work across modeled goals, policy payments and provider verification in mocks', () => {
+  const result = run('', true, true, true, true, true);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Separate owner signed the guarded payment/);
+  assert.notEqual(result.goals.owner_account_id, result.goals.contract_id);
+  assert.equal(result.provider.owner_account_id, result.goals.owner_account_id);
+  assert.equal(result.owner.owner_account_id, result.goals.owner_account_id);
+  assert.equal(result.journal.owner_account_id, result.goals.owner_account_id);
+  assert.equal(result.journal.entries.filter(entry => entry.delivery?.status === 'verified').length, 5);
+  assert.match(result.stdout, /First locally corrupted reply stopped the batch/);
 });
 
 test('demo setup retries only an explicit pre-admission Expired error once', () => {
