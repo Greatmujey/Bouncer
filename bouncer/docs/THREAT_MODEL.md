@@ -52,7 +52,10 @@ all possible callback or token failure cases.
    requests independently. The resource agent (and its MCP preview) makes
    tentative shared-budget and vault reservations and aborts a blocked batch
    before new payments, but views are not atomic and cannot guarantee later
-   authorization or prevent partial execution if the chain changes.
+   authorization or prevent partial execution if the chain changes. Each
+   newly paid delivery must pass its bounded checks and persist a receipt before
+   the resource runner submits another payment. Failure or an execution-time
+   policy block halts later unpaid goals, but cannot undo an earlier transfer.
 6. **Policies and tokens are shared.** Policy-specific key grants isolate which
    policy a key may use, but policies may share the same token vault. Caps are
    denominated in token units, not USD; there is no price oracle. Rebinding a
@@ -72,9 +75,16 @@ all possible callback or token failure cases.
    curated quote selection is separate: it contacts only owner-configured
    endpoints, compares one token at a time, rejects mismatched or unavailable
    quotes, and requotes the selected price before the guarded runner may pay.
-   It sends full order inputs to every candidate. A dishonest approved provider
-   may underbid and refuse delivery; unsigned quotes have no expiry or guarantee.
-   New-format entries record the payment request and provider route before
+   It may send full order inputs to every candidate, with up to five requests
+   in flight. A failed quote stops queued work but cannot recall inputs already
+   sent. A dishonest approved provider may underbid and refuse delivery;
+   unsigned quotes have no expiry or guarantee.
+   A separate fixed-origin Agent Market discovery command reads a bounded public
+   catalog only: query terms are disclosed and listing text/metrics are untrusted
+   and can contain prompt injection. They never authorize payment or modify the
+   planner or allowlist. The marketplace's advertised mainnet x402 delegated FT
+   transfer is not controlled by the existing restricted-key policy and is not
+   implemented here. New-format entries record the payment request and provider route before
    submission. Completed payments can recover without a fresh quote and reject
    changed routes; legacy entries may lack either safeguard and still require
    the original quote. Provider or independent-source outages can still block

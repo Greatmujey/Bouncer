@@ -70,6 +70,52 @@ test('ties use owner order, not asynchronous response order', async () => {
   assert.equal(calls[0].url, 'https://alternative.example');
 });
 
+test('large comparisons bound quote concurrency and preserve owner order', async () => {
+  const c = config();
+  c.max_tasks = 10; c.required_resources = ['compute']; delete c.resources.storage;
+  c.resources.compute.max_tasks = 10;
+  c.resources.compute.max_total_amount = '1000000000000000000000';
+  c.resources.compute.alternatives = Array.from({ length: 4 }, (_, i) => ({
+    id: `alt${i}`, provider_url: `https://vendor${i}.example`, policy_id: `policy${i}`,
+    payee: `vendor${i}.testnet`, max_amount: c.resources.compute.max_amount,
+  }));
+  const tasks = Array.from({ length: 10 }, (_, i) => ({ resource: 'compute', input: { text: `work ${i}`, rounds: 2 } }));
+  const proposedGoals = goalsFromModel({ tasks }, c);
+  let active = 0, maximum = 0, calls = 0;
+  const createClient = url => ({ getQuote: async ({ resource, input }) => {
+    calls++; active++; maximum = Math.max(maximum, active);
+    await new Promise(resolve => setTimeout(resolve, url === c.provider_url ? 4 : 2));
+    active--;
+    const index = c.resources.compute.alternatives.findIndex(offer => offer.provider_url === url);
+    const offer = index < 0 ? c.resources.compute : c.resources.compute.alternatives[index];
+    return { resource, policy_id: offer.policy_id, token: c.resources.compute.token, payee: offer.payee,
+      amount: '80', memo: orderMemo(resource, input) };
+  } });
+  const result = await compareApprovedQuotes({ config: c, proposedGoals, createClient });
+  assert.equal(calls, 50); assert.equal(maximum, 5); assert.equal(active, 0);
+  assert.ok(result.goals.every(goal => goal.provider_id === 'primary'));
+  assert.deepEqual(result.goals.map(goal => goal.id), tasks.map((_, i) => `compute-${i + 1}`));
+  assert.deepEqual(result.quote_comparisons[0].quotes.map(quote => quote.provider_id), ['primary', 'alt0', 'alt1', 'alt2', 'alt3']);
+});
+
+test('a failed quote stops queued requests and waits for in-flight requests; no partial selection escapes', async () => {
+  const c = config(); c.max_tasks = 4; c.required_resources = ['compute']; delete c.resources.storage;
+  c.resources.compute.max_tasks = 4; c.resources.compute.max_total_amount = '400000000000000000000';
+  const tasks = Array.from({ length: 4 }, (_, i) => ({ resource: 'compute', input: { text: `work ${i}`, rounds: 2 } }));
+  let active = 0, calls = 0;
+  const createClient = url => ({ getQuote: async ({ resource, input }) => {
+    calls++; active++;
+    if (url === c.provider_url && input.text === 'work 0') { active--; throw new Error('offline'); }
+    await new Promise(resolve => setTimeout(resolve, 5));
+    active--;
+    const offer = url === c.provider_url ? c.resources.compute : c.resources.compute.alternatives[0];
+    return { resource, policy_id: offer.policy_id, token: c.resources.compute.token, payee: offer.payee,
+      amount: '80', memo: orderMemo(resource, input) };
+  } });
+  await assert.rejects(compareApprovedQuotes({ config: c, proposedGoals: goalsFromModel({ tasks }, c), createClient }), /comparison failed: offline/);
+  assert.ok(calls <= 5); assert.equal(active, 0);
+});
+
 test('mismatched token, payee, policy, memo, invalid prices and unavailable providers abort all selection', async () => {
   const cases = [
     [{ token: 'other.testnet' }, /does not match/], [{ payee: 'attacker.testnet' }, /does not match/],

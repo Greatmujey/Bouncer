@@ -113,6 +113,40 @@ test('a changed on-chain policy after preview can still cause partial execution'
   assert.equal(f.calls, 1);
 });
 
+test('an execution-time policy block defers later unpaid goals instead of continuing', async () => {
+  const f = fixture();
+  f.base.goals.push(goal('three', 'third'));
+  const call = f.base.provider.callFunction; let checks = 0, fulfilled = 0;
+  f.base.provider.callFunction = async (...args) => {
+    if (args[1] === 'check' && ++checks === 5) return [false, 'changed after preview'];
+    return call(...args);
+  };
+  f.base.fulfill = async ({ input }) => { fulfilled++; return computeResult(input); };
+  const result = await runResourceAgent(f.base);
+  assert.equal(result.payments.paid, 1);
+  assert.equal(result.payments.blocked, 1);
+  assert.equal(result.payments.deferred, 1);
+  assert.deepEqual(result.checks.map(check => check.status), ['READY', 'BLOCKED', 'DEFERRED']);
+  assert.equal(f.calls, 1); assert.equal(fulfilled, 1);
+  assert.equal(f.entries.get('one').delivery.status, 'verified');
+  assert.equal(f.entries.has('two'), false); assert.equal(f.entries.has('three'), false);
+});
+
+test('missing or changed post-payment journal entries fail closed before another payment', async () => {
+  for (const mode of ['missing', 'transaction', 'fingerprint']) {
+    const f = fixture(), get = f.base.journal.get;
+    f.base.journal.get = id => {
+      const entry = get(id);
+      if (id !== 'one' || entry?.status !== 'completed') return entry;
+      if (mode === 'missing') return undefined;
+      if (mode === 'transaction') return { ...entry, tx_hash: 'different-tx' };
+      return { ...entry, fingerprint: 'different-fingerprint' };
+    };
+    await assert.rejects(runResourceAgent(f.base), /confirmed payment.*(missing|changed)/);
+    assert.equal(f.calls, 1); assert.equal(f.entries.has('two'), false);
+  }
+});
+
 test('an invalid or unavailable aggregate view is not treated as approval', async () => {
   for (const bad of ['-1', '1e3', (1n << 128n).toString(), null]) {
     const f = fixture();

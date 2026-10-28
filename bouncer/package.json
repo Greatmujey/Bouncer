@@ -11,6 +11,7 @@
     "agent": "node agent/procurement.mjs",
     "solver": "node agent/solver.mjs",
     "quote": "node agent/intents.mjs quote",
+    "discover": "node agent/market-discovery.mjs",
     "market": "node agent/intents.mjs market",
     "demo": "node demo-multi-resource.mjs",
     "simulation": "echo \"Offline simulation only: open demo/index.html; no transactions are sent.\"",

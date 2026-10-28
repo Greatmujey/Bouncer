@@ -83,8 +83,10 @@ export function requestFingerprint(request) {
  * get(id) and put(id, entry); every live payment is marked pending BEFORE it
  * is sent. An unresolved pending entry is never retried automatically.
  */
-export async function runProcurement({ plan: rawPlan, provider, account, publicKey, journal, journalRoutes, execute = false, log = console.log, onCheck = () => {} }) {
+export async function runProcurement({ plan: rawPlan, provider, account, publicKey, journal, journalRoutes, execute = false,
+  log = console.log, onCheck = () => {}, onPaid = async () => {}, stopOnBlocked = false }) {
   const plan = validatePlan(rawPlan);
+  if (typeof onPaid !== 'function' || typeof stopOnBlocked !== 'boolean') throw new Error('invalid procurement execution hooks');
   let routes;
   if (journalRoutes !== undefined) {
     if (!(journalRoutes instanceof Map) || journalRoutes.size !== plan.requests.length) throw new Error('invalid payment journal routes');
@@ -110,6 +112,7 @@ export async function runProcurement({ plan: rawPlan, provider, account, publicK
   }
 
   const totals = { paid: 0, blocked: 0, skipped: 0, ready: 0 };
+  let stopNewPayments = false;
   for (const request of plan.requests) {
     const hash = requestFingerprint(request);
     const previous = journal?.get(request.id);
@@ -122,6 +125,12 @@ export async function runProcurement({ plan: rawPlan, provider, account, publicK
     }
     if (previous) {
       throw new Error(`${request.id}: unresolved pending payment; inspect the chain and journal before retrying`);
+    }
+    if (stopNewPayments) {
+      onCheck({ id: request.id, status: 'DEFERRED', reason: 'A previous execution-time policy check blocked the batch.' });
+      log(`[procurement] DEFERRED ${request.id}: no payment submitted after an earlier block`);
+      totals.deferred = (totals.deferred || 0) + 1;
+      continue;
     }
 
     const policy = await provider.callFunction(plan.contract_id, 'get_policy', { policy_id: request.policy_id }, { finality: 'final' });
@@ -140,6 +149,7 @@ export async function runProcurement({ plan: rawPlan, provider, account, publicK
       onCheck({ id: request.id, status: 'BLOCKED', reason: decision[1] });
       log(`[procurement] BLOCKED ${request.id} (${request.resource}): ${decision[1]}`);
       totals.blocked++;
+      if (execute && stopOnBlocked) stopNewPayments = true;
       continue;
     }
     if (!execute) {
@@ -185,6 +195,10 @@ export async function runProcurement({ plan: rawPlan, provider, account, publicK
       const reference = txHash ? ` (tx ${txHash})` : '';
       throw new Error(`${request.id}: payment could not be confirmed${reference}; journal may be pending or uncertain, do not retry automatically: ${error.message}`, { cause: error });
     }
+    // Payment and its journal entry are already confirmed. Delivery failures
+    // must not be mislabeled as uncertain payments, and must stop the loop
+    // before any later request can be sent.
+    await onPaid({ id: request.id, tx_hash: txHash });
   }
   return totals;
 }

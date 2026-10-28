@@ -99,6 +99,21 @@ jobs:
             git push
           fi
 
+  independent-market-discovery:
+    name: Independent marketplace catalog (read only)
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[independent-discovery]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Read public catalog (no credentials or payments)
+        run: node bouncer/scripts/probe-market-discovery.mjs
+
   testnet-smoke:
     name: Live testnet restricted-key smoke test
     if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && contains(github.event.head_commit.message, '[testnet-smoke]'))

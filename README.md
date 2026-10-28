@@ -8,7 +8,9 @@ policy checks. The v4 prototype has passed a three-token testnet quote → payme
 An optional model adapter translates natural-language objectives into tasks
 within an owner-controlled catalog, which can compare quotes from explicitly
 approved providers using the same token. The agent also checks the bounded
-example deliveries and saves local receipts; see [AI agent setup and limits](bouncer/docs/AI_AGENT.md).
+example deliveries and saves local receipts before proceeding to the next payment;
+see [AI agent setup and limits](bouncer/docs/AI_AGENT.md). A separate read-only
+command can discover untrusted public marketplace listings; it cannot hire or pay.
 No model or inference service is bundled. This is unaudited testnet software,
 not suitable for real funds.
 
@@ -109,8 +111,9 @@ Offline mocks are not proof of on-chain behavior.
   model. Delivery checks cover only the bounded example protocols: storage is
   one readback from the same provider, and GitHub checking covers repository
   identity only, not the truth or freshness of its other fields. Local receipts
-  are editable records, not signed invoices. This is not a public marketplace:
-  independent vendors, invoices, stablecoin flows and NEAR Intents remain unfinished.
+  are editable records, not signed invoices. The separate public catalog search
+  is read-only, not a purchasing integration: independent vendor fulfillment,
+  invoices, stablecoin flows and NEAR Intents remain unfinished.
 - Token trust is not enforced; configure policies only for trusted FTs. Changing
   a policy's token retains its numeric spend history even if the new token has
   different units; create a new policy for a different token instead. Key
@@ -220,8 +223,9 @@ not commercial vendors.
 The optional `--compare-providers` path compares valid quotes only within the
 resource's owner-pinned token. It chooses the cheapest using exact integer
 amounts, saves the selected route and price, and rechecks that price before the
-normal on-chain policy preflight and payment. An invalid or unavailable quote
-stops the comparison. See [setup and recovery limits](bouncer/docs/AI_AGENT.md#compare-owner-approved-providers).
+normal on-chain policy preflight and payment. Up to five quotes are requested
+concurrently; an invalid or unavailable quote stops queued requests and the
+comparison fails without a partial selection. See [setup and recovery limits](bouncer/docs/AI_AGENT.md#compare-owner-approved-providers).
 
 In the [live comparison job](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40666249071/job/122742140751),
 two self-hosted development endpoints quoted 0.10 and 0.08 wNEAR for the same
@@ -235,6 +239,25 @@ That run also completed the three-resource and public-data purchases and replay
 checks. Both tests used self-hosted services, not independent commercial
 providers, and do not guarantee future delivery.
 
+### Read-only independent marketplace discovery
+
+```sh
+npm run discover --prefix bouncer -- --query research --limit 5
+```
+
+This optional command makes a bounded, fixed-origin GET to the public
+[NEAR Agent Market catalog](https://market.near.ai/v1/agents?limit=3). It has no
+wallet, credentials, model or policy access and cannot quote, hire or pay. The
+catalog is for a **mainnet marketplace**, not proof of a testnet service or any
+Bouncer-compatible vendor. Search terms are sent to the marketplace; do not use
+secrets or private objectives. Listing text, availability, payment-method labels
+and reported metrics are untrusted, may contain prompt injection, and are not
+validated quotes or endorsements. They are not fed into the planner, allowlist
+or payment runner. An owner must independently vet any potential integration.
+The advertised [x402 hiring flow](https://docs.market.near.ai/a2a/hire-agent-using-x402)
+uses direct delegated FT transfers, which would bypass the current Bouncer
+restricted-key policy. Bouncer deliberately does not perform that flow.
+
 ### Delivery checks and local receipts
 
 The resource agent recomputes bounded SHA-256 and text-statistics results,
@@ -245,7 +268,10 @@ payment, result, verification scope and result hash. A bad or unavailable
 result leaves the payment completed and delivery unverified; a new-format
 journal can retry delivery with the same transaction without fetching a new
 quote or sending another payment; the recorded provider route must still match.
-These are local, editable records—not signed
+After whole-batch preflight, each newly confirmed payment is fulfilled, checked
+and journaled **before** the next payment. An unverified delivery, receipt write
+failure or execution-time policy block stops later payments; previous payments
+cannot be rolled back. These are local, editable records—not signed
 invoices, generic compute proofs or guarantees of future storage. See the
 [verification and recovery details](bouncer/docs/AI_AGENT.md#delivery-checks-and-local-receipts).
 
@@ -343,6 +369,7 @@ real testnet transactions. To build locally with Rust and the wasm target, run
 - `bouncer/agent/procurement.mjs` — plan-driven, testnet-only procurement runner.
 - `bouncer/agent/resource-agent.mjs` — quote, guarded payment, fulfillment orchestration.
 - `bouncer/agent/verify-delivery.mjs` — bounded result checks and local receipt validation.
+- `bouncer/agent/market-discovery.mjs` — isolated, read-only public catalog search.
 - `bouncer/agent/goal-planner.mjs`, `autonomous.mjs` — model proposals constrained by the owner catalog.
 - `bouncer/agent/quote-comparison.mjs` — opt-in, same-token selection among owner-approved providers.
 - `bouncer/services/resource-provider.mjs` — self-hosted test-only resource provider.

@@ -93,6 +93,71 @@ test('a wrong compute result leaves a paid unverified record; restart recovers w
   journal.close();
 }));
 
+test('first-run verification gates every later payment and restart resumes the same batch', () => withDir(async dir => {
+  const f = fixture(dir); let journal = f.open();
+  const goals = [makeGoal('compute-1'), makeGoal('compute-2'), makeGoal('compute-3')];
+  const events = [], pay = f.options.account.callFunctionRaw;
+  f.options.account.callFunctionRaw = async (...args) => { events.push(`pay:${args[0].args.memo}`); return pay(...args); };
+  const badFulfill = async ({ input }, { goalId }) => {
+    events.push(`deliver:${goalId}`);
+    const result = computeResult(input);
+    return goalId === 'compute-1' ? { ...result, result: '0'.repeat(64) } : result;
+  };
+  await assert.rejects(runResourceAgent({ ...f.options, goals, journal, fulfill: badFulfill }), /verification failed after confirmed payment/);
+  assert.equal(f.paid, 1);
+  assert.equal(journal.get('compute-1').delivery.status, 'unverified');
+  assert.equal(journal.get('compute-2'), undefined);
+  assert.equal(journal.get('compute-3'), undefined);
+  assert.equal(events.length, 2);
+  assert.equal(events[1], 'deliver:compute-1');
+  const firstTx = journal.get('compute-1').tx_hash;
+  journal.close(); journal = f.open();
+  const getQuote = async (order, { goalId }) => {
+    if (goalId === 'compute-1') throw new Error('already paid request must not be requoted');
+    return f.options.getQuote(order);
+  };
+  events.length = 0;
+  const recovered = await runResourceAgent({ ...f.options, goals, journal, getQuote,
+    fulfill: async ({ input }, { goalId }) => { events.push(`deliver:${goalId}`); return computeResult(input); } });
+  assert.equal(recovered.payments.skipped, 1); assert.equal(recovered.payments.paid, 2);
+  assert.equal(journal.get('compute-1').tx_hash, firstTx);
+  assert.equal(f.paid, 3);
+  assert.deepEqual(events.map(event => event.startsWith('pay:') ? 'pay' : event),
+    ['deliver:compute-1', 'pay', 'deliver:compute-2', 'pay', 'deliver:compute-3']);
+  assert.ok(goals.every(goal => journal.get(goal.id).delivery.status === 'verified'));
+  journal.close();
+}));
+
+test('a failure to persist a verified receipt stops before another payment', () => withDir(async dir => {
+  const f = fixture(dir), journal = f.open();
+  const put = journal.put.bind(journal);
+  journal.put = (id, entry) => { if (entry.delivery?.status === 'verified') throw new Error('receipt disk failure'); return put(id, entry); };
+  const goals = [makeGoal('compute-1'), makeGoal('compute-2')];
+  await assert.rejects(runResourceAgent({ ...f.options, goals, journal }), /receipt disk failure/);
+  assert.equal(f.paid, 1);
+  assert.equal(journal.get('compute-1').status, 'completed');
+  assert.equal(journal.get('compute-2'), undefined);
+  journal.close();
+}));
+
+test('a later bad delivery leaves prior verified work intact and does not pay remaining goals', () => withDir(async dir => {
+  const f = fixture(dir), journal = f.open();
+  const goals = [makeGoal('compute-1'), makeGoal('compute-2'), makeGoal('compute-3')];
+  const fulfill = async ({ input }, { goalId }) => goalId === 'compute-2'
+    ? { ...computeResult(input), result: '0'.repeat(64) } : computeResult(input);
+  await assert.rejects(runResourceAgent({ ...f.options, goals, journal, fulfill }), /verification failed after confirmed payment/);
+  assert.equal(f.paid, 2);
+  assert.equal(journal.get('compute-1').delivery.status, 'verified');
+  assert.equal(journal.get('compute-2').delivery.status, 'unverified');
+  assert.equal(journal.get('compute-3'), undefined);
+  const previousHashes = [journal.get('compute-1').tx_hash, journal.get('compute-2').tx_hash];
+  const recovered = await runResourceAgent({ ...f.options, goals, journal });
+  assert.equal(recovered.payments.skipped, 2); assert.equal(recovered.payments.paid, 1);
+  assert.deepEqual([journal.get('compute-1').tx_hash, journal.get('compute-2').tx_hash], previousHashes);
+  assert.equal(f.paid, 3);
+  journal.close();
+}));
+
 test('an earlier unverified delivery is checked again before any new batch payment', () => withDir(async dir => {
   const f = fixture(dir); const journal = f.open();
   const badFulfill = async ({ input }) => ({ ...computeResult(input), result: '0'.repeat(64) });

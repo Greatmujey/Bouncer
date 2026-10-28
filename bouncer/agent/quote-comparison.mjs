@@ -8,6 +8,25 @@ import { goalsFromModel, validatePlanningConfig } from './goal-planner.mjs';
 import { httpResourceProvider, planFromQuotes } from './resource-agent.mjs';
 
 const allowedGoalKeys = ['id', 'resource', 'input', 'policy_id', 'token', 'payee', 'max_amount'];
+const MAX_QUOTES_IN_FLIGHT = 5;
+
+// Limit simultaneous external requests and retain owner order regardless of
+// response timing. Once any quote fails, start no queued requests and wait for
+// already-started ones to settle; callers must never use a partial selection.
+async function boundedQuotes(candidates, work) {
+  const results = new Array(candidates.length);
+  let cursor = 0, failure;
+  async function worker() {
+    while (!failure && cursor < candidates.length) {
+      const index = cursor++;
+      try { results[index] = await work(candidates[index]); }
+      catch (error) { failure ||= error instanceof Error ? error : new Error('quote failed'); }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(MAX_QUOTES_IN_FLIGHT, candidates.length) }, worker));
+  if (failure) throw failure;
+  return results;
+}
 
 /**
  * Reconstruct the proposal from task inputs and the owner catalog, so callers
@@ -51,7 +70,7 @@ export async function compareApprovedQuotes({ config: rawConfig, proposedGoals, 
   // All candidates must respond with valid comparable quotes. An unavailable,
   // malformed, changed-token or unauthorized quote aborts the entire comparison;
   // no silent fallback to a more expensive provider and no payment is made here.
-  const results = await Promise.all(groups.map(group => Promise.all(group.map(async candidate => {
+  const quoted = await boundedQuotes(groups.flat(), async candidate => {
     try {
       const plan = await planFromQuotes({ contractId: config.contract_id, ownerAccountId: config.owner_account_id,
         goals: [candidate.goal], getQuote: candidate.client.getQuote });
@@ -60,7 +79,9 @@ export async function compareApprovedQuotes({ config: rawConfig, proposedGoals, 
       const message = String(error?.message || 'quote failed').replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 200);
       throw new Error(`${candidate.goal.id}/${candidate.offer.id}: comparison failed: ${message}`);
     }
-  }))));
+  });
+  let offset = 0;
+  const results = groups.map(group => { const slice = quoted.slice(offset, offset + group.length); offset += group.length; return slice; });
 
   const comparisons = [];
   const selectedGoals = results.map((quotes, index) => {

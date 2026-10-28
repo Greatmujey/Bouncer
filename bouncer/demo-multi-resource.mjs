@@ -287,7 +287,9 @@ async function main() {
   }));
   // The optional AI path uses the model-generated input and independently
   // checked owner-pinned financial fields. Default mode remains deterministic.
-  const goals = aiGoals || configuredGoals;
+  // The owner-defined order controls execution priority; model output order
+  // must not decide which resource gets paid first.
+  const goals = aiGoals ? configuredGoals.map(expected => aiGoals.find(goal => goal.id === expected.id)) : configuredGoals;
   if (aiGoals) {
     for (const expected of configuredGoals) {
       const actual = aiGoals.find(goal => goal.id === expected.id);
@@ -318,7 +320,7 @@ async function main() {
   const baseUrl = `http://127.0.0.1:${devProvider.server.address().port}`;
   const client = httpResourceProvider(baseUrl);
   let journal, alternateProvider;
-  let proof, comparisonProof, deliveryProof;
+  let proof, comparisonProof, deliveryProof, gatedBatchProof;
   try {
     journal = new FileJournal(journalPath, bid, bid);
     const runner = {
@@ -331,8 +333,42 @@ async function main() {
       },
       provider, account: account(bid, agentKey), publicKey: agentKey.getPublicKey(), journal, execute: true,
     };
-    const first = await runResourceAgent(runner);
-    if (first.payments.paid !== 3 || first.payments.blocked || first.payments.skipped || first.deliveries.length !== 3) {
+    let first;
+    if (badDeliveryDemo) {
+      // Inject a local fault after the FIRST real payment, then prove neither
+      // later vendor is paid until this delivery has been recovered. This is
+      // a transport fault, not evidence of a dishonest provider.
+      let injected = 0, rejected = false;
+      const faulty = { ...runner, fulfill: async (order, context) => {
+        const actual = await client.fulfill(order);
+        if (context.goalId !== 'compute-1') throw new Error('later delivery was attempted before the first result was checked');
+        injected++;
+        return { ...actual, result: '0'.repeat(64) };
+      } };
+      try { await runResourceAgent(faulty); }
+      catch (error) {
+        if (!/verification failed after confirmed payment.*independent recomputation/.test(error.message)) throw error;
+        rejected = true;
+      }
+      const paid = journal.get('compute-1');
+      if (!rejected || injected !== 1 || paid?.status !== 'completed' || paid.delivery?.status !== 'unverified' ||
+          journal.get('storage-1') || journal.get('api-1')) throw new Error('unverified first delivery did not stop the batch');
+      exact(await view(WNEAR, 'ft_balance_of', { account_id: vendorIds.compute }), resources[0].payment, 'first paid compute vendor');
+      exact(await view(storageToken, 'ft_balance_of', { account_id: vendorIds.storage }), 0n, 'storage vendor before recovery');
+      exact(await view(apiToken, 'ft_balance_of', { account_id: vendorIds.api }), 0n, 'API vendor before recovery');
+      const priorTx = paid.tx_hash;
+      first = await runResourceAgent({ ...runner, getQuote: async (order, context) => {
+        if (context.goalId === 'compute-1') throw new Error('paid compute must not be requoted');
+        return client.getQuote(order);
+      } });
+      if (journal.get('compute-1').tx_hash !== priorTx) throw new Error('recovery changed the original compute payment');
+      gatedBatchProof = `contract=${bid}; first_tx=${priorTx}; injected-bad-result=rejected; later-vendors-before-recovery=0; recovery=same-first-payment-then-verified-rest`;
+      console.log('    ✅ First locally corrupted reply stopped the batch before storage/API payments; recovery reused the first payment.');
+    } else {
+      first = await runResourceAgent(runner);
+    }
+    if (first.payments.paid !== (badDeliveryDemo ? 2 : 3) || first.payments.blocked ||
+        first.payments.skipped !== (badDeliveryDemo ? 1 : 0) || first.deliveries.length !== 3) {
       throw new Error(`unexpected agent result: ${JSON.stringify(first)}`);
     }
     const second = await runResourceAgent(runner);
@@ -524,6 +560,7 @@ async function main() {
     console.log(`::notice title=${label}::contract=${bid}; ${proof}`);
     if (comparisonProof) console.log(`::notice title=Owner-approved provider comparison proof::${comparisonProof}`);
     if (deliveryProof) console.log(`::notice title=Delivery verification and recovery proof::${deliveryProof}`);
+    if (gatedBatchProof) console.log(`::notice title=Verify-before-next-payment proof::${gatedBatchProof}`);
   }
   console.log(`Contract: ${bid}`);
   console.log(`Explorer: https://testnet.nearblocks.io/address/${bid}?tab=receipts`);

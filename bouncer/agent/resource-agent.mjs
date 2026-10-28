@@ -127,9 +127,18 @@ export async function runResourceAgent({ contractId, ownerAccountId, goals, getQ
   } });
   const summary = await reservePreview(provider, plan, checks, preview);
   const delivered = new Map();
-  async function deliverPaid(i) {
-    const goal = goals[i], request = plan.requests[i], entry = journal.get(goal.id);
-    if (!entry || entry.status !== 'completed' || !entry.tx_hash) return;
+  async function deliverPaid(i, required = false, expectedTx = null) {
+    const goal = goals[i], request = plan.requests[i];
+    if (!goal || !request) throw new Error('missing goal for confirmed payment');
+    const entry = journal.get(goal.id);
+    if (!entry || entry.status !== 'completed' || !entry.tx_hash) {
+      if (required) throw new Error(`${goal.id}: confirmed payment is missing from the journal; stop and reconcile manually`);
+      return;
+    }
+    if (entry.fingerprint !== requestFingerprint(request) || (expectedTx && entry.tx_hash !== expectedTx) ||
+        (entry.provider_route !== undefined && JSON.stringify(normalizeProviderRoute(entry.provider_route)) !== JSON.stringify(journalRoutes.get(goal.id)))) {
+      throw new Error(`${goal.id}: confirmed payment journal entry changed; stop and reconcile manually`);
+    }
     const input = normalizeOrder(goal.resource, goal.input), context = { goalId: goal.id };
     let stage = 'fulfillment', verified;
     try {
@@ -163,12 +172,22 @@ export async function runResourceAgent({ contractId, ownerAccountId, goals, getQ
   // Recheck/recover already-paid deliveries before spending on any new goal.
   // A bad or unavailable earlier delivery aborts this run without new payments.
   if (execute) {
-    for (let i = 0; i < checks.length; i++) if (checks[i].status === 'SKIPPED') await deliverPaid(i);
+    for (let i = 0; i < checks.length; i++) if (checks[i].status === 'SKIPPED') await deliverPaid(i, true);
   }
   let payments;
   if (execute && !summary.blocked) {
     log('[resource-agent] Batch preflight passed; these non-atomic views are not a guarantee.');
-    payments = await runProcurement({ plan, provider, account, publicKey, journal, journalRoutes, execute: true, log });
+    const indexById = new Map(plan.requests.map((request, index) => [request.id, index]));
+    payments = await runProcurement({ plan, provider, account, publicKey, journal, journalRoutes, execute: true, log, stopOnBlocked: true,
+      onCheck: check => {
+        if (check.status === 'BLOCKED' || check.status === 'DEFERRED') {
+          const index = indexById.get(check.id);
+          checks[index] = { id: check.id, status: check.status,
+            reason: String(check.reason || 'Policy rejected the request.').replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 200) };
+        }
+      },
+      onPaid: async ({ id, tx_hash }) => { await deliverPaid(indexById.get(id), true, tx_hash); },
+    });
   } else {
     for (let i = 0; i < checks.length; i++) {
       const check = checks[i], request = plan.requests[i];

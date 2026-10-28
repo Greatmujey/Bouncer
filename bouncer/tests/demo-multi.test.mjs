@@ -129,13 +129,14 @@ test('mocked combined run rejects an injected bad delivery and recovers the same
   const result = run('', true, true, true, true);
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /Injected an incorrect local reply after payment: rejected, then recovered with the same transaction and no requote/);
+  assert.match(result.stdout, /First locally corrupted reply stopped the batch before storage\/API payments; recovery reused the first payment/);
   assert.match(result.stdout, /Private journal receipts bind payments to agent-checked results/);
   assert.equal(result.journal.entries.filter(e => e.status === 'completed' && e.delivery?.status === 'verified').length, 5);
   assert.equal(result.journal.entries.find(e => e.id === 'compute-market-1').delivery.receipt.verification.scope, 'iterated-sha256');
   assert.equal(result.journal.entries.find(e => e.id === 'storage-1').delivery.receipt.verification.scope, 'single-read-content');
   assert.equal(result.journal.entries.find(e => e.id === 'api-github-1').delivery.receipt.verification.scope, 'repository-identity-only');
   assert.equal((result.stdout.match(/\[procurement\] PAID /g) || []).length, 5);
-  assert.equal((result.stdout.match(/\[procurement\] SKIP /g) || []).length, 6);
+  assert.equal((result.stdout.match(/\[procurement\] SKIP /g) || []).length, 7);
 });
 
 test('an inaccurate model comparison task fails before any account setup', () => {

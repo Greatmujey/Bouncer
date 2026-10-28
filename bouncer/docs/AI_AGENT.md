@@ -218,11 +218,13 @@ unreviewed testnet spending. `--compare-providers` cannot be combined with
 `--local-provider`: comparison needs all the providers running beforehand.
 Without the flag, the primary is used and alternatives are not contacted.
 
-Comparison sends each task's normalized **full input** to every approved
-candidate, which can retain it. No quote is sent to the model. All candidates
-must return an authorized, order-bound quote; one unavailable, over-cap or
-invalid response aborts the comparison with no selection or payment. The
-selected origin, policy, payee and **exact quote amount** are saved privately.
+Comparison can send each task's normalized **full input** to every approved
+candidate, which can retain it. No quote is sent to the model. At most five
+quotes are in flight concurrently; all candidates must return an authorized,
+order-bound quote. One unavailable, over-cap or invalid response stops queued
+requests, waits for in-flight requests and aborts with no selection or payment.
+Ties still follow owner order, not response timing. The selected origin, policy,
+payee and **exact quote amount** are saved privately.
 Before a **new** payment, the runner requotes that same provider and refuses
 even a lower changed amount. For a confirmed payment with a recorded request,
 recovery reuses that request without requoting or paying again. A quote has no
@@ -275,11 +277,15 @@ a refund for a bad delivery.
 
 An invalid response or failed readback never receives a verified receipt. The
 completed payment remains in the journal as completed, with delivery marked
-`unverified`; subsequent attempts reuse that payment. On a later run, already
-paid deliveries are rechecked before any new batch payments. On the **first**
-run, however, separate batch payments may already have completed before the
-first delivery is checked; there is no rollback. If an already verified result
-later changes, the agent refuses to overwrite its receipt. Keep the original
+`unverified`; subsequent attempts reuse that payment. After the whole-batch
+preflight passes, each newly paid delivery is verified and its receipt persisted
+before the next payment is sent. Failure to fulfill, verify or persist stops
+later payments. A policy rejection during execution also stops later unpaid
+goals, which are reported as `DEFERRED`. Already-paid deliveries are rechecked
+before any new batch payments on a later run. Earlier payments cannot be rolled
+back, and the non-atomic preview does not prevent a partial batch if state
+changes. If an already verified result later changes, the agent refuses to
+overwrite its receipt. Keep the original
 goals and journal; if the provider cannot reproduce a correct result,
 manual resolution is required. Deleting or altering these files can allow
 repeat payments and local records are not tamper-proof.
@@ -309,6 +315,19 @@ The GitHub receipt records **repository identity only**. The same workflow's
 JavaScript tests, Rust tests and wasm build also passed; its security job was
 not run. These are testnet payments to development services, not proof of an
 independent provider or future storage availability.
+
+## Read-only market discovery
+
+`npm run discover --prefix bouncer -- --query research --limit 5` independently
+reads public listings from the fixed NEAR Agent Market catalog. It does not
+read owner configuration, call a model, create quotes, change policy or pay.
+The listed marketplace advertises mainnet x402 rather than Bouncer-controlled
+testnet procurement. Search terms are disclosed to the marketplace, and its
+names, descriptions, statistics and availability are untrusted: they can contain
+prompt injection or misleading claims. Never treat a listing as an allowlist
+entry, provider endorsement or payment authority. Any future integration needs
+separate owner approval, a compatible policy-enforced payment flow and real
+provider interoperability testing.
 
 ## Verification
 
