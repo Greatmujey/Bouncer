@@ -99,6 +99,48 @@ jobs:
             git push
           fi
 
+  circle-usdc-live:
+    name: Circle testnet USDC guarded multi-resource mission
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[circle-usdc-live]')
+    needs: build-contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: bouncer-wasm
+          path: .
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      - name: Pay and verify three development resources with Circle testnet USDC
+        shell: bash
+        run: |
+          set +e
+          node bouncer/demo-circle-usdc.mjs 2>&1 | tee "$RUNNER_TEMP/circle-usdc-live.log"
+          result=${PIPESTATUS[0]}
+          if [ "$result" -ne 0 ]; then
+            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-4000).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=Circle testnet USDC live check failed::"+s)' "$RUNNER_TEMP/circle-usdc-live.log"
+          fi
+          exit "$result"
+      # These files contain public testnet orders and transaction IDs, never keys.
+      - name: Preserve unresolved public testnet journal and provider state
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: circle-usdc-unresolved-journal
+          path: |
+            /tmp/bouncer-usdc-*/journal.json
+            /tmp/bouncer-usdc-*/goals.json
+            /tmp/bouncer-usdc-*/provider-config.json
+            /tmp/bouncer-usdc-*/development-provider/**
+          if-no-files-found: ignore
+          retention-days: 7
+
   ft-call-live:
     name: Guarded independent FT funding, paid test connector and refund (testnet)
     if: github.event_name == 'push' && contains(github.event.head_commit.message, '[ft-call-live]')
