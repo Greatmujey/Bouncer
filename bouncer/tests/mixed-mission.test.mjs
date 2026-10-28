@@ -40,6 +40,13 @@ test('live mission preflights both, verifies independent compute, then executes 
   assert.deepEqual(f.calls, ['external-preview', 'ft-preview', 'external-send', 'ft-execute']);
 });
 
+test('durable direct-payment option reaches both resource preview and execution', async () => {
+  const f = fixture(), seen = [], original = f.runners.resources;
+  f.runners.resources = async options => { seen.push([options.execute, options.durablePayment]); return original(options); };
+  assert.equal((await runMixedMission({ ...f.options, resources: { ...f.options.resources, durablePayment: true }, execute: true })).status, 'FULFILLED');
+  assert.deepEqual(seen, [[false, true], [true, true]]);
+});
+
 test('either blocked preflight prevents both payment paths', async () => {
   let f = fixture();
   f.runners.outlayer = async () => { f.calls.push('external-blocked'); return { status: 'BLOCKED' }; };

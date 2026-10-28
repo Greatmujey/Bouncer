@@ -133,7 +133,7 @@ async function provePaidMission({ contract, contractId, owner, ownerId, fundingA
     const common = { provider, journal, execute: true, log: console.log,
       funding: { goal: fundingGoal, account: fundingAgent, publicKey: fundingKey.getPublicKey() },
       project: { goal: projectGoal, account: projectAgent, publicKey: projectKey.getPublicKey() },
-      resources: { contractId, ownerAccountId: ownerId, goals, account: resourceAgent, publicKey: resourceKey.getPublicKey(),
+      resources: { contractId, ownerAccountId: ownerId, goals, account: resourceAgent, publicKey: resourceKey.getPublicKey(), durablePayment: true,
         getQuote: client.getQuote, readStorage: client.readStorage } };
     let injected = false;
     try {

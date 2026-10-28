@@ -293,6 +293,7 @@ async function main() {
   if (options.help) { console.log(USAGE); return; }
   const config = JSON.parse(fs.readFileSync(options.goals, 'utf8'));
   if (!config || typeof config !== 'object' || Array.isArray(config)) throw new Error('invalid goals file');
+  if (options.durable) console.log('[resource-agent] Durable direct payments enabled: signed hashes are recorded before broadcast.');
   // Validate the configured origin before starting any provider or spending.
   httpResourceProvider(config.provider_url);
   // Check every selected route before starting a development provider.

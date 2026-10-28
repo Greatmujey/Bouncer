@@ -27,6 +27,9 @@ function fixture() {
 test('autonomous CLI only plans without a key, never overwrites, and preflights with a key', () => {
   const f = fixture();
   try {
+    const missingKey = exec([...f.args, '--durable']);
+    assert.equal(missingKey.status, 1); assert.match(missingKey.stderr, /require --key/);
+    assert.equal(fs.existsSync(f.output), false);
     const planned = exec(f.args);
     assert.equal(planned.status, 0, planned.stderr);
     assert.match(planned.stdout, /Planning only: no quotes/);
@@ -46,6 +49,12 @@ test('autonomous CLI only plans without a key, never overwrites, and preflights 
     assert.match(preview.stdout, /Dry run only/);
     assert.doesNotMatch(preview.stdout, /PAID|FULFILLED/);
     assert.equal(fs.existsSync(`${previewFile}.bouncer-journal.json`), false);
+    const durableFile = path.join(f.dir, 'durable-preview.json');
+    const durableArgs = f.args.map(x => x === f.output ? durableFile : x);
+    const durablePreview = exec([...durableArgs, '--key', f.key, '--durable']);
+    assert.equal(durablePreview.status, 0, durablePreview.stderr);
+    assert.match(durablePreview.stdout, /Durable direct payments enabled/);
+    assert.doesNotMatch(durablePreview.stdout, /PAID|FULFILLED/);
   } finally { fs.rmSync(f.dir, { recursive: true, force: true }); }
 });
 

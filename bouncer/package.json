@@ -9,6 +9,7 @@
     "test:all": "node --test packages/policy/policy.test.mjs tests/*.test.mjs",
     "build": "bash scripts/build.sh",
     "agent": "node agent/procurement.mjs",
+    "recover-direct": "node agent/recover-direct-payment.mjs",
     "outlayer": "node agent/outlayer.mjs",
     "ft-call": "node agent/ft-call.mjs",
     "outlayer-project": "node agent/outlayer-project.mjs",

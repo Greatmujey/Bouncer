@@ -6,13 +6,14 @@ import os from 'node:os';
 import path from 'node:path';
 import nearApi from 'near-api-js';
 import { FileJournal, requestFingerprint, runProcurement, validatePlan } from '../agent/procurement.mjs';
-import { recoverDirectPayment } from '../agent/recover-direct-payment.mjs';
+import { recoverDirectPayment, recoverDirectResourcePayment } from '../agent/recover-direct-payment.mjs';
+import { orderMemo } from '../services/resource-provider.mjs';
 import { isTransactionHash, verifyDirectPayment } from '../shared/direct-payment-settlement.mjs';
 
 const keyPair = nearApi.KeyPair.fromRandom('ed25519'), realSigner = new nearApi.KeyPairSigner(keyPair);
 const key = keyPair.getPublicKey().toString();
 const plan = validatePlan({ contract_id: 'bouncer.testnet', owner_account_id: 'owner.testnet', requests: [
-  { id: 'compute-1', resource: 'compute', policy_id: 'compute', token: 'wrap.testnet', payee: 'vendor.testnet', amount: '100', memo: 'reviewed-order' },
+  { id: 'compute-1', resource: 'compute', policy_id: 'compute', token: 'wrap.testnet', payee: 'vendor.testnet', amount: '100', memo: orderMemo('compute', { text: 'work', rounds: 2 }) },
 ] });
 const request = plan.requests[0], enc = value => Buffer.from(JSON.stringify(value)).toString('base64');
 const args = () => ({ policy_id: request.policy_id, payee: request.payee, amount: request.amount, memo: request.memo, expected_token: request.token });

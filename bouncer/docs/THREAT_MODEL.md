@@ -78,8 +78,9 @@ possible callback, provider or token failure cases.
    performs SHA-256 work, local-file storage, text statistics and fixed-origin
    unauthenticated GitHub data reads; it is not an independent commercial
    provider or marketplace. GitHub data is untrusted and can be unavailable
-   after payment. The multi-token test uses
-   synthetic testnet FTs, not USDC. There is no cross-chain settlement. The old
+   after payment. The older multi-token test uses synthetic testnet FTs; a
+   separate Circle testnet USDC mission also pays this self-hosted provider.
+   Testnet USDC has no real value. There is no cross-chain settlement. The old
    solver is disabled because it previously used fake fill hashes; the older
    standalone quote comparator does not settle anything. The agent's optional
    curated quote selection is separate: it contacts only owner-configured
@@ -106,11 +107,16 @@ possible callback, provider or token failure cases.
    unreliable storage can bypass the protection. The signer keeps its own
    process's nonces monotonic to mitigate stale RPC reads; it does not coordinate
    concurrent processes using the same key or
-   retry a failed send. Use one writer per key and reconcile pending payments
-   manually. For OutLayer, the signed transaction hash is journaled before the
-   one broadcast and can be re-queried without a private key; an absent or
-   expired hash is still not automatically resent. FT payments use their own
-   existing journal path and do not yet pre-record the signed hash.
+   retry a failed send. Use one writer per key. For OutLayer and opt-in
+   `--durable` direct FT payments, the signed transaction hash is journaled
+   before the one broadcast and can be re-queried without a private key. This
+   requires trusted FINAL RPC receipts, Bouncer code and token code; it verifies
+   payment, not delivery. An unknown or expired hash stays unresolved and is
+   never automatically resent. Existing direct-payment entries and runs that
+   do not opt into `--durable` may lack a pre-recorded hash and still require
+   manual reconciliation. The resource, autonomous, mixed-mission and
+   paid-mission CLIs must be explicitly run with `--durable` to use this path
+   for direct resource payments; it is not the default.
 9. **Provider verification and operations are not trustless.** The provider
    trusts its configured RPC, Bouncer deployment/code and token contracts. It
    verifies transaction arguments and receipts, but cannot protect against a

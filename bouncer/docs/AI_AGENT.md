@@ -70,8 +70,10 @@ another host can cause duplicate payments. See [THREAT_MODEL.md](THREAT_MODEL.md
 The planner can accept an owner-pinned 64-hex implicit token ID in addition to a
 `.testnet` token ID. Such an ID does not identify a network by itself: the
 runner and standalone configured provider require an RPC reporting testnet,
-which can still lie. This is format support only; no USDC/stablecoin purchase
-has been tested. The development provider also accepts an explicit
+which can still lie. A separate [Circle testnet USDC mission](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40697938370/job/122850532589)
+paid for three self-hosted development resources. Testnet USDC has no real
+value; the owner obtained it in a separate Ref swap that was not agent-guarded.
+No commercial-provider or mainnet stablecoin purchase is claimed. The development provider also accepts an explicit
 `owner_account_id` distinct from `contract_id`; it pins both for transaction
 verification. The [AI-planned testnet job](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40676850305/job/122778129850)
 used owner `user.bouncer-d1e045d2.testnet` and contract `bouncer-d1e045d2.testnet`;
@@ -144,7 +146,7 @@ the same local provider, adding `--execute`:
 ```sh
 cd /workspaces/Bouncer
 ID=$(cat "$HOME/.bouncer_id")
-node bouncer/agent/resource-agent.mjs --goals "$HOME/.bouncer/testnet/new-work.bouncer-goals.json" --key "$HOME/.near-credentials/testnet/$ID.agent.json" --local-provider "$HOME/.bouncer/testnet/$ID.provider.json" --execute
+node bouncer/agent/resource-agent.mjs --goals "$HOME/.bouncer/testnet/new-work.bouncer-goals.json" --key "$HOME/.near-credentials/testnet/$ID.agent.json" --local-provider "$HOME/.bouncer/testnet/$ID.provider.json" --execute --durable
 ```
 
 The generated goals file stores its stable matching journal path. Preserve both.
@@ -156,9 +158,16 @@ submission; recovery does not need a fresh quote and rejects a changed route.
 Older entries without a recorded request still need the original quote and
 fingerprint to match; older entries also may not pin the provider route.
 Providers or independent data sources may still be
-unavailable, and a vendor may refuse to deliver or replay. A pending or ambiguous
-payment requires manual chain reconciliation; do not delete the journal or
-regenerate the goal to bypass it. As an alternative, adding `--execute` to the
+unavailable, and a vendor may refuse to deliver or replay. With `--durable`, a
+signed transaction's hash and public key are recorded before the single
+broadcast; the key-free recovery tool can re-query FINAL transaction and receipt
+data against the original goal and journal. It never sends again and does not
+verify delivery. Use `node bouncer/agent/recover-direct-payment.mjs --help` for
+its `--goals`, `--id` and `--state` arguments, then rerun the resource agent to
+verify delivery before any later purchase. Unknown or expired transactions remain
+pending. Without `--durable`, or with legacy entries, a missing hash can require
+manual chain reconciliation. Do not delete the journal or regenerate the goal to
+bypass uncertainty. As an alternative, adding `--execute` to the
 first command opts into **immediate, unreviewed** execution after the model plan;
 this can spend on a mistaken but permitted task and should not be used when the
 objective or model output is untrusted. Omitting `--key` produces the goal file

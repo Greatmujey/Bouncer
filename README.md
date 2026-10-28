@@ -2,7 +2,8 @@
 
 Bouncer aims to let an AI agent buy compute, storage and API/data resources
 with owner-defined spending policies across NEAR assets. Its testnet prototype
-has paid three fungible tokens for self-hosted development services. It has
+has paid three fungible tokens and Circle's canonical **testnet USDC** for
+self-hosted development services. Testnet USDC has no real-world value. It has
 also paid independently operated OutLayer for bounded native-NEAR compute and
 for a connectivity probe funded with fake testnet USDC.e and native NEAR. The
 probe returned HTTP 405: a paid status response, not useful API data or a
@@ -72,8 +73,8 @@ that all six are complete.
 | AI Security & Defense | 1-yocto owner guard, scoped keys, caps and delivery gating. | Independent audit and stronger prompt defenses. |
 | Agent Economy | Paid independent test probe and bounded FT resource purchases. | Useful commercial API/storage providers and signed receipts. |
 | Autonomous Business | AI task planning, approved-provider selection, payments and recovery. | Real customers, invoicing and production operations. |
-| Real-World Money | Fake testnet USDC.e-funded provider call. | Circle testnet USDC payments and real-money rails. |
-| Unstoppable DeFi | An owner-setup Ref testnet swap acquired fake tokens. | Agent-guarded swaps and cross-chain settlement. |
+| Real-World Money | Circle testnet USDC paid for three development resources; fake USDC.e funded a separate probe. | Independent providers and real-money rails; testnet USDC has no real value. |
+| Unstoppable DeFi | Owner-setup Ref testnet swaps acquired test tokens, including Circle testnet USDC. | Agent-guarded swaps and cross-chain settlement. |
 | AI Swarms | One coordinator sequences multiple resources. | Multiple autonomous agents and secure handoffs. |
 
 ## Contract capabilities in this branch
@@ -141,11 +142,12 @@ Offline mocks are not proof of on-chain behavior.
   is read-only, not a purchasing integration. OutLayer uses its own native and
   prepaid FT interfaces, not this experimental FT-provider protocol. The paid
   connector returned HTTP 405 rather than useful API data. Independent useful
-  storage/API purchases, invoices, Circle USDC and NEAR Intents remain unfinished.
+  storage/API purchases, invoices, real-value stablecoin payments and NEAR Intents remain unfinished.
 - Token trust is not enforced; configure policies only for trusted FTs. The
   planner and configured development provider accept owner-pinned 64-hex token
-  IDs on a testnet-reported RPC. The independent probe used fake testnet
-  USDC.e, not Circle USDC or real-value stablecoin.
+  IDs on a testnet-reported RPC. The independent OutLayer probe used fake
+  testnet USDC.e, not Circle USDC. A separate Circle testnet USDC mission paid
+  only a self-hosted development provider; its tokens have no real value.
   Changing a policy's token retains its numeric spend history even if the new token has
   different units; create a new policy for a different token instead. Key
   grants do not themselves create or restrict NEAR access keys. The owner must
@@ -314,6 +316,24 @@ runner's initiation of *all* stages is covered offline, not yet proved live.
 Previews are non-atomic, and earlier payments cannot be rolled back. The
 preceding Ref swap was owner setup, not agent-guarded DeFi.
 
+### Circle testnet USDC resource mission
+
+The [Circle testnet mission](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40697938370/job/122850532589)
+used Circle's [canonical NEAR testnet USDC contract](https://testnet.nearblocks.io/address/3e2210e1184b45b64c8a434c0a7e7b23cc04ea7eb7a6c3c32520d03d4afcb8af)
+with six decimals. A full-access owner first acquired the token with a small,
+bounded [Ref swap](https://testnet.nearblocks.io/txns/8tAYE8uubKqwv8rAU9T5dcgPkXQ3AweuvwyC7Py3gNHP)
+and [funded the vault](https://testnet.nearblocks.io/txns/7X7xYBTA9nhau9MnZrrQHHT25XFJkVQ6uu2sLtTEotAk).
+That setup swap was **not** agent-guarded. A restricted Bouncer key then paid
+1,000 micro-USDC each for self-hosted [compute](https://testnet.nearblocks.io/txns/2yB7fdPGjZreSLu2Ksjf66wR9GDZ1Lwf3j1fNDdnKKP5),
+[storage](https://testnet.nearblocks.io/txns/8JnKhKUGYJsQYdKQKuMxoGyhXJakfJiSNMiuiDuppeYc)
+and [API](https://testnet.nearblocks.io/txns/5YcQToX4Zj7ABrVsnXJL5Q6u2bob9KvaE9wPHJaF4GCQ).
+The run rejected a zero-deposit owner-policy escalation, token substitution and
+over-cap payment. After the real compute payment, it simulated a lost RPC
+response and recovered the pre-recorded hash without a key or second payment.
+A deliberately corrupted compute result then blocked later payments until the
+original delivery was verified. These are prepared goals, a development provider
+and testnet funds with **no real value**, not commercial delivery or mainnet payments.
+
 ### Read-only independent marketplace discovery
 
 ```sh
@@ -425,9 +445,16 @@ node bouncer/agent/procurement.mjs --plan /path/to/plan.json --key /path/to/agen
 
 The journal is local, not a distributed exactly-once mechanism. Before sending,
 requests are marked pending; if confirmation is uncertain the runner refuses to
-retry automatically. Inspect the chain and reconcile the journal manually. Do
-not delete or change journals to bypass this safety check. Keys must be kept
-private, and different journal paths cannot prevent duplicate payments.
+retry automatically. Direct procurement, the resource and autonomous agents,
+and the mixed/paid mission CLIs offer an opt-in `--durable` path for direct FT
+resource payments: it validates the signed transaction, persists its
+hash before the one broadcast, and can re-query matching final receipts without
+a key using `bouncer/agent/recover-direct-payment.mjs`. This confirms payment
+only; delivery must still be verified before later purchases. Older entries and
+runs without `--durable` can require manual reconciliation. An unknown or
+expired transaction stays unresolved; it is never resent automatically. Do not
+delete or change journals to bypass this safety check. Keys must be kept private,
+and different journal paths or multiple writers can still duplicate payments.
 
 The development provider trusts its configured RPC, Bouncer account/code, and
 FT contracts; it is not a trustless payment proof. Its local redemption state
@@ -454,7 +481,9 @@ real testnet transactions. To build locally with Rust and the wasm target, run
 - `bouncer/contracts/bouncer/src/lib.rs` — current vault and policy contract.
 - `bouncer/demo-all.mjs` — fresh-deployment restricted-key security check.
 - `bouncer/demo-multi-resource.mjs` — testnet wNEAR plus synthetic FT check.
+- `bouncer/demo-circle-usdc.mjs` — Circle testnet USDC multi-resource and failure-recovery check.
 - `bouncer/agent/procurement.mjs` — plan-driven, testnet-only procurement runner.
+- `bouncer/agent/recover-direct-payment.mjs` — key-free receipt-based recovery for opt-in signed direct payments.
 - `bouncer/agent/resource-agent.mjs` — quote, guarded payment, fulfillment orchestration.
 - `bouncer/agent/verify-delivery.mjs` — bounded result checks and local receipt validation.
 - `bouncer/agent/market-discovery.mjs` — isolated, read-only public catalog search.

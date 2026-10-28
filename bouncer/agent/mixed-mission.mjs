@@ -88,6 +88,7 @@ function parseArgs(args) {
     const arg = args[i];
     if (arg === '--help') options.help = true;
     else if (arg === '--execute') options.execute = true;
+    else if (arg === '--durable') options.durable = true;
     else if (['--mission', '--ft-key', '--outlayer-key', '--journal', '--rpc', '--local-provider'].includes(arg) && args[i + 1] && !args[i + 1].startsWith('--')) {
       const name = arg.slice(2);
       if (options[name]) throw new Error(`duplicate ${arg}`);
@@ -105,8 +106,8 @@ function accountFromFile(file, owner, provider) {
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   if (options.help) {
-    console.log('Usage: node bouncer/agent/mixed-mission.mjs --mission MISSION.json --ft-key FT_KEY.json --outlayer-key COMPUTE_KEY.json [--journal JOURNAL.json] [--rpc URL] [--local-provider CONFIG.json] [--execute]');
-    console.log('Default: non-atomic dry-run preflight. --execute spends testnet funds; OutLayer uses native NEAR, other goals use configured FTs.');
+    console.log('Usage: node bouncer/agent/mixed-mission.mjs --mission MISSION.json --ft-key FT_KEY.json --outlayer-key COMPUTE_KEY.json [--journal JOURNAL.json] [--rpc URL] [--local-provider CONFIG.json] [--execute] [--durable]');
+    console.log('Default: non-atomic dry-run preflight. --execute spends testnet funds; --durable records direct FT hashes before broadcast.');
     return;
   }
   if (!options.mission || !options['ft-key'] || !options['outlayer-key']) throw new Error('--mission, --ft-key and --outlayer-key are required');
@@ -143,7 +144,7 @@ async function main() {
     const result = await runMixedMission({
       outlayer: { goal, ...outlayer }, provider, journal, execute: options.execute,
       resources: { contractId: resources.contract_id, ownerAccountId: resources.owner_account_id, providerUrl: resources.provider_url,
-        goals: resources.goals, getQuote: client.getQuote, fulfill: client.fulfill, readStorage: client.readStorage, ...ft },
+        goals: resources.goals, getQuote: client.getQuote, fulfill: client.fulfill, readStorage: client.readStorage, durablePayment: options.durable === true, ...ft },
     });
     console.log(`[mission] ${result.status}; non-atomic testnet mission; journal ${journalPath}`);
     if (result.independent?.delivery) console.log(`[mission] Independent delivery: ${JSON.stringify(result.independent.delivery)}`);
