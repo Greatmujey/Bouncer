@@ -10,6 +10,7 @@
     "build": "bash scripts/build.sh",
     "agent": "node agent/procurement.mjs",
     "outlayer": "node agent/outlayer.mjs",
+    "mission": "node agent/mixed-mission.mjs",
     "solver": "node agent/solver.mjs",
     "quote": "node agent/intents.mjs quote",
     "discover": "node agent/market-discovery.mjs",

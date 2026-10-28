@@ -18,9 +18,16 @@ import { MonotonicAccount } from './near-account.mjs';
 import { isTestnetAccount } from '../shared/account-id.mjs';
 import { validateRpcEndpoint } from '../shared/rpc-endpoint.mjs';
 
-const { KeyPair, KeyPairSigner, providers } = nearApi;
+const { KeyPair, KeyPairSigner, providers, transactions, utils } = nearApi;
 export const OUTLAYER = 'outlayer.testnet';
 export const NATIVE = 'native';
+// Public OutLayer example, pinned by the owner before policy installation.
+// This is a bounded demonstration task, not a general code or entropy proof.
+const RANDOM_EXAMPLE_SHA256 = '0bb0668611f0fa9abeabbfaabf48436a46c94aa65ae1a0d106db7212f2d5f88a';
+export const RANDOM_TESTNET_PROGRAM = Object.freeze({
+  url: `https://wasmhub.testnet.fastfs.io/fastfs.testnet/${RANDOM_EXAMPLE_SHA256}.wasm`, sha256: RANDOM_EXAMPLE_SHA256,
+  build_target: 'wasm32-wasip1', max_instructions: 10_000_000, max_memory_mb: 128, max_execution_seconds: 60,
+});
 const VERSION = 'bouncer-agent-v5';
 const MAX_U128 = (1n << 128n) - 1n;
 const GAS = 300n * 10n ** 12n;
@@ -183,6 +190,29 @@ export function verifyOutlayerResult(rawGoal, result, publicKey) {
     result: output, verification: 'trusted RPC and provider receipts; output range only; no TEE or randomness proof' };
 }
 
+/** Re-check an existing payment by hash. This path has no signer and cannot send. */
+export async function recoverOutlayerGoal({ goal: rawGoal, provider, journal, publicKey, update = true, log = console.log }) {
+  const goal = validateOutlayerGoal(rawGoal);
+  if (!journal || typeof journal.get !== 'function' || typeof journal.put !== 'function') throw new Error('recovery requires the original journal');
+  if ((await provider.viewNodeStatus())?.chain_id !== 'testnet') throw new Error('RPC must report testnet');
+  const previous = journal.get(goal.id);
+  if (!previous || previous.fingerprint !== goalFingerprint(goal)) throw new Error(`${goal.id}: journal does not match the reviewed goal`);
+  if (!validHash(previous.tx_hash)) throw new Error(`${goal.id}: unresolved payment without a transaction hash; reconcile manually, never resend automatically`);
+  // New entries retain the public key used to sign, not the secret. A key can
+  // be revoked after sending without preventing proof of the historical tx.
+  // Older journal entries can still be recovered by supplying the original key.
+  const signedBy = previous.agent_public_key || (publicKey && String(publicKey));
+  if (typeof signedBy !== 'string' || !signedBy) throw new Error(`${goal.id}: original signing public key is required to recover this legacy journal`);
+  if (publicKey && signedBy !== String(publicKey)) throw new Error(`${goal.id}: journal signing key differs from the supplied key`);
+  const chain = await provider.txStatusReceipts(previous.tx_hash, goal.owner_account_id, 'FINAL');
+  const delivery = verifyOutlayerResult(goal, chain, signedBy);
+  if (delivery.tx_hash !== previous.tx_hash) throw new Error(`${goal.id}: RPC returned a different transaction`);
+  if (previous.status === 'completed' && previous.delivery && !equal(previous.delivery, delivery)) throw new Error(`${goal.id}: recorded result differs from chain evidence`);
+  if (update && previous.status !== 'completed') journal.put(goal.id, { ...previous, status: 'completed', delivery, completed_at: new Date().toISOString() });
+  log(`[outlayer] REUSED ${goal.id}: ${delivery.tx_hash}; no new payment`);
+  return { status: 'REUSED', delivery };
+}
+
 /** Preflight, one guarded send, and chain-based recovery without resending. */
 export async function runOutlayerGoal({ goal: rawGoal, provider, account, publicKey, journal, execute = false, log = console.log }) {
   const goal = validateOutlayerGoal(rawGoal);
@@ -202,15 +232,7 @@ export async function runOutlayerGoal({ goal: rawGoal, provider, account, public
   }
   const fingerprint = goalFingerprint(goal), previous = journal?.get(goal.id);
   if (previous && previous.fingerprint !== fingerprint) throw new Error(`${goal.id}: journal does not match the reviewed goal`);
-  if (previous) {
-    if (!validHash(previous.tx_hash)) throw new Error(`${goal.id}: unresolved payment without a transaction hash; reconcile manually, never resend automatically`);
-    const chain = await provider.txStatusReceipts(previous.tx_hash, goal.owner_account_id, 'FINAL');
-    const delivery = verifyOutlayerResult(goal, chain, publicKey);
-    if (previous.status === 'completed' && previous.delivery && !equal(previous.delivery, delivery)) throw new Error(`${goal.id}: recorded result differs from chain evidence`);
-    if (previous.status !== 'completed') journal.put(goal.id, { ...previous, status: 'completed', delivery, completed_at: new Date().toISOString() });
-    log(`[outlayer] REUSED ${goal.id}: ${delivery.tx_hash}; no new payment`);
-    return { status: 'REUSED', delivery };
-  }
+  if (previous) return recoverOutlayerGoal({ goal, provider, journal, publicKey, log });
   const [policy, program, allowed, verdict] = await Promise.all([
     provider.callFunction(goal.contract_id, 'get_policy', { policy_id: goal.policy_id }, final),
     provider.callFunction(goal.contract_id, 'get_outlayer_program', { policy_id: goal.policy_id }, final),
@@ -223,29 +245,35 @@ export async function runOutlayerGoal({ goal: rawGoal, provider, account, public
   if (!Array.isArray(verdict) || verdict.length !== 2 || typeof verdict[0] !== 'boolean') throw new Error('invalid policy verdict');
   if (!verdict[0]) { log(`[outlayer] BLOCKED ${goal.id}: ${String(verdict[1]).slice(0, 200)}`); return { status: 'BLOCKED' }; }
   if (!execute) { log(`[outlayer] READY ${goal.id}: at most ${goal.amount} yoctoNEAR to ${OUTLAYER} (dry run)`); return { status: 'READY' }; }
-  const pending = { fingerprint, status: 'pending', outlayer_goal: goal, started_at: new Date().toISOString() };
+  // Sign locally, persist the exact signed transaction hash and only then
+  // broadcast. If the RPC times out or the process crashes, the journal can
+  // be queried without signing or submitting another transaction. We do not
+  // persist signed bytes, and an absent/expired transaction is NOT retried.
+  if (!account.signer || typeof account.createTransaction !== 'function' ||
+      String(await account.signer.getPublicKey()) !== String(publicKey)) throw new Error('account signer does not match the reviewed agent key');
+  const action = transactions.functionCall('execute_outlayer', expectedArgs(goal), GAS, 0n);
+  const transaction = await account.createTransaction(goal.contract_id, [action], publicKey);
+  const [hashBytes, signed] = await account.signer.signTransaction(transaction);
+  if (!(hashBytes instanceof Uint8Array) || hashBytes.length !== 32 || !signed) throw new Error('signer did not return a transaction hash');
+  const txHash = utils.serialize.base_encode(hashBytes);
+  if (!validHash(txHash)) throw new Error('signer returned an invalid transaction hash');
+  const pending = { fingerprint, status: 'pending', outlayer_goal: goal, agent_public_key: String(publicKey),
+    tx_hash: txHash, started_at: new Date().toISOString() };
   journal.put(goal.id, pending);
-  let txHash;
   try {
     // Never retry this payment, including explicit expiry or a timeout.
-    const sent = await account.callFunctionRaw({ contractId: goal.contract_id, methodName: 'execute_outlayer',
-      args: expectedArgs(goal), deposit: 0n, gas: GAS, waitUntil: 'FINAL' });
-    if (validHash(sent?.transaction_outcome?.id)) txHash = sent.transaction_outcome.id;
-    if (!txHash) throw new Error('transaction did not return a valid hash');
-    journal.put(goal.id, { ...pending, tx_hash: txHash });
+    const sent = await provider.sendTransactionUntil(signed, 'FINAL');
+    if (sent?.transaction_outcome?.id !== txHash) throw new Error('RPC returned a different or missing transaction hash');
     // Request raw receipts as well as outcomes; ordinary send_tx outcomes do
     // not establish the actual OutLayer refund transfer to the owner.
     const chain = await provider.txStatusReceipts(txHash, goal.owner_account_id, 'FINAL');
     const delivery = verifyOutlayerResult(goal, chain, publicKey);
-    journal.put(goal.id, { ...pending, status: 'completed', tx_hash: txHash, delivery, completed_at: new Date().toISOString() });
+    if (delivery.tx_hash !== txHash) throw new Error('RPC returned a different transaction');
+    journal.put(goal.id, { ...pending, status: 'completed', delivery, completed_at: new Date().toISOString() });
     log(`[outlayer] FULFILLED ${goal.id}: ${txHash}; charged ${delivery.charged_yocto}, refund ${delivery.refunded_to_owner_yocto} yoctoNEAR`);
     return { status: 'FULFILLED', delivery };
   } catch (error) {
-    if (!txHash && validHash(error?.transaction_outcome?.id)) {
-      txHash = error.transaction_outcome.id;
-      journal.put(goal.id, { ...pending, tx_hash: txHash });
-    }
-    throw new Error(`${goal.id}: payment/delivery unresolved${txHash ? ` (tx ${txHash})` : ''}; do not resend automatically: ${error.message}`, { cause: error });
+    throw new Error(`${goal.id}: payment/delivery unresolved (tx ${txHash}); do not resend automatically: ${error.message}`, { cause: error });
   }
 }
 
@@ -254,6 +282,7 @@ function parseArgs(args) {
   const options = { execute: false };
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--execute') options.execute = true;
+    else if (args[i] === '--recover') options.recover = true;
     else if (args[i] === '--help') options.help = true;
     else if (['--goal', '--key', '--state', '--rpc'].includes(args[i]) && args[i + 1] && !args[i + 1].startsWith('--')) options[args[i].slice(2)] = args[++i];
     else throw new Error(`unknown or incomplete argument: ${args[i]}`);
@@ -264,21 +293,28 @@ async function main() {
   const options = parseArgs(process.argv.slice(2));
   if (options.help) {
     console.log('Usage: node bouncer/agent/outlayer.mjs --goal GOAL.json --key AGENT_KEY.json [--state JOURNAL.json] [--rpc URL] [--execute]');
-    console.log('Dry run by default; --execute spends testnet NEAR once through a v5 policy.');
+    console.log('       node bouncer/agent/outlayer.mjs --goal GOAL.json --state JOURNAL.json [--rpc URL] --recover');
+    console.log('Dry run by default; --execute spends testnet NEAR once. --recover only reads the existing transaction; no key is needed.');
     return;
   }
-  if (!options.goal || !options.key) throw new Error('provide --goal and --key; see --help');
+  if (!options.goal || (!options.recover && !options.key)) throw new Error('provide --goal and --key, or --goal with --recover; see --help');
+  if (options.recover && (options.execute || options.key)) throw new Error('--recover cannot be combined with --execute or --key');
   const goalPath = path.resolve(expandHome(options.goal));
   const goal = validateOutlayerGoal(JSON.parse(fs.readFileSync(goalPath, 'utf8')));
-  const keyFile = JSON.parse(fs.readFileSync(expandHome(options.key), 'utf8'));
-  if (keyFile.account_id !== goal.owner_account_id || typeof keyFile.private_key !== 'string') throw new Error('agent key file does not match the owner');
-  const key = KeyPair.fromString(keyFile.private_key);
   const provider = new providers.JsonRpcProvider({ url: validateRpcEndpoint(options.rpc || process.env.NEAR_TESTNET_RPC || 'https://test.rpc.fastnear.com') });
-  const account = new MonotonicAccount(goal.owner_account_id, provider, new KeyPairSigner(key));
   const state = path.resolve(expandHome(options.state || `${goalPath}.bouncer-journal.json`));
-  const journal = options.execute ? new FileJournal(state, goal.contract_id, goal.owner_account_id) : null;
+  if (options.recover && !fs.existsSync(state)) throw new Error('original journal not found; recovery cannot create one');
+  const journal = options.execute || options.recover ? new FileJournal(state, goal.contract_id, goal.owner_account_id) : null;
   try {
-    const outcome = await runOutlayerGoal({ goal, provider, account, publicKey: key.getPublicKey(), journal, execute: options.execute });
+    let outcome;
+    if (options.recover) outcome = await recoverOutlayerGoal({ goal, provider, journal });
+    else {
+      const keyFile = JSON.parse(fs.readFileSync(expandHome(options.key), 'utf8'));
+      if (keyFile.account_id !== goal.owner_account_id || typeof keyFile.private_key !== 'string') throw new Error('agent key file does not match the owner');
+      const key = KeyPair.fromString(keyFile.private_key);
+      const account = new MonotonicAccount(goal.owner_account_id, provider, new KeyPairSigner(key));
+      outcome = await runOutlayerGoal({ goal, provider, account, publicKey: key.getPublicKey(), journal, execute: options.execute });
+    }
     if (outcome.delivery) console.log(JSON.stringify(outcome.delivery, null, 2));
     if (outcome.status === 'BLOCKED') process.exitCode = 2;
   } finally { journal?.close(); }

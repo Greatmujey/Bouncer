@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 import nearApi from 'near-api-js';
 import { MonotonicAccount } from './agent/near-account.mjs';
 import { FileJournal } from './agent/procurement.mjs';
-import { runOutlayerGoal } from './agent/outlayer.mjs';
+import { runOutlayerGoal, recoverOutlayerGoal, RANDOM_TESTNET_PROGRAM } from './agent/outlayer.mjs';
 import { validateRpcEndpoint } from './shared/rpc-endpoint.mjs';
 
 const { KeyPair, KeyPairSigner, providers, transactions } = nearApi;
@@ -19,9 +19,7 @@ const provider = new providers.JsonRpcProvider({ url: validateRpcEndpoint(proces
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const ONE = 10n ** 24n, TGAS = 10n ** 12n;
 const amount = ONE / 10n, funding = 3n * amount;
-const programHash = '0bb0668611f0fa9abeabbfaabf48436a46c94aa65ae1a0d106db7212f2d5f88a';
-const program = { url: `https://wasmhub.testnet.fastfs.io/fastfs.testnet/${programHash}.wasm`, sha256: programHash,
-  build_target: 'wasm32-wasip1', max_instructions: 10_000_000, max_memory_mb: 128, max_execution_seconds: 60 };
+const program = RANDOM_TESTNET_PROGRAM;
 const accountFor = (id, key) => new MonotonicAccount(id, provider, new KeyPairSigner(key));
 const view = (id, method, args = {}) => provider.callFunction(id, method, args, { finality: 'final' });
 const txUrl = hash => `https://testnet.nearblocks.io/txns/${hash}`;
@@ -118,8 +116,8 @@ async function main() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bouncer-outlayer-'));
   const journal = new FileJournal(path.join(dir, 'journal.json'), contractId, ownerId);
   let sends = 0, inject = true;
-  const countedAccount = { accountId: ownerId, async callFunctionRaw(args) { sends++; return agent.callFunctionRaw(args); } };
   const faultProvider = new Proxy(provider, { get(target, property) {
+    if (property === 'sendTransactionUntil') return async (...args) => { sends++; return target.sendTransactionUntil(...args); };
     if (property === 'txStatusReceipts') return async (...args) => {
       const result = await target.txStatusReceipts(...args);
       if (!inject) return result;
@@ -133,10 +131,10 @@ async function main() {
   } });
   let paidHash;
   try {
-    const dry = await runOutlayerGoal({ goal, provider, account: countedAccount, publicKey: agentKey.getPublicKey(), journal, execute: false });
+    const dry = await runOutlayerGoal({ goal, provider, account: agent, publicKey: agentKey.getPublicKey(), journal, execute: false });
     if (dry.status !== 'READY' || sends !== 0) throw new Error('preflight did not stay read-only');
     try {
-      await runOutlayerGoal({ goal, provider: faultProvider, account: countedAccount, publicKey: agentKey.getPublicKey(), journal, execute: true });
+      await runOutlayerGoal({ goal, provider: faultProvider, account: agent, publicKey: agentKey.getPublicKey(), journal, execute: true });
       throw new Error('injected verification failure unexpectedly passed');
     } catch (error) {
       if (!/payment\/delivery unresolved/.test(error.message)) throw error;
@@ -144,9 +142,9 @@ async function main() {
     paidHash = journal.get(goal.id)?.tx_hash;
     if (!paidHash || sends !== 1 || journal.get(goal.id)?.status !== 'pending') throw new Error('uncertain delivery was not durably journaled');
     console.log(`    ✅ Local evidence fault stopped delivery after one send; recovering ${txUrl(paidHash)}`);
-    const recovered = await runOutlayerGoal({ goal, provider, account: countedAccount, publicKey: agentKey.getPublicKey(), journal, execute: true });
+    const recovered = await recoverOutlayerGoal({ goal, provider, journal });
     if (recovered.status !== 'REUSED' || recovered.delivery.tx_hash !== paidHash || sends !== 1) throw new Error('recovery did not reuse the paid transaction');
-    const again = await runOutlayerGoal({ goal, provider, account: countedAccount, publicKey: agentKey.getPublicKey(), journal, execute: true });
+    const again = await recoverOutlayerGoal({ goal, provider, journal });
     if (again.status !== 'REUSED' || sends !== 1) throw new Error('completed goal was repaid');
     const balance = BigInt(await view(contractId, 'vault_balance', { token: 'native' }));
     const spent = BigInt(await view(contractId, 'daily_spent', { policy_id: policyId }));

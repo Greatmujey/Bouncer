@@ -18,6 +18,8 @@ import { createModelClient, goalsFromModel, planObjective } from './agent/goal-p
 import { compareApprovedQuotes } from './agent/quote-comparison.mjs';
 import { validateRpcEndpoint } from './shared/rpc-endpoint.mjs';
 import { MonotonicAccount } from './agent/near-account.mjs';
+import { RANDOM_TESTNET_PROGRAM } from './agent/outlayer.mjs';
+import { runMixedMission } from './agent/mixed-mission.mjs';
 
 const { KeyPair, KeyPairSigner, providers, transactions } = nearApi;
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -116,6 +118,8 @@ async function main() {
   const userId = `user.${bid}`;
   const separateOwnerDemo = process.env.BOUNCER_DEMO_SEPARATE_OWNER === '1';
   const ownerId = separateOwnerDemo ? userId : bid;
+  const externalDemo = process.env.BOUNCER_DEMO_OUTLAYER === '1';
+  if (externalDemo && !separateOwnerDemo) throw new Error('independent provider mission requires the separate-owner demo');
   const compareDemo = process.env.BOUNCER_DEMO_COMPARE === '1';
   const badDeliveryDemo = process.env.BOUNCER_DEMO_BAD_DELIVERY === '1';
   if (badDeliveryDemo && !compareDemo) throw new Error('delivery verification probe requires provider comparison');
@@ -277,6 +281,26 @@ async function main() {
     await call(owner, bid, 'allow_payee', { policy_id: 'compute-wnear', payee: vendorIds.computeAlt }, 1n);
   }
 
+  let externalMission, externalKeyFile;
+  if (externalDemo) {
+    console.log('\n=== 6b) Owner pins independent OutLayer compute and a separate restricted key ===');
+    const externalKey = KeyPair.fromRandom('ed25519');
+    externalKeyFile = saveKey(ownerId, externalKey, 'outlayer-agent');
+    const installed = await setupAttempt('create OutLayer key', () => owner.signAndSendTransaction({ receiverId: ownerId, waitUntil: 'FINAL',
+      actions: [transactions.addKey(externalKey.getPublicKey(), transactions.functionCallAccessKey(bid, ['execute_outlayer'], N / 2n))] }));
+    assertReceipts(installed, 'create OutLayer key');
+    const cap = N / 10n, policyId = 'independent-compute';
+    await call(owner, bid, 'deposit_native', {}, 3n * cap);
+    await call(owner, bid, 'set_policy', { policy_id: policyId, token: 'native', per_tx_cap: cap.toString(), daily_cap: cap.toString() }, 1n);
+    await call(owner, bid, 'allow_payee', { policy_id: policyId, payee: 'outlayer.testnet' }, 1n);
+    await call(owner, bid, 'set_outlayer_program', { policy_id: policyId, program: RANDOM_TESTNET_PROGRAM }, 1n);
+    await call(owner, bid, 'grant_agent_key', { policy_id: policyId, public_key: externalKey.getPublicKey().toString() }, 1n);
+    externalMission = { goal: { id: 'independent-random-1', contract_id: bid, owner_account_id: ownerId, policy_id: policyId,
+      amount: cap.toString(), input: { min: 1, max: 100 }, program: RANDOM_TESTNET_PROGRAM },
+      account: account(ownerId, externalKey), publicKey: externalKey.getPublicKey() };
+    console.log('    Independent task is owner-selected; the model does not choose its program, price or payee.');
+  }
+
   console.log('\n=== 7) Quote, pay and fulfill three orders with the resource agent ===');
   fs.mkdirSync(RUN_DIR, { recursive: true, mode: 0o700 });
   const planFile = path.join(RUN_DIR, `${bid}.plan.json`);
@@ -316,6 +340,12 @@ async function main() {
     fs.chmodSync(file, 0o600);
   }
   console.log(`    Provider config: ${providerFile}\n    Goals config: ${goalsFile}\n    Owner planning config: ${ownerFile}`);
+  if (externalMission) {
+    const missionFile = path.join(RUN_DIR, `${bid}.mission.json`);
+    fs.writeFileSync(missionFile, JSON.stringify({ outlayer_goal: externalMission.goal, resources: goalsConfig, journal_path: journalPath }, null, 2) + '\n', { mode: 0o600 });
+    fs.chmodSync(missionFile, 0o600);
+    console.log(`    Mixed mission: ${missionFile}\n    OutLayer-only key: ${externalKeyFile}`);
+  }
   const devProvider = createResourceProvider({ rpcProvider: provider, contractId: bid, ownerAccountId: ownerId, products, dataDir });
   await new Promise((resolve, reject) => {
     devProvider.server.once('error', reject);
@@ -324,7 +354,7 @@ async function main() {
   const baseUrl = `http://127.0.0.1:${devProvider.server.address().port}`;
   const client = httpResourceProvider(baseUrl);
   let journal, alternateProvider;
-  let proof, comparisonProof, deliveryProof, gatedBatchProof, ownerProof;
+  let proof, comparisonProof, deliveryProof, gatedBatchProof, ownerProof, independentProof;
   try {
     journal = new FileJournal(journalPath, bid, ownerId);
     const runner = {
@@ -336,6 +366,14 @@ async function main() {
         fs.chmodSync(planFile, 0o600);
       },
       provider, account: account(ownerId, agentKey), publicKey: agentKey.getPublicKey(), journal, execute: true,
+    };
+    const launch = async resourceRunner => {
+      if (!externalMission) return runResourceAgent(resourceRunner);
+      const mixed = await runMixedMission({ outlayer: externalMission, resources: resourceRunner, provider, journal, execute: true });
+      if (mixed.status !== 'FULFILLED') throw new Error(`mixed independent/FT mission did not finish: ${mixed.status}`);
+      const delivery = mixed.independent.delivery;
+      independentProof = `contract=${bid}; owner=${ownerId}; independent_tx=${delivery.tx_hash}; charge_yocto=${delivery.charged_yocto}; owner_refund_yocto=${delivery.refunded_to_owner_yocto}; random=${delivery.result.random_number}`;
+      return mixed.resources;
     };
     let first;
     if (badDeliveryDemo) {
@@ -349,7 +387,7 @@ async function main() {
         injected++;
         return { ...actual, result: '0'.repeat(64) };
       } };
-      try { await runResourceAgent(faulty); }
+      try { await launch(faulty); }
       catch (error) {
         if (!/verification failed after confirmed payment.*independent recomputation/.test(error.message)) throw error;
         rejected = true;
@@ -361,7 +399,7 @@ async function main() {
       exact(await view(storageToken, 'ft_balance_of', { account_id: vendorIds.storage }), 0n, 'storage vendor before recovery');
       exact(await view(apiToken, 'ft_balance_of', { account_id: vendorIds.api }), 0n, 'API vendor before recovery');
       const priorTx = paid.tx_hash;
-      first = await runResourceAgent({ ...runner, getQuote: async (order, context) => {
+      first = await launch({ ...runner, getQuote: async (order, context) => {
         if (context.goalId === 'compute-1') throw new Error('paid compute must not be requoted');
         return client.getQuote(order);
       } });
@@ -369,7 +407,7 @@ async function main() {
       gatedBatchProof = `contract=${bid}; first_tx=${priorTx}; injected-bad-result=rejected; later-vendors-before-recovery=0; recovery=same-first-payment-then-verified-rest`;
       console.log('    ✅ First locally corrupted reply stopped the batch before storage/API payments; recovery reused the first payment.');
     } else {
-      first = await runResourceAgent(runner);
+      first = await launch(runner);
     }
     if (first.payments.paid !== (badDeliveryDemo ? 2 : 3) || first.payments.blocked ||
         first.payments.skipped !== (badDeliveryDemo ? 1 : 0) || first.deliveries.length !== 3) {
@@ -551,6 +589,15 @@ async function main() {
       console.log(`    ✅ VERIFIED owner-approved comparison: ${resources[0].payment} vs ${cheaper} ${WNEAR}; selected payee ${vendorIds.computeAlt}; replay made no second payment.`);
       console.log('    Both compared endpoints are self-hosted development services, not independent commercial vendors.');
     }
+    if (externalMission) {
+      if (!independentProof || journal.get(externalMission.goal.id)?.status !== 'completed') throw new Error('independent mission delivery was not recorded');
+      exact(await view(bid, 'vault_balance', { token: 'native' }), 2n * N / 10n, 'native vault after independent execution');
+      exact(await view(bid, 'daily_spent', { policy_id: externalMission.goal.policy_id }), N / 10n, 'independent daily reservation');
+      const verdict = await view(bid, 'check', { policy_id: externalMission.goal.policy_id, payee: 'outlayer.testnet', amount: '1' });
+      if (verdict?.[0] !== false) throw new Error('independent daily budget did not block another deposit');
+      await call(owner, bid, 'withdraw_native', { amount: (2n * N / 10n).toString() }, 1n);
+      exact(await view(bid, 'vault_balance', { token: 'native' }), 0n, 'remaining native vault withdrawn');
+    }
     if (separateOwnerDemo) {
       const tx = journal.get('compute-1')?.tx_hash;
       const outcome = await provider.viewTransactionStatus(tx, ownerId, 'FINAL');
@@ -567,8 +614,9 @@ async function main() {
     await new Promise(resolve => devProvider.server.close(resolve));
   }
   console.log('\n✅ Three real testnet FT payments and self-hosted resource services verified.');
-  console.log('Services are development examples, not commercial vendors or production infrastructure.');
-  if (aiGoals) console.log('The resource inputs were planned by the configured model and checked against the synthetic objective before payment.');
+  console.log('Storage, API and FT-backed compute services are self-hosted development examples, not commercial vendors or production infrastructure.');
+  if (independentProof) console.log('Independent OutLayer compute was paid in native NEAR; output range checked, TEE/entropy not independently verified.');
+  if (aiGoals) console.log('The FT resource inputs were planned by the configured model and checked against the synthetic objective before payment; independent compute was owner-selected.');
   if (process.env.GITHUB_ACTIONS === 'true') {
     const label = aiGoals ? 'AI-planned testnet multi-resource proof' : 'Testnet multi-resource proof';
     console.log(`::notice title=${label}::contract=${bid}; ${proof}`);
@@ -576,6 +624,7 @@ async function main() {
     if (deliveryProof) console.log(`::notice title=Delivery verification and recovery proof::${deliveryProof}`);
     if (gatedBatchProof) console.log(`::notice title=Verify-before-next-payment proof::${gatedBatchProof}`);
     if (ownerProof) console.log(`::notice title=Separate owner payment proof::${ownerProof}`);
+    if (independentProof) console.log(`::notice title=Unified independent and FT multi-resource mission::${independentProof}; ${proof}`);
   }
   console.log(`Contract: ${bid}`);
   console.log(`Explorer: https://testnet.nearblocks.io/address/${bid}?tab=receipts`);

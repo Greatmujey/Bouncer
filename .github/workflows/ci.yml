@@ -129,6 +129,16 @@ jobs:
             node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-3500).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=Guarded OutLayer live check failed::"+s)' "$RUNNER_TEMP/outlayer-live.log"
           fi
           exit "$result"
+      # The journal has public testnet order/transaction data, never private
+      # keys. Preserve it on failure so an ambiguous payment can be reconciled.
+      - name: Preserve unresolved public payment journal
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: outlayer-unresolved-journal
+          path: /tmp/bouncer-outlayer-*/journal.json
+          if-no-files-found: ignore
+          retention-days: 14
 
   outlayer-direct-research:
     name: Independent OutLayer testnet research (not guarded)
@@ -194,7 +204,7 @@ jobs:
 
   testnet-multi:
     name: Live testnet multi-token procurement check
-    if: github.event_name == 'push' && (contains(github.event.head_commit.message, '[multi-resource-smoke]') || contains(github.event.head_commit.message, '[provider-compare]') || contains(github.event.head_commit.message, '[delivery-verify]') || contains(github.event.head_commit.message, '[separate-owner]'))
+    if: github.event_name == 'push' && (contains(github.event.head_commit.message, '[multi-resource-smoke]') || contains(github.event.head_commit.message, '[provider-compare]') || contains(github.event.head_commit.message, '[delivery-verify]') || contains(github.event.head_commit.message, '[separate-owner]') || contains(github.event.head_commit.message, '[mixed-outlayer]'))
     needs: build-contract
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -218,7 +228,8 @@ jobs:
         env:
           BOUNCER_DEMO_COMPARE: ${{ (contains(github.event.head_commit.message, '[provider-compare]') || contains(github.event.head_commit.message, '[delivery-verify]')) && '1' || '0' }}
           BOUNCER_DEMO_BAD_DELIVERY: ${{ contains(github.event.head_commit.message, '[delivery-verify]') && '1' || '0' }}
-          BOUNCER_DEMO_SEPARATE_OWNER: ${{ contains(github.event.head_commit.message, '[separate-owner]') && '1' || '0' }}
+          BOUNCER_DEMO_SEPARATE_OWNER: ${{ (contains(github.event.head_commit.message, '[separate-owner]') || contains(github.event.head_commit.message, '[mixed-outlayer]')) && '1' || '0' }}
+          BOUNCER_DEMO_OUTLAYER: ${{ contains(github.event.head_commit.message, '[mixed-outlayer]') && '1' || '0' }}
         run: |
           set +e
           node bouncer/demo-multi-resource.mjs 2>&1 | tee "$RUNNER_TEMP/multi-resource.log"
@@ -227,6 +238,14 @@ jobs:
             node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-3500).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=Multi-resource check failed::"+s)' "$RUNNER_TEMP/multi-resource.log"
           fi
           exit "$result"
+      - name: Preserve unresolved synthetic testnet journal
+        if: failure() && contains(github.event.head_commit.message, '[mixed-outlayer]')
+        uses: actions/upload-artifact@v4
+        with:
+          name: mixed-testnet-unresolved-journal
+          path: ~/.bouncer/testnet/*.bouncer-journal.json
+          if-no-files-found: ignore
+          retention-days: 14
 
   ai-testnet:
     name: Local AI-planned multi-resource testnet flow
@@ -265,7 +284,8 @@ jobs:
           BOUNCER_DEMO_PUBLIC_DATA: '1'
           BOUNCER_DEMO_COMPARE: ${{ (contains(github.event.head_commit.message, '[ai-provider-compare]') || contains(github.event.head_commit.message, '[ai-delivery-verify]')) && '1' || '0' }}
           BOUNCER_DEMO_BAD_DELIVERY: ${{ contains(github.event.head_commit.message, '[ai-delivery-verify]') && '1' || '0' }}
-          BOUNCER_DEMO_SEPARATE_OWNER: ${{ contains(github.event.head_commit.message, '[separate-owner]') && '1' || '0' }}
+          BOUNCER_DEMO_SEPARATE_OWNER: ${{ (contains(github.event.head_commit.message, '[separate-owner]') || contains(github.event.head_commit.message, '[mixed-outlayer]')) && '1' || '0' }}
+          BOUNCER_DEMO_OUTLAYER: ${{ contains(github.event.head_commit.message, '[mixed-outlayer]') && '1' || '0' }}
           BOUNCER_LLM_URL: http://127.0.0.1:17890/v1/chat/completions
           BOUNCER_LLM_MODEL: bouncer-local-qwen
           BOUNCER_MODEL_CACHE: ${{ runner.temp }}/bouncer-local-model
@@ -285,6 +305,14 @@ jobs:
             node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-3500).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=AI testnet check failed::"+s)' "$RUNNER_TEMP/ai-testnet.log"
           fi
           exit "$result"
+      - name: Preserve unresolved synthetic AI testnet journal
+        if: failure() && contains(github.event.head_commit.message, '[mixed-outlayer]')
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-mixed-testnet-unresolved-journal
+          path: ~/.bouncer/testnet/*.bouncer-journal.json
+          if-no-files-found: ignore
+          retention-days: 14
 
   wallet-probe:
     name: External Meteor testnet page probe (no sign-in)

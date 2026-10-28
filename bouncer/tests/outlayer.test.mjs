@@ -1,9 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { validateOutlayerGoal, verifyOutlayerResult, runOutlayerGoal } from '../agent/outlayer.mjs';
+import nearApi from 'near-api-js';
+import { validateOutlayerGoal, verifyOutlayerResult, runOutlayerGoal, recoverOutlayerGoal } from '../agent/outlayer.mjs';
 
 const key = 'ed25519:agent';
-const hash = '5'.repeat(44), bouncerReceipt = '6'.repeat(44), requestReceipt = '7'.repeat(44);
+const hashBytes = Buffer.alloc(32, 42), hash = nearApi.utils.serialize.base_encode(hashBytes);
+const bouncerReceipt = '6'.repeat(44), requestReceipt = '7'.repeat(44);
 const completedReceipt = '8'.repeat(44), refundReceipt = '9'.repeat(44);
 const goal = {
   id: 'random-1', contract_id: 'bouncer.testnet', owner_account_id: 'owner.testnet',
@@ -60,13 +62,23 @@ function fixture() {
       if (method === 'check') return [true, 'ok'];
       throw new Error(`unexpected view ${method}`);
     },
+    async sendTransactionUntil(signed, wait) {
+      sends++; assert.equal(wait, 'FINAL'); assert.deepEqual(signed, { signed: true });
+      assert.equal(journal.get(goal.id).status, 'pending');
+      assert.equal(journal.get(goal.id).tx_hash, hash); // persisted before broadcast
+      return { transaction_outcome: { id: hash } };
+    },
     async txStatusReceipts(tx, account, wait) { reads++; assert.equal(tx, hash); assert.equal(account, goal.owner_account_id); assert.equal(wait, 'FINAL'); return finalResult(); },
   };
-  const account = { accountId: goal.owner_account_id, async callFunctionRaw(call) {
-    sends++; assert.equal(call.contractId, goal.contract_id); assert.equal(call.methodName, 'execute_outlayer');
-    assert.equal(call.deposit, 0n); assert.equal(call.waitUntil, 'FINAL'); assert.deepEqual(call.args, signedArgs());
-    return { transaction_outcome: { id: hash } };
-  } };
+  const account = { accountId: goal.owner_account_id,
+    signer: { async getPublicKey() { return key; }, async signTransaction(tx) { assert.deepEqual(tx, { unsigned: true }); return [hashBytes, { signed: true }]; } },
+    async createTransaction(receiver, actions, publicKey) {
+      assert.equal(receiver, goal.contract_id); assert.equal(publicKey, key); assert.equal(actions.length, 1);
+      const call = actions[0].functionCall;
+      assert.equal(call.methodName, 'execute_outlayer'); assert.equal(call.deposit, 0n); assert.equal(call.gas, 300n * 10n ** 12n);
+      assert.deepEqual(JSON.parse(Buffer.from(call.args).toString()), signedArgs());
+      return { unsigned: true };
+    } };
   return { provider, account, journal, state, sends: () => sends, reads: () => reads };
 }
 const run = (f, options = {}) => runOutlayerGoal({ goal, publicKey: key, provider: f.provider, account: f.account, journal: f.journal, log: () => {}, ...options });
@@ -129,8 +141,6 @@ test('dry run checks all policy bindings and sends nothing', async () => {
 
 test('one send is journaled before broadcast; recovery reuses the exact transaction', async () => {
   const f = fixture();
-  const original = f.account.callFunctionRaw;
-  f.account.callFunctionRaw = async call => { assert.equal(f.journal.get(goal.id).status, 'pending'); return original(call); };
   const first = await run(f, { execute: true });
   assert.equal(first.status, 'FULFILLED'); assert.equal(f.sends(), 1);
   assert.equal(f.journal.get(goal.id).status, 'completed');
@@ -138,15 +148,21 @@ test('one send is journaled before broadcast; recovery reuses the exact transact
   assert.equal(next.status, 'REUSED'); assert.equal(f.sends(), 1); assert.equal(f.reads(), 2);
 });
 
-test('ambiguous broadcast is never retried and a recorded hash can recover without payment', async () => {
-  const f = fixture();
-  f.account.callFunctionRaw = async () => { throw new Error('network timeout after possible broadcast'); };
+test('ambiguous broadcast has a pre-signed hash and can recover without a signer or another payment', async () => {
+  const f = fixture(); let broadcasts = 0;
+  f.provider.sendTransactionUntil = async () => {
+    broadcasts++; assert.equal(f.journal.get(goal.id).tx_hash, hash);
+    throw new Error('network timeout after possible broadcast');
+  };
   await assert.rejects(run(f, { execute: true }), /do not resend automatically/);
   assert.equal(f.journal.get(goal.id).status, 'pending');
-  await assert.rejects(run(f, { execute: true }), /without a transaction hash/);
-  f.journal.put(goal.id, { ...f.journal.get(goal.id), tx_hash: hash });
-  assert.equal((await run(f, { execute: true })).status, 'REUSED');
+  assert.equal(f.journal.get(goal.id).tx_hash, hash);
+  // Recovery does not query the current access key, contract policy or signer.
+  f.provider.viewAccessKey = async () => { throw new Error('key revoked'); };
+  f.provider.callFunction = async () => { throw new Error('policy changed'); };
+  assert.equal((await recoverOutlayerGoal({ goal, provider: f.provider, journal: f.journal, log: () => {} })).status, 'REUSED');
   assert.equal(f.journal.get(goal.id).status, 'completed');
+  assert.equal(broadcasts, 1);
 });
 
 test('unverified result stays pending with its hash; recovery never sends twice', async () => {
