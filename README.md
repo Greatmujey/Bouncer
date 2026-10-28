@@ -224,8 +224,12 @@ two self-hosted development endpoints quoted 0.10 and 0.08 wNEAR for the same
 explicitly supplied compute task. Bouncer selected the approved cheaper payee,
 [paid it on testnet](https://testnet.nearblocks.io/txns/3ztdLNn4M91nDtqQNUSZZqgwEg3Fh9CaU3XP7BnD8T3S),
 verified the local result and replayed without a second payment. The comparison
-task was deterministic, not model-generated; this is not proof of independent
-commercial providers or guaranteed future delivery.
+task was deterministic. A [later combined AI run](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40667233621/job/122745427128)
+used the local model to propose the comparison task, selected the same cheaper
+quote and [paid on testnet](https://testnet.nearblocks.io/txns/HbibFp8eUpNgdQUV4azi1jG9PVekEY9teupjHgHrDhki).
+That run also completed the three-resource and public-data purchases and replay
+checks. Both tests used self-hosted services, not independent commercial
+providers, and do not guarantee future delivery.
 
 ### Run the resource agent again
 

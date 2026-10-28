@@ -247,7 +247,16 @@ two self-hosted development providers quoted 0.10 and 0.08 wNEAR for one
 explicitly supplied compute task; the agent selected the cheaper approved payee,
 [paid on testnet](https://testnet.nearblocks.io/txns/3ztdLNn4M91nDtqQNUSZZqgwEg3Fh9CaU3XP7BnD8T3S),
 verified the local result and replayed without another payment. That comparison
-task was deterministic, not model-generated; the providers were not commercial.
+task was deterministic. A later combined
+[AI/provider-comparison run](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40667233621/job/122745427128)
+used the local model to propose the comparison task before any accounts were
+created, then selected the approved 0.08 wNEAR quote and
+[paid it on testnet](https://testnet.nearblocks.io/txns/HbibFp8eUpNgdQUV4azi1jG9PVekEY9teupjHgHrDhki).
+It also completed the three-resource and GitHub-data payments and replay checks.
+Its separate security job was skipped; the earlier security/refund success is
+linked above. All compared providers were self-hosted, not commercial. The
+combined optional job uses both markers `[ai-multi-resource]` and
+`[ai-provider-compare]`; tests and demos remain testnet only.
 [Run 40579499294](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40579499294)
 passed with contract `bouncer-ff7d41d8.testnet`: model inference, three real
 synthetic/testnet-token payments and all local deliveries. It used text
