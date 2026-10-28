@@ -11,9 +11,10 @@ import nearApi from 'near-api-js';
 import { validateRpcEndpoint } from '../shared/rpc-endpoint.mjs';
 import { validateProviderOrigin } from '../shared/provider-origin.mjs';
 import { assertFinalPaymentReceipts } from '../shared/final-payment.mjs';
+import { isTransactionHash, verifyDirectPayment } from '../shared/direct-payment-settlement.mjs';
 import { MonotonicAccount } from './near-account.mjs';
 
-const { KeyPair, KeyPairSigner, providers } = nearApi;
+const { KeyPair, KeyPairSigner, providers, transactions, utils } = nearApi;
 const DEFAULT_RPC = 'https://test.rpc.fastnear.com';
 const CONTRACT_VERSIONS = new Set(['bouncer-agent-v4', 'bouncer-agent-v5', 'bouncer-agent-v6', 'bouncer-agent-v7']);
 const U128_MAX = (1n << 128n) - 1n;
@@ -85,9 +86,9 @@ export function requestFingerprint(request) {
  * is sent. An unresolved pending entry is never retried automatically.
  */
 export async function runProcurement({ plan: rawPlan, provider, account, publicKey, journal, journalRoutes, execute = false,
-  log = console.log, onCheck = () => {}, onPaid = async () => {}, stopOnBlocked = false }) {
+  durablePayment = false, log = console.log, onCheck = () => {}, onPaid = async () => {}, stopOnBlocked = false }) {
   const plan = validatePlan(rawPlan);
-  if (typeof onPaid !== 'function' || typeof stopOnBlocked !== 'boolean') throw new Error('invalid procurement execution hooks');
+  if (typeof onPaid !== 'function' || typeof stopOnBlocked !== 'boolean' || typeof durablePayment !== 'boolean') throw new Error('invalid procurement execution hooks');
   let routes;
   if (journalRoutes !== undefined) {
     if (!(journalRoutes instanceof Map) || journalRoutes.size !== plan.requests.length) throw new Error('invalid payment journal routes');
@@ -160,29 +161,56 @@ export async function runProcurement({ plan: rawPlan, provider, account, publicK
       continue;
     }
     const before = BigInt(await provider.callFunction(request.token, 'ft_balance_of', { account_id: request.payee }, { finality: 'final' }));
-    // Persist the exact normalized request before sending. This lets a later
-    // run recover fulfillment of a confirmed payment without asking a vendor
-    // for a new quote; an unresolved pending entry remains non-retryable.
-    const pending = { fingerprint: hash, status: 'pending', request,
+    // Persist the exact normalized request before sending. The opt-in signed
+    // path additionally fsyncs the signed transaction hash BEFORE its one
+    // broadcast. It never stores the key or signed transaction bytes.
+    const args = { policy_id: request.policy_id, payee: request.payee, amount: request.amount,
+      memo: request.memo, expected_token: request.token };
+    let pending = { fingerprint: hash, status: 'pending', request,
       ...(routes ? { provider_route: routes.get(request.id) } : {}), started_at: new Date().toISOString() };
+    let txHash, signed;
+    if (durablePayment) {
+      if (!account.signer || typeof account.createTransaction !== 'function' ||
+          String(await account.signer.getPublicKey()) !== String(publicKey)) throw new Error('signer does not match the reviewed agent key');
+      if (typeof provider.sendTransactionUntil !== 'function' || typeof provider.txStatusReceipts !== 'function') throw new Error('durable payment requires signed broadcast and receipt-inclusive RPC');
+      const transaction = await account.createTransaction(plan.contract_id, [transactions.functionCall('execute', args, GAS, 0n)], publicKey);
+      const action = transaction?.actions?.[0]?.functionCall, reviewedKey = utils.PublicKey.from(String(publicKey));
+      if (transaction?.signerId !== plan.owner_account_id || transaction.receiverId !== plan.contract_id ||
+          String(transaction.publicKey) !== String(publicKey) || !Array.isArray(transaction.actions) || transaction.actions.length !== 1 ||
+          transaction.actions[0]?.enum !== 'functionCall' || action?.methodName !== 'execute' || action.gas !== GAS || action.deposit !== 0n ||
+          !Buffer.from(action.args || []).equals(Buffer.from(JSON.stringify(args)))) throw new Error('prepared transaction does not match the reviewed payment');
+      // Compute the hash independently, and ensure the actual signed payload and
+      // signature match the prepared request before journaling or broadcasting.
+      const unsigned = Buffer.from(transactions.encodeTransaction(transaction));
+      const digest = crypto.createHash('sha256').update(unsigned).digest();
+      const [bytes, signedTransaction] = await account.signer.signTransaction(transaction);
+      if (!(bytes instanceof Uint8Array) || !Buffer.from(bytes).equals(digest) || !signedTransaction?.transaction ||
+          !Buffer.from(transactions.encodeTransaction(signedTransaction.transaction)).equals(unsigned) ||
+          !reviewedKey.verify(digest, signedTransaction.signature?.data)) throw new Error('signed transaction does not match the reviewed payment');
+      txHash = utils.serialize.base_encode(bytes);
+      if (!isTransactionHash(txHash)) throw new Error('invalid signed transaction hash');
+      signed = signedTransaction;
+      pending = { ...pending, payment_version: 'direct-signed-v1', agent_public_key: String(publicKey), tx_hash: txHash };
+    }
     journal.put(request.id, pending);
-    let txHash;
     try {
-      const result = await account.callFunctionRaw({
-        contractId: plan.contract_id,
-        methodName: 'execute',
-        args: { policy_id: request.policy_id, payee: request.payee, amount: request.amount,
-          memo: request.memo, expected_token: request.token },
-        deposit: 0n, gas: GAS, waitUntil: 'FINAL',
-      });
+      const result = durablePayment
+        ? await provider.sendTransactionUntil(signed, 'FINAL')
+        : await account.callFunctionRaw({ contractId: plan.contract_id, methodName: 'execute', args, deposit: 0n, gas: GAS, waitUntil: 'FINAL' });
       const candidateHash = result?.transaction_outcome?.id;
-      if (typeof candidateHash === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(candidateHash)) txHash = candidateHash;
-      if (txHash) journal.put(request.id, { ...pending, tx_hash: txHash });
-      assertFinalPaymentReceipts(result, request.token);
+      if (durablePayment && candidateHash !== txHash) throw new Error('RPC returned a different or missing transaction hash');
+      if (!durablePayment && typeof candidateHash === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(candidateHash)) txHash = candidateHash;
+      if (!durablePayment && txHash) journal.put(request.id, { ...pending, tx_hash: txHash });
+      let settlement;
+      if (durablePayment) {
+        const chain = await provider.txStatusReceipts(txHash, plan.owner_account_id, 'FINAL');
+        settlement = verifyDirectPayment({ result: chain, contractId: plan.contract_id, ownerAccountId: plan.owner_account_id,
+          request, publicKey: String(publicKey), txHash });
+      } else assertFinalPaymentReceipts(result, request.token);
       if (typeof txHash !== 'string' || !/^[A-Za-z0-9_-]{1,100}$/.test(txHash)) throw new Error('invalid transaction hash');
       const after = BigInt(await provider.callFunction(request.token, 'ft_balance_of', { account_id: request.payee }, { finality: 'final' }));
       if (after !== before + BigInt(request.amount)) throw new Error('vendor balance delta did not match the payment');
-      journal.put(request.id, { ...pending, status: 'completed', tx_hash: txHash, completed_at: new Date().toISOString() });
+      journal.put(request.id, { ...pending, status: 'completed', tx_hash: txHash, ...(settlement ? { settlement } : {}), completed_at: new Date().toISOString() });
       log(`[procurement] PAID ${request.id} (${request.resource}): ${request.amount} ${request.token} → ${request.payee} ${EXPLORER(txHash)}`);
       totals.paid++;
     } catch (error) {
@@ -292,6 +320,7 @@ function parseArgs(args) {
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === '--execute') out.execute = true;
+    else if (arg === '--durable') out.durable = true;
     else if (arg === '--help') out.help = true;
     else if (['--plan', '--key', '--state', '--rpc'].includes(arg) && args[i + 1] && !args[i + 1].startsWith('--')) {
       out[arg.slice(2)] = args[++i];
@@ -316,8 +345,8 @@ export function createRuntime({ plan: rawPlan, keyFile, rpc }) {
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   if (options.help) {
-    console.log('Usage: node bouncer/agent/procurement.mjs --plan PLAN.json --key AGENT_KEY.json [--state JOURNAL.json] [--rpc URL] [--execute]');
-    console.log('Dry run by default. --execute submits real testnet payments.');
+    console.log('Usage: node bouncer/agent/procurement.mjs --plan PLAN.json --key AGENT_KEY.json [--state JOURNAL.json] [--rpc URL] [--execute] [--durable]');
+    console.log('Dry run by default. --execute submits real testnet payments. --durable records the signed hash before broadcasting.');
     return;
   }
   if (!options.plan || !options.key) throw new Error('provide --plan and --key; use --help for usage');
@@ -328,7 +357,7 @@ async function main() {
   const journal = options.execute ? new FileJournal(journalPath, plan.contract_id, plan.owner_account_id) : null;
   try {
     console.log(`[procurement] ${options.execute ? 'LIVE TESTNET' : 'DRY RUN'} on ${plan.contract_id}; ${plan.requests.length} request(s)`);
-    const totals = await runProcurement({ plan, provider, account, publicKey, journal, execute: options.execute });
+    const totals = await runProcurement({ plan, provider, account, publicKey, journal, execute: options.execute, durablePayment: options.durable === true });
     console.log(`[procurement] paid=${totals.paid} blocked=${totals.blocked} skipped=${totals.skipped} ready=${totals.ready}`);
     if (options.execute) console.log(`[procurement] journal: ${journalPath}`);
     if (totals.blocked > 0) process.exitCode = 2;

@@ -136,6 +136,7 @@ jobs:
           path: |
             /tmp/bouncer-usdc-*/journal.json
             /tmp/bouncer-usdc-*/goals.json
+            /tmp/bouncer-usdc-*/plan.json
             /tmp/bouncer-usdc-*/provider-config.json
             /tmp/bouncer-usdc-*/development-provider/**
           if-no-files-found: ignore

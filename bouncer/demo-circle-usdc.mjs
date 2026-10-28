@@ -12,6 +12,7 @@ import nearApi from 'near-api-js';
 import { MonotonicAccount } from './agent/near-account.mjs';
 import { FileJournal } from './agent/procurement.mjs';
 import { runResourceAgent, httpResourceProvider } from './agent/resource-agent.mjs';
+import { recoverDirectPayment } from './agent/recover-direct-payment.mjs';
 import { createResourceProvider } from './services/resource-provider.mjs';
 import { validateRpcEndpoint } from './shared/rpc-endpoint.mjs';
 import { waitForNewTestnetKey } from './shared/testnet-ready.mjs';
@@ -150,8 +151,43 @@ async function main() {
   let journal = new FileJournal(state, contractId, ownerId), success = false;
   try {
     const client = httpResourceProvider(`http://127.0.0.1:${service.server.address().port}`);
+    let reviewedPlan;
     const common = { contractId, ownerAccountId: ownerId, goals, getQuote: client.getQuote, readStorage: client.readStorage,
-      provider, account: agent, publicKey: agentKey.getPublicKey(), execute: true, log: console.log };
+      provider, account: agent, publicKey: agentKey.getPublicKey(), execute: true, durablePayment: true, log: console.log,
+      onPlan: plan => {
+        if (!reviewedPlan) {
+          reviewedPlan = plan;
+          fs.writeFileSync(path.join(dir, 'plan.json'), JSON.stringify(plan, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
+        } else if (JSON.stringify(plan) !== JSON.stringify(reviewedPlan)) throw new Error('reviewed resource plan changed');
+      } };
+    // Broadcast the first real payment exactly once, then simulate the RPC
+    // response being lost. Recovery reads FINAL receipts by the pre-saved hash;
+    // no signer is passed to recovery and no second payment is broadcast.
+    let broadcasts = 0;
+    const lossyProvider = new Proxy(provider, { get(target, property) {
+      if (property === 'sendTransactionUntil') return async (...args) => {
+        broadcasts++;
+        const outcome = await target.sendTransactionUntil(...args);
+        if (broadcasts === 1) throw new Error('injected lost response after actual broadcast');
+        return outcome;
+      };
+      const value = Reflect.get(target, property, target);
+      return typeof value === 'function' ? value.bind(target) : value;
+    } });
+    try {
+      await runResourceAgent({ ...common, provider: lossyProvider, journal, fulfill: async () => { throw new Error('delivery before payment recovery'); } });
+      throw new Error('lost-response injection unexpectedly completed');
+    } catch (error) {
+      if (!/payment could not be confirmed.*do not retry automatically.*injected lost response/.test(error.message)) throw error;
+      console.log('    Lost response left one signed-hash pending payment; no automatic retry.');
+    }
+    const pending = journal.get(goals[0].id), firstHash = pending?.tx_hash;
+    if (broadcasts !== 1 || pending?.status !== 'pending' || pending.payment_version !== 'direct-signed-v1' || !firstHash ||
+        journal.get(goals[1].id) || journal.get(goals[2].id) ||
+        BigInt(await view(TOKEN, 'ft_balance_of', { account_id: vendorId })) !== PRICE) throw new Error('lost-response journal or payment mismatch');
+    journal.close(); journal = new FileJournal(state, contractId, ownerId);
+    const recovered = await recoverDirectPayment({ plan: reviewedPlan, requestId: goals[0].id, provider, journal });
+    if (recovered.settlement.tx_hash !== firstHash || journal.get(goals[0].id)?.status !== 'completed') throw new Error('key-free payment recovery mismatch');
     let injected = false;
     try {
       await runResourceAgent({ ...common, journal, fulfill: async order => {
@@ -164,8 +200,8 @@ async function main() {
       if (!/verification failed after confirmed payment/.test(error.message)) throw error;
       console.log('    Corrupt delivery blocked all later payments.');
     }
-    const first = journal.get(goals[0].id), firstHash = first?.tx_hash;
-    if (!injected || !firstHash || first.delivery?.status !== 'unverified' || journal.get(goals[1].id) || journal.get(goals[2].id) ||
+    const first = journal.get(goals[0].id);
+    if (!injected || first?.tx_hash !== firstHash || first.delivery?.status !== 'unverified' || journal.get(goals[1].id) || journal.get(goals[2].id) ||
         BigInt(await view(TOKEN, 'ft_balance_of', { account_id: vendorId })) !== PRICE) throw new Error('verify-before-next-payment gate failed');
     journal.close(); journal = new FileJournal(state, contractId, ownerId);
     const result = await runResourceAgent({ ...common, journal, fulfill: client.fulfill });
@@ -177,8 +213,9 @@ async function main() {
     const hashes = Object.fromEntries(goals.map(goal => [goal.resource, journal.get(goal.id).tx_hash]));
     console.log(`::notice title=Circle testnet USDC guarded multi-resource mission::${JSON.stringify({ contract: contractId, owner: ownerId, vendor: vendorId, token: TOKEN,
       pool: quote.pool_id, owner_setup_swap: swap.transaction_outcome.id, owner_vault_funding: funding.transaction_outcome.id, resource_transactions: hashes,
-      units_per_resource: PRICE.toString(), total_micro_usdc: (3n * PRICE).toString(), corrupt_delivery_stopped_later_payments: true,
-      first_hash_reused_on_restart: true, provider: 'self-hosted development', testnet_usdc_has_no_real_value: true, owner_swap_guarded: false })}`);
+      units_per_resource: PRICE.toString(), total_micro_usdc: (3n * PRICE).toString(), lost_response_recovered_by_hash_without_key: true,
+      corrupt_delivery_stopped_later_payments: true, first_hash_reused_on_restart: true, provider: 'self-hosted development',
+      testnet_usdc_has_no_real_value: true, owner_swap_guarded: false })}`);
     success = true;
   } finally {
     journal.close();
