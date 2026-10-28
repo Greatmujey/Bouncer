@@ -136,7 +136,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: outlayer-unresolved-journal
-          path: /tmp/bouncer-outlayer-*/journal.json
+          path: |
+            /tmp/bouncer-outlayer-*/journal.json
+            /tmp/bouncer-outlayer-*/goal.json
           if-no-files-found: ignore
           retention-days: 14
 

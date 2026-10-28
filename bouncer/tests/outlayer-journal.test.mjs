@@ -1,7 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import nearApi from 'near-api-js';
 import { runOutlayerGoal, recoverOutlayerGoal } from '../agent/outlayer.mjs';
+import { FileJournal } from '../agent/procurement.mjs';
+import { finishDemoEvidence } from '../demo-outlayer.mjs';
 
 const key = 'ed25519:agent';
 const bytes = Buffer.alloc(32, 4), hash = nearApi.utils.serialize.base_encode(bytes);
@@ -53,4 +58,28 @@ test('a changed reviewed goal or missing signing key cannot be recovered', async
   const old = f.entries.get(goal.id); delete old.agent_public_key;
   await assert.rejects(recoverOutlayerGoal({ goal, provider: f.provider, journal: f.journal }), /public key is required/);
   assert.equal(f.sends(), 1);
+});
+
+test('live demo preserves its goal and pending journal on failure; success removes only the temporary directory', () => {
+  for (const completed of [false, true]) {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'bouncer-evidence-test-'));
+    const journalPath = path.join(directory, 'journal.json'), goalPath = path.join(directory, 'goal.json');
+    fs.writeFileSync(goalPath, JSON.stringify(goal));
+    const journal = new FileJournal(journalPath, goal.contract_id, goal.owner_account_id);
+    journal.put(goal.id, { status: 'pending', fingerprint: 'x', tx_hash: hash, outlayer_goal: goal, agent_public_key: key });
+    const messages = [];
+    finishDemoEvidence({ journal, directory, journalPath, goalPath, completed, log: message => messages.push(message) });
+    if (completed) {
+      assert.equal(fs.existsSync(directory), false);
+      assert.deepEqual(messages, []);
+    } else {
+      assert.equal(fs.existsSync(goalPath), true);
+      assert.equal(fs.existsSync(`${journalPath}.lock`), false);
+      assert.match(messages[0], /never resend automatically/);
+      const reopened = new FileJournal(journalPath, goal.contract_id, goal.owner_account_id);
+      assert.equal(reopened.get(goal.id).tx_hash, hash);
+      reopened.close();
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  }
 });

@@ -3,8 +3,10 @@
 This document describes the **current bounded prototype**, to help a potential
 independent provider evaluate compatibility. It is not an adopted standard,
 an audited payment protocol, or evidence that any independent provider has
-integrated. The only live fulfillment tests so far use Bouncer's self-hosted
-development providers. Do not use it with valuable funds.
+adopted this **FT** interface. Its live fulfillment tests use Bouncer's
+self-hosted development providers. Bouncer's separate
+[OutLayer integration](OUTLAYER.md) uses OutLayer's own native-NEAR API, not
+this protocol. Do not use either path with valuable funds.
 
 ## Trust and setup
 

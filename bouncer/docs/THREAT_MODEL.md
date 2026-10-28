@@ -22,11 +22,19 @@ It has not been audited and must not hold valuable funds.
   callback attempts to restore the vault and the **original** hourly bucket if
   the token transfer fails. The demo inspects receipts and exact token balances
   rather than trusting a successful callback status alone.
+- V5 additionally tracks native NEAR and pins a bounded OutLayer program to a
+  native policy. The owner installs a separate `execute_outlayer`-only key. The
+  full maximum deposit is debited and budgeted up front, while any unused
+  accepted-execution refund is sent to the owner. A failed promise is never
+  treated as proof that the full native deposit returned to the vault.
 
 A [v4 testnet run](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40558301848)
 verified a restricted-key payment, both escalation-guard layers and a failed FT
-transfer whose callback restored the vault and daily budget. It does not prove
-all possible callback or token failure cases.
+transfer whose callback restored the vault and daily budget. A separate-owner
+[v5 OutLayer check](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40681361587/job/122793284625)
+verified one independently operated native-NEAR execution and owner refund; it
+checked output range, not TEE attestation or randomness. Neither run proves all
+possible callback, provider or token failure cases.
 
 ## Remaining risks
 
@@ -47,7 +55,9 @@ all possible callback or token failure cases.
 5. **Views are policy previews, not authorization checks.** `check` and
    `try_execute` do not identify a transaction signing key. V4 has no owner
    view, so a preflight cannot verify that the supplied signer account is the
-   owner; execution still enforces it on-chain. The runner requires the RPC to
+   owner; execution still enforces it on-chain. V5 exposes `get_owner` and the
+   OutLayer runner checks it; the older FT preflight still relies on the
+   on-chain signer check. The runner requires the RPC to
    report `testnet`, but a malicious RPC can lie. The raw procurement CLI checks
    requests independently. The resource agent (and its MCP preview) makes
    tentative shared-budget and vault reservations and aborts a blocked batch
@@ -97,7 +107,10 @@ all possible callback or token failure cases.
    process's nonces monotonic to mitigate stale RPC reads; it does not coordinate
    concurrent processes using the same key or
    retry a failed send. Use one writer per key and reconcile pending payments
-   manually.
+   manually. For OutLayer, the signed transaction hash is journaled before the
+   one broadcast and can be re-queried without a private key; an absent or
+   expired hash is still not automatically resent. FT payments use their own
+   existing journal path and do not yet pre-record the signed hash.
 9. **Provider verification and operations are not trustless.** The provider
    trusts its configured RPC, Bouncer deployment/code and token contracts. It
    verifies transaction arguments and receipts, but cannot protect against a
@@ -119,8 +132,19 @@ all possible callback or token failure cases.
    independent attestations.
 10. **Prior contracts are unsafe to upgrade without migration.** Older contracts
    have different state and authorization; v3 and v4 also interpret budget bucket
-   keys differently. Deploy v4 fresh. Hourly spend buckets are not pruned and
-   incur ongoing state/storage costs; the 25 reads per check also consume gas.
+   keys differently; v5 adds state again. Deploy v5 fresh; no migration is
+   supplied. Hourly spend buckets are not pruned and incur ongoing state/storage
+   costs; the 25 reads per check also consume gas.
+11. **OutLayer is a trusted independent service, not trustless compute.** Its
+   payment is native NEAR rather than an FT. Provider/RPC availability,
+   contract code, program hosting and the owner-pinned hash are assumptions;
+   output range alone does not establish randomness or verify TEE attestation.
+   The full maximum stays budgeted even after an owner refund. A rejection may
+   return untracked funds to the contract, while a failed accepted execution
+   may only partially refund the owner. The owner must inspect receipts and
+   reconcile; no generic failed-promise callback restores the maximum. Inputs
+   are public. OutLayer's prepaid FT key or direct x402 delegation would not be
+   protected by this per-call policy.
 
 The owner key, NEAR protocol, token implementation, callback availability and
 software correctness are trust assumptions. Offline JavaScript mocks are not

@@ -7,6 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import util from 'node:util';
+import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import nearApi from 'near-api-js';
 import { MonotonicAccount } from './agent/near-account.mjs';
@@ -15,7 +16,8 @@ import { runOutlayerGoal, recoverOutlayerGoal, RANDOM_TESTNET_PROGRAM } from './
 import { validateRpcEndpoint } from './shared/rpc-endpoint.mjs';
 
 const { KeyPair, KeyPairSigner, providers, transactions } = nearApi;
-const provider = new providers.JsonRpcProvider({ url: validateRpcEndpoint(process.env.NEAR_TESTNET_RPC || 'https://test.rpc.fastnear.com') });
+const RPC = validateRpcEndpoint(process.env.NEAR_TESTNET_RPC || 'https://test.rpc.fastnear.com');
+const provider = new providers.JsonRpcProvider({ url: RPC });
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const ONE = 10n ** 24n, TGAS = 10n ** 12n;
 const amount = ONE / 10n, funding = 3n * amount;
@@ -75,6 +77,14 @@ async function createFunded(id, key) {
   return accountFor(id, key);
 }
 
+// Never destroy the only local copy of an unresolved testnet payment. The
+// failure artifact contains just the synthetic goal and public journal, not keys.
+export function finishDemoEvidence({ journal, directory, journalPath, goalPath, completed, log = console.error }) {
+  journal.close();
+  if (completed) fs.rmSync(directory, { recursive: true, force: true });
+  else log(`Unresolved testnet evidence preserved: goal=${goalPath}; journal=${journalPath}. Reconcile the recorded hash; never resend automatically.`);
+}
+
 async function main() {
   if ((await provider.viewNodeStatus())?.chain_id !== 'testnet') throw new Error('RPC must report testnet');
   const wasm = fs.readFileSync(path.join(ROOT, 'bouncer.wasm'));
@@ -114,8 +124,10 @@ async function main() {
   const goal = { id: 'external-random', contract_id: contractId, owner_account_id: ownerId, policy_id: policyId,
     amount: amount.toString(), input: { min: 1, max: 100 }, program };
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bouncer-outlayer-'));
-  const journal = new FileJournal(path.join(dir, 'journal.json'), contractId, ownerId);
-  let sends = 0, inject = true;
+  const journalPath = path.join(dir, 'journal.json'), goalPath = path.join(dir, 'goal.json');
+  fs.writeFileSync(goalPath, JSON.stringify(goal, null, 2) + '\n', { mode: 0o600 });
+  let journal = new FileJournal(journalPath, contractId, ownerId);
+  let sends = 0, inject = true, completed = false;
   const faultProvider = new Proxy(provider, { get(target, property) {
     if (property === 'sendTransactionUntil') return async (...args) => { sends++; return target.sendTransactionUntil(...args); };
     if (property === 'txStatusReceipts') return async (...args) => {
@@ -142,6 +154,16 @@ async function main() {
     paidHash = journal.get(goal.id)?.tx_hash;
     if (!paidHash || sends !== 1 || journal.get(goal.id)?.status !== 'pending') throw new Error('uncertain delivery was not durably journaled');
     console.log(`    ✅ Local evidence fault stopped delivery after one send; recovering ${txUrl(paidHash)}`);
+    // Exercise the actual no-key CLI in a fresh process, using the same goal,
+    // journal and transaction hash. Release the local lock first; if the CLI
+    // fails the evidence directory is retained for manual reconciliation.
+    journal.close();
+    const cli = await util.promisify(execFile)(process.execPath, [path.join(ROOT, 'bouncer/agent/outlayer.mjs'),
+      '--goal', goalPath, '--state', journalPath, '--rpc', RPC, '--recover'], { timeout: 90_000, maxBuffer: 64 * 1024 });
+    if (!cli.stdout.includes('REUSED') || !cli.stdout.includes(paidHash)) throw new Error('key-free recovery CLI did not reuse the recorded transaction');
+    journal = new FileJournal(journalPath, contractId, ownerId);
+    if (journal.get(goal.id)?.status !== 'completed' || journal.get(goal.id)?.tx_hash !== paidHash) throw new Error('key-free CLI did not persist verified recovery');
+    console.log('    ✅ A separate key-free recovery CLI verified and persisted the same transaction.');
     const recovered = await recoverOutlayerGoal({ goal, provider, journal });
     if (recovered.status !== 'REUSED' || recovered.delivery.tx_hash !== paidHash || sends !== 1) throw new Error('recovery did not reuse the paid transaction');
     const again = await recoverOutlayerGoal({ goal, provider, journal });
@@ -155,9 +177,11 @@ async function main() {
     console.log('Evidence scope: testnet native NEAR, trusted RPC and OutLayer receipts; output range only. TEE attestation and randomness quality were not independently verified.');
     await setupCall(owner, contractId, 'withdraw_native', { amount: balance.toString() }, 1n);
     if (BigInt(await view(contractId, 'vault_balance', { token: 'native' })) !== 0n) throw new Error('native withdrawal did not clear the tracked vault');
+    completed = true;
   } finally {
-    journal.close();
-    fs.rmSync(dir, { recursive: true, force: true });
+    finishDemoEvidence({ journal, directory: dir, journalPath, goalPath, completed });
   }
 }
-main().catch(error => { console.error(error); process.exitCode = 1; });
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch(error => { console.error(error); process.exitCode = 1; });
+}

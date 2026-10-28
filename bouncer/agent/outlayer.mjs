@@ -105,7 +105,7 @@ function events(result, name) {
       try {
         const event = JSON.parse(log.slice('EVENT_JSON:'.length));
         if (event.standard === 'near-outlayer' && event.event === name && Array.isArray(event.data)) {
-          for (const data of event.data) out.push({ data, outcome: receipt.outcome });
+          for (const data of event.data) out.push({ data, outcome: receipt.outcome, receiptId: receipt.id });
         }
       } catch { /* Unrelated malformed logs are not evidence. */ }
     }
@@ -155,7 +155,8 @@ export function verifyOutlayerResult(rawGoal, result, publicKey) {
       args.payer_account_id !== goal.owner_account_id || args.response_format !== 'Json' || args.secrets_ref !== null || args.params !== null) {
     throw new Error('OutLayer receipt does not match the pinned program, input, limits and owner refund');
   }
-  const requested = events(result, 'execution_requested').filter(({ data }) => {
+  const requested = events(result, 'execution_requested').filter(({ data, receiptId }) => {
+    if (receiptId !== requests[0].receipt.receipt_id) return false;
     try {
       const request = JSON.parse(data.request_data);
       return request.sender_id === goal.owner_account_id && request.predecessor_id === goal.contract_id &&

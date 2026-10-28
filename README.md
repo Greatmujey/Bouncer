@@ -1,18 +1,17 @@
 # Bouncer — autonomous multi-resource procurement on NEAR
 
-Bouncer aims to let an AI agent buy several resources — such as compute,
-storage, and API credits — using different NEAR fungible tokens, subject to
-owner-defined spending policies. The current prototype implements the vault and
-policy checks. The v4 prototype has passed a three-token testnet quote → payment
-→ self-hosted delivery check and a separate restricted-key security/refund check.
-An optional model adapter translates natural-language objectives into tasks
-within an owner-controlled catalog, which can compare quotes from explicitly
-approved providers using the same token. The agent also checks the bounded
-example deliveries and saves local receipts before proceeding to the next payment;
-see [AI agent setup and limits](bouncer/docs/AI_AGENT.md). A separate read-only
-command can discover untrusted public marketplace listings; it cannot hire or pay.
-No model or inference service is bundled. This is unaudited testnet software,
-not suitable for real funds.
+Bouncer aims to let an AI agent buy compute, storage and API/data resources
+with owner-defined spending policies across NEAR assets. Its testnet prototype
+has paid three fungible tokens for self-hosted development services, and has
+also paid independently operated OutLayer for a bounded compute task using
+native NEAR through a restricted Bouncer key. The latter is **not** an FT or
+stablecoin purchase. An optional model translates objectives into tasks within
+an owner-controlled catalog; it does not choose financial authority. Bounded
+delivery checks and a local journal gate later payments. See
+[AI agent setup](bouncer/docs/AI_AGENT.md) and
+[guarded independent compute](bouncer/docs/OUTLAYER.md). A separate marketplace
+catalog search is read-only. No model or inference service is bundled. This is
+unaudited testnet software, not suitable for real funds.
 
 ## Website preview (read-only)
 
@@ -68,6 +67,10 @@ AI Swarms are potential extensions, not completed integrations.
 
 ## Contract capabilities in this branch
 
+The checked-in `bouncer.wasm` is built from v5 source (SHA-256
+`ac6e5c8d73ef64e44ae1ecb84c9aa704ec542d0dbd3ffbce89f2a9b6e872bd15`).
+V5 needs a fresh deployment; there is no migration from older state.
+
 - NEP-141 deposits; token-specific vault balances and per-policy caps.
 - A direct `execute` call must come from the owner account, with **zero**
   attached deposit and a signing public key explicitly granted to that policy.
@@ -81,8 +84,13 @@ AI Swarms are potential extensions, not completed integrations.
   payments on that policy. `daily_spent` reports the current budget usage.
 - Policy changes, agent-key grants/revocations, payee changes and withdrawals
   require the owner and exactly **1 yoctoNEAR**.
-- A transfer failure callback attempts to refund the vault and the original
+- An FT transfer failure callback attempts to refund the vault and the original
   spend bucket. A failed callback can still leave a debit unresolved.
+- V5 separately tracks native NEAR. An owner-pinned OutLayer program and an
+  `execute_outlayer`-only key can request a bounded testnet execution under the
+  same cap, budget and allowlist controls. The **full maximum deposit** remains
+  counted against the budget; OutLayer's unused deposit goes directly to the
+  owner, not back into the Bouncer vault. It is not an FT payment.
 
 The updated check is designed to use a real restricted key to pay wNEAR, deny
 other callers and policies, revoke a payee and a key, and test both layers of
@@ -97,7 +105,8 @@ Offline mocks are not proof of on-chain behavior.
   including `bouncer-a958bd.testnet`, still have the older unauthenticated
   `execute` and a different state layout. The v4 rolling-budget bucket semantics
   also differ from v3. Do not upgrade older deployments without a migration or
-  use them for valuable funds. The script creates a fresh account.
+  use them for valuable funds. V5 adds native state and also requires a fresh
+  deployment; no migration is provided. The scripts create fresh accounts.
 - The security check uses **one token (wNEAR)**. The separate multi-token check
   creates two synthetic testnet credit FTs and sends payments to three vendor
   accounts. It is not a USDC/stablecoin demonstration.
@@ -114,8 +123,10 @@ Offline mocks are not proof of on-chain behavior.
   one readback from the same provider, and GitHub checking covers repository
   identity only, not the truth or freshness of its other fields. Local receipts
   are editable records, not signed invoices. The separate public catalog search
-  is read-only, not a purchasing integration: independent vendor fulfillment,
-  invoices, stablecoin flows and NEAR Intents remain unfinished.
+  is read-only, not a purchasing integration. OutLayer is a separate native-NEAR
+  compute integration, not an adopter of this experimental FT-provider protocol;
+  independent storage/API purchases, invoices, stablecoin flows and NEAR Intents
+  remain unfinished.
 - Token trust is not enforced; configure policies only for trusted FTs. The
   planner and configured development provider accept owner-pinned 64-hex token
   IDs on a testnet-reported RPC, but no stablecoin purchase has been tested.
@@ -242,6 +253,32 @@ quote and [paid on testnet](https://testnet.nearblocks.io/txns/HbibFp8eUpNgdQUV4
 That run also completed the three-resource and public-data purchases and replay
 checks. Both tests used self-hosted services, not independent commercial
 providers, and do not guarantee future delivery.
+
+### Guarded independent compute on testnet
+
+A separate-owner [live check](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40681361587/job/122793284625)
+used an `execute_outlayer`-only key to call the independently operated
+`outlayer.testnet` through a fresh Bouncer v5 deployment. In
+[transaction `7RDx…R7N9`](https://testnet.nearblocks.io/txns/7RDxWqUYd4GvC9dNLmq4Bgu3do93QcthZ7Hyj8rdR7N9),
+the 0.1 NEAR maximum produced a number in the requested 1–100 range. The
+provider charged 0.0010213 NEAR and the unused 0.0989787 NEAR was verified as
+refunded to the separate owner. The demo rejected over-cap and zero-deposit
+program-escalation attempts, injected a local evidence fault, and recovered the
+same transaction without a second payment. The maximum 0.1 NEAR remained in
+the rolling budget.
+
+The verifier trusts the configured RPC and OutLayer contract. An in-range output
+is **not** independent verification of TEE attestation or randomness quality.
+This is one bounded random-number program, paid in testnet native NEAR; it is
+not a general independent cloud marketplace or a USDC purchase. A mixed-mission
+runner can combine that owner-selected task with FT-backed resource goals; its
+previews are non-atomic and earlier payments cannot be rolled back if later
+work fails. In the [full mixed test](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40681361587/job/122793284540),
+the same separate-owner deployment paid [OutLayer](https://testnet.nearblocks.io/txns/7pfoABwbLRBsEuhfrPnF2GgdNEn2Vc244t4punA3h98e)
+and then fulfilled AI-planned compute, storage, API and public-data goals using
+three FTs and self-hosted development providers. The model did not select the
+OutLayer task. An injected FT-result fault stopped later payments until the same
+transaction was recovered. See [setup, recovery and trust boundaries](bouncer/docs/OUTLAYER.md).
 
 ### Read-only independent marketplace discovery
 

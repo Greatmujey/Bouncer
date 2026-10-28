@@ -105,6 +105,7 @@ test('rejects misleading, incomplete or mismatched chain evidence', () => {
     r => { const a = outlayerArgs(); a.payer_account_id = 'attacker.testnet'; r.receipts[0].receipt.Action.actions[0].FunctionCall.args = encode(a); },
     r => { const a = outlayerArgs(); a.source.WasmUrl.hash = 'b'.repeat(64); r.receipts[0].receipt.Action.actions[0].FunctionCall.args = encode(a); },
     r => { r.receipts_outcome[1].outcome.logs = []; },
+    r => { r.receipts_outcome[2].outcome.logs.push(...r.receipts_outcome[1].outcome.logs); r.receipts_outcome[1].outcome.logs = []; },
     r => { r.receipts_outcome[2].outcome.logs = []; },
     r => { r.receipts[1].receiver_id = 'attacker.testnet'; },
     r => { r.receipts[1].receipt.Action.actions[0].Transfer.deposit = '89'; },
@@ -172,6 +173,16 @@ test('unverified result stays pending with its hash; recovery never sends twice'
   assert.equal(f.sends(), 1); assert.equal(f.journal.get(goal.id).status, 'pending'); assert.equal(f.journal.get(goal.id).tx_hash, hash);
   f.provider.txStatusReceipts = async () => finalResult();
   assert.equal((await run(f, { execute: true })).status, 'REUSED'); assert.equal(f.sends(), 1);
+});
+
+test('recovery rejects an RPC response for another otherwise matching transaction', async () => {
+  const f = fixture();
+  f.provider.txStatusReceipts = async () => { const r = finalResult(); r.transaction.hash = 'A'.repeat(44); r.transaction_outcome.id = r.transaction.hash; return r; };
+  await assert.rejects(run(f, { execute: true }), /different transaction/);
+  assert.equal(f.sends(), 1);
+  assert.equal(f.journal.get(goal.id).tx_hash, hash);
+  await assert.rejects(recoverOutlayerGoal({ goal, provider: f.provider, journal: f.journal, log: () => {} }), /different transaction/);
+  assert.equal(f.sends(), 1);
 });
 
 test('stops before payment on wrong chain, excess key permission or altered program', async () => {
