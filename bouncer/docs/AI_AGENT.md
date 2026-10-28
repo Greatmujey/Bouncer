@@ -298,6 +298,18 @@ an AI delivery proof. Fresh testnet demo setup now retries an explicit
 pre-admission `Expired` RPC error once; timeouts, receipt outcomes and agent
 procurement payments are never retried by that helper.
 
+The [subsequent combined AI/live verification job](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40673056154/job/122765249942)
+passed after those failures. On `bouncer-3e6fcb2e.testnet`, the pinned local
+Qwen model proposed the tasks before account setup; the agent bought compute,
+storage, text API and GitHub data and compared the two self-hosted providers.
+The locally corrupted comparison result was rejected and recovered without a
+requote or second payment using [transaction `5Jnhhr…ayvf`](https://testnet.nearblocks.io/txns/5JnhhrRpWSfuSBVvfw25BSVrtQPQWRoyTnff2dKAayvf).
+The GitHub receipt records **repository identity only**. The same workflow's
+[deterministic job](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40673056154/job/122765249982),
+JavaScript tests, Rust tests and wasm build also passed; its security job was
+not run. These are testnet payments to development services, not proof of an
+independent provider or future storage availability.
+
 ## Verification
 
 `npm test --prefix bouncer` includes mock-model/mock-chain tests for malicious

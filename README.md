@@ -255,8 +255,13 @@ the reply locally, rejected it and recovered using the [same payment](https://te
 without requoting. The fault was injected by the demo, not evidence of provider
 misconduct. The job also checked storage readback, text statistics and receipts.
 A [separate security/refund job](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40671752050/job/122760598164)
-passed; the AI job in that run failed during policy setup on a testnet
-`Transaction has expired` error, before resource purchases.
+passed; the AI job in that run failed during setup on a testnet expiry error.
+A [subsequent combined AI job](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40673056154/job/122765249942)
+passed with the synced journal: the local model planned the tasks, all five
+payments completed, and the injected bad reply was rejected and recovered
+using the [same transaction](https://testnet.nearblocks.io/txns/5JnhhrRpWSfuSBVvfw25BSVrtQPQWRoyTnff2dKAayvf).
+The GitHub check verified repository identity only; the providers were still
+self-hosted development services.
 
 ### Run the resource agent again
 
