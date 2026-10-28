@@ -403,7 +403,7 @@ impl Bouncer {
             "payer_account_id": self.owner.clone(), "params": null,
         });
         env::log_str("BOUNCER independent compute initiated; full maximum reserved");
-        Promise::new(payee).function_call("request_execution".into(), args.to_string().into_bytes(),
+        Promise::new(payee).function_call("request_execution", args.to_string().into_bytes(),
             NearToken::from_yoctonear(amount.0), GAS_FOR_OUTLAYER)
     }
 
