@@ -74,7 +74,8 @@ Account.prototype.signAndSendTransaction = async function ({ receiverId, actions
 };
 providers.JsonRpcProvider.prototype.viewNodeStatus = async () => ({ chain_id: process.env.BOUNCER_MOCK_MODE === 'wrong_chain' ? 'mainnet' : (process.env.MOCK_CHAIN || 'testnet') });
 providers.JsonRpcProvider.prototype.viewAccessKey = async function (_id, publicKey) {
-  return { permission: { FunctionCall: accessKeys.get(publicKey.toString()) } };
+  const permission = accessKeys.get(publicKey.toString());
+  return { permission: permission ? { FunctionCall: permission } : 'FullAccess' };
 };
 Account.prototype.callFunctionRaw = async function ({ contractId, methodName, args, deposit, gas, waitUntil }) {
   if (typeof gas !== 'bigint' || typeof deposit !== 'bigint' || waitUntil !== 'FINAL') fail('invalid call options');
@@ -139,7 +140,7 @@ Account.prototype.callFunctionRaw = async function ({ contractId, methodName, ar
 };
 providers.JsonRpcProvider.prototype.callFunction = async function (id, method, args) {
   switch (method) {
-    case 'contract_version': return 'bouncer-agent-v6';
+    case 'contract_version': return 'bouncer-agent-v7';
     case 'get_required': return (2n * 10n ** 24n).toString();
     case 'ft_metadata': return tokens.get(id);
     case 'storage_balance_bounds': return { min: '1250000000000000000000', max: null };

@@ -137,6 +137,8 @@ jobs:
             /tmp/bouncer-ftcall-*/goal.json
             /tmp/bouncer-ftcall-*/refund-goal.json
             /tmp/bouncer-ftcall-*/project-goal.json
+            /tmp/bouncer-ftcall-*/resource-goals.json
+            /tmp/bouncer-ftcall-*/development-provider/**
           if-no-files-found: ignore
           retention-days: 7
 

@@ -17,7 +17,11 @@ import { MonotonicAccount } from './agent/near-account.mjs';
 import { FileJournal } from './agent/procurement.mjs';
 import { runFtCallGoal, recoverFtCallGoal } from './agent/ft-call.mjs';
 import { runProjectGoal, recoverProjectGoal } from './agent/outlayer-project.mjs';
+import { runPaidProjectMission } from './agent/paid-mission.mjs';
+import { createResourceProvider } from './services/resource-provider.mjs';
+import { httpResourceProvider } from './agent/resource-agent.mjs';
 import { validateRpcEndpoint } from './shared/rpc-endpoint.mjs';
+import { waitForNewTestnetKey } from './shared/testnet-ready.mjs';
 
 const { KeyPair, KeyPairSigner, providers, transactions } = nearApi;
 const RPC = validateRpcEndpoint(process.env.NEAR_TESTNET_RPC || 'https://test.rpc.fastnear.com');
@@ -87,10 +91,76 @@ async function createFunded(id, key) {
   const response = await fetch('https://helper.testnet.near.org/account', { method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ newAccountId: id, newAccountPublicKey: key.getPublicKey().toString() }), signal: AbortSignal.timeout(30_000) });
   if (!response.ok) throw new Error(`testnet helper HTTP ${response.status}`);
+  await waitForNewTestnetKey(provider, id, key.getPublicKey());
   return accountFor(id, key);
 }
 function expected(goal) { return { policy_id: goal.policy_id, payee: goal.payee, amount: goal.amount, expected_token: goal.token,
   expected_msg: goal.msg, expected_policy_revision: goal.policy_revision, expected_route_revision: goal.route_revision }; }
+
+// Continue the settled independent paid connector with three guarded
+// development resources in ONE journal. A locally corrupted delivery must
+// stop later payments; recovery must reuse every prior transaction hash.
+async function provePaidMission({ contract, contractId, owner, ownerId, fundingAgent, fundingKey, projectAgent, projectKey,
+  fundingGoal, projectGoal, journal, dir }) {
+  const price = 100_000_000_000_000_000_000n; // 0.0001 testnet wNEAR per resource
+  const policy = 'development-resources', vendorId = `vendor.${contractId}`;
+  const vendorKey = KeyPair.fromRandom('ed25519'), resourceKey = KeyPair.fromRandom('ed25519');
+  const created = await setupAttempt('create development provider account', () => contract.signAndSendTransaction({ receiverId: vendorId,
+    actions: [transactions.createAccount(), transactions.transfer(ONE / 10n), transactions.addKey(vendorKey.getPublicKey(), transactions.fullAccessKey())], waitUntil: 'FINAL' }));
+  receiptsOk(created, 'create development provider account');
+  await register(owner, WRAP, vendorId);
+  await call(owner, WRAP, 'ft_transfer_call', { receiver_id: contractId, amount: (3n * price).toString(), memo: 'paid-mission resources', msg: '' }, 1n, 200n * TGAS);
+  if (BigInt(await view(contractId, 'vault_balance', { token: WRAP })) !== 3n * price) throw new Error('development resource vault setup mismatch');
+  await call(owner, contractId, 'set_policy', { policy_id: policy, token: WRAP, per_tx_cap: price.toString(), daily_cap: (3n * price).toString() }, 1n);
+  await call(owner, contractId, 'allow_payee', { policy_id: policy, payee: vendorId }, 1n);
+  await call(owner, contractId, 'grant_agent_key', { public_key: resourceKey.getPublicKey().toString(), policy_id: policy }, 1n);
+  await addKey(owner, contractId, resourceKey, ['execute']);
+  const resourceAgent = accountFor(ownerId, resourceKey);
+  const products = Object.fromEntries(['compute', 'storage', 'api'].map(resource => [resource,
+    { policy_id: policy, token: WRAP, payee: vendorId, amount: price.toString() }]));
+  const goals = [
+    { id: 'paid-mission-compute', resource: 'compute', input: { text: 'independent paid mission', rounds: 25 } },
+    { id: 'paid-mission-storage', resource: 'storage', input: { name: 'paid-mission', content: 'Verified after the independent paid probe.' } },
+    { id: 'paid-mission-api', resource: 'api', input: { text: 'paid multi resource mission' } },
+  ].map(goal => ({ ...goal, policy_id: policy, token: WRAP, payee: vendorId, max_amount: price.toString() }));
+  fs.writeFileSync(path.join(dir, 'resource-goals.json'), JSON.stringify(goals, null, 2), { mode: 0o600 });
+  const service = createResourceProvider({ rpcProvider: provider, contractId, ownerAccountId: ownerId, products,
+    dataDir: path.join(dir, 'development-provider') });
+  await new Promise((resolve, reject) => { service.server.once('error', reject); service.server.listen(0, '127.0.0.1', resolve); });
+  try {
+    const client = httpResourceProvider(`http://127.0.0.1:${service.server.address().port}`);
+    const initialFundingHash = journal.get(fundingGoal.id)?.tx_hash, initialProjectHash = journal.get(projectGoal.id)?.tx_hash;
+    const common = { provider, journal, execute: true, log: console.log,
+      funding: { goal: fundingGoal, account: fundingAgent, publicKey: fundingKey.getPublicKey() },
+      project: { goal: projectGoal, account: projectAgent, publicKey: projectKey.getPublicKey() },
+      resources: { contractId, ownerAccountId: ownerId, goals, account: resourceAgent, publicKey: resourceKey.getPublicKey(),
+        getQuote: client.getQuote, readStorage: client.readStorage } };
+    let injected = false;
+    try {
+      await runPaidProjectMission({ ...common, resources: { ...common.resources, fulfill: async order => {
+        const result = await client.fulfill(order);
+        if (!injected && order.resource === 'compute') { injected = true; return { ...result, result: '0'.repeat(64) }; }
+        throw new Error('later fulfillment ran before recovery');
+      } } });
+      throw new Error('bad compute delivery unexpectedly passed');
+    } catch (error) {
+      if (!/verification failed after confirmed payment/.test(error.message)) throw error;
+      console.log('    ✅ bad compute delivery blocked subsequent mission payments');
+    }
+    const compute = journal.get(goals[0].id), computeHash = compute?.tx_hash;
+    if (!injected || !computeHash || compute.delivery?.status !== 'unverified' || journal.get(goals[1].id) || journal.get(goals[2].id) ||
+        BigInt(await view(WRAP, 'ft_balance_of', { account_id: vendorId })) !== price) throw new Error('verify-before-next-payment gate failed');
+    const result = await runPaidProjectMission({ ...common, resources: { ...common.resources, fulfill: client.fulfill } });
+    if (result.status !== 'FULFILLED' || result.resources.deliveries.length !== 3 ||
+        journal.get(fundingGoal.id)?.tx_hash !== initialFundingHash || journal.get(projectGoal.id)?.tx_hash !== initialProjectHash ||
+        journal.get(goals[0].id)?.tx_hash !== computeHash || goals.some(goal => journal.get(goal.id)?.delivery?.status !== 'verified') ||
+        BigInt(await view(WRAP, 'ft_balance_of', { account_id: vendorId })) !== 3n * price) {
+      throw new Error('paid multi-resource mission recovery or delivery mismatch');
+    }
+    const hashes = goals.map(goal => `${goal.resource}:${journal.get(goal.id).tx_hash}`).join('; ');
+    console.log(`::notice title=Paid-provider and FT multi-resource recovery proof::contract=${contractId}; funding_tx=${initialFundingHash}; paid_probe_tx=${initialProjectHash}; ${hashes}; first_compute_hash_reused=true; later_payments_blocked_until_verified=true; probe_http=${result.independent.delivery.result.http_status}; resources=self-hosted-development; mission=non-atomic`);
+  } finally { await new Promise(resolve => service.server.close(resolve)); }
+}
 
 async function main() {
   if ((await provider.viewNodeStatus())?.chain_id !== 'testnet') throw new Error('RPC must report testnet');
@@ -110,7 +180,7 @@ async function main() {
   receiptsOk(created, 'create owner');
   const owner = accountFor(ownerId, ownerKey), agent = accountFor(ownerId, agentKey), attacker = accountFor(ownerId, attackKey);
   await call(contract, contractId, 'new', { owner: ownerId });
-  if (await view(contractId, 'contract_version') !== 'bouncer-agent-v6' || await view(contractId, 'get_owner') !== ownerId) throw new Error('stale contract or unexpected owner');
+  if (await view(contractId, 'contract_version') !== 'bouncer-agent-v7' || await view(contractId, 'get_owner') !== ownerId) throw new Error('stale contract or unexpected owner');
 
   for (const [token, id] of [[WRAP, ownerId], [WRAP, contractId], [WRAP, OUTLAYER], [TOKEN, ownerId], [TOKEN, contractId], [TOKEN, OUTLAYER]]) await register(owner, token, id);
   await call(owner, WRAP, 'near_deposit', {}, ONE / 500n, 50n * TGAS);
@@ -255,6 +325,8 @@ async function main() {
         BigInt(await view(contractId, 'daily_spent', { policy_id: 'refund-test' })) !== 0n) throw new Error('rejected token was not fully restored');
     console.log(`::notice title=Guarded FT receiver rejection and refund::contract=${contractId}; tx=${refunded.settlement.tx_hash}; token=${WRAP}; used=0; unused=${REFUND_AMOUNT}; budget_restored=true`);
     await call(owner, contractId, 'withdraw', { token: WRAP, amount: REFUND_AMOUNT.toString() }, 1n);
+    await provePaidMission({ contract, contractId, owner, ownerId, fundingAgent: agent, fundingKey: agentKey,
+      projectAgent, projectKey, fundingGoal: goal, projectGoal, journal, dir });
     await call(owner, contractId, 'withdraw_native', { amount: (PROJECT_NATIVE_FUNDING - PROJECT_NATIVE_MAX).toString() }, 1n);
     completed = true;
   } finally {

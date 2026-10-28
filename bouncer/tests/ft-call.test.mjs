@@ -155,3 +155,9 @@ test('send errors remain pending and changed goals or recorded settlements are n
   const prior = f.journal.get(goal.id); f.journal.put(goal.id, { ...prior, settlement: { ...prior.settlement, used: '61' } });
   await assert.rejects(recoverFtCallGoal({ goal, provider: f.provider, journal: f.journal, log: () => {} }), /differs/);
 });
+
+test('FT calls support the distinct fresh v7 layout as well as existing v6 deployments', async () => {
+  const f = fixture(), call = f.provider.callFunction;
+  f.provider.callFunction = async (id, method, ...rest) => method === 'contract_version' ? 'bouncer-agent-v7' : call(id, method, ...rest);
+  assert.equal((await run(f)).status, 'READY'); assert.equal(f.sends(), 0);
+});

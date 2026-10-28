@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import crypto from 'node:crypto';
 import nearApi from 'near-api-js';
 import { validateRpcEndpoint } from './shared/rpc-endpoint.mjs';
+import { waitForNewTestnetKey } from './shared/testnet-ready.mjs';
 import { MonotonicAccount } from './agent/near-account.mjs';
 
 const { KeyPair, KeyPairSigner, providers, transactions } = nearApi;
@@ -51,7 +52,9 @@ async function helperCreate(id, publicKey) {
     signal: AbortSignal.timeout(30_000),
   });
   if (!response.ok) throw new Error(`testnet helper ${response.status}: ${await response.text()}`);
-  return response.json();
+  const body = await response.json();
+  await waitForNewTestnetKey(provider, id, publicKey);
+  return body;
 }
 
 // A callback can succeed after a failed ft_transfer. A successful top-level
@@ -167,7 +170,7 @@ async function main() {
   let version;
   try { version = await view(bouncerId, 'contract_version', {}); }
   catch (error) { throw new Error('The deployed wasm is stale; wait for the CI wasm build and git pull again.', { cause: error }); }
-  if (version !== 'bouncer-agent-v6') throw new Error(`Unsupported contract version: ${version}`);
+  if (version !== 'bouncer-agent-v7') throw new Error(`Unsupported contract version: ${version}`);
 
   console.log('\n=== 3) Create user and vendor sub-accounts ===');
   const userKey = KeyPair.fromRandom('ed25519');

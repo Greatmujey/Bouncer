@@ -14,6 +14,7 @@ import { MonotonicAccount } from './agent/near-account.mjs';
 import { FileJournal } from './agent/procurement.mjs';
 import { runOutlayerGoal, recoverOutlayerGoal, RANDOM_TESTNET_PROGRAM } from './agent/outlayer.mjs';
 import { validateRpcEndpoint } from './shared/rpc-endpoint.mjs';
+import { waitForNewTestnetKey } from './shared/testnet-ready.mjs';
 
 const { KeyPair, KeyPairSigner, providers, transactions } = nearApi;
 const RPC = validateRpcEndpoint(process.env.NEAR_TESTNET_RPC || 'https://test.rpc.fastnear.com');
@@ -74,6 +75,7 @@ async function createFunded(id, key) {
     signal: AbortSignal.timeout(30_000),
   });
   if (!response.ok) throw new Error(`testnet helper HTTP ${response.status}`);
+  await waitForNewTestnetKey(provider, id, key.getPublicKey());
   return accountFor(id, key);
 }
 
@@ -104,7 +106,7 @@ async function main() {
   receiptsOk(created, 'create owner');
   const owner = accountFor(ownerId, ownerKey);
   await setupCall(contract, contractId, 'new', { owner: ownerId });
-  if (await view(contractId, 'contract_version') !== 'bouncer-agent-v6' || await view(contractId, 'get_owner') !== ownerId) throw new Error('stale contract or wrong owner');
+  if (await view(contractId, 'contract_version') !== 'bouncer-agent-v7' || await view(contractId, 'get_owner') !== ownerId) throw new Error('stale contract or wrong owner');
 
   await setupCall(owner, contractId, 'deposit_native', {}, funding);
   await setupCall(owner, contractId, 'set_policy', { policy_id: policyId, token: 'native', per_tx_cap: amount.toString(), daily_cap: amount.toString() }, 1n);

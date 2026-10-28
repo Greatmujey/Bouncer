@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * A single owner-pinned NEP-141 transfer-call under Bouncer v6. This reports
+ * A single owner-pinned NEP-141 transfer-call under Bouncer v6 or v7. This reports
  * token settlement ONLY: a receiver retaining tokens is not proof that it
  * delivered a storage/API/compute service. The exact action/message, receiver,
  * token and revisions must already have been approved on chain by the owner.
@@ -110,7 +110,7 @@ export function verifyFtCallSettlement(rawGoal, result, publicKey) {
   if (callbacks.length !== 1 || String(callbacks[0].call.deposit) !== '0') throw new Error('missing unique settlement callback');
   const callbackArgs = decode(callbacks[0].call.args, 'settlement callback arguments');
   const callbackFields = ['policy_id', 'token', 'amount', 'bucket', 'policy_revision'];
-  // Early v6 test deployments used the five-field callback. Current v6 also
+  // Early v6 test deployments used the five-field callback. Later v6 and v7 also
   // carries the pinned payee/message to account for OutLayer prepaid credit.
   const legacyCallback = owns(callbackArgs, callbackFields);
   const currentCallback = owns(callbackArgs, [...callbackFields, 'payee', 'msg']) && callbackArgs.payee === goal.payee && callbackArgs.msg === goal.msg;
@@ -160,7 +160,7 @@ export async function runFtCallGoal({ goal: rawGoal, provider, account, publicKe
     provider.callFunction(goal.contract_id, 'contract_version', {}, final), provider.callFunction(goal.contract_id, 'get_owner', {}, final),
     provider.viewAccessKey(goal.owner_account_id, publicKey, final),
   ]);
-  if (version !== 'bouncer-agent-v6' || owner !== goal.owner_account_id) throw new Error('unsupported Bouncer version or unexpected owner');
+  if (!['bouncer-agent-v6', 'bouncer-agent-v7'].includes(version) || owner !== goal.owner_account_id) throw new Error('unsupported Bouncer version or unexpected owner');
   const permission = access?.permission?.FunctionCall;
   if (!permission || permission.receiver_id !== goal.contract_id || !equal(permission.method_names, ['execute_ft_call'])) throw new Error('agent key must be scoped ONLY to execute_ft_call on this contract');
   const previous = journal?.get(goal.id), hash = fingerprint(goal);

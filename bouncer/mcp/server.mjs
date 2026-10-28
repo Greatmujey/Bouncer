@@ -18,7 +18,7 @@ import { httpResourceProvider, runResourceAgent } from '../agent/resource-agent.
 import { RUN } from '../web/evidence.mjs';
 
 const DEFAULT_RPC = 'https://test.rpc.fastnear.com';
-const VERSIONS = new Set(['bouncer-agent-v4', 'bouncer-agent-v5', 'bouncer-agent-v6']);
+const VERSIONS = new Set(['bouncer-agent-v4', 'bouncer-agent-v5', 'bouncer-agent-v6', 'bouncer-agent-v7']);
 const publicKeyPattern = /^ed25519:[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 const accountPattern = /^(?=.{2,64}$)[a-z0-9]+(?:[-_][a-z0-9]+)*(?:\.[a-z0-9]+(?:[-_][a-z0-9]+)*)*\.testnet$/;
 const account = z.string().regex(accountPattern, 'Must be an explicit .testnet account ID');
@@ -73,14 +73,14 @@ export function createBouncerMcpServer({ provider = new nearApi.providers.JsonRp
 
   server.registerTool('bouncer_inspect_policy', {
     title: 'Inspect a testnet policy',
-    description: 'Read a v4 or v5 Bouncer policy, conservative rolling spend and vault balance from final NEAR testnet views. No signing or transaction.',
+    description: 'Read a v4–v7 Bouncer policy, conservative rolling spend and vault balance from final NEAR testnet views. No signing or transaction.',
     inputSchema: { contract_id: account, policy_id: policy }, annotations,
   }, async ({ contract_id, policy_id }) => {
     try {
       await assertTestnet(provider);
       const final = { finality: 'final' };
       const version = await provider.callFunction(contract_id, 'contract_version', {}, final);
-      if (!VERSIONS.has(version)) return toolError('This contract does not report a supported Bouncer v4, v5 or v6 version. A version string alone does not verify deployed code.');
+      if (!VERSIONS.has(version)) return toolError('This contract does not report a supported Bouncer v4, v5, v6 or v7 version. A version string alone does not verify deployed code.');
       const settings = await provider.callFunction(contract_id, 'get_policy', { policy_id }, final);
       if (!settings) return toolError('Policy was not found.');
       if (!accountOrImplicit.safeParse(settings.token).success || typeof settings.per_tx_cap !== 'string' || !/^\d{1,39}$/.test(settings.per_tx_cap) || typeof settings.daily_cap !== 'string' || !/^\d{1,39}$/.test(settings.daily_cap)) {

@@ -188,7 +188,7 @@ export async function runProjectGoal({ goal: rawGoal, provider, account, publicK
   const final = { finality: 'final' };
   const [version, owner, access] = await Promise.all([provider.callFunction(goal.contract_id, 'contract_version', {}, final),
     provider.callFunction(goal.contract_id, 'get_owner', {}, final), provider.viewAccessKey(goal.owner_account_id, publicKey, final)]);
-  if (version !== 'bouncer-agent-v6' || owner !== goal.owner_account_id) throw new Error('unsupported Bouncer version or unexpected owner');
+  if (version !== 'bouncer-agent-v7' || owner !== goal.owner_account_id) throw new Error('unsupported Bouncer version or unexpected owner');
   const permission = access?.permission?.FunctionCall;
   if (!permission || permission.receiver_id !== goal.contract_id || !equal(permission.method_names, ['execute_outlayer_project'])) throw new Error('agent key must be scoped ONLY to execute_outlayer_project on this contract');
   const previous = journal?.get(goal.id), hash = fingerprint(goal);
@@ -209,8 +209,9 @@ export async function runProjectGoal({ goal: rawGoal, provider, account, publicK
   ]);
   if (!equal(route, goal.route) || nativePolicy?.token !== 'native' || usdPolicy?.token !== p.token || nativeGrant !== true || usdGrant !== true) throw new Error('project route, policies or key grants changed');
   const usd = BigInt(p.attached_usd), max = unsigned(usdPolicy.per_tx_cap, 'prepaid cap'), daily = unsigned(usdPolicy.daily_cap, 'prepaid daily cap');
-  if (usd > max || (daily > 0n && unsigned(usdSpent, 'prepaid spend') + usd > daily) || unsigned(credit, 'prepaid credit') < usd) {
-    log(`[project] BLOCKED ${goal.id}: prepaid cap, rolling budget or credit`); return { status: 'BLOCKED' };
+  const available = unsigned(credit, 'prepaid credit');
+  if (usd > max || (daily > 0n && unsigned(usdSpent, 'prepaid spend') + usd > daily)) {
+    log(`[project] BLOCKED ${goal.id}: prepaid cap or rolling budget`); return { status: 'BLOCKED' };
   }
   const row = pricing?.operations?.filter(item => item?.operation === 'fetch');
   if (configuredToken !== p.token || pricing?.author_account_id !== goal.expected_author || !Array.isArray(row) || row.length !== 1 ||
@@ -220,6 +221,13 @@ export async function runProjectGoal({ goal: rawGoal, provider, account, publicK
   }
   if (!Array.isArray(verdict) || verdict.length !== 2 || typeof verdict[0] !== 'boolean') throw new Error('invalid native policy verdict');
   if (!verdict[0]) { log(`[project] BLOCKED ${goal.id}: ${String(verdict[1]).slice(0, 200)}`); return { status: 'BLOCKED' }; }
+  if (available < usd) {
+    if (!execute) {
+      log(`[project] FUNDING REQUIRED ${goal.id}: shortfall ${usd - available} test-token units; no payment sent`);
+      return { status: 'FUNDING_REQUIRED', shortfall: (usd - available).toString() };
+    }
+    log(`[project] BLOCKED ${goal.id}: insufficient recorded prepaid credit`); return { status: 'BLOCKED' };
+  }
   if (!execute) { log(`[project] READY ${goal.id}: native <=${goal.amount}, fake test USD=${p.attached_usd} (dry run)`); return { status: 'READY' }; }
   if (!account.signer || typeof account.createTransaction !== 'function' || String(await account.signer.getPublicKey()) !== String(publicKey)) throw new Error('signer does not match reviewed key');
   const action = transactions.functionCall('execute_outlayer_project', signedArgs(goal), GAS, 0n);
@@ -279,7 +287,7 @@ async function main() {
       outcome = await runProjectGoal({ goal, provider, account, publicKey: key.getPublicKey(), journal, execute: options.execute });
     }
     if (outcome.delivery) console.log(JSON.stringify(outcome.delivery, null, 2));
-    if (outcome.status === 'BLOCKED') process.exitCode = 2;
+    if (outcome.status === 'BLOCKED' || outcome.status === 'FUNDING_REQUIRED') process.exitCode = 2;
   } finally { journal?.close(); }
 }
 if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url) {

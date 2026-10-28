@@ -44,7 +44,7 @@ function fixture() {
     async viewNodeStatus() { return { chain_id: 'testnet' }; },
     async viewAccessKey() { return { permission: { FunctionCall: { receiver_id: goal.contract_id, method_names: ['execute_outlayer_project'] } } }; },
     async callFunction(_, method, args) {
-      if (method === 'contract_version') return 'bouncer-agent-v6';
+      if (method === 'contract_version') return 'bouncer-agent-v7';
       if (method === 'get_owner') return goal.owner_account_id;
       if (method === 'get_outlayer_project') return structuredClone(route);
       if (method === 'get_policy') return args.policy_id === goal.native_policy_id ? { token: 'native', per_tx_cap: '100', daily_cap: '200' } : { token: route.project.token, per_tx_cap: '15000', daily_cap: '30000' };
@@ -121,6 +121,7 @@ test('provider repricing, stale routes, insufficient credit and dangerous key sc
   }
   const f = fixture(), original = f.provider.callFunction;
   f.provider.callFunction = async (c, m, a, o) => m === 'outlayer_prepaid_balance' ? '14999' : original(c, m, a, o);
+  assert.deepEqual(await run(f), { status: 'FUNDING_REQUIRED', shortfall: '1' });
   assert.deepEqual(await run(f, { execute: true }), { status: 'BLOCKED' }); assert.equal(f.sends(), 0);
   f.provider.viewAccessKey = async () => ({ permission: { FunctionCall: { receiver_id: goal.contract_id, method_names: ['execute_outlayer_project', 'set_policy'] } } });
   await assert.rejects(run(f, { execute: true }), /scoped ONLY/);
@@ -140,4 +141,10 @@ test('uncertain project result remains pending and key-free recovery never resen
   f.provider.txStatusReceipts = read;
   assert.equal((await recoverProjectGoal({ goal, provider: f.provider, journal: f.journal, log: () => {} })).status, 'REUSED');
   assert.equal(f.sends(), 1);
+});
+
+test('new paid-project sends require the distinct v7 storage layout', async () => {
+  const f = fixture(), call = f.provider.callFunction;
+  f.provider.callFunction = async (id, method, ...rest) => method === 'contract_version' ? 'bouncer-agent-v6' : call(id, method, ...rest);
+  await assert.rejects(run(f), /unsupported Bouncer version/); assert.equal(f.sends(), 0);
 });

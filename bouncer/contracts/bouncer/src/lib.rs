@@ -349,7 +349,7 @@ impl Bouncer {
         })
     }
 
-    pub fn contract_version(&self) -> &'static str { "bouncer-agent-v6" }
+    pub fn contract_version(&self) -> &'static str { "bouncer-agent-v7" }
 
     /// Lets clients verify the refund recipient; a version string alone does
     /// not verify deployed code or the RPC.

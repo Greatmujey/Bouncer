@@ -17,6 +17,7 @@ import { httpResourceProvider, routedResourceProvider, runResourceAgent } from '
 import { createModelClient, goalsFromModel, planObjective } from './agent/goal-planner.mjs';
 import { compareApprovedQuotes } from './agent/quote-comparison.mjs';
 import { validateRpcEndpoint } from './shared/rpc-endpoint.mjs';
+import { waitForNewTestnetKey } from './shared/testnet-ready.mjs';
 import { MonotonicAccount } from './agent/near-account.mjs';
 import { RANDOM_TESTNET_PROGRAM } from './agent/outlayer.mjs';
 import { runMixedMission } from './agent/mixed-mission.mjs';
@@ -58,6 +59,7 @@ async function createFunded(id, key) {
   });
   if (!response.ok) throw new Error(`testnet helper ${response.status}: ${await response.text()}`);
   await response.json();
+  await waitForNewTestnetKey(provider, id, key.getPublicKey());
   saveKey(id, key);
   return account(id, key);
 }
@@ -212,7 +214,7 @@ async function main() {
   assertReceipts(deploy, 'deploy');
   console.log(`    ✅ deploy ${txUrl(deploy.transaction_outcome.id)}`);
   await call(bouncer, bid, 'new', { owner: ownerId });
-  if (await view(bid, 'contract_version', {}) !== 'bouncer-agent-v6') throw new Error('stale wasm: wait for CI and git pull');
+  if (await view(bid, 'contract_version', {}) !== 'bouncer-agent-v7') throw new Error('stale wasm: wait for CI and git pull');
 
   console.log(`\n=== 2) Create funded user and ${compareDemo ? 'four' : 'three'} development vendor accounts ===`);
   const userKey = KeyPair.fromRandom('ed25519');
