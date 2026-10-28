@@ -78,6 +78,33 @@ does not imply provider misconduct.
   runner rejects it. OutLayer's separate prepaid FT payment keys and direct
   x402 delegation are not this guarded per-call payment and are not used here.
 
+## Separate prepaid FT and priced connector path
+
+V7 can fund an owner-pinned OutLayer prepaid balance using `execute_ft_call`,
+then call an owner-pinned project under **separate** native and prepaid-token
+policies. The FT route fixes the token, receiver and exact message, with policy
+and route revisions; the project route fixes its version, input, fee and
+resource limits. Separate restricted keys and policy grants are required. FT
+settlement proves only how much the trusted token reports as used, not that a
+provider delivered anything.
+
+The [live paid-provider test](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40699116807/job/122854642930)
+funded OutLayer with fake testnet USDC.e, then paid for a version-pinned
+connectivity probe using that prepaid balance and native NEAR. The probe
+returned HTTP **405**; it is not useful API data or a commercial API purchase.
+The unified mission recovered that payment and continued to self-hosted FT
+resources, stopping later payments until a corrupted local delivery was checked.
+
+Provider-held credit is distinct from Bouncer's FT vault. In this path a project
+refund can be credited to Bouncer's balance **at OutLayer**, not returned to
+Bouncer's vault. The conservative local ledger can understate returned credit
+and strand it; no general user-balance withdrawal is assumed. Provider and
+contract balance views are non-atomic. Reconcile any ambiguous or failed payment
+manually; never automatically repay. Pricing, versions, contract code, RPC and
+provider behavior remain trust assumptions. Inspect `ft-call.mjs`,
+`outlayer-project.mjs` and `paid-mission.mjs` with `--help` for their separate
+reviewed goals and journals.
+
 ## Try the mixed mission
 
 The optional demo creates **fresh testnet accounts**, a v7 deployment, synthetic

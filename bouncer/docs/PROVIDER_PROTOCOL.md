@@ -5,8 +5,10 @@ independent provider evaluate compatibility. It is not an adopted standard,
 an audited payment protocol, or evidence that any independent provider has
 adopted this **FT** interface. Its live fulfillment tests use Bouncer's
 self-hosted development providers. Bouncer's separate
-[OutLayer integration](OUTLAYER.md) uses OutLayer's own native-NEAR API, not
-this protocol. Do not use either path with valuable funds.
+[OutLayer integration](OUTLAYER.md) uses OutLayer's native-NEAR and separate
+prepaid-project interfaces, not this protocol. The Circle testnet USDC mission
+also uses this self-hosted provider; its tokens have no real value. Do not use
+any path with valuable funds.
 
 ## Trust and setup
 

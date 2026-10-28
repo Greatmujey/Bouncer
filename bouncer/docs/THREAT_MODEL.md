@@ -27,6 +27,11 @@ It has not been audited and must not hold valuable funds.
   full maximum deposit is debited and budgeted up front, while any unused
   accepted-execution refund is sent to the owner. A failed promise is never
   treated as proof that the full native deposit returned to the vault.
+- V6/V7 add owner-pinned FT transfer-call messages and revisions. The owner
+  must trust the token and exact receiver behavior; final settlement alone does
+  not establish provider delivery. V7 also tracks conservative OutLayer
+  prepaid credit and requires separate native and token policies, grants and
+  caps for an owner-pinned priced project.
 
 A [v4 testnet run](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40558301848)
 verified a restricted-key payment, both escalation-guard layers and a failed FT
@@ -142,16 +147,19 @@ possible callback, provider or token failure cases.
    Deploy v7 fresh; no migration is supplied. A reported version is not proof
    of code identity. Hourly spend buckets are not pruned and incur ongoing
    state/storage costs; the 25 reads per check also consume gas.
-11. **OutLayer is a trusted independent service, not trustless compute.** Its
-   payment is native NEAR rather than an FT. Provider/RPC availability,
-   contract code, program hosting and the owner-pinned hash are assumptions;
-   output range alone does not establish randomness or verify TEE attestation.
-   The full maximum stays budgeted even after an owner refund. A rejection may
-   return untracked funds to the contract, while a failed accepted execution
-   may only partially refund the owner. The owner must inspect receipts and
-   reconcile; no generic failed-promise callback restores the maximum. Inputs
-   are public. OutLayer's prepaid FT key or direct x402 delegation would not be
-   protected by this per-call policy.
+11. **OutLayer is a trusted independent service, not trustless compute.** The
+   random-number example uses native NEAR; the separate priced-project path
+   also spends an owner-pinned provider-held prepaid FT balance. Provider/RPC
+   availability, contract code, program hosting and the owner-pinned hash are
+   assumptions; output range alone does not establish randomness or verify TEE
+   attestation. The full native maximum stays budgeted even after an owner
+   refund. An accepted failure may only partially refund the owner; a rejected
+   request may return untracked funds to the contract. A project refund can
+   instead return to Bouncer's provider-held prepaid balance, not the vault;
+   the conservative ledger may understate funds and strand credit. Views are
+   non-atomic. Reconcile uncertain results manually; no generic callback
+   restores the full maximum. Inputs are public. OutLayer's separate HTTPS
+   payment keys or direct x402 delegation would bypass this per-call policy.
 
 The owner key, NEAR protocol, token implementation, callback availability and
 software correctness are trust assumptions. Offline JavaScript mocks are not
