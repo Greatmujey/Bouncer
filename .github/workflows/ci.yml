@@ -82,6 +82,10 @@ jobs:
           # -Os can strip panic messages; -O1 keeps errors readable.
           wasm-opt -O1 --strip-debug -o bouncer.opt.wasm bouncer.wasm && mv bouncer.opt.wasm bouncer.wasm
           ls -lh bouncer.wasm
+      # This only catches an accidentally stale build; it is not a code audit
+      # or proof that any independently deployed contract matches this binary.
+      - name: Check built artifact matches the source version marker
+        run: node bouncer/scripts/check-wasm-artifact.mjs
       - name: Save the exact build for the testnet job
         uses: actions/upload-artifact@v4
         with:
