@@ -89,7 +89,7 @@ jobs:
           path: bouncer.wasm
           if-no-files-found: error
       - name: Commit built wasm on branch pushes
-        if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/arena/')
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/arena/') && !contains(github.event.head_commit.message, '[artifact-only]')
         run: |
           git config user.name "CI Bot"
           git config user.email "ci@bouncer.local"
