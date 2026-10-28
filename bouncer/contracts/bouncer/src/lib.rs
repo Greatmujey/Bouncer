@@ -1,10 +1,13 @@
 use near_sdk::json_types::U128;
 use near_sdk::store::LookupMap;
-use near_sdk::{env, ext_contract, near, AccountId, Gas, NearToken, PanicOnDefault, Promise, PublicKey};
+use near_sdk::{env, ext_contract, near, AccountId, Gas, NearToken, PanicOnDefault, Promise, PromiseOrValue, PublicKey};
 
 const ONE_YOCTO: NearToken = NearToken::from_yoctonear(1);
 const ZERO_NEAR: NearToken = NearToken::from_yoctonear(0);
 const GAS_FOR_FT_TRANSFER: Gas = Gas::from_tgas(15);
+// A transfer-call needs gas for both the independent receiver and the FT's
+// resolve step. The outer transaction uses 300 TGas and reserves a callback.
+const GAS_FOR_FT_TRANSFER_CALL: Gas = Gas::from_tgas(200);
 const GAS_FOR_RESOLVE: Gas = Gas::from_tgas(15);
 // OutLayer uses yield/resume. The caller must attach enough gas for this
 // cross-contract request; the user's restricted key still attaches zero NEAR.
@@ -14,6 +17,7 @@ const NATIVE_ASSET: &str = "native";
 const OUTLAYER_TESTNET: &str = "outlayer.testnet";
 const NATIVE_SURPLUS_RESERVE: u128 = 50_000_000_000_000_000_000_000; // 0.05 NEAR
 const MAX_OUTLAYER_INPUT_BYTES: usize = 4096;
+const MAX_FT_CALL_MESSAGE_BYTES: usize = 2048;
 const NS_PER_HOUR: u64 = 60 * 60 * 1_000_000_000;
 const WINDOW_HOURS: u64 = 24;
 #[cfg(test)]
@@ -34,10 +38,12 @@ fn require(cond: bool, msg: &str) { if !cond { abort_with(msg); } }
 #[ext_contract(ext_ft)]
 trait ExtFt {
     fn ft_transfer(&mut self, receiver_id: AccountId, amount: U128, memo: Option<String>);
+    fn ft_transfer_call(&mut self, receiver_id: AccountId, amount: U128, memo: Option<String>, msg: String) -> PromiseOrValue<U128>;
 }
 #[ext_contract(ext_self)]
 trait ExtSelf {
     fn after_execute(&mut self, policy_id: String, token: AccountId, amount: U128, bucket: u64);
+    fn after_execute_ft_call(&mut self, policy_id: String, token: AccountId, amount: U128, bucket: u64, policy_revision: u64) -> Option<U128>;
     fn after_withdraw(&mut self, token: AccountId, amount: U128);
     fn after_native_withdraw(&mut self, amount: U128);
 }
@@ -64,6 +70,17 @@ pub struct PolicyView {
     pub daily_cap: U128,
 }
 
+#[derive(near_sdk::serde::Serialize)]
+#[serde(crate = "near_sdk::serde")]
+pub struct FtCallRouteView {
+    pub token: AccountId,
+    pub msg: String,
+    pub policy_revision: u64,
+    pub route_revision: u64,
+    /// False after a policy change; the owner must review and pin it again.
+    pub active: bool,
+}
+
 #[near(contract_state)]
 #[derive(PanicOnDefault)]
 pub struct Bouncer {
@@ -82,6 +99,12 @@ pub struct Bouncer {
     // JSON is stored as a string so the existing map can persist the exact
     // owner-approved program without accepting a mutable provider project ID.
     outlayer_programs: LookupMap<String, String>,
+    // Policy changes invalidate prior route reviews. Each route also has a
+    // monotonic revision so a clear/re-pin cannot revive a stale signature.
+    ft_policy_revisions: LookupMap<String, u64>,
+    // (route revision, optional (token, exact message, policy revision)). A
+    // tombstone retains the revision when an owner clears or revokes a route.
+    ft_call_routes: LookupMap<(String, AccountId), (u64, Option<(AccountId, String, u64)>)>,
 }
 
 fn allow_key(pid: &str, p: &str) -> String {
@@ -169,6 +192,8 @@ impl Bouncer {
             agents: LookupMap::new(b"k"),
             native_balance: 0,
             outlayer_programs: LookupMap::new(b"o"),
+            ft_policy_revisions: LookupMap::new(b"p"),
+            ft_call_routes: LookupMap::new(b"f"),
         }
     }
 
@@ -176,6 +201,9 @@ impl Bouncer {
     pub fn set_policy(&mut self, policy_id: String, token: AccountId, per_tx_cap: U128, daily_cap: Option<U128>) {
         require_owner(self, env::attached_deposit()).unwrap_or_else(|m| abort_with(&m));
         if per_tx_cap.0 == 0 { abort_with("per_tx_cap must be > 0"); }
+        let revision = self.ft_policy_revisions.get(&policy_id).copied().unwrap_or(0)
+            .checked_add(1).unwrap_or_else(|| abort_with("policy revision overflow"));
+        self.ft_policy_revisions.insert(policy_id.clone(), revision);
         self.token_of.insert(policy_id.clone(), token);
         self.cap_of.insert(policy_id.clone(), per_tx_cap.0);
         self.daily_of.insert(policy_id, daily_cap.map(|u| u.0).unwrap_or(0));
@@ -217,13 +245,55 @@ impl Bouncer {
     pub fn revoke_payee(&mut self, policy_id: String, payee: AccountId) {
         require_owner(self, env::attached_deposit()).unwrap_or_else(|m| abort_with(&m));
         let k = allow_key(&policy_id, payee.as_str());
+        let route_key = (policy_id.clone(), payee);
+        if let Some((revision, _)) = self.ft_call_routes.get(&route_key) {
+            let next = revision.checked_add(1).unwrap_or_else(|| abort_with("route revision overflow"));
+            self.ft_call_routes.insert(route_key, (next, None));
+        }
         if self.allow.remove(&k).is_some() {
             let n = self.allow_count.get(&policy_id).cloned().unwrap_or(1);
             self.allow_count.insert(policy_id, n.saturating_sub(1));
         }
     }
 
-    pub fn contract_version(&self) -> &'static str { "bouncer-agent-v5" }
+    /// Pin the exact NEP-141 receiver message for a previously allowed payee.
+    /// This is powerful configuration: it may encode actions or destinations.
+    /// Review the token, receiver and whole message before signing with 1 yocto.
+    #[payable]
+    pub fn set_ft_call_message(&mut self, policy_id: String, payee: AccountId, msg: String) {
+        require_owner(self, env::attached_deposit()).unwrap_or_else(|m| abort_with(&m));
+        let token = self.token_of.get(&policy_id).cloned().unwrap_or_else(|| abort_with("policy does not exist"));
+        require(token.as_str() != NATIVE_ASSET, "ft_transfer_call requires an FT policy");
+        require(self.allow.get(&allow_key(&policy_id, payee.as_str())) == Some(&true),
+            "payee must already be allowed");
+        require(msg.len() <= MAX_FT_CALL_MESSAGE_BYTES, "FT receiver message is too large");
+        let policy_revision = self.ft_policy_revisions.get(&policy_id).copied()
+            .unwrap_or_else(|| abort_with("policy revision is missing"));
+        let key = (policy_id, payee);
+        let route_revision = self.ft_call_routes.get(&key).map(|v| v.0).unwrap_or(0)
+            .checked_add(1).unwrap_or_else(|| abort_with("route revision overflow"));
+        self.ft_call_routes.insert(key, (route_revision, Some((token, msg, policy_revision))));
+    }
+
+    #[payable]
+    pub fn clear_ft_call_message(&mut self, policy_id: String, payee: AccountId) {
+        require_owner(self, env::attached_deposit()).unwrap_or_else(|m| abort_with(&m));
+        let key = (policy_id, payee);
+        let route_revision = self.ft_call_routes.get(&key).map(|v| v.0).unwrap_or(0)
+            .checked_add(1).unwrap_or_else(|| abort_with("route revision overflow"));
+        self.ft_call_routes.insert(key, (route_revision, None));
+    }
+
+    pub fn get_ft_call_route(&self, policy_id: String, payee: AccountId) -> Option<FtCallRouteView> {
+        let (route_revision, data) = self.ft_call_routes.get(&(policy_id.clone(), payee))?;
+        let (token, msg, policy_revision) = data.as_ref()?;
+        Some(FtCallRouteView {
+            token: token.clone(), msg: msg.clone(), policy_revision: *policy_revision, route_revision: *route_revision,
+            active: self.ft_policy_revisions.get(&policy_id) == Some(policy_revision),
+        })
+    }
+
+    pub fn contract_version(&self) -> &'static str { "bouncer-agent-v6" }
 
     /// Lets clients verify the refund recipient; a version string alone does
     /// not verify deployed code or the RPC.
@@ -301,6 +371,42 @@ impl Bouncer {
             .with_attached_deposit(ONE_YOCTO).with_static_gas(GAS_FOR_FT_TRANSFER)
             .ft_transfer(payee, amount, memo)
             .then(ext_self::ext(env::current_account_id()).with_static_gas(GAS_FOR_RESOLVE).after_execute(policy_id, token, amount, bucket))
+    }
+
+    /// Call an FT receiver using exactly the token and message the owner pinned.
+    /// The agent cannot supply a new action, destination, or stale route. The
+    /// full amount is reserved before dispatch; the callback only credits the
+    /// returned unused amount after a well-formed NEP-141 result.
+    #[payable]
+    pub fn execute_ft_call(&mut self, policy_id: String, payee: AccountId, amount: U128,
+        expected_token: AccountId, expected_msg: String, expected_policy_revision: u64,
+        expected_route_revision: u64) -> Promise {
+        require(env::attached_deposit() == ZERO_NEAR, "BLOCKED: execute_ft_call requires zero deposit");
+        require(env::predecessor_account_id() == self.owner && env::signer_account_id() == self.owner,
+            "BLOCKED: caller is not the owner account");
+        require(self.agents.get(&(policy_id.clone(), env::signer_account_pk())) == Some(&true),
+            "BLOCKED: signing key is not authorized for this policy");
+        require(expected_msg.len() <= MAX_FT_CALL_MESSAGE_BYTES, "FT receiver message is too large");
+        let route = self.get_ft_call_route(policy_id.clone(), payee.clone())
+            .unwrap_or_else(|| abort_with("BLOCKED: no owner-approved FT call route"));
+        require(route.active && route.policy_revision == expected_policy_revision &&
+            route.route_revision == expected_route_revision && route.token == expected_token && route.msg == expected_msg,
+            "BLOCKED: FT call route changed since review");
+        let (token, bal) = validate(self, &policy_id, &payee, amount.0).unwrap_or_else(|m| abort_with(&m));
+        require(token == expected_token && token.as_str() != NATIVE_ASSET,
+            "BLOCKED: FT policy token changed since review");
+        let bucket = env::block_timestamp() / NS_PER_HOUR;
+        let dk = daily_key(&policy_id, bucket);
+        let spent = self.daily_spent.get(&dk).copied().unwrap_or(0);
+        let next_spent = spent.checked_add(amount.0).unwrap_or_else(|| abort_with("daily spend overflow"));
+        self.balances.insert(token.clone(), bal - amount.0);
+        self.daily_spent.insert(dk, next_spent);
+        env::log_str("BOUNCER guarded ft_transfer_call initiated; full amount reserved");
+        ext_ft::ext(token.clone())
+            .with_attached_deposit(ONE_YOCTO).with_static_gas(GAS_FOR_FT_TRANSFER_CALL)
+            .ft_transfer_call(payee, amount, Some("bouncer:guarded-ft-call".into()), route.msg)
+            .then(ext_self::ext(env::current_account_id()).with_static_gas(GAS_FOR_RESOLVE)
+                .after_execute_ft_call(policy_id, token, amount, bucket, route.policy_revision))
     }
 
     /// Anyone may fund this native-NEAR vault; only the owner can withdraw it
@@ -414,6 +520,40 @@ impl Bouncer {
                 .unwrap_or_else(|| abort_with("native refund balance overflow"));
             env::log_str("BOUNCER native withdrawal failed; vault refunded");
         }
+    }
+
+    /// NEP-141's final `ft_transfer_call` result is the amount USED, not the
+    /// amount refunded. A failed/malformed result can be ambiguous (the token
+    /// or receiver may have acted); conservatively leave the whole reservation
+    /// in place and expose `null`, never assume it is safe to retry or recredit.
+    #[private]
+    pub fn after_execute_ft_call(&mut self, policy_id: String, token: AccountId, amount: U128,
+        bucket: u64, policy_revision: u64) -> Option<U128> {
+        let used = match env::promise_result(0) {
+            near_sdk::PromiseResult::Successful(bytes) => near_sdk::serde_json::from_slice::<U128>(&bytes)
+                .ok().map(|v| v.0).filter(|v| *v <= amount.0),
+            _ => None,
+        };
+        let Some(used) = used else {
+            env::log_str("BOUNCER ft_transfer_call unresolved; full reservation retained");
+            return None;
+        };
+        let unused = amount.0 - used;
+        if unused > 0 {
+            let bal = self.balances.get(&token).copied().unwrap_or(0);
+            let updated = bal.checked_add(unused).unwrap_or_else(|| abort_with("FT call refund balance overflow"));
+            self.balances.insert(token, updated);
+            // Never subtract a differently denominated/changed policy's budget.
+            // Keep it conservative if the owner changed the policy in flight.
+            if self.ft_policy_revisions.get(&policy_id) == Some(&policy_revision) {
+                let dk = daily_key(&policy_id, bucket);
+                if let Some(spent) = self.daily_spent.get(&dk).copied() {
+                    self.daily_spent.insert(dk, spent.saturating_sub(unused));
+                }
+            }
+        }
+        env::log_str(&format!("BOUNCER ft_transfer_call settled; used={}; unused={}", used, unused));
+        Some(U128(used))
     }
 
     #[private]
@@ -658,6 +798,190 @@ mod tests {
         assert_eq!(contract.vault_balance(id("token.testnet")).0, 1_000);
         assert_eq!(*contract.daily_spent.get(&daily_key("compute", WINDOW_HOURS)).unwrap(), 0);
         assert_eq!(*contract.daily_spent.get(&daily_key("compute", WINDOW_HOURS + 1)).unwrap(), 75);
+    }
+
+    const PINNED_FT_MSG: &str = r#"{"action":"purchase","plan":"basic"}"#;
+
+    fn ft_call_fixture() -> (Bouncer, PublicKey) {
+        let (mut contract, agent) = fixture();
+        testing_env!(owner_context(&key(1), 1, NS_PER_DAY));
+        contract.set_ft_call_message("compute".into(), id("vendor.testnet"), PINNED_FT_MSG.into());
+        (contract, agent)
+    }
+    fn send_ft_call(contract: &mut Bouncer, amount: u128) {
+        drop(contract.execute_ft_call("compute".into(), id("vendor.testnet"), U128(amount),
+            id("token.testnet"), PINNED_FT_MSG.into(), 1, 1));
+    }
+
+    #[test]
+    fn ft_call_reserves_budget_and_dispatches_only_the_exact_pinned_message() {
+        use near_sdk::mock::MockAction;
+        use near_sdk::test_utils::get_created_receipts;
+        let (mut contract, agent) = ft_call_fixture();
+        let route = contract.get_ft_call_route("compute".into(), id("vendor.testnet")).unwrap();
+        assert!(route.active);
+        assert_eq!((route.policy_revision, route.route_revision), (1, 1));
+        assert_eq!(route.token, id("token.testnet"));
+        assert_eq!(route.msg, PINNED_FT_MSG);
+        testing_env!(owner_context(&agent, 0, NS_PER_DAY));
+        send_ft_call(&mut contract, 100);
+        assert_eq!(contract.vault_balance(id("token.testnet")).0, 900);
+        assert_eq!(contract.daily_spent("compute".into()).0, 100);
+        let receipts = get_created_receipts();
+        let receipt = receipts.iter().find(|r| r.receiver_id == id("token.testnet")).expect("FT receipt");
+        let (args, deposit) = receipt.actions.iter().find_map(|a| match a {
+            MockAction::FunctionCallWeight { method_name, args, attached_deposit, .. } if method_name == b"ft_transfer_call" => Some((args, attached_deposit)),
+            _ => None,
+        }).expect("ft_transfer_call action");
+        assert_eq!(*deposit, ONE_YOCTO);
+        let args: near_sdk::serde_json::Value = near_sdk::serde_json::from_slice(args).unwrap();
+        assert_eq!(args["receiver_id"], "vendor.testnet");
+        assert_eq!(args["amount"], "100");
+        assert_eq!(args["msg"], PINNED_FT_MSG);
+    }
+
+    #[test]
+    #[should_panic(expected = "owner-only method requires exactly 1 yoctoNEAR")]
+    fn agent_cannot_pin_a_new_ft_receiver_action() {
+        let (mut contract, agent) = ft_call_fixture();
+        testing_env!(owner_context(&agent, 0, NS_PER_DAY));
+        contract.set_ft_call_message("compute".into(), id("vendor.testnet"), "attacker action".into());
+    }
+
+    #[test]
+    #[should_panic(expected = "BLOCKED: FT call route changed since review")]
+    fn agent_cannot_modify_ft_receiver_message() {
+        let (mut contract, agent) = ft_call_fixture();
+        testing_env!(owner_context(&agent, 0, NS_PER_DAY));
+        drop(contract.execute_ft_call("compute".into(), id("vendor.testnet"), U128(100),
+            id("token.testnet"), "attacker action".into(), 1, 1));
+    }
+
+    #[test]
+    #[should_panic(expected = "BLOCKED: FT call route changed since review")]
+    fn agent_cannot_change_the_pinned_ft_token() {
+        let (mut contract, agent) = ft_call_fixture();
+        testing_env!(owner_context(&agent, 0, NS_PER_DAY));
+        drop(contract.execute_ft_call("compute".into(), id("vendor.testnet"), U128(100),
+            id("other-token.testnet"), PINNED_FT_MSG.into(), 1, 1));
+    }
+
+    #[test]
+    #[should_panic(expected = "BLOCKED: amount exceeds per-tx cap")]
+    fn ft_call_cannot_exceed_the_policy_cap() {
+        let (mut contract, agent) = ft_call_fixture();
+        testing_env!(owner_context(&agent, 0, NS_PER_DAY));
+        send_ft_call(&mut contract, 201);
+    }
+
+    #[test]
+    #[should_panic(expected = "BLOCKED: signing key is not authorized for this policy")]
+    fn ft_call_requires_an_explicitly_granted_key() {
+        let (mut contract, _) = ft_call_fixture();
+        testing_env!(owner_context(&key(3), 0, NS_PER_DAY));
+        send_ft_call(&mut contract, 100);
+    }
+
+    #[test]
+    #[should_panic(expected = "BLOCKED: FT call route changed since review")]
+    fn a_policy_edit_invalidates_even_a_previously_signed_route() {
+        let (mut contract, agent) = ft_call_fixture();
+        testing_env!(owner_context(&key(1), 1, NS_PER_DAY));
+        contract.set_policy("compute".into(), id("token.testnet"), U128(200), Some(U128(300)));
+        assert!(!contract.get_ft_call_route("compute".into(), id("vendor.testnet")).unwrap().active);
+        testing_env!(owner_context(&agent, 0, NS_PER_DAY));
+        send_ft_call(&mut contract, 100);
+    }
+
+    #[test]
+    fn ft_routes_require_review_again_after_policy_change_and_cannot_revive_after_revoke() {
+        let (mut contract, _) = ft_call_fixture();
+        testing_env!(owner_context(&key(1), 1, NS_PER_DAY));
+        contract.set_policy("compute".into(), id("other-token.testnet"), U128(200), Some(U128(300)));
+        contract.set_policy("compute".into(), id("token.testnet"), U128(200), Some(U128(300)));
+        assert!(!contract.get_ft_call_route("compute".into(), id("vendor.testnet")).unwrap().active);
+        contract.set_ft_call_message("compute".into(), id("vendor.testnet"), PINNED_FT_MSG.into());
+        let route = contract.get_ft_call_route("compute".into(), id("vendor.testnet")).unwrap();
+        assert!(route.active);
+        assert_eq!((route.policy_revision, route.route_revision), (3, 2));
+        contract.revoke_payee("compute".into(), id("vendor.testnet"));
+        contract.allow_payee("compute".into(), id("vendor.testnet"));
+        assert!(contract.get_ft_call_route("compute".into(), id("vendor.testnet")).is_none());
+        contract.set_ft_call_message("compute".into(), id("vendor.testnet"), PINNED_FT_MSG.into());
+        assert_eq!(contract.get_ft_call_route("compute".into(), id("vendor.testnet")).unwrap().route_revision, 4);
+    }
+
+    #[test]
+    #[should_panic(expected = "BLOCKED: FT call route changed since review")]
+    fn clearing_and_repinning_the_same_message_does_not_revive_a_stale_signature() {
+        let (mut contract, agent) = ft_call_fixture();
+        testing_env!(owner_context(&key(1), 1, NS_PER_DAY));
+        contract.clear_ft_call_message("compute".into(), id("vendor.testnet"));
+        contract.set_ft_call_message("compute".into(), id("vendor.testnet"), PINNED_FT_MSG.into());
+        testing_env!(owner_context(&agent, 0, NS_PER_DAY));
+        send_ft_call(&mut contract, 100);
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn ft_call_partial_refund_uses_the_used_amount_and_original_hour() {
+        let (mut contract, agent) = ft_call_fixture();
+        testing_env!(owner_context(&agent, 0, NS_PER_DAY));
+        send_ft_call(&mut contract, 100);
+        contract.daily_spent.insert(daily_key("compute", WINDOW_HOURS + 1), 75);
+        testing_env_with_promise_results(context("bouncer.testnet", "bouncer.testnet", &agent, 0, NS_PER_DAY + NS_PER_HOUR),
+            PromiseResult::Successful(b"\"60\"".to_vec()));
+        assert_eq!(contract.after_execute_ft_call("compute".into(), id("token.testnet"), U128(100), WINDOW_HOURS, 1).map(|u| u.0), Some(60));
+        assert_eq!(contract.vault_balance(id("token.testnet")).0, 940);
+        assert_eq!(*contract.daily_spent.get(&daily_key("compute", WINDOW_HOURS)).unwrap(), 60);
+        assert_eq!(*contract.daily_spent.get(&daily_key("compute", WINDOW_HOURS + 1)).unwrap(), 75);
+    }
+
+    #[allow(deprecated)]
+    fn assert_ft_call_accounting(used: u128, expected_balance: u128, expected_spent: u128) {
+        let (mut contract, agent) = ft_call_fixture();
+        testing_env!(owner_context(&agent, 0, NS_PER_DAY));
+        send_ft_call(&mut contract, 100);
+        testing_env_with_promise_results(context("bouncer.testnet", "bouncer.testnet", &agent, 0, NS_PER_DAY),
+            PromiseResult::Successful(format!("\"{}\"", used).into_bytes()));
+        assert_eq!(contract.after_execute_ft_call("compute".into(), id("token.testnet"), U128(100), WINDOW_HOURS, 1).map(|u| u.0), Some(used));
+        assert_eq!(contract.vault_balance(id("token.testnet")).0, expected_balance);
+        assert_eq!(contract.daily_spent("compute".into()).0, expected_spent);
+    }
+    #[test]
+    fn ft_call_fully_refunds_when_nothing_was_used() { assert_ft_call_accounting(0, 1_000, 0); }
+    #[test]
+    fn ft_call_retains_full_reservation_when_all_was_used() { assert_ft_call_accounting(100, 900, 100); }
+
+    #[test]
+    #[allow(deprecated)]
+    fn ambiguous_or_malformed_ft_call_results_never_release_the_reservation() {
+        let (mut contract, agent) = ft_call_fixture();
+        testing_env!(owner_context(&agent, 0, NS_PER_DAY));
+        send_ft_call(&mut contract, 100);
+        for result in [PromiseResult::Failed, PromiseResult::Successful(b"null".to_vec()),
+            PromiseResult::Successful(b"60".to_vec()), PromiseResult::Successful(b"\"101\"".to_vec()),
+            PromiseResult::Successful(b"bad".to_vec())] {
+            testing_env_with_promise_results(context("bouncer.testnet", "bouncer.testnet", &agent, 0, NS_PER_DAY), result);
+            assert!(contract.after_execute_ft_call("compute".into(), id("token.testnet"), U128(100), WINDOW_HOURS, 1).is_none());
+            assert_eq!(contract.vault_balance(id("token.testnet")).0, 900);
+            assert_eq!(contract.daily_spent("compute".into()).0, 100);
+        }
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn ft_refund_does_not_release_budget_after_policy_was_changed_in_flight() {
+        let (mut contract, agent) = ft_call_fixture();
+        testing_env!(owner_context(&agent, 0, NS_PER_DAY));
+        send_ft_call(&mut contract, 100);
+        testing_env!(owner_context(&key(1), 1, NS_PER_DAY));
+        contract.set_policy("compute".into(), id("other-token.testnet"), U128(200), Some(U128(300)));
+        testing_env_with_promise_results(context("bouncer.testnet", "bouncer.testnet", &agent, 0, NS_PER_DAY),
+            PromiseResult::Successful(b"\"60\"".to_vec()));
+        assert_eq!(contract.after_execute_ft_call("compute".into(), id("token.testnet"), U128(100), WINDOW_HOURS, 1).map(|u| u.0), Some(60));
+        assert_eq!(contract.vault_balance(id("token.testnet")).0, 940);
+        assert_eq!(contract.daily_spent("compute".into()).0, 100);
     }
 
     fn program() -> OutlayerProgram {

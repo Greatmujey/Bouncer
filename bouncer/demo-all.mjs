@@ -167,7 +167,7 @@ async function main() {
   let version;
   try { version = await view(bouncerId, 'contract_version', {}); }
   catch (error) { throw new Error('The deployed wasm is stale; wait for the CI wasm build and git pull again.', { cause: error }); }
-  if (version !== 'bouncer-agent-v5') throw new Error(`Unsupported contract version: ${version}`);
+  if (version !== 'bouncer-agent-v6') throw new Error(`Unsupported contract version: ${version}`);
 
   console.log('\n=== 3) Create user and vendor sub-accounts ===');
   const userKey = KeyPair.fromRandom('ed25519');

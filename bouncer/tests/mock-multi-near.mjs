@@ -139,7 +139,7 @@ Account.prototype.callFunctionRaw = async function ({ contractId, methodName, ar
 };
 providers.JsonRpcProvider.prototype.callFunction = async function (id, method, args) {
   switch (method) {
-    case 'contract_version': return 'bouncer-agent-v5';
+    case 'contract_version': return 'bouncer-agent-v6';
     case 'get_required': return (2n * 10n ** 24n).toString();
     case 'ft_metadata': return tokens.get(id);
     case 'storage_balance_bounds': return { min: '1250000000000000000000', max: null };

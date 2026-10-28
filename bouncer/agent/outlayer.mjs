@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Owner-pinned OutLayer testnet randomness procurement. The NEAR deposit and
- * delivery are one cross-contract transaction through Bouncer v5, not x402.
+ * delivery are one cross-contract transaction through Bouncer v5 or v6, not x402.
  * A local journal records intent before the single send and never repays an
  * unresolved transaction. Chain evidence is checked against a trusted RPC;
  * range checking does not prove randomness or verify a TEE attestation.
@@ -28,7 +28,7 @@ export const RANDOM_TESTNET_PROGRAM = Object.freeze({
   url: `https://wasmhub.testnet.fastfs.io/fastfs.testnet/${RANDOM_EXAMPLE_SHA256}.wasm`, sha256: RANDOM_EXAMPLE_SHA256,
   build_target: 'wasm32-wasip1', max_instructions: 10_000_000, max_memory_mb: 128, max_execution_seconds: 60,
 });
-const VERSION = 'bouncer-agent-v5';
+const VERSIONS = new Set(['bouncer-agent-v5', 'bouncer-agent-v6']);
 const MAX_U128 = (1n << 128n) - 1n;
 const GAS = 300n * 10n ** 12n;
 const PROGRAM_KEYS = ['url', 'sha256', 'build_target', 'max_instructions', 'max_memory_mb', 'max_execution_seconds'];
@@ -226,7 +226,7 @@ export async function runOutlayerGoal({ goal: rawGoal, provider, account, public
     provider.callFunction(goal.contract_id, 'get_owner', {}, final),
     provider.viewAccessKey(goal.owner_account_id, publicKey, final),
   ]);
-  if (version !== VERSION || owner !== goal.owner_account_id) throw new Error('unsupported Bouncer version or unexpected owner/refund account');
+  if (!VERSIONS.has(version) || owner !== goal.owner_account_id) throw new Error('unsupported Bouncer version or unexpected owner/refund account');
   const permission = access?.permission?.FunctionCall;
   if (!permission || permission.receiver_id !== goal.contract_id || !equal(permission.method_names, ['execute_outlayer'])) {
     throw new Error('agent key must be scoped ONLY to execute_outlayer on this contract');
