@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /**
- * Narrow paid OutLayer connector-probe integration, testnet only. The owner has
- * pinned a project version, exact `fetch` input, fake-USDC.e fee and separate
- * native/token policy budgets on chain. This is a provider connectivity
- * probe, not a general commercial API or a TEE attestation verifier.
+ * Narrow paid OutLayer connector-probe integration, testnet only. The owner
+ * pins a project version, exact fetch or bounded burn input, fake-USDC.e fee
+ * and separate native/token policy budgets on chain. Burn is a deterministic
+ * diagnostic workload, not general-purpose compute or TEE attestation.
  */
 import fs from 'node:fs';
 import os from 'node:os';
@@ -38,13 +38,44 @@ function text(value, label, limit) {
   if (typeof value !== 'string' || !value.trim() || Buffer.byteLength(value) > limit) throw new Error(`invalid ${label}`);
   return value;
 }
+
+// Only two independently priced, owner-pinned test-connector operations are
+// supported. Canonical JSON prevents alternate fields, duplicate keys and
+// unreviewed inputs from being smuggled into a price-equivalent route.
+function probeTerms(project) {
+  if (project.project_id !== PROJECT || project.token !== TOKEN) throw new Error('only the pinned testnet connector-probe and fake test token are supported');
+  if (project.input_data === '{"operation":"fetch"}' && project.attached_usd === '15000') {
+    return { operation: 'fetch', developerShareBp: 10_000 };
+  }
+  let input;
+  if (typeof project.input_data !== 'string' || Buffer.byteLength(project.input_data) > 128) throw new Error('invalid connector-probe input');
+  try { input = JSON.parse(project.input_data); } catch { /* fail closed below */ }
+  if (ownKeys(input, ['operation', 'rounds']) && input.operation === 'burn' && Number.isSafeInteger(input.rounds) &&
+      input.rounds >= 1 && input.rounds <= 200 && project.attached_usd === '10000' &&
+      project.input_data === JSON.stringify({ operation: 'burn', rounds: input.rounds })) {
+    return { operation: 'burn', rounds: input.rounds, developerShareBp: 3333 };
+  }
+  throw new Error('only the explicitly priced testnet connector-probe fetch or bounded burn is supported');
+}
+
+// The published probe hashes SHA256("probe"), then 1,000 successive hashes per
+// round. Its u64 checksum is little-endian, not a JS-safe integer in general.
+// This recomputation verifies the returned value; it does not prove which
+// machine performed the work or establish TEE attestation.
+export function expectedBurnChecksum(rounds) {
+  integer(rounds, 1, 200, 'burn rounds');
+  let digest = crypto.createHash('sha256').update('probe').digest();
+  for (let i = 0; i < rounds * 1_000; i++) digest = crypto.createHash('sha256').update(digest).digest();
+  return digest.readBigUInt64LE(0).toString();
+}
+
 export function validateProjectGoal(value) {
   if (!ownKeys(value, FIELDS) || !ownKeys(value.route, ROUTE) || !ownKeys(value.route.project, CONFIG)) throw new Error('project goal must contain exactly the reviewed fields');
   const id = text(value.id, 'goal id', 64);
   if (!/^[A-Za-z0-9_-]+$/.test(id)) throw new Error('invalid goal id');
   if (![value.contract_id, value.owner_account_id, value.expected_author].every(isTestnetAccount)) throw new Error('only named testnet accounts are supported');
   const nativePolicy = text(value.native_policy_id, 'native policy', 128), p = value.route.project;
-  if (p.project_id !== PROJECT || p.token !== TOKEN || p.attached_usd !== '15000' || p.input_data !== '{"operation":"fetch"}') throw new Error('only the explicitly pinned testnet connector-probe fetch is supported');
+  probeTerms(p);
   if (typeof p.version_key !== 'string' || !/^[a-f0-9]{64}$/.test(p.version_key)) throw new Error('invalid pinned project version');
   const usdPolicy = text(p.usd_policy_id, 'prepaid policy', 128);
   if (usdPolicy === nativePolicy) throw new Error('project requires separate native and prepaid policies');
@@ -66,11 +97,23 @@ export function validateProjectGoal(value) {
 }
 const fingerprint = goal => crypto.createHash('sha256').update(JSON.stringify(goal)).digest('hex');
 const signedArgs = goal => ({ native_policy_id: goal.native_policy_id, amount: goal.amount, expected_route: goal.route });
-function decode(value, label, limit = 16_384) {
+function decode(value, label, limit = 16_384, reviver) {
   if (typeof value !== 'string' || value.length > Math.ceil(limit / 3) * 4 + 4 || !/^[A-Za-z0-9+/]*={0,2}$/.test(value)) throw new Error(`invalid ${label}`);
   const bytes = Buffer.from(value, 'base64');
   if (bytes.length > limit || bytes.toString('base64') !== value) throw new Error(`invalid ${label}`);
-  try { return JSON.parse(bytes.toString('utf8')); } catch { throw new Error(`invalid ${label}`); }
+  try { return JSON.parse(bytes.toString('utf8'), reviver); } catch { throw new Error(`invalid ${label}`); }
+}
+
+// Node 22's source context preserves an integer's original JSON spelling. A
+// plain JSON.parse rounds most u64s; comparing rounded doubles could accept a
+// neighboring wrong checksum. Reject runtimes without source context and every
+// non-canonical, signed, fractional, quoted or out-of-range checksum.
+function losslessChecksum(key, value, context) {
+  if (key !== 'checksum') return value;
+  const source = context?.source;
+  if (typeof value !== 'number' || typeof source !== 'string' || !/^(?:0|[1-9][0-9]{0,19})$/.test(source) ||
+      BigInt(source) > (1n << 64n) - 1n) throw new Error('invalid checksum');
+  return source;
 }
 function successful(status) {
   return status && typeof status === 'object' && !Array.isArray(status) && status.Failure === undefined &&
@@ -100,7 +143,7 @@ function events(result, name) {
 
 /** Verify the provider's paid probe result, not its TEE or independent HTTP truth. */
 export function verifyProjectResult(rawGoal, result, publicKey) {
-  const goal = validateProjectGoal(rawGoal), p = goal.route.project, tx = result?.transaction, hash = result?.transaction_outcome?.id;
+  const goal = validateProjectGoal(rawGoal), p = goal.route.project, terms = probeTerms(p), tx = result?.transaction, hash = result?.transaction_outcome?.id;
   if (result?.final_execution_status !== 'FINAL' || typeof result.status?.SuccessValue !== 'string' || !validHash(hash)) throw new Error('transaction is not a successful FINAL result');
   if (!tx || tx.hash !== hash || tx.signer_id !== goal.owner_account_id || tx.receiver_id !== goal.contract_id ||
       (publicKey !== undefined && tx.public_key !== String(publicKey)) || !Array.isArray(tx.actions) || tx.actions.length !== 1) throw new Error('transaction owner, contract or key mismatch');
@@ -108,6 +151,9 @@ export function verifyProjectResult(rawGoal, result, publicKey) {
   if (!signed || signed.method_name !== 'execute_outlayer_project' || String(signed.deposit) !== '0' ||
       !equal(decode(signed.args, 'signed project arguments'), signedArgs(goal))) throw new Error('signed project does not match the reviewed goal');
   if (!Array.isArray(result.receipts_outcome) || !result.receipts_outcome.length || result.receipts_outcome.some(r => !successful(r?.outcome?.status)) || !Array.isArray(result.receipts)) throw new Error('receipt outcomes failed, incomplete or missing');
+  const outcomeIds = result.receipts_outcome.map(r => r?.id), receiptIds = result.receipts.map(r => r?.receipt_id);
+  if (outcomeIds.some(id => !validHash(id)) || new Set(outcomeIds).size !== outcomeIds.length ||
+      receiptIds.some(id => !validHash(id)) || new Set(receiptIds).size !== receiptIds.length) throw new Error('duplicate or invalid receipt identifiers');
   const initiations = result.receipts_outcome.filter(r => r.outcome?.executor_id === goal.contract_id &&
     r.outcome.logs?.includes('BOUNCER independent paid project initiated; native and prepaid maxima reserved'));
   if (initiations.length !== 1) throw new Error('missing guarded project initiation');
@@ -139,9 +185,11 @@ export function verifyProjectResult(rawGoal, result, publicKey) {
     throw new Error('missing matching provider request and successful completion');
   }
   // The project's current on-chain row is checked before sending, and this
-  // transaction's provider log must confirm the entire fee was split exactly.
-  // OutLayer remains trusted and can change pricing between those moments.
-  const split = `Split ${p.attached_usd} stablecoin for project ${PROJECT}: ${p.attached_usd} to author ${goal.expected_author}, 0 to owner connectors.outlayer.testnet (attached=${p.attached_usd}, refund=0)`;
+  // transaction's provider log must confirm the exact operation-specific
+  // fee split. OutLayer remains trusted and can change its pricing in between.
+  const authorCut = BigInt(p.attached_usd) * BigInt(terms.developerShareBp) / 10_000n;
+  const ownerCut = BigInt(p.attached_usd) - authorCut;
+  const split = `Split ${p.attached_usd} stablecoin for project ${PROJECT}: ${authorCut} to author ${goal.expected_author}, ${ownerCut} to owner connectors.outlayer.testnet (attached=${p.attached_usd}, refund=0)`;
   if (!completed[0].outcome.logs?.includes(split)) throw new Error('missing matching provider prepaid-fee settlement');
   const charge = unsigned(completed[0].data.payment_charged, 'NEAR charge');
   const refund = unsigned(completed[0].data.payment_refunded, 'NEAR refund');
@@ -154,12 +202,23 @@ export function verifyProjectResult(rawGoal, result, publicKey) {
     });
     if (transfers.length !== 1) throw new Error('native refund to owner not confirmed');
   }
-  const output = decode(result.status.SuccessValue, 'provider output', 4096);
-  if (!output || output.ok !== true || output.operation !== 'fetch' || !Number.isSafeInteger(output.http_status) || output.http_status < 100 || output.http_status > 599) throw new Error('provider did not deliver the expected connectivity-probe result');
+  const output = decode(result.status.SuccessValue, 'provider output', 4096, terms.operation === 'burn' ? losslessChecksum : undefined);
+  if (!output || typeof output !== 'object' || Array.isArray(output) || output.ok !== true || output.operation !== terms.operation) throw new Error('provider did not deliver the expected connector-probe result');
+  let verifiedResult, verification;
+  if (terms.operation === 'burn') {
+    if (output.rounds_done !== terms.rounds || output.checksum !== expectedBurnChecksum(terms.rounds)) {
+      throw new Error('provider did not deliver the expected independently recomputed burn checksum');
+    }
+    verifiedResult = { operation: 'burn', rounds_done: terms.rounds, hashes: terms.rounds * 1_000, checksum: output.checksum };
+    verification = 'trusted RPC and OutLayer receipts; deterministic checksum independently recomputed; no proof of execution location or TEE';
+  } else {
+    if (!Number.isSafeInteger(output.http_status) || output.http_status < 100 || output.http_status > 599) throw new Error('provider did not deliver the expected connectivity-probe result');
+    verifiedResult = { operation: 'fetch', http_status: output.http_status };
+    verification = 'trusted RPC and OutLayer receipts; connector-probe status only; no independent HTTP or TEE proof';
+  }
   return { tx_hash: hash, provider: OUTLAYER, project: PROJECT, version_key: p.version_key, asset: TOKEN,
     prepaid_charged: p.attached_usd, author: goal.expected_author, maximum_yocto: goal.amount,
-    near_charged: charge.toString(), near_refunded_to_owner: refund.toString(), result: { operation: output.operation, http_status: output.http_status },
-    verification: 'trusted RPC and OutLayer receipts; connector-probe status only; no independent HTTP or TEE proof' };
+    near_charged: charge.toString(), near_refunded_to_owner: refund.toString(), result: verifiedResult, verification };
 }
 
 export async function recoverProjectGoal({ goal: rawGoal, provider, journal, publicKey, update = true, log = console.log }) {
@@ -181,7 +240,7 @@ export async function recoverProjectGoal({ goal: rawGoal, provider, journal, pub
 }
 
 export async function runProjectGoal({ goal: rawGoal, provider, account, publicKey, journal, execute = false, log = console.log }) {
-  const goal = validateProjectGoal(rawGoal), p = goal.route.project;
+  const goal = validateProjectGoal(rawGoal), p = goal.route.project, terms = probeTerms(p);
   if (!account || account.accountId !== goal.owner_account_id || !publicKey) throw new Error('agent key account does not match owner');
   if (execute && (!journal || typeof journal.get !== 'function' || typeof journal.put !== 'function')) throw new Error('live execution requires a journal');
   if ((await provider.viewNodeStatus())?.chain_id !== 'testnet') throw new Error('RPC must report testnet');
@@ -213,9 +272,9 @@ export async function runProjectGoal({ goal: rawGoal, provider, account, publicK
   if (usd > max || (daily > 0n && unsigned(usdSpent, 'prepaid spend') + usd > daily)) {
     log(`[project] BLOCKED ${goal.id}: prepaid cap or rolling budget`); return { status: 'BLOCKED' };
   }
-  const row = pricing?.operations?.filter(item => item?.operation === 'fetch');
+  const row = pricing?.operations?.filter(item => item?.operation === terms.operation);
   if (configuredToken !== p.token || pricing?.author_account_id !== goal.expected_author || !Array.isArray(row) || row.length !== 1 ||
-      row[0].price_usd !== p.attached_usd || row[0].developer_share_bp !== 10_000 ||
+      row[0].price_usd !== p.attached_usd || row[0].developer_share_bp !== terms.developerShareBp ||
       versionInfo?.wasm_hash !== p.version_key || versionInfo?.source?.WasmUrl?.hash !== p.version_key || versionInfo?.source?.WasmUrl?.build_target !== 'wasm32-wasip2') {
     throw new Error('provider token, price, author or pinned project version changed');
   }
@@ -245,7 +304,7 @@ export async function runProjectGoal({ goal: rawGoal, provider, account, publicK
     const delivery = verifyProjectResult(goal, chain, publicKey);
     if (delivery.tx_hash !== txHash) throw new Error('RPC returned a different transaction');
     journal.put(goal.id, { ...pending, status: 'completed', delivery, completed_at: new Date().toISOString() });
-    log(`[project] FULFILLED ${goal.id}: ${txHash}; fake test USD=${delivery.prepaid_charged}; HTTP status=${delivery.result.http_status}`);
+    log(`[project] FULFILLED ${goal.id}: ${txHash}; fake test USD=${delivery.prepaid_charged}; result=${JSON.stringify(delivery.result)}`);
     return { status: 'FULFILLED', delivery };
   } catch (error) {
     throw new Error(`${goal.id}: paid project unresolved (tx ${txHash}); do not resend automatically: ${error.message}`, { cause: error });
@@ -268,7 +327,7 @@ async function main() {
   if (options.help) {
     console.log('Usage: node bouncer/agent/outlayer-project.mjs --goal GOAL.json --key AGENT_KEY.json [--state JOURNAL.json] [--rpc URL] [--execute]');
     console.log('       node bouncer/agent/outlayer-project.mjs --goal GOAL.json --state JOURNAL.json [--rpc URL] --recover');
-    console.log('A narrowly pinned paid testnet connectivity probe; dry run by default. Recovery needs no key and never resends.'); return;
+    console.log('A narrowly pinned paid testnet fetch or diagnostic burn probe; dry run by default. Recovery needs no key and never resends.'); return;
   }
   if (!options.goal || (!options.recover && !options.key)) throw new Error('provide --goal and --key, or --goal with --recover');
   if (options.recover && (options.execute || options.key)) throw new Error('--recover cannot be combined with --execute or --key');

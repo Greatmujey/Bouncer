@@ -170,6 +170,17 @@ returned HTTP **405**; it is not useful API data or a commercial API purchase.
 The unified mission recovered that payment and continued to self-hosted FT
 resources, stopping later payments until a corrupted local delivery was checked.
 
+The runner also supports the independently operated connector's **`burn` test
+operation**, pinned at 10,000 micro-units of fake USDC.e and 3,333 basis points
+for the author. It accepts only canonical owner-pinned inputs with 1–200 rounds,
+recomputes the iterated SHA-256 checksum locally, and parses the provider's
+64-bit JSON number without JavaScript rounding. The live demo's `burn` mode asks
+for 50 rounds (50,000 hashes), and stages a later **self-hosted** storage goal
+containing the verified result and transaction ID. The operation is a diagnostic
+benchmark, not arbitrary compute or a commercial resource. As of this change,
+the `burn` path has offline tests only; live execution and delivery have not yet
+been established. It uses neither Circle USDC nor a TEE attestation.
+
 Provider-held credit is distinct from Bouncer's FT vault. In this path a project
 refund can be credited to Bouncer's balance **at OutLayer**, not returned to
 Bouncer's vault. The conservative local ledger can understate returned credit

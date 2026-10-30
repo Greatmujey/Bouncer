@@ -140,3 +140,24 @@ test('mismatched or invalid provider credit blocks before any top-up or project 
     assert(!f.calls.includes('fund-send')); assert(!f.calls.includes('project-send'));
   }
 });
+
+test('bounded burn can gate the same multi-resource mission without an extra funding or project send', async () => {
+  const f = fixture(), burn = structuredClone(project);
+  burn.route.project.input_data = '{"operation":"burn","rounds":1}';
+  burn.route.project.attached_usd = '10000';
+  const burnFunding = { ...funding, amount: '10000' };
+  const burnSettlement = { ...settlement, requested: '10000', used: '10000' };
+  const burnDelivery = { tx_hash: 'burn-tx', result: { operation: 'burn', rounds_done: 1, hashes: 1000, checksum: '15658707147005546673' } };
+  f.runners.funding = async ({ goal, execute }) => {
+    assert.deepEqual(goal, burnFunding); f.calls.push(execute ? 'fund-send' : 'fund-preview');
+    if (!execute) return { status: 'READY' };
+    f.setCredit('10000'); return { status: 'SETTLED', settlement: burnSettlement };
+  };
+  f.runners.project = async ({ goal, execute }) => {
+    assert.deepEqual(goal, burn); f.calls.push(execute ? 'burn-send' : 'burn-preview');
+    return execute ? { status: 'FULFILLED', delivery: burnDelivery } : { status: 'FUNDING_REQUIRED', shortfall: '10000' };
+  };
+  const result = await runPaidProjectMission({ ...f.options, funding: { goal: burnFunding }, project: { goal: burn }, execute: true });
+  assert.equal(result.status, 'FULFILLED'); assert.deepEqual(result.independent.delivery, burnDelivery);
+  assert.deepEqual(f.calls, ['burn-preview', 'provider-credit', 'fund-preview', 'resources-preview', 'fund-send', 'provider-credit', 'burn-send', 'resources-send']);
+});
