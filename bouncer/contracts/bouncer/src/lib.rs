@@ -111,6 +111,20 @@ pub struct FtCallRouteView {
     pub active: bool,
 }
 
+/// A native OutLayer program and its exact input, reviewed together by the
+/// owner. Policy/payee changes, program edits and clearing the route prevent
+/// previously signed requests from being silently revived.
+#[derive(Clone, Debug, PartialEq, Eq, near_sdk::serde::Serialize, near_sdk::serde::Deserialize)]
+#[serde(crate = "near_sdk::serde", deny_unknown_fields)]
+pub struct OutlayerInputRouteView {
+    pub program: OutlayerProgram,
+    pub input_data: String,
+    pub route_revision: u64,
+    pub policy_revision: u64,
+    pub payee_revision: u64,
+    pub active: bool,
+}
+
 #[near(contract_state)]
 #[derive(PanicOnDefault)]
 pub struct Bouncer {
@@ -143,6 +157,9 @@ pub struct Bouncer {
     // (route revision, optional (encoded configuration, policy and payee
     // revisions for the native and prepaid-token policies)).
     outlayer_project_routes: LookupMap<String, (u64, Option<(String, u64, u64, u64, u64)>)>,
+    // Revision and optional (encoded program, exact input, policy/payee
+    // revisions). A tombstone prevents stale requests after clearing a route.
+    outlayer_input_routes: LookupMap<String, (u64, Option<(String, String, u64, u64)>)>,
 }
 
 fn allow_key(pid: &str, p: &str) -> String {
@@ -243,6 +260,7 @@ impl Bouncer {
             outlayer_prepaid: LookupMap::new(b"u"),
             allow_revisions: LookupMap::new(b"e"),
             outlayer_project_routes: LookupMap::new(b"j"),
+            outlayer_input_routes: LookupMap::new(b"i"),
         }
     }
 
@@ -349,7 +367,7 @@ impl Bouncer {
         })
     }
 
-    pub fn contract_version(&self) -> &'static str { "bouncer-agent-v7" }
+    pub fn contract_version(&self) -> &'static str { "bouncer-agent-v8" }
 
     /// Lets clients verify the refund recipient; a version string alone does
     /// not verify deployed code or the RPC.
@@ -527,12 +545,66 @@ impl Bouncer {
             "invalid OutLayer resource limits");
         let encoded = near_sdk::serde_json::to_string(&program)
             .unwrap_or_else(|_| abort_with("cannot serialize OutLayer program"));
+        // Even changing a program away and back must not reactivate an old
+        // signed exact-input route. The owner must explicitly review it again.
+        if let Some((revision, _)) = self.outlayer_input_routes.get(&policy_id) {
+            let next = revision.checked_add(1).unwrap_or_else(|| abort_with("input route revision overflow"));
+            self.outlayer_input_routes.insert(policy_id.clone(), (next, None));
+        }
         self.outlayer_programs.insert(policy_id, encoded);
     }
 
     pub fn get_outlayer_program(&self, policy_id: String) -> Option<OutlayerProgram> {
         self.outlayer_programs.get(&policy_id).map(|encoded|
             near_sdk::serde_json::from_str(encoded).unwrap_or_else(|_| abort_with("invalid stored OutLayer program")))
+    }
+
+    /// Pin the entire input alongside the already-reviewed program. The
+    /// restricted key can later execute only this route, not supply a URL,
+    /// alternate operation or other arbitrary program input.
+    #[payable]
+    pub fn set_outlayer_input(&mut self, policy_id: String, input_data: String) {
+        require_owner(self, env::attached_deposit()).unwrap_or_else(|m| abort_with(&m));
+        require(input_data.len() <= MAX_OUTLAYER_INPUT_BYTES, "OutLayer input is too large");
+        let input: near_sdk::serde_json::Value = near_sdk::serde_json::from_str(&input_data)
+            .unwrap_or_else(|_| abort_with("OutLayer input must be JSON"));
+        require(input.is_object(), "OutLayer input must be a JSON object");
+        require(self.token_of.get(&policy_id).map(|x| x.as_str()) == Some(NATIVE_ASSET),
+            "OutLayer policy must use the native asset");
+        let payee: AccountId = OUTLAYER_TESTNET.parse().unwrap_or_else(|_| abort_with("invalid OutLayer account"));
+        require(self.allow.get(&allow_key(&policy_id, payee.as_str())) == Some(&true), "OutLayer payee must already be allowed");
+        let program = self.outlayer_programs.get(&policy_id).cloned()
+            .unwrap_or_else(|| abort_with("BLOCKED: no owner-approved OutLayer program"));
+        let policy_revision = self.ft_policy_revisions.get(&policy_id).copied()
+            .unwrap_or_else(|| abort_with("missing policy revision"));
+        let payee_revision = self.allow_revisions.get(&(policy_id.clone(), payee)).copied()
+            .unwrap_or_else(|| abort_with("missing payee revision"));
+        let revision = self.outlayer_input_routes.get(&policy_id).map(|(v, _)| *v).unwrap_or(0)
+            .checked_add(1).unwrap_or_else(|| abort_with("input route revision overflow"));
+        self.outlayer_input_routes.insert(policy_id, (revision, Some((program, input_data, policy_revision, payee_revision))));
+    }
+
+    #[payable]
+    pub fn clear_outlayer_input(&mut self, policy_id: String) {
+        require_owner(self, env::attached_deposit()).unwrap_or_else(|m| abort_with(&m));
+        let revision = self.outlayer_input_routes.get(&policy_id).map(|(v, _)| *v).unwrap_or(0)
+            .checked_add(1).unwrap_or_else(|| abort_with("input route revision overflow"));
+        self.outlayer_input_routes.insert(policy_id, (revision, None));
+    }
+
+    pub fn get_outlayer_input(&self, policy_id: String) -> Option<OutlayerInputRouteView> {
+        let (revision, entry) = self.outlayer_input_routes.get(&policy_id)?;
+        let (encoded, input_data, policy_revision, payee_revision) = entry.as_ref()?;
+        let program: OutlayerProgram = near_sdk::serde_json::from_str(encoded)
+            .unwrap_or_else(|_| abort_with("invalid stored OutLayer input program"));
+        let payee: AccountId = OUTLAYER_TESTNET.parse().unwrap_or_else(|_| abort_with("invalid OutLayer account"));
+        let active = self.token_of.get(&policy_id).map(|x| x.as_str()) == Some(NATIVE_ASSET)
+            && self.allow.get(&allow_key(&policy_id, payee.as_str())) == Some(&true)
+            && self.ft_policy_revisions.get(&policy_id) == Some(policy_revision)
+            && self.allow_revisions.get(&(policy_id.clone(), payee)) == Some(payee_revision)
+            && self.outlayer_programs.get(&policy_id) == Some(encoded);
+        Some(OutlayerInputRouteView { program, input_data: input_data.clone(), route_revision: *revision,
+            policy_revision: *policy_revision, payee_revision: *payee_revision, active })
     }
 
     /// Approve exactly one OutLayer project version, input and prepaid fee for
@@ -650,6 +722,19 @@ impl Bouncer {
         env::log_str("BOUNCER independent paid project initiated; native and prepaid maxima reserved");
         Promise::new(payee).function_call("request_execution", args.to_string().into_bytes(),
             NearToken::from_yoctonear(amount.0), GAS_FOR_OUTLAYER)
+    }
+
+    /// Restricted-key path for programs whose input must be owner-pinned.
+    /// The complete route, including monotonic revisions, is signed by the
+    /// agent and compared again on-chain before reserving any funds.
+    #[payable]
+    pub fn execute_outlayer_pinned(&mut self, policy_id: String, amount: U128,
+        expected_route: OutlayerInputRouteView) -> Promise {
+        require(env::attached_deposit() == ZERO_NEAR, "BLOCKED: execute_outlayer_pinned requires zero deposit");
+        let route = self.get_outlayer_input(policy_id.clone())
+            .unwrap_or_else(|| abort_with("BLOCKED: no owner-approved OutLayer input route"));
+        require(route.active && route == expected_route, "BLOCKED: OutLayer input route changed since review");
+        self.execute_outlayer(policy_id, amount, route.input_data, route.program)
     }
 
     /// Request one independent testnet execution with an explicitly capped
@@ -1362,6 +1447,132 @@ mod tests {
         testing_env!(context("owner.testnet", "owner.testnet", &owner_key, 500, NS_PER_DAY));
         contract.deposit_native();
         (contract, agent, p)
+    }
+
+    fn pinned_native_fixture() -> (Bouncer, PublicKey, OutlayerInputRouteView) {
+        let (mut contract, agent, _) = native_fixture();
+        testing_env!(context("owner.testnet", "owner.testnet", &key(1), 1, NS_PER_DAY));
+        contract.set_outlayer_input("external-compute".into(), "{\"command\":\"fetch_external\",\"token_id\":\"near\",\"source\":\"coingecko\"}".into());
+        let route = contract.get_outlayer_input("external-compute".into()).unwrap();
+        (contract, agent, route)
+    }
+
+    #[test]
+    fn pinned_outlayer_executes_exact_owner_input_and_reserves_budget() {
+        use near_sdk::mock::MockAction;
+        use near_sdk::test_utils::get_created_receipts;
+        let (mut contract, agent, route) = pinned_native_fixture();
+        assert!(route.active);
+        testing_env!(context("owner.testnet", "owner.testnet", &agent, 0, NS_PER_DAY));
+        drop(contract.execute_outlayer_pinned("external-compute".into(), U128(100), route.clone()));
+        assert_eq!(contract.vault_balance(id(NATIVE_ASSET)).0, 400);
+        assert_eq!(contract.daily_spent("external-compute".into()).0, 100);
+        let receipts = get_created_receipts();
+        let receipt = receipts.iter().find(|r| r.receiver_id == id(OUTLAYER_TESTNET)).unwrap();
+        let args = receipt.actions.iter().find_map(|a| match a {
+            MockAction::FunctionCallWeight { method_name, args, attached_deposit, .. } if method_name == b"request_execution" => {
+                assert_eq!(*attached_deposit, NearToken::from_yoctonear(100)); Some(args)
+            }, _ => None,
+        }).unwrap();
+        let args: near_sdk::serde_json::Value = near_sdk::serde_json::from_slice(args).unwrap();
+        assert_eq!(args["input_data"], route.input_data);
+        assert_eq!(args["source"]["WasmUrl"]["hash"], route.program.sha256);
+    }
+
+    #[test]
+    #[should_panic(expected = "owner-only method requires exactly 1 yoctoNEAR")]
+    fn agent_cannot_pin_a_different_outlayer_input() {
+        let (mut contract, agent, _) = pinned_native_fixture();
+        testing_env!(context("owner.testnet", "owner.testnet", &agent, 0, NS_PER_DAY));
+        contract.set_outlayer_input("external-compute".into(), "{\"command\":\"arbitrary\"}".into());
+    }
+
+    #[test]
+    #[should_panic(expected = "BLOCKED: OutLayer input route changed since review")]
+    fn agent_cannot_change_the_exact_outlayer_input() {
+        let (mut contract, agent, mut route) = pinned_native_fixture();
+        route.input_data = "{\"command\":\"arbitrary\"}".into();
+        testing_env!(context("owner.testnet", "owner.testnet", &agent, 0, NS_PER_DAY));
+        drop(contract.execute_outlayer_pinned("external-compute".into(), U128(100), route));
+    }
+
+    #[test]
+    #[should_panic(expected = "BLOCKED: signing key is not authorized for this policy")]
+    fn pinned_outlayer_requires_an_explicit_agent_grant() {
+        let (mut contract, _, route) = pinned_native_fixture();
+        testing_env!(context("owner.testnet", "owner.testnet", &key(3), 0, NS_PER_DAY));
+        drop(contract.execute_outlayer_pinned("external-compute".into(), U128(100), route));
+    }
+
+    #[test]
+    #[should_panic(expected = "BLOCKED: amount exceeds per-tx cap")]
+    fn pinned_outlayer_respects_per_transaction_cap() {
+        let (mut contract, agent, route) = pinned_native_fixture();
+        testing_env!(context("owner.testnet", "owner.testnet", &agent, 0, NS_PER_DAY));
+        drop(contract.execute_outlayer_pinned("external-compute".into(), U128(201), route));
+    }
+
+    #[test]
+    #[should_panic(expected = "BLOCKED: daily cap exceeded for this policy")]
+    fn pinned_outlayer_respects_rolling_budget() {
+        let (mut contract, agent, route) = pinned_native_fixture();
+        testing_env!(context("owner.testnet", "owner.testnet", &agent, 0, NS_PER_DAY));
+        drop(contract.execute_outlayer_pinned("external-compute".into(), U128(200), route.clone()));
+        drop(contract.execute_outlayer_pinned("external-compute".into(), U128(101), route));
+    }
+
+    #[test]
+    #[should_panic(expected = "OutLayer input must be a JSON object")]
+    fn owner_cannot_pin_non_object_outlayer_input() {
+        let (mut contract, _, _) = pinned_native_fixture();
+        testing_env!(context("owner.testnet", "owner.testnet", &key(1), 1, NS_PER_DAY));
+        contract.set_outlayer_input("external-compute".into(), "[]".into());
+    }
+
+    #[test]
+    #[should_panic(expected = "OutLayer input is too large")]
+    fn owner_cannot_pin_unbounded_outlayer_input() {
+        let (mut contract, _, _) = pinned_native_fixture();
+        testing_env!(context("owner.testnet", "owner.testnet", &key(1), 1, NS_PER_DAY));
+        contract.set_outlayer_input("external-compute".into(), "x".repeat(MAX_OUTLAYER_INPUT_BYTES + 1));
+    }
+
+    #[test]
+    fn route_changes_and_revocations_do_not_revive_stale_requests() {
+        let (mut contract, _, initial) = pinned_native_fixture();
+        testing_env!(context("owner.testnet", "owner.testnet", &key(1), 1, NS_PER_DAY));
+        contract.set_policy("external-compute".into(), id(NATIVE_ASSET), U128(200), Some(U128(300)));
+        assert!(!contract.get_outlayer_input("external-compute".into()).unwrap().active);
+        contract.set_outlayer_input("external-compute".into(), initial.input_data.clone());
+        let after_policy = contract.get_outlayer_input("external-compute".into()).unwrap();
+        assert!(after_policy.active && after_policy.route_revision > initial.route_revision);
+        contract.revoke_payee("external-compute".into(), id(OUTLAYER_TESTNET));
+        contract.allow_payee("external-compute".into(), id(OUTLAYER_TESTNET));
+        assert!(!contract.get_outlayer_input("external-compute".into()).unwrap().active);
+        contract.set_outlayer_input("external-compute".into(), initial.input_data.clone());
+        let after_payee = contract.get_outlayer_input("external-compute".into()).unwrap();
+        // Even re-setting the same program tombstones the route.
+        contract.set_outlayer_program("external-compute".into(), initial.program.clone());
+        assert!(contract.get_outlayer_input("external-compute".into()).is_none());
+        contract.set_outlayer_input("external-compute".into(), initial.input_data.clone());
+        let after_program = contract.get_outlayer_input("external-compute".into()).unwrap();
+        assert!(after_program.route_revision > after_payee.route_revision);
+        contract.clear_outlayer_input("external-compute".into());
+        assert!(contract.get_outlayer_input("external-compute".into()).is_none());
+        contract.set_outlayer_input("external-compute".into(), initial.input_data);
+        let after_clear = contract.get_outlayer_input("external-compute".into()).unwrap();
+        assert!(after_clear.active && after_clear.route_revision > after_program.route_revision);
+    }
+
+    #[test]
+    #[should_panic(expected = "BLOCKED: OutLayer input route changed since review")]
+    fn stale_outlayer_input_signature_stays_blocked_after_repin() {
+        let (mut contract, agent, old) = pinned_native_fixture();
+        testing_env!(context("owner.testnet", "owner.testnet", &key(1), 1, NS_PER_DAY));
+        contract.clear_outlayer_input("external-compute".into());
+        contract.set_outlayer_input("external-compute".into(), old.input_data.clone());
+        testing_env!(context("owner.testnet", "owner.testnet", &agent, 0, NS_PER_DAY));
+        drop(contract.execute_outlayer_pinned("external-compute".into(), U128(100), old));
     }
 
     #[test]

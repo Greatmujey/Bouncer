@@ -16,7 +16,7 @@ import { MonotonicAccount } from './near-account.mjs';
 
 const { KeyPair, KeyPairSigner, providers, transactions, utils } = nearApi;
 const DEFAULT_RPC = 'https://test.rpc.fastnear.com';
-const CONTRACT_VERSIONS = new Set(['bouncer-agent-v4', 'bouncer-agent-v5', 'bouncer-agent-v6', 'bouncer-agent-v7']);
+const CONTRACT_VERSIONS = new Set(['bouncer-agent-v4', 'bouncer-agent-v5', 'bouncer-agent-v6', 'bouncer-agent-v7', 'bouncer-agent-v8']);
 const U128_MAX = (1n << 128n) - 1n;
 const GAS = 200_000_000_000_000n;
 const EXPLORER = hash => `https://testnet.nearblocks.io/txns/${hash}?network=testnet`;

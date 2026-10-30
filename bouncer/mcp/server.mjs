@@ -18,7 +18,7 @@ import { httpResourceProvider, runResourceAgent } from '../agent/resource-agent.
 import { RUN } from '../web/evidence.mjs';
 
 const DEFAULT_RPC = 'https://test.rpc.fastnear.com';
-const VERSIONS = new Set(['bouncer-agent-v4', 'bouncer-agent-v5', 'bouncer-agent-v6', 'bouncer-agent-v7']);
+const VERSIONS = new Set(['bouncer-agent-v4', 'bouncer-agent-v5', 'bouncer-agent-v6', 'bouncer-agent-v7', 'bouncer-agent-v8']);
 const publicKeyPattern = /^ed25519:[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 const accountPattern = /^(?=.{2,64}$)[a-z0-9]+(?:[-_][a-z0-9]+)*(?:\.[a-z0-9]+(?:[-_][a-z0-9]+)*)*\.testnet$/;
 const account = z.string().regex(accountPattern, 'Must be an explicit .testnet account ID');
@@ -80,7 +80,7 @@ export function createBouncerMcpServer({ provider = new nearApi.providers.JsonRp
       await assertTestnet(provider);
       const final = { finality: 'final' };
       const version = await provider.callFunction(contract_id, 'contract_version', {}, final);
-      if (!VERSIONS.has(version)) return toolError('This contract does not report a supported Bouncer v4, v5, v6 or v7 version. A version string alone does not verify deployed code.');
+      if (!VERSIONS.has(version)) return toolError('This contract does not report a supported Bouncer v4, v5, v6, v7 or v8 version. A version string alone does not verify deployed code.');
       const settings = await provider.callFunction(contract_id, 'get_policy', { policy_id }, final);
       if (!settings) return toolError('Policy was not found.');
       if (!accountOrImplicit.safeParse(settings.token).success || typeof settings.per_tx_cap !== 'string' || !/^\d{1,39}$/.test(settings.per_tx_cap) || typeof settings.daily_cap !== 'string' || !/^\d{1,39}$/.test(settings.daily_cap)) {

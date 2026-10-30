@@ -160,7 +160,7 @@ export async function runFtCallGoal({ goal: rawGoal, provider, account, publicKe
     provider.callFunction(goal.contract_id, 'contract_version', {}, final), provider.callFunction(goal.contract_id, 'get_owner', {}, final),
     provider.viewAccessKey(goal.owner_account_id, publicKey, final),
   ]);
-  if (!['bouncer-agent-v6', 'bouncer-agent-v7'].includes(version) || owner !== goal.owner_account_id) throw new Error('unsupported Bouncer version or unexpected owner');
+  if (!['bouncer-agent-v6', 'bouncer-agent-v7', 'bouncer-agent-v8'].includes(version) || owner !== goal.owner_account_id) throw new Error('unsupported Bouncer version or unexpected owner');
   const permission = access?.permission?.FunctionCall;
   if (!permission || permission.receiver_id !== goal.contract_id || !equal(permission.method_names, ['execute_ft_call'])) throw new Error('agent key must be scoped ONLY to execute_ft_call on this contract');
   const previous = journal?.get(goal.id), hash = fingerprint(goal);

@@ -106,7 +106,7 @@ async function main() {
   receiptsOk(created, 'create owner');
   const owner = accountFor(ownerId, ownerKey);
   await setupCall(contract, contractId, 'new', { owner: ownerId });
-  if (await view(contractId, 'contract_version') !== 'bouncer-agent-v7' || await view(contractId, 'get_owner') !== ownerId) throw new Error('stale contract or wrong owner');
+  if (await view(contractId, 'contract_version') !== 'bouncer-agent-v8' || await view(contractId, 'get_owner') !== ownerId) throw new Error('stale contract or wrong owner');
 
   await setupCall(owner, contractId, 'deposit_native', {}, funding);
   await setupCall(owner, contractId, 'set_policy', { policy_id: policyId, token: 'native', per_tx_cap: amount.toString(), daily_cap: amount.toString() }, 1n);
