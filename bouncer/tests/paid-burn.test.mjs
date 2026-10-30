@@ -82,6 +82,8 @@ const run = (f, options = {}) => runProjectGoal({ goal, provider: f.provider, ac
 test('burn checksum matches independent u64 golden vectors without JS precision loss', () => {
   assert.equal(expectedBurnChecksum(1), checksum1);
   assert.equal(expectedBurnChecksum(5), checksum5);
+  // Independently calculated with Python hashlib over 50,000 hashes.
+  assert.equal(expectedBurnChecksum(50), '11684001528787636706');
   assert(BigInt(checksum1) > BigInt(Number.MAX_SAFE_INTEGER));
   assert.equal(Number(checksum1), Number((BigInt(checksum1) + 1n).toString())); // why floating-point comparison is unsafe
   for (const value of [0, 201, -1, 1.5, '1', NaN]) assert.throws(() => expectedBurnChecksum(value));

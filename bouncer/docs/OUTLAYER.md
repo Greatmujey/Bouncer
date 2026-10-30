@@ -175,8 +175,9 @@ operation**, pinned at 10,000 micro-units of fake USDC.e and 3,333 basis points
 for the author. It accepts only canonical owner-pinned inputs with 1–200 rounds,
 recomputes the iterated SHA-256 checksum locally, and parses the provider's
 64-bit JSON number without JavaScript rounding. The live demo's `burn` mode asks
-for 50 rounds (50,000 hashes), and stages a later **self-hosted** storage goal
-containing the verified result and transaction ID. The operation is a diagnostic
+for 50 rounds (50,000 iterated hashes after the initial seed hash), and stages
+a later **self-hosted** storage goal containing the verified result and
+transaction ID. The operation is a diagnostic
 benchmark, not arbitrary compute or a commercial resource. As of this change,
 the `burn` path has offline tests only; live execution and delivery have not yet
 been established. It uses neither Circle USDC nor a TEE attestation.
