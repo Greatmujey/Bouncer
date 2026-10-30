@@ -21,6 +21,16 @@ seller-created expectation with these exact string fields:
   by the seller. A seller can use the example [resource protocol](../../docs/PROVIDER_PROTOCOL.md)
   or a different agreed, unique order-binding memo.
 
+For a real multi-customer seller, create and persist a fresh seller-owned order
+ID or challenge for every order and bind it to the exact memo and price. Atomically
+reserve each transaction for only that order. The reference v1 resource memo
+is deterministic from the input and has **no per-order challenge**: identical
+inputs produce identical memos, and the current resource agent does not negotiate
+a separate challenge. A seller-specific challenge format therefore requires a
+compatible buyer integration; the SDK alone does not add that negotiation.
+Public memos are not authentication or secrets, and even a unique challenge
+cannot force delivery or refund an incorrect payment.
+
 The buyer must **not** be the authority for the seller's contract, RPC, price,
 token, payee or memo. Persist the seller's order and expected values before
 payment. Restrict acceptable deployments to ones the seller independently
@@ -56,7 +66,12 @@ This depends on the seller's RPC, Bouncer deployment and token code being
 honest and correctly configured. An implicit 64-hex token address does not
 identify its network; even an RPC reporting testnet can lie. This is **not a
 light-client proof**, a replay database, a generic x402 implementation, or
-proof that the seller delivered a resource. It does not support Bouncer's
+proof that the seller delivered a resource. The three reconstructed historical
+memo vectors can be compared with the public [compute](https://testnet.nearblocks.io/txns/7XxeU466RVYvVN3wBrWqXHu2zeHHyFPcs4WhNuFX2GbJ/execution),
+[storage](https://testnet.nearblocks.io/txns/GJkJMWBF2CCh1H5uh9uAKJJciTsqcvcgKvNXvnJrEvjL/execution)
+and [API](https://testnet.nearblocks.io/txns/7RxBwG4G6FRqG1o2shYRN2ES2WsxVFdEMd8NWp7zA5vy/execution)
+receipts. Those explorer observations alone do not establish that this SDK has
+run against receipt-inclusive RPC data. It does not support Bouncer's
 `execute_ft_call`, OutLayer prepaid projects or arbitrary `execute` gas values.
 A buyer and seller must agree on the exact order/memo and handling of failures.
 

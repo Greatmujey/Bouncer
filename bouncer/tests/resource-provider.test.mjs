@@ -115,6 +115,27 @@ test('provider pins a separate owner signer and contract receiver; mismatched si
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('seller products are pinned at startup despite later caller mutations', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'resource-pin-test-'));
+  const mutable = structuredClone(products);
+  const provider = createResourceProvider({ contractId, products: mutable, dataDir: dir,
+    rpcProvider: { async txStatusReceipts(hash) { return payment('compute', hash); } } });
+  try {
+    mutable.compute.payee = 'attacker.testnet';
+    mutable.compute.amount = '1';
+    mutable.compute.secret = 'must-not-be-returned';
+    await new Promise(resolve => provider.server.listen(0, '127.0.0.1', resolve));
+    const { port } = provider.server.address();
+    const response = await fetch(`http://127.0.0.1:${port}/quote`, { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ resource: 'compute', input: inputs.compute }) });
+    const { quote } = await response.json();
+    assert.equal(quote.payee, products.compute.payee);
+    assert.equal(quote.amount, products.compute.amount);
+    assert.equal(quote.secret, undefined);
+    assert.equal((await provider.redeem({ tx_hash: mockHash('seller-pin'), resource: 'compute', input: inputs.compute })).type, 'compute');
+  } finally { await provider.close(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('real local compute, disk storage and data API require payment, survive restart, and reject replay tampering', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'resource-provider-test-'));
   let calls = 0;

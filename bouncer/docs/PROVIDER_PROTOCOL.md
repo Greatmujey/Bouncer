@@ -10,6 +10,20 @@ prepaid-project interfaces, not this protocol. The Circle testnet USDC mission
 also uses this self-hosted provider; its tokens have no real value. Do not use
 any path with valuable funds.
 
+### Independent-provider research: MultiAgency
+
+MultiAgency's public testnet demo historically accepted a seller-generated memo
+and Circle testnet USDC into its DAO for asynchronous agent/human work. Its
+[deposit scanner](https://github.com/MultiAgency/near-agencies/blob/staging/lib/history.mjs)
+looks for the token's transfer event, potentially compatible with an indirect
+Bouncer `ft_transfer`. However, the operator's newer
+[removal plan](https://github.com/MultiAgency/near-agencies/blob/staging/docs/plans/remove-payments.md)
+explicitly says **no client deposits** and states that payout keys have been
+removed. The legacy site and API may still display a 3-test-USDC deposit flow;
+that is not evidence the operator is accepting or fulfilling paid orders. Do not
+submit a quote or send funds to this stale path. No MultiAgency purchase or
+independent FT-paid delivery has been demonstrated by Bouncer.
+
 ## Trust and setup
 
 An owner must independently vet a provider and explicitly pin its HTTPS origin,
@@ -66,8 +80,12 @@ and produces the following key orders:
 
 For the compute example, the normalized JSON is exactly
 `{"text":"Bouncer protocol test","rounds":3}` and its memo is the value above.
-The quote is unsigned and has no expiry or delivery guarantee. The agent checks
-its fields against owner limits and may requote before paying; it does not
+The v1 memo is deterministic, so identical inputs have identical memos; it is
+not a seller-owned unique order challenge or buyer authentication. A real
+multi-customer provider needs a fresh seller-issued order binding and a
+compatible buyer flow; the current agent does not yet negotiate one. The quote
+is unsigned and has no expiry or delivery guarantee. The agent checks its
+fields against owner limits and may requote before paying; it does not
 implicitly trust a listing, model or quote as financial authority.
 
 ## 2. Confirm payment and redeem

@@ -170,12 +170,17 @@ export function createResourceProvider({ rpcProvider, contractId, ownerAccountId
   if (!rpcProvider || typeof rpcProvider.viewNodeStatus !== 'function' || typeof rpcProvider.txStatusReceipts !== 'function' ||
       !isTestnetAccount(contractId) || !isTestnetAccount(ownerAccountId) || !plainObject(products) ||
       typeof dataDir !== 'string' || !dataDir || typeof adoptLegacyState !== 'boolean') throw new Error('provider configuration is invalid');
+  const pinnedProducts = Object.create(null);
   for (const name of ['compute', 'storage', 'api']) {
     const p = products[name];
     if (!plainObject(p) || typeof p.policy_id !== 'string' || !p.policy_id.trim() || bytes(p.policy_id) > 128 ||
         !isTestnetToken(p.token) || !isTestnetAccount(p.payee) || typeof p.amount !== 'string' ||
         !/^[1-9][0-9]{0,38}$/.test(p.amount) || BigInt(p.amount) > (1n << 128n) - 1n) throw new Error(`invalid ${name} product`);
+    // Do not let later mutation of the caller's config change what this
+    // running seller quotes or treats as a valid payment.
+    pinnedProducts[name] = Object.freeze({ policy_id: p.policy_id, token: p.token, payee: p.payee, amount: p.amount });
   }
+  Object.freeze(pinnedProducts);
   const root = path.resolve(dataDir);
   const storageDir = path.join(root, 'objects');
   ensureDirectory(root);
@@ -250,7 +255,7 @@ export function createResourceProvider({ rpcProvider, contractId, ownerAccountId
     const { tx_hash: txHash, resource } = order;
     const input = normalizeOrder(resource, order.input);
     const memo = orderMemo(resource, input);
-    const product = products[resource];
+    const product = pinnedProducts[resource];
     if (!product) throw new Error('unknown product');
     return singleFlight(txHash, resource, memo, async () => {
       assertStore();
@@ -307,9 +312,9 @@ export function createResourceProvider({ rpcProvider, contractId, ownerAccountId
       }
       const order = JSON.parse(Buffer.concat(chunks).toString('utf8'));
       if (request.url === '/quote') {
-        if (!plainObject(order) || !Object.hasOwn(products, order.resource)) throw new Error('unknown product');
+        if (!plainObject(order) || !Object.hasOwn(pinnedProducts, order.resource)) throw new Error('unknown product');
         const memo = orderMemo(order.resource, order.input);
-        const quote = { resource: order.resource, ...products[order.resource], memo };
+        const quote = { resource: order.resource, ...pinnedProducts[order.resource], memo };
         response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ ok: true, quote }));
         return;
       }
