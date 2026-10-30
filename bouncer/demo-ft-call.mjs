@@ -159,7 +159,7 @@ async function provePaidMission({ contract, contractId, owner, ownerId, fundingA
     }
     const hashes = goals.map(goal => `${goal.resource}:${journal.get(goal.id).tx_hash}`).join('; ');
     console.log(`::notice title=Paid-provider and FT multi-resource recovery proof::contract=${contractId}; funding_tx=${initialFundingHash}; paid_probe_tx=${initialProjectHash}; ${hashes}; first_compute_hash_reused=true; later_payments_blocked_until_verified=true; probe_http=${result.independent.delivery.result.http_status}; resources=self-hosted-development; mission=non-atomic`);
-  } finally { await new Promise(resolve => service.server.close(resolve)); }
+  } finally { await service.close(); }
 }
 
 async function main() {

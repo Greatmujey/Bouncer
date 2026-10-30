@@ -406,6 +406,13 @@ validate, hire or transact with their providers.
 
 ### Delivery checks and local receipts
 
+The experimental [seller verification SDK](bouncer/packages/provider-sdk/README.md)
+lets a testnet provider check a reviewed order against the finalized Bouncer
+transaction, actual token-transfer receipt and callback. The local development
+provider now uses it and protects one data directory with an exclusive lock and
+fsync-backed state/object writes. This is not distributed replay protection or
+proof that an independent FT seller has adopted the protocol.
+
 The resource agent recomputes bounded SHA-256 and text-statistics results,
 checks a single storage readback against the ordered bytes, and checks GitHub
 repository identity against a separate fixed-origin read. Other GitHub fields
@@ -503,9 +510,10 @@ delete or change journals to bypass this safety check. Keys must be kept private
 and different journal paths or multiple writers can still duplicate payments.
 
 The development provider trusts its configured RPC, Bouncer account/code, and
-FT contracts; it is not a trustless payment proof. Its local redemption state
-is single-process only. It has no authentication, TLS, privacy or multi-host
-replay protection and must not be exposed publicly or used with real money.
+FT contracts; it is not a trustless payment proof. A local exclusive lock
+allows one provider process per data directory, but separate directories or
+hosts do not share replay protection. It has no authentication, TLS or privacy
+and must not be exposed publicly or used with real money.
 Order data is sent to the provider, and its hash is public in the payment memo.
 
 ## Local tests

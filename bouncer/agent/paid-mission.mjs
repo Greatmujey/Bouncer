@@ -172,7 +172,7 @@ async function main() {
     if (result.independent?.delivery) console.log(`[paid-mission] Independent probe: ${JSON.stringify(result.independent.delivery)}`);
     if (result.resources) console.log(`[paid-mission] FT batch: ${JSON.stringify(result.resources.payments)}; deliveries=${result.resources.deliveries.length}`);
     if (result.status !== 'READY' && result.status !== 'FULFILLED') process.exitCode = 2;
-  } finally { journal?.close(); if (local) await new Promise(resolve => local.server.close(resolve)); }
+  } finally { journal?.close(); if (local) await local.close(); }
 }
 if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url) {
   main().catch(error => { console.error(`[paid-mission] ERROR: ${error.message}`); process.exitCode = 1; });

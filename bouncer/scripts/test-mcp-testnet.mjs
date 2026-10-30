@@ -96,6 +96,6 @@ try {
   console.log('::notice title=Bouncer live MCP check::Testnet policy, three-resource quote/preflight, shared-limit and over-cap rejection passed; no transaction or private key was used.');
 } finally {
   if (client) await client.close();
-  if (devProvider) await new Promise((resolve, reject) => devProvider.server.close(error => error ? reject(error) : resolve()));
+  if (devProvider) await devProvider.close();
   fs.rmSync(temp, { recursive: true, force: true });
 }

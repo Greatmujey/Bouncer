@@ -1,5 +1,6 @@
 // TEST-ONLY transport for demo-multi-resource.mjs. No network transactions.
 import nearApi from 'near-api-js';
+import { mockHash, mockGuardedPayment } from './mock-guarded-payment.mjs';
 const { Account, providers } = nearApi;
 const T = 10n ** 12n;
 const balances = new Map();
@@ -126,12 +127,7 @@ Account.prototype.callFunctionRaw = async function ({ contractId, methodName, ar
       spent.set(args.policy_id, (spent.get(args.policy_id) || 0n) + amount);
       add(policy.token, contractId, -amount);
       add(policy.token, args.payee, amount);
-      const result = ok(policy.token);
-      result.status = { SuccessValue: '' };
-      result.transaction = {
-        hash: result.transaction_outcome.id, signer_id: this.accountId, receiver_id: contractId,
-        actions: [{ FunctionCall: { method_name: methodName, deposit: deposit.toString(), args: Buffer.from(JSON.stringify(args)).toString('base64') } }],
-      };
+      const result = mockGuardedPayment({ hash: mockHash(`mock-payment-${++tx}`), owner: this.accountId, contract: contractId, publicKey: pk, args });
       transactionsByHash.set(result.transaction.hash, result);
       return result;
     }
@@ -163,3 +159,5 @@ providers.JsonRpcProvider.prototype.viewTransactionStatus = async function (hash
   if (accountId !== owner || waitUntil !== 'FINAL' || !transactionsByHash.has(hash)) fail('unknown transaction');
   return transactionsByHash.get(hash);
 };
+
+providers.JsonRpcProvider.prototype.txStatusReceipts = providers.JsonRpcProvider.prototype.viewTransactionStatus;

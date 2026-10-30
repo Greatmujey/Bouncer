@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fetchPublicRepository, normalizeRepository } from '../services/github-data.mjs';
 import { createResourceProvider, normalizeOrder, orderMemo } from '../services/resource-provider.mjs';
+import { mockHash, mockGuardedPayment } from './mock-guarded-payment.mjs';
 
 const data = () => ({ private: false, full_name: 'near/near-api-js', id: 12345, description: 'A public repository',
   stargazers_count: 123, forks_count: 40, open_issues_count: 8, license: { spdx_id: 'MIT' } });
@@ -63,14 +64,12 @@ test('payment-bound public data is retryable after a read outage and replay uses
   const products = Object.fromEntries(['compute', 'storage', 'api'].map(name => [name, {
     policy_id: name, token: `${name}-token.testnet`, payee: `${name}-vendor.testnet`, amount: '123',
   }]));
-  const input = { repo: 'near/near-api-js' }, txHash = 'tx-api';
+  const input = { repo: 'near/near-api-js' }, txHash = mockHash('tx-api');
   const args = { policy_id: 'api', expected_token: products.api.token, payee: products.api.payee, amount: '123', memo: orderMemo('api', input) };
   let rpcCalls = 0, fetchCalls = 0;
-  const rpcProvider = { async viewTransactionStatus(hash, id, wait) {
+  const rpcProvider = { async viewNodeStatus() { return { chain_id: 'testnet' }; }, async txStatusReceipts(hash, id, wait) {
     rpcCalls++; assert.equal(id, contractId); assert.equal(wait, 'FINAL');
-    return { final_execution_status: 'FINAL', status: { SuccessValue: '' }, transaction: { hash, signer_id: contractId, receiver_id: contractId,
-      actions: [{ FunctionCall: { method_name: 'execute', deposit: '0', args: Buffer.from(JSON.stringify(args)).toString('base64') } }] },
-      receipts_outcome: [{ outcome: { executor_id: products.api.token, status: { SuccessValue: '' } } }] };
+    return mockGuardedPayment({ hash, owner: contractId, contract: contractId, args });
   } };
   const options = { rpcProvider, contractId, products, dataDir: dir, dataFetch: async () => ++fetchCalls === 1 ? new Response('unavailable', { status: 503 }) : ok(data()) };
   try {
@@ -82,9 +81,11 @@ test('payment-bound public data is retryable after a read outage and replay uses
     assert.equal(result.repository, 'near/near-api-js');
     assert.equal(rpcCalls, 2);
     assert.equal(fetchCalls, 2);
+    await provider.close();
     const restarted = createResourceProvider(options);
     assert.deepEqual(await restarted.redeem(order), result);
     assert.equal(fetchCalls, 2, 'completed data is replayed, not fetched or paid again');
     await assert.rejects(restarted.redeem({ ...order, input: { repo: 'near/nearcore' } }), /different order/);
+    await restarted.close();
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });

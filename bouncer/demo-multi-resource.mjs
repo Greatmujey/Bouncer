@@ -612,8 +612,8 @@ async function main() {
     }
   } finally {
     journal?.close();
-    if (alternateProvider) await new Promise(resolve => alternateProvider.server.close(resolve));
-    await new Promise(resolve => devProvider.server.close(resolve));
+    if (alternateProvider) await alternateProvider.close();
+    await devProvider.close();
   }
   console.log('\n✅ Three real testnet FT payments and self-hosted resource services verified.');
   console.log('Storage, API and FT-backed compute services are self-hosted development examples, not commercial vendors or production infrastructure.');

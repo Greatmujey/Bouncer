@@ -266,7 +266,7 @@ async function main() {
     success = true;
   } finally {
     journal?.close();
-    if (service) await new Promise(resolve => service.server.close(resolve));
+    if (service) await service.close();
     if (success) fs.rmSync(dir, { recursive: true, force: true });
     else console.error(`Public testnet recovery evidence retained in ${dir}; reconcile the recorded hash, never resend automatically.`);
   }

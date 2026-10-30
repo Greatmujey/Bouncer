@@ -170,7 +170,7 @@ async function main() {
     if (result.status === 'BLOCKED' || result.status === 'INCOMPLETE') process.exitCode = 2;
   } finally {
     journal?.close();
-    if (local) await new Promise(resolve => local.server.close(resolve));
+    if (local) await local.close();
   }
 }
 if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url) {

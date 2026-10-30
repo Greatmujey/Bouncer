@@ -137,11 +137,15 @@ not prove all possible callback, provider or token failure cases.
 9. **Provider verification and operations are not trustless.** The provider
    trusts its configured RPC, Bouncer deployment/code and token contracts. It
    verifies transaction arguments and receipts, but cannot protect against a
-   compromised or upgraded trusted contract, malicious RPC or token. Its state
-   is single-process: up to eight independent redemptions can be in flight,
-   with same-transaction coalescing but no multi-process lock or replay protection.
-   Its local state writes do not provide fsync durability; a write error stops
-   the instance and requires manual reconciliation. Storage is plaintext and
+   compromised or upgraded trusted contract, malicious RPC or token. The seller
+   verifier requires matching FINAL transaction, transfer and callback receipts.
+   Up to eight redemptions can be in flight with same-transaction coalescing.
+   An exclusive lock excludes other provider processes using the same local
+   directory; state and object files and directories are fsynced, subject to
+   filesystem guarantees. A crash may leave a stale lock or pending fulfillment;
+   never steal a lock automatically. A write error stops the instance for manual
+   reconciliation. Different directories/hosts have no shared replay protection.
+   Storage is plaintext and
    publicly retrievable, and there is no authentication or transport security.
    The configured provider checks that its RPC reports testnet, but the RPC can
    lie; an implicit 64-hex token ID does not itself identify a network.

@@ -81,10 +81,13 @@ the local provider verified [their separate-owner payment](https://testnet.nearb
 
 The development provider permits up to eight distinct in-flight redemptions and
 coalesces identical concurrent requests for the same transaction; excess work is
-rejected, not queued. A state-write error stops that instance for manual
-reconciliation. This improves bounded single-process I/O concurrency only: it
-has synchronous CPU/filesystem work, no fsync guarantee, authentication, TLS or
-multi-process/distributed replay protection and is **not production infrastructure**.
+rejected, not queued. A local exclusive lock excludes other provider processes
+using the **same directory**; pending, object and completion writes synchronize
+files and directories on filesystems that honor fsync. A failed write stops the
+instance for manual reconciliation. This is still synchronous, plaintext,
+unauthenticated local software: separate directories/hosts can redeem twice,
+there is no TLS or replicated/distributed replay protection, and it is **not
+production infrastructure**. See the [provider SDK and recovery notes](../packages/provider-sdk/README.md).
 
 ## Use a prepared testnet deployment
 

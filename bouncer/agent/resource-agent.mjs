@@ -332,7 +332,7 @@ async function main() {
     if (result.payments.blocked) process.exitCode = 2;
   } finally {
     journal?.close();
-    if (local) await new Promise(resolve => local.server.close(resolve));
+    if (local) await local.close();
   }
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

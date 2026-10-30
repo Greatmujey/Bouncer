@@ -303,6 +303,24 @@ jobs:
           fi
           exit "$result"
 
+  provider-historical-verification:
+    name: Verify existing testnet FT seller receipts (read only)
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[provider-inspect]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      # Reuses three existing self-hosted-provider transactions. No credentials,
+      # signatures, transfers, or new provider purchases are made.
+      - name: Verify historical Circle testnet receipts and seller substitution
+        run: node bouncer/scripts/verify-provider-history.mjs
+
   oracle-transaction-inspection:
     name: Reconcile one existing oracle transaction (read only)
     if: github.event_name == 'push' && contains(github.event.head_commit.message, '[oracle-inspect]')

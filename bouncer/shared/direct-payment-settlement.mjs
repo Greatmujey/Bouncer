@@ -50,6 +50,13 @@ export function verifyDirectPayment({ result, contractId, ownerAccountId, reques
   if (!call || call.method_name !== 'execute' || String(call.deposit) !== '0' || String(call.gas) !== '200000000000000' ||
       !equal(json(call.args, 'execute arguments'), expected)) throw new Error('signed execute does not match the reviewed payment');
   if (!Array.isArray(result.receipts) || !Array.isArray(result.receipts_outcome)) throw new Error('receipt-inclusive final result required');
+  // An outcome must describe one unique receipt. In particular, a matching
+  // token/callback outcome cannot be borrowed from a duplicated or ambiguous ID.
+  const outcomeIds = result.receipts_outcome.map(r => r?.id), receiptIds = result.receipts.map(r => r?.receipt_id);
+  if (outcomeIds.some(id => typeof id !== 'string' || !id) || new Set(outcomeIds).size !== outcomeIds.length ||
+      receiptIds.some(id => typeof id !== 'string' || !id) || new Set(receiptIds).size !== receiptIds.length) {
+    throw new Error('missing or duplicate receipt IDs');
+  }
   const initiations = result.receipts_outcome.filter(r => r?.outcome?.executor_id === contractId &&
     r.outcome.logs?.includes('BOUNCER payment initiated'));
   if (initiations.length !== 1) throw new Error('missing unique guarded payment initiation');

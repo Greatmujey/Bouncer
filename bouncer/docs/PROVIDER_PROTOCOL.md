@@ -30,8 +30,8 @@ RPC can lie. Never accept these values from the order itself as authority.
 The current runner follows no redirects. Quotes and redemption bodies are JSON
 and responses are bounded to 64 KiB; storage readback is bounded to 4096 bytes.
 Orders disclose their full inputs to the provider. The reference server is
-loopback-only, single-process and unauthenticated, and does not provide TLS or
-production durability. It is not a suitable public deployment.
+loopback-only and unauthenticated, without TLS or distributed durability. It
+is not a suitable public deployment.
 
 ## 1. Quote an exact order
 
@@ -80,22 +80,29 @@ After a finalized payment the client sends:
 
 The endpoint is `POST /redeem`. Before any paid side effect, a provider should
 fetch the transaction from its trusted NEAR testnet RPC with `FINAL` execution
-and fail closed unless all expected receipts have completed successfully. The
-current verifier checks the transaction hash, pinned owner signer and contract
-receiver, a single zero-deposit `execute` action, the pinned policy, token,
-payee, exact amount and order memo, plus a successful receipt from the pinned
-FT contract. See [`verifyPayment`](../services/resource-provider.mjs) and
-[`assertFinalPaymentReceipts`](../shared/final-payment.mjs) for the exact checks
-and trust assumptions. This is not a light-client proof or a generic FT payment
-verifier. A failed or ambiguous transaction must not be treated as paid.
+and fail closed unless the expected receipts have completed successfully. The
+[provider SDK](../packages/provider-sdk/README.md) checks the transaction hash,
+pinned owner and contract, zero-deposit signed `execute` and exact order fields.
+It also binds the guarded initiation to the actual Bouncer-to-token
+`ft_transfer` and settlement callback, verifies their arguments and successful
+outcomes, and rejects duplicate receipt IDs. Its supported direct-payment
+format currently uses the Bouncer runner's **200 TGas** `execute` action. An
+RPC without receipt-inclusive `FINAL` data fails closed. This is neither a
+light-client proof nor a generic FT or service-delivery verifier; a malicious
+RPC, upgraded contract or token remains a trust risk.
 
 Persist a unique transaction-to-order binding before non-repeatable side
 effects; return the same result for the same transaction and order, and reject
 a different order. A pending or ambiguous prior fulfillment needs reconciliation,
-not an automatic second side effect. The reference provider coalesces duplicate
-requests and caps concurrent redemptions in one process only; it has no
-multi-host lock, fsync guarantee or crash-proof distributed idempotency. A real
-provider needs an appropriate durable, transactional design of its own.
+not an automatic second side effect. The reference provider holds an exclusive
+lock for one local data directory, coalesces duplicates, limits concurrent
+redemptions to eight and synchronizes each state/object file and directory.
+This depends on local filesystem semantics and excludes other writers only if
+they share that directory and respect its lock. It does not coordinate separate
+directories or machines, and is not distributed replay protection. A real
+provider needs its own transactional, replicated system, authentication and TLS.
+The SDK is an integration tool, not evidence that an independent seller has
+adopted it.
 
 ## 3. Return a verifiable bounded result
 

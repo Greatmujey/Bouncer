@@ -219,7 +219,7 @@ async function main() {
     success = true;
   } finally {
     journal.close();
-    await new Promise(resolve => service.server.close(resolve));
+    await service.close();
     if (success) fs.rmSync(dir, { recursive: true, force: true });
     else console.error(`Public testnet recovery files retained in ${dir}; do not retry an uncertain payment automatically.`);
   }
