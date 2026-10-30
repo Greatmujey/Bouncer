@@ -33,10 +33,16 @@ export const ORACLE_TESTNET_PROGRAM = Object.freeze({
   build_target: 'wasm32-wasip2', max_instructions: 10_000_000_000, max_memory_mb: 256, max_execution_seconds: 60,
 });
 export const ORACLE_NEAR_INPUT = Object.freeze({ command: 'fetch_external', token_id: 'near', source: 'coingecko' });
+// One explicitly reviewed public source, not an agent-supplied URL. The
+// deployed oracle parses only data.amount and labels the output "custom";
+// neither the full Coinbase response nor market freshness is authenticated.
+export const ORACLE_COINBASE_NEAR_INPUT = Object.freeze({ command: 'fetch_external', token_id: 'near', source: Object.freeze({
+  custom: Object.freeze({ url: 'https://api.coinbase.com/v2/prices/NEAR-USD/spot', json_path: 'data.amount', value_type: 'number', method: 'GET' }),
+}) });
 export const ORACLE_PROJECT_ID = 'zavodil2.testnet/price-oracle';
 export const ORACLE_PROJECT_UUID = 'p0000000000000007';
 export const ORACLE_TESTNET_PROJECT = Object.freeze({ project_id: ORACLE_PROJECT_ID, version_key: HASH,
-  input_data: JSON.stringify(ORACLE_NEAR_INPUT), max_instructions: ORACLE_TESTNET_PROGRAM.max_instructions,
+  input_data: JSON.stringify(ORACLE_COINBASE_NEAR_INPUT), max_instructions: ORACLE_TESTNET_PROGRAM.max_instructions,
   max_memory_mb: ORACLE_TESTNET_PROGRAM.max_memory_mb, max_execution_seconds: ORACLE_TESTNET_PROGRAM.max_execution_seconds });
 const APPROVED = new Map([
   ['coingecko', new Set(['near', 'bitcoin', 'ethereum'])],
@@ -66,9 +72,11 @@ function parseInput(value) {
   text(value, 'pinned oracle input', 4096);
   let input;
   try { input = JSON.parse(value); } catch { throw new Error('invalid pinned oracle input JSON'); }
+  const approvedBuiltin = typeof input?.source === 'string' && typeof input?.token_id === 'string' &&
+    APPROVED.get(input.source)?.has(input.token_id);
+  const approvedCoinbase = input?.token_id === 'near' && equal(input?.source, ORACLE_COINBASE_NEAR_INPUT.source);
   if (!ownKeys(input, ['command', 'token_id', 'source']) || input.command !== 'fetch_external' ||
-      typeof input.source !== 'string' || typeof input.token_id !== 'string' ||
-      !APPROVED.get(input.source)?.has(input.token_id) || JSON.stringify(input) !== value) {
+      (!approvedBuiltin && !approvedCoinbase) || JSON.stringify(input) !== value) {
     throw new Error('only an exact canonical, approved single-source price request is supported');
   }
   return input;
@@ -106,8 +114,9 @@ const commonGoal = goal => ({ ...goal, input: parseInput(goal.route.project.inpu
 
 function validatePrice(input, output) {
   const permitted = new Set(['success', 'token_id', 'source', 'price_usd', 'timestamp', 'warning']);
+  const expectedSource = typeof input.source === 'string' ? input.source : 'custom';
   if (!output || typeof output !== 'object' || Array.isArray(output) || Object.keys(output).some(k => !permitted.has(k)) ||
-      output.success !== true || output.token_id !== input.token_id || output.source !== input.source ||
+      output.success !== true || output.token_id !== input.token_id || output.source !== expectedSource ||
       typeof output.price_usd !== 'number' || !Number.isFinite(output.price_usd) || output.price_usd <= 0 ||
       !Number.isSafeInteger(output.timestamp) || output.timestamp <= 0 ||
       (output.warning !== undefined && (typeof output.warning !== 'string' || Buffer.byteLength(output.warning) > 512))) {

@@ -16,7 +16,7 @@ import nearApi from 'near-api-js';
 import { MonotonicAccount } from './agent/near-account.mjs';
 import { FileJournal } from './agent/procurement.mjs';
 import { runOracleGoal, recoverOracleGoal, assertOracleFreshForUse, assertOracleProjectRegistry,
-  ORACLE_NEAR_INPUT, ORACLE_TESTNET_PROJECT } from './agent/oracle-outlayer.mjs';
+  ORACLE_TESTNET_PROJECT } from './agent/oracle-outlayer.mjs';
 import { runMixedMission } from './agent/mixed-mission.mjs';
 import { httpResourceProvider } from './agent/resource-agent.mjs';
 import { createResourceProvider } from './services/resource-provider.mjs';
@@ -100,7 +100,7 @@ async function main() {
   if (meta?.spec !== 'ft-1.0.0' || meta?.symbol !== 'USDC' || meta?.decimals !== 6) throw new Error('unexpected Circle testnet USDC metadata');
   await assertOracleProjectRegistry(provider); // read-only; verify real UUID, version, hash and pricing before setup
   const quote = await selectOwnerSetupQuote(provider); // read-only; no transaction
-  const input = JSON.stringify(ORACLE_NEAR_INPUT), project = { ...ORACLE_TESTNET_PROJECT };
+  const project = { ...ORACLE_TESTNET_PROJECT }, input = project.input_data;
   const estimate = BigInt(await view(OUTLAYER, 'estimate_execution_cost', { resource_limits: {
     max_instructions: project.max_instructions, max_memory_mb: project.max_memory_mb, max_execution_seconds: project.max_execution_seconds,
   }, input_len: Buffer.byteLength(input) }));
@@ -210,13 +210,13 @@ async function main() {
     notice('Guarded independent price delivery', { contract: contractId, owner: ownerId, tx, result: recovered.delivery.result,
       native_charge_yocto: recovered.delivery.charged_yocto, owner_refund_yocto: recovered.delivery.refunded_to_owner_yocto,
       max_budget_reserved_yocto: nativeSpent.toString(), signed_hash_recovered_without_key: true, broadcasts,
-      scope: 'single-source public market data via independent paid execution; no TEE or price accuracy proof' });
+      scope: 'pinned Coinbase public price via independent paid execution; output labels source custom; no TEE or price accuracy proof' });
 
     // Bind the actual independently returned value into subsequent resource
     // inputs; do not fabricate or replace it. The three paid FT products are
     // supplied only by a local development provider.
     const observation = recovered.delivery.result;
-    const report = `OutLayer single-source ${observation.token_id}/${observation.source} USD=${observation.price_usd}; worker timestamp=${observation.timestamp}; tx=${tx}; unverified market data.`;
+    const report = `OutLayer single-source Coinbase ${observation.token_id}/USD=${observation.price_usd}; worker timestamp=${observation.timestamp}; tx=${tx}; unverified market data.`;
     const products = Object.fromEntries(['compute', 'storage', 'api'].map(resource => [resource,
       { policy_id: FT_POLICY, token: TOKEN, payee: vendorId, amount: PRICE.toString() }]));
     const goals = [
@@ -258,7 +258,7 @@ async function main() {
         BigInt(await view(contractId, 'daily_spent', { policy_id: FT_POLICY })) !== 3n * PRICE) throw new Error('oracle-led Circle mission delivery or recovery mismatch');
     const hashes = Object.fromEntries(goals.map(item => [item.resource, journal.get(item.id).tx_hash]));
     notice('Oracle-led Circle testnet multi-resource mission', { contract: contractId, owner: ownerId, vendor: vendorId, token: TOKEN,
-      oracle_tx: tx, worker_timestamp: observation.timestamp, single_source_usd: observation.price_usd, owner_setup_pool: quote.pool_id,
+      oracle_tx: tx, worker_timestamp: observation.timestamp, source: 'Coinbase via pinned custom URL', single_source_usd: observation.price_usd, owner_setup_pool: quote.pool_id,
       owner_setup_swap: swap.transaction_outcome.id, owner_vault_funding: funding.transaction_outcome.id, resource_transactions: hashes,
       units_per_resource: PRICE.toString(), oracle_output_used_in_resource_inputs: true, independent_hash_reused: true,
       corrupt_delivery_stopped_later_payments: true, first_ft_hash_reused: true, independent_execution: 'OutLayer',

@@ -64,10 +64,23 @@ The corrected [v9 Project-mode attempt](https://github.com/abdullahimujeeb0505-s
 reached the oracle WASM, but its requested CoinGecko API returned HTTP 403. The
 [final transaction](https://testnet.nearblocks.io/txns/HNPWAhuYaoctcCWd16E76rHcG2Amm3yKFGJYLEnhhJpx)
 returned `success: false`; recovery refused it and no downstream Circle resource
-payments were sent. Both the zero-deposit contract guard and the protocol's
-one-yocto restricted-key guard rejected escalation probes. This hash must not be
-resent; receipt reconciliation is read-only. Useful independent data delivery
-remains unproven.
+payments were sent. OutLayer reported a completed WASM execution but an
+application-level HTTP error, charging `1120300000000000000000` yoctoNEAR and
+refunding `98879700000000000000000` to the owner. [Read-only reconciliation](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41072024180/job/124118338158)
+confirmed the project ID, UUID and resolved hash. Both the zero-deposit contract
+guard and the protocol's one-yocto restricted-key guard rejected escalation
+probes. This hash must not be resent. Useful independent data delivery remains
+unproven.
+
+A separate [read-only research probe](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41072024180/job/124118338158)
+found Coinbase's public NEAR/USD spot endpoint reachable from the GitHub runner;
+that does **not** establish reachability from OutLayer's workers. The next
+explicitly different test pins that exact GET URL and `data.amount` field in the
+owner's project input, with no headers, body, secrets or agent-selected URL. The
+oracle returns only a number and the label `custom`, not the original Coinbase
+response; the endpoint, provider and RPC remain trusted, and its timestamp is
+the worker's rather than a verified market-observation time. See [Coinbase's
+public endpoint documentation](https://docs.cdp.coinbase.com/coinbase-business/track-apis/prices).
 
 ## Asset and policy semantics
 

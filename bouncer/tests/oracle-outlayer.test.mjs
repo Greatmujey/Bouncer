@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import nearApi from 'near-api-js';
-import { ORACLE_TESTNET_PROGRAM, ORACLE_NEAR_INPUT, ORACLE_TESTNET_PROJECT, ORACLE_PROJECT_ID, ORACLE_PROJECT_UUID, validateOracleGoal, verifyOracleResult, assertOracleFreshForUse,
+import { ORACLE_TESTNET_PROGRAM, ORACLE_NEAR_INPUT, ORACLE_COINBASE_NEAR_INPUT, ORACLE_TESTNET_PROJECT, ORACLE_PROJECT_ID, ORACLE_PROJECT_UUID, validateOracleGoal, verifyOracleResult, assertOracleFreshForUse,
   runOracleGoal, recoverOracleGoal } from '../agent/oracle-outlayer.mjs';
 
 const key = 'ed25519:agent', hashBytes = Buffer.alloc(32, 42), hash = nearApi.utils.serialize.base_encode(hashBytes);
@@ -18,7 +18,7 @@ const limits = () => ({ max_instructions: goal.route.project.max_instructions, m
 const signedArgs = () => ({ policy_id: goal.policy_id, amount: goal.amount, expected_route: goal.route });
 const outlayerArgs = () => ({ source: { Project: { project_id: ORACLE_PROJECT_ID, version_key: ORACLE_TESTNET_PROJECT.version_key } }, resource_limits: limits(), input_data: goal.route.project.input_data,
   secrets_ref: null, response_format: 'Json', payer_account_id: goal.owner_account_id, params: null });
-const output = () => ({ success: true, token_id: 'near', source: 'coingecko', price_usd: 2.75, timestamp: stamp,
+const output = () => ({ success: true, token_id: 'near', source: 'custom', price_usd: 2.75, timestamp: stamp,
   warning: 'Price from single external API, not verified by oracle consensus' });
 function outcome(id, executor_id, status, logs = []) { return { id, block_hash: blockHash, outcome: { executor_id, status, logs } }; }
 function receipt(id, predecessor_id, receiver_id, actions) { return { receipt_id: id, predecessor_id, receiver_id, receipt: { Action: { actions } } }; }
@@ -80,7 +80,14 @@ const run = (f, options = {}) => runOracleGoal({ goal, provider: f.provider, acc
 
 test('accepts only a reviewed, version-pinned bounded testnet price goal', () => {
   assert.deepEqual(validateOracleGoal(goal), goal);
+  assert.equal(goal.route.project.input_data, JSON.stringify(ORACLE_COINBASE_NEAR_INPUT));
+  assert.doesNotThrow(() => validateOracleGoal({ ...goal, route: { ...goal.route, project: { ...goal.route.project, input_data: JSON.stringify(ORACLE_NEAR_INPUT) } } }));
+  const custom = ORACLE_COINBASE_NEAR_INPUT.source.custom;
+  const changedCustom = changes => ({ ...goal, route: { ...goal.route, project: { ...goal.route.project,
+    input_data: JSON.stringify({ ...ORACLE_COINBASE_NEAR_INPUT, source: { custom: { ...custom, ...changes } } }) } } });
   const values = [
+    changedCustom({ url: 'https://evil.test/price' }), changedCustom({ url: `${custom.url}?date=2020-01-01` }),
+    changedCustom({ json_path: 'data.base' }), changedCustom({ method: 'POST' }), changedCustom({ headers: [['Authorization', 'secret']] }),
     { ...goal, owner_account_id: 'owner.near' }, { ...goal, amount: '0' }, { ...goal, amount: '01' },
     { ...goal, max_age_seconds: 0 }, { ...goal, max_age_seconds: 901 }, { ...goal, extra: true },
     { ...goal, route: { ...goal.route, active: false } }, { ...goal, route: { ...goal.route, route_revision: 0 } },
