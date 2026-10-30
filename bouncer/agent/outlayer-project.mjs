@@ -69,6 +69,31 @@ export function expectedBurnChecksum(rounds) {
   return digest.readBigUInt64LE(0).toString();
 }
 
+/**
+ * Compare the provider's non-atomic views with reviewed terms. The optional
+ * registry and native estimate let a funding caller fail closed BEFORE moving
+ * FT into provider custody. These views are not reservations or attestation.
+ */
+export function assertProjectRegistry({ project, expectedAuthor, configuredToken, pricing, versionInfo, registry, estimate, maximumNative }) {
+  const terms = probeTerms(project);
+  const row = Array.isArray(pricing?.operations) ? pricing.operations.filter(item => item?.operation === terms.operation) : [];
+  if (!isTestnetAccount(expectedAuthor) || typeof project.version_key !== 'string' || !/^[a-f0-9]{64}$/.test(project.version_key) ||
+      configuredToken !== project.token || pricing?.author_account_id !== expectedAuthor || row.length !== 1 ||
+      row[0].price_usd !== project.attached_usd || row[0].developer_share_bp !== terms.developerShareBp ||
+      versionInfo?.wasm_hash !== project.version_key || versionInfo?.source?.WasmUrl?.hash !== project.version_key ||
+      versionInfo?.source?.WasmUrl?.build_target !== 'wasm32-wasip2') {
+    throw new Error('provider token, price, author or pinned project version changed');
+  }
+  if (registry !== undefined && (registry?.project_id !== PROJECT || registry?.uuid !== 'p0000000000000020' ||
+      registry?.owner !== 'connectors.outlayer.testnet' || registry?.active_version !== project.version_key)) {
+    throw new Error('provider project identity or active version changed');
+  }
+  if (estimate !== undefined || maximumNative !== undefined) {
+    const cost = unsigned(estimate, 'provider compute estimate'), cap = unsigned(maximumNative, 'maximum NEAR deposit');
+    if (cost === 0n || cap === 0n || cost > cap) throw new Error('provider compute estimate exceeds the owner-approved native maximum');
+  }
+}
+
 export function validateProjectGoal(value) {
   if (!ownKeys(value, FIELDS) || !ownKeys(value.route, ROUTE) || !ownKeys(value.route.project, CONFIG)) throw new Error('project goal must contain exactly the reviewed fields');
   const id = text(value.id, 'goal id', 64);
@@ -240,7 +265,7 @@ export async function recoverProjectGoal({ goal: rawGoal, provider, journal, pub
 }
 
 export async function runProjectGoal({ goal: rawGoal, provider, account, publicKey, journal, execute = false, log = console.log }) {
-  const goal = validateProjectGoal(rawGoal), p = goal.route.project, terms = probeTerms(p);
+  const goal = validateProjectGoal(rawGoal), p = goal.route.project;
   if (!account || account.accountId !== goal.owner_account_id || !publicKey) throw new Error('agent key account does not match owner');
   if (execute && (!journal || typeof journal.get !== 'function' || typeof journal.put !== 'function')) throw new Error('live execution requires a journal');
   if ((await provider.viewNodeStatus())?.chain_id !== 'testnet') throw new Error('RPC must report testnet');
@@ -272,12 +297,7 @@ export async function runProjectGoal({ goal: rawGoal, provider, account, publicK
   if (usd > max || (daily > 0n && unsigned(usdSpent, 'prepaid spend') + usd > daily)) {
     log(`[project] BLOCKED ${goal.id}: prepaid cap or rolling budget`); return { status: 'BLOCKED' };
   }
-  const row = pricing?.operations?.filter(item => item?.operation === terms.operation);
-  if (configuredToken !== p.token || pricing?.author_account_id !== goal.expected_author || !Array.isArray(row) || row.length !== 1 ||
-      row[0].price_usd !== p.attached_usd || row[0].developer_share_bp !== terms.developerShareBp ||
-      versionInfo?.wasm_hash !== p.version_key || versionInfo?.source?.WasmUrl?.hash !== p.version_key || versionInfo?.source?.WasmUrl?.build_target !== 'wasm32-wasip2') {
-    throw new Error('provider token, price, author or pinned project version changed');
-  }
+  assertProjectRegistry({ project: p, expectedAuthor: goal.expected_author, configuredToken, pricing, versionInfo });
   if (!Array.isArray(verdict) || verdict.length !== 2 || typeof verdict[0] !== 'boolean') throw new Error('invalid native policy verdict');
   if (!verdict[0]) { log(`[project] BLOCKED ${goal.id}: ${String(verdict[1]).slice(0, 200)}`); return { status: 'BLOCKED' }; }
   if (available < usd) {

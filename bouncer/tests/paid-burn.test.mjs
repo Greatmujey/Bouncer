@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import nearApi from 'near-api-js';
-import { expectedBurnChecksum, validateProjectGoal, verifyProjectResult, runProjectGoal, recoverProjectGoal } from '../agent/outlayer-project.mjs';
+import { assertProjectRegistry, expectedBurnChecksum, validateProjectGoal, verifyProjectResult, runProjectGoal, recoverProjectGoal } from '../agent/outlayer-project.mjs';
 
 const projectId = 'connectors.outlayer.testnet/connector-probe', key = 'ed25519:agent';
 const hashBytes = Buffer.alloc(32, 31), hash = nearApi.utils.serialize.base_encode(hashBytes);
@@ -136,6 +136,25 @@ test('preflight verifies burn price and author share before any send', async () 
     await assert.rejects(run(f, { execute: true }), /provider token, price, author or pinned project version changed/); assert.equal(f.sends(), 0);
   }
   const f = fixture(); assert.deepEqual(await run(f), { status: 'READY' }); assert.equal(f.sends(), 0);
+});
+
+test('pre-deposit registry and native estimate checks reject drift and malformed views', () => {
+  const terms = { project: goal.route.project, expectedAuthor: goal.expected_author, configuredToken: goal.route.project.token,
+    pricing: { author_account_id: goal.expected_author, operations: [{ operation: 'burn', price_usd: '10000', developer_share_bp: 3333 }] },
+    versionInfo: { wasm_hash: goal.route.project.version_key, source: source() },
+    registry: { project_id: projectId, uuid: 'p0000000000000020', owner: 'connectors.outlayer.testnet', active_version: goal.route.project.version_key },
+    estimate: '99', maximumNative: '100' };
+  assert.doesNotThrow(() => assertProjectRegistry(terms));
+  for (const mutate of [
+    t => { t.registry.uuid = 'p0000000000000021'; }, t => { t.registry.owner = 'other.testnet'; },
+    t => { t.registry.active_version = 'b'.repeat(64); }, t => { t.registry = null; },
+    t => { t.pricing.operations.push({ ...t.pricing.operations[0] }); }, t => { t.pricing.operations = {}; },
+    t => { t.versionInfo.source.WasmUrl.hash = 'b'.repeat(64); }, t => { t.versionInfo.source.WasmUrl.build_target = 'wasm32-wasip1'; },
+    t => { t.expectedAuthor = 'other.testnet'; }, t => { t.configuredToken = 'circle.testnet'; },
+    t => { t.estimate = '101'; }, t => { t.estimate = '0'; }, t => { t.estimate = 99; },
+    t => { t.estimate = '01'; }, t => { t.estimate = ((1n << 128n)).toString(); }, t => { delete t.estimate; },
+    t => { t.maximumNative = '0'; }, t => { delete t.maximumNative; },
+  ]) { const changed = structuredClone(terms); mutate(changed); assert.throws(() => assertProjectRegistry(changed)); }
 });
 
 test('one paid burn is journaled before broadcast; uncertainty is recovered without paying again', async () => {

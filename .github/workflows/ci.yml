@@ -209,6 +209,10 @@ jobs:
         with:
           node-version: '22'
       - run: npm ci --prefix bouncer --no-audit --no-fund
+      # A receipt-inclusive historical regression must pass before any new
+      # account setup, test-token funding or project purchase is attempted.
+      - name: Verify the previous paid connector transaction (read only)
+        run: node bouncer/scripts/verify-project-history.mjs
       - name: Test pinned FT funding, paid independent probe and rejection refund
         shell: bash
         env:
@@ -372,6 +376,21 @@ jobs:
       - run: npm ci --prefix bouncer --no-audit --no-fund
       - name: Inspect independent testnet contracts without keys or payments
         run: node bouncer/scripts/probe-ft-ecosystem.mjs
+
+  project-history:
+    name: Historical paid connector regression (read only)
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[project-history]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      - run: node bouncer/scripts/verify-project-history.mjs
 
   independent-market-discovery:
     name: Independent marketplace catalog (read only)

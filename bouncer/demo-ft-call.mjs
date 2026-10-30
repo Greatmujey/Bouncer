@@ -16,7 +16,7 @@ import nearApi from 'near-api-js';
 import { MonotonicAccount } from './agent/near-account.mjs';
 import { FileJournal } from './agent/procurement.mjs';
 import { runFtCallGoal, recoverFtCallGoal } from './agent/ft-call.mjs';
-import { runProjectGoal, recoverProjectGoal } from './agent/outlayer-project.mjs';
+import { assertProjectRegistry, runProjectGoal, recoverProjectGoal } from './agent/outlayer-project.mjs';
 import { runPaidProjectMission } from './agent/paid-mission.mjs';
 import { createResourceProvider } from './services/resource-provider.mjs';
 import { httpResourceProvider } from './agent/resource-agent.mjs';
@@ -40,6 +40,8 @@ const PROJECT = 'connectors.outlayer.testnet/connector-probe';
 const PROJECT_VERSION = '2d406ed8005a422c38aec0616990989970e2c444c1386d4f09d54cce59468fb9';
 const PROJECT_AUTHOR = 'zavodil.testnet';
 const PROJECT_NATIVE_MAX = ONE / 10n, PROJECT_NATIVE_FUNDING = 3n * PROJECT_NATIVE_MAX;
+const PROJECT_LIMITS = { max_instructions: PROBE === 'burn' ? 5_000_000_000 : 1_000_000_000,
+  max_memory_mb: 256, max_execution_seconds: 60 };
 const accountFor = (id, key) => new MonotonicAccount(id, provider, new KeyPairSigner(key));
 const view = (id, method, args = {}) => provider.callFunction(id, method, args, { finality: 'final' });
 const txUrl = hash => `https://testnet.nearblocks.io/txns/${hash}`;
@@ -48,19 +50,15 @@ const txUrl = hash => `https://testnet.nearblocks.io/txns/${hash}`;
 // again immediately before the guarded deposit. These non-atomic views are not
 // an attestation and cannot prevent the provider changing terms afterward.
 async function assertProviderTerms() {
-  const [token, project, version, pricing] = await Promise.all([
+  const [token, project, version, pricing, estimate] = await Promise.all([
     view(OUTLAYER, 'get_payment_token_contract'), view(OUTLAYER, 'get_project', { project_id: PROJECT }),
     view(OUTLAYER, 'get_version', { project_id: PROJECT, version_key: PROJECT_VERSION }),
     view(OUTLAYER, 'get_project_pricing', { project_id: PROJECT }),
+    view(OUTLAYER, 'estimate_execution_cost', { resource_limits: PROJECT_LIMITS, input_len: Buffer.byteLength(PROBE_INPUT) }),
   ]);
-  const rows = Array.isArray(pricing?.operations) ? pricing.operations.filter(row => row?.operation === PROBE) : [];
-  if (token !== TOKEN || project?.project_id !== PROJECT || project?.uuid !== 'p0000000000000020' ||
-      project?.owner !== 'connectors.outlayer.testnet' || project?.active_version !== PROJECT_VERSION ||
-      version?.wasm_hash !== PROJECT_VERSION || version?.source?.WasmUrl?.hash !== PROJECT_VERSION ||
-      version?.source?.WasmUrl?.build_target !== 'wasm32-wasip2' || pricing?.author_account_id !== PROJECT_AUTHOR ||
-      rows.length !== 1 || rows[0].price_usd !== USD_AMOUNT.toString() || rows[0].developer_share_bp !== PROBE_SHARE_BP) {
-    throw new Error('live project identity, version, token, author, price or operation split changed; no provider payment allowed');
-  }
+  assertProjectRegistry({ project: { project_id: PROJECT, version_key: PROJECT_VERSION, token: TOKEN,
+    attached_usd: USD_AMOUNT.toString(), input_data: PROBE_INPUT }, expectedAuthor: PROJECT_AUTHOR,
+    configuredToken: token, pricing, versionInfo: version, registry: project, estimate, maximumNative: PROJECT_NATIVE_MAX.toString() });
 }
 function probeSummary(result) {
   if (result?.operation === 'burn') return `operation=burn; rounds=${result.rounds_done}; hashes=${result.hashes}; checksum_u64=${result.checksum}`;
@@ -306,8 +304,7 @@ async function main() {
       await call(owner, contractId, 'grant_agent_key', { policy_id, public_key: projectKey.getPublicKey().toString() }, 1n);
     }
     const config = { project_id: PROJECT, version_key: PROJECT_VERSION, usd_policy_id: 'project-token', token: TOKEN,
-      attached_usd: USD_AMOUNT.toString(), input_data: PROBE_INPUT, max_instructions: PROBE === 'burn' ? 5_000_000_000 : 1_000_000_000,
-      max_memory_mb: 256, max_execution_seconds: 60 };
+      attached_usd: USD_AMOUNT.toString(), input_data: PROBE_INPUT, ...PROJECT_LIMITS };
     const estimate = BigInt(await view(OUTLAYER, 'estimate_execution_cost', { resource_limits: { max_instructions: config.max_instructions,
       max_memory_mb: config.max_memory_mb, max_execution_seconds: config.max_execution_seconds }, input_len: Buffer.byteLength(config.input_data) }));
     if (estimate <= 0n || estimate > PROJECT_NATIVE_MAX) throw new Error('provider compute estimate exceeds the owner-approved native maximum');
