@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
  * Buy a bounded, owner-pinned single-source price lookup from OutLayer on NEAR
- * testnet. Bouncer v8 pins code, input, revisions and maximum native spend on
- * chain; a NEAR function-call key must be scoped ONLY to that pinned method.
+ * testnet. Bouncer v9 pins a project version, input, revisions and maximum
+ * native spend on chain; a function-call key is scoped ONLY to that method.
  * The journal persists the signed hash before the single broadcast. Recovery
  * uses only public chain evidence and never signs or retries a payment.
  *
@@ -33,13 +33,19 @@ export const ORACLE_TESTNET_PROGRAM = Object.freeze({
   build_target: 'wasm32-wasip2', max_instructions: 10_000_000_000, max_memory_mb: 256, max_execution_seconds: 60,
 });
 export const ORACLE_NEAR_INPUT = Object.freeze({ command: 'fetch_external', token_id: 'near', source: 'coingecko' });
+export const ORACLE_PROJECT_ID = 'zavodil2.testnet/price-oracle';
+export const ORACLE_PROJECT_UUID = 'p0000000000000007';
+export const ORACLE_TESTNET_PROJECT = Object.freeze({ project_id: ORACLE_PROJECT_ID, version_key: HASH,
+  input_data: JSON.stringify(ORACLE_NEAR_INPUT), max_instructions: ORACLE_TESTNET_PROGRAM.max_instructions,
+  max_memory_mb: ORACLE_TESTNET_PROGRAM.max_memory_mb, max_execution_seconds: ORACLE_TESTNET_PROGRAM.max_execution_seconds });
 const APPROVED = new Map([
   ['coingecko', new Set(['near', 'bitcoin', 'ethereum'])],
   ['binance', new Set(['NEARUSDT', 'BTCUSDT', 'ETHUSDT'])],
 ]);
 const MAX_U128 = (1n << 128n) - 1n, GAS = 300n * 10n ** 12n;
 const FIELDS = ['id', 'contract_id', 'owner_account_id', 'policy_id', 'amount', 'route', 'max_age_seconds'];
-const ROUTE = ['program', 'input_data', 'route_revision', 'policy_revision', 'payee_revision', 'active'];
+const ROUTE = ['project', 'route_revision', 'policy_revision', 'payee_revision', 'active'];
+const PROJECT = ['project_id', 'version_key', 'input_data', 'max_instructions', 'max_memory_mb', 'max_execution_seconds'];
 const equal = isDeepStrictEqual;
 const ownKeys = (obj, keys) => obj && typeof obj === 'object' && !Array.isArray(obj) &&
   Object.keys(obj).length === keys.length && keys.every(key => Object.hasOwn(obj, key));
@@ -70,18 +76,20 @@ function parseInput(value) {
 
 /** Validate the complete owner-reviewed route and bounded lookup. */
 export function validateOracleGoal(value) {
-  if (!ownKeys(value, FIELDS) || !ownKeys(value.route, ROUTE)) throw new Error('oracle goal must contain exactly the reviewed fields');
+  if (!ownKeys(value, FIELDS) || !ownKeys(value.route, ROUTE) || !ownKeys(value.route.project, PROJECT)) throw new Error('oracle goal must contain exactly the reviewed fields');
   const id = text(value.id, 'goal id', 64);
   if (!/^[A-Za-z0-9_-]+$/.test(id)) throw new Error('invalid goal id');
   if (!isTestnetAccount(value.contract_id) || !isTestnetAccount(value.owner_account_id)) throw new Error('only named NEAR testnet accounts are supported');
   const policy = text(value.policy_id, 'policy id', 128), amount = unsigned(value.amount, 'maximum deposit');
   if (amount === 0n) throw new Error('maximum deposit must be positive');
-  const program = normalizeProgram(value.route.program);
-  if (program.sha256 !== HASH || program.url !== ORACLE_TESTNET_PROGRAM.url || program.build_target !== 'wasm32-wasip2') {
-    throw new Error('oracle program is not the explicitly reviewed testnet version');
-  }
-  parseInput(value.route.input_data);
-  const route = { program, input_data: value.route.input_data,
+  const p = value.route.project;
+  if (p.project_id !== ORACLE_PROJECT_ID || p.version_key !== HASH) throw new Error('oracle project is not the explicitly reviewed testnet version');
+  parseInput(p.input_data);
+  const project = { project_id: p.project_id, version_key: p.version_key, input_data: p.input_data,
+    max_instructions: integer(p.max_instructions, 1, 500_000_000_000, 'instruction limit'),
+    max_memory_mb: integer(p.max_memory_mb, 1, 4096, 'memory limit'),
+    max_execution_seconds: integer(p.max_execution_seconds, 1, 180, 'time limit') };
+  const route = { project,
     route_revision: integer(value.route.route_revision, 1, Number.MAX_SAFE_INTEGER, 'route revision'),
     policy_revision: integer(value.route.policy_revision, 1, Number.MAX_SAFE_INTEGER, 'policy revision'),
     payee_revision: integer(value.route.payee_revision, 1, Number.MAX_SAFE_INTEGER, 'payee revision'), active: value.route.active };
@@ -91,7 +99,10 @@ export function validateOracleGoal(value) {
 }
 const fingerprint = goal => crypto.createHash('sha256').update(JSON.stringify(goal)).digest('hex');
 const signedArgs = goal => ({ policy_id: goal.policy_id, amount: goal.amount, expected_route: goal.route });
-const commonGoal = goal => ({ ...goal, program: goal.route.program, input: parseInput(goal.route.input_data) });
+const commonGoal = goal => ({ ...goal, input: parseInput(goal.route.project.input_data), program: normalizeProgram({
+  ...ORACLE_TESTNET_PROGRAM, max_instructions: goal.route.project.max_instructions,
+  max_memory_mb: goal.route.project.max_memory_mb, max_execution_seconds: goal.route.project.max_execution_seconds,
+}) });
 
 function validatePrice(input, output) {
   const permitted = new Set(['success', 'token_id', 'source', 'price_usd', 'timestamp', 'warning']);
@@ -111,7 +122,8 @@ function validatePrice(input, output) {
  */
 export async function verifyOracleResult(rawGoal, chain, publicKey, provider) {
   const goal = validateOracleGoal(rawGoal), common = commonGoal(goal);
-  const evidence = verifyOutlayerEvidence(common, chain, publicKey, 'execute_outlayer_pinned', signedArgs(goal));
+  const evidence = verifyOutlayerEvidence(common, chain, publicKey, 'execute_outlayer_native_project', signedArgs(goal),
+    { id: goal.route.project.project_id, version: goal.route.project.version_key, uuid: ORACLE_PROJECT_UUID });
   validatePrice(common.input, evidence.result);
   const blockHash = evidence.completion_block_hash;
   if (!validHash(blockHash) || !provider || typeof provider.block !== 'function') throw new Error('missing provider completion block evidence');
@@ -158,6 +170,23 @@ export async function recoverOracleGoal({ goal: rawGoal, provider, journal, publ
   return { status: 'REUSED', delivery };
 }
 
+// Fail closed if the public registry no longer resolves the reviewed version to
+// the expected project namespace, bytecode hash and native-only pricing. This
+// is a non-atomic view of an independent provider, not a code attestation.
+export async function assertOracleProjectRegistry(provider) {
+  const final = { finality: 'final' };
+  const [project, projectVersion, pricing] = await Promise.all([
+    provider.callFunction(OUTLAYER, 'get_project', { project_id: ORACLE_PROJECT_ID }, final),
+    provider.callFunction(OUTLAYER, 'get_version', { project_id: ORACLE_PROJECT_ID, version_key: HASH }, final),
+    provider.callFunction(OUTLAYER, 'get_project_pricing', { project_id: ORACLE_PROJECT_ID }, final),
+  ]);
+  const p = ORACLE_TESTNET_PROGRAM;
+  if (project?.project_id !== ORACLE_PROJECT_ID || project?.uuid !== ORACLE_PROJECT_UUID || project?.owner !== 'zavodil2.testnet' ||
+      projectVersion?.wasm_hash !== HASH || !equal(projectVersion?.source, { WasmUrl: { url: p.url, hash: p.sha256, build_target: p.build_target } }) || pricing !== null) {
+    throw new Error('independent project identity, pinned source or native-only pricing changed');
+  }
+}
+
 /** Dry-run or sign one exact-input request after on-chain policy preflight. */
 export async function runOracleGoal({ goal: rawGoal, provider, account, publicKey, journal, execute = false, log = console.log }) {
   const goal = validateOracleGoal(rawGoal);
@@ -169,19 +198,20 @@ export async function runOracleGoal({ goal: rawGoal, provider, account, publicKe
     provider.callFunction(goal.contract_id, 'contract_version', {}, final), provider.callFunction(goal.contract_id, 'get_owner', {}, final),
     provider.viewAccessKey(goal.owner_account_id, publicKey, final),
   ]);
-  if (version !== 'bouncer-agent-v8' || owner !== goal.owner_account_id) throw new Error('pinned oracle requires Bouncer v8 and the reviewed owner');
+  if (version !== 'bouncer-agent-v9' || owner !== goal.owner_account_id) throw new Error('pinned oracle requires Bouncer v9 and the reviewed owner');
   const permission = access?.permission?.FunctionCall;
-  if (!permission || permission.receiver_id !== goal.contract_id || !equal(permission.method_names, ['execute_outlayer_pinned'])) {
-    throw new Error('agent key must be scoped ONLY to execute_outlayer_pinned on this contract');
+  if (!permission || permission.receiver_id !== goal.contract_id || !equal(permission.method_names, ['execute_outlayer_native_project'])) {
+    throw new Error('agent key must be scoped ONLY to execute_outlayer_native_project on this contract');
   }
   const fp = fingerprint(goal), previous = journal?.get(goal.id);
   if (previous && previous.fingerprint !== fp) throw new Error(`${goal.id}: journal does not match the reviewed goal`);
   if (previous) return recoverOracleGoal({ goal, provider, journal, publicKey, log });
   const [policy, route, allowed, verdict] = await Promise.all([
     provider.callFunction(goal.contract_id, 'get_policy', { policy_id: goal.policy_id }, final),
-    provider.callFunction(goal.contract_id, 'get_outlayer_input', { policy_id: goal.policy_id }, final),
+    provider.callFunction(goal.contract_id, 'get_outlayer_native_project', { policy_id: goal.policy_id }, final),
     provider.callFunction(goal.contract_id, 'is_agent_key_allowed', { policy_id: goal.policy_id, public_key: String(publicKey) }, final),
     provider.callFunction(goal.contract_id, 'check', { policy_id: goal.policy_id, payee: OUTLAYER, amount: goal.amount }, final),
+    assertOracleProjectRegistry(provider),
   ]);
   if (!policy || policy.token !== NATIVE || !equal(route, goal.route) || allowed !== true) throw new Error('policy, native asset, pinned route or key grant does not match');
   if (!Array.isArray(verdict) || verdict.length !== 2 || typeof verdict[0] !== 'boolean') throw new Error('invalid policy verdict');
@@ -189,7 +219,7 @@ export async function runOracleGoal({ goal: rawGoal, provider, account, publicKe
   if (!execute) { log(`[oracle] READY ${goal.id}: at most ${goal.amount} yoctoNEAR to ${OUTLAYER} (dry run)`); return { status: 'READY' }; }
   if (!account.signer || typeof account.createTransaction !== 'function' ||
       String(await account.signer.getPublicKey()) !== String(publicKey)) throw new Error('account signer does not match the reviewed agent key');
-  const action = transactions.functionCall('execute_outlayer_pinned', signedArgs(goal), GAS, 0n);
+  const action = transactions.functionCall('execute_outlayer_native_project', signedArgs(goal), GAS, 0n);
   const transaction = await account.createTransaction(goal.contract_id, [action], publicKey);
   const [hashBytes, signed] = await account.signer.signTransaction(transaction);
   if (!(hashBytes instanceof Uint8Array) || hashBytes.length !== 32 || !signed) throw new Error('signer did not return a transaction hash');

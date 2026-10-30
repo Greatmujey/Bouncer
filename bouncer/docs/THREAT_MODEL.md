@@ -36,6 +36,10 @@ It has not been audited and must not hold valuable funds.
   with policy/payee/route revisions. It only constrains a key installed to call
   `execute_outlayer_pinned` alone; the legacy `execute_outlayer` method still
   allows that method's authorized key to choose its input.
+- V9 adds a native-only owner-pinned OutLayer **Project** route and a separate
+  `execute_outlayer_native_project`-only key. It pins exact input, version and
+  limits without secrets or prepaid FT parameters; registry checks are off-chain
+  and non-atomic, and post-payment verification cannot undo a bad execution.
 
 A [v4 testnet run](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40558301848)
 verified a restricted-key payment, both escalation-guard layers and a failed FT
@@ -77,7 +81,7 @@ possible callback, provider or token failure cases.
    policy block halts later unpaid goals, but cannot undo an earlier transfer.
 6. **Policies and tokens are shared.** Policy-specific key grants isolate which
    policy a key may use, but policies may share the same token vault. Caps are
-   denominated in token units, not USD; there is no price oracle. Rebinding a
+   denominated in token units, not USD; the contract does not enforce oracle prices. Rebinding a
    policy to another token retains numeric spend history in the old units. Use
    a new policy for each token rather than changing an existing policy's token.
 7. **Untrusted model and development-only provider.** An optional model can
@@ -147,8 +151,8 @@ possible callback, provider or token failure cases.
    independent attestations.
 10. **Prior contracts are unsafe to upgrade without migration.** Older contracts
    have different state and authorization; v3 and v4 interpret budget bucket
-   keys differently, and v5, both v6 layouts, v7 and v8 add incompatible state.
-   Deploy v8 fresh; no migration is supplied. A reported version is not proof
+   keys differently, and v5, both v6 layouts, v7, v8 and v9 add incompatible state.
+   Deploy v9 fresh; no migration is supplied. A reported version is not proof
    of code identity. Hourly spend buckets are not pruned and incur ongoing
    state/storage costs; the 25 reads per check also consume gas.
 11. **OutLayer is a trusted independent service, not trustless compute.** The

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { runMixedMission } from '../agent/mixed-mission.mjs';
-import { ORACLE_NEAR_INPUT, ORACLE_TESTNET_PROGRAM } from '../agent/oracle-outlayer.mjs';
+import { ORACLE_TESTNET_PROJECT } from '../agent/oracle-outlayer.mjs';
 
 const goal = { id: 'independent-1', contract_id: 'bouncer.testnet', owner_account_id: 'owner.testnet',
   policy_id: 'independent', amount: '100', input: { min: 1, max: 100 },
@@ -110,7 +110,7 @@ test('rejects cross-contract, cross-owner and colliding goal IDs before prefligh
 function oracleFixture(timestamp = Math.floor(Date.now() / 1000)) {
   const f = fixture();
   const oracle = { id: 'market-price', contract_id: goal.contract_id, owner_account_id: goal.owner_account_id,
-    policy_id: 'oracle-data', amount: '100', route: { program: { ...ORACLE_TESTNET_PROGRAM }, input_data: JSON.stringify(ORACLE_NEAR_INPUT),
+    policy_id: 'oracle-data', amount: '100', route: { project: { ...ORACLE_TESTNET_PROJECT },
       route_revision: 1, policy_revision: 1, payee_revision: 1, active: true }, max_age_seconds: 300 };
   const delivery = { tx_hash: 'oracle-tx', result: { timestamp, price_usd: 2.5 }, max_age_seconds: 300 };
   f.options.outlayer = { kind: 'oracle', goal: oracle };

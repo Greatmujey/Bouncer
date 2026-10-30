@@ -203,7 +203,7 @@ Only configured resources are available to the model. `max_tasks` is at most 10.
 ```
 
 The payee, token and policy must also be configured and allowed on the fresh
-v8 contract, and the quote provider must actually support that product. The model
+v9 contract, and the quote provider must actually support that product. The model
 cannot make these changes. The example is a shape, not a deployed account.
 
 ## Compare owner-approved providers

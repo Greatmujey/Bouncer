@@ -1,22 +1,22 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import nearApi from 'near-api-js';
-import { ORACLE_TESTNET_PROGRAM, ORACLE_NEAR_INPUT, validateOracleGoal, verifyOracleResult, assertOracleFreshForUse,
+import { ORACLE_TESTNET_PROGRAM, ORACLE_NEAR_INPUT, ORACLE_TESTNET_PROJECT, ORACLE_PROJECT_ID, ORACLE_PROJECT_UUID, validateOracleGoal, verifyOracleResult, assertOracleFreshForUse,
   runOracleGoal, recoverOracleGoal } from '../agent/oracle-outlayer.mjs';
 
 const key = 'ed25519:agent', hashBytes = Buffer.alloc(32, 42), hash = nearApi.utils.serialize.base_encode(hashBytes);
 const blockHash = 'B'.repeat(44), bouncerReceipt = '6'.repeat(44), requestReceipt = '7'.repeat(44);
 const completedReceipt = '8'.repeat(44), refundReceipt = '9'.repeat(44), stamp = 1_700_000_000;
 const goal = { id: 'oracle-near', contract_id: 'bouncer.testnet', owner_account_id: 'owner.testnet', policy_id: 'external-api',
-  amount: '100', route: { program: { ...ORACLE_TESTNET_PROGRAM }, input_data: JSON.stringify(ORACLE_NEAR_INPUT),
+  amount: '100', route: { project: { ...ORACLE_TESTNET_PROJECT },
     route_revision: 1, policy_revision: 1, payee_revision: 1, active: true }, max_age_seconds: 300 };
 const encode = value => Buffer.from(JSON.stringify(value)).toString('base64');
 const event = (event, data) => `EVENT_JSON:${JSON.stringify({ standard: 'near-outlayer', version: '1.0.0', event, data: [data] })}`;
-const source = () => ({ WasmUrl: { url: goal.route.program.url, hash: goal.route.program.sha256, build_target: goal.route.program.build_target } });
-const limits = () => ({ max_instructions: goal.route.program.max_instructions, max_memory_mb: goal.route.program.max_memory_mb,
-  max_execution_seconds: goal.route.program.max_execution_seconds });
+const source = () => ({ WasmUrl: { url: ORACLE_TESTNET_PROGRAM.url, hash: ORACLE_TESTNET_PROGRAM.sha256, build_target: ORACLE_TESTNET_PROGRAM.build_target } });
+const limits = () => ({ max_instructions: goal.route.project.max_instructions, max_memory_mb: goal.route.project.max_memory_mb,
+  max_execution_seconds: goal.route.project.max_execution_seconds });
 const signedArgs = () => ({ policy_id: goal.policy_id, amount: goal.amount, expected_route: goal.route });
-const outlayerArgs = () => ({ source: source(), resource_limits: limits(), input_data: goal.route.input_data,
+const outlayerArgs = () => ({ source: { Project: { project_id: ORACLE_PROJECT_ID, version_key: ORACLE_TESTNET_PROJECT.version_key } }, resource_limits: limits(), input_data: goal.route.project.input_data,
   secrets_ref: null, response_format: 'Json', payer_account_id: goal.owner_account_id, params: null });
 const output = () => ({ success: true, token_id: 'near', source: 'coingecko', price_usd: 2.75, timestamp: stamp,
   warning: 'Price from single external API, not verified by oracle consensus' });
@@ -24,13 +24,13 @@ function outcome(id, executor_id, status, logs = []) { return { id, block_hash: 
 function receipt(id, predecessor_id, receiver_id, actions) { return { receipt_id: id, predecessor_id, receiver_id, receipt: { Action: { actions } } }; }
 function finalResult(data = output()) {
   const encoded = encode(data), request = { sender_id: goal.owner_account_id, predecessor_id: goal.contract_id, payment: goal.amount,
-    input_data: goal.route.input_data, code_source: source() };
+    input_data: goal.route.project.input_data, code_source: source(), project_id: ORACLE_PROJECT_ID, project_uuid: ORACLE_PROJECT_UUID, attached_usd: '0' };
   const completion = { success: true, sender_id: goal.owner_account_id, code_source: source(), payment_charged: '10', payment_refunded: '90' };
   return { final_execution_status: 'FINAL', status: { SuccessValue: encoded }, transaction_outcome: { id: hash },
     transaction: { hash, signer_id: goal.owner_account_id, receiver_id: goal.contract_id, public_key: key,
-      actions: [{ FunctionCall: { method_name: 'execute_outlayer_pinned', deposit: '0', args: encode(signedArgs()) } }] },
+      actions: [{ FunctionCall: { method_name: 'execute_outlayer_native_project', deposit: '0', args: encode(signedArgs()) } }] },
     receipts_outcome: [
-      outcome(bouncerReceipt, goal.contract_id, { SuccessReceiptId: requestReceipt }, ['BOUNCER independent compute initiated; full maximum reserved']),
+      outcome(bouncerReceipt, goal.contract_id, { SuccessReceiptId: requestReceipt }, ['BOUNCER independent native project initiated; full maximum reserved']),
       outcome(requestReceipt, 'outlayer.testnet', { SuccessReceiptId: completedReceipt }, [event('execution_requested', { request_data: JSON.stringify(request) })]),
       outcome(completedReceipt, 'outlayer.testnet', { SuccessValue: encoded }, [event('execution_completed', completion)]),
       outcome(refundReceipt, goal.owner_account_id, { SuccessValue: '' }),
@@ -45,14 +45,17 @@ function fixture() {
   const journal = { get(id) { return entries.get(id); }, put(id, value) { entries.set(id, structuredClone(value)); } };
   const provider = {
     async viewNodeStatus() { return { chain_id: 'testnet' }; },
-    async viewAccessKey() { return { permission: { FunctionCall: { receiver_id: goal.contract_id, method_names: ['execute_outlayer_pinned'] } } }; },
+    async viewAccessKey() { return { permission: { FunctionCall: { receiver_id: goal.contract_id, method_names: ['execute_outlayer_native_project'] } } }; },
     async callFunction(_, method) {
-      if (method === 'contract_version') return 'bouncer-agent-v8';
+      if (method === 'contract_version') return 'bouncer-agent-v9';
       if (method === 'get_owner') return goal.owner_account_id;
       if (method === 'get_policy') return { token: 'native', per_tx_cap: '100', daily_cap: '100' };
-      if (method === 'get_outlayer_input') return structuredClone(goal.route);
+      if (method === 'get_outlayer_native_project') return structuredClone(goal.route);
       if (method === 'is_agent_key_allowed') return true;
       if (method === 'check') return [true, 'ok'];
+      if (method === 'get_project') return { project_id: ORACLE_PROJECT_ID, uuid: ORACLE_PROJECT_UUID, owner: 'zavodil2.testnet' };
+      if (method === 'get_version') return { wasm_hash: ORACLE_TESTNET_PROGRAM.sha256, source: source() };
+      if (method === 'get_project_pricing') return null;
       throw new Error(`unexpected view ${method}`);
     },
     async block(query) { assert.deepEqual(query, { blockId: blockHash }); return { header: { hash: blockHash, timestamp_nanosec: `${stamp + 8}000000000` } }; },
@@ -68,7 +71,7 @@ function fixture() {
     async createTransaction(receiver, actions, publicKey) {
       assert.equal(receiver, goal.contract_id); assert.equal(publicKey, key); assert.equal(actions.length, 1);
       const call = actions[0].functionCall;
-      assert.equal(call.methodName, 'execute_outlayer_pinned'); assert.equal(call.deposit, 0n); assert.equal(call.gas, 300n * 10n ** 12n);
+      assert.equal(call.methodName, 'execute_outlayer_native_project'); assert.equal(call.deposit, 0n); assert.equal(call.gas, 300n * 10n ** 12n);
       assert.deepEqual(JSON.parse(Buffer.from(call.args).toString()), signedArgs()); return { unsigned: true };
     } };
   return { entries, journal, provider, account, sends: () => sends };
@@ -81,12 +84,12 @@ test('accepts only a reviewed, version-pinned bounded testnet price goal', () =>
     { ...goal, owner_account_id: 'owner.near' }, { ...goal, amount: '0' }, { ...goal, amount: '01' },
     { ...goal, max_age_seconds: 0 }, { ...goal, max_age_seconds: 901 }, { ...goal, extra: true },
     { ...goal, route: { ...goal.route, active: false } }, { ...goal, route: { ...goal.route, route_revision: 0 } },
-    { ...goal, route: { ...goal.route, program: { ...goal.route.program, sha256: 'a'.repeat(64) } } },
-    { ...goal, route: { ...goal.route, input_data: '{"command":"fetch_external","token_id":"near","source":{"custom":{"url":"https://evil.example"}}}' } },
-    { ...goal, route: { ...goal.route, input_data: '{ "command":"fetch_external","token_id":"near","source":"coingecko"}' } },
-    { ...goal, route: { ...goal.route, input_data: '{"command":"update_prices","token_id":"near","source":"coingecko"}' } },
-    { ...goal, route: { ...goal.route, input_data: '{"command":"fetch_external","token_id":"near","source":"coingecko","extra":true}' } },
-    { ...goal, route: { ...goal.route, input_data: '{"command":"fetch_external","token_id":"x","source":"coingecko"}' } },
+    { ...goal, route: { ...goal.route, project: { ...goal.route.project, version_key: 'a'.repeat(64) } } },
+    { ...goal, route: { ...goal.route, project: { ...goal.route.project, input_data: '{"command":"fetch_external","token_id":"near","source":{"custom":{"url":"https://evil.example"}}}' } } },
+    { ...goal, route: { ...goal.route, project: { ...goal.route.project, input_data: '{ "command":"fetch_external","token_id":"near","source":"coingecko"}' } } },
+    { ...goal, route: { ...goal.route, project: { ...goal.route.project, input_data: '{"command":"update_prices","token_id":"near","source":"coingecko"}' } } },
+    { ...goal, route: { ...goal.route, project: { ...goal.route.project, input_data: '{"command":"fetch_external","token_id":"near","source":"coingecko","extra":true}' } } },
+    { ...goal, route: { ...goal.route, project: { ...goal.route.project, input_data: '{"command":"fetch_external","token_id":"x","source":"coingecko"}' } } },
   ];
   for (const value of values) assert.throws(() => validateOracleGoal(value));
 });
@@ -116,6 +119,10 @@ test('rejects failed, stale, mismatched, unauthenticated or incomplete evidence'
     r => { r.transaction.actions[0].FunctionCall.method_name = 'execute_outlayer'; },
     r => { const args = signedArgs(); args.expected_route = { ...args.expected_route, route_revision: 2 }; r.transaction.actions[0].FunctionCall.args = encode(args); },
     r => { const args = outlayerArgs(); args.input_data = '{"command":"arbitrary"}'; r.receipts[0].receipt.Action.actions[0].FunctionCall.args = encode(args); },
+    r => { const args = outlayerArgs(); args.source.Project.version_key = 'a'.repeat(64); r.receipts[0].receipt.Action.actions[0].FunctionCall.args = encode(args); },
+    r => { const args = outlayerArgs(); args.params = { attached_usd: '1' }; r.receipts[0].receipt.Action.actions[0].FunctionCall.args = encode(args); },
+    r => { const e = JSON.parse(r.receipts_outcome[1].outcome.logs[0].slice('EVENT_JSON:'.length)); const data = JSON.parse(e.data[0].request_data); data.project_uuid = 'wrong'; e.data[0].request_data = JSON.stringify(data); r.receipts_outcome[1].outcome.logs[0] = `EVENT_JSON:${JSON.stringify(e)}`; },
+    r => { const e = JSON.parse(r.receipts_outcome[1].outcome.logs[0].slice('EVENT_JSON:'.length)); const data = JSON.parse(e.data[0].request_data); data.code_source.WasmUrl.hash = 'a'.repeat(64); e.data[0].request_data = JSON.stringify(data); r.receipts_outcome[1].outcome.logs[0] = `EVENT_JSON:${JSON.stringify(e)}`; },
     r => { r.receipts_outcome[1].outcome.status = { Failure: {} }; },
     r => { r.receipts_outcome[2].block_hash = undefined; },
     r => { r.receipts[1].receiver_id = 'attacker.testnet'; },
@@ -124,6 +131,21 @@ test('rejects failed, stale, mismatched, unauthenticated or incomplete evidence'
   for (const mutate of mutations) { const result = finalResult(); mutate(result); await assert.rejects(verifyOracleResult(goal, result, key, f.provider)); }
   f.provider.block = async () => ({ header: { hash: 'wrong', timestamp_nanosec: '1700000008000000000' } });
   await assert.rejects(verifyOracleResult(goal, finalResult(), key, f.provider), /invalid completion block/);
+});
+
+test('preflight fails closed if the independent project identity, source or pricing changes', async () => {
+  for (const [methodName, value] of [
+    ['get_project', { project_id: ORACLE_PROJECT_ID, uuid: 'wrong', owner: 'zavodil2.testnet' }],
+    ['get_project', { project_id: ORACLE_PROJECT_ID, uuid: ORACLE_PROJECT_UUID, owner: 'attacker.testnet' }],
+    ['get_version', { wasm_hash: 'a'.repeat(64), source: source() }],
+    ['get_version', { wasm_hash: ORACLE_TESTNET_PROGRAM.sha256, source: { WasmUrl: { ...source().WasmUrl, url: 'https://evil.test' } } }],
+    ['get_project_pricing', { code_executions: [] }],
+  ]) {
+    const f = fixture(), original = f.provider.callFunction;
+    f.provider.callFunction = async (contract, method, ...rest) => method === methodName ? value : original(contract, method, ...rest);
+    await assert.rejects(run(f, { execute: true }), /project identity, pinned source or native-only pricing changed/);
+    assert.equal(f.sends(), 0); assert.equal(f.entries.size, 0);
+  }
 });
 
 test('dry run is read-only; a paid result is journaled before broadcast and recovered without a second send', async () => {
@@ -158,11 +180,11 @@ test('preflight blocks excessive permissions, a changed route, wrong chain and d
   f.provider.viewNodeStatus = async () => ({ chain_id: 'mainnet' });
   await assert.rejects(run(f, { execute: true }), /testnet/);
   f.provider.viewNodeStatus = async () => ({ chain_id: 'testnet' });
-  f.provider.viewAccessKey = async () => ({ permission: { FunctionCall: { receiver_id: goal.contract_id, method_names: ['execute_outlayer_pinned', 'execute_outlayer'] } } });
+  f.provider.viewAccessKey = async () => ({ permission: { FunctionCall: { receiver_id: goal.contract_id, method_names: ['execute_outlayer_native_project', 'execute_outlayer'] } } });
   await assert.rejects(run(f, { execute: true }), /scoped ONLY/);
-  f.provider.viewAccessKey = async () => ({ permission: { FunctionCall: { receiver_id: goal.contract_id, method_names: ['execute_outlayer_pinned'] } } });
+  f.provider.viewAccessKey = async () => ({ permission: { FunctionCall: { receiver_id: goal.contract_id, method_names: ['execute_outlayer_native_project'] } } });
   const call = f.provider.callFunction;
-  f.provider.callFunction = async (id, method, ...rest) => method === 'get_outlayer_input' ? { ...goal.route, route_revision: 2 } : call(id, method, ...rest);
+  f.provider.callFunction = async (id, method, ...rest) => method === 'get_outlayer_native_project' ? { ...goal.route, route_revision: 2 } : call(id, method, ...rest);
   await assert.rejects(run(f, { execute: true }), /pinned route/);
   f.provider.callFunction = async (id, method, ...rest) => method === 'check' ? [false, 'daily cap'] : call(id, method, ...rest);
   assert.deepEqual(await run(f, { execute: true }), { status: 'BLOCKED' });

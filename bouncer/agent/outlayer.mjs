@@ -117,7 +117,7 @@ function events(result, name) {
  * Callers must validate their own goal, signed method/arguments and output.
  * This trusts the RPC and provider; it does not verify TEE attestations.
  */
-export function verifyOutlayerEvidence(goal, result, publicKey, methodName, signedArgs) {
+export function verifyOutlayerEvidence(goal, result, publicKey, methodName, signedArgs, project = null) {
   const tx = result?.transaction, txHash = result?.transaction_outcome?.id;
   if (result?.final_execution_status !== 'FINAL' || typeof result.status?.SuccessValue !== 'string' || !validHash(txHash)) {
     throw new Error('transaction is not a successful FINAL result');
@@ -133,8 +133,9 @@ export function verifyOutlayerEvidence(goal, result, publicKey, methodName, sign
       result.receipts_outcome.some(r => !successful(r?.outcome?.status)) || !Array.isArray(result.receipts)) {
     throw new Error('receipt outcomes are failed, incomplete or missing');
   }
-  if (!result.receipts_outcome.some(r => r.outcome?.executor_id === goal.contract_id &&
-      r.outcome.logs?.includes('BOUNCER independent compute initiated; full maximum reserved'))) {
+  const initiation = project ? 'BOUNCER independent native project initiated; full maximum reserved' :
+    'BOUNCER independent compute initiated; full maximum reserved';
+  if (!result.receipts_outcome.some(r => r.outcome?.executor_id === goal.contract_id && r.outcome.logs?.includes(initiation))) {
     throw new Error('missing Bouncer execution evidence');
   }
   const requests = result.receipts.flatMap(receipt => {
@@ -147,7 +148,9 @@ export function verifyOutlayerEvidence(goal, result, publicKey, methodName, sign
   }
   const args = decodeJson(requests[0].call.args, 'OutLayer arguments');
   const program = goal.program;
-  if (!equal(args.source, { WasmUrl: { url: program.url, hash: program.sha256, build_target: program.build_target } }) ||
+  const resolvedSource = { url: program.url, hash: program.sha256, build_target: program.build_target };
+  const expectedSource = project ? { Project: { project_id: project.id, version_key: project.version } } : { WasmUrl: resolvedSource };
+  if (!equal(args.source, expectedSource) ||
       !equal(args.resource_limits, { max_instructions: program.max_instructions, max_memory_mb: program.max_memory_mb,
         max_execution_seconds: program.max_execution_seconds }) || args.input_data !== JSON.stringify(goal.input) ||
       args.payer_account_id !== goal.owner_account_id || args.response_format !== 'Json' || args.secrets_ref !== null || args.params !== null) {
@@ -159,11 +162,12 @@ export function verifyOutlayerEvidence(goal, result, publicKey, methodName, sign
       const request = JSON.parse(data.request_data);
       return request.sender_id === goal.owner_account_id && request.predecessor_id === goal.contract_id &&
         request.payment === goal.amount && request.input_data === JSON.stringify(goal.input) &&
-        equal(request.code_source?.WasmUrl, args.source.WasmUrl);
+        equal(request.code_source?.WasmUrl, resolvedSource) &&
+        (!project || (request.project_id === project.id && request.project_uuid === project.uuid && String(request.attached_usd) === '0'));
     } catch { return false; }
   });
   const completed = events(result, 'execution_completed').filter(({ data, outcome }) => data?.success === true &&
-    data.sender_id === goal.owner_account_id && equal(data.code_source?.WasmUrl, args.source.WasmUrl) &&
+    data.sender_id === goal.owner_account_id && equal(data.code_source?.WasmUrl, resolvedSource) &&
     outcome.status?.SuccessValue === result.status.SuccessValue);
   if (requested.length !== 1 || completed.length !== 1) throw new Error('missing matching OutLayer request and successful completion');
   const event = completed[0].data;

@@ -79,11 +79,11 @@ that all six are complete.
 
 ## Contract capabilities in this branch
 
-The source in this branch reports v8 and needs a **fresh deployment**; no
+The source in this branch reports v9 and needs a **fresh deployment**; no
 migration from older state is provided. Two incompatible earlier layouts both
 reported v6, so a version string alone does not establish upgrade safety. The
-checked-in `bouncer.wasm` is the CI-built v8 artifact (SHA-256
-`23b6fe30b53f423be06fa508ee2b3a92a57a7aec00094c3a1ade5d52ea8bab88`).
+checked-in `bouncer.wasm` is the CI-built v9 artifact (SHA-256
+`835f0baa51d08ddf3af6812df0caefb93283480735a63e3d382073e04fbaf8ee`).
 CI checks that its version marker matches the source; this sanity check is not
 an audit or proof that a deployed contract has the same code. Earlier live
 runs used the fresh WASM built by their own CI jobs.
@@ -112,8 +112,13 @@ runs used the fresh WASM built by their own CI jobs.
   the program and policy/payee revisions. The new agent key must be restricted
   **only** to that method; the older `execute_outlayer` method still permits
   an authorized key to choose input. Edits and revocations invalidate old
-  pinned routes. A testnet single-source price runner and mixed-mission path
-  are provided; their live outcome is reported separately, not assumed.
+  pinned routes.
+- V9 adds a separate native-only `execute_outlayer_native_project` route: the
+  owner pins the OutLayer project/version, exact JSON input, limits and policy
+  revisions. It supplies no secrets or FT spending parameters. Its testnet
+  oracle runner checks the registry and final project UUID, resolved WASM hash,
+  payment and result; views are non-atomic and provider/RPC remain trusted.
+  A live result is reported separately, not assumed.
 
 The updated check is designed to use a real restricted key to pay wNEAR, deny
 other callers and policies, revoke a payee and a key, and test both layers of

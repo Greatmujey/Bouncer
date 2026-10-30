@@ -1,5 +1,5 @@
 // Explicit opt-in TESTNET-only integration. One independent OutLayer oracle
-// execution is paid with native testnet NEAR through a v8 exact-input route.
+// execution is paid with native testnet NEAR through a v9 exact Project route.
 // Its single-source price is included in three development-resource orders,
 // which are paid with canonical Circle TESTNET USDC (no real value). Ref is an
 // owner-only setup swap, not a guarded agent trade. The FT provider is local
@@ -15,7 +15,8 @@ import { fileURLToPath } from 'node:url';
 import nearApi from 'near-api-js';
 import { MonotonicAccount } from './agent/near-account.mjs';
 import { FileJournal } from './agent/procurement.mjs';
-import { runOracleGoal, recoverOracleGoal, assertOracleFreshForUse, ORACLE_NEAR_INPUT, ORACLE_TESTNET_PROGRAM } from './agent/oracle-outlayer.mjs';
+import { runOracleGoal, recoverOracleGoal, assertOracleFreshForUse, assertOracleProjectRegistry,
+  ORACLE_NEAR_INPUT, ORACLE_TESTNET_PROJECT } from './agent/oracle-outlayer.mjs';
 import { runMixedMission } from './agent/mixed-mission.mjs';
 import { httpResourceProvider } from './agent/resource-agent.mjs';
 import { createResourceProvider } from './services/resource-provider.mjs';
@@ -97,14 +98,15 @@ async function main() {
   if ((await provider.viewNodeStatus())?.chain_id !== 'testnet') throw new Error('RPC must report testnet');
   const meta = await view(TOKEN, 'ft_metadata');
   if (meta?.spec !== 'ft-1.0.0' || meta?.symbol !== 'USDC' || meta?.decimals !== 6) throw new Error('unexpected Circle testnet USDC metadata');
+  await assertOracleProjectRegistry(provider); // read-only; verify real UUID, version, hash and pricing before setup
   const quote = await selectOwnerSetupQuote(provider); // read-only; no transaction
-  const input = JSON.stringify(ORACLE_NEAR_INPUT), program = { ...ORACLE_TESTNET_PROGRAM };
+  const input = JSON.stringify(ORACLE_NEAR_INPUT), project = { ...ORACLE_TESTNET_PROJECT };
   const estimate = BigInt(await view(OUTLAYER, 'estimate_execution_cost', { resource_limits: {
-    max_instructions: program.max_instructions, max_memory_mb: program.max_memory_mb, max_execution_seconds: program.max_execution_seconds,
+    max_instructions: project.max_instructions, max_memory_mb: project.max_memory_mb, max_execution_seconds: project.max_execution_seconds,
   }, input_len: Buffer.byteLength(input) }));
   if (estimate <= 0n || estimate > MAX_NATIVE) throw new Error('provider estimate exceeds the native maximum');
   const wasm = fs.readFileSync(path.join(ROOT, 'bouncer.wasm'));
-  if (!wasm.includes(Buffer.from('bouncer-agent-v8'))) throw new Error('demo requires the fresh v8 artifact; marker is not attestation');
+  if (!wasm.includes(Buffer.from('bouncer-agent-v9'))) throw new Error('demo requires the fresh v9 artifact; marker is not attestation');
   const contractKey = KeyPair.fromRandom('ed25519'), ownerKey = KeyPair.fromRandom('ed25519'), vendorKey = KeyPair.fromRandom('ed25519');
   const oracleKey = KeyPair.fromRandom('ed25519'), resourceKey = KeyPair.fromRandom('ed25519'), attackKey = KeyPair.fromRandom('ed25519');
   const suffix = crypto.randomBytes(4).toString('hex'), contractId = `bouncer-oracle-${suffix}.testnet`;
@@ -122,7 +124,7 @@ async function main() {
   const owner = accountFor(ownerId, ownerKey), oracleAgent = accountFor(ownerId, oracleKey), ftAgent = accountFor(ownerId, resourceKey);
   const attacker = accountFor(ownerId, attackKey);
   await call(contract, contractId, 'new', { owner: ownerId });
-  if (await view(contractId, 'contract_version') !== 'bouncer-agent-v8' || await view(contractId, 'get_owner') !== ownerId) throw new Error('stale contract or wrong owner');
+  if (await view(contractId, 'contract_version') !== 'bouncer-agent-v9' || await view(contractId, 'get_owner') !== ownerId) throw new Error('stale contract or wrong owner');
 
   // Prepare Circle testnet USDC as the full-access OWNER, before any agent
   // purchase. The swap and vault funding are each sent once, never retried.
@@ -145,22 +147,23 @@ async function main() {
   await call(owner, contractId, 'deposit_native', {}, 2n * MAX_NATIVE);
   await call(owner, contractId, 'set_policy', { policy_id: NATIVE_POLICY, token: 'native', per_tx_cap: MAX_NATIVE.toString(), daily_cap: MAX_NATIVE.toString() }, 1n);
   await call(owner, contractId, 'allow_payee', { policy_id: NATIVE_POLICY, payee: OUTLAYER }, 1n);
-  await call(owner, contractId, 'set_outlayer_program', { policy_id: NATIVE_POLICY, program }, 1n);
-  await call(owner, contractId, 'set_outlayer_input', { policy_id: NATIVE_POLICY, input_data: input }, 1n);
+  await call(owner, contractId, 'set_outlayer_native_project', { policy_id: NATIVE_POLICY, project }, 1n);
   await call(owner, contractId, 'grant_agent_key', { policy_id: NATIVE_POLICY, public_key: oracleKey.getPublicKey().toString() }, 1n);
-  await addKey(owner, contractId, oracleKey, ['execute_outlayer_pinned']);
-  await addKey(owner, contractId, attackKey, ['set_outlayer_input']);
-  const route = await view(contractId, 'get_outlayer_input', { policy_id: NATIVE_POLICY });
+  await addKey(owner, contractId, oracleKey, ['execute_outlayer_native_project']);
+  await addKey(owner, contractId, attackKey, ['set_outlayer_native_project']);
+  const route = await view(contractId, 'get_outlayer_native_project', { policy_id: NATIVE_POLICY });
   const goal = { id: 'independent-near-price', contract_id: contractId, owner_account_id: ownerId,
     policy_id: NATIVE_POLICY, amount: MAX_NATIVE.toString(), route, max_age_seconds: 900 };
-  await expectRejection('1-yocto input escalation guard', /owner-only method requires exactly 1 yoctoNEAR/, () => attacker.callFunctionRaw({
-    contractId, methodName: 'set_outlayer_input', args: { policy_id: NATIVE_POLICY, input_data: '{"command":"arbitrary"}' }, deposit: 0n, gas: 100n * TGAS, waitUntil: 'FINAL' }));
-  const altered = { ...route, input_data: '{"command":"arbitrary"}' };
-  await expectRejection('on-chain request substitution', /OutLayer input route changed since review/, () => oracleAgent.callFunctionRaw({
-    contractId, methodName: 'execute_outlayer_pinned', args: { policy_id: NATIVE_POLICY, amount: MAX_NATIVE.toString(), expected_route: altered },
+  await expectRejection('zero-deposit project escalation guard', /owner-only method requires exactly 1 yoctoNEAR/, () => attacker.callFunctionRaw({
+    contractId, methodName: 'set_outlayer_native_project', args: { policy_id: NATIVE_POLICY, project }, deposit: 0n, gas: 100n * TGAS, waitUntil: 'FINAL' }));
+  await expectRejection('one-yocto project escalation blocked by NEAR', /DepositWithFunctionCall|deposit with a function call action is not allowed with a function call access key/i, () => attacker.callFunctionRaw({
+    contractId, methodName: 'set_outlayer_native_project', args: { policy_id: NATIVE_POLICY, project }, deposit: 1n, gas: 100n * TGAS, waitUntil: 'FINAL' }));
+  const altered = { ...route, project: { ...route.project, input_data: '{"command":"arbitrary"}' } };
+  await expectRejection('on-chain request substitution', /native project route changed since review/, () => oracleAgent.callFunctionRaw({
+    contractId, methodName: 'execute_outlayer_native_project', args: { policy_id: NATIVE_POLICY, amount: MAX_NATIVE.toString(), expected_route: altered },
     deposit: 0n, gas: 300n * TGAS, waitUntil: 'FINAL' }));
   await expectRejection('native per-transaction cap', /amount exceeds per-tx cap/, () => oracleAgent.callFunctionRaw({
-    contractId, methodName: 'execute_outlayer_pinned', args: { policy_id: NATIVE_POLICY, amount: (MAX_NATIVE + 1n).toString(), expected_route: route },
+    contractId, methodName: 'execute_outlayer_native_project', args: { policy_id: NATIVE_POLICY, amount: (MAX_NATIVE + 1n).toString(), expected_route: route },
     deposit: 0n, gas: 300n * TGAS, waitUntil: 'FINAL' }));
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bouncer-oracle-'));

@@ -2,7 +2,7 @@
 
 Bouncer v5 and later can pay an independently operated provider, `outlayer.testnet`,
 for a **bounded random-number example**. That particular integration uses
-native testnet NEAR, not wNEAR, USDC or another fungible token. The current v8
+native testnet NEAR, not wNEAR, USDC or another fungible token. The current v9
 source also supports a separately guarded prepaid FT funding and priced
 connector path; its live test used fake USDC.e and returned HTTP 405, not useful
 API data. Storage, API/data and the other compute examples still use Bouncer's
@@ -83,6 +83,14 @@ successful independent price-data purchase.
   The oracle runner verifies receipts and a single-source result, but trusts the
   provider/RPC and does not verify TEE attestation or market-data accuracy. A
   worker timestamp is not authenticated freshness of the upstream market data.
+- V9 separately pins a native-only **Project** version and exact JSON input via
+  `set_outlayer_native_project`; its key is restricted to
+  `execute_outlayer_native_project`. The runner checks the public registry's
+  project UUID, owner, version, resolved hash and lack of project pricing, then
+  verifies that the final provider request carried that UUID and resolved hash.
+  Those preflight views are non-atomic and provider-owned code/registry can
+  change. Post-payment verification is not a refund or code attestation. This
+  route sends `params: null` and no secrets; no prepaid FT is authorized.
 - OutLayer receives the specified maximum deposit. Bouncer immediately debits
   and counts that **entire maximum**, even if OutLayer charges less. For an
   accepted execution the provider is instructed to refund unused native NEAR
@@ -131,7 +139,7 @@ reviewed goals and journals.
 
 ## Try the mixed mission
 
-The optional demo creates **fresh testnet accounts**, a v8 deployment, synthetic
+The optional demo creates **fresh testnet accounts**, a v9 deployment, synthetic
 FTs, local development services and a small native OutLayer budget. It uses two
 separate restricted keys and saves them privately in
 `~/.near-credentials/testnet/`; goals and journals are in `~/.bouncer/testnet/`.
