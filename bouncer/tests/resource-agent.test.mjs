@@ -88,7 +88,7 @@ test('provider HTTP replies are bounded and error text cannot inject terminal co
 });
 
 test('a delivery outage after payment is recoverable without a duplicate payment', async () => {
-  const g = goal(); let paid = 0, redeemed = 0, balance = 0n;
+  const g = goal(); let paid = 0, redeemed = 0, guarded = 0, balance = 0n;
   const entries = new Map();
   const journal = { get: id => entries.get(id), put: (id, value) => entries.set(id, { ...value }) };
   const provider = {
@@ -112,6 +112,7 @@ test('a delivery outage after payment is recoverable without a duplicate payment
   const opts = {
     contractId: 'bouncer.testnet', ownerAccountId: 'bouncer.testnet', goals: [g], getQuote: async () => quote(g),
     fulfill: async () => { if (++redeemed === 1) throw new Error('vendor temporarily unavailable'); return computeResult(g.input); },
+    beforePayment: async request => { assert.equal(request.id, g.id); guarded++; },
     provider, account, publicKey: { toString: () => 'ed25519:abc' }, journal, execute: true, log: () => {},
   };
   await assert.rejects(runResourceAgent(opts), /vendor temporarily unavailable/);
@@ -121,4 +122,5 @@ test('a delivery outage after payment is recoverable without a duplicate payment
   assert.equal(retry.deliveries.length, 1);
   assert.equal(paid, 1);
   assert.equal(redeemed, 2);
+  assert.equal(guarded, 1); // replaying fulfillment never sends or invokes a new-payment guard
 });

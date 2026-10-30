@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { createModelClient, planObjective, saveGoals, validatePlanningConfig } from './goal-planner.mjs';
 import { compareApprovedQuotes } from './quote-comparison.mjs';
 
-const USAGE = `Usage: node bouncer/agent/autonomous.mjs --config owner.json --objective-file objective.txt --output new-goals.json [--compare-providers] [--key agent-key.json] [--local-provider provider.json] [--execute]
+const USAGE = `Usage: node bouncer/agent/autonomous.mjs --config owner.json --objective-file objective.txt --output new-goals.json [--compare-providers] [--key agent-key.json] [--local-provider provider.json] [--execute] [--durable]
 
 Uses BOUNCER_LLM_URL (full chat-completions endpoint), BOUNCER_LLM_MODEL, and
 optionally BOUNCER_LLM_API_KEY. The objective is sent to that model; do not
@@ -19,8 +19,9 @@ include secrets in it. The owner config, signing key and journal are not sent.
 Planning alone sends no transactions. --compare-providers sends each order to
 all owner-approved quote endpoints; start them separately, not --local-provider.
 Supplying --key also runs a read-only quote/policy preflight; --execute
-explicitly sends real TESTNET transactions. The output and its matching journal
-are private and must be kept for recovery.
+explicitly sends real TESTNET transactions. --durable records direct-payment
+hashes before broadcast. The output and its matching journal are private and
+must be kept for recovery.
 Do not use real funds or a full-access key. See bouncer/docs/AI_AGENT.md.
 `;
 
@@ -29,7 +30,7 @@ function parseArgs(args) {
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === '--help') return { help: true };
-    if (arg === '--execute' || arg === '--compare-providers') {
+    if (arg === '--execute' || arg === '--compare-providers' || arg === '--durable') {
       const name = arg.slice(2);
       if (options[name]) throw new Error(`duplicate ${arg}`);
       options[name] = true; continue;
@@ -41,7 +42,7 @@ function parseArgs(args) {
     } else throw new Error(`unknown or incomplete argument: ${arg}`);
   }
   if (!options.config || !options['objective-file'] || !options.output) throw new Error('--config, --objective-file and --output are required');
-  if ((options.execute || options['local-provider']) && !options.key) throw new Error('--execute and --local-provider require --key');
+  if ((options.execute || options['local-provider'] || options.durable) && !options.key) throw new Error('--execute, --durable and --local-provider require --key');
   if (options['compare-providers'] && options['local-provider']) throw new Error('--compare-providers requires separately running providers, not --local-provider');
   return options;
 }
@@ -96,6 +97,7 @@ async function main() {
   const args = [runner, '--goals', target, '--key', options.key];
   if (options['local-provider']) args.push('--local-provider', options['local-provider']);
   if (options.execute) args.push('--execute');
+  if (options.durable) args.push('--durable');
   const childEnv = { ...process.env };
   // The resource runner has no need for the model credential.
   delete childEnv.BOUNCER_LLM_API_KEY;

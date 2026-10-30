@@ -1,5 +1,26 @@
-// A recorded public testnet run, not a wallet and not simulated settlement.
-// Source: https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40558301848
+// These are recorded public testnet runs, not a wallet or simulated settlement.
+// The latest oracle-led mission is separate from the earlier multi-token
+// resource example below. The site cannot run either mission.
+export const LATEST_MISSION = Object.freeze({
+  verifiedAt: '2026-10-30T14:41:01Z',
+  account: 'bouncer-oracle-6a42bf32.testnet',
+  owner: 'owner.bouncer-oracle-6a42bf32.testnet',
+  vendor: 'vendor.bouncer-oracle-6a42bf32.testnet',
+  actionUrl: 'https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41073097919/job/124122803916',
+  aiActionUrl: 'https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40689705483/job/122821855839',
+  setupSwapTx: 'CqXgcgZ5RuN4n5hTgkgZFx51EH5t1WeVU7SsiNyNeVwt',
+  fundingTx: 'BaScmpZxC7tqAdQC515A3xoj8ev9exFxsN7T4KjHFppw',
+  oracleTx: '4MCH1jvtrz43trdnjvxQfkVuLXN4a9nhtyzPt8kM95yZ',
+  priceUsd: '4.27625', source: 'Coinbase via OutLayer',
+  testToken: '3e2210e1184b45b64c8a434c0a7e7b23cc04ea7eb7a6c3c32520d03d4afcb8af',
+  resourceMicroUsdc: '1000',
+  computeTx: '7XxeU466RVYvVN3wBrWqXHu2zeHHyFPcs4WhNuFX2GbJ',
+  storageTx: 'GJkJMWBF2CCh1H5uh9uAKJJciTsqcvcgKvNXvnJrEvjL',
+  apiTx: '7RxBwG4G6FRqG1o2shYRN2ES2WsxVFdEMd8NWp7zA5vy',
+});
+
+// Source of the earlier three-token walkthrough:
+// https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40558301848
 export const RUN = Object.freeze({
   verifiedAt: '2026-10-27T18:20:37Z',
   account: 'bouncer-42dcdfb7.testnet',

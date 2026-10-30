@@ -45,6 +45,13 @@ test('live mission gates funding, provider credit, paid delivery and three resou
   assert.deepEqual(f.calls, ['project-preview', 'provider-credit', 'fund-preview', 'resources-preview', 'fund-send', 'provider-credit', 'project-send', 'resources-send']);
 });
 
+test('durable direct-payment option reaches resource preview and execution', async () => {
+  const f = fixture(), seen = [], original = f.runners.resources;
+  f.runners.resources = async options => { seen.push([options.execute, options.durablePayment]); return original(options); };
+  assert.equal((await runPaidProjectMission({ ...f.options, resources: { ...f.options.resources, durablePayment: true }, execute: true })).status, 'FULFILLED');
+  assert.deepEqual(seen, [[false, true], [true, true]]);
+});
+
 test('blocked future resource or changed provider/project preflight stops every payment', async () => {
   let f = fixture(); f.runners.resources = async () => { f.calls.push('resources-blocked'); return { payments: { blocked: 1 }, deliveries: [] }; };
   assert.equal((await runPaidProjectMission({ ...f.options, execute: true })).stage, 'resource-preflight');

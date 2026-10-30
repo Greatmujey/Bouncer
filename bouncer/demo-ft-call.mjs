@@ -133,7 +133,7 @@ async function provePaidMission({ contract, contractId, owner, ownerId, fundingA
     const common = { provider, journal, execute: true, log: console.log,
       funding: { goal: fundingGoal, account: fundingAgent, publicKey: fundingKey.getPublicKey() },
       project: { goal: projectGoal, account: projectAgent, publicKey: projectKey.getPublicKey() },
-      resources: { contractId, ownerAccountId: ownerId, goals, account: resourceAgent, publicKey: resourceKey.getPublicKey(),
+      resources: { contractId, ownerAccountId: ownerId, goals, account: resourceAgent, publicKey: resourceKey.getPublicKey(), durablePayment: true,
         getQuote: client.getQuote, readStorage: client.readStorage } };
     let injected = false;
     try {
@@ -180,7 +180,7 @@ async function main() {
   receiptsOk(created, 'create owner');
   const owner = accountFor(ownerId, ownerKey), agent = accountFor(ownerId, agentKey), attacker = accountFor(ownerId, attackKey);
   await call(contract, contractId, 'new', { owner: ownerId });
-  if (await view(contractId, 'contract_version') !== 'bouncer-agent-v7' || await view(contractId, 'get_owner') !== ownerId) throw new Error('stale contract or unexpected owner');
+  if (await view(contractId, 'contract_version') !== 'bouncer-agent-v9' || await view(contractId, 'get_owner') !== ownerId) throw new Error('stale contract or unexpected owner');
 
   for (const [token, id] of [[WRAP, ownerId], [WRAP, contractId], [WRAP, OUTLAYER], [TOKEN, ownerId], [TOKEN, contractId], [TOKEN, OUTLAYER]]) await register(owner, token, id);
   await call(owner, WRAP, 'near_deposit', {}, ONE / 500n, 50n * TGAS);

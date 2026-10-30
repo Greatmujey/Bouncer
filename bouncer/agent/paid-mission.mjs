@@ -122,6 +122,7 @@ function parseArgs(args) {
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--help') options.help = true;
     else if (args[i] === '--execute') options.execute = true;
+    else if (args[i] === '--durable') options.durable = true;
     else if (['--mission', '--funding-key', '--project-key', '--ft-key', '--journal', '--rpc', '--local-provider'].includes(args[i]) && args[i + 1] && !args[i + 1].startsWith('--')) {
       const name = args[i].slice(2); if (options[name]) throw new Error(`duplicate ${args[i]}`); options[name] = args[++i];
     } else throw new Error(`unknown or incomplete argument: ${args[i]}`);
@@ -137,8 +138,8 @@ function accountFromFile(file, owner, provider) {
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   if (options.help) {
-    console.log('Usage: node bouncer/agent/paid-mission.mjs --mission MISSION.json --funding-key KEY.json --project-key KEY.json --ft-key KEY.json [--journal JOURNAL.json] [--rpc URL] [--local-provider CONFIG.json] [--execute]');
-    console.log('Testnet only; default is a non-atomic dry run. Independent service is a priced connectivity probe, not a commercial API.'); return;
+    console.log('Usage: node bouncer/agent/paid-mission.mjs --mission MISSION.json --funding-key KEY.json --project-key KEY.json --ft-key KEY.json [--journal JOURNAL.json] [--rpc URL] [--local-provider CONFIG.json] [--execute] [--durable]');
+    console.log('Testnet only; default is a non-atomic dry run. --durable records direct FT hashes before broadcast. Independent probe is not a commercial API.'); return;
   }
   if (!options.mission || !options['funding-key'] || !options['project-key'] || !options['ft-key']) throw new Error('provide --mission, --funding-key, --project-key and --ft-key');
   const missionPath = path.resolve(home(options.mission)), config = JSON.parse(fs.readFileSync(missionPath, 'utf8'));
@@ -166,7 +167,7 @@ async function main() {
     if (options.execute || fs.existsSync(journalPath)) journal = new FileJournal(journalPath, paid.contract_id, paid.owner_account_id);
     const result = await runPaidProjectMission({ funding: { goal: fund, ...funding }, project: { goal: paid, ...project }, provider, journal, execute: options.execute,
       resources: { contractId: resources.contract_id, ownerAccountId: resources.owner_account_id, providerUrl: resources.provider_url,
-        goals: resources.goals, getQuote: client.getQuote, fulfill: client.fulfill, readStorage: client.readStorage, ...ft } });
+        goals: resources.goals, getQuote: client.getQuote, fulfill: client.fulfill, readStorage: client.readStorage, durablePayment: options.durable === true, ...ft } });
     console.log(`[paid-mission] ${result.status}; non-atomic testnet mission; journal ${journalPath}`);
     if (result.independent?.delivery) console.log(`[paid-mission] Independent probe: ${JSON.stringify(result.independent.delivery)}`);
     if (result.resources) console.log(`[paid-mission] FT batch: ${JSON.stringify(result.resources.payments)}; deliveries=${result.resources.deliveries.length}`);

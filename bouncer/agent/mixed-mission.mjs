@@ -14,6 +14,7 @@ import nearApi from 'near-api-js';
 import { FileJournal } from './procurement.mjs';
 import { MonotonicAccount } from './near-account.mjs';
 import { runOutlayerGoal, recoverOutlayerGoal, validateOutlayerGoal } from './outlayer.mjs';
+import { runOracleGoal, recoverOracleGoal, validateOracleGoal, assertOracleFreshForUse } from './oracle-outlayer.mjs';
 import { runResourceAgent, routedResourceProvider } from './resource-agent.mjs';
 import { startConfiguredProvider } from '../services/resource-provider.mjs';
 import { validateRpcEndpoint } from '../shared/rpc-endpoint.mjs';
@@ -28,17 +29,20 @@ import { validateRpcEndpoint } from '../shared/rpc-endpoint.mjs';
  * authorization boundary; callers must use the real trusted implementations.
  */
 export async function runMixedMission({ outlayer, resources, provider, journal, execute = false, log = console.log, runners = {} }) {
-  const goal = validateOutlayerGoal(outlayer?.goal);
+  const kind = outlayer?.kind ?? 'random';
+  if (!['random', 'oracle'].includes(kind)) throw new Error('unsupported independent mission kind');
+  const goal = kind === 'oracle' ? validateOracleGoal(outlayer?.goal) : validateOutlayerGoal(outlayer?.goal);
   if (!resources || resources.contractId !== goal.contract_id || resources.ownerAccountId !== goal.owner_account_id ||
       !Array.isArray(resources.goals) || !resources.goals.length) throw new Error('both mission paths must share the reviewed contract and owner');
+  if (resources.beforePayment !== undefined && typeof resources.beforePayment !== 'function') throw new Error('invalid pre-payment guard');
   const ids = resources.goals.map(item => item?.id);
   if (ids.some(id => typeof id !== 'string' || !id || id === goal.id) || new Set(ids).size !== ids.length) {
     throw new Error('mission goal IDs must be distinct across both paths');
   }
   if (execute && (!journal || typeof journal.get !== 'function' || typeof journal.put !== 'function')) throw new Error('live mission requires a shared journal');
   if (journal && (typeof journal.get !== 'function' || typeof journal.put !== 'function')) throw new Error('invalid mission journal');
-  const runExternal = runners.outlayer ?? runOutlayerGoal;
-  const recoverExternal = runners.recover ?? recoverOutlayerGoal;
+  const runExternal = runners.outlayer ?? (kind === 'oracle' ? runOracleGoal : runOutlayerGoal);
+  const recoverExternal = runners.recover ?? (kind === 'oracle' ? recoverOracleGoal : recoverOutlayerGoal);
   const runFT = runners.resources ?? runResourceAgent;
   if ([runExternal, recoverExternal, runFT].some(fn => typeof fn !== 'function')) throw new Error('invalid mission runner');
 
@@ -73,9 +77,21 @@ export async function runMixedMission({ outlayer, resources, provider, journal, 
     if (independent.status === 'BLOCKED') return { status: 'BLOCKED', stage: 'independent-execution', independent, resources: preview };
     if (!['FULFILLED', 'REUSED'].includes(independent.status) || !independent.delivery) throw new Error('independent delivery was not verified');
   }
+  // Recovery establishes a historical payment, not freshness today. Refuse to
+  // continue an oracle-led mission with an expired or future worker timestamp.
+  // This still cannot establish that the external market data was accurate.
+  if (kind === 'oracle') assertOracleFreshForUse(independent.delivery);
   // runResourceAgent repeats its non-atomic preview, recovers prior FT
   // deliveries first, and checks each paid result before the next FT payment.
-  const delivered = await runFT({ ...common, execute: true });
+  // A batch may take long enough for the oracle result to expire in between:
+  // recheck it immediately before EACH new payment, including after any custom
+  // async guard. This is an off-chain timing check, not authenticated market
+  // freshness or an on-chain constraint.
+  const delivered = await runFT({ ...common, execute: true, beforePayment: async request => {
+    if (kind === 'oracle') assertOracleFreshForUse(independent.delivery);
+    if (resources.beforePayment) await resources.beforePayment(request);
+    if (kind === 'oracle') assertOracleFreshForUse(independent.delivery);
+  } });
   if (!delivered?.payments || !Array.isArray(delivered.deliveries)) throw new Error('invalid FT batch result');
   const complete = !delivered.payments.blocked && !delivered.payments.deferred && delivered.deliveries.length === ids.length;
   return { status: complete ? 'FULFILLED' : 'INCOMPLETE', independent, resources: delivered };
@@ -88,6 +104,7 @@ function parseArgs(args) {
     const arg = args[i];
     if (arg === '--help') options.help = true;
     else if (arg === '--execute') options.execute = true;
+    else if (arg === '--durable') options.durable = true;
     else if (['--mission', '--ft-key', '--outlayer-key', '--journal', '--rpc', '--local-provider'].includes(arg) && args[i + 1] && !args[i + 1].startsWith('--')) {
       const name = arg.slice(2);
       if (options[name]) throw new Error(`duplicate ${arg}`);
@@ -105,14 +122,16 @@ function accountFromFile(file, owner, provider) {
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   if (options.help) {
-    console.log('Usage: node bouncer/agent/mixed-mission.mjs --mission MISSION.json --ft-key FT_KEY.json --outlayer-key COMPUTE_KEY.json [--journal JOURNAL.json] [--rpc URL] [--local-provider CONFIG.json] [--execute]');
-    console.log('Default: non-atomic dry-run preflight. --execute spends testnet funds; OutLayer uses native NEAR, other goals use configured FTs.');
+    console.log('Usage: node bouncer/agent/mixed-mission.mjs --mission MISSION.json --ft-key FT_KEY.json --outlayer-key COMPUTE_KEY.json [--journal JOURNAL.json] [--rpc URL] [--local-provider CONFIG.json] [--execute] [--durable]');
+    console.log('Default: non-atomic dry-run preflight. --execute spends testnet funds; --durable records direct FT hashes before broadcast.');
     return;
   }
   if (!options.mission || !options['ft-key'] || !options['outlayer-key']) throw new Error('--mission, --ft-key and --outlayer-key are required');
   const missionPath = path.resolve(expandHome(options.mission));
   const config = JSON.parse(fs.readFileSync(missionPath, 'utf8'));
-  const goal = validateOutlayerGoal(config?.outlayer_goal);
+  const kind = config?.outlayer_kind ?? 'random';
+  if (!['random', 'oracle'].includes(kind)) throw new Error('unsupported independent mission kind');
+  const goal = kind === 'oracle' ? validateOracleGoal(config?.outlayer_goal) : validateOutlayerGoal(config?.outlayer_goal);
   const resources = config?.resources;
   if (!resources || resources.contract_id !== goal.contract_id || resources.owner_account_id !== goal.owner_account_id || !Array.isArray(resources.goals)) {
     throw new Error('mission resources must name the same contract and owner as the OutLayer goal');
@@ -141,9 +160,9 @@ async function main() {
     const client = routedResourceProvider({ providerUrl: resources.provider_url, goals: resources.goals, overrides });
     if (options.execute || fs.existsSync(journalPath)) journal = new FileJournal(journalPath, goal.contract_id, goal.owner_account_id);
     const result = await runMixedMission({
-      outlayer: { goal, ...outlayer }, provider, journal, execute: options.execute,
+      outlayer: { kind, goal, ...outlayer }, provider, journal, execute: options.execute,
       resources: { contractId: resources.contract_id, ownerAccountId: resources.owner_account_id, providerUrl: resources.provider_url,
-        goals: resources.goals, getQuote: client.getQuote, fulfill: client.fulfill, readStorage: client.readStorage, ...ft },
+        goals: resources.goals, getQuote: client.getQuote, fulfill: client.fulfill, readStorage: client.readStorage, durablePayment: options.durable === true, ...ft },
     });
     console.log(`[mission] ${result.status}; non-atomic testnet mission; journal ${journalPath}`);
     if (result.independent?.delivery) console.log(`[mission] Independent delivery: ${JSON.stringify(result.independent.delivery)}`);

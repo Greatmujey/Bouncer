@@ -1,10 +1,14 @@
 # Guarded independent compute (testnet)
 
-Bouncer v5 can pay an independently operated provider, `outlayer.testnet`, for
-a **bounded random-number example**. This integration uses native testnet NEAR,
-not wNEAR, USDC or another fungible token. Storage, API/data and the other
-compute examples still use Bouncer's self-hosted development services. This is
-unaudited software; do not use real funds.
+Bouncer v5 and later can pay an independently operated provider, `outlayer.testnet`,
+for a **bounded random-number example**. That particular integration uses
+native testnet NEAR, not wNEAR, USDC or another fungible token. The current v9
+source also supports a separately guarded prepaid FT funding and priced
+connector path; its live test used fake USDC.e and returned HTTP 405, not useful
+API data. A separate v9 native execution has since returned a single-source
+public price; the FT-funded compute, storage and text-API services in that
+mission remain self-hosted development services. This is unaudited software;
+do not use real funds.
 
 ## What has been demonstrated
 
@@ -39,8 +43,63 @@ financial settings.
 This result trusts the configured RPC and the OutLayer contract. Checking a
 number is in range does **not** independently prove TEE attestation, correct
 execution, or statistical randomness. It does not establish any delivery SLA,
-production reliability, independent storage/API service, FT integration or
-stablecoin purchase. The local fault does not imply provider misconduct.
+production reliability, independent storage/API service, FT payment to this
+native compute example or a real-value stablecoin purchase. The local fault
+does not imply provider misconduct.
+
+## Pinned price-data mission and earlier failures
+
+V8 adds a pinned-input single-source price lookup and a mixed mission that can
+include the returned value in development-resource orders. The first
+[opt-in live test](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41069232857/job/124109266232)
+proved that changing the pinned input and exceeding the native cap were rejected
+on chain, but [the requested lookup](https://testnet.nearblocks.io/txns/8hqLZGkuYAgB8EqMhjN58MeGcLNApHJ7EFi5jLNhk2Dy)
+returned `null`. Recovery did not accept it as delivery, and no subsequent
+resource purchases were sent. [Read-only receipt inspection](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41069934314/job/124111032227)
+found that the published WASM imports project storage, which is unavailable to
+an inline `WasmUrl` request. OutLayer reported charging
+`1123300000000000000000` yoctoNEAR and refunding `98876700000000000000000`
+to the owner. The hash must not be automatically retried; this was not a
+successful independent price-data purchase.
+
+The corrected [v9 Project-mode attempt](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41071182834/job/124116356927)
+reached the oracle WASM, but its requested CoinGecko API returned HTTP 403. The
+[final transaction](https://testnet.nearblocks.io/txns/HNPWAhuYaoctcCWd16E76rHcG2Amm3yKFGJYLEnhhJpx)
+returned `success: false`; recovery refused it and no downstream Circle resource
+payments were sent. OutLayer reported a completed WASM execution but an
+application-level HTTP error, charging `1120300000000000000000` yoctoNEAR and
+refunding `98879700000000000000000` to the owner. [Read-only reconciliation](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41072024180/job/124118338158)
+confirmed the project ID, UUID and resolved hash. Both the zero-deposit contract
+guard and the protocol's one-yocto restricted-key guard rejected escalation
+probes. This hash must not be resent.
+
+A [read-only research probe](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41072024180/job/124118338158)
+found Coinbase's public NEAR/USD endpoint reachable from the GitHub runner,
+which alone did not establish OutLayer worker reachability. An explicitly
+separate [successful v9 mission](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41073097919/job/124122803916)
+then pinned the exact GET URL and `data.amount` field in the owner's Project
+input, with no headers, body, secrets or agent-selected URL. The independently
+operated OutLayer [execution](https://testnet.nearblocks.io/txns/4MCH1jvtrz43trdnjvxQfkVuLXN4a9nhtyzPt8kM95yZ)
+returned `4.27625` USD, reported a native charge of `1111600000000000000000`
+yoctoNEAR and a `98888400000000000000000` owner refund, and was recovered by
+its original hash after an injected lost response. The full 0.1-NEAR maximum
+remained in Bouncer's rolling budget. The input, cap, zero-deposit owner guard
+and one-yocto restricted-key guard rejected adversarial probes.
+
+The returned number was included in three orders to a **self-hosted** development
+provider: Circle testnet USDC paid [compute](https://testnet.nearblocks.io/txns/7XxeU466RVYvVN3wBrWqXHu2zeHHyFPcs4WhNuFX2GbJ),
+[storage](https://testnet.nearblocks.io/txns/GJkJMWBF2CCh1H5uh9uAKJJciTsqcvcgKvNXvnJrEvjL)
+and [API](https://testnet.nearblocks.io/txns/7RxBwG4G6FRqG1o2shYRN2ES2WsxVFdEMd8NWp7zA5vy),
+1,000 micro-units each. A deliberately corrupted compute result stopped the
+other two payments until recovery reused the existing first FT transaction.
+The owner's setup swap and funding were not guarded agent purchases. The test
+uses no real-value USDC, and does not pay an independent provider in FT.
+
+The oracle returns only a number and the label `custom`, not the original
+Coinbase response; the endpoint, provider and RPC remain trusted. Its timestamp
+is the worker's, not a verified market-observation time; no TEE attestation,
+consensus, accuracy, commercial SLA or production readiness was established.
+See [Coinbase's public endpoint documentation](https://docs.cdp.coinbase.com/coinbase-business/track-apis/prices).
 
 ## Asset and policy semantics
 
@@ -56,6 +115,25 @@ stablecoin purchase. The local fault does not imply provider misconduct.
   owner signer, key grant, payee allowlist, native vault, per-call cap, rolling
   daily budget, exact program and an at-most-4096-byte JSON object. The JS
   runner further restricts the random-number input and output.
+- V8 additionally provides `set_outlayer_input` and
+  `execute_outlayer_pinned`. The owner pins an entire JSON input and the exact
+  program, and installs an agent key scoped **only** to the pinned method.
+  Route, policy, payee and program edits invalidate earlier signed routes. The
+  legacy `execute_outlayer` method still allows that method's key to supply
+  its own input: do not give it to an agent that needs exact-input isolation.
+- V9 separately pins a native-only **Project** version and exact JSON input via
+  `set_outlayer_native_project`; its key is restricted to
+  `execute_outlayer_native_project`. The runner checks the public registry's
+  project UUID, owner, version, resolved hash and lack of project pricing, then
+  verifies that the final provider request carried that UUID and resolved hash.
+  Those preflight views are non-atomic and provider-owned code/registry can
+  change. Post-payment verification is not a refund or code attestation. This
+  route sends `params: null` and no secrets; no prepaid FT is authorized. The
+  oracle runner verifies receipts and a single-source result, but trusts the
+  provider/RPC and does not verify TEE attestation or market-data accuracy. A
+  worker timestamp is not authenticated freshness of the upstream market data.
+  Oracle-led batches recheck that timestamp against the local clock before each
+  new FT payment; expiry stops later purchases but cannot undo earlier ones.
 - OutLayer receives the specified maximum deposit. Bouncer immediately debits
   and counts that **entire maximum**, even if OutLayer charges less. For an
   accepted execution the provider is instructed to refund unused native NEAR
@@ -75,9 +153,36 @@ stablecoin purchase. The local fault does not imply provider misconduct.
   runner rejects it. OutLayer's separate prepaid FT payment keys and direct
   x402 delegation are not this guarded per-call payment and are not used here.
 
+## Separate prepaid FT and priced connector path
+
+V7 can fund an owner-pinned OutLayer prepaid balance using `execute_ft_call`,
+then call an owner-pinned project under **separate** native and prepaid-token
+policies. The FT route fixes the token, receiver and exact message, with policy
+and route revisions; the project route fixes its version, input, fee and
+resource limits. Separate restricted keys and policy grants are required. FT
+settlement proves only how much the trusted token reports as used, not that a
+provider delivered anything.
+
+The [live paid-provider test](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40699116807/job/122854642930)
+funded OutLayer with fake testnet USDC.e, then paid for a version-pinned
+connectivity probe using that prepaid balance and native NEAR. The probe
+returned HTTP **405**; it is not useful API data or a commercial API purchase.
+The unified mission recovered that payment and continued to self-hosted FT
+resources, stopping later payments until a corrupted local delivery was checked.
+
+Provider-held credit is distinct from Bouncer's FT vault. In this path a project
+refund can be credited to Bouncer's balance **at OutLayer**, not returned to
+Bouncer's vault. The conservative local ledger can understate returned credit
+and strand it; no general user-balance withdrawal is assumed. Provider and
+contract balance views are non-atomic. Reconcile any ambiguous or failed payment
+manually; never automatically repay. Pricing, versions, contract code, RPC and
+provider behavior remain trust assumptions. Inspect `ft-call.mjs`,
+`outlayer-project.mjs` and `paid-mission.mjs` with `--help` for their separate
+reviewed goals and journals.
+
 ## Try the mixed mission
 
-The optional demo creates **fresh testnet accounts**, a v5 deployment, synthetic
+The optional demo creates **fresh testnet accounts**, a v9 deployment, synthetic
 FTs, local development services and a small native OutLayer budget. It uses two
 separate restricted keys and saves them privately in
 `~/.near-credentials/testnet/`; goals and journals are in `~/.bouncer/testnet/`.

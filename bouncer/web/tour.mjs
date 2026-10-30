@@ -3,12 +3,12 @@ const steps = [
   {
     kicker: 'WELCOME TO BOUNCER', title: 'Meet your resource agent.',
     description: 'Bouncer helps an agent get compute, storage and API services while your on-chain rules guard its spending.',
-    callout: 'Today, a person prepares the requests. This is an early testnet prototype—not an autonomous AI marketplace yet.',
+    callout: 'A local model can propose tasks in a separate test. Financial authority stays with the owner; this is not an open marketplace.',
   },
   {
     kicker: 'SEE THE WHOLE JOURNEY', title: 'From a need to a result.',
-    description: 'A prepared request gets a quote, passes policy checks, pays on NEAR testnet, and is fulfilled by a development provider.',
-    callout: 'Explore the three recorded examples on this page. They are historical results, not new orders.',
+    description: 'A request gets a quote, passes policy checks, pays on NEAR testnet, and is fulfilled and verified.',
+    callout: 'The latest independent price execution and three resource examples are recorded results, not new orders.',
   },
   {
     kicker: 'YOU STAY IN CONTROL', title: 'Your wallet, your rules.',
@@ -18,7 +18,7 @@ const steps = [
   {
     kicker: 'BRING AN ASSISTANT', title: 'Connect through MCP.',
     description: 'Compatible MCP clients can inspect policies and preview quotes using the local Bouncer server—without signing or paying.',
-    callout: 'A hosted connection for web AI apps and an AI planner are still to be built. This tour and website do not run purchases.',
+    callout: 'A hosted connection for web AI apps is still to be built. The model planner runs separately; this website does not run purchases.',
   },
 ];
 

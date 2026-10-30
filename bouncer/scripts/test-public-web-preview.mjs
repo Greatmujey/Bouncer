@@ -28,6 +28,13 @@ try {
   assert.deepEqual(await page.locator('.resource-amount').allInnerTexts(), ['0.1 wNEAR', '1.5 storage credits', '2 API credits']);
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'mobile page overflows');
   assert.match(await page.locator('.snapshot-note').innerText(), /not a running agent/);
+  assert.match(await page.locator('#latest-mission').innerText(), /4\.27625/);
+  assert.match(await page.locator('#latest-mission').innerText(), /Circle testnet USDC/);
+  assert.match(await page.locator('#latest-mission').innerText(), /not independently verified for accuracy or market freshness/);
+  assert.match(await page.locator('#latest-mission').innerText(), /self-hosted development examples/);
+  assert.match(await page.locator('#latest-mission').innerText(), /independent execution was not paid in USDC/);
+  assert.match(await page.locator('#latest-mission a').first().getAttribute('href'), /4MCH1jvtrz43trdnjvxQfkVuLXN4a9nhtyzPt8kM95yZ$/);
+  assert.equal(await page.locator('.track-card').count(), 6);
   assert.deepEqual(pageErrors, []);
   const writes = [];
   page.on('request', request => { if (request.method() !== 'GET' && request.method() !== 'HEAD') writes.push(request.url()); });

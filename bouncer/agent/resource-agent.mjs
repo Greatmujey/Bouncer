@@ -74,11 +74,12 @@ export async function planFromQuotes({ contractId, ownerAccountId, goals, getQuo
  * same order again. The provider must implement its own replay protection.
  */
 export async function runResourceAgent({ contractId, ownerAccountId, goals, getQuote, fulfill, readStorage, repositoryLookup, providerUrl, onPlan = () => {},
-  provider, account, publicKey, runtimeFactory, journal, execute = false, log = console.log }) {
+  beforePayment = async () => {}, provider, account, publicKey, runtimeFactory, journal, execute = false, durablePayment = false, log = console.log }) {
   if (execute && (typeof fulfill !== 'function' || typeof journal?.get !== 'function' || typeof journal?.put !== 'function')) {
     throw new Error('live execution requires a readable/writable journal and fulfillment source');
   }
   if (journal !== undefined && journal !== null && typeof journal.get !== 'function') throw new Error('invalid journal');
+  if (typeof beforePayment !== 'function') throw new Error('invalid pre-payment guard');
   if (repositoryLookup !== undefined && typeof repositoryLookup !== 'function') throw new Error('invalid GitHub reference lookup');
   if (execute && Array.isArray(goals) && goals.some(goal => goal?.resource === 'storage') && typeof readStorage !== 'function') {
     throw new Error('live storage execution requires provider readback before payment');
@@ -178,7 +179,8 @@ export async function runResourceAgent({ contractId, ownerAccountId, goals, getQ
   if (execute && !summary.blocked) {
     log('[resource-agent] Batch preflight passed; these non-atomic views are not a guarantee.');
     const indexById = new Map(plan.requests.map((request, index) => [request.id, index]));
-    payments = await runProcurement({ plan, provider, account, publicKey, journal, journalRoutes, execute: true, log, stopOnBlocked: true,
+    payments = await runProcurement({ plan, provider, account, publicKey, journal, journalRoutes, execute: true, durablePayment, log, stopOnBlocked: true,
+      beforePayment,
       onCheck: check => {
         if (check.status === 'BLOCKED' || check.status === 'DEFERRED') {
           const index = indexById.get(check.id);
@@ -262,12 +264,13 @@ export function routedResourceProvider({ providerUrl, goals, overrides = new Map
   };
 }
 
-const USAGE = `Usage: node bouncer/agent/resource-agent.mjs --goals goals.json --key agent-key.json [--journal journal.json] [--local-provider provider.json] [--execute]
+const USAGE = `Usage: node bouncer/agent/resource-agent.mjs --goals goals.json --key agent-key.json [--journal journal.json] [--local-provider provider.json] [--execute] [--durable]
 
 Quote configured providers and preflight owner-pinned resource goals.
 Default is read-only; --execute sends real testnet payments, checks bounded
-example deliveries and stores local receipts in the private journal. Checks
-happen after payment and do not guarantee delivery or refunds. Use a function-call
+example deliveries and stores local receipts in the private journal. --durable
+records the signed transaction hash before broadcast for key-free recovery.
+Checks happen after payment and do not guarantee delivery or refunds. Use a function-call
 key scoped only to Bouncer execute. Amounts are token smallest units, not USD.
 Never use real funds.
 `;
@@ -277,6 +280,7 @@ function parseCli(args) {
     const arg = args[i];
     if (arg === '--help') return { help: true };
     if (arg === '--execute') { options.execute = true; continue; }
+    if (arg === '--durable') { options.durable = true; continue; }
     if (['--goals', '--key', '--journal', '--local-provider'].includes(arg) && args[i + 1] && !args[i + 1].startsWith('--')) {
       const key = arg.slice(2);
       if (options[key]) throw new Error(`duplicate ${arg}`);
@@ -291,6 +295,7 @@ async function main() {
   if (options.help) { console.log(USAGE); return; }
   const config = JSON.parse(fs.readFileSync(options.goals, 'utf8'));
   if (!config || typeof config !== 'object' || Array.isArray(config)) throw new Error('invalid goals file');
+  if (options.durable) console.log('[resource-agent] Durable direct payments enabled: signed hashes are recorded before broadcast.');
   // Validate the configured origin before starting any provider or spending.
   httpResourceProvider(config.provider_url);
   // Check every selected route before starting a development provider.
@@ -319,7 +324,7 @@ async function main() {
     }
     const result = await runResourceAgent({
       contractId: config.contract_id, ownerAccountId: config.owner_account_id, providerUrl: config.provider_url, goals: config.goals,
-      getQuote: client.getQuote, fulfill: client.fulfill, readStorage: client.readStorage, journal, execute: options.execute,
+      getQuote: client.getQuote, fulfill: client.fulfill, readStorage: client.readStorage, journal, execute: options.execute, durablePayment: options.durable === true,
       onPlan: plan => console.log(`[resource-agent] Validated quote plan:\n${JSON.stringify(plan, null, 2)}`),
       runtimeFactory: plan => createRuntime({ plan, keyFile: options.key }),
     });

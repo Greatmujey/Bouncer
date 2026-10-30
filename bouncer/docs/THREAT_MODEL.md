@@ -27,14 +27,31 @@ It has not been audited and must not hold valuable funds.
   full maximum deposit is debited and budgeted up front, while any unused
   accepted-execution refund is sent to the owner. A failed promise is never
   treated as proof that the full native deposit returned to the vault.
+- V6/V7 add owner-pinned FT transfer-call messages and revisions. The owner
+  must trust the token and exact receiver behavior; final settlement alone does
+  not establish provider delivery. V7 also tracks conservative OutLayer
+  prepaid credit and requires separate native and token policies, grants and
+  caps for an owner-pinned priced project.
+- V8 adds a separate owner-pinned native program **and exact input** route,
+  with policy/payee/route revisions. It only constrains a key installed to call
+  `execute_outlayer_pinned` alone; the legacy `execute_outlayer` method still
+  allows that method's authorized key to choose its input.
+- V9 adds a native-only owner-pinned OutLayer **Project** route and a separate
+  `execute_outlayer_native_project`-only key. It pins exact input, version and
+  limits without secrets or prepaid FT parameters; registry checks are off-chain
+  and non-atomic, and post-payment verification cannot undo a bad execution.
 
 A [v4 testnet run](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40558301848)
 verified a restricted-key payment, both escalation-guard layers and a failed FT
 transfer whose callback restored the vault and daily budget. A separate-owner
 [v5 OutLayer check](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40682550107/job/122797278579)
 verified one independently operated native-NEAR execution and owner refund; it
-checked output range, not TEE attestation or randomness. Neither run proves all
-possible callback, provider or token failure cases.
+checked output range, not TEE attestation or randomness. A [v9 mission](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41073097919/job/124122803916)
+also rejected project-route escalation and substitution probes, recovered a
+native-paid price request, and gated Circle testnet resource payments on
+checked development deliveries. The worker timestamp and single-source value
+are not authenticated market freshness or a price-accuracy proof. These runs do
+not prove all possible callback, provider or token failure cases.
 
 ## Remaining risks
 
@@ -68,7 +85,7 @@ possible callback, provider or token failure cases.
    policy block halts later unpaid goals, but cannot undo an earlier transfer.
 6. **Policies and tokens are shared.** Policy-specific key grants isolate which
    policy a key may use, but policies may share the same token vault. Caps are
-   denominated in token units, not USD; there is no price oracle. Rebinding a
+   denominated in token units, not USD; the contract does not enforce oracle prices. Rebinding a
    policy to another token retains numeric spend history in the old units. Use
    a new policy for each token rather than changing an existing policy's token.
 7. **Untrusted model and development-only provider.** An optional model can
@@ -78,8 +95,9 @@ possible callback, provider or token failure cases.
    performs SHA-256 work, local-file storage, text statistics and fixed-origin
    unauthenticated GitHub data reads; it is not an independent commercial
    provider or marketplace. GitHub data is untrusted and can be unavailable
-   after payment. The multi-token test uses
-   synthetic testnet FTs, not USDC. There is no cross-chain settlement. The old
+   after payment. The older multi-token test uses synthetic testnet FTs; a
+   separate Circle testnet USDC mission also pays this self-hosted provider.
+   Testnet USDC has no real value. There is no cross-chain settlement. The old
    solver is disabled because it previously used fake fill hashes; the older
    standalone quote comparator does not settle anything. The agent's optional
    curated quote selection is separate: it contacts only owner-configured
@@ -106,11 +124,16 @@ possible callback, provider or token failure cases.
    unreliable storage can bypass the protection. The signer keeps its own
    process's nonces monotonic to mitigate stale RPC reads; it does not coordinate
    concurrent processes using the same key or
-   retry a failed send. Use one writer per key and reconcile pending payments
-   manually. For OutLayer, the signed transaction hash is journaled before the
-   one broadcast and can be re-queried without a private key; an absent or
-   expired hash is still not automatically resent. FT payments use their own
-   existing journal path and do not yet pre-record the signed hash.
+   retry a failed send. Use one writer per key. For OutLayer and opt-in
+   `--durable` direct FT payments, the signed transaction hash is journaled
+   before the one broadcast and can be re-queried without a private key. This
+   requires trusted FINAL RPC receipts, Bouncer code and token code; it verifies
+   payment, not delivery. An unknown or expired hash stays unresolved and is
+   never automatically resent. Existing direct-payment entries and runs that
+   do not opt into `--durable` may lack a pre-recorded hash and still require
+   manual reconciliation. The resource, autonomous, mixed-mission and
+   paid-mission CLIs must be explicitly run with `--durable` to use this path
+   for direct resource payments; it is not the default.
 9. **Provider verification and operations are not trustless.** The provider
    trusts its configured RPC, Bouncer deployment/code and token contracts. It
    verifies transaction arguments and receipts, but cannot protect against a
@@ -131,20 +154,24 @@ possible callback, provider or token failure cases.
    editable, depend on trusted host/RPC, and are not signed invoices or
    independent attestations.
 10. **Prior contracts are unsafe to upgrade without migration.** Older contracts
-   have different state and authorization; v3 and v4 also interpret budget bucket
-   keys differently; v5 adds state again. Deploy v5 fresh; no migration is
-   supplied. Hourly spend buckets are not pruned and incur ongoing state/storage
-   costs; the 25 reads per check also consume gas.
-11. **OutLayer is a trusted independent service, not trustless compute.** Its
-   payment is native NEAR rather than an FT. Provider/RPC availability,
-   contract code, program hosting and the owner-pinned hash are assumptions;
-   output range alone does not establish randomness or verify TEE attestation.
-   The full maximum stays budgeted even after an owner refund. A rejection may
-   return untracked funds to the contract, while a failed accepted execution
-   may only partially refund the owner. The owner must inspect receipts and
-   reconcile; no generic failed-promise callback restores the maximum. Inputs
-   are public. OutLayer's prepaid FT key or direct x402 delegation would not be
-   protected by this per-call policy.
+   have different state and authorization; v3 and v4 interpret budget bucket
+   keys differently, and v5, both v6 layouts, v7, v8 and v9 add incompatible state.
+   Deploy v9 fresh; no migration is supplied. A reported version is not proof
+   of code identity. Hourly spend buckets are not pruned and incur ongoing
+   state/storage costs; the 25 reads per check also consume gas.
+11. **OutLayer is a trusted independent service, not trustless compute.** The
+   random-number example uses native NEAR; the separate priced-project path
+   also spends an owner-pinned provider-held prepaid FT balance. Provider/RPC
+   availability, contract code, program hosting and the owner-pinned hash are
+   assumptions; output range alone does not establish randomness or verify TEE
+   attestation. The full native maximum stays budgeted even after an owner
+   refund. An accepted failure may only partially refund the owner; a rejected
+   request may return untracked funds to the contract. A project refund can
+   instead return to Bouncer's provider-held prepaid balance, not the vault;
+   the conservative ledger may understate funds and strand credit. Views are
+   non-atomic. Reconcile uncertain results manually; no generic callback
+   restores the full maximum. Inputs are public. OutLayer's separate HTTPS
+   payment keys or direct x402 delegation would bypass this per-call policy.
 
 The owner key, NEAR protocol, token implementation, callback availability and
 software correctness are trust assumptions. Offline JavaScript mocks are not

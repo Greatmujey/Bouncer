@@ -85,6 +85,25 @@ test('dry run performs preflight only and does not write journal entries', async
   assert.equal(f.journal.entries.size, 0);
 });
 
+test('a pre-payment guard runs only for new payments and stops before journaling or sending the next one', async () => {
+  const f = fixture(), seen = [];
+  const guard = async request => {
+    assert.equal(Object.isFrozen(request), true);
+    seen.push(request.id);
+    if (request.id === 'storage-1') throw new Error('mission condition expired');
+  };
+  await run(f, { execute: false, beforePayment: guard });
+  assert.deepEqual(seen, []); assert.equal(f.journal.entries.size, 0);
+  await assert.rejects(run(f, { beforePayment: guard }), /mission condition expired/);
+  assert.deepEqual(seen, ['compute-1', 'storage-1']);
+  assert.equal(f.calls.length, 1); assert.equal(f.journal.get('compute-1').status, 'completed');
+  assert.equal(f.journal.get('storage-1'), undefined); assert.equal(f.journal.get('api-1'), undefined);
+  seen.length = 0;
+  await run(f, { beforePayment: async request => { seen.push(request.id); } });
+  assert.deepEqual(seen, ['storage-1', 'api-1']);
+  assert.equal(f.calls.length, 3);
+});
+
 test('rejects an RPC that does not report testnet before reading policies or paying', async () => {
   const f = fixture();
   let otherCalls = 0;
