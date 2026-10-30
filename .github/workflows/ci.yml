@@ -317,7 +317,9 @@ jobs:
           node-version: '22'
       - run: npm ci --prefix bouncer --no-audit --no-fund
       - name: Inspect existing final receipts without signing or spending
-        run: node bouncer/scripts/inspect-testnet-transaction.mjs 8hqLZGkuYAgB8EqMhjN58MeGcLNApHJ7EFi5jLNhk2Dy owner.bouncer-oracle-576a1d53.testnet
+        run: |
+          node bouncer/scripts/inspect-testnet-transaction.mjs HNPWAhuYaoctcCWd16E76rHcG2Amm3yKFGJYLEnhhJpx owner.bouncer-oracle-2a7a8ec7.testnet
+          node bouncer/scripts/probe-price-sources.mjs
 
   oracle-ecosystem-discovery:
     name: Independent testnet oracle discovery (read only)

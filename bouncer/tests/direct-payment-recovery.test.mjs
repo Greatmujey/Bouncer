@@ -155,6 +155,13 @@ test('dry runs, signer mismatches and journal write errors cannot broadcast', as
   await assert.rejects(run(f), /disk full/); assert.equal(f.signs, 1); assert.equal(f.sends, 0);
 });
 
+test('a stale mission guard after signing leaves no journal entry or broadcast', async () => {
+  const f = fixture();
+  await assert.rejects(run(f, { beforePayment: async () => { throw new Error('price expired'); } }), /price expired/);
+  assert.equal(f.signs, 1); assert.equal(f.sends, 0); assert.equal(f.journal.get(request.id), undefined);
+  await run(f); assert.equal(f.sends, 1); assert.equal(f.journal.get(request.id).status, 'completed');
+});
+
 test('recovery refuses a changed stored request or settlement and can verify read-only', async () => {
   const f = fixture(); await run(f);
   const saved = f.journal.get(request.id);

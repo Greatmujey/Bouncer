@@ -60,6 +60,15 @@ an inline `WasmUrl` request. OutLayer reported charging
 to the owner. The hash must not be automatically retried; this was not a
 successful independent price-data purchase.
 
+The corrected [v9 Project-mode attempt](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41071182834/job/124116356927)
+reached the oracle WASM, but its requested CoinGecko API returned HTTP 403. The
+[final transaction](https://testnet.nearblocks.io/txns/HNPWAhuYaoctcCWd16E76rHcG2Amm3yKFGJYLEnhhJpx)
+returned `success: false`; recovery refused it and no downstream Circle resource
+payments were sent. Both the zero-deposit contract guard and the protocol's
+one-yocto restricted-key guard rejected escalation probes. This hash must not be
+resent; receipt reconciliation is read-only. Useful independent data delivery
+remains unproven.
+
 ## Asset and policy semantics
 
 - `deposit_native` tracks an explicit native vault balance, distinct from FTs,
@@ -83,6 +92,8 @@ successful independent price-data purchase.
   The oracle runner verifies receipts and a single-source result, but trusts the
   provider/RPC and does not verify TEE attestation or market-data accuracy. A
   worker timestamp is not authenticated freshness of the upstream market data.
+  Oracle-led batches recheck that timestamp before each new FT payment; an
+  expiry stops later purchases but cannot undo earlier ones.
 - V9 separately pins a native-only **Project** version and exact JSON input via
   `set_outlayer_native_project`; its key is restricted to
   `execute_outlayer_native_project`. The runner checks the public registry's

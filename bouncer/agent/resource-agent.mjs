@@ -74,11 +74,12 @@ export async function planFromQuotes({ contractId, ownerAccountId, goals, getQuo
  * same order again. The provider must implement its own replay protection.
  */
 export async function runResourceAgent({ contractId, ownerAccountId, goals, getQuote, fulfill, readStorage, repositoryLookup, providerUrl, onPlan = () => {},
-  provider, account, publicKey, runtimeFactory, journal, execute = false, durablePayment = false, log = console.log }) {
+  beforePayment = async () => {}, provider, account, publicKey, runtimeFactory, journal, execute = false, durablePayment = false, log = console.log }) {
   if (execute && (typeof fulfill !== 'function' || typeof journal?.get !== 'function' || typeof journal?.put !== 'function')) {
     throw new Error('live execution requires a readable/writable journal and fulfillment source');
   }
   if (journal !== undefined && journal !== null && typeof journal.get !== 'function') throw new Error('invalid journal');
+  if (typeof beforePayment !== 'function') throw new Error('invalid pre-payment guard');
   if (repositoryLookup !== undefined && typeof repositoryLookup !== 'function') throw new Error('invalid GitHub reference lookup');
   if (execute && Array.isArray(goals) && goals.some(goal => goal?.resource === 'storage') && typeof readStorage !== 'function') {
     throw new Error('live storage execution requires provider readback before payment');
@@ -179,6 +180,7 @@ export async function runResourceAgent({ contractId, ownerAccountId, goals, getQ
     log('[resource-agent] Batch preflight passed; these non-atomic views are not a guarantee.');
     const indexById = new Map(plan.requests.map((request, index) => [request.id, index]));
     payments = await runProcurement({ plan, provider, account, publicKey, journal, journalRoutes, execute: true, durablePayment, log, stopOnBlocked: true,
+      beforePayment,
       onCheck: check => {
         if (check.status === 'BLOCKED' || check.status === 'DEFERRED') {
           const index = indexById.get(check.id);

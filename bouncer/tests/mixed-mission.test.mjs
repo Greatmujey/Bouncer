@@ -131,6 +131,33 @@ test('oracle-led multi-resource mission verifies independent delivery before FT 
   assert.deepEqual(f.calls, ['oracle-preview', 'ft-preview', 'oracle-send', 'ft-execute']);
 });
 
+test('oracle timestamp is rechecked between resource payments and after an async guard', async () => {
+  const now = 1_700_000_000, realNow = Date.now, f = oracleFixture(now);
+  let paid = 0;
+  try {
+    Date.now = () => now * 1000;
+    f.runners.resources = async ({ execute, beforePayment }) => {
+      if (!execute) return { payments: { blocked: 0 }, deliveries: [] };
+      await beforePayment({ id: 'storage-1' }); paid++;
+      Date.now = () => (now + 301) * 1000;
+      await beforePayment({ id: 'api-1' }); paid++;
+      return { payments: { blocked: 0 }, deliveries: [] };
+    };
+    await assert.rejects(runMixedMission({ ...f.options, execute: true }), /too old/);
+    assert.equal(paid, 1);
+    Date.now = () => now * 1000; paid = 0;
+    const g = oracleFixture(now);
+    g.options.resources.beforePayment = async () => { Date.now = () => (now + 301) * 1000; };
+    g.runners.resources = async ({ execute, beforePayment }) => {
+      if (!execute) return { payments: { blocked: 0 }, deliveries: [] };
+      await beforePayment({ id: 'storage-1' }); paid++;
+      return { payments: { blocked: 0 }, deliveries: [] };
+    };
+    await assert.rejects(runMixedMission({ ...g.options, execute: true }), /too old/);
+    assert.equal(paid, 0);
+  } finally { Date.now = realNow; }
+});
+
 test('an expired recovered price cannot authorize later resource payments', async () => {
   const f = oracleFixture(Math.floor(Date.now() / 1000) - 301);
   f.entries.set(f.oracle.id, { status: 'completed' });

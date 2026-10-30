@@ -34,6 +34,7 @@ export async function runMixedMission({ outlayer, resources, provider, journal, 
   const goal = kind === 'oracle' ? validateOracleGoal(outlayer?.goal) : validateOutlayerGoal(outlayer?.goal);
   if (!resources || resources.contractId !== goal.contract_id || resources.ownerAccountId !== goal.owner_account_id ||
       !Array.isArray(resources.goals) || !resources.goals.length) throw new Error('both mission paths must share the reviewed contract and owner');
+  if (resources.beforePayment !== undefined && typeof resources.beforePayment !== 'function') throw new Error('invalid pre-payment guard');
   const ids = resources.goals.map(item => item?.id);
   if (ids.some(id => typeof id !== 'string' || !id || id === goal.id) || new Set(ids).size !== ids.length) {
     throw new Error('mission goal IDs must be distinct across both paths');
@@ -82,7 +83,15 @@ export async function runMixedMission({ outlayer, resources, provider, journal, 
   if (kind === 'oracle') assertOracleFreshForUse(independent.delivery);
   // runResourceAgent repeats its non-atomic preview, recovers prior FT
   // deliveries first, and checks each paid result before the next FT payment.
-  const delivered = await runFT({ ...common, execute: true });
+  // A batch may take long enough for the oracle result to expire in between:
+  // recheck it immediately before EACH new payment, including after any custom
+  // async guard. This is an off-chain timing check, not authenticated market
+  // freshness or an on-chain constraint.
+  const delivered = await runFT({ ...common, execute: true, beforePayment: async request => {
+    if (kind === 'oracle') assertOracleFreshForUse(independent.delivery);
+    if (resources.beforePayment) await resources.beforePayment(request);
+    if (kind === 'oracle') assertOracleFreshForUse(independent.delivery);
+  } });
   if (!delivered?.payments || !Array.isArray(delivered.deliveries)) throw new Error('invalid FT batch result');
   const complete = !delivered.payments.blocked && !delivered.payments.deferred && delivered.deliveries.length === ids.length;
   return { status: complete ? 'FULFILLED' : 'INCOMPLETE', independent, resources: delivered };

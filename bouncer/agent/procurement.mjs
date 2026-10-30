@@ -86,9 +86,9 @@ export function requestFingerprint(request) {
  * is sent. An unresolved pending entry is never retried automatically.
  */
 export async function runProcurement({ plan: rawPlan, provider, account, publicKey, journal, journalRoutes, execute = false,
-  durablePayment = false, log = console.log, onCheck = () => {}, onPaid = async () => {}, stopOnBlocked = false }) {
+  durablePayment = false, log = console.log, onCheck = () => {}, beforePayment = async () => {}, onPaid = async () => {}, stopOnBlocked = false }) {
   const plan = validatePlan(rawPlan);
-  if (typeof onPaid !== 'function' || typeof stopOnBlocked !== 'boolean' || typeof durablePayment !== 'boolean') throw new Error('invalid procurement execution hooks');
+  if (typeof beforePayment !== 'function' || typeof onPaid !== 'function' || typeof stopOnBlocked !== 'boolean' || typeof durablePayment !== 'boolean') throw new Error('invalid procurement execution hooks');
   let routes;
   if (journalRoutes !== undefined) {
     if (!(journalRoutes instanceof Map) || journalRoutes.size !== plan.requests.length) throw new Error('invalid payment journal routes');
@@ -192,6 +192,11 @@ export async function runProcurement({ plan: rawPlan, provider, account, publicK
       signed = signedTransaction;
       pending = { ...pending, payment_version: 'direct-signed-v1', agent_public_key: String(publicKey), tx_hash: txHash };
     }
+    // A mission may impose an additional time-sensitive condition. Check it
+    // immediately before journaling/broadcasting each *new* payment, not just
+    // once at batch preview. A rejection here leaves no pending entry; no
+    // signed bytes have been broadcast or persisted.
+    await beforePayment(Object.freeze({ ...request }));
     journal.put(request.id, pending);
     try {
       const result = durablePayment
