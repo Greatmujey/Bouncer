@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { runMixedMission } from '../agent/mixed-mission.mjs';
+import { ORACLE_NEAR_INPUT, ORACLE_TESTNET_PROGRAM } from '../agent/oracle-outlayer.mjs';
 
 const goal = { id: 'independent-1', contract_id: 'bouncer.testnet', owner_account_id: 'owner.testnet',
   policy_id: 'independent', amount: '100', input: { min: 1, max: 100 },
@@ -104,4 +105,45 @@ test('rejects cross-contract, cross-owner and colliding goal IDs before prefligh
   await assert.rejects(runMixedMission({ ...f.options, resources: { ...f.options.resources, ownerAccountId: 'other.testnet' } }), /share the reviewed/);
   await assert.rejects(runMixedMission({ ...f.options, resources: { ...f.options.resources, goals: [{ id: goal.id }] } }), /distinct/);
   assert.deepEqual(f.calls, []);
+});
+
+function oracleFixture(timestamp = Math.floor(Date.now() / 1000)) {
+  const f = fixture();
+  const oracle = { id: 'market-price', contract_id: goal.contract_id, owner_account_id: goal.owner_account_id,
+    policy_id: 'oracle-data', amount: '100', route: { program: { ...ORACLE_TESTNET_PROGRAM }, input_data: JSON.stringify(ORACLE_NEAR_INPUT),
+      route_revision: 1, policy_revision: 1, payee_revision: 1, active: true }, max_age_seconds: 300 };
+  const delivery = { tx_hash: 'oracle-tx', result: { timestamp, price_usd: 2.5 }, max_age_seconds: 300 };
+  f.options.outlayer = { kind: 'oracle', goal: oracle };
+  f.runners.outlayer = async ({ execute }) => {
+    f.calls.push(execute ? 'oracle-send' : 'oracle-preview');
+    if (!execute) return { status: 'READY' };
+    f.entries.set(oracle.id, { status: 'completed', delivery });
+    return { status: 'FULFILLED', delivery };
+  };
+  f.runners.recover = async () => { f.calls.push('oracle-recover'); return { status: 'REUSED', delivery }; };
+  return { ...f, oracle };
+}
+
+test('oracle-led multi-resource mission verifies independent delivery before FT payments', async () => {
+  const f = oracleFixture();
+  const result = await runMixedMission({ ...f.options, execute: true });
+  assert.equal(result.status, 'FULFILLED'); assert.equal(result.independent.delivery.result.price_usd, 2.5);
+  assert.deepEqual(f.calls, ['oracle-preview', 'ft-preview', 'oracle-send', 'ft-execute']);
+});
+
+test('an expired recovered price cannot authorize later resource payments', async () => {
+  const f = oracleFixture(Math.floor(Date.now() / 1000) - 301);
+  f.entries.set(f.oracle.id, { status: 'completed' });
+  await assert.rejects(runMixedMission({ ...f.options, execute: true }), /too old/);
+  assert.deepEqual(f.calls, ['oracle-recover', 'ft-preview']);
+});
+
+test('a future price or failed independent result cannot trigger FT execution', async () => {
+  const f = oracleFixture(Math.floor(Date.now() / 1000) + 31);
+  await assert.rejects(runMixedMission({ ...f.options, execute: true }), /future/);
+  assert.deepEqual(f.calls, ['oracle-preview', 'ft-preview', 'oracle-send']);
+  const g = oracleFixture();
+  g.runners.outlayer = async ({ execute }) => execute ? Promise.reject(new Error('unverified oracle result')) : { status: 'READY' };
+  await assert.rejects(runMixedMission({ ...g.options, execute: true }), /unverified oracle/);
+  assert.deepEqual(g.calls, ['ft-preview']);
 });

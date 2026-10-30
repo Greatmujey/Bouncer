@@ -79,11 +79,11 @@ that all six are complete.
 
 ## Contract capabilities in this branch
 
-The source in this branch reports v7 and needs a **fresh deployment**; no
+The source in this branch reports v8 and needs a **fresh deployment**; no
 migration from older state is provided. Two incompatible earlier layouts both
 reported v6, so a version string alone does not establish upgrade safety. The
-checked-in `bouncer.wasm` is the CI-built v7 artifact (SHA-256
-`65e11e3367cd792a74c9436b6c8b3db6341ddfb18205956a451cb165b38d9413`).
+checked-in `bouncer.wasm` is the CI-built v8 artifact (SHA-256
+`23b6fe30b53f423be06fa508ee2b3a92a57a7aec00094c3a1ade5d52ea8bab88`).
 CI checks that its version marker matches the source; this sanity check is not
 an audit or proof that a deployed contract has the same code. Earlier live
 runs used the fresh WASM built by their own CI jobs.
@@ -108,6 +108,12 @@ runs used the fresh WASM built by their own CI jobs.
   same cap, budget and allowlist controls. The **full maximum deposit** remains
   counted against the budget; OutLayer's unused deposit goes directly to the
   owner, not back into the Bouncer vault. It is not an FT payment.
+- V8 adds `execute_outlayer_pinned`: the owner pins the exact input as well as
+  the program and policy/payee revisions. The new agent key must be restricted
+  **only** to that method; the older `execute_outlayer` method still permits
+  an authorized key to choose input. Edits and revocations invalidate old
+  pinned routes. A testnet single-source price runner and mixed-mission path
+  are provided; their live outcome is reported separately, not assumed.
 
 The updated check is designed to use a real restricted key to pay wNEAR, deny
 other callers and policies, revoke a payee and a key, and test both layers of

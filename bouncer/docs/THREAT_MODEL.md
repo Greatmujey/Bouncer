@@ -32,6 +32,10 @@ It has not been audited and must not hold valuable funds.
   not establish provider delivery. V7 also tracks conservative OutLayer
   prepaid credit and requires separate native and token policies, grants and
   caps for an owner-pinned priced project.
+- V8 adds a separate owner-pinned native program **and exact input** route,
+  with policy/payee/route revisions. It only constrains a key installed to call
+  `execute_outlayer_pinned` alone; the legacy `execute_outlayer` method still
+  allows that method's authorized key to choose its input.
 
 A [v4 testnet run](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40558301848)
 verified a restricted-key payment, both escalation-guard layers and a failed FT
@@ -143,8 +147,8 @@ possible callback, provider or token failure cases.
    independent attestations.
 10. **Prior contracts are unsafe to upgrade without migration.** Older contracts
    have different state and authorization; v3 and v4 interpret budget bucket
-   keys differently, and v5, both v6 layouts and v7 add incompatible state.
-   Deploy v7 fresh; no migration is supplied. A reported version is not proof
+   keys differently, and v5, both v6 layouts, v7 and v8 add incompatible state.
+   Deploy v8 fresh; no migration is supplied. A reported version is not proof
    of code identity. Hourly spend buckets are not pruned and incur ongoing
    state/storage costs; the 25 reads per check also consume gas.
 11. **OutLayer is a trusted independent service, not trustless compute.** The

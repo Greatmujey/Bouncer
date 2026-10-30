@@ -2,7 +2,7 @@
 
 Bouncer v5 and later can pay an independently operated provider, `outlayer.testnet`,
 for a **bounded random-number example**. That particular integration uses
-native testnet NEAR, not wNEAR, USDC or another fungible token. The current v7
+native testnet NEAR, not wNEAR, USDC or another fungible token. The current v8
 source also supports a separately guarded prepaid FT funding and priced
 connector path; its live test used fake USDC.e and returned HTTP 405, not useful
 API data. Storage, API/data and the other compute examples still use Bouncer's
@@ -59,6 +59,15 @@ does not imply provider misconduct.
   owner signer, key grant, payee allowlist, native vault, per-call cap, rolling
   daily budget, exact program and an at-most-4096-byte JSON object. The JS
   runner further restricts the random-number input and output.
+- V8 additionally provides `set_outlayer_input` and
+  `execute_outlayer_pinned`. The owner pins an entire JSON input and the exact
+  program, and installs an agent key scoped **only** to the pinned method.
+  Route, policy, payee and program edits invalidate earlier signed routes. The
+  legacy `execute_outlayer` method still allows that method's key to supply
+  its own input: do not give it to an agent that needs exact-input isolation.
+  The oracle runner verifies receipts and a single-source result, but trusts the
+  provider/RPC and does not verify TEE attestation or market-data accuracy. A
+  worker timestamp is not authenticated freshness of the upstream market data.
 - OutLayer receives the specified maximum deposit. Bouncer immediately debits
   and counts that **entire maximum**, even if OutLayer charges less. For an
   accepted execution the provider is instructed to refund unused native NEAR
@@ -107,7 +116,7 @@ reviewed goals and journals.
 
 ## Try the mixed mission
 
-The optional demo creates **fresh testnet accounts**, a v7 deployment, synthetic
+The optional demo creates **fresh testnet accounts**, a v8 deployment, synthetic
 FTs, local development services and a small native OutLayer budget. It uses two
 separate restricted keys and saves them privately in
 `~/.near-credentials/testnet/`; goals and journals are in `~/.bouncer/testnet/`.

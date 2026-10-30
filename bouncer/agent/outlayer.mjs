@@ -46,7 +46,7 @@ function unsigned(value, label) {
   if (typeof value !== 'string' || !/^(?:0|[1-9][0-9]{0,38})$/.test(value) || BigInt(value) > MAX_U128) throw new Error(`invalid ${label}`);
   return BigInt(value);
 }
-function normalizeProgram(value) {
+export function normalizeProgram(value) {
   if (!ownKeys(value, PROGRAM_KEYS)) throw new Error('program must contain exactly the owner-reviewed fields');
   const url = boundedString(value.url, 'program URL', 512);
   let parsed;
@@ -105,7 +105,7 @@ function events(result, name) {
       try {
         const event = JSON.parse(log.slice('EVENT_JSON:'.length));
         if (event.standard === 'near-outlayer' && event.event === name && Array.isArray(event.data)) {
-          for (const data of event.data) out.push({ data, outcome: receipt.outcome, receiptId: receipt.id });
+          for (const data of event.data) out.push({ data, outcome: receipt.outcome, receiptId: receipt.id, blockHash: receipt.block_hash });
         }
       } catch { /* Unrelated malformed logs are not evidence. */ }
     }
@@ -113,13 +113,11 @@ function events(result, name) {
   return out;
 }
 
-/**
- * Verify FINAL transaction and actual request/refund receipts against the exact
- * owner-reviewed order. This trusts the RPC and OutLayer contract. It does not
- * independently verify TEE attestation or the statistical quality of entropy.
+/** Shared receipt verification for an already validated OutLayer goal.
+ * Callers must validate their own goal, signed method/arguments and output.
+ * This trusts the RPC and provider; it does not verify TEE attestations.
  */
-export function verifyOutlayerResult(rawGoal, result, publicKey) {
-  const goal = validateOutlayerGoal(rawGoal);
+export function verifyOutlayerEvidence(goal, result, publicKey, methodName, signedArgs) {
   const tx = result?.transaction, txHash = result?.transaction_outcome?.id;
   if (result?.final_execution_status !== 'FINAL' || typeof result.status?.SuccessValue !== 'string' || !validHash(txHash)) {
     throw new Error('transaction is not a successful FINAL result');
@@ -129,8 +127,8 @@ export function verifyOutlayerResult(rawGoal, result, publicKey) {
     throw new Error('transaction does not match the reviewed owner, contract and key');
   }
   const signed = tx.actions[0]?.FunctionCall;
-  if (!signed || signed.method_name !== 'execute_outlayer' || String(signed.deposit) !== '0' ||
-      !equal(decodeJson(signed.args, 'signed arguments'), expectedArgs(goal))) throw new Error('signed transaction does not match the reviewed goal');
+  if (!signed || signed.method_name !== methodName || String(signed.deposit) !== '0' ||
+      !equal(decodeJson(signed.args, 'signed arguments'), signedArgs)) throw new Error('signed transaction does not match the reviewed goal');
   if (!Array.isArray(result.receipts_outcome) || !result.receipts_outcome.length ||
       result.receipts_outcome.some(r => !successful(r?.outcome?.status)) || !Array.isArray(result.receipts)) {
     throw new Error('receipt outcomes are failed, incomplete or missing');
@@ -182,13 +180,21 @@ export function verifyOutlayerResult(rawGoal, result, publicKey) {
     if (transfers.length !== 1) throw new Error('provider refund to the owner was not confirmed by a receipt');
   }
   const output = decodeJson(result.status.SuccessValue, 'provider result', 4096);
+  return { tx_hash: txHash, provider: OUTLAYER, asset: 'NEAR', maximum_yocto: goal.amount,
+    charged_yocto: charged.toString(), refunded_to_owner_yocto: refund.toString(), program_sha256: program.sha256,
+    result: output, completion_block_hash: completed[0].blockHash };
+}
+
+/** Verify the bounded random task after the shared payment/receipt checks. */
+export function verifyOutlayerResult(rawGoal, result, publicKey) {
+  const goal = validateOutlayerGoal(rawGoal);
+  const { completion_block_hash, ...evidence } = verifyOutlayerEvidence(goal, result, publicKey, 'execute_outlayer', expectedArgs(goal));
+  const output = evidence.result;
   if (!ownKeys(output, ['random_number']) || !Number.isSafeInteger(output.random_number) ||
       output.random_number < goal.input.min || output.random_number > goal.input.max) {
     throw new Error('provider result is not a random number inside the requested range');
   }
-  return { tx_hash: txHash, provider: OUTLAYER, asset: 'NEAR', maximum_yocto: goal.amount,
-    charged_yocto: charged.toString(), refunded_to_owner_yocto: refund.toString(), program_sha256: program.sha256,
-    result: output, verification: 'trusted RPC and provider receipts; output range only; no TEE or randomness proof' };
+  return { ...evidence, verification: 'trusted RPC and provider receipts; output range only; no TEE or randomness proof' };
 }
 
 /** Re-check an existing payment by hash. This path has no signer and cannot send. */
