@@ -45,6 +45,18 @@ production reliability, independent storage/API service, FT payment to this
 native compute example or a real-value stablecoin purchase. The local fault
 does not imply provider misconduct.
 
+## Pinned price-data attempt
+
+V8 adds a pinned-input single-source price lookup and a mixed mission that can
+include the returned value in development-resource orders. The first
+[opt-in live test](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41069232857/job/124109266232)
+proved that changing the pinned input and exceeding the native cap were rejected
+on chain, but [the requested lookup](https://testnet.nearblocks.io/txns/8hqLZGkuYAgB8EqMhjN58MeGcLNApHJ7EFi5jLNhk2Dy)
+returned `null`. Recovery did not accept it as delivery, and no subsequent
+resource purchases were sent. The existing transaction is being inspected
+read-only; it must not be automatically retried. This is not yet evidence of a
+successful independent price-data purchase.
+
 ## Asset and policy semantics
 
 - `deposit_native` tracks an explicit native vault balance, distinct from FTs,

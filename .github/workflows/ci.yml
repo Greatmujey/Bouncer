@@ -303,6 +303,22 @@ jobs:
           fi
           exit "$result"
 
+  oracle-transaction-inspection:
+    name: Reconcile one existing oracle transaction (read only)
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[oracle-inspect]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      - name: Inspect existing final receipts without signing or spending
+        run: node bouncer/scripts/inspect-testnet-transaction.mjs 8hqLZGkuYAgB8EqMhjN58MeGcLNApHJ7EFi5jLNhk2Dy owner.bouncer-oracle-576a1d53.testnet
+
   oracle-ecosystem-discovery:
     name: Independent testnet oracle discovery (read only)
     if: github.event_name == 'push' && contains(github.event.head_commit.message, '[oracle-discovery]')
