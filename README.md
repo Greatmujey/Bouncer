@@ -410,8 +410,11 @@ The experimental [seller verification SDK](bouncer/packages/provider-sdk/README.
 lets a testnet provider check a reviewed order against the finalized Bouncer
 transaction, actual token-transfer receipt and callback. The local development
 provider now uses it and protects one data directory with an exclusive lock and
-fsync-backed state/object writes. This is not distributed replay protection or
-proof that an independent FT seller has adopted the protocol.
+fsync-backed state/object writes. A [read-only check of three existing Circle
+testnet payments](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41101505909/job/124219376411)
+passed against FINAL RPC receipts and rejected a substituted seller. These
+payments were to our own development provider. This is not distributed replay
+protection or proof that an independent FT seller has adopted the protocol.
 
 The resource agent recomputes bounded SHA-256 and text-statistics results,
 checks a single storage readback against the ordered bytes, and checks GitHub
