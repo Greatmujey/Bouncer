@@ -86,24 +86,28 @@ test('current balance read fails closed on HTTP, RPC, and malformed values', asy
   }
 });
 
-test('latest paid-provider mission points to the verified separate-owner testnet run', () => {
-  assert.equal(LATEST_MISSION.account, 'bouncer-ft-07c759b0.testnet');
-  assert.equal(LATEST_MISSION.owner, 'owner.bouncer-ft-07c759b0.testnet');
+test('latest oracle-led mission links to the verified testnet data and three resource payments', () => {
+  assert.equal(LATEST_MISSION.account, 'bouncer-oracle-6a42bf32.testnet');
+  assert.equal(LATEST_MISSION.owner, 'owner.bouncer-oracle-6a42bf32.testnet');
   assert.notEqual(LATEST_MISSION.account, LATEST_MISSION.owner);
-  assert.equal(LATEST_MISSION.testToken, 'usdc.fakes.testnet');
-  assert.equal(LATEST_MISSION.fundingMicro, '15000');
-  assert.equal(LATEST_MISSION.probeHttpStatus, 405);
+  assert.equal(LATEST_MISSION.testToken, '3e2210e1184b45b64c8a434c0a7e7b23cc04ea7eb7a6c3c32520d03d4afcb8af');
+  assert.equal(LATEST_MISSION.resourceMicroUsdc, '1000');
+  assert.equal(LATEST_MISSION.priceUsd, '4.27625');
   const html = fs.readFileSync(new URL('../web/index.html', import.meta.url), 'utf8');
-  for (const key of ['fundingTx', 'probeTx', 'computeTx', 'storageTx', 'apiTx']) {
+  for (const key of ['setupSwapTx', 'fundingTx', 'oracleTx', 'computeTx', 'storageTx', 'apiTx']) {
     assert.match(LATEST_MISSION[key], /^[1-9A-HJ-NP-Za-km-z]{43,44}$/);
     assert.ok(html.includes(explorerTx(LATEST_MISSION[key])), `missing link for ${key}`);
   }
   assert.ok(html.includes(LATEST_MISSION.actionUrl));
   assert.ok(html.includes(LATEST_MISSION.aiActionUrl));
-  assert.match(html, /probe returned a status—not useful API data/);
-  assert.match(html, /fake testnet USDC\.e/);
-  assert.match(html, /already settled when the unified mission resumed/);
-  assert.match(html, /locally corrupted result blocked later payments/);
+  assert.match(html, /Coinbase’s public endpoint through OutLayer/);
+  assert.match(html, /testnet NEAR/);
+  assert.match(html, /Circle testnet USDC/);
+  assert.match(html, /self-hosted development examples/);
+  assert.match(html, /no real value/);
+  assert.match(html, /not independently verified for accuracy or market freshness/);
+  assert.match(html, /intentionally corrupted result stopped later payments/);
+  assert.match(html, /independent execution was not paid in USDC/);
   assert.match(html, /process is non-atomic/);
   assert.equal((html.match(/class="track-card"/g) || []).length, 6);
 });

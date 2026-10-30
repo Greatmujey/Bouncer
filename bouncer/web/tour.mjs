@@ -8,7 +8,7 @@ const steps = [
   {
     kicker: 'SEE THE WHOLE JOURNEY', title: 'From a need to a result.',
     description: 'A request gets a quote, passes policy checks, pays on NEAR testnet, and is fulfilled and verified.',
-    callout: 'The latest paid provider probe and three resource examples are recorded results, not new orders.',
+    callout: 'The latest independent price execution and three resource examples are recorded results, not new orders.',
   },
   {
     kicker: 'YOU STAY IN CONTROL', title: 'Your wallet, your rules.',
