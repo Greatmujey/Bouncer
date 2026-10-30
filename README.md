@@ -4,10 +4,11 @@ Bouncer aims to let an AI agent buy compute, storage and API/data resources
 with owner-defined spending policies across NEAR assets. Its testnet prototype
 has paid three fungible tokens and Circle's canonical **testnet USDC** for
 self-hosted development services. Testnet USDC has no real-world value. It has
-also paid independently operated OutLayer for bounded native-NEAR compute and
-for a connectivity probe funded with fake testnet USDC.e and native NEAR. The
-probe returned HTTP 405: a paid status response, not useful API data or a
-commercial service. An optional model translates objectives into tasks within
+also paid independently operated OutLayer in native testnet NEAR for bounded
+compute and a single-source public price lookup; the returned value was used
+in three Circle-funded development-resource orders. A separate probe funded
+with fake testnet USDC.e and native NEAR returned HTTP 405, not useful API data
+or a commercial service. An optional model translates objectives into tasks within
 an owner-controlled catalog; it does not choose financial authority. Bounded
 delivery checks and a local journal gate later payments. See
 [AI agent setup](bouncer/docs/AI_AGENT.md) and
@@ -70,10 +71,10 @@ that all six are complete.
 
 | Track | Evidence today | Still needed |
 | --- | --- | --- |
-| AI Security & Defense | 1-yocto owner guard, scoped keys, caps and delivery gating. | Independent audit and stronger prompt defenses. |
-| Agent Economy | Paid independent test probe and bounded FT resource purchases. | Useful commercial API/storage providers and signed receipts. |
-| Autonomous Business | AI task planning, approved-provider selection, payments and recovery. | Real customers, invoicing and production operations. |
-| Real-World Money | Circle testnet USDC paid for three development resources; fake USDC.e funded a separate probe. | Independent providers and real-money rails; testnet USDC has no real value. |
+| AI Security & Defense | 1-yocto guard, scoped keys, caps, pinned project/input and delivery gating. | Independent audit and stronger prompt defenses. |
+| Agent Economy | Native-paid independent price execution feeds three FT-paid development resources. | Independent FT-paid commercial API/storage providers and signed receipts. |
+| Autonomous Business | AI planning in a separate run; multi-resource payments, delivery checks and recovery. | Real customers, invoicing and production operations. |
+| Real-World Money | Circle testnet USDC paid for three self-hosted resources; fake USDC.e funded a separate probe. | Independent providers and real-money rails; testnet USDC has no real value. |
 | Unstoppable DeFi | Owner-setup Ref testnet swaps acquired test tokens, including Circle testnet USDC. | Agent-guarded swaps and cross-chain settlement. |
 | AI Swarms | One coordinator sequences multiple resources. | Multiple autonomous agents and secure handoffs. |
 
@@ -153,8 +154,10 @@ Offline mocks are not proof of on-chain behavior.
   are editable records, not signed invoices. The separate public catalog search
   is read-only, not a purchasing integration. OutLayer uses its own native and
   prepaid FT interfaces, not this experimental FT-provider protocol. The paid
-  connector returned HTTP 405 rather than useful API data. Independent useful
-  storage/API purchases, invoices, real-value stablecoin payments and NEAR Intents remain unfinished.
+  connector returned HTTP 405 rather than useful API data. The separate native
+  price execution consumes a public endpoint, not an FT-paid API subscription.
+  Independent FT-paid storage/commercial API purchases, invoices, real-value
+  stablecoin payments and NEAR Intents remain unfinished.
 - Token trust is not enforced; configure policies only for trusted FTs. The
   planner and configured development provider accept owner-pinned 64-hex token
   IDs on a testnet-reported RPC. The independent OutLayer probe used fake
@@ -310,6 +313,36 @@ and then fulfilled AI-planned compute, storage, API and public-data goals using
 three FTs and self-hosted development providers. The model did not select the
 OutLayer task. An injected FT-result fault stopped later payments until the same
 transaction was recovered. See [setup, recovery and trust boundaries](bouncer/docs/OUTLAYER.md).
+
+### Oracle-led Circle testnet mission
+
+In the [v9 live test](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41073097919/job/124122803916),
+Bouncer paid [OutLayer](https://testnet.nearblocks.io/txns/4MCH1jvtrz43trdnjvxQfkVuLXN4a9nhtyzPt8kM95yZ)
+for an owner-pinned project version and exact request to Coinbase's public
+NEAR/USD endpoint. The project returned **4.27625 USD** as a single-source
+number. OutLayer reported charging `1111600000000000000000` yoctoNEAR and
+refunding `98888400000000000000000` to the owner; Bouncer retained the full
+`100000000000000000000000` maximum against the rolling budget. An injected
+lost response was recovered by the original hash without a key or second send.
+
+The returned number was included in three separate orders, paid with 1,000
+micro-units each of Circle **testnet** USDC: [compute](https://testnet.nearblocks.io/txns/7XxeU466RVYvVN3wBrWqXHu2zeHHyFPcs4WhNuFX2GbJ),
+[storage](https://testnet.nearblocks.io/txns/GJkJMWBF2CCh1H5uh9uAKJJciTsqcvcgKvNXvnJrEvjL),
+and [API](https://testnet.nearblocks.io/txns/7RxBwG4G6FRqG1o2shYRN2ES2WsxVFdEMd8NWp7zA5vy).
+A corrupted compute delivery stopped later purchases; recovery reused the first
+payment before continuing. Both layers of the 1-yocto escalation guard and the
+request-substitution and per-transaction-cap checks rejected their probes. The
+owner's [Ref setup swap](https://testnet.nearblocks.io/txns/CqXgcgZ5RuN4n5hTgkgZFx51EH5t1WeVU7SsiNyNeVwt)
+and [vault funding](https://testnet.nearblocks.io/txns/BaScmpZxC7tqAdQC515A3xoj8ev9exFxsN7T4KjHFppw)
+were owner setup actions, not guarded agent purchases.
+
+The price was paid for with **native testnet NEAR**, not USDC; Coinbase's data
+endpoint is public, and the three FT-funded products came from our self-hosted
+development provider. The oracle returns only a numeric field and a worker
+request timestamp: neither the original response, market freshness, accuracy,
+consensus nor TEE attestation is independently verified. Payments and previews
+are non-atomic; later failure cannot undo earlier purchases. See [the full
+failure history and trust boundaries](bouncer/docs/OUTLAYER.md).
 
 ### Paid-provider mission and recovery
 

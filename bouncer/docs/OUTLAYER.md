@@ -5,8 +5,10 @@ for a **bounded random-number example**. That particular integration uses
 native testnet NEAR, not wNEAR, USDC or another fungible token. The current v9
 source also supports a separately guarded prepaid FT funding and priced
 connector path; its live test used fake USDC.e and returned HTTP 405, not useful
-API data. Storage, API/data and the other compute examples still use Bouncer's
-self-hosted development services. This is unaudited software; do not use real funds.
+API data. A separate v9 native execution has since returned a single-source
+public price; the FT-funded compute, storage and text-API services in that
+mission remain self-hosted development services. This is unaudited software;
+do not use real funds.
 
 ## What has been demonstrated
 
@@ -45,7 +47,7 @@ production reliability, independent storage/API service, FT payment to this
 native compute example or a real-value stablecoin purchase. The local fault
 does not imply provider misconduct.
 
-## Pinned price-data attempt
+## Pinned price-data mission and earlier failures
 
 V8 adds a pinned-input single-source price lookup and a mixed mission that can
 include the returned value in development-resource orders. The first
@@ -69,18 +71,35 @@ application-level HTTP error, charging `1120300000000000000000` yoctoNEAR and
 refunding `98879700000000000000000` to the owner. [Read-only reconciliation](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41072024180/job/124118338158)
 confirmed the project ID, UUID and resolved hash. Both the zero-deposit contract
 guard and the protocol's one-yocto restricted-key guard rejected escalation
-probes. This hash must not be resent. Useful independent data delivery remains
-unproven.
+probes. This hash must not be resent.
 
-A separate [read-only research probe](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41072024180/job/124118338158)
-found Coinbase's public NEAR/USD spot endpoint reachable from the GitHub runner;
-that does **not** establish reachability from OutLayer's workers. The next
-explicitly different test pins that exact GET URL and `data.amount` field in the
-owner's project input, with no headers, body, secrets or agent-selected URL. The
-oracle returns only a number and the label `custom`, not the original Coinbase
-response; the endpoint, provider and RPC remain trusted, and its timestamp is
-the worker's rather than a verified market-observation time. See [Coinbase's
-public endpoint documentation](https://docs.cdp.coinbase.com/coinbase-business/track-apis/prices).
+A [read-only research probe](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41072024180/job/124118338158)
+found Coinbase's public NEAR/USD endpoint reachable from the GitHub runner,
+which alone did not establish OutLayer worker reachability. An explicitly
+separate [successful v9 mission](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41073097919/job/124122803916)
+then pinned the exact GET URL and `data.amount` field in the owner's Project
+input, with no headers, body, secrets or agent-selected URL. The independently
+operated OutLayer [execution](https://testnet.nearblocks.io/txns/4MCH1jvtrz43trdnjvxQfkVuLXN4a9nhtyzPt8kM95yZ)
+returned `4.27625` USD, reported a native charge of `1111600000000000000000`
+yoctoNEAR and a `98888400000000000000000` owner refund, and was recovered by
+its original hash after an injected lost response. The full 0.1-NEAR maximum
+remained in Bouncer's rolling budget. The input, cap, zero-deposit owner guard
+and one-yocto restricted-key guard rejected adversarial probes.
+
+The returned number was included in three orders to a **self-hosted** development
+provider: Circle testnet USDC paid [compute](https://testnet.nearblocks.io/txns/7XxeU466RVYvVN3wBrWqXHu2zeHHyFPcs4WhNuFX2GbJ),
+[storage](https://testnet.nearblocks.io/txns/GJkJMWBF2CCh1H5uh9uAKJJciTsqcvcgKvNXvnJrEvjL)
+and [API](https://testnet.nearblocks.io/txns/7RxBwG4G6FRqG1o2shYRN2ES2WsxVFdEMd8NWp7zA5vy),
+1,000 micro-units each. A deliberately corrupted compute result stopped the
+other two payments until recovery reused the existing first FT transaction.
+The owner's setup swap and funding were not guarded agent purchases. The test
+uses no real-value USDC, and does not pay an independent provider in FT.
+
+The oracle returns only a number and the label `custom`, not the original
+Coinbase response; the endpoint, provider and RPC remain trusted. Its timestamp
+is the worker's, not a verified market-observation time; no TEE attestation,
+consensus, accuracy, commercial SLA or production readiness was established.
+See [Coinbase's public endpoint documentation](https://docs.cdp.coinbase.com/coinbase-business/track-apis/prices).
 
 ## Asset and policy semantics
 
@@ -102,11 +121,6 @@ public endpoint documentation](https://docs.cdp.coinbase.com/coinbase-business/t
   Route, policy, payee and program edits invalidate earlier signed routes. The
   legacy `execute_outlayer` method still allows that method's key to supply
   its own input: do not give it to an agent that needs exact-input isolation.
-  The oracle runner verifies receipts and a single-source result, but trusts the
-  provider/RPC and does not verify TEE attestation or market-data accuracy. A
-  worker timestamp is not authenticated freshness of the upstream market data.
-  Oracle-led batches recheck that timestamp before each new FT payment; an
-  expiry stops later purchases but cannot undo earlier ones.
 - V9 separately pins a native-only **Project** version and exact JSON input via
   `set_outlayer_native_project`; its key is restricted to
   `execute_outlayer_native_project`. The runner checks the public registry's
@@ -114,7 +128,12 @@ public endpoint documentation](https://docs.cdp.coinbase.com/coinbase-business/t
   verifies that the final provider request carried that UUID and resolved hash.
   Those preflight views are non-atomic and provider-owned code/registry can
   change. Post-payment verification is not a refund or code attestation. This
-  route sends `params: null` and no secrets; no prepaid FT is authorized.
+  route sends `params: null` and no secrets; no prepaid FT is authorized. The
+  oracle runner verifies receipts and a single-source result, but trusts the
+  provider/RPC and does not verify TEE attestation or market-data accuracy. A
+  worker timestamp is not authenticated freshness of the upstream market data.
+  Oracle-led batches recheck that timestamp against the local clock before each
+  new FT payment; expiry stops later purchases but cannot undo earlier ones.
 - OutLayer receives the specified maximum deposit. Bouncer immediately debits
   and counts that **entire maximum**, even if OutLayer charges less. For an
   accepted execution the provider is instructed to refund unused native NEAR

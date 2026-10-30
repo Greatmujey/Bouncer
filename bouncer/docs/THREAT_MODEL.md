@@ -46,8 +46,12 @@ verified a restricted-key payment, both escalation-guard layers and a failed FT
 transfer whose callback restored the vault and daily budget. A separate-owner
 [v5 OutLayer check](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40682550107/job/122797278579)
 verified one independently operated native-NEAR execution and owner refund; it
-checked output range, not TEE attestation or randomness. Neither run proves all
-possible callback, provider or token failure cases.
+checked output range, not TEE attestation or randomness. A [v9 mission](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41073097919/job/124122803916)
+also rejected project-route escalation and substitution probes, recovered a
+native-paid price request, and gated Circle testnet resource payments on
+checked development deliveries. The worker timestamp and single-source value
+are not authenticated market freshness or a price-accuracy proof. These runs do
+not prove all possible callback, provider or token failure cases.
 
 ## Remaining risks
 
