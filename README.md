@@ -18,16 +18,16 @@ unaudited testnet software, not suitable for real funds.
 
 ## Website preview (read-only)
 
-**[Open Bouncer](https://www.madethis.website/s/quy43ezm/)** — a public,
-temporary preview hosted by madethis.website, expiring **4 November 2026 at
-13:14 UTC**. Anyone with the link can view it. It is a snapshot, not a
+**[Open Bouncer](https://www.madethis.website/s/njatdkbb/)** — a public,
+temporary preview hosted by madethis.website, expiring **6 November 2026 at
+14:45 UTC**. Anyone with the link can view it. It is a snapshot, not a
 production deployment, and the private repository remains private.
 
 `bouncer/web/` explains the prototype's request → quote → guarded payment →
-fulfillment flow and links to the latest paid-provider mission and recovery
-proof. It also retains an interactive walkthrough of three real, **recorded**
-requests from an earlier multi-token run. A separate test used a local AI model
-to propose tasks; the latest paid-provider mission used prepared goals. The
+fulfillment flow and links to the latest oracle-led Circle testnet mission and
+recovery proof. It also retains an interactive walkthrough of three real,
+**recorded** requests from an earlier multi-token run. A separate test used a
+local AI model to propose tasks; the latest oracle mission used prepared goals. The
 two credit tokens in the earlier example are synthetic and fulfillment was
 self-hosted. The site
 is not a live agent dashboard or commercial marketplace. It includes an
