@@ -70,8 +70,11 @@ proof that the seller delivered a resource. The three reconstructed historical
 memo vectors can be compared with the public [compute](https://testnet.nearblocks.io/txns/7XxeU466RVYvVN3wBrWqXHu2zeHHyFPcs4WhNuFX2GbJ/execution),
 [storage](https://testnet.nearblocks.io/txns/GJkJMWBF2CCh1H5uh9uAKJJciTsqcvcgKvNXvnJrEvjL/execution)
 and [API](https://testnet.nearblocks.io/txns/7RxBwG4G6FRqG1o2shYRN2ES2WsxVFdEMd8NWp7zA5vy/execution)
-receipts. Those explorer observations alone do not establish that this SDK has
-run against receipt-inclusive RPC data. It does not support Bouncer's
+receipts. A regression test also runs the SDK on a **partial reconstruction**
+of the compute payment from FastNEAR testnet block data at heights 275463446–449.
+Its final status was synthesized and unrelated receipts were omitted; neither
+this fixture nor the explorer establishes that the SDK ran against a complete
+receipt-inclusive RPC response. It does not support Bouncer's
 `execute_ft_call`, OutLayer prepaid projects or arbitrary `execute` gas values.
 A buyer and seller must agree on the exact order/memo and handling of failures.
 
