@@ -188,7 +188,7 @@ export async function runProjectGoal({ goal: rawGoal, provider, account, publicK
   const final = { finality: 'final' };
   const [version, owner, access] = await Promise.all([provider.callFunction(goal.contract_id, 'contract_version', {}, final),
     provider.callFunction(goal.contract_id, 'get_owner', {}, final), provider.viewAccessKey(goal.owner_account_id, publicKey, final)]);
-  if (!['bouncer-agent-v7', 'bouncer-agent-v8'].includes(version) || owner !== goal.owner_account_id) throw new Error('unsupported Bouncer version or unexpected owner');
+  if (!['bouncer-agent-v7', 'bouncer-agent-v8', 'bouncer-agent-v9'].includes(version) || owner !== goal.owner_account_id) throw new Error('unsupported Bouncer version or unexpected owner');
   const permission = access?.permission?.FunctionCall;
   if (!permission || permission.receiver_id !== goal.contract_id || !equal(permission.method_names, ['execute_outlayer_project'])) throw new Error('agent key must be scoped ONLY to execute_outlayer_project on this contract');
   const previous = journal?.get(goal.id), hash = fingerprint(goal);

@@ -53,8 +53,11 @@ include the returned value in development-resource orders. The first
 proved that changing the pinned input and exceeding the native cap were rejected
 on chain, but [the requested lookup](https://testnet.nearblocks.io/txns/8hqLZGkuYAgB8EqMhjN58MeGcLNApHJ7EFi5jLNhk2Dy)
 returned `null`. Recovery did not accept it as delivery, and no subsequent
-resource purchases were sent. The existing transaction is being inspected
-read-only; it must not be automatically retried. This is not yet evidence of a
+resource purchases were sent. [Read-only receipt inspection](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41069934314/job/124111032227)
+found that the published WASM imports project storage, which is unavailable to
+an inline `WasmUrl` request. OutLayer reported charging
+`1123300000000000000000` yoctoNEAR and refunding `98876700000000000000000`
+to the owner. The hash must not be automatically retried; this was not a
 successful independent price-data purchase.
 
 ## Asset and policy semantics

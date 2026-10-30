@@ -214,7 +214,7 @@ async function main() {
   assertReceipts(deploy, 'deploy');
   console.log(`    ✅ deploy ${txUrl(deploy.transaction_outcome.id)}`);
   await call(bouncer, bid, 'new', { owner: ownerId });
-  if (await view(bid, 'contract_version', {}) !== 'bouncer-agent-v8') throw new Error('stale wasm: wait for CI and git pull');
+  if (await view(bid, 'contract_version', {}) !== 'bouncer-agent-v9') throw new Error('stale wasm: wait for CI and git pull');
 
   console.log(`\n=== 2) Create funded user and ${compareDemo ? 'four' : 'three'} development vendor accounts ===`);
   const userKey = KeyPair.fromRandom('ed25519');

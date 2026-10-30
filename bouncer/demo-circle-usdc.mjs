@@ -91,7 +91,7 @@ async function main() {
   const wasm = fs.readFileSync(path.join(ROOT, 'bouncer.wasm'));
   // Avoid using a stale root artifact by mistake. This marker is a sanity
   // check only, NOT proof of deployed contract code integrity.
-  if (!wasm.includes(Buffer.from('bouncer-agent-v8'))) throw new Error('demo requires the fresh v8 WASM artifact');
+  if (!wasm.includes(Buffer.from('bouncer-agent-v9'))) throw new Error('demo requires the fresh v9 WASM artifact');
   const contractKey = KeyPair.fromRandom('ed25519'), ownerKey = KeyPair.fromRandom('ed25519');
   const vendorKey = KeyPair.fromRandom('ed25519'), agentKey = KeyPair.fromRandom('ed25519'), attackKey = KeyPair.fromRandom('ed25519');
   const suffix = crypto.randomBytes(4).toString('hex'), contractId = `bouncer-usdc-${suffix}.testnet`;
@@ -108,7 +108,7 @@ async function main() {
   }
   const owner = accountFor(ownerId, ownerKey), agent = accountFor(ownerId, agentKey), attacker = accountFor(ownerId, attackKey);
   await call(contract, contractId, 'new', { owner: ownerId });
-  if (await view(contractId, 'contract_version') !== 'bouncer-agent-v8' || await view(contractId, 'get_owner') !== ownerId) throw new Error('stale contract or unexpected owner');
+  if (await view(contractId, 'contract_version') !== 'bouncer-agent-v9' || await view(contractId, 'get_owner') !== ownerId) throw new Error('stale contract or unexpected owner');
   for (const [token, id] of [[WRAP, ownerId], [TOKEN, ownerId], [TOKEN, contractId], [TOKEN, vendorId]]) await register(owner, token, id);
   await call(owner, WRAP, 'near_deposit', {}, OWNER_SETUP_INPUT, 50n * TGAS);
   // This swap is full-access OWNER setup, not controlled by an agent policy.

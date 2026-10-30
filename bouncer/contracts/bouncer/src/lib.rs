@@ -125,6 +125,30 @@ pub struct OutlayerInputRouteView {
     pub active: bool,
 }
 
+/// A project-scoped native execution: unlike an inline WasmUrl, a Project
+/// source supplies the provider's project storage namespace. No stablecoin is
+/// attached or debited through this route.
+#[derive(Clone, Debug, PartialEq, Eq, near_sdk::serde::Serialize, near_sdk::serde::Deserialize)]
+#[serde(crate = "near_sdk::serde", deny_unknown_fields)]
+pub struct OutlayerNativeProject {
+    pub project_id: String,
+    pub version_key: String,
+    pub input_data: String,
+    pub max_instructions: u64,
+    pub max_memory_mb: u32,
+    pub max_execution_seconds: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, near_sdk::serde::Serialize, near_sdk::serde::Deserialize)]
+#[serde(crate = "near_sdk::serde", deny_unknown_fields)]
+pub struct OutlayerNativeProjectRouteView {
+    pub project: OutlayerNativeProject,
+    pub route_revision: u64,
+    pub policy_revision: u64,
+    pub payee_revision: u64,
+    pub active: bool,
+}
+
 #[near(contract_state)]
 #[derive(PanicOnDefault)]
 pub struct Bouncer {
@@ -160,6 +184,8 @@ pub struct Bouncer {
     // Revision and optional (encoded program, exact input, policy/payee
     // revisions). A tombstone prevents stale requests after clearing a route.
     outlayer_input_routes: LookupMap<String, (u64, Option<(String, String, u64, u64)>)>,
+    // Exact native-only project source, version and input plus revisions.
+    outlayer_native_projects: LookupMap<String, (u64, Option<(String, u64, u64)>)>,
 }
 
 fn allow_key(pid: &str, p: &str) -> String {
@@ -261,6 +287,7 @@ impl Bouncer {
             allow_revisions: LookupMap::new(b"e"),
             outlayer_project_routes: LookupMap::new(b"j"),
             outlayer_input_routes: LookupMap::new(b"i"),
+            outlayer_native_projects: LookupMap::new(b"q"),
         }
     }
 
@@ -367,7 +394,7 @@ impl Bouncer {
         })
     }
 
-    pub fn contract_version(&self) -> &'static str { "bouncer-agent-v8" }
+    pub fn contract_version(&self) -> &'static str { "bouncer-agent-v9" }
 
     /// Lets clients verify the refund recipient; a version string alone does
     /// not verify deployed code or the RPC.
@@ -605,6 +632,98 @@ impl Bouncer {
             && self.outlayer_programs.get(&policy_id) == Some(encoded);
         Some(OutlayerInputRouteView { program, input_data: input_data.clone(), route_revision: *revision,
             policy_revision: *policy_revision, payee_revision: *payee_revision, active })
+    }
+
+    /// Approve a native-only Project source, pinned version and exact input.
+    /// Project-scoped WASM may require provider storage even for read-only API
+    /// requests; this path does not spend or attach any provider-held FT credit.
+    #[payable]
+    pub fn set_outlayer_native_project(&mut self, policy_id: String, project: OutlayerNativeProject) {
+        require_owner(self, env::attached_deposit()).unwrap_or_else(|m| abort_with(&m));
+        require(self.token_of.get(&policy_id).map(|t| t.as_str()) == Some(NATIVE_ASSET),
+            "project native policy must use native NEAR");
+        let mut parts = project.project_id.split('/');
+        let owner = parts.next().unwrap_or("");
+        let name = parts.next().unwrap_or("");
+        require(parts.next().is_none() && owner.ends_with(".testnet") && owner.parse::<AccountId>().is_ok() &&
+            !name.is_empty() && name.len() <= 64 && name.bytes().all(|b|
+                b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_'), "invalid OutLayer project id");
+        require(project.version_key.len() == 64 && project.version_key.bytes().all(|b|
+            (b'0'..=b'9').contains(&b) || (b'a'..=b'f').contains(&b)), "invalid pinned project version");
+        require(project.input_data.len() <= MAX_OUTLAYER_INPUT_BYTES, "project input is too large");
+        let input: near_sdk::serde_json::Value = near_sdk::serde_json::from_str(&project.input_data)
+            .unwrap_or_else(|_| abort_with("project input must be JSON"));
+        require(input.is_object(), "project input must be a JSON object");
+        require(project.max_instructions > 0 && project.max_instructions <= 500_000_000_000 &&
+            project.max_memory_mb > 0 && project.max_memory_mb <= 4096 &&
+            project.max_execution_seconds > 0 && project.max_execution_seconds <= 180,
+            "invalid OutLayer project resource limits");
+        let payee: AccountId = OUTLAYER_TESTNET.parse().unwrap_or_else(|_| abort_with("invalid OutLayer account"));
+        require(self.allow.get(&allow_key(&policy_id, payee.as_str())) == Some(&true), "OutLayer payee must already be allowed");
+        let pr = self.ft_policy_revisions.get(&policy_id).copied().unwrap_or_else(|| abort_with("missing policy revision"));
+        let ar = self.allow_revisions.get(&(policy_id.clone(), payee)).copied().unwrap_or_else(|| abort_with("missing payee revision"));
+        let revision = self.outlayer_native_projects.get(&policy_id).map(|v| v.0).unwrap_or(0)
+            .checked_add(1).unwrap_or_else(|| abort_with("native project revision overflow"));
+        let encoded = near_sdk::serde_json::to_string(&project).unwrap_or_else(|_| abort_with("cannot serialize native project"));
+        self.outlayer_native_projects.insert(policy_id, (revision, Some((encoded, pr, ar))));
+    }
+
+    #[payable]
+    pub fn clear_outlayer_native_project(&mut self, policy_id: String) {
+        require_owner(self, env::attached_deposit()).unwrap_or_else(|m| abort_with(&m));
+        let revision = self.outlayer_native_projects.get(&policy_id).map(|v| v.0).unwrap_or(0)
+            .checked_add(1).unwrap_or_else(|| abort_with("native project revision overflow"));
+        self.outlayer_native_projects.insert(policy_id, (revision, None));
+    }
+
+    pub fn get_outlayer_native_project(&self, policy_id: String) -> Option<OutlayerNativeProjectRouteView> {
+        let (revision, entry) = self.outlayer_native_projects.get(&policy_id)?;
+        let (encoded, pr, ar) = entry.as_ref()?;
+        let project: OutlayerNativeProject = near_sdk::serde_json::from_str(encoded)
+            .unwrap_or_else(|_| abort_with("invalid stored native project"));
+        let payee: AccountId = OUTLAYER_TESTNET.parse().unwrap_or_else(|_| abort_with("invalid OutLayer account"));
+        let active = self.token_of.get(&policy_id).map(|t| t.as_str()) == Some(NATIVE_ASSET) &&
+            self.ft_policy_revisions.get(&policy_id) == Some(pr) &&
+            self.allow_revisions.get(&(policy_id.clone(), payee.clone())) == Some(ar) &&
+            self.allow.get(&allow_key(&policy_id, payee.as_str())) == Some(&true);
+        Some(OutlayerNativeProjectRouteView { project, route_revision: *revision,
+            policy_revision: *pr, payee_revision: *ar, active })
+    }
+
+    /// One capped native Project request. No agent-controlled destination,
+    /// version, input, secrets, or FT fee. The full native maximum remains
+    /// conservatively spent, even when the provider reports a partial refund.
+    #[payable]
+    pub fn execute_outlayer_native_project(&mut self, policy_id: String, amount: U128,
+        expected_route: OutlayerNativeProjectRouteView) -> Promise {
+        require(env::attached_deposit() == ZERO_NEAR, "BLOCKED: execute_outlayer_native_project requires zero deposit");
+        require(env::predecessor_account_id() == self.owner && env::signer_account_id() == self.owner,
+            "BLOCKED: caller is not the owner account");
+        require(self.agents.get(&(policy_id.clone(), env::signer_account_pk())) == Some(&true),
+            "BLOCKED: signing key is not authorized for this policy");
+        let route = self.get_outlayer_native_project(policy_id.clone())
+            .unwrap_or_else(|| abort_with("BLOCKED: no owner-approved native project"));
+        require(route.active && route == expected_route, "BLOCKED: native project route changed since review");
+        let payee: AccountId = OUTLAYER_TESTNET.parse().unwrap_or_else(|_| abort_with("invalid OutLayer account"));
+        let (token, balance) = validate(self, &policy_id, &payee, amount.0).unwrap_or_else(|m| abort_with(&m));
+        require(token.as_str() == NATIVE_ASSET, "BLOCKED: native project policy changed");
+        let bucket = env::block_timestamp() / NS_PER_HOUR;
+        let key = daily_key(&policy_id, bucket);
+        let next = self.daily_spent.get(&key).copied().unwrap_or(0)
+            .checked_add(amount.0).unwrap_or_else(|| abort_with("daily spend overflow"));
+        self.native_balance = balance - amount.0;
+        self.daily_spent.insert(key, next);
+        let project = route.project;
+        let args = near_sdk::serde_json::json!({
+            "source": {"Project": {"project_id": project.project_id, "version_key": project.version_key}},
+            "resource_limits": {"max_instructions": project.max_instructions, "max_memory_mb": project.max_memory_mb,
+                "max_execution_seconds": project.max_execution_seconds},
+            "input_data": project.input_data, "secrets_ref": null, "response_format": "Json",
+            "payer_account_id": self.owner.clone(), "params": null,
+        });
+        env::log_str("BOUNCER independent native project initiated; full maximum reserved");
+        Promise::new(payee).function_call("request_execution", args.to_string().into_bytes(),
+            NearToken::from_yoctonear(amount.0), GAS_FOR_OUTLAYER)
     }
 
     /// Approve exactly one OutLayer project version, input and prepaid fee for
@@ -1447,6 +1566,135 @@ mod tests {
         testing_env!(context("owner.testnet", "owner.testnet", &owner_key, 500, NS_PER_DAY));
         contract.deposit_native();
         (contract, agent, p)
+    }
+
+    fn native_project() -> OutlayerNativeProject {
+        OutlayerNativeProject { project_id: "author.testnet/price-oracle".into(), version_key: "a".repeat(64),
+            input_data: "{\"command\":\"fetch_external\",\"token_id\":\"near\",\"source\":\"coingecko\"}".into(),
+            max_instructions: 10_000_000, max_memory_mb: 128, max_execution_seconds: 60 }
+    }
+    fn native_project_fixture() -> (Bouncer, PublicKey, OutlayerNativeProjectRouteView) {
+        let (mut contract, agent, _) = native_fixture();
+        testing_env!(context("owner.testnet", "owner.testnet", &key(1), 1, NS_PER_DAY));
+        contract.set_outlayer_native_project("external-compute".into(), native_project());
+        let route = contract.get_outlayer_native_project("external-compute".into()).unwrap();
+        (contract, agent, route)
+    }
+
+    #[test]
+    fn native_project_pins_version_input_and_spends_only_native() {
+        use near_sdk::mock::MockAction;
+        use near_sdk::test_utils::get_created_receipts;
+        let (mut contract, agent, route) = native_project_fixture();
+        assert!(route.active);
+        testing_env!(context("owner.testnet", "owner.testnet", &agent, 0, NS_PER_DAY));
+        drop(contract.execute_outlayer_native_project("external-compute".into(), U128(100), route.clone()));
+        assert_eq!(contract.vault_balance(id(NATIVE_ASSET)).0, 400);
+        assert_eq!(contract.daily_spent("external-compute".into()).0, 100);
+        let receipts = get_created_receipts();
+        let receipt = receipts.iter().find(|r| r.receiver_id == id(OUTLAYER_TESTNET)).unwrap();
+        let args = receipt.actions.iter().find_map(|a| match a {
+            MockAction::FunctionCallWeight { method_name, args, attached_deposit, .. } if method_name == b"request_execution" => {
+                assert_eq!(*attached_deposit, NearToken::from_yoctonear(100)); Some(args)
+            }, _ => None,
+        }).unwrap();
+        let args: near_sdk::serde_json::Value = near_sdk::serde_json::from_slice(args).unwrap();
+        assert_eq!(args["source"]["Project"]["project_id"], route.project.project_id);
+        assert_eq!(args["source"]["Project"]["version_key"], route.project.version_key);
+        assert_eq!(args["input_data"], route.project.input_data);
+        assert_eq!(args["payer_account_id"], "owner.testnet");
+        assert!(args["secrets_ref"].is_null() && args["params"].is_null());
+    }
+
+    #[test]
+    #[should_panic(expected = "owner-only method requires exactly 1 yoctoNEAR")]
+    fn agent_cannot_change_native_project() {
+        let (mut contract, agent, _) = native_project_fixture();
+        testing_env!(context("owner.testnet", "owner.testnet", &agent, 0, NS_PER_DAY));
+        contract.set_outlayer_native_project("external-compute".into(), native_project());
+    }
+    #[test]
+    #[should_panic(expected = "BLOCKED: native project route changed since review")]
+    fn agent_cannot_change_native_project_input() {
+        let (mut contract, agent, mut route) = native_project_fixture();
+        route.project.input_data = "{\"command\":\"arbitrary\"}".into();
+        testing_env!(context("owner.testnet", "owner.testnet", &agent, 0, NS_PER_DAY));
+        drop(contract.execute_outlayer_native_project("external-compute".into(), U128(100), route));
+    }
+    #[test]
+    #[should_panic(expected = "BLOCKED: native project route changed since review")]
+    fn agent_cannot_change_native_project_version() {
+        let (mut contract, agent, mut route) = native_project_fixture();
+        route.project.version_key = "b".repeat(64);
+        testing_env!(context("owner.testnet", "owner.testnet", &agent, 0, NS_PER_DAY));
+        drop(contract.execute_outlayer_native_project("external-compute".into(), U128(100), route));
+    }
+    #[test]
+    #[should_panic(expected = "BLOCKED: signing key is not authorized for this policy")]
+    fn native_project_requires_an_explicit_key_grant() {
+        let (mut contract, _, route) = native_project_fixture();
+        testing_env!(context("owner.testnet", "owner.testnet", &key(3), 0, NS_PER_DAY));
+        drop(contract.execute_outlayer_native_project("external-compute".into(), U128(100), route));
+    }
+    #[test]
+    #[should_panic(expected = "BLOCKED: amount exceeds per-tx cap")]
+    fn native_project_respects_cap() {
+        let (mut contract, agent, route) = native_project_fixture();
+        testing_env!(context("owner.testnet", "owner.testnet", &agent, 0, NS_PER_DAY));
+        drop(contract.execute_outlayer_native_project("external-compute".into(), U128(201), route));
+    }
+    #[test]
+    #[should_panic(expected = "BLOCKED: daily cap exceeded for this policy")]
+    fn native_project_respects_rolling_budget() {
+        let (mut contract, agent, route) = native_project_fixture();
+        testing_env!(context("owner.testnet", "owner.testnet", &agent, 0, NS_PER_DAY));
+        drop(contract.execute_outlayer_native_project("external-compute".into(), U128(200), route.clone()));
+        drop(contract.execute_outlayer_native_project("external-compute".into(), U128(101), route));
+    }
+    #[test]
+    #[should_panic(expected = "invalid OutLayer project id")]
+    fn native_project_rejects_mainnet_project() {
+        let (mut contract, _, _) = native_project_fixture();
+        let mut project = native_project(); project.project_id = "author.near/price-oracle".into();
+        testing_env!(context("owner.testnet", "owner.testnet", &key(1), 1, NS_PER_DAY));
+        contract.set_outlayer_native_project("external-compute".into(), project);
+    }
+    #[test]
+    #[should_panic(expected = "invalid pinned project version")]
+    fn native_project_rejects_unpinned_version() {
+        let (mut contract, _, _) = native_project_fixture();
+        let mut project = native_project(); project.version_key = "".into();
+        testing_env!(context("owner.testnet", "owner.testnet", &key(1), 1, NS_PER_DAY));
+        contract.set_outlayer_native_project("external-compute".into(), project);
+    }
+    #[test]
+    fn native_project_edits_revoke_old_routes_without_revival() {
+        let (mut contract, _, original) = native_project_fixture();
+        testing_env!(context("owner.testnet", "owner.testnet", &key(1), 1, NS_PER_DAY));
+        contract.revoke_payee("external-compute".into(), id(OUTLAYER_TESTNET));
+        contract.allow_payee("external-compute".into(), id(OUTLAYER_TESTNET));
+        assert!(!contract.get_outlayer_native_project("external-compute".into()).unwrap().active);
+        contract.set_outlayer_native_project("external-compute".into(), original.project.clone());
+        let after = contract.get_outlayer_native_project("external-compute".into()).unwrap();
+        assert!(after.active && after.route_revision > original.route_revision);
+        contract.set_policy("external-compute".into(), id(NATIVE_ASSET), U128(200), Some(U128(300)));
+        assert!(!contract.get_outlayer_native_project("external-compute".into()).unwrap().active);
+        contract.set_outlayer_native_project("external-compute".into(), original.project.clone());
+        let repinned = contract.get_outlayer_native_project("external-compute".into()).unwrap();
+        contract.clear_outlayer_native_project("external-compute".into());
+        assert!(contract.get_outlayer_native_project("external-compute".into()).is_none());
+        contract.set_outlayer_native_project("external-compute".into(), original.project);
+        assert!(contract.get_outlayer_native_project("external-compute".into()).unwrap().route_revision > repinned.route_revision);
+    }
+    #[test]
+    #[should_panic(expected = "BLOCKED: native project route changed since review")]
+    fn old_native_project_signature_stays_blocked_after_clear_and_repin() {
+        let (mut contract, agent, old) = native_project_fixture();
+        testing_env!(context("owner.testnet", "owner.testnet", &key(1), 1, NS_PER_DAY));
+        contract.clear_outlayer_native_project("external-compute".into());
+        contract.set_outlayer_native_project("external-compute".into(), old.project.clone());
+        testing_env!(context("owner.testnet", "owner.testnet", &agent, 0, NS_PER_DAY));
+        drop(contract.execute_outlayer_native_project("external-compute".into(), U128(100), old));
     }
 
     fn pinned_native_fixture() -> (Bouncer, PublicKey, OutlayerInputRouteView) {
