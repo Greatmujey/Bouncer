@@ -185,11 +185,13 @@ passing offline tests, but live delivery has **not** been established. In the
 credited OutLayer with 10,000 fake-token micro-units; the subsequent project
 send remained unresolved. Its journaled hash is
 `DTJyQq7zMVtQFExeAtVSfKLSEkDSdmZerP3CJkWx8YUD` for
-`owner.bouncer-ft-69756b49.testnet`. A [read-only reconciliation](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41212462384/job/124570128722)
+`owner.bouncer-ft-69756b49.testnet`. A [read-only reconciliation](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41212677218/job/124570783704)
 could not retrieve FINAL receipts: one RPC timed out and the other returned HTTP
 408. The explorer did not show the hash, but absence there is **not** proof of
-non-execution. Preserve the original journal and goal, and never automatically
-resend this transaction. It uses neither Circle USDC nor a TEE attestation.
+non-execution. The [public recovery evidence artifact](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41212677218)
+contains the original journal and goal and expires 29 January 2027. Preserve them
+and never automatically resend this transaction. It uses neither Circle USDC nor
+a TEE attestation.
 
 Provider-held credit is distinct from Bouncer's FT vault. In this path a project
 refund can be credited to Bouncer's balance **at OutLayer**, not returned to
