@@ -54,6 +54,13 @@ test('unknown transaction remains unresolved after bounded read-only RPC calls',
   });
 });
 
+test('a malformed RPC result remains unresolved with a useful error', async () => {
+  await withServer(body => body.method === 'status' ? { result: { chain_id: 'testnet' } } : {}, async (endpoint, requests) => {
+    await assert.rejects(reconcileProject({ goal, entry, endpoints: [endpoint] }), /missing result/);
+    assert.deepEqual(requests.map(r => r.method), ['status', 'EXPERIMENTAL_tx_status']);
+  });
+});
+
 test('a different chain, transaction or unfinalized response is never treated as evidence', async () => {
   await withServer(() => ({ result: { chain_id: 'mainnet' } }), async (endpoint, requests) => {
     await assert.rejects(reconcileProject({ goal, entry, endpoints: [endpoint] }), /RPC must report testnet/);

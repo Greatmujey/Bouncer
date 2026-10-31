@@ -282,7 +282,11 @@ async function main() {
     try {
       await runFtCallGoal({ goal, provider: faulty, account: agent, publicKey: agentKey.getPublicKey(), journal, execute: true });
       throw new Error('injected fault unexpectedly passed');
-    } catch (error) { if (!/FT call unresolved/.test(error.message)) throw error; }
+    } catch (error) {
+      // A real send/RPC error is not the synthetic receipt fault. Preserve and
+      // report its hash/cause instead of masking it as an injected failure.
+      if (!/FT call unresolved/.test(error.message) || inject) throw error;
+    }
     const tx = journal.get(goal.id)?.tx_hash;
     if (!tx || sends !== 1 || journal.get(goal.id)?.status !== 'pending') throw new Error('uncertain transfer was not journaled');
     journal.close();
@@ -340,7 +344,11 @@ async function main() {
     try {
       await runProjectGoal({ goal: projectGoal, provider: projectFaulty, account: projectAgent, publicKey: projectKey.getPublicKey(), journal, execute: true });
       throw new Error('injected project fault unexpectedly passed');
-    } catch (error) { if (!/paid project unresolved/.test(error.message)) throw error; }
+    } catch (error) {
+      // Only the deliberately corrupted receipt can be used to demonstrate
+      // recovery. Propagate an unrelated RPC or broadcast error as-is.
+      if (!/paid project unresolved/.test(error.message) || projectInject) throw error;
+    }
     const projectTx = journal.get(projectGoal.id)?.tx_hash;
     if (!projectTx || projectSends !== 1 || journal.get(projectGoal.id)?.status !== 'pending') throw new Error('paid project was not journaled');
     journal.close();

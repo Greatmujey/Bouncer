@@ -33,7 +33,7 @@ async function rpc(endpoint, method, params) {
     body: JSON.stringify({ jsonrpc: '2.0', id: 'project-reconcile', method, params }), signal: AbortSignal.timeout(15_000) });
   if (!response.ok) throw new Error(`${method}: RPC HTTP ${response.status}`);
   const body = await readBoundedJson(response, { maxBytes: 4_000_000, label: method });
-  if (body?.error || !body || !Object.hasOwn(body, 'result')) throw new Error(`${method}: RPC error ${JSON.stringify(body?.error).slice(0, 400)}`);
+  if (body?.error || !body || !Object.hasOwn(body, 'result')) throw new Error(`${method}: RPC error ${JSON.stringify(body?.error ?? 'missing result').slice(0, 400)}`);
   return body.result;
 }
 function confirmTransaction(goal, entry, result) {

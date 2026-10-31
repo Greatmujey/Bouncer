@@ -178,9 +178,18 @@ recomputes the iterated SHA-256 checksum locally, and parses the provider's
 for 50 rounds (50,000 iterated hashes after the initial seed hash), and stages
 a later **self-hosted** storage goal containing the verified result and
 transaction ID. The operation is a diagnostic
-benchmark, not arbitrary compute or a commercial resource. As of this change,
-the `burn` path has offline tests only; live execution and delivery have not yet
-been established. It uses neither Circle USDC nor a TEE attestation.
+benchmark, not arbitrary compute or a commercial resource. The `burn` path has
+passing offline tests, but live delivery has **not** been established. In the
+[30 October diagnostic](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41106347709/job/124237940287),
+[funding](https://testnet.nearblocks.io/txns/3uMBAaenMBQzJyxPxEdH8tBg5M3rvAuoQy5oRpNx56MY)
+credited OutLayer with 10,000 fake-token micro-units; the subsequent project
+send remained unresolved. Its journaled hash is
+`DTJyQq7zMVtQFExeAtVSfKLSEkDSdmZerP3CJkWx8YUD` for
+`owner.bouncer-ft-69756b49.testnet`. A [read-only reconciliation](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41212462384/job/124570128722)
+could not retrieve FINAL receipts: one RPC timed out and the other returned HTTP
+408. The explorer did not show the hash, but absence there is **not** proof of
+non-execution. Preserve the original journal and goal, and never automatically
+resend this transaction. It uses neither Circle USDC nor a TEE attestation.
 
 Provider-held credit is distinct from Bouncer's FT vault. In this path a project
 refund can be credited to Bouncer's balance **at OutLayer**, not returned to

@@ -355,8 +355,11 @@ The unified runner recovered those already-settled transactions and then paid
 and verified self-hosted [compute](https://testnet.nearblocks.io/txns/B9PLx9GQaaJc7im6VvmJ5rXoBSKm5N11ZRGNWA6EPPz5),
 [storage](https://testnet.nearblocks.io/txns/FCR2LtrGjjXAfWLK3XhEkkU6Mo8P9CFWLGs8NXXuBTau)
 and [API](https://testnet.nearblocks.io/txns/6GZ18f7y3H6vm8LXYrjKTfZccnfzLJHH8JvojHt3kXa9)
-tasks in wNEAR using the durable direct-payment path. A locally corrupted compute
-result stopped later payments; recovery reused that same compute transaction
+tasks in wNEAR using the durable direct-payment path. A later fake-token `burn`
+diagnostic funded the provider, but its project transaction remains unresolved;
+no delivery is claimed and it must not be resent automatically. See the [recovery
+evidence](bouncer/docs/OUTLAYER.md). A locally corrupted compute result in the
+earlier mission stopped later payments; recovery reused that same compute transaction
 before continuing. The unified
 runner's initiation of *all* stages is covered offline, not yet proved live.
 Previews are non-atomic, and earlier payments cannot be rolled back. The

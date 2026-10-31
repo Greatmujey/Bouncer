@@ -421,6 +421,16 @@ jobs:
           mapfile -t goals < <(find "$RUNNER_TEMP/paid-project-evidence" -type f -name project-goal.json)
           test "${#journals[@]}" -eq 1 && test "${#goals[@]}" -eq 1
           node bouncer/scripts/reconcile-project-journal.mjs "${journals[0]}" "${goals[0]}"
+      # These are only the earlier run's public testnet goals and journal,
+      # never keys or signed payloads. Preserve them even when RPC is down.
+      - name: Retain the original public recovery evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reconciled-project-public-evidence
+          path: ${{ runner.temp }}/paid-project-evidence/**
+          if-no-files-found: ignore
+          retention-days: 90
 
   independent-market-discovery:
     name: Independent marketplace catalog (read only)
