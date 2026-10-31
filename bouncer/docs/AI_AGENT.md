@@ -89,6 +89,12 @@ unauthenticated local software: separate directories/hosts can redeem twice,
 there is no TLS or replicated/distributed replay protection, and it is **not
 production infrastructure**. See the [provider SDK and recovery notes](../packages/provider-sdk/README.md).
 
+For owner-reviewed sequential dependencies, the separate [workflow runner](DEPENDENT_WORKFLOWS.md)
+can feed a verified independent result into later bounded resource inputs and
+replay paid stages without keys or new payments. Its current end-to-end tests
+are offline with synthetic receipts and a self-hosted provider; it is not a
+model planner, a new live demonstration or an independent FT seller.
+
 ## Use a prepared testnet deployment
 
 Node.js 22 is required. `node bouncer/demo-multi-resource.mjs` creates a fresh

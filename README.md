@@ -344,6 +344,21 @@ consensus nor TEE attestation is independently verified. Payments and previews
 are non-atomic; later failure cannot undo earlier purchases. See [the full
 failure history and trust boundaries](bouncer/docs/OUTLAYER.md).
 
+### Owner-reviewed dependent workflows
+
+The new [workflow runner](bouncer/docs/DEPENDENT_WORKFLOWS.md) passes a verified
+independent result into a compute order, then can pass verified outputs into
+storage and API steps. The owner fixes each policy, token, payee, maximum and
+provider route; provider data cannot change financial authority. Maximum-cost
+preflight aggregates shared budgets, and every signed FT payment is journaled
+before broadcast. Recovery rechecks the original source and paid steps without
+keys or repayment before any new purchase.
+
+This dependency runner has been exercised **offline with synthetic receipts**
+and the self-hosted development provider; it has not yet been run live. It does
+not resolve or resend the pending project transaction below, demonstrate an
+independent FT-paid vendor, or guarantee truth, future storage or atomicity.
+
 ### Paid-provider mission and recovery
 
 In the [28 October 2026 test](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40699116807/job/122854642930),
@@ -545,6 +560,7 @@ real testnet transactions. To build locally with Rust and the wasm target, run
 - `bouncer/agent/procurement.mjs` — plan-driven, testnet-only procurement runner.
 - `bouncer/agent/recover-direct-payment.mjs` — key-free receipt-based recovery for opt-in signed direct payments.
 - `bouncer/agent/resource-agent.mjs` — quote, guarded payment, fulfillment orchestration.
+- `bouncer/agent/workflow.mjs` — owner-reviewed dependent source → resource workflows and key-free recovery.
 - `bouncer/agent/verify-delivery.mjs` — bounded result checks and local receipt validation.
 - `bouncer/agent/market-discovery.mjs` — isolated, read-only public catalog search.
 - `bouncer/agent/goal-planner.mjs`, `autonomous.mjs` — model proposals constrained by the owner catalog.

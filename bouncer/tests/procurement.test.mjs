@@ -242,3 +242,16 @@ test('file journal persists atomically and blocks a concurrent runner', () => {
     assert.equal(fs.existsSync(`${file}.lock`), false);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('file journal refuses entries whose embedded ID differs from the requested key', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bouncer-journal-id-'));
+  const journal = new FileJournal(path.join(dir, 'state.json'), 'bouncer.testnet', 'owner.testnet');
+  try {
+    journal.put('first', { status: 'pending', fingerprint: 'one' });
+    const existing = journal.get('first');
+    assert.throws(() => journal.put('second', { ...existing, fingerprint: 'two' }), /ID does not match/);
+    assert.equal(journal.get('second'), undefined); assert.equal(journal.get('first').fingerprint, 'one');
+    journal.put('first', { ...existing, fingerprint: 'updated' });
+    assert.equal(journal.get('first').fingerprint, 'updated');
+  } finally { journal.close(); fs.rmSync(dir, { recursive: true, force: true }); }
+});

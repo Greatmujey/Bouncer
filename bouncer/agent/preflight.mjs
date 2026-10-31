@@ -13,7 +13,19 @@ function amount(value) {
 }
 
 /** Mutates checks to mark newly blocked requests; never sends a transaction. */
-export async function reservePreview(provider, plan, checks, summary) {
+export async function reservePreview(provider, plan, checks, summary, { policyReservations = [] } = {}) {
+  if (!Array.isArray(policyReservations)) throw new Error('invalid prior policy reservations');
+  const prior = new Map();
+  for (const item of policyReservations) {
+    if (!item || typeof item !== 'object' || Array.isArray(item) || Object.keys(item).length !== 3 ||
+        typeof item.policy_id !== 'string' || !item.policy_id || typeof item.token !== 'string' || !item.token ||
+        !Object.hasOwn(item, 'amount')) throw new Error('invalid prior policy reservation');
+    const reserved = amount(item.amount);
+    if (reserved === 0n) throw new Error('invalid prior policy reservation');
+    const previous = prior.get(item.policy_id);
+    if (previous && previous.token !== item.token) throw new Error('conflicting reservation tokens');
+    prior.set(item.policy_id, { token: item.token, reserved: (previous?.reserved ?? 0n) + reserved });
+  }
   const counts = status => checks.filter(check => check.status === status).length;
   if (!Array.isArray(checks) || checks.length !== plan.requests.length ||
       checks.some((check, i) => check?.id !== plan.requests[i].id || !['READY', 'BLOCKED', 'SKIPPED'].includes(check.status)) ||
@@ -33,7 +45,11 @@ export async function reservePreview(provider, plan, checks, summary) {
         provider.callFunction(plan.contract_id, 'daily_spent', { policy_id: request.policy_id }, final),
       ]);
       if (!view || view.token !== request.token) throw new Error('policy changed during batch preflight');
-      policy = { token: view.token, cap: amount(view.per_tx_cap), daily: amount(view.daily_cap), spent: amount(spent), reserved: 0n };
+      const existing = prior.get(request.policy_id);
+      if (existing && existing.token !== view.token) throw new Error('prior reservation token does not match policy');
+      // Prior reservations affect the rolling policy budget only. They may
+      // represent provider-held credit, not a debit from this FT vault.
+      policy = { token: view.token, cap: amount(view.per_tx_cap), daily: amount(view.daily_cap), spent: amount(spent), reserved: existing?.reserved ?? 0n };
       policies.set(request.policy_id, policy);
     }
     if (policy.token !== request.token) throw new Error('conflicting policy tokens');

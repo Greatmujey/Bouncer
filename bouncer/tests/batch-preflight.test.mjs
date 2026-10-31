@@ -2,6 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { orderMemo } from '../services/resource-provider.mjs';
 import { runResourceAgent } from '../agent/resource-agent.mjs';
+import { reservePreview } from '../agent/preflight.mjs';
+import { validatePlan } from '../agent/procurement.mjs';
 import { computeResult } from './mock-delivery.mjs';
 
 const publicKey = { toString: () => 'ed25519:fake-agent' };
@@ -155,4 +157,23 @@ test('an invalid or unavailable aggregate view is not treated as approval', asyn
     await assert.rejects(runResourceAgent(f.base), /contract amount/);
     assert.equal(f.calls, 0);
   }
+});
+
+test('prepaid policy reservations count against shared daily budget but do not debit the FT vault twice', async () => {
+  const f = fixture({ daily: '150', vault: '100' });
+  const plan = validatePlan({ contract_id: 'bouncer.testnet', owner_account_id: 'bouncer.testnet', requests: [
+    { id: 'one', resource: 'compute', policy_id: 'shared', token: 'wrap.testnet', payee: 'vendor.testnet', amount: '80' }] });
+  const preview = async (reservation, provider = f.base.provider) => {
+    const checks = [{ id: 'one', status: 'READY' }];
+    const payments = await reservePreview(provider, plan, checks, { paid: 0, ready: 1, blocked: 0, skipped: 0 }, { policyReservations: [reservation] });
+    return { payments, checks };
+  };
+  const large = await preview({ policy_id: 'shared', token: 'wrap.testnet', amount: '71' });
+  assert.equal(large.payments.blocked, 1); assert.match(large.checks[0].reason, /rolling daily budget/);
+  const fits = await preview({ policy_id: 'shared', token: 'wrap.testnet', amount: '70' });
+  assert.equal(fits.payments.blocked, 0); assert.equal(fits.checks[0].status, 'READY');
+  const other = await preview({ policy_id: 'other', token: 'wrap.testnet', amount: '1000' });
+  assert.equal(other.payments.blocked, 0);
+  await assert.rejects(preview({ policy_id: 'shared', token: 'wrong.testnet', amount: '1' }), /reservation token/);
+  await assert.rejects(preview({ policy_id: 'shared', token: 'wrap.testnet', amount: '-1' }), /contract amount/);
 });

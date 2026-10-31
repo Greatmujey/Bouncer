@@ -283,9 +283,11 @@ export class FileJournal {
   get(id) { this.assertAvailable(); return this.data.entries.find(entry => entry.id === id); }
   put(id, entry) {
     this.assertAvailable();
+    if (typeof id !== 'string' || !id || !entry || typeof entry !== 'object' || Array.isArray(entry) ||
+        (Object.hasOwn(entry, 'id') && entry.id !== id)) throw new Error('journal entry ID does not match its key');
     const index = this.data.entries.findIndex(item => item.id === id);
     const entries = this.data.entries.slice();
-    const next = { id, ...entry };
+    const next = { ...entry, id };
     if (index === -1) entries.push(next); else entries[index] = next;
     const data = { ...this.data, entries };
     const temp = `${this.file}.${crypto.randomBytes(6).toString('hex')}.tmp`;

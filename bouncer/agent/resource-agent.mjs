@@ -69,6 +69,57 @@ export async function planFromQuotes({ contractId, ownerAccountId, goals, getQuo
 }
 
 /**
+ * Revalidate and fulfill an already-confirmed resource order. This function
+ * never signs or sends a payment. Its caller must first independently bind
+ * `request` to the reviewed goal (planFromQuotes or durable recovery does so).
+ * A provider must make redemption of the same transaction/order idempotent.
+ */
+export async function fulfillPaidResource({ goal, request, contractId, ownerAccountId, providerUrl, journal, fulfill, readStorage,
+  repositoryLookup, required = false, expectedTx = null, log = console.log }) {
+  if (!goal || !request) throw new Error('missing goal for confirmed payment');
+  const entry = journal?.get(goal.id);
+  if (!entry || entry.status !== 'completed' || !entry.tx_hash) {
+    if (required) throw new Error(`${goal.id}: confirmed payment is missing from the journal; stop and reconcile manually`);
+    return null;
+  }
+  const route = normalizeProviderRoute({ provider_id: goal.provider_id ?? null, provider_origin: goal.provider_url ?? providerUrl ?? null });
+  if (entry.fingerprint !== requestFingerprint(request) || (expectedTx && entry.tx_hash !== expectedTx) ||
+      (entry.provider_route !== undefined && JSON.stringify(normalizeProviderRoute(entry.provider_route)) !== JSON.stringify(route))) {
+    throw new Error(`${goal.id}: confirmed payment journal entry changed; stop and reconcile manually`);
+  }
+  if (typeof fulfill !== 'function') throw new Error('fulfillment source is required');
+  const input = normalizeOrder(goal.resource, goal.input), context = { goalId: goal.id };
+  checkDeliveryRecord({ delivery: entry.delivery, contractId, ownerAccountId, request, txHash: entry.tx_hash,
+    providerId: goal.provider_id, providerOrigin: goal.provider_url ?? providerUrl, input });
+  let stage = 'fulfillment', verified;
+  try {
+    const result = await fulfill({ tx_hash: entry.tx_hash, resource: goal.resource, input }, context);
+    stage = 'verification';
+    verified = await verifyDelivery({ resource: goal.resource, input, result, txHash: entry.tx_hash,
+      readStorage: readStorage && (objectId => readStorage(objectId, context)), repositoryLookup });
+  } catch (error) {
+    // Preserve a successful receipt if a later replay fails. Otherwise mark
+    // only delivery unverified: the confirmed payment must never be repeated.
+    if (entry.delivery?.status !== 'verified') journal.put(goal.id, { ...entry,
+      delivery: { status: 'unverified', stage, attempted_at: new Date().toISOString() } });
+    const message = String(error?.message || 'delivery failed').replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 200);
+    throw new Error(`${goal.id}: ${stage} failed after confirmed payment ${entry.tx_hash}; no automatic repayment: ${message}`, { cause: error });
+  }
+  let receipt = entry.delivery?.receipt;
+  if (receipt) {
+    if (receipt.result_sha256 !== deliveryResultHash(verified.result)) {
+      throw new Error(`${goal.id}: replayed delivery differs from the existing receipt; reconcile manually`);
+    }
+  } else {
+    receipt = createDeliveryReceipt({ contractId, ownerAccountId, request, txHash: entry.tx_hash,
+      providerId: goal.provider_id, providerOrigin: goal.provider_url ?? providerUrl, result: verified.result, verification: verified.verification });
+    journal.put(goal.id, { ...entry, delivery: { status: 'verified', receipt } });
+  }
+  log(`[resource-agent] FULFILLED ${goal.id} (${goal.resource}); checked ${verified.verification.scope}; receipt in journal`);
+  return { id: goal.id, result: verified.result, receipt };
+}
+
+/**
  * No payment or fulfillment unless execute is true. If an earlier payment was
  * completed but delivery failed, rerunning reuses that payment and requests the
  * same order again. The provider must implement its own replay protection.
@@ -130,45 +181,9 @@ export async function runResourceAgent({ contractId, ownerAccountId, goals, getQ
   const delivered = new Map();
   async function deliverPaid(i, required = false, expectedTx = null) {
     const goal = goals[i], request = plan.requests[i];
-    if (!goal || !request) throw new Error('missing goal for confirmed payment');
-    const entry = journal.get(goal.id);
-    if (!entry || entry.status !== 'completed' || !entry.tx_hash) {
-      if (required) throw new Error(`${goal.id}: confirmed payment is missing from the journal; stop and reconcile manually`);
-      return;
-    }
-    if (entry.fingerprint !== requestFingerprint(request) || (expectedTx && entry.tx_hash !== expectedTx) ||
-        (entry.provider_route !== undefined && JSON.stringify(normalizeProviderRoute(entry.provider_route)) !== JSON.stringify(journalRoutes.get(goal.id)))) {
-      throw new Error(`${goal.id}: confirmed payment journal entry changed; stop and reconcile manually`);
-    }
-    const input = normalizeOrder(goal.resource, goal.input), context = { goalId: goal.id };
-    let stage = 'fulfillment', verified;
-    try {
-      const result = await fulfill({ tx_hash: entry.tx_hash, resource: goal.resource, input }, context);
-      stage = 'verification';
-      verified = await verifyDelivery({ resource: goal.resource, input, result, txHash: entry.tx_hash,
-        readStorage: readStorage && (objectId => readStorage(objectId, context)), repositoryLookup });
-    } catch (error) {
-      // Preserve a successful receipt if a later replay fails. Otherwise mark
-      // only the delivery unverified: the completed payment remains final and
-      // is never sent again by this journal. Do not persist untrusted errors.
-      if (entry.delivery?.status !== 'verified') journal.put(goal.id, { ...entry,
-        delivery: { status: 'unverified', stage, attempted_at: new Date().toISOString() } });
-      const message = String(error?.message || 'delivery failed').replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 200);
-      throw new Error(`${goal.id}: ${stage} failed after confirmed payment ${entry.tx_hash}; no automatic repayment: ${message}`, { cause: error });
-    }
-    const providerId = goal.provider_id, providerOrigin = goal.provider_url ?? providerUrl;
-    let receipt = entry.delivery?.receipt;
-    if (receipt) {
-      if (receipt.result_sha256 !== deliveryResultHash(verified.result)) {
-        throw new Error(`${goal.id}: replayed delivery differs from the existing receipt; reconcile manually`);
-      }
-    } else {
-      receipt = createDeliveryReceipt({ contractId, ownerAccountId, request, txHash: entry.tx_hash,
-        providerId, providerOrigin, result: verified.result, verification: verified.verification });
-      journal.put(goal.id, { ...entry, delivery: { status: 'verified', receipt } });
-    }
-    log(`[resource-agent] FULFILLED ${goal.id} (${goal.resource}); checked ${verified.verification.scope}; receipt in journal`);
-    delivered.set(goal.id, { id: goal.id, result: verified.result, receipt });
+    const delivery = await fulfillPaidResource({ goal, request, contractId, ownerAccountId, providerUrl, journal, fulfill, readStorage,
+      repositoryLookup, required, expectedTx, log });
+    if (delivery) delivered.set(goal.id, delivery);
   }
   // Recheck/recover already-paid deliveries before spending on any new goal.
   // A bad or unavailable earlier delivery aborts this run without new payments.

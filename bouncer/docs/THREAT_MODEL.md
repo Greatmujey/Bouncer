@@ -140,7 +140,13 @@ not prove all possible callback, provider or token failure cases.
    do not opt into `--durable` may lack a pre-recorded hash and still require
    manual reconciliation. The resource, autonomous, mixed-mission and
    paid-mission CLIs must be explicitly run with `--durable` to use this path
-   for direct resource payments; it is not the default.
+   for direct resource payments; it is not the default. The separate dependent
+   workflow runner always uses durable direct FT payments and binds a normalized
+   owner manifest into the same journal. Its key-free recovery verifies the
+   recorded source and each paid delivery before any new stage. It can still
+   fail if the RPC/provider is unavailable, and journal loss, changes or another
+   host can enable duplicate spending. Its offline tests are synthetic, not
+   evidence of a new live workflow. See [dependent workflows](DEPENDENT_WORKFLOWS.md).
 9. **Provider verification and operations are not trustless.** The provider
    trusts its configured RPC, Bouncer deployment/code and token contracts. It
    verifies transaction arguments and receipts, but cannot protect against a

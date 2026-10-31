@@ -150,5 +150,9 @@ payment and marks the delivery unverified; it stops before later payments and
 can retry the same transaction without repaying. The provider may still refuse
 or be unable to deliver; there is no automatic refund, signed invoice or
 on-chain proof of the resource result. Preserve payment/order state for manual
-resolution. This protocol does not implement the marketplace's direct-delegated
-x402 transfer, which would bypass the current restricted-key policy.
+resolution. The [dependent workflow runner](DEPENDENT_WORKFLOWS.md) may replay
+an already-paid transaction during key-free recovery, without a new quote or
+payment; providers must make redemption for that transaction and exact order
+idempotent. A workflow may send a prior verified artifact as order input, so do
+not put secrets in it. This protocol does not implement the marketplace's
+direct-delegated x402 transfer, which would bypass the current restricted-key policy.

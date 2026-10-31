@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import nearApi from 'near-api-js';
 import { validatePlan, requestFingerprint } from '../agent/procurement.mjs';
-import { recoverDirectResourcePayment } from '../agent/recover-direct-payment.mjs';
+import { recoverDirectResourcePayment, recoverResourceDelivery } from '../agent/recover-direct-payment.mjs';
+import { computeResult } from './mock-delivery.mjs';
 import { orderMemo } from '../services/resource-provider.mjs';
 
 const key = 'ed25519:example', hash = nearApi.utils.serialize.base_encode(Buffer.alloc(32, 31));
@@ -52,4 +53,32 @@ test('resource recovery rejects a changed order, cap, quote or provider route be
   const f = fixture();
   await assert.rejects(recover(f, { ...config, goals: [goal, goal] }), /exactly once/); assert.equal(f.reads, 0);
   await assert.rejects(recover(f, { ...config, provider_url: 'https://different.example' }), /provider route/); assert.equal(f.reads, 0);
+});
+
+test('key-free resource recovery verifies settlement and delivery without quotes or payments', async () => {
+  const f = fixture(); let fulfillments = 0;
+  const recoverDelivery = () => recoverResourceDelivery({ goal, contractId: config.contract_id, ownerAccountId: config.owner_account_id,
+    providerUrl: config.provider_url, provider: f.provider, journal: f.journal, log: () => {},
+    fulfill: async ({ tx_hash, input: order }, context) => { fulfillments++; assert.equal(tx_hash, hash); assert.equal(context.goalId, goal.id); return computeResult(order); } });
+  const result = await recoverDelivery();
+  assert.deepEqual(result.result, computeResult(input)); assert.equal(result.receipt.tx_hash, hash);
+  assert.equal(f.entry.status, 'completed'); assert.equal(f.entry.delivery.status, 'verified');
+  const receipt = structuredClone(f.entry.delivery.receipt);
+  await recoverDelivery(); assert.deepEqual(f.entry.delivery.receipt, receipt); assert.equal(fulfillments, 2);
+});
+
+test('key-free delivery recovery rejects a changed route before querying the chain or contacting a provider', async () => {
+  const f = fixture(); let fulfillments = 0;
+  await assert.rejects(recoverResourceDelivery({ goal: { ...goal, provider_url: 'https://attacker.example' }, contractId: config.contract_id,
+    ownerAccountId: config.owner_account_id, providerUrl: config.provider_url, provider: f.provider, journal: f.journal,
+    fulfill: async () => { fulfillments++; } }), /provider route/);
+  assert.equal(f.reads, 0); assert.equal(fulfillments, 0); assert.equal(f.entry.status, 'pending');
+});
+
+test('failed delivery after key-free settlement stays paid and unverified, never resent', async () => {
+  const f = fixture();
+  await assert.rejects(recoverResourceDelivery({ goal, contractId: config.contract_id, ownerAccountId: config.owner_account_id,
+    providerUrl: config.provider_url, provider: f.provider, journal: f.journal, log: () => {},
+    fulfill: async ({ input: order }) => ({ ...computeResult(order), result: '0'.repeat(64) }) }), /verification failed after confirmed payment/);
+  assert.equal(f.entry.status, 'completed'); assert.equal(f.entry.tx_hash, hash); assert.equal(f.entry.delivery.status, 'unverified');
 });

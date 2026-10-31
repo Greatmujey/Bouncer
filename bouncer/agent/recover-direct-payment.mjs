@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 /**
  * Recover a --durable direct FT payment by its previously persisted hash.
- * Requires the exact reviewed plan or resource goals and ORIGINAL journal;
- * this tool never signs, broadcasts, retries a payment or verifies delivery.
+ * Requires the exact reviewed plan or resource goals and ORIGINAL journal.
+ * The CLI never signs, broadcasts, retries a payment or verifies delivery;
+ * the exported workflow helper additionally replays an already-paid delivery.
  */
 import fs from 'node:fs';
 import os from 'node:os';
@@ -11,7 +12,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { pathToFileURL } from 'node:url';
 import { PaymentRpcProvider } from './near-account.mjs';
 import { FileJournal, normalizeProviderRoute, requestFingerprint, validatePlan } from './procurement.mjs';
-import { planFromQuotes } from './resource-agent.mjs';
+import { planFromQuotes, fulfillPaidResource } from './resource-agent.mjs';
 import { isTransactionHash, verifyDirectPayment } from '../shared/direct-payment-settlement.mjs';
 
 export async function recoverDirectPayment({ plan: rawPlan, requestId, provider, journal, update = true, log = console.log }) {
@@ -57,6 +58,23 @@ export async function recoverDirectResourcePayment({ config, requestId, provider
     getQuote: async () => { throw new Error('recovery must not request a quote'); }, journal: facade });
   return recoverDirectPayment({ plan, requestId, provider, journal, update, log });
 }
+/**
+ * Reconcile an existing durable payment, then replay/verify its exact delivery
+ * without a signer, a quote or another payment. This may update the same
+ * journal with confirmed settlement and a verified/unverified delivery; the
+ * approved provider must implement idempotent redemption for that transaction.
+ */
+export async function recoverResourceDelivery({ goal, contractId, ownerAccountId, providerUrl, provider, journal,
+  fulfill, readStorage, repositoryLookup, log = console.log }) {
+  const config = { contract_id: contractId, owner_account_id: ownerAccountId, provider_url: providerUrl, goals: [goal] };
+  await recoverDirectResourcePayment({ config, requestId: goal?.id, provider, journal, update: true, log });
+  const entry = journal.get(goal.id);
+  const delivery = await fulfillPaidResource({ goal, request: entry.request, contractId, ownerAccountId, providerUrl, journal,
+    fulfill, readStorage, repositoryLookup, required: true, expectedTx: entry.tx_hash, log });
+  if (!delivery) throw new Error(`${goal.id}: recovered payment has no verified delivery`);
+  return delivery;
+}
+
 function home(value) { return value.startsWith('~/') ? path.join(os.homedir(), value.slice(2)) : value; }
 function parse(args) {
   const out = {};

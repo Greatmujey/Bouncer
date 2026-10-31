@@ -16,6 +16,7 @@
     "outlayer-project": "node agent/outlayer-project.mjs",
     "mission": "node agent/mixed-mission.mjs",
     "paid-mission": "node agent/paid-mission.mjs",
+    "workflow": "node agent/workflow.mjs",
     "solver": "node agent/solver.mjs",
     "quote": "node agent/intents.mjs quote",
     "discover": "node agent/market-discovery.mjs",
