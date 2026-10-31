@@ -62,8 +62,10 @@ storage.
    Delivery must be verified and durably recorded before the next step.
 4. A historical oracle result may be replayed for recovery, but it must be
    within its owner-approved age immediately before every **new** resource
-   payment, including after asynchronous guards. Its timestamp is still
-   provider supplied, not authenticated market freshness or a price proof.
+   payment, including after asynchronous guards and again after the journal is
+   synced. Its timestamp is still provider supplied, not authenticated market
+   freshness or a price proof. If the final check fails after journaling, no
+   payment is sent; the signed hash remains pending for manual reconciliation.
 
 The source can be `oracle` (the V9 owner-pinned single-source testnet project),
 `random` (bounded legacy native OutLayer execution; the older on-chain method

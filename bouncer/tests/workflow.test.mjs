@@ -199,6 +199,7 @@ test('owner spec is snapshotted before async provider code can mutate later fina
 test('oracle is checked again after an asynchronous guard and before signing is broadcast', () => withFixture(async f => {
   f.workflow.source.goal.max_age_seconds = 1; f.delivery.max_age_seconds = 1;
   const clock = Date.now;
+  Date.now = () => f.delivery.result.timestamp * 1000;
   f.resources.beforePayment = async () => { Date.now = () => (f.delivery.result.timestamp + 3) * 1000; };
   try { await assert.rejects(f.invoke(), /too old/); } finally { Date.now = clock; }
   assert.equal(f.sends, 0); assert.equal(f.sourcePays, 1); assert.equal(f.journal.get('compute'), undefined);
@@ -419,4 +420,20 @@ test('out-of-order journal entries fail before recovering the source or paying',
   f.journal.put('storage', { ...compute, request: undefined, status: 'pending' });
   const eventsBefore = f.events.length;
   await assert.rejects(f.invoke(), /out-of-order/); assert.equal(f.events.length, eventsBefore); assert.equal(f.sends, 1);
+}));
+
+test('oracle expiry during journal fsync rejects before broadcast and keeps the signed hash pending', () => withFixture(async f => {
+  f.workflow.source.goal.max_age_seconds = 1; f.delivery.max_age_seconds = 1;
+  const clock = Date.now, put = f.journal.put.bind(f.journal);
+  Date.now = () => f.delivery.result.timestamp * 1000;
+  f.journal.put = (id, entry) => {
+    const result = put(id, entry);
+    if (id === 'compute' && entry.status === 'pending') Date.now = () => (f.delivery.result.timestamp + 3) * 1000;
+    return result;
+  };
+  try { await assert.rejects(f.invoke(), /pre-broadcast guard.*no payment was sent/); }
+  finally { Date.now = clock; }
+  assert.equal(f.sourcePays, 1); assert.equal(f.sends, 0);
+  const pending = f.journal.get('compute'); assert.equal(pending.status, 'pending'); assert.ok(pending.tx_hash);
+  await assert.rejects(f.invoke(), /unknown synthetic hash/); assert.equal(f.sends, 0);
 }));

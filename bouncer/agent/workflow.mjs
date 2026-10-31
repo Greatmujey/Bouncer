@@ -294,7 +294,7 @@ export async function runWorkflow({ workflow: rawWorkflow, source = {}, resource
         if (kind === 'oracle') assertOracleFreshForUse(independent.delivery);
         if (resources.beforePayment) await resources.beforePayment(request);
         if (kind === 'oracle') assertOracleFreshForUse(independent.delivery);
-      } });
+      }, beforeBroadcast: () => { if (kind === 'oracle') assertOracleFreshForUse(independent.delivery); } });
     if (!result?.payments || !Array.isArray(result.deliveries)) throw new Error(`${stage.id}: invalid resource execution result`);
     if (result.payments.blocked || result.payments.deferred) return { status: 'BLOCKED', stage: stage.id, independent, deliveries, resource: result };
     const delivery = result.deliveries[0], stored = journal.get(stage.id);

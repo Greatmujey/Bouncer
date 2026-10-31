@@ -86,9 +86,9 @@ export function requestFingerprint(request) {
  * is sent. An unresolved pending entry is never retried automatically.
  */
 export async function runProcurement({ plan: rawPlan, provider, account, publicKey, journal, journalRoutes, execute = false,
-  durablePayment = false, log = console.log, onCheck = () => {}, beforePayment = async () => {}, onPaid = async () => {}, stopOnBlocked = false }) {
+  durablePayment = false, log = console.log, onCheck = () => {}, beforePayment = async () => {}, beforeBroadcast = () => {}, onPaid = async () => {}, stopOnBlocked = false }) {
   const plan = validatePlan(rawPlan);
-  if (typeof beforePayment !== 'function' || typeof onPaid !== 'function' || typeof stopOnBlocked !== 'boolean' || typeof durablePayment !== 'boolean') throw new Error('invalid procurement execution hooks');
+  if (typeof beforePayment !== 'function' || typeof beforeBroadcast !== 'function' || typeof onPaid !== 'function' || typeof stopOnBlocked !== 'boolean' || typeof durablePayment !== 'boolean') throw new Error('invalid procurement execution hooks');
   let routes;
   if (journalRoutes !== undefined) {
     if (!(journalRoutes instanceof Map) || journalRoutes.size !== plan.requests.length) throw new Error('invalid payment journal routes');
@@ -198,6 +198,18 @@ export async function runProcurement({ plan: rawPlan, provider, account, publicK
     // signed bytes have been broadcast or persisted.
     await beforePayment(Object.freeze({ ...request }));
     journal.put(request.id, pending);
+    // A synchronous final guard can enforce a time-sensitive condition after
+    // fsync but immediately before submission. If it rejects, nothing was sent;
+    // retain the pending hash conservatively rather than inventing a retry.
+    try {
+      const verdict = beforeBroadcast(Object.freeze({ ...request }));
+      if (verdict && typeof verdict.then === 'function') {
+        Promise.resolve(verdict).catch(() => {}); // do not leak a rejected async hook
+        throw new Error('pre-broadcast guard must be synchronous');
+      }
+    } catch (error) {
+      throw new Error(`${request.id}: pre-broadcast guard rejected after journal write; no payment was sent, retain the pending entry and reconcile: ${error.message}`, { cause: error });
+    }
     try {
       const result = durablePayment
         ? await provider.sendTransactionUntil(signed, 'FINAL')
