@@ -16,11 +16,11 @@ import { isDeepStrictEqual } from 'node:util';
 import { pathToFileURL } from 'node:url';
 import nearApi from 'near-api-js';
 import { FileJournal } from './procurement.mjs';
-import { MonotonicAccount } from './near-account.mjs';
+import { MonotonicAccount, PaymentRpcProvider } from './near-account.mjs';
 import { isTestnetAccount, isTestnetToken } from '../shared/account-id.mjs';
-import { validateRpcEndpoint } from '../shared/rpc-endpoint.mjs';
+import { signReviewedCall } from './reviewed-transaction.mjs';
 
-const { KeyPair, KeyPairSigner, providers, transactions, utils } = nearApi;
+const { KeyPair, KeyPairSigner } = nearApi;
 const MAX = (1n << 128n) - 1n;
 const GAS = 300n * 10n ** 12n;
 const FIELDS = ['id', 'contract_id', 'owner_account_id', 'policy_id', 'payee', 'token', 'amount', 'msg', 'policy_revision', 'route_revision'];
@@ -177,12 +177,8 @@ export async function runFtCallGoal({ goal: rawGoal, provider, account, publicKe
   if (!Array.isArray(verdict) || verdict.length !== 2 || typeof verdict[0] !== 'boolean') throw new Error('invalid policy verdict');
   if (!verdict[0]) { log(`[ft-call] BLOCKED ${goal.id}: ${String(verdict[1]).slice(0, 200)}`); return { status: 'BLOCKED' }; }
   if (!execute) { log(`[ft-call] READY ${goal.id}: at most ${goal.amount} ${goal.token} to ${goal.payee} (dry run)`); return { status: 'READY' }; }
-  if (!account.signer || typeof account.createTransaction !== 'function' || String(await account.signer.getPublicKey()) !== String(publicKey)) throw new Error('signer does not match reviewed agent key');
-  const action = transactions.functionCall('execute_ft_call', expectedArgs(goal), GAS, 0n);
-  const transaction = await account.createTransaction(goal.contract_id, [action], publicKey);
-  const [bytes, signed] = await account.signer.signTransaction(transaction);
-  if (!(bytes instanceof Uint8Array) || bytes.length !== 32 || !signed) throw new Error('signer did not return a transaction hash');
-  const txHash = utils.serialize.base_encode(bytes);
+  const { txHash, signed } = await signReviewedCall({ account, publicKey, ownerId: goal.owner_account_id, contractId: goal.contract_id,
+    method: 'execute_ft_call', args: expectedArgs(goal), gas: GAS });
   if (!validHash(txHash)) throw new Error('invalid transaction hash');
   const pending = { fingerprint: hash, status: 'pending', ft_call_goal: goal, agent_public_key: String(publicKey), tx_hash: txHash, started_at: new Date().toISOString() };
   journal.put(goal.id, pending);
@@ -223,7 +219,7 @@ async function main() {
   if (options.recover && (options.execute || options.key)) throw new Error('--recover cannot be combined with --execute or --key');
   const goalPath = path.resolve(home(options.goal));
   const goal = validateFtCallGoal(JSON.parse(fs.readFileSync(goalPath, 'utf8')));
-  const provider = new providers.JsonRpcProvider({ url: validateRpcEndpoint(options.rpc || process.env.NEAR_TESTNET_RPC || 'https://test.rpc.fastnear.com') });
+  const provider = new PaymentRpcProvider(options.rpc || process.env.NEAR_TESTNET_RPC || 'https://test.rpc.fastnear.com');
   const state = path.resolve(home(options.state || `${goalPath}.bouncer-journal.json`));
   if (options.recover && !fs.existsSync(state)) throw new Error('original journal not found; recovery cannot create one');
   const journal = options.execute || options.recover ? new FileJournal(state, goal.contract_id, goal.owner_account_id) : null;

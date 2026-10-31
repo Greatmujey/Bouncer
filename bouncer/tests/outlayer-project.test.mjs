@@ -1,9 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import nearApi from 'near-api-js';
 import { validateProjectGoal, verifyProjectResult, runProjectGoal, recoverProjectGoal } from '../agent/outlayer-project.mjs';
-
-const key = 'ed25519:agent', hashBytes = Buffer.alloc(32, 43), hash = nearApi.utils.serialize.base_encode(hashBytes);
+import { signingFixture } from './signing-fixture.mjs';
 const initId = '6'.repeat(44), requestId = '7'.repeat(44), completeId = '8'.repeat(44), refundId = '9'.repeat(44);
 const route = { project: { project_id: 'connectors.outlayer.testnet/connector-probe', version_key: 'a'.repeat(64),
   usd_policy_id: 'api-token', token: 'usdc.fakes.testnet', attached_usd: '15000', input_data: '{"operation":"fetch"}',
@@ -16,6 +14,8 @@ const event = (event, data) => `EVENT_JSON:${JSON.stringify({ standard: 'near-ou
 const source = () => ({ WasmUrl: { url: 'https://example.test/pinned.wasm', hash: route.project.version_key, build_target: 'wasm32-wasip2' } });
 const limits = () => ({ max_instructions: route.project.max_instructions, max_memory_mb: route.project.max_memory_mb, max_execution_seconds: route.project.max_execution_seconds });
 const signedArgs = () => ({ native_policy_id: goal.native_policy_id, amount: goal.amount, expected_route: goal.route });
+const signing = signingFixture({ ownerId: goal.owner_account_id, contractId: goal.contract_id, method: 'execute_outlayer_project', args: signedArgs() });
+const { key, hash } = signing;
 const providerArgs = () => ({ source: { Project: { project_id: route.project.project_id, version_key: route.project.version_key } },
   resource_limits: limits(), input_data: route.project.input_data, secrets_ref: null, response_format: 'Json', payer_account_id: goal.owner_account_id, params: { attached_usd: '15000' } });
 const split = `Split 15000 stablecoin for project ${route.project.project_id}: 15000 to author ${goal.expected_author}, 0 to owner connectors.outlayer.testnet (attached=15000, refund=0)`;
@@ -57,17 +57,11 @@ function fixture() {
       if (method === 'get_version') return { wasm_hash: route.project.version_key, source: source() };
       throw new Error(`unexpected view ${method}`);
     },
-    async sendTransactionUntil(signed, wait) { sends++; assert.equal(wait, 'FINAL'); assert.deepEqual(signed, { signed: true });
+    async sendTransactionUntil(signed, wait) { sends++; assert.equal(wait, 'FINAL'); assert.equal(signed.transaction.receiverId, goal.contract_id);
       assert.equal(journal.get(goal.id).status, 'pending'); assert.equal(journal.get(goal.id).tx_hash, hash); return { transaction_outcome: { id: hash } }; },
     async txStatusReceipts(tx, owner, wait) { assert.equal(tx, hash); assert.equal(owner, goal.owner_account_id); assert.equal(wait, 'FINAL'); return finalResult(); },
   };
-  const account = { accountId: goal.owner_account_id,
-    signer: { async getPublicKey() { return key; }, async signTransaction(tx) { assert.deepEqual(tx, { unsigned: true }); return [hashBytes, { signed: true }]; } },
-    async createTransaction(receiver, actions, publicKey) {
-      assert.equal(receiver, goal.contract_id); assert.equal(publicKey, key); const call = actions[0].functionCall;
-      assert.equal(call.methodName, 'execute_outlayer_project'); assert.equal(call.deposit, 0n); assert.equal(call.gas, 300n * 10n ** 12n);
-      assert.deepEqual(JSON.parse(Buffer.from(call.args).toString()), signedArgs()); return { unsigned: true };
-    } };
+  const account = signing.newAccount();
   return { provider, account, journal, state, sends: () => sends };
 }
 const run = (f, opts = {}) => runProjectGoal({ goal, provider: f.provider, account: f.account, publicKey: key, journal: f.journal, log: () => {}, ...opts });
@@ -147,4 +141,34 @@ test('new paid-project sends require the distinct v7 storage layout', async () =
   const f = fixture(), call = f.provider.callFunction;
   f.provider.callFunction = async (id, method, ...rest) => method === 'contract_version' ? 'bouncer-agent-v6' : call(id, method, ...rest);
   await assert.rejects(run(f), /unsupported Bouncer version/); assert.equal(f.sends(), 0);
+});
+
+test('paid-project runner refuses altered prepared and signed calls before journaling or payment', async () => {
+  for (const mutate of [
+    tx => { tx.receiverId = 'other.testnet'; }, tx => { tx.signerId = 'other.testnet'; },
+    tx => { tx.actions[0].functionCall.methodName = 'execute'; }, tx => { tx.actions[0].functionCall.args = Buffer.from('{}'); },
+    tx => { tx.actions[0].functionCall.deposit = 1n; }, tx => { tx.actions[0].functionCall.gas = 1n; },
+    tx => { tx.actions.push(tx.actions[0]); },
+  ]) {
+    const f = fixture(), create = f.account.createTransaction;
+    f.account.createTransaction = async (...args) => { const tx = await create(...args); mutate(tx); return tx; };
+    await assert.rejects(run(f, { execute: true }), /prepared transaction does not match/);
+    assert.equal(f.state.size, 0); assert.equal(f.sends(), 0);
+  }
+  for (const mutate of [
+    ([hash]) => { hash[0] ^= 1; }, ([, signed]) => { signed.transaction.receiverId = 'other.testnet'; },
+    ([, signed]) => { signed.signature.data[0] ^= 1; },
+    ([, signed]) => { signed.signature.enum = 'secp256k1Signature'; },
+  ]) {
+    const f = fixture(), sign = f.account.signer.signTransaction;
+    f.account.signer.signTransaction = async tx => { const result = await sign(tx); mutate(result); return result; };
+    await assert.rejects(run(f, { execute: true }), /signed transaction does not match/);
+    assert.equal(f.state.size, 0); assert.equal(f.sends(), 0);
+  }
+});
+
+test('paid-project runner never broadcasts if the pending journal cannot be persisted', async () => {
+  const f = fixture(); f.journal.put = () => { throw new Error('simulated fsync failure'); };
+  await assert.rejects(run(f, { execute: true }), /simulated fsync failure/);
+  assert.equal(f.sends(), 0); assert.equal(f.state.size, 0);
 });

@@ -1,10 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import nearApi from 'near-api-js';
 import { assertProjectRegistry, expectedBurnChecksum, validateProjectGoal, verifyProjectResult, runProjectGoal, recoverProjectGoal } from '../agent/outlayer-project.mjs';
+import { signingFixture } from './signing-fixture.mjs';
 
-const projectId = 'connectors.outlayer.testnet/connector-probe', key = 'ed25519:agent';
-const hashBytes = Buffer.alloc(32, 31), hash = nearApi.utils.serialize.base_encode(hashBytes);
+const projectId = 'connectors.outlayer.testnet/connector-probe';
 const ids = ['6', '7', '8', '9'].map(n => n.repeat(44));
 const goal = { id: 'independent-burn', contract_id: 'bouncer.testnet', owner_account_id: 'owner.testnet',
   native_policy_id: 'compute-native', amount: '100', expected_author: 'zavodil.testnet',
@@ -21,6 +20,8 @@ const raw64 = value => Buffer.from(value).toString('base64');
 const event = (event, data) => `EVENT_JSON:${JSON.stringify({ standard: 'near-outlayer', version: '1.0.0', event, data: [data] })}`;
 const source = () => ({ WasmUrl: { url: 'https://example.test/pinned.wasm', hash: goal.route.project.version_key, build_target: 'wasm32-wasip2' } });
 const signedArgs = () => ({ native_policy_id: goal.native_policy_id, amount: goal.amount, expected_route: goal.route });
+const signing = signingFixture({ ownerId: goal.owner_account_id, contractId: goal.contract_id, method: 'execute_outlayer_project', args: signedArgs() });
+const { key, hash } = signing;
 const providerArgs = () => ({ source: { Project: { project_id: projectId, version_key: goal.route.project.version_key } },
   resource_limits: { max_instructions: 1_000_000_000, max_memory_mb: 256, max_execution_seconds: 60 },
   input_data: goal.route.project.input_data, secrets_ref: null, response_format: 'Json', payer_account_id: goal.owner_account_id,
@@ -64,17 +65,11 @@ function fixture() {
       if (method === 'get_version') return { wasm_hash: goal.route.project.version_key, source: source() };
       throw new Error(`unexpected view ${method}`);
     },
-    async sendTransactionUntil(signed, wait) { sends++; assert.equal(wait, 'FINAL'); assert.deepEqual(signed, { signed: true });
+    async sendTransactionUntil(signed, wait) { sends++; assert.equal(wait, 'FINAL'); assert.equal(signed.transaction.receiverId, goal.contract_id);
       assert.equal(journal.get(goal.id).status, 'pending'); assert.equal(journal.get(goal.id).tx_hash, hash); return { transaction_outcome: { id: hash } }; },
     async txStatusReceipts(tx, owner, wait) { assert.equal(tx, hash); assert.equal(owner, goal.owner_account_id); assert.equal(wait, 'FINAL'); return finalResult(); },
   };
-  const account = { accountId: goal.owner_account_id,
-    signer: { async getPublicKey() { return key; }, async signTransaction(tx) { assert.deepEqual(tx, { unsigned: true }); return [hashBytes, { signed: true }]; } },
-    async createTransaction(receiver, actions, publicKey) {
-      assert.equal(receiver, goal.contract_id); assert.equal(publicKey, key); const call = actions[0].functionCall;
-      assert.equal(call.methodName, 'execute_outlayer_project'); assert.equal(call.deposit, 0n);
-      assert.deepEqual(JSON.parse(Buffer.from(call.args).toString()), signedArgs()); return { unsigned: true };
-    } };
+  const account = signing.newAccount();
   return { provider, account, journal, entries, sends: () => sends };
 }
 const run = (f, options = {}) => runProjectGoal({ goal, provider: f.provider, account: f.account, publicKey: key, journal: f.journal, log: () => {}, ...options });

@@ -12,9 +12,9 @@ import { validateRpcEndpoint } from '../shared/rpc-endpoint.mjs';
 import { validateProviderOrigin } from '../shared/provider-origin.mjs';
 import { assertFinalPaymentReceipts } from '../shared/final-payment.mjs';
 import { isTransactionHash, verifyDirectPayment } from '../shared/direct-payment-settlement.mjs';
-import { MonotonicAccount } from './near-account.mjs';
+import { MonotonicAccount, PaymentRpcProvider } from './near-account.mjs';
 
-const { KeyPair, KeyPairSigner, providers, transactions, utils } = nearApi;
+const { KeyPair, KeyPairSigner, transactions, utils } = nearApi;
 const DEFAULT_RPC = 'https://test.rpc.fastnear.com';
 const CONTRACT_VERSIONS = new Set(['bouncer-agent-v4', 'bouncer-agent-v5', 'bouncer-agent-v6', 'bouncer-agent-v7', 'bouncer-agent-v8', 'bouncer-agent-v9']);
 const U128_MAX = (1n << 128n) - 1n;
@@ -342,7 +342,7 @@ export function createRuntime({ plan: rawPlan, keyFile, rpc }) {
     throw new Error('agent key file does not match owner_account_id');
   }
   const key = KeyPair.fromString(credentials.private_key);
-  const provider = new providers.JsonRpcProvider({ url: rpcUrl });
+  const provider = new PaymentRpcProvider(rpcUrl);
   const account = new MonotonicAccount(plan.owner_account_id, provider, new KeyPairSigner(key));
   return { provider, account, publicKey: key.getPublicKey() };
 }

@@ -126,7 +126,14 @@ not prove all possible callback, provider or token failure cases.
    concurrent processes using the same key or
    retry a failed send. Use one writer per key. For OutLayer and opt-in
    `--durable` direct FT payments, the signed transaction hash is journaled
-   before the one broadcast and can be re-queried without a private key. This
+   before the one broadcast and can be re-queried without a private key. The
+   durable direct, FT-call, paid-project, native OutLayer and oracle runners
+   check the prepared action, arguments, locally derived hash and signature
+   against the reviewed call before journaling. The built-in payment RPC makes
+   one HTTP send attempt and bounds receipt reads; injected RPC providers can
+   have different retry behavior and must be reviewed separately. A timed-out
+   read remains unresolved, never evidence that a transaction did not execute.
+   These checks do not protect against a compromised host or owner key. Recovery
    requires trusted FINAL RPC receipts, Bouncer code and token code; it verifies
    payment, not delivery. An unknown or expired hash stays unresolved and is
    never automatically resent. Existing direct-payment entries and runs that

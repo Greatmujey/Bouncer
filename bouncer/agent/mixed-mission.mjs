@@ -12,12 +12,11 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import nearApi from 'near-api-js';
 import { FileJournal } from './procurement.mjs';
-import { MonotonicAccount } from './near-account.mjs';
+import { MonotonicAccount, PaymentRpcProvider } from './near-account.mjs';
 import { runOutlayerGoal, recoverOutlayerGoal, validateOutlayerGoal } from './outlayer.mjs';
 import { runOracleGoal, recoverOracleGoal, validateOracleGoal, assertOracleFreshForUse } from './oracle-outlayer.mjs';
 import { runResourceAgent, routedResourceProvider } from './resource-agent.mjs';
 import { startConfiguredProvider } from '../services/resource-provider.mjs';
-import { validateRpcEndpoint } from '../shared/rpc-endpoint.mjs';
 
 /**
  * Read-only preview of both asset paths before any new payment, then verify
@@ -136,7 +135,7 @@ async function main() {
   if (!resources || resources.contract_id !== goal.contract_id || resources.owner_account_id !== goal.owner_account_id || !Array.isArray(resources.goals)) {
     throw new Error('mission resources must name the same contract and owner as the OutLayer goal');
   }
-  const provider = new nearApi.providers.JsonRpcProvider({ url: validateRpcEndpoint(options.rpc || process.env.NEAR_TESTNET_RPC || 'https://test.rpc.fastnear.com') });
+  const provider = new PaymentRpcProvider(options.rpc || process.env.NEAR_TESTNET_RPC || 'https://test.rpc.fastnear.com');
   const ft = accountFromFile(options['ft-key'], goal.owner_account_id, provider);
   const outlayer = accountFromFile(options['outlayer-key'], goal.owner_account_id, provider);
   const journalPath = path.resolve(expandHome(options.journal || config.journal_path || `${missionPath}.bouncer-journal.json`));

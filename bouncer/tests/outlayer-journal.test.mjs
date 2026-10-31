@@ -3,15 +3,15 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import nearApi from 'near-api-js';
 import { runOutlayerGoal, recoverOutlayerGoal } from '../agent/outlayer.mjs';
 import { FileJournal } from '../agent/procurement.mjs';
 import { finishDemoEvidence } from '../demo-outlayer.mjs';
-
-const key = 'ed25519:agent';
-const bytes = Buffer.alloc(32, 4), hash = nearApi.utils.serialize.base_encode(bytes);
+import { signingFixture } from './signing-fixture.mjs';
 const goal = { id: 'random-1', contract_id: 'bouncer.testnet', owner_account_id: 'owner.testnet', policy_id: 'external', amount: '100', input: { min: 1, max: 100 },
   program: { url: 'https://example.org/program.wasm', sha256: 'a'.repeat(64), build_target: 'wasm32-wasip1', max_instructions: 100, max_memory_mb: 128, max_execution_seconds: 60 } };
+const signedArgs = { policy_id: goal.policy_id, amount: goal.amount, input_data: JSON.stringify(goal.input), expected_program: goal.program };
+const signing = signingFixture({ ownerId: goal.owner_account_id, contractId: goal.contract_id, method: 'execute_outlayer', args: signedArgs });
+const { key, hash } = signing;
 function fixture() {
   const entries = new Map(); let sends = 0;
   const journal = { get: id => entries.get(id), put: (id, item) => entries.set(id, item) };
@@ -30,8 +30,7 @@ function fixture() {
     async sendTransactionUntil() { sends++; throw new Error('uncertain broadcast'); },
     async txStatusReceipts() { throw new Error('transaction unavailable'); },
   };
-  const account = { accountId: goal.owner_account_id, async createTransaction() { return {}; },
-    signer: { async getPublicKey() { return key; }, async signTransaction() { return [bytes, {}]; } } };
+  const account = signing.newAccount();
   return { journal, entries, provider, account, sends: () => sends };
 }
 const run = f => runOutlayerGoal({ goal, provider: f.provider, account: f.account, publicKey: key, journal: f.journal, execute: true, log: () => {} });

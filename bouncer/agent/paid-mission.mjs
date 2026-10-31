@@ -12,12 +12,11 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import nearApi from 'near-api-js';
 import { FileJournal } from './procurement.mjs';
-import { MonotonicAccount } from './near-account.mjs';
+import { MonotonicAccount, PaymentRpcProvider } from './near-account.mjs';
 import { runFtCallGoal, recoverFtCallGoal, validateFtCallGoal } from './ft-call.mjs';
 import { runProjectGoal, recoverProjectGoal, validateProjectGoal } from './outlayer-project.mjs';
 import { runResourceAgent, routedResourceProvider } from './resource-agent.mjs';
 import { startConfiguredProvider } from '../services/resource-provider.mjs';
-import { validateRpcEndpoint } from '../shared/rpc-endpoint.mjs';
 
 const OUTLAYER = 'outlayer.testnet', DEPOSIT = '{"action":"deposit_balance"}';
 function validateMission(funding, project, resources) {
@@ -145,7 +144,7 @@ async function main() {
   const missionPath = path.resolve(home(options.mission)), config = JSON.parse(fs.readFileSync(missionPath, 'utf8'));
   const paid = validateProjectGoal(config?.project_goal), fund = validateFtCallGoal(config?.funding_goal), resources = config?.resources;
   if (!resources || resources.contract_id !== paid.contract_id || resources.owner_account_id !== paid.owner_account_id || !Array.isArray(resources.goals)) throw new Error('mission resources must name the same contract and owner');
-  const provider = new nearApi.providers.JsonRpcProvider({ url: validateRpcEndpoint(options.rpc || process.env.NEAR_TESTNET_RPC || 'https://test.rpc.fastnear.com') });
+  const provider = new PaymentRpcProvider(options.rpc || process.env.NEAR_TESTNET_RPC || 'https://test.rpc.fastnear.com');
   const funding = accountFromFile(options['funding-key'], paid.owner_account_id, provider);
   const project = accountFromFile(options['project-key'], paid.owner_account_id, provider);
   const ft = accountFromFile(options['ft-key'], paid.owner_account_id, provider);

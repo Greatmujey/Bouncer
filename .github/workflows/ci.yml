@@ -392,6 +392,36 @@ jobs:
       - run: npm ci --prefix bouncer --no-audit --no-fund
       - run: node bouncer/scripts/verify-project-history.mjs
 
+  reconcile-project-journal:
+    name: Reconcile existing paid-project journal (read only)
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[project-reconcile]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: ft-call-unresolved-journals
+          path: ${{ runner.temp }}/paid-project-evidence
+          github-token: ${{ github.token }}
+          run-id: 41106347709
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      # Exactly one existing public journal and goal. This script has no key,
+      # send or write path: even an unknown hash is never automatically resent.
+      - name: Inspect recorded hash and FINAL receipts without payment
+        shell: bash
+        run: |
+          mapfile -t journals < <(find "$RUNNER_TEMP/paid-project-evidence" -type f -name journal.json)
+          mapfile -t goals < <(find "$RUNNER_TEMP/paid-project-evidence" -type f -name project-goal.json)
+          test "${#journals[@]}" -eq 1 && test "${#goals[@]}" -eq 1
+          node bouncer/scripts/reconcile-project-journal.mjs "${journals[0]}" "${goals[0]}"
+
   independent-market-discovery:
     name: Independent marketplace catalog (read only)
     if: github.event_name == 'push' && contains(github.event.head_commit.message, '[independent-discovery]')

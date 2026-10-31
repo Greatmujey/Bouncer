@@ -9,11 +9,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { pathToFileURL } from 'node:url';
-import nearApi from 'near-api-js';
+import { PaymentRpcProvider } from './near-account.mjs';
 import { FileJournal, normalizeProviderRoute, requestFingerprint, validatePlan } from './procurement.mjs';
 import { planFromQuotes } from './resource-agent.mjs';
 import { isTransactionHash, verifyDirectPayment } from '../shared/direct-payment-settlement.mjs';
-import { validateRpcEndpoint } from '../shared/rpc-endpoint.mjs';
 
 export async function recoverDirectPayment({ plan: rawPlan, requestId, provider, journal, update = true, log = console.log }) {
   const plan = validatePlan(rawPlan);
@@ -86,7 +85,7 @@ async function main() {
   if (typeof contractId !== 'string' || typeof ownerId !== 'string') throw new Error('invalid owner or contract in reviewed input');
   const state = path.resolve(home(options.state));
   if (!fs.existsSync(state)) throw new Error('original journal not found; recovery cannot create one');
-  const provider = new nearApi.providers.JsonRpcProvider({ url: validateRpcEndpoint(options.rpc || process.env.NEAR_TESTNET_RPC || 'https://test.rpc.fastnear.com') });
+  const provider = new PaymentRpcProvider(options.rpc || process.env.NEAR_TESTNET_RPC || 'https://test.rpc.fastnear.com');
   const journal = new FileJournal(state, contractId, ownerId);
   try {
     const result = plan ? await recoverDirectPayment({ plan, requestId: options.id, provider, journal })

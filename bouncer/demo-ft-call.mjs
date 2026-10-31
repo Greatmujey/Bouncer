@@ -13,7 +13,7 @@ import util from 'node:util';
 import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import nearApi from 'near-api-js';
-import { MonotonicAccount } from './agent/near-account.mjs';
+import { MonotonicAccount, PaymentRpcProvider } from './agent/near-account.mjs';
 import { FileJournal } from './agent/procurement.mjs';
 import { runFtCallGoal, recoverFtCallGoal } from './agent/ft-call.mjs';
 import { assertProjectRegistry, runProjectGoal, recoverProjectGoal } from './agent/outlayer-project.mjs';
@@ -23,9 +23,9 @@ import { httpResourceProvider } from './agent/resource-agent.mjs';
 import { validateRpcEndpoint } from './shared/rpc-endpoint.mjs';
 import { waitForNewTestnetKey } from './shared/testnet-ready.mjs';
 
-const { KeyPair, KeyPairSigner, providers, transactions } = nearApi;
+const { KeyPair, KeyPairSigner, transactions } = nearApi;
 const RPC = validateRpcEndpoint(process.env.NEAR_TESTNET_RPC || 'https://test.rpc.fastnear.com');
-const provider = new providers.JsonRpcProvider({ url: RPC });
+const provider = new PaymentRpcProvider(RPC);
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const ONE = 10n ** 24n, TGAS = 10n ** 12n;
 const TOKEN = 'usdc.fakes.testnet', WRAP = 'wrap.testnet', REF = 'ref-finance-101.testnet', OUTLAYER = 'outlayer.testnet';
@@ -266,7 +266,12 @@ async function main() {
   fs.writeFileSync(goalPath, JSON.stringify(goal, null, 2) + '\n', { mode: 0o600 });
   let journal = new FileJournal(state, contractId, ownerId), sends = 0, inject = true, completed = false;
   const faulty = new Proxy(provider, { get(target, property) {
-    if (property === 'sendTransactionUntil') return async (...args) => { sends++; return target.sendTransactionUntil(...args); };
+    if (property === 'sendTransactionUntil') return async (...args) => {
+      const pending = journal.get(goal.id);
+      if (pending?.status !== 'pending' || typeof pending.tx_hash !== 'string') throw new Error('funding hash must be journaled before broadcast');
+      console.log(`::notice title=One-shot funding hash journaled::contract=${contractId}; owner=${ownerId}; tx=${pending.tx_hash}; status=pending_before_broadcast; do_not_resend=true`);
+      sends++; return target.sendTransactionUntil(...args);
+    };
     if (property === 'txStatusReceipts') return async (...args) => { const result = await target.txStatusReceipts(...args);
       if (!inject) return result; inject = false; return { ...result, receipts: [] }; };
     const value = Reflect.get(target, property, target); return typeof value === 'function' ? value.bind(target) : value;
@@ -321,7 +326,12 @@ async function main() {
     fs.writeFileSync(projectPath, JSON.stringify(projectGoal, null, 2) + '\n', { mode: 0o600 });
     let projectSends = 0, projectInject = true;
     const projectFaulty = new Proxy(provider, { get(target, property) {
-      if (property === 'sendTransactionUntil') return async (...args) => { projectSends++; return target.sendTransactionUntil(...args); };
+      if (property === 'sendTransactionUntil') return async (...args) => {
+        const pending = journal.get(projectGoal.id);
+        if (pending?.status !== 'pending' || typeof pending.tx_hash !== 'string') throw new Error('project hash must be journaled before broadcast');
+        console.log(`::notice title=One-shot project hash journaled::contract=${contractId}; owner=${ownerId}; tx=${pending.tx_hash}; status=pending_before_broadcast; do_not_resend=true`);
+        projectSends++; return target.sendTransactionUntil(...args);
+      };
       if (property === 'txStatusReceipts') return async (...args) => { const result = await target.txStatusReceipts(...args);
         if (!projectInject) return result; projectInject = false; return { ...result, receipts: [] }; };
       const value = Reflect.get(target, property, target); return typeof value === 'function' ? value.bind(target) : value;

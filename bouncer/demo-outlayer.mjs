@@ -10,15 +10,15 @@ import util from 'node:util';
 import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import nearApi from 'near-api-js';
-import { MonotonicAccount } from './agent/near-account.mjs';
+import { MonotonicAccount, PaymentRpcProvider } from './agent/near-account.mjs';
 import { FileJournal } from './agent/procurement.mjs';
 import { runOutlayerGoal, recoverOutlayerGoal, RANDOM_TESTNET_PROGRAM } from './agent/outlayer.mjs';
 import { validateRpcEndpoint } from './shared/rpc-endpoint.mjs';
 import { waitForNewTestnetKey } from './shared/testnet-ready.mjs';
 
-const { KeyPair, KeyPairSigner, providers, transactions } = nearApi;
+const { KeyPair, KeyPairSigner, transactions } = nearApi;
 const RPC = validateRpcEndpoint(process.env.NEAR_TESTNET_RPC || 'https://test.rpc.fastnear.com');
-const provider = new providers.JsonRpcProvider({ url: RPC });
+const provider = new PaymentRpcProvider(RPC);
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const ONE = 10n ** 24n, TGAS = 10n ** 12n;
 const amount = ONE / 10n, funding = 3n * amount;

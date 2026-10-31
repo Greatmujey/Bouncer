@@ -19,12 +19,12 @@ import { isDeepStrictEqual } from 'node:util';
 import { pathToFileURL } from 'node:url';
 import nearApi from 'near-api-js';
 import { FileJournal } from './procurement.mjs';
-import { MonotonicAccount } from './near-account.mjs';
+import { MonotonicAccount, PaymentRpcProvider } from './near-account.mjs';
 import { normalizeProgram, verifyOutlayerEvidence, OUTLAYER, NATIVE } from './outlayer.mjs';
 import { isTestnetAccount } from '../shared/account-id.mjs';
-import { validateRpcEndpoint } from '../shared/rpc-endpoint.mjs';
+import { signReviewedCall } from './reviewed-transaction.mjs';
 
-const { KeyPair, KeyPairSigner, providers, transactions, utils } = nearApi;
+const { KeyPair, KeyPairSigner } = nearApi;
 const HASH = '3585b3890f49748713b43ccb9b0ef4148f317d62f4d598db80fdaffc3f3185a0';
 // Independently published project version observed in the testnet registry;
 // its WasmUrl is pinned, not followed through the mutable active-version view.
@@ -226,13 +226,8 @@ export async function runOracleGoal({ goal: rawGoal, provider, account, publicKe
   if (!Array.isArray(verdict) || verdict.length !== 2 || typeof verdict[0] !== 'boolean') throw new Error('invalid policy verdict');
   if (!verdict[0]) { log(`[oracle] BLOCKED ${goal.id}: ${String(verdict[1]).slice(0, 200)}`); return { status: 'BLOCKED' }; }
   if (!execute) { log(`[oracle] READY ${goal.id}: at most ${goal.amount} yoctoNEAR to ${OUTLAYER} (dry run)`); return { status: 'READY' }; }
-  if (!account.signer || typeof account.createTransaction !== 'function' ||
-      String(await account.signer.getPublicKey()) !== String(publicKey)) throw new Error('account signer does not match the reviewed agent key');
-  const action = transactions.functionCall('execute_outlayer_native_project', signedArgs(goal), GAS, 0n);
-  const transaction = await account.createTransaction(goal.contract_id, [action], publicKey);
-  const [hashBytes, signed] = await account.signer.signTransaction(transaction);
-  if (!(hashBytes instanceof Uint8Array) || hashBytes.length !== 32 || !signed) throw new Error('signer did not return a transaction hash');
-  const txHash = utils.serialize.base_encode(hashBytes);
+  const { txHash, signed } = await signReviewedCall({ account, publicKey, ownerId: goal.owner_account_id, contractId: goal.contract_id,
+    method: 'execute_outlayer_native_project', args: signedArgs(goal), gas: GAS });
   if (!validHash(txHash)) throw new Error('signer returned an invalid transaction hash');
   const pending = { fingerprint: fp, status: 'pending', oracle_goal: goal, agent_public_key: String(publicKey),
     tx_hash: txHash, started_at: new Date().toISOString() };
@@ -277,7 +272,7 @@ async function main() {
   if (options.recover && (options.execute || options.key)) throw new Error('--recover cannot be combined with --execute or --key');
   const goalPath = path.resolve(expandHome(options.goal));
   const goal = validateOracleGoal(JSON.parse(fs.readFileSync(goalPath, 'utf8')));
-  const provider = new providers.JsonRpcProvider({ url: validateRpcEndpoint(options.rpc || process.env.NEAR_TESTNET_RPC || 'https://test.rpc.fastnear.com') });
+  const provider = new PaymentRpcProvider(options.rpc || process.env.NEAR_TESTNET_RPC || 'https://test.rpc.fastnear.com');
   const state = path.resolve(expandHome(options.state || `${goalPath}.bouncer-journal.json`));
   if (options.recover && !fs.existsSync(state)) throw new Error('original journal not found; recovery cannot create one');
   const journal = options.execute || options.recover ? new FileJournal(state, goal.contract_id, goal.owner_account_id) : null;

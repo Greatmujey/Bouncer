@@ -1,6 +1,7 @@
 // TEST-ONLY transport for demo-multi-resource.mjs. No network transactions.
 import nearApi from 'near-api-js';
 import { mockHash, mockGuardedPayment } from './mock-guarded-payment.mjs';
+import { PaymentRpcProvider } from '../agent/near-account.mjs';
 const { Account, providers } = nearApi;
 const T = 10n ** 12n;
 const balances = new Map();
@@ -161,3 +162,4 @@ providers.JsonRpcProvider.prototype.viewTransactionStatus = async function (hash
 };
 
 providers.JsonRpcProvider.prototype.txStatusReceipts = providers.JsonRpcProvider.prototype.viewTransactionStatus;
+PaymentRpcProvider.prototype.txStatusReceipts = providers.JsonRpcProvider.prototype.viewTransactionStatus;

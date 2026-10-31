@@ -9,18 +9,17 @@ import crypto from 'node:crypto';
 import util from 'node:util';
 import { fileURLToPath } from 'node:url';
 import nearApi from 'near-api-js';
-import { MonotonicAccount } from './agent/near-account.mjs';
+import { MonotonicAccount, PaymentRpcProvider } from './agent/near-account.mjs';
 import { FileJournal } from './agent/procurement.mjs';
 import { runResourceAgent, httpResourceProvider } from './agent/resource-agent.mjs';
 import { recoverDirectPayment } from './agent/recover-direct-payment.mjs';
 import { createResourceProvider } from './services/resource-provider.mjs';
-import { validateRpcEndpoint } from './shared/rpc-endpoint.mjs';
 import { waitForNewTestnetKey } from './shared/testnet-ready.mjs';
 import { CIRCLE_TESTNET_USDC as TOKEN, WRAP_TESTNET as WRAP, REF_TESTNET as REF, OWNER_SETUP_INPUT,
   OWNER_SETUP_MAX_OUTPUT, DEMO_RESOURCE_PRICE as PRICE, selectOwnerSetupQuote } from './scripts/circle-testnet-setup.mjs';
 
-const { KeyPair, KeyPairSigner, providers, transactions } = nearApi;
-const provider = new providers.JsonRpcProvider({ url: validateRpcEndpoint(process.env.NEAR_TESTNET_RPC || 'https://test.rpc.fastnear.com') });
+const { KeyPair, KeyPairSigner, transactions } = nearApi;
+const provider = new PaymentRpcProvider(process.env.NEAR_TESTNET_RPC || 'https://test.rpc.fastnear.com');
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const ONE = 10n ** 24n, TGAS = 10n ** 12n, POLICY = 'circle-dev-resources';
 const accountFor = (id, key) => new MonotonicAccount(id, provider, new KeyPairSigner(key));

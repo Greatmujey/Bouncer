@@ -13,7 +13,7 @@ import util from 'node:util';
 import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import nearApi from 'near-api-js';
-import { MonotonicAccount } from './agent/near-account.mjs';
+import { MonotonicAccount, PaymentRpcProvider } from './agent/near-account.mjs';
 import { FileJournal } from './agent/procurement.mjs';
 import { runOracleGoal, recoverOracleGoal, assertOracleFreshForUse, assertOracleProjectRegistry,
   ORACLE_TESTNET_PROJECT } from './agent/oracle-outlayer.mjs';
@@ -25,9 +25,9 @@ import { waitForNewTestnetKey } from './shared/testnet-ready.mjs';
 import { CIRCLE_TESTNET_USDC as TOKEN, WRAP_TESTNET as WRAP, REF_TESTNET as REF, OWNER_SETUP_INPUT,
   OWNER_SETUP_MAX_OUTPUT, DEMO_RESOURCE_PRICE as PRICE, selectOwnerSetupQuote } from './scripts/circle-testnet-setup.mjs';
 
-const { KeyPair, KeyPairSigner, providers, transactions } = nearApi;
+const { KeyPair, KeyPairSigner, transactions } = nearApi;
 const RPC = validateRpcEndpoint(process.env.NEAR_TESTNET_RPC || 'https://test.rpc.fastnear.com');
-const provider = new providers.JsonRpcProvider({ url: RPC });
+const provider = new PaymentRpcProvider(RPC);
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const ONE = 10n ** 24n, TGAS = 10n ** 12n, MAX_NATIVE = ONE / 10n;
 const OUTLAYER = 'outlayer.testnet', NATIVE_POLICY = 'independent-price', FT_POLICY = 'circle-resources';

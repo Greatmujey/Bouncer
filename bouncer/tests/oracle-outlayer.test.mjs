@@ -1,10 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import nearApi from 'near-api-js';
 import { ORACLE_TESTNET_PROGRAM, ORACLE_NEAR_INPUT, ORACLE_COINBASE_NEAR_INPUT, ORACLE_TESTNET_PROJECT, ORACLE_PROJECT_ID, ORACLE_PROJECT_UUID, validateOracleGoal, verifyOracleResult, assertOracleFreshForUse,
   runOracleGoal, recoverOracleGoal } from '../agent/oracle-outlayer.mjs';
-
-const key = 'ed25519:agent', hashBytes = Buffer.alloc(32, 42), hash = nearApi.utils.serialize.base_encode(hashBytes);
+import { signingFixture } from './signing-fixture.mjs';
 const blockHash = 'B'.repeat(44), bouncerReceipt = '6'.repeat(44), requestReceipt = '7'.repeat(44);
 const completedReceipt = '8'.repeat(44), refundReceipt = '9'.repeat(44), stamp = 1_700_000_000;
 const goal = { id: 'oracle-near', contract_id: 'bouncer.testnet', owner_account_id: 'owner.testnet', policy_id: 'external-api',
@@ -16,6 +14,8 @@ const source = () => ({ WasmUrl: { url: ORACLE_TESTNET_PROGRAM.url, hash: ORACLE
 const limits = () => ({ max_instructions: goal.route.project.max_instructions, max_memory_mb: goal.route.project.max_memory_mb,
   max_execution_seconds: goal.route.project.max_execution_seconds });
 const signedArgs = () => ({ policy_id: goal.policy_id, amount: goal.amount, expected_route: goal.route });
+const signing = signingFixture({ ownerId: goal.owner_account_id, contractId: goal.contract_id, method: 'execute_outlayer_native_project', args: signedArgs() });
+const { key, hash } = signing;
 const outlayerArgs = () => ({ source: { Project: { project_id: ORACLE_PROJECT_ID, version_key: ORACLE_TESTNET_PROJECT.version_key } }, resource_limits: limits(), input_data: goal.route.project.input_data,
   secrets_ref: null, response_format: 'Json', payer_account_id: goal.owner_account_id, params: null });
 const output = () => ({ success: true, token_id: 'near', source: 'custom', price_usd: 2.75, timestamp: stamp,
@@ -60,20 +60,13 @@ function fixture() {
     },
     async block(query) { assert.deepEqual(query, { blockId: blockHash }); return { header: { hash: blockHash, timestamp_nanosec: `${stamp + 8}000000000` } }; },
     async sendTransactionUntil(signed, wait) {
-      sends++; assert.equal(wait, 'FINAL'); assert.deepEqual(signed, { signed: true });
+      sends++; assert.equal(wait, 'FINAL'); assert.equal(signed.transaction.receiverId, goal.contract_id);
       assert.equal(journal.get(goal.id).status, 'pending'); assert.equal(journal.get(goal.id).tx_hash, hash);
       return { transaction_outcome: { id: hash } };
     },
     async txStatusReceipts(tx, account, wait) { assert.equal(tx, hash); assert.equal(account, goal.owner_account_id); assert.equal(wait, 'FINAL'); return finalResult(); },
   };
-  const account = { accountId: goal.owner_account_id,
-    signer: { async getPublicKey() { return key; }, async signTransaction(tx) { assert.deepEqual(tx, { unsigned: true }); return [hashBytes, { signed: true }]; } },
-    async createTransaction(receiver, actions, publicKey) {
-      assert.equal(receiver, goal.contract_id); assert.equal(publicKey, key); assert.equal(actions.length, 1);
-      const call = actions[0].functionCall;
-      assert.equal(call.methodName, 'execute_outlayer_native_project'); assert.equal(call.deposit, 0n); assert.equal(call.gas, 300n * 10n ** 12n);
-      assert.deepEqual(JSON.parse(Buffer.from(call.args).toString()), signedArgs()); return { unsigned: true };
-    } };
+  const account = signing.newAccount();
   return { entries, journal, provider, account, sends: () => sends };
 }
 const run = (f, options = {}) => runOracleGoal({ goal, provider: f.provider, account: f.account, publicKey: key, journal: f.journal, log: () => {}, ...options });
@@ -203,4 +196,33 @@ test('recovery rejects a different transaction or a tampered completed record', 
   const old = f.journal.get(goal.id); f.journal.put(goal.id, { ...old, delivery: { ...old.delivery, charged_yocto: '11' } });
   await assert.rejects(recoverOracleGoal({ goal, provider: f.provider, journal: f.journal, log: () => {} }), /recorded result differs/);
   assert.equal(f.sends(), 1);
+});
+
+test('oracle runner rejects altered transactions and signatures before journal or broadcast', async () => {
+  for (const mutate of [
+    tx => { tx.receiverId = 'other.testnet'; }, tx => { tx.signerId = 'other.testnet'; },
+    tx => { tx.actions[0].functionCall.args = Buffer.from('{}'); }, tx => { tx.actions[0].functionCall.deposit = 1n; },
+    tx => { tx.actions[0].functionCall.gas = 1n; }, tx => { tx.actions.push(tx.actions[0]); },
+  ]) {
+    const f = fixture(), create = f.account.createTransaction;
+    f.account.createTransaction = async (...args) => { const tx = await create(...args); mutate(tx); return tx; };
+    await assert.rejects(run(f, { execute: true }), /prepared transaction does not match/);
+    assert.equal(f.entries.size, 0); assert.equal(f.sends(), 0);
+  }
+  for (const mutate of [
+    ([hash]) => { hash[0] ^= 1; }, ([, signed]) => { signed.transaction.receiverId = 'other.testnet'; },
+    ([, signed]) => { signed.signature.data[0] ^= 1; },
+    ([, signed]) => { signed.signature.enum = 'secp256k1Signature'; },
+  ]) {
+    const f = fixture(), sign = f.account.signer.signTransaction;
+    f.account.signer.signTransaction = async tx => { const result = await sign(tx); mutate(result); return result; };
+    await assert.rejects(run(f, { execute: true }), /signed transaction does not match/);
+    assert.equal(f.entries.size, 0); assert.equal(f.sends(), 0);
+  }
+});
+
+test('oracle runner does not broadcast if the pending journal write fails', async () => {
+  const f = fixture(); f.journal.put = () => { throw new Error('simulated fsync failure'); };
+  await assert.rejects(run(f, { execute: true }), /simulated fsync failure/);
+  assert.equal(f.sends(), 0); assert.equal(f.entries.size, 0);
 });

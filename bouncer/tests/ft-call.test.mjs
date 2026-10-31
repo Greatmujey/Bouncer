@@ -1,10 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import nearApi from 'near-api-js';
 import { validateFtCallGoal, verifyFtCallSettlement, runFtCallGoal, recoverFtCallGoal } from '../agent/ft-call.mjs';
-
-const key = 'ed25519:agent';
-const hashBytes = Buffer.alloc(32, 44), hash = nearApi.utils.serialize.base_encode(hashBytes);
+import { signingFixture } from './signing-fixture.mjs';
 const initReceipt = '6'.repeat(44), tokenReceipt = '7'.repeat(44), callbackReceipt = '8'.repeat(44);
 const goal = { id: 'api-credit', contract_id: 'bouncer.testnet', owner_account_id: 'owner.testnet', policy_id: 'api',
   payee: 'vendor.testnet', token: 'usdc.fakes.testnet', amount: '100', msg: '{"action":"deposit_balance"}',
@@ -12,6 +9,8 @@ const goal = { id: 'api-credit', contract_id: 'bouncer.testnet', owner_account_i
 const encode = value => Buffer.from(JSON.stringify(value)).toString('base64');
 const signedArgs = () => ({ policy_id: goal.policy_id, payee: goal.payee, amount: goal.amount, expected_token: goal.token,
   expected_msg: goal.msg, expected_policy_revision: goal.policy_revision, expected_route_revision: goal.route_revision });
+const signing = signingFixture({ ownerId: goal.owner_account_id, contractId: goal.contract_id, method: 'execute_ft_call', args: signedArgs() });
+const { key, hash } = signing;
 const transferArgs = () => ({ receiver_id: goal.payee, amount: goal.amount, memo: 'bouncer:guarded-ft-call', msg: goal.msg });
 const callbackArgs = () => ({ policy_id: goal.policy_id, token: goal.token, amount: goal.amount, bucket: 24, policy_revision: goal.policy_revision });
 function outcome(id, executor_id, status, logs = [], receipt_ids = []) { return { id, outcome: { executor_id, status, logs, receipt_ids } }; }
@@ -49,22 +48,13 @@ function fixture() {
       throw new Error(`unexpected view ${method}`);
     },
     async sendTransactionUntil(signed, wait) {
-      sends++; assert.deepEqual(signed, { signed: true }); assert.equal(wait, 'FINAL');
+      sends++; assert.equal(signed.transaction.receiverId, goal.contract_id); assert.equal(wait, 'FINAL');
       assert.equal(journal.get(goal.id).status, 'pending'); assert.equal(journal.get(goal.id).tx_hash, hash);
       return { transaction_outcome: { id: hash } };
     },
     async txStatusReceipts(tx, owner, wait) { reads++; assert.equal(tx, hash); assert.equal(owner, goal.owner_account_id); assert.equal(wait, 'FINAL'); return finalResult(); },
   };
-  const account = { accountId: goal.owner_account_id,
-    signer: { async getPublicKey() { return key; }, async signTransaction(tx) { assert.deepEqual(tx, { unsigned: true }); return [hashBytes, { signed: true }]; } },
-    async createTransaction(receiver, actions, publicKey) {
-      assert.equal(receiver, goal.contract_id); assert.equal(publicKey, key); assert.equal(actions.length, 1);
-      const call = actions[0].functionCall;
-      assert.equal(call.methodName, 'execute_ft_call'); assert.equal(call.deposit, 0n); assert.equal(call.gas, 300n * 10n ** 12n);
-      assert.deepEqual(JSON.parse(Buffer.from(call.args).toString()), signedArgs());
-      return { unsigned: true };
-    },
-  };
+  const account = signing.newAccount();
   return { provider, account, journal, state, sends: () => sends, reads: () => reads };
 }
 const run = (f, opts = {}) => runFtCallGoal({ goal, provider: f.provider, account: f.account, publicKey: key, journal: f.journal, log: () => {}, ...opts });
@@ -160,4 +150,34 @@ test('FT calls support the distinct fresh v7 layout as well as existing v6 deplo
   const f = fixture(), call = f.provider.callFunction;
   f.provider.callFunction = async (id, method, ...rest) => method === 'contract_version' ? 'bouncer-agent-v7' : call(id, method, ...rest);
   assert.equal((await run(f)).status, 'READY'); assert.equal(f.sends(), 0);
+});
+
+test('FT-call runner rejects altered prepared and signed transactions before journaling or broadcast', async () => {
+  for (const mutate of [
+    tx => { tx.receiverId = 'other.testnet'; }, tx => { tx.signerId = 'other.testnet'; },
+    tx => { tx.actions[0].functionCall.methodName = 'execute'; }, tx => { tx.actions[0].functionCall.args = Buffer.from('{}'); },
+    tx => { tx.actions[0].functionCall.deposit = 1n; }, tx => { tx.actions[0].functionCall.gas = 1n; },
+    tx => { tx.actions.push(tx.actions[0]); },
+  ]) {
+    const f = fixture(), create = f.account.createTransaction;
+    f.account.createTransaction = async (...args) => { const tx = await create(...args); mutate(tx); return tx; };
+    await assert.rejects(run(f, { execute: true }), /prepared transaction does not match/);
+    assert.equal(f.state.size, 0); assert.equal(f.sends(), 0);
+  }
+  for (const mutate of [
+    ([hash]) => { hash[0] ^= 1; }, ([, signed]) => { signed.transaction.receiverId = 'other.testnet'; },
+    ([, signed]) => { signed.signature.data[0] ^= 1; },
+    ([, signed]) => { signed.signature.enum = 'secp256k1Signature'; },
+  ]) {
+    const f = fixture(), sign = f.account.signer.signTransaction;
+    f.account.signer.signTransaction = async tx => { const result = await sign(tx); mutate(result); return result; };
+    await assert.rejects(run(f, { execute: true }), /signed transaction does not match/);
+    assert.equal(f.state.size, 0); assert.equal(f.sends(), 0);
+  }
+});
+
+test('FT-call never broadcasts if the pending journal cannot be persisted', async () => {
+  const f = fixture(); f.journal.put = () => { throw new Error('simulated fsync failure'); };
+  await assert.rejects(run(f, { execute: true }), /simulated fsync failure/);
+  assert.equal(f.sends(), 0); assert.equal(f.state.size, 0);
 });
