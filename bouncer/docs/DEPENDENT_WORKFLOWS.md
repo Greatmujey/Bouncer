@@ -7,6 +7,43 @@ uses **synthetic chain receipts and a self-hosted development provider**; it is
 not a new live test or evidence that an independent FT seller supports Bouncer.
 Earlier live transactions are documented separately in the [README](../../README.md).
 
+## Optional isolated testnet check
+
+The opt-in `node bouncer/demo-oracle-mission.mjs --dependent-workflow` script
+sets up a **new** testnet account and v9 contract, then exercises the workflow
+runner rather than the older static mission. It uses an independent OutLayer
+oracle paid in native testnet NEAR; the following compute, storage and API
+orders are paid in Circle **testnet** USDC to Bouncer's self-hosted development
+provider. Neither token has real value. The full-access owner performs the
+bounded Ref testnet swap and vault funding as setup; those actions are not
+agent-guarded. The source and every resource have separate on-chain policies
+and restricted function-call keys.
+
+The demonstration previews the combined maximum budget, chains the actual
+verified result into each subsequent order, and deliberately discards the
+response **after** the first FT transaction was broadcast. It stops, shuts down
+the provider and journal, and invokes the ordinary workflow `--recover-only`
+CLI in a separate process **without keys**. Only after that exact hash and its
+delivery are verified can the FT agent resume the other steps. It checks the
+actual data dependencies, one source broadcast, three FT broadcasts, final
+vault balances and rolling spend. The GitHub Actions job runs only on an explicit
+`[dependent-live]` push after JS, Rust and WASM checks pass; regular pushes are
+unpaid. Its public journal, workflow, orders, provider state and optional
+success evidence are uploaded for 90 days. They contain no private keys but
+may disclose task data; do not use this public-artifact configuration for
+private workloads. The ephemeral demo keys are not retained, so unpaid steps
+cannot be resumed after the live process exits. Key-free recovery of already
+paid steps still requires the preserved workflow, original journal and seller
+state; when relocating the artifact, update only the local provider config's
+`data_dir` to its restored directory, never the frozen workflow or journal.
+
+The opt-in script makes new testnet transactions each time: do not rerun it to
+"fix" an ambiguous outcome. Preserve its logs and artifacts and investigate the
+recorded hash without paying again. It never adopts or touches the unrelated
+unresolved project transaction described below. The presence of this harness or
+passing synthetic tests alone is **not** a claim of a successful live run or an
+independent FT-paid service.
+
 ## What is reviewed
 
 The owner supplies a JSON manifest such as

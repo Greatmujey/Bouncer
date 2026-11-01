@@ -24,6 +24,26 @@ that is not evidence the operator is accepting or fulfilling paid orders. Do not
 submit a quote or send funds to this stale path. No MultiAgency purchase or
 independent FT-paid delivery has been demonstrated by Bouncer.
 
+### Independent-provider research: T402 direct payments
+
+[T402's NEAR documentation](https://docs.t402.io/reference/other-mechanisms)
+describes an `exact-direct` NEP-141 transfer followed by a transaction-hash
+proof. Inspection of the published [`@t402/near` 2.9.0 package](https://registry.npmjs.org/@t402/near/-/near-2.9.0.tgz)
+shows that its TypeScript facilitator checks the **root transaction receiver**
+is the token contract and looks for a root `ft_transfer` action. A Bouncer
+payment instead signs a zero-deposit `execute` action to the Bouncer contract,
+which then creates the token transfer in a receipt. Therefore this published
+verifier will reject the Bouncer transaction even if the nested transfer paid
+the seller. Sending a direct `ft_transfer` with a full-access key would bypass
+Bouncer's policy and 1-yocto security boundary; it is not an integration.
+
+A merchant would need to opt into a receipt-aware verification extension, such
+as the experimental Bouncer provider SDK below. Do not relabel that custom
+extension as stock T402 compatibility or assume an independent merchant accepts
+it. T402's documented `usdc.fakes.testnet` example is not Circle's canonical
+NEAR testnet USDC; exact token and network IDs must be owner-pinned. No T402
+seller was paid or contacted by this research.
+
 ## Trust and setup
 
 An owner must independently vet a provider and explicitly pin its HTTPS origin,

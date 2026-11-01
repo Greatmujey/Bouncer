@@ -191,6 +191,57 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+  dependent-workflow-live:
+    name: Dependent oracle to compute, storage and API (testnet)
+    # Explicit one-shot opt-in only. This uses a new, isolated testnet account;
+    # it does not touch or retry the separately unresolved project transaction.
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[dependent-live]')
+    needs: [js-tests, contract-tests, build-contract]
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: bouncer-wasm
+          path: .
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      # One native OutLayer purchase and three Circle testnet USDC payments to
+      # local development software. Testnet tokens have no value. No ambiguous
+      # payment is retried; recovery is by the original signed hash only.
+      - name: Run and recover the chained testnet workflow
+        shell: bash
+        run: |
+          set +e
+          node bouncer/demo-oracle-mission.mjs --dependent-workflow 2>&1 | tee "$RUNNER_TEMP/dependent-live.log"
+          result=${PIPESTATUS[0]}
+          if [ "$result" -ne 0 ]; then
+            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-4500).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=Dependent workflow live check failed::"+s)' "$RUNNER_TEMP/dependent-live.log"
+          fi
+          exit "$result"
+      # Both success and failure evidence are public testnet inputs, hashes and
+      # local-provider state. Ephemeral private keys are never written to disk.
+      - name: Preserve testnet workflow evidence, never keys
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependent-workflow-public-evidence
+          path: |
+            /tmp/bouncer-dependent-live-*/journal.json
+            /tmp/bouncer-dependent-live-*/oracle-goal.json
+            /tmp/bouncer-dependent-live-*/workflow.json
+            /tmp/bouncer-dependent-live-*/derived-orders.json
+            /tmp/bouncer-dependent-live-*/evidence.json
+            /tmp/bouncer-dependent-live-*/provider-config.json
+            /tmp/bouncer-dependent-live-*/development-provider/**
+          if-no-files-found: ignore
+          retention-days: 90
+
   ft-call-live:
     name: Guarded independent FT funding, paid test connector and refund (testnet)
     if: github.event_name == 'push' && (contains(github.event.head_commit.message, '[ft-call-live]') || contains(github.event.head_commit.message, '[paid-compute-live]'))

@@ -5,7 +5,7 @@ import crypto from 'node:crypto';
 import nearApi from 'near-api-js';
 import { ORACLE_PROJECT_ID, ORACLE_PROJECT_UUID, ORACLE_TESTNET_PROGRAM } from '../agent/oracle-outlayer.mjs';
 
-export function attachSyntheticOracle({ provider, goal, journal, events, ambiguous = false }) {
+export function attachSyntheticOracle({ provider, goal, journal, events, ambiguous = false, workflowId = 'research' }) {
   const keypair = nearApi.KeyPair.fromRandom('ed25519'), signer = new nearApi.KeyPairSigner(keypair), publicKey = keypair.getPublicKey();
   const blockHash = 'B'.repeat(44), bouncerReceipt = '6'.repeat(44), requestReceipt = '7'.repeat(44), completedReceipt = '8'.repeat(44), refundReceipt = '9'.repeat(44);
   const stamp = Math.floor(Date.now() / 1000), encode = value => Buffer.from(JSON.stringify(value)).toString('base64');
@@ -35,7 +35,7 @@ export function attachSyntheticOracle({ provider, goal, journal, events, ambiguo
     if (signed.transaction.actions[0].functionCall.methodName !== 'execute_outlayer_native_project') return send(signed, wait);
     sourceSends++; events.push('real-source:pay');
     sourceHash = nearApi.utils.serialize.base_encode(crypto.createHash('sha256').update(nearApi.transactions.encodeTransaction(signed.transaction)).digest());
-    assert.equal(journal.get('workflow:research').status, 'pending');
+    assert.equal(journal.get(`workflow:${workflowId}`).status, 'pending');
     assert.equal(journal.get(goal.id).status, 'pending'); assert.equal(journal.get(goal.id).tx_hash, sourceHash);
     const limits = { max_instructions: project.max_instructions, max_memory_mb: project.max_memory_mb, max_execution_seconds: project.max_execution_seconds };
     const data = { success: true, token_id: 'near', source: 'custom', price_usd: 2.75, timestamp: stamp };

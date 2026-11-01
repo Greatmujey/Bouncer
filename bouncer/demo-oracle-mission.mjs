@@ -18,6 +18,7 @@ import { FileJournal } from './agent/procurement.mjs';
 import { runOracleGoal, recoverOracleGoal, assertOracleFreshForUse, assertOracleProjectRegistry,
   ORACLE_TESTNET_PROJECT } from './agent/oracle-outlayer.mjs';
 import { runMixedMission } from './agent/mixed-mission.mjs';
+import { makeOracleDependentWorkflow, runDependentLiveProof } from './agent/dependent-live-proof.mjs';
 import { httpResourceProvider } from './agent/resource-agent.mjs';
 import { createResourceProvider } from './services/resource-provider.mjs';
 import { validateRpcEndpoint } from './shared/rpc-endpoint.mjs';
@@ -95,6 +96,9 @@ function notice(title, data) {
 }
 
 async function main() {
+  const args = process.argv.slice(2);
+  if (args.length > 1 || (args.length === 1 && args[0] !== '--dependent-workflow')) throw new Error('optional argument: --dependent-workflow');
+  const dependent = args[0] === '--dependent-workflow';
   if ((await provider.viewNodeStatus())?.chain_id !== 'testnet') throw new Error('RPC must report testnet');
   const meta = await view(TOKEN, 'ft_metadata');
   if (meta?.spec !== 'ft-1.0.0' || meta?.symbol !== 'USDC' || meta?.decimals !== 6) throw new Error('unexpected Circle testnet USDC metadata');
@@ -111,7 +115,7 @@ async function main() {
   const oracleKey = KeyPair.fromRandom('ed25519'), resourceKey = KeyPair.fromRandom('ed25519'), attackKey = KeyPair.fromRandom('ed25519');
   const suffix = crypto.randomBytes(4).toString('hex'), contractId = `bouncer-oracle-${suffix}.testnet`;
   const ownerId = `owner.${contractId}`, vendorId = `vendor.${contractId}`;
-  console.log(`Independent oracle + Circle TESTNET resource mission: contract=${contractId}; no real value; FT provider=self-hosted development`);
+  console.log(`Independent oracle + Circle TESTNET ${dependent ? 'dependent workflow' : 'resource mission'}: contract=${contractId}; no real value; FT provider=self-hosted development`);
   const contract = await createFunded(contractId, contractKey);
   const deployed = await setupAttempt('deploy', () => contract.signAndSendTransaction({ receiverId: contractId,
     actions: [transactions.deployContract(wasm)], waitUntil: 'FINAL' }));
@@ -166,11 +170,91 @@ async function main() {
     contractId, methodName: 'execute_outlayer_native_project', args: { policy_id: NATIVE_POLICY, amount: (MAX_NATIVE + 1n).toString(), expected_route: route },
     deposit: 0n, gas: 300n * TGAS, waitUntil: 'FINAL' }));
 
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bouncer-oracle-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), dependent ? 'bouncer-dependent-live-' : 'bouncer-oracle-'));
   const state = path.join(dir, 'journal.json'), goalPath = path.join(dir, 'oracle-goal.json');
   fs.writeFileSync(goalPath, JSON.stringify(goal, null, 2) + '\n', { mode: 0o600 });
   let journal = new FileJournal(state, contractId, ownerId), success = false, service;
   try {
+    if (dependent) {
+      // One manifest is frozen before the first workflow payment. Each data
+      // binding refers only to the previous verified output; financial routes
+      // remain owner-pinned. The provider is local development code, not an
+      // independent FT merchant.
+      const products = Object.fromEntries(['compute', 'storage', 'api'].map(resource => [resource,
+        { policy_id: FT_POLICY, token: TOKEN, payee: vendorId, amount: PRICE.toString() }]));
+      const config = { contract_id: contractId, owner_account_id: ownerId, products,
+        data_dir: path.join(dir, 'development-provider'), port: 0 };
+      const configPath = path.join(dir, 'provider-config.json'), workflowPath = path.join(dir, 'workflow.json');
+      const ordersPath = path.join(dir, 'derived-orders.json');
+      fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
+      const workflow = makeOracleDependentWorkflow({ goal, token: TOKEN, payee: vendorId,
+        policyId: FT_POLICY, price: PRICE.toString(), providerUrl: 'http://127.0.0.1:0' });
+      fs.writeFileSync(workflowPath, JSON.stringify(workflow, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
+      let client;
+      const startService = async () => {
+        service = createResourceProvider({ rpcProvider: provider, contractId, ownerAccountId: ownerId,
+          products, dataDir: config.data_dir });
+        await new Promise((resolve, reject) => { service.server.once('error', reject); service.server.listen(0, '127.0.0.1', resolve); });
+        client = httpResourceProvider(`http://127.0.0.1:${service.server.address().port}`);
+      };
+      await startService();
+      const derivedOrders = [];
+      const resources = { account: ftAgent, publicKey: resourceKey.getPublicKey(),
+        getQuote: async (order, context) => {
+          derivedOrders.push({ goal_id: context.goalId, ...structuredClone(order) });
+          fs.writeFileSync(ordersPath, JSON.stringify(derivedOrders, null, 2) + '\n', { mode: 0o600 });
+          return client.getQuote(order);
+        },
+        fulfill: (order, context) => client.fulfill(order, context),
+        readStorage: (objectId, context) => client.readStorage(objectId, context),
+      };
+      const proof = await runDependentLiveProof({ workflow, provider, source: { account: oracleAgent, publicKey: oracleKey.getPublicKey() },
+        resources, getJournal: () => journal, log: console.log,
+        recoverWithoutKeys: async ({ firstHash }) => {
+          // Stop both exclusive owners before launching a completely separate
+          // CLI process, with no key files or signer arguments. The process
+          // restarts the same local provider state at an ephemeral port.
+          await service.close(); service = undefined;
+          journal.close(); journal = undefined;
+          let recovered = false;
+          try {
+            const cli = await util.promisify(execFile)(process.execPath, [path.join(ROOT, 'bouncer/agent/workflow.mjs'),
+              '--workflow', workflowPath, '--journal', state, '--rpc', RPC, '--local-provider', configPath, '--recover-only'],
+            { timeout: 120_000, maxBuffer: 128 * 1024, env: { ...process.env, NEAR_TESTNET_RPC: RPC } });
+            if (!cli.stdout.includes('[workflow] RECOVERED') || !cli.stdout.includes('Next unpaid step: dependent-storage') ||
+                !cli.stdout.includes(firstHash)) throw new Error('key-free workflow CLI did not recover the recorded hash');
+            console.log(cli.stdout.trim()); recovered = true;
+          } finally {
+            journal = new FileJournal(state, contractId, ownerId);
+            if (recovered) await startService();
+          }
+          return { status: 'RECOVERED', next: 'dependent-storage', new_payments: 0 };
+        } });
+      const nativeBalance = BigInt(await view(contractId, 'vault_balance', { token: 'native' }));
+      const nativeSpent = BigInt(await view(contractId, 'daily_spent', { policy_id: NATIVE_POLICY }));
+      const ftBalance = BigInt(await view(contractId, 'vault_balance', { token: TOKEN }));
+      const ftSpent = BigInt(await view(contractId, 'daily_spent', { policy_id: FT_POLICY }));
+      const vendorBalance = BigInt(await view(TOKEN, 'ft_balance_of', { account_id: vendorId }));
+      if (nativeBalance !== MAX_NATIVE || nativeSpent !== MAX_NATIVE || ftBalance !== 0n || ftSpent !== 3n * PRICE || vendorBalance !== 3n * PRICE) {
+        throw new Error('dependent workflow final vault, recipient or rolling-budget mismatch');
+      }
+      const observation = proof.result.independent.delivery.result;
+      const hashes = Object.fromEntries(workflow.steps.map(step => [step.resource, journal.get(step.id).tx_hash]));
+      const evidence = { contract: contractId, owner: ownerId, vendor: vendorId, token: TOKEN,
+        oracle_tx: proof.sourceHash, resource_transactions: hashes, single_source_usd: observation.price_usd,
+        worker_timestamp: observation.timestamp, owner_setup_pool: quote.pool_id, owner_setup_swap: swap.transaction_outcome.id,
+        owner_vault_funding: funding.transaction_outcome.id, micro_usdc_per_resource: PRICE.toString(),
+        workflow: 'verified oracle -> compute -> storage -> api', exact_data_dependencies_checked: true,
+        source_broadcasts: proof.sourceBroadcasts, resource_broadcasts: proof.resourceBroadcasts,
+        lost_ft_response_recovered_with_key_free_cli: true, first_ft_hash_reused: true,
+        independent_execution: 'OutLayer; native testnet NEAR', ft_provider: 'self-hosted development',
+        owner_swap_guarded: false, testnet_tokens_have_no_real_value: true,
+        trust: 'single-source Coinbase data through OutLayer; no market-truth or TEE proof' };
+      fs.writeFileSync(path.join(dir, 'evidence.json'), JSON.stringify(evidence, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
+      notice('Dependent testnet workflow', evidence);
+      success = true;
+      return;
+    }
     if ((await runOracleGoal({ goal, provider, account: oracleAgent, publicKey: oracleKey.getPublicKey(), journal })).status !== 'READY') throw new Error('oracle preflight was not ready');
     let broadcasts = 0;
     const lossy = new Proxy(provider, { get(target, property) {
@@ -267,7 +351,8 @@ async function main() {
   } finally {
     journal?.close();
     if (service) await service.close();
-    if (success) fs.rmSync(dir, { recursive: true, force: true });
+    if (success && !dependent) fs.rmSync(dir, { recursive: true, force: true });
+    else if (success) console.log(`Public testnet workflow evidence retained in ${dir}; it contains no keys.`);
     else console.error(`Public testnet recovery evidence retained in ${dir}; reconcile the recorded hash, never resend automatically.`);
   }
 }
