@@ -8,7 +8,10 @@
 import nearApi from 'near-api-js';
 import { isTestnetAccount, isTestnetToken } from './lib/account-id.mjs';
 import { isTransactionHash, verifyDirectPayment } from './lib/direct-payment-settlement.mjs';
-export { normalizeOrder, orderMemo, orderMemoV2, challengeFromOrderMemo } from './lib/resource-order.mjs';
+import { validateClaimTerms, verifyClaimAuthorization } from './lib/resource-claim.mjs';
+export { normalizeOrder, orderMemo, orderMemoV2, challengeFromOrderMemo, orderMemoV3, challengeFromOrderMemoV3 } from './lib/resource-order.mjs';
+export { CLAIM_SCHEME, canonicalClaimOrigin, validateClaimTerms, claimMessage, claimDigest,
+  verifyClaimAuthorization, signClaimAuthorization } from './lib/resource-claim.mjs';
 
 const U128_MAX = (1n << 128n) - 1n;
 
@@ -54,4 +57,27 @@ export async function readAndVerifyProviderPayment({ provider, expectation }) {
   if ((await provider.viewNodeStatus())?.chain_id !== 'testnet') throw new Error('provider RPC must report testnet');
   const result = await provider.txStatusReceipts(expected.tx_hash, expected.owner_account_id, 'FINAL');
   return verifyProviderPayment(result, expected);
+}
+
+/** Verify both seller-owned payment terms and an off-chain claim by the actual transaction key. */
+export function verifyAuthenticatedProviderPayment(result, rawExpectation, rawTerms, authorization) {
+  const expected = validatePaymentExpectation(rawExpectation), terms = validateClaimTerms(rawTerms);
+  for (const field of ['tx_hash', 'contract_id', 'owner_account_id', 'policy_id', 'token', 'payee', 'amount', 'memo']) {
+    if (terms[field] !== expected[field]) throw new Error('authenticated claim does not match the seller payment expectation');
+  }
+  const settlement = verifyProviderPayment(result, expected);
+  const publicKey = result.transaction.public_key;
+  verifyClaimAuthorization(terms, authorization, publicKey);
+  return { settlement, agent_public_key: publicKey };
+}
+
+/** Read FINAL testnet receipts once and authenticate against their signing key. */
+export async function readAndVerifyAuthenticatedProviderPayment({ provider, expectation, terms, authorization }) {
+  const expected = validatePaymentExpectation(expectation);
+  if (!provider || typeof provider.viewNodeStatus !== 'function' || typeof provider.txStatusReceipts !== 'function') {
+    throw new Error('a testnet RPC with receipt-inclusive transaction status is required');
+  }
+  if ((await provider.viewNodeStatus())?.chain_id !== 'testnet') throw new Error('provider RPC must report testnet');
+  const result = await provider.txStatusReceipts(expected.tx_hash, expected.owner_account_id, 'FINAL');
+  return verifyAuthenticatedProviderPayment(result, expected, terms, authorization);
 }

@@ -19,7 +19,8 @@ import { submitOwnerSetupOnce } from './agent/testnet-owner-setup.mjs';
 import { runOracleGoal, recoverOracleGoal, assertOracleFreshForUse, assertOracleProjectRegistry,
   ORACLE_TESTNET_PROJECT } from './agent/oracle-outlayer.mjs';
 import { runMixedMission } from './agent/mixed-mission.mjs';
-import { makeOracleDependentWorkflow, runDependentLiveProof, verifySellerV2ProofState } from './agent/dependent-live-proof.mjs';
+import { makeOracleDependentWorkflow, runDependentLiveProof, verifySellerV2ProofState, verifySellerV3ProofState,
+  verifySellerV3AccessControls } from './agent/dependent-live-proof.mjs';
 import { httpResourceProvider } from './agent/resource-agent.mjs';
 import { createResourceProvider } from './services/resource-provider.mjs';
 import { validateRpcEndpoint } from './shared/rpc-endpoint.mjs';
@@ -98,11 +99,12 @@ function notice(title, data) {
 
 async function main() {
   const args = process.argv.slice(2);
-  if (args.length > 1 || (args.length === 1 && !['--dependent-workflow', '--seller-v2-workflow'].includes(args[0]))) {
-    throw new Error('optional argument: --dependent-workflow or --seller-v2-workflow');
+  if (args.length > 1 || (args.length === 1 && !['--dependent-workflow', '--seller-v2-workflow', '--seller-v3-workflow'].includes(args[0]))) {
+    throw new Error('optional argument: --dependent-workflow, --seller-v2-workflow or --seller-v3-workflow');
   }
   const sellerV2 = args[0] === '--seller-v2-workflow';
-  const dependent = sellerV2 || args[0] === '--dependent-workflow';
+  const sellerV3 = args[0] === '--seller-v3-workflow';
+  const dependent = sellerV2 || sellerV3 || args[0] === '--dependent-workflow';
   if ((await provider.viewNodeStatus())?.chain_id !== 'testnet') throw new Error('RPC must report testnet');
   const meta = await view(TOKEN, 'ft_metadata');
   if (meta?.spec !== 'ft-1.0.0' || meta?.symbol !== 'USDC' || meta?.decimals !== 6) throw new Error('unexpected Circle testnet USDC metadata');
@@ -119,7 +121,7 @@ async function main() {
   const oracleKey = KeyPair.fromRandom('ed25519'), resourceKey = KeyPair.fromRandom('ed25519'), attackKey = KeyPair.fromRandom('ed25519');
   const suffix = crypto.randomBytes(4).toString('hex'), contractId = `bouncer-oracle-${suffix}.testnet`;
   const ownerId = `owner.${contractId}`, vendorId = `vendor.${contractId}`;
-  console.log(`Independent oracle + Circle TESTNET ${sellerV2 ? 'seller-v2 dependent workflow' : dependent ? 'dependent workflow' : 'resource mission'}: contract=${contractId}; no real value; FT provider=self-hosted development`);
+  console.log(`Independent oracle + Circle TESTNET ${sellerV3 ? 'seller-v3 authenticated workflow' : sellerV2 ? 'seller-v2 dependent workflow' : dependent ? 'dependent workflow' : 'resource mission'}: contract=${contractId}; no real value; FT provider=self-hosted development`);
   const contract = await createFunded(contractId, contractKey);
   const deployed = await setupAttempt('deploy', () => contract.signAndSendTransaction({ receiverId: contractId,
     actions: [transactions.deployContract(wasm)], waitUntil: 'FINAL' }));
@@ -138,7 +140,7 @@ async function main() {
   // purchase. The swap and vault funding are each sent once, never retried.
   for (const [token, id] of [[WRAP, ownerId], [TOKEN, ownerId], [TOKEN, contractId], [TOKEN, vendorId]]) await register(owner, token, id);
   await call(owner, WRAP, 'near_deposit', {}, OWNER_SETUP_INPUT, 50n * TGAS);
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), sellerV2 ? 'bouncer-seller-v2-live-' : dependent ? 'bouncer-dependent-live-' : 'bouncer-oracle-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), sellerV3 ? 'bouncer-seller-v3-live-' : sellerV2 ? 'bouncer-seller-v2-live-' : dependent ? 'bouncer-dependent-live-' : 'bouncer-oracle-'));
   const setupJournal = new FileJournal(path.join(dir, 'setup-journal.json'), contractId, ownerId);
   let swap, funding;
   try {
@@ -200,18 +202,18 @@ async function main() {
       const products = Object.fromEntries(['compute', 'storage', 'api'].map(resource => [resource,
         { policy_id: FT_POLICY, token: TOKEN, payee: vendorId, amount: PRICE.toString() }]));
       const config = { contract_id: contractId, owner_account_id: ownerId, products,
-        data_dir: path.join(dir, 'development-provider'), port: 0 };
+        data_dir: path.join(dir, 'development-provider'), port: 0, ...(sellerV3 ? { seller_origin: 'http://127.0.0.1:0' } : {}) };
       const configPath = path.join(dir, 'provider-config.json'), workflowPath = path.join(dir, 'workflow.json');
       const ordersPath = path.join(dir, 'derived-orders.json');
       fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
       const workflow = makeOracleDependentWorkflow({ goal, token: TOKEN, payee: vendorId,
         policyId: FT_POLICY, price: PRICE.toString(), providerUrl: 'http://127.0.0.1:0',
-        ...(sellerV2 ? { orderBinding: 'seller-v2' } : {}) });
+        ...(sellerV3 ? { orderBinding: 'seller-v3' } : sellerV2 ? { orderBinding: 'seller-v2' } : {}) });
       fs.writeFileSync(workflowPath, JSON.stringify(workflow, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
       let client;
       const startService = async () => {
         service = createResourceProvider({ rpcProvider: provider, contractId, ownerAccountId: ownerId,
-          products, dataDir: config.data_dir });
+          products, dataDir: config.data_dir, sellerOrigin: config.seller_origin });
         await new Promise((resolve, reject) => { service.server.once('error', reject); service.server.listen(0, '127.0.0.1', resolve); });
         client = httpResourceProvider(`http://127.0.0.1:${service.server.address().port}`);
       };
@@ -248,8 +250,11 @@ async function main() {
           }
           return { status: 'RECOVERED', next: 'dependent-storage', new_payments: 0 };
         } });
-      const sellerClaims = sellerV2 ? verifySellerV2ProofState({ workflow, proof, journal,
-        state: JSON.parse(fs.readFileSync(path.join(config.data_dir, 'redemptions.json'), 'utf8')) }) : undefined;
+      const sellerState = sellerV2 || sellerV3 ? JSON.parse(fs.readFileSync(path.join(config.data_dir, 'redemptions.json'), 'utf8')) : undefined;
+      const sellerClaims = sellerV3 ? verifySellerV3ProofState({ workflow, proof, journal, state: sellerState })
+        : sellerV2 ? verifySellerV2ProofState({ workflow, proof, journal, state: sellerState }) : undefined;
+      const accessControls = sellerV3 ? await verifySellerV3AccessControls({ workflow, proof, journal,
+        fulfill: client.fulfill, readStorage: client.readStorage }) : undefined;
       const nativeBalance = BigInt(await view(contractId, 'vault_balance', { token: 'native' }));
       const nativeSpent = BigInt(await view(contractId, 'daily_spent', { policy_id: NATIVE_POLICY }));
       const ftBalance = BigInt(await view(contractId, 'vault_balance', { token: TOKEN }));
@@ -267,13 +272,14 @@ async function main() {
         workflow: 'verified oracle -> compute -> storage -> api', exact_data_dependencies_checked: true,
         source_broadcasts: proof.sourceBroadcasts, resource_broadcasts: proof.resourceBroadcasts,
         lost_ft_response_recovered_with_key_free_cli: true, first_ft_hash_reused: true,
-        order_binding: sellerV2 ? 'seller-v2' : 'legacy-v1', resource_memos: proof.quoteMemos,
+        order_binding: sellerV3 ? 'seller-v3' : sellerV2 ? 'seller-v2' : 'legacy-v1', resource_memos: proof.quoteMemos,
         ...(sellerClaims ? { persisted_seller_claims: sellerClaims } : {}),
+        ...(accessControls ?? {}),
         independent_execution: 'OutLayer; native testnet NEAR', ft_provider: 'self-hosted development',
         owner_swap_guarded: false, testnet_tokens_have_no_real_value: true,
         trust: 'single-source Coinbase data through OutLayer; no market-truth or TEE proof' };
       fs.writeFileSync(path.join(dir, 'evidence.json'), JSON.stringify(evidence, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
-      notice(sellerV2 ? 'Seller-v2 dependent testnet workflow' : 'Dependent testnet workflow', evidence);
+      notice(sellerV3 ? 'Seller-v3 authenticated testnet workflow' : sellerV2 ? 'Seller-v2 dependent testnet workflow' : 'Dependent testnet workflow', evidence);
       success = true;
       return;
     }
@@ -374,8 +380,8 @@ async function main() {
     journal?.close();
     if (service) await service.close();
     if (success && !dependent) fs.rmSync(dir, { recursive: true, force: true });
-    else if (success) console.log(`Public testnet workflow evidence retained in ${dir}; it contains no keys.`);
-    else console.error(`Public testnet recovery evidence retained in ${dir}; reconcile the recorded hash, never resend automatically.`);
+    else if (success) console.log(`${sellerV3 ? 'Private' : 'Public'} testnet workflow evidence retained in ${dir}; it contains no keys${sellerV3 ? ' but contains bearer claim signatures' : ''}.`);
+    else console.error(`${sellerV3 ? 'Private' : 'Public'} testnet recovery evidence retained in ${dir}; reconcile the recorded hash, never resend automatically.`);
   }
 }
 main().catch(error => { console.error(`[oracle-mission] ERROR: ${error.stack || error}`); process.exitCode = 1; });

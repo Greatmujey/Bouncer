@@ -119,6 +119,15 @@ The earlier linked testnet run used v1; the later v2 run used a self-hosted
 seller, not an independent FT provider. Offline adversarial tests also exercise
 v2 challenge reuse, state tampering and recovery.
 
+For claim authentication instead, explicitly use `"order_binding":"seller-v3"`
+with a supporting seller and durable execution. The exact reviewed origin is
+bound into a signature by the payment transaction key, saved before broadcast;
+key-free workflow recovery reuses it. Offline tests exercise the real recovery
+CLI after a seller restart. The signature is a replayable bearer credential:
+never publish a v3 journal or expose it through the older public-artifact job.
+See [v3 terms, wire bytes and limitations](SELLER_V3.md). This does not prove
+independent seller adoption or safe distributed replay protection.
+
 A data binding such as `{"from":"price"}` is permitted **only** in compute
 `text`, storage `content`, or text-API `text`. It inserts a bounded JSON
 artifact from an **earlier, verified** stage: `version`, `kind`, `goal_id`,
@@ -198,8 +207,8 @@ node --test tests/workflow.test.mjs tests/workflow-cli.test.mjs tests/batch-pref
 
 The dry run checks the source and maximum-cost budgets, but cannot obtain an
 exact downstream quote until its verified input exists; this workflow preview
-does not create seller-v2 quotes. By contrast, a standalone resource-agent dry
-run or AI quote comparison does request quotes and can persist v2 orders at a
+does not create seller-v2/v3 quotes. By contrast, a standalone resource-agent dry
+run or AI quote comparison does request quotes and can persist v2/v3 orders at a
 seller. Execution rechecks the real quote and on-chain policy for every new
 step. `--recover-only` reads chain
 receipts and may contact the approved seller to complete/recheck already-paid
@@ -218,8 +227,9 @@ the workflow runner does not adopt, fund or repeat it. See the README's retained
 evidence and reconciliation status.
 
 The journal stores the complete reviewed manifest, requests, results, public
-keys and transaction hashes; it can contain sensitive task data. Protect and
-back it up, never commit keys or private inputs. File locking/fsync covers one
+keys and transaction hashes; it can contain sensitive task data. V3 also stores
+replayable claim signatures, so it must be kept private even if the tasks are
+public. Protect and back it up, never commit keys, claims or private inputs. File locking/fsync covers one
 local journal on a filesystem that honors those operations, not multiple hosts,
 directories or users. Deleting, editing or replacing the journal—or changing
 all IDs and using another journal—can allow duplicate spending. Treat the host,

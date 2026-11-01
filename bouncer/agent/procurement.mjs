@@ -13,6 +13,7 @@ import { validateProviderOrigin } from '../shared/provider-origin.mjs';
 import { assertFinalPaymentReceipts } from '../shared/final-payment.mjs';
 import { isTransactionHash, verifyDirectPayment } from '../shared/direct-payment-settlement.mjs';
 import { MonotonicAccount, PaymentRpcProvider } from './near-account.mjs';
+import { canonicalClaimOrigin, signClaimAuthorization } from '../packages/provider-sdk/lib/resource-claim.mjs';
 
 const { KeyPair, KeyPairSigner, transactions, utils } = nearApi;
 const DEFAULT_RPC = 'https://test.rpc.fastnear.com';
@@ -85,7 +86,7 @@ export function requestFingerprint(request) {
  * get(id) and put(id, entry); every live payment is marked pending BEFORE it
  * is sent. An unresolved pending entry is never retried automatically.
  */
-export async function runProcurement({ plan: rawPlan, provider, account, publicKey, journal, journalRoutes, execute = false,
+export async function runProcurement({ plan: rawPlan, provider, account, publicKey, journal, journalRoutes, claimOrigins, execute = false,
   durablePayment = false, log = console.log, onCheck = () => {}, beforePayment = async () => {}, beforeBroadcast = () => {}, onPaid = async () => {}, stopOnBlocked = false }) {
   const plan = validatePlan(rawPlan);
   if (typeof beforePayment !== 'function' || typeof beforeBroadcast !== 'function' || typeof onPaid !== 'function' || typeof stopOnBlocked !== 'boolean' || typeof durablePayment !== 'boolean') throw new Error('invalid procurement execution hooks');
@@ -96,6 +97,26 @@ export async function runProcurement({ plan: rawPlan, provider, account, publicK
     for (const request of plan.requests) {
       if (!journalRoutes.has(request.id)) throw new Error('missing payment journal route');
       routes.set(request.id, normalizeProviderRoute(journalRoutes.get(request.id)));
+    }
+  }
+  const claims = new Map();
+  if (claimOrigins !== undefined) {
+    if (!(claimOrigins instanceof Map) || !routes) throw new Error('authenticated claims require reviewed provider routes');
+    for (const [id, origin] of claimOrigins) {
+      const request = plan.requests.find(item => item.id === id), route = routes.get(id);
+      if (!request || !['compute', 'storage', 'api'].includes(request.resource) || !route?.provider_origin || canonicalClaimOrigin(origin) !== origin ||
+          validateProviderOrigin(route.provider_origin).origin !== origin ||
+          !new RegExp(`^bouncer-order-v3:${request.resource}:[a-f0-9]{32}:[a-f0-9]{64}$`).test(request.memo)) {
+        throw new Error('authenticated claim does not match the reviewed request and origin');
+      }
+      claims.set(id, origin);
+    }
+    if (execute && claims.size && !durablePayment) throw new Error('authenticated claims require durable signed-hash journaling');
+    if (execute && claims.size && typeof journal?.list !== 'function') throw new Error('authenticated claims require the original listable exclusive journal');
+  }
+  for (const request of plan.requests) {
+    if (request.memo.startsWith('bouncer-order-v3:') && !claims.has(request.id)) {
+      throw new Error(`${request.id}: seller-v3 memo requires its reviewed authenticated claim origin`);
     }
   }
   if (!account || account.accountId !== plan.owner_account_id) throw new Error('agent key account does not match the plan owner');
@@ -191,12 +212,35 @@ export async function runProcurement({ plan: rawPlan, provider, account, publicK
       if (!isTransactionHash(txHash)) throw new Error('invalid signed transaction hash');
       signed = signedTransaction;
       pending = { ...pending, payment_version: 'direct-signed-v1', agent_public_key: String(publicKey), tx_hash: txHash };
+      if (claims.has(request.id)) {
+        // An off-chain NEP-413 signature by the same restricted key binds the
+        // claim to this reviewed transaction and seller. Persist it BEFORE the
+        // only broadcast so recovery needs no signing key. Treat the journal
+        // as private: the signature is a replayable bearer credential.
+        const terms = { network: 'near:testnet', contract_id: plan.contract_id, owner_account_id: plan.owner_account_id,
+          seller_origin: claims.get(request.id), resource: request.resource, policy_id: request.policy_id, token: request.token,
+          payee: request.payee, amount: request.amount, memo: request.memo, tx_hash: txHash };
+        const authorization = await signClaimAuthorization({ terms, signer: account.signer, publicKey });
+        pending = { ...pending, resource_authorization: authorization };
+      }
     }
     // A mission may impose an additional time-sensitive condition. Check it
     // immediately before journaling/broadcasting each *new* payment, not just
     // once at batch preview. A rejection here leaves no pending entry; no
     // signed bytes have been broadcast or persisted.
     await beforePayment(Object.freeze({ ...request }));
+    // Multiple calls can share one open journal in the same process. All
+    // asynchronous preparation is complete: recheck and write synchronously,
+    // so concurrent callers cannot both reserve this ID before broadcasting.
+    if (journal.get(request.id)) throw new Error(`${request.id}: journal entry appeared during payment preparation; recover it instead of paying`);
+    if (claims.has(request.id)) {
+      const challenge = /^bouncer-order-v3:(?:compute|storage|api):([a-f0-9]{32}):[a-f0-9]{64}$/.exec(request.memo)?.[1];
+      if (!challenge || journal.list().some(entry => {
+        if (entry?.id === request.id || typeof entry?.request?.memo !== 'string') return false;
+        const prior = /^bouncer-order-v[23]:(?:compute|storage|api):([a-f0-9]{32}):[a-f0-9]{64}$/.exec(entry.request.memo);
+        return prior?.[1] === challenge;
+      })) throw new Error(`${request.id}: seller challenge is already recorded in this journal; never pay again`);
+    }
     journal.put(request.id, pending);
     // A synchronous final guard can enforce a time-sensitive condition after
     // fsync but immediately before submission. If it rejects, nothing was sent;

@@ -20,7 +20,7 @@ import { runOracleGoal, recoverOracleGoal, validateOracleGoal, assertOracleFresh
 import { runProjectGoal, recoverProjectGoal, validateProjectGoal, expectedBurnChecksum } from './outlayer-project.mjs';
 import { runResourceAgent, routedResourceProvider } from './resource-agent.mjs';
 import { recoverResourceDelivery } from './recover-direct-payment.mjs';
-import { normalizeOrder, challengeFromOrderMemo, startConfiguredProvider } from '../services/resource-provider.mjs';
+import { normalizeOrder, challengeFromOrderMemo, challengeFromOrderMemoV3, startConfiguredProvider } from '../services/resource-provider.mjs';
 import { validateProviderOrigin } from '../shared/provider-origin.mjs';
 import { isTestnetAccount, isTestnetToken } from '../shared/account-id.mjs';
 import { isTransactionHash } from '../shared/direct-payment-settlement.mjs';
@@ -103,7 +103,7 @@ export function validateWorkflow(raw) {
     if (exact !== undefined && BigInt(exact) > BigInt(amount)) throw new Error('selected quote exceeds the owner maximum');
     if (step.provider_id !== undefined && (typeof step.provider_id !== 'string' || !/^[A-Za-z0-9_-]{1,32}$/.test(step.provider_id))) throw new Error('invalid provider id');
     if (step.provider_url !== undefined) validateProviderOrigin(step.provider_url);
-    if (step.order_binding !== undefined && step.order_binding !== 'seller-v2') throw new Error('unsupported owner-reviewed order binding');
+    if (step.order_binding !== undefined && !['seller-v2', 'seller-v3'].includes(step.order_binding)) throw new Error('unsupported owner-reviewed order binding');
     const input = normalizeTemplate(step.resource, step.input, earlier);
     const result = { id: stepId, resource: step.resource, policy_id: step.policy_id, token: step.token, payee: step.payee,
       max_amount: amount, input, ...(exact === undefined ? {} : { quote_amount: exact }),
@@ -272,8 +272,9 @@ export async function runWorkflow({ workflow: rawWorkflow, source = {}, resource
   const common = { contractId: goal.contract_id, ownerAccountId: goal.owner_account_id, providerUrl: workflow.provider_url,
     provider, journal, fulfill: resources.fulfill, readStorage: resources.readStorage, repositoryLookup: resources.repositoryLookup, log };
   function checkChallenge(stage, request, remember = false) {
-    if (stage.order_binding !== 'seller-v2') return;
-    const challenge = challengeFromOrderMemo(stage.resource, stage.input, request?.memo);
+    if (!['seller-v2', 'seller-v3'].includes(stage.order_binding)) return;
+    const challenge = stage.order_binding === 'seller-v3'
+      ? challengeFromOrderMemoV3(stage.resource, stage.input, request?.memo) : challengeFromOrderMemo(stage.resource, stage.input, request?.memo);
     if (challenges.has(challenge)) throw new Error(`${stage.id}: seller challenge was reused in this workflow`);
     if (remember) challenges.add(challenge);
   }

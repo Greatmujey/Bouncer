@@ -81,9 +81,11 @@ async function main() {
   // Fail before asking any seller for a potentially persistent challenge. In a
   // comparison, any approved candidate could be selected, so require durable
   // mode even if the cheapest offer may eventually turn out to be legacy.
-  const mayUseV2 = goals.goals.some(goal => goal.order_binding === 'seller-v2' ||
-    (options['compare-providers'] && reviewed.resources[goal.resource].alternatives?.some(offer => offer.order_binding === 'seller-v2')));
-  if (options.execute && mayUseV2 && !options.durable) throw new Error('seller-v2 execution requires --durable');
+  for (const binding of ['seller-v2', 'seller-v3']) {
+    const mayUseBinding = goals.goals.some(goal => goal.order_binding === binding ||
+      (options['compare-providers'] && reviewed.resources[goal.resource].alternatives?.some(offer => offer.order_binding === binding)));
+    if (options.execute && mayUseBinding && !options.durable) throw new Error(`${binding} execution requires --durable`);
+  }
   if (options['compare-providers']) {
     goals = await compareApprovedQuotes({ config, proposedGoals: goals });
     for (const comparison of goals.quote_comparisons) {

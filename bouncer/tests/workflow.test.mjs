@@ -16,7 +16,8 @@ import { httpResourceProvider } from '../agent/resource-agent.mjs';
 import { ORACLE_TESTNET_PROJECT } from '../agent/oracle-outlayer.mjs';
 import { expectedBurnChecksum } from '../agent/outlayer-project.mjs';
 import { validateWorkflow, materializeWorkflowStep, runWorkflow } from '../agent/workflow.mjs';
-import { makeOracleDependentWorkflow, runDependentLiveProof, verifySellerV2ProofState } from '../agent/dependent-live-proof.mjs';
+import { makeOracleDependentWorkflow, runDependentLiveProof, verifySellerV2ProofState, verifySellerV3ProofState,
+  verifySellerV3AccessControls } from '../agent/dependent-live-proof.mjs';
 import { createResourceProvider, orderMemo, orderMemoV2, challengeFromOrderMemo } from '../services/resource-provider.mjs';
 import { computeResult } from './mock-delivery.mjs';
 import { mockHash, mockGuardedPayment } from './mock-guarded-payment.mjs';
@@ -73,7 +74,8 @@ async function fixture() {
     return nearApi.transactions.createTransaction(owner, providedKey, receiver, BigInt(++nonce), actions, Buffer.alloc(32, 7));
   } };
   const products = Object.fromEntries(['compute', 'storage', 'api'].map(resource => [resource, { policy_id: 'resources', token, payee, amount: '10' }]));
-  const sellerOptions = { rpcProvider: provider, contractId: contract, ownerAccountId: owner, products, dataDir: path.join(dir, 'provider') };
+  const sellerOptions = { rpcProvider: provider, contractId: contract, ownerAccountId: owner, products, dataDir: path.join(dir, 'provider'),
+    sellerOrigin: 'http://127.0.0.1:0' };
   let service = createResourceProvider(sellerOptions);
   await new Promise((resolve, reject) => { service.server.once('error', reject); service.server.listen(0, '127.0.0.1', resolve); });
   const sellerPort = service.server.address().port, origin = `http://127.0.0.1:${sellerPort}`;
@@ -529,7 +531,7 @@ test('dependent proof stops after recovery failure, leaving the first hash pendi
   assert.equal(oracle.sends, 1); assert.equal(f.sends, 1);
 }));
 
-for (const orderBinding of [undefined, 'seller-v2']) {
+for (const orderBinding of [undefined, 'seller-v2', 'seller-v3']) {
   test(`dependent ${orderBinding ?? 'legacy'} proof recovers in the real key-free CLI with restarted seller and synthetic RPC`, () => withFixture(async f => {
     const workflow = makeOracleDependentWorkflow({ goal: f.workflow.source.goal, token, payee, policyId: 'resources',
       price: '100', providerUrl: 'http://127.0.0.1:0', orderBinding });
@@ -537,7 +539,8 @@ for (const orderBinding of [undefined, 'seller-v2']) {
       events: f.events, workflowId: workflow.id });
     const products = Object.fromEntries(['compute', 'storage', 'api'].map(resource => [resource,
       { policy_id: 'resources', token, payee, amount: '10' }]));
-    const config = { contract_id: contract, owner_account_id: owner, products, data_dir: path.join(f.dir, 'provider'), port: 0 };
+    const config = { contract_id: contract, owner_account_id: owner, products, data_dir: path.join(f.dir, 'provider'), port: 0,
+      seller_origin: 'http://127.0.0.1:0' };
     const configPath = path.join(f.dir, 'config.json'), workflowPath = path.join(f.dir, 'workflow.json');
     fs.writeFileSync(configPath, JSON.stringify(config)); fs.writeFileSync(workflowPath, JSON.stringify(workflow));
     const rpcCalls = [], rpcServer = http.createServer(async (req, res) => {
@@ -570,7 +573,7 @@ for (const orderBinding of [undefined, 'seller-v2']) {
             assert.ok(output.stdout.includes(firstHash));
           } finally { f.reopen(); }
           restarted = createResourceProvider({ rpcProvider: f.provider, contractId: contract, ownerAccountId: owner,
-            products, dataDir: config.data_dir });
+            products, dataDir: config.data_dir, sellerOrigin: config.seller_origin });
           await new Promise((resolve, reject) => { restarted.server.once('error', reject); restarted.server.listen(previousPort, '127.0.0.1', resolve); });
           return { status: 'RECOVERED', next: 'dependent-storage', new_payments: 0 };
         } });
@@ -593,6 +596,36 @@ for (const orderBinding of [undefined, 'seller-v2']) {
           assert.throws(() => verifySellerV2ProofState({ workflow, proof, journal: f.journal, state: bad }), /seller-v2|seller claim/);
         }
         assert.equal(f.sends, 3, 'state verification is read-only');
+      } else if (orderBinding === 'seller-v3') {
+        const state = JSON.parse(fs.readFileSync(path.join(config.data_dir, 'redemptions.json'), 'utf8'));
+        assert.equal(state.version, 4); assert.equal(new Set(proof.challenges).size, 3);
+        assert.deepEqual(verifySellerV3ProofState({ workflow, proof, journal: f.journal, state }),
+          { quote_count: 3, claimed_transaction_count: 3, first_hash: proof.firstHash });
+        assert.deepEqual(await verifySellerV3AccessControls({ workflow, proof, journal: f.journal,
+          fulfill: f.resources.fulfill, readStorage: f.resources.readStorage }),
+          { public_proof_only_rejected: true, wrong_signing_key_rejected: true, authenticated_storage_read_checked: true });
+        assert.equal(f.sends, 3, 'access-control checks cannot broadcast payments');
+        const forgedJournal = { get(id) {
+          const entry = structuredClone(f.journal.get(id));
+          if (id === workflow.steps[0].id) entry.resource_authorization.signature = Buffer.alloc(64).toString('base64');
+          return entry;
+        } };
+        assert.throws(() => verifySellerV3ProofState({ workflow, proof, journal: forgedJournal, state }), /signature/);
+        for (const mutate of [
+          s => { s.quotes[proof.challenges[0]].agent_public_key = nearApi.KeyPair.fromRandom('ed25519').getPublicKey().toString(); },
+          s => { s.quotes[proof.challenges[1]].seller_origin = 'https://evil.example'; },
+          s => { s.redemptions[proof.firstHash].status = 'pending'; },
+        ]) {
+          const bad = structuredClone(state); mutate(bad);
+          assert.throws(() => verifySellerV3ProofState({ workflow, proof, journal: f.journal, state: bad }), /seller claim/);
+        }
+        for (let i = 0; i < workflow.steps.length; i++) {
+          const entry = f.journal.get(workflow.steps[i].id), quote = state.quotes[proof.challenges[i]];
+          assert.equal(quote.tx_hash, entry.tx_hash); assert.equal(quote.agent_public_key, entry.agent_public_key);
+          assert.equal(quote.seller_origin, config.seller_origin); assert.ok(entry.resource_authorization.signature);
+          assert.equal(state.redemptions[entry.tx_hash].status, 'completed');
+        }
+        assert.equal(f.sends, 3);
       } else {
         assert.deepEqual(proof.challenges, []);
         assert.throws(() => verifySellerV2ProofState({ workflow, proof, journal: f.journal, state: {} }), /needs three v2 steps/);

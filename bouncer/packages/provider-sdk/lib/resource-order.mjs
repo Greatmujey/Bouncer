@@ -69,3 +69,21 @@ export function challengeFromOrderMemo(resource, input, memo) {
   }
   return match[2];
 }
+
+/** seller-v3 is deliberately distinct on chain: an authenticated claim cannot downgrade to v2. */
+export function orderMemoV3(resource, input, challenge) {
+  if (typeof challenge !== 'string' || !CHALLENGE.test(challenge)) throw new Error('seller challenge must be 32 lowercase hex characters');
+  const normalized = normalizeOrder(resource, input);
+  const hash = digest(`bouncer-order-v3\0${resource}\0${challenge}\0${JSON.stringify(normalized)}`);
+  return `bouncer-order-v3:${resource}:${challenge}:${hash}`;
+}
+
+/** Require the exact v3 task and challenge; the separate claim signature is still required. */
+export function challengeFromOrderMemoV3(resource, input, memo) {
+  if (typeof memo !== 'string') throw new Error('invalid seller-v3 order memo');
+  const match = /^bouncer-order-v3:(compute|storage|api):([a-f0-9]{32}):([a-f0-9]{64})$/.exec(memo);
+  if (!match || match[1] !== resource || orderMemoV3(resource, input, match[2]) !== memo) {
+    throw new Error('seller-v3 quote is not bound to this exact order');
+  }
+  return match[2];
+}

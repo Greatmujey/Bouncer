@@ -172,9 +172,11 @@ not prove all possible callback, provider or token failure cases.
    filesystem guarantees. A crash may leave a stale lock or pending fulfillment;
    never steal a lock automatically. A write error stops the instance for manual
    reconciliation. Different directories/hosts have no shared replay protection.
-   Storage is plaintext and
-   publicly retrievable, and there is no authentication or transport security.
-   The configured provider checks that its RPC reports testnet, but the RPC can
+   Storage is plaintext. V1/v2 storage is publicly retrievable. Opt-in
+   [seller-v3](SELLER_V3.md) requires a transaction-key-signed bearer claim for
+   redemption and readback, but leaked claims are replayable; it does not add
+   TLS, authenticated users, revocation or distributed coordination. The
+   configured provider checks that its RPC reports testnet, but the RPC can
    lie; an implicit 64-hex token ID does not itself identify a network.
    Orders are sent to the provider; their hashes are on chain.
    Client-side verification occurs only after payment: it recomputes the bounded

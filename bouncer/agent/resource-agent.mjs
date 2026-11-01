@@ -12,7 +12,8 @@ import { createRuntime, FileJournal, normalizeProviderRoute, requestFingerprint,
 import { reservePreview } from './preflight.mjs';
 import { readBoundedBytes, readBoundedJson } from '../shared/bounded-json.mjs';
 import { validateProviderOrigin } from '../shared/provider-origin.mjs';
-import { normalizeOrder, orderMemo, challengeFromOrderMemo, startConfiguredProvider } from '../services/resource-provider.mjs';
+import { normalizeOrder, orderMemo, challengeFromOrderMemo, challengeFromOrderMemoV3, startConfiguredProvider } from '../services/resource-provider.mjs';
+import { CLAIM_SCHEME, canonicalClaimOrigin, verifyClaimAuthorization } from '../packages/provider-sdk/lib/resource-claim.mjs';
 import { checkDeliveryRecord, createDeliveryReceipt, deliveryResultHash, verifyDelivery } from './verify-delivery.mjs';
 
 function positiveAmount(value, label) {
@@ -23,9 +24,25 @@ function validText(value, label) {
   if (typeof value !== 'string' || !value.trim()) throw new Error(`${label} is required`);
   return value;
 }
+function reviewedClaimOrigin(goal, providerUrl) {
+  const route = goal.provider_url ?? providerUrl;
+  if (typeof route !== 'string') throw new Error(`${goal.id}: authenticated order requires an owner-pinned seller origin`);
+  return canonicalClaimOrigin(validateProviderOrigin(route).origin);
+}
+function reviewedClaimTerms({ contractId, ownerAccountId, request, txHash, origin }) {
+  return { network: 'near:testnet', contract_id: contractId, owner_account_id: ownerAccountId, seller_origin: origin,
+    resource: request.resource, policy_id: request.policy_id, token: request.token, payee: request.payee,
+    amount: request.amount, memo: request.memo, tx_hash: txHash };
+}
+function requireRecordedClaim({ goal, request, entry, contractId, ownerAccountId, providerUrl }) {
+  const terms = reviewedClaimTerms({ contractId, ownerAccountId, request, txHash: entry.tx_hash, origin: reviewedClaimOrigin(goal, providerUrl) });
+  if (entry.payment_version !== 'direct-signed-v1' || typeof entry.agent_public_key !== 'string') throw new Error(`${goal.id}: authenticated claim requires the original signed payment`);
+  verifyClaimAuthorization(terms, entry.resource_authorization, entry.agent_public_key);
+  return structuredClone(entry.resource_authorization);
+}
 
 /** Fetch a quote for each goal and validate it against owner-pinned constraints. */
-export async function planFromQuotes({ contractId, ownerAccountId, goals, getQuote, journal }) {
+export async function planFromQuotes({ contractId, ownerAccountId, goals, getQuote, journal, providerUrl }) {
   if (!Array.isArray(goals) || !goals.length || typeof getQuote !== 'function') throw new Error('goals and a quote source are required');
   // Snapshot all reviewed goals before the first asynchronous quote, and never
   // let an injected quote source mutate the input used to validate its memo.
@@ -39,19 +56,21 @@ export async function planFromQuotes({ contractId, ownerAccountId, goals, getQuo
     const max = positiveAmount(goal.max_amount, `${id} max_amount`);
     const selectedAmount = goal.quote_amount === undefined ? undefined : positiveAmount(goal.quote_amount, `${id} selected quote amount`);
     if (selectedAmount !== undefined && selectedAmount > max) throw new Error(`${id}: selected quote exceeds the owner-approved maximum`);
-    if (goal.order_binding !== undefined && goal.order_binding !== 'seller-v2') throw new Error(`${id}: unsupported owner-reviewed order binding`);
-    return { id, resource, policyId, token, payee, max, selectedAmount, unique: goal.order_binding === 'seller-v2',
-      input: Object.freeze(normalizeOrder(resource, goal.input)) };
+    if (goal.order_binding !== undefined && !['seller-v2', 'seller-v3'].includes(goal.order_binding)) throw new Error(`${id}: unsupported owner-reviewed order binding`);
+    const binding = goal.order_binding ?? 'legacy';
+    return { id, resource, policyId, token, payee, max, selectedAmount, binding, unique: binding !== 'legacy',
+      origin: binding === 'seller-v3' ? reviewedClaimOrigin(goal, providerUrl) : null,
+      goal, input: Object.freeze(normalizeOrder(resource, goal.input)) };
   });
   validatePlan({ contract_id: contractId, owner_account_id: ownerAccountId, requests: prepared.map(item => ({ id: item.id,
     resource: item.resource, policy_id: item.policyId, token: item.token, payee: item.payee, amount: item.max.toString() })) });
-  function checkMemo({ id, resource, input, unique }, memo, label) {
+  function checkMemo({ id, resource, input, unique, binding }, memo, label) {
     const mismatch = label === 'recorded payment' ? 'recorded payment does not match the reviewed goal' : `${label} is not bound to this exact order`;
     if (!unique) {
       if (memo !== orderMemo(resource, input)) throw new Error(`${id}: ${mismatch}`);
     } else {
       let challenge;
-      try { challenge = challengeFromOrderMemo(resource, input, memo); }
+      try { challenge = binding === 'seller-v3' ? challengeFromOrderMemoV3(resource, input, memo) : challengeFromOrderMemo(resource, input, memo); }
       catch (error) { throw new Error(`${id}: ${mismatch}`, { cause: error }); }
       if (challenges.has(challenge)) throw new Error(`${id}: seller challenge was reused in this batch`);
       challenges.add(challenge);
@@ -75,21 +94,25 @@ export async function planFromQuotes({ contractId, ownerAccountId, goals, getQuo
         throw new Error(`${id}: recorded payment does not match the reviewed goal`);
       }
       checkMemo(item, request.memo, 'recorded payment');
+      if (item.binding === 'seller-v3') requireRecordedClaim({ goal: item.goal, request, entry: previous, contractId, ownerAccountId, providerUrl });
       item.replayedRequest = request;
     } else if (unique && previous) {
       // A fresh challenge cannot recover an old payment.
-      throw new Error(`${id}: seller-v2 recovery requires the original recorded request`);
+      throw new Error(`${id}: seller-bound recovery requires the original recorded request`);
     }
   }
   for (const item of prepared) {
-    const { id, resource, policyId, token, payee, max, selectedAmount, unique, input } = item;
+    const { id, resource, policyId, token, payee, max, selectedAmount, unique, binding, origin, input } = item;
     if (item.replayedRequest) { requests.push(item.replayedRequest); continue; }
     // Legacy v1 journals without a recorded request still require the old exact
     // quote/fingerprint check. Context never goes in the provider request body.
-    const quoteOrder = Object.freeze({ resource, input, ...(unique ? { order_binding: 'seller-v2' } : {}) });
+    const quoteOrder = Object.freeze({ resource, input, ...(unique ? { order_binding: binding } : {}) });
     const quote = structuredClone(await getQuote(quoteOrder, { goalId: id }));
     if (!quote || quote.resource !== resource || quote.policy_id !== policyId || quote.token !== token || quote.payee !== payee) {
       throw new Error(`${id}: quote does not match the permitted resource, policy, token, or payee`);
+    }
+    if (binding === 'seller-v3' && (quote.auth_scheme !== CLAIM_SCHEME || quote.seller_origin !== origin)) {
+      throw new Error(`${id}: quote does not match the reviewed authenticated seller origin and scheme`);
     }
     const amount = positiveAmount(quote.amount, `${id} quote amount`);
     if (amount > max) throw new Error(`${id}: quote exceeds the owner-approved maximum`);
@@ -120,16 +143,21 @@ export async function fulfillPaidResource({ goal, request, contractId, ownerAcco
     throw new Error(`${goal.id}: confirmed payment journal entry changed; stop and reconcile manually`);
   }
   if (typeof fulfill !== 'function') throw new Error('fulfillment source is required');
-  const input = Object.freeze(normalizeOrder(goal.resource, goal.input)), context = { goalId: goal.id };
-  if (goal.order_binding !== undefined && goal.order_binding !== 'seller-v2') throw new Error(`${goal.id}: unsupported owner-reviewed order binding`);
-  const unique = goal.order_binding === 'seller-v2';
-  if (unique) challengeFromOrderMemo(goal.resource, input, request.memo);
+  const input = Object.freeze(normalizeOrder(goal.resource, goal.input));
+  if (goal.order_binding !== undefined && !['seller-v2', 'seller-v3'].includes(goal.order_binding)) throw new Error(`${goal.id}: unsupported owner-reviewed order binding`);
+  const unique = goal.order_binding === 'seller-v2' || goal.order_binding === 'seller-v3';
+  const authenticated = goal.order_binding === 'seller-v3';
+  if (authenticated) challengeFromOrderMemoV3(goal.resource, input, request.memo);
+  else if (unique) challengeFromOrderMemo(goal.resource, input, request.memo);
   else if (request.memo !== orderMemo(goal.resource, input)) throw new Error(`${goal.id}: recorded payment is not bound to this exact order`);
+  const authorization = authenticated ? Object.freeze(requireRecordedClaim({ goal, request, entry, contractId, ownerAccountId, providerUrl })) : null;
+  const context = Object.freeze({ goalId: goal.id, ...(authenticated ? { txHash: entry.tx_hash, authorization } : {}) });
   checkDeliveryRecord({ delivery: entry.delivery, contractId, ownerAccountId, request, txHash: entry.tx_hash,
     providerId: goal.provider_id, providerOrigin: goal.provider_url ?? providerUrl, input });
   let stage = 'fulfillment', verified;
   try {
-    const result = await fulfill({ tx_hash: entry.tx_hash, resource: goal.resource, input, ...(unique ? { memo: request.memo } : {}) }, context);
+    const result = await fulfill({ tx_hash: entry.tx_hash, resource: goal.resource, input, ...(unique ? { memo: request.memo } : {}),
+      ...(authenticated ? { authorization } : {}) }, context);
     stage = 'verification';
     verified = await verifyDelivery({ resource: goal.resource, input, result, txHash: entry.tx_hash,
       readStorage: readStorage && (objectId => readStorage(objectId, context)), repositoryLookup });
@@ -172,8 +200,9 @@ export async function runResourceAgent({ contractId, ownerAccountId, goals, getQ
   if (execute && Array.isArray(goals) && goals.some(goal => goal?.resource === 'storage') && typeof readStorage !== 'function') {
     throw new Error('live storage execution requires provider readback before payment');
   }
-  if (execute && Array.isArray(goals) && goals.some(goal => goal?.order_binding === 'seller-v2') && !durablePayment) {
-    throw new Error('seller-v2 execution requires durable signed-hash journaling');
+  if (execute && Array.isArray(goals) && !durablePayment) {
+    if (goals.some(goal => goal?.order_binding === 'seller-v2')) throw new Error('seller-v2 execution requires durable signed-hash journaling');
+    if (goals.some(goal => goal?.order_binding === 'seller-v3')) throw new Error('seller-v3 execution requires durable signed-hash journaling');
   }
   // Receipt routing metadata is owner-supplied, never provider- or model-chosen.
   // Validate it before quotes or payments; it is a local label, not attestation.
@@ -181,7 +210,7 @@ export async function runResourceAgent({ contractId, ownerAccountId, goals, getQ
     if (typeof providerUrl !== 'string') throw new Error('invalid default provider origin');
     httpResourceProvider(providerUrl);
   }
-  const journalRoutes = new Map();
+  const journalRoutes = new Map(), claimOrigins = new Map();
   for (const goal of Array.isArray(goals) ? goals : []) {
     if (goal?.provider_url !== undefined) {
       if (typeof goal.provider_url !== 'string') throw new Error('invalid goal provider origin');
@@ -192,12 +221,13 @@ export async function runResourceAgent({ contractId, ownerAccountId, goals, getQ
     }
     const route = normalizeProviderRoute({ provider_id: goal?.provider_id ?? null, provider_origin: goal?.provider_url ?? providerUrl ?? null });
     journalRoutes.set(goal?.id, route);
+    if (goal?.order_binding === 'seller-v3') claimOrigins.set(goal.id, reviewedClaimOrigin(goal, providerUrl));
     const previous = journal?.get(goal?.id);
     if (previous?.provider_route !== undefined && JSON.stringify(normalizeProviderRoute(previous.provider_route)) !== JSON.stringify(route)) {
       throw new Error(`${goal.id}: recorded provider route does not match the reviewed goal`);
     }
   }
-  const plan = await planFromQuotes({ contractId, ownerAccountId, goals, getQuote, journal });
+  const plan = await planFromQuotes({ contractId, ownerAccountId, goals, getQuote, journal, providerUrl });
   // Reject corrupted or mismatched prior receipts before paying another goal.
   for (let i = 0; i < plan.requests.length; i++) {
     const request = plan.requests[i], goal = goals[i], entry = journal?.get(request.id);
@@ -215,7 +245,7 @@ export async function runResourceAgent({ contractId, ownerAccountId, goals, getQ
   // The views are non-atomic: the contract still decides each real payment,
   // and another actor can change state after this preview.
   const checks = [], blockedReasons = new Map();
-  const preview = await runProcurement({ plan, provider, account, publicKey, journal, journalRoutes, execute: false, log: () => {}, onCheck: check => {
+  const preview = await runProcurement({ plan, provider, account, publicKey, journal, journalRoutes, claimOrigins, execute: false, log: () => {}, onCheck: check => {
     checks.push({ id: check.id, status: check.status });
     if (check.status === 'BLOCKED') blockedReasons.set(check.id, typeof check.reason === 'string' ? check.reason.replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 200) : 'Policy rejected the request.');
   } });
@@ -236,7 +266,7 @@ export async function runResourceAgent({ contractId, ownerAccountId, goals, getQ
   if (execute && !summary.blocked) {
     log('[resource-agent] Batch preflight passed; these non-atomic views are not a guarantee.');
     const indexById = new Map(plan.requests.map((request, index) => [request.id, index]));
-    payments = await runProcurement({ plan, provider, account, publicKey, journal, journalRoutes, execute: true, durablePayment, log, stopOnBlocked: true,
+    payments = await runProcurement({ plan, provider, account, publicKey, journal, journalRoutes, claimOrigins, execute: true, durablePayment, log, stopOnBlocked: true,
       beforePayment, beforeBroadcast,
       onCheck: check => {
         if (check.status === 'BLOCKED' || check.status === 'DEFERRED') {
@@ -281,11 +311,14 @@ export function httpResourceProvider(baseUrl, fetchImpl = globalThis.fetch) {
   return {
     async getQuote(order) { return (await post('/quote', order)).quote; },
     async fulfill(order) { return (await post('/redeem', order)).result; },
-    async readStorage(objectId) {
+    async readStorage(objectId, context) {
       if (typeof objectId !== 'string' || !/^[a-f0-9]{64}$/.test(objectId)) throw new Error('invalid storage object id');
-      const response = await fetchImpl(new URL(`/storage/${objectId}`, url), {
-        method: 'GET', redirect: 'error', signal: AbortSignal.timeout(30_000),
-      });
+      const authenticated = context?.authorization !== undefined;
+      const response = authenticated
+        ? await fetchImpl(new URL('/storage-read', url), { method: 'POST', redirect: 'error',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ tx_hash: context.txHash, object_id: objectId, authorization: context.authorization }), signal: AbortSignal.timeout(30_000) })
+        : await fetchImpl(new URL(`/storage/${objectId}`, url), { method: 'GET', redirect: 'error', signal: AbortSignal.timeout(30_000) });
       if (!response.ok) throw new Error(`provider storage readback failed (HTTP ${response.status})`);
       return readBoundedBytes(response, { maxBytes: 4096, label: 'provider storage' });
     },
@@ -317,7 +350,7 @@ export function routedResourceProvider({ providerUrl, goals, overrides = new Map
   return {
     getQuote: (order, context) => route(context).getQuote(order),
     fulfill: (order, context) => route(context).fulfill(order),
-    readStorage: (objectId, context) => route(context).readStorage(objectId),
+    readStorage: (objectId, context) => route(context).readStorage(objectId, context),
   };
 }
 

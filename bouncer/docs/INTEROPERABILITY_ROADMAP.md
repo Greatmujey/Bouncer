@@ -14,6 +14,7 @@ that agent.
 | Native NEAR to independently operated OutLayer | The [dependent workflow](DEPENDENT_WORKFLOWS.md) used a single-source price result in later compute, storage and API orders. | Native payment, not Circle USDC. The oracle is not a guarantee of market truth or authenticated freshness. |
 | Circle testnet USDC to Bouncer's development seller | A [seller-v2 run](DEPENDENT_WORKFLOWS.md) verified three FINAL guarded transfers and one key-free lost-response recovery. | Seller and resources were self-hosted; storage readback is not a future-availability guarantee. |
 | Circle testnet USDC to a PipRail SDK gate | A [fresh testnet run](ONCHAIN_PROOF.md#evidence-and-limitations) obtained a quote, sent one guarded payment, recovered it, and obtained a response verified by the published SDK. | The gate was local and self-hosted; testnet support used our wrapper. It is custom `onchain-proof`, not x402 `exact`. |
+| Authenticated Bouncer seller-v3 | [Offline tests](SELLER_V3.md) exercise signed claims, three resources, seller restart and key-free workflow recovery. | This is a custom testnet protocol with a self-hosted seller, not independent adoption. Claim signatures remain bearer credentials. |
 | Owner-only Ref testnet setup | Owner acquired test tokens and separately funded the vault in the live runs. | This is **not** an agent-guarded swap. Plain outgoing Ref `ft_transfer` does not call Bouncer's deposit hook. |
 
 No independent FT-paid commercial compute, storage or API purchase is
@@ -49,16 +50,18 @@ with that SDK/configuration, not adoption by someone else.
    request is reconciled. A buyer cannot fix a seller's replay store or prove a
    seller has delivered quality merely by checking an HTTP 200.
 
-The opt-in buyer makes at most one payment broadcast and one paid HTTP request
-per preserved journal; after an ambiguous result it stops. A different or
+The opt-in onchain-proof buyer makes at most one payment broadcast and one paid
+HTTP request per preserved journal; after an ambiguous result it stops. A different or
 lost journal, a different process, an untrusted RPC, an untrusted seller, or
 an injected retrying transport can defeat assumptions. Do not use valuable
 funds. See [the detailed onchain-proof risks](ONCHAIN_PROOF.md).
 
-## Proposed next protocol: authenticated, order-bound fulfillment
+## Authenticated, order-bound fulfillment
 
-The following is **unimplemented design work** and requires seller adoption.
-It is not a drop-in security upgrade for an existing x402 merchant:
+An experimental implementation of the core claim and local seller flow now
+exists as [seller-v3](SELLER_V3.md). It is **not** a drop-in security upgrade
+for an existing x402 merchant and requires that merchant's adoption. The
+following checklist separates what the prototype does from what remains:
 
 - A seller issues and durably records a fresh bounded quote/challenge and its
   exact service terms. The owner approves the normalized task, seller origin,
@@ -66,9 +69,10 @@ It is not a drop-in security upgrade for an existing x402 merchant:
 - After constructing the exact guarded transaction and before broadcasting,
   the restricted agent signs a **domain-separated**, versioned canonical
   message containing at least the chain, Bouncer contract, transaction hash,
-  seller origin, issued challenge, task digest, token, payee, amount and quote
-  expiry/terms. Persist the transaction hash and off-chain authorization
-  before one send so recovery can proceed without the key.
+  seller origin, issued challenge, task digest, token, payee and amount. The
+  buyer persists the transaction hash and authorization before one send so
+  recovery can proceed without the key. V3 has **no expiry**; a safe expiry and
+  late-payment/refund protocol remain future work.
 - The seller independently checks FINAL transaction and receipts, binds the
   authorization to the *actual transaction signing public key*, checks the
   challenge was issued for those exact terms, and atomically claims both the
@@ -82,11 +86,11 @@ It is not a drop-in security upgrade for an existing x402 merchant:
   compromised agents, denial of service, or exactly-once execution across
   arbitrary external side effects. Never release or repeat an ambiguous claim
   without a protocol-specific, safe reconciliation rule.
-- Specify canonical bytes and cross-language vectors first, then test changed
-  origin, task, challenge, amount, hash, signer, expiry and chain; replay,
-  simultaneous claims, restarts, disk failures and crash points; and finally a
-  consenting independent seller. Until that happens, keep the present explicit
-  warnings and risk flags. Do not describe this design as implemented.
+- V3 specifies canonical bytes and a fixed vector, and offline tests cover
+  changed origin, task, challenge, amount, hash, signer and chain, concurrent
+  claims, restarts and key-free recovery. Independent-language implementations,
+  expiry/refund semantics, wider crash testing, security review and a consenting
+  independent seller remain open. Keep the explicit warnings and risk flags.
 
 ## Other blockers for a first-class multi-resource agent
 

@@ -36,8 +36,9 @@ export async function runMixedMission({ outlayer, resources, provider, journal, 
   resources = { ...resources, goals: structuredClone(resources.goals) };
   // The independent leg must not be paid only to discover later that the FT
   // leg cannot safely journal its seller-issued challenges.
-  if (execute && resources.goals.some(item => item?.order_binding === 'seller-v2') && resources.durablePayment !== true) {
-    throw new Error('seller-v2 mission execution requires durable signed-hash journaling');
+  if (execute && resources.durablePayment !== true) {
+    if (resources.goals.some(item => item?.order_binding === 'seller-v2')) throw new Error('seller-v2 mission execution requires durable signed-hash journaling');
+    if (resources.goals.some(item => item?.order_binding === 'seller-v3')) throw new Error('seller-v3 mission execution requires durable signed-hash journaling');
   }
   if (resources.beforePayment !== undefined && typeof resources.beforePayment !== 'function') throw new Error('invalid pre-payment guard');
   const ids = resources.goals.map(item => item?.id);

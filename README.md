@@ -68,12 +68,12 @@ tools—it does not itself provide a model or access to the new planning/executi
 Bouncer is a resource-buying agent; the on-chain firewall is its spending
 kernel, not the whole product. These are connections to the tracks, not claims
 that all six are complete. See the [interoperability roadmap](bouncer/docs/INTEROPERABILITY_ROADMAP.md)
-for the independent-seller gap, proposed authentication and swap-accounting work.
+for the independent-seller gap, experimental authentication and outstanding swap-accounting work.
 
 | Track | Evidence today | Still needed |
 | --- | --- | --- |
 | AI Security & Defense | 1-yocto guard, scoped keys, caps, pinned project/input and delivery gating. | Independent audit and stronger prompt defenses. |
-| Agent Economy | Native-paid independent price execution feeds three FT-paid development resources; an experimental x402 onchain-proof adapter passed a live testnet check against a self-hosted third-party SDK gate. | Independent FT-paid commercial API/storage providers, order-bound authentication and signed receipts. |
+| Agent Economy | Native-paid independent price execution feeds three FT-paid development resources; x402 compatibility and an authenticated seller-v3 protocol have self-hosted tests. | Independent FT-paid commercial API/storage providers, audited authentication and signed receipts. |
 | Autonomous Business | AI planning in a separate run; multi-resource payments, delivery checks and recovery. | Real customers, invoicing and production operations. |
 | Real-World Money | Circle testnet USDC paid for three self-hosted resources; fake USDC.e funded a separate probe. | Independent providers and real-money rails; testnet USDC has no real value. |
 | Unstoppable DeFi | Owner-setup Ref testnet swaps acquired test tokens, including Circle testnet USDC. | Agent-guarded swaps with safe output accounting and cross-chain settlement. |
@@ -145,8 +145,9 @@ Offline mocks are not proof of on-chain behavior.
   metadata. GitHub data is live, unauthenticated third-party data; availability
   is not guaranteed. The provider is not commercial. It can handle up to eight
   unrelated redemptions concurrently within one process and deduplicates the same
-  in-flight transaction, but has no multi-host coordination, authentication or
-  production durability. An optional selector compares quotes from owner-approved endpoints only, within one token per
+  in-flight transaction, but has no multi-host coordination, general user
+  authentication, TLS or production durability. Optional v3 claim signatures
+  are replayable bearer credentials. An optional selector compares quotes from owner-approved endpoints only, within one token per
   resource; every quote must match the approved constraints. The model proposes
   tasks but cannot choose financial authority. It requires a separately supplied
   model. Delivery checks cover only the bounded example protocols: storage is
@@ -487,6 +488,18 @@ explicitly accept those risks. Payments and seller requests are each attempted
 at most once per preserved local journal; uncertain outcomes are never
 repurchased or automatically re-redeemed.
 
+### Authenticated seller-v3 orders
+
+The opt-in [seller-v3 protocol](bouncer/docs/SELLER_V3.md) binds an exact
+seller-issued compute, storage or API order to a NEP-413 signature by the
+restricted transaction key. The buyer journals that signature before sending;
+the development seller checks it against the FINAL payment signer and protects
+v3 storage readback. Offline tests cover public-proof theft, wrong keys,
+concurrency, seller restart and key-free dependent-workflow recovery.
+Signatures are **bearer credentials**: protect journals and transport. This is
+a custom, unaudited testnet protocol—not an independent merchant integration,
+x402 `exact`, or a guarantee of confidential hosting.
+
 ### Delivery checks and local receipts
 
 The experimental [seller verification SDK](bouncer/packages/provider-sdk/README.md)
@@ -614,8 +627,9 @@ and different journal paths or multiple writers can still duplicate payments.
 The development provider trusts its configured RPC, Bouncer account/code, and
 FT contracts; it is not a trustless payment proof. A local exclusive lock
 allows one provider process per data directory, but separate directories or
-hosts do not share replay protection. It has no authentication, TLS or privacy
-and must not be exposed publicly or used with real money.
+hosts do not share replay protection. V1/v2 have no claim authentication; v3
+uses replayable signed bearer claims. The server supplies no TLS or general
+privacy and must not be exposed publicly or used with real money.
 Order data is sent to the provider, and its hash is public in the payment memo.
 
 ## Local tests

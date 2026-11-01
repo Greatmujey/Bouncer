@@ -77,7 +77,7 @@ export async function compareApprovedQuotes({ config: rawConfig, proposedGoals, 
   const quoted = await boundedQuotes(groups.flat(), async candidate => {
     try {
       const plan = await planFromQuotes({ contractId: config.contract_id, ownerAccountId: config.owner_account_id,
-        goals: [candidate.goal], getQuote: candidate.client.getQuote });
+        providerUrl: candidate.offer.provider_url, goals: [candidate.goal], getQuote: candidate.client.getQuote });
       return { offer: candidate.offer, amount: plan.requests[0].amount };
     } catch (error) {
       const message = String(error?.message || 'quote failed').replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 200);

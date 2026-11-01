@@ -299,6 +299,57 @@ jobs:
           if-no-files-found: ignore
           retention-days: 90
 
+  seller-v3-workflow-live:
+    name: Authenticated seller-v3 dependent workflow (testnet)
+    # One explicit fresh testnet run; Actions reruns never repeat its payments.
+    if: github.event_name == 'push' && github.run_attempt == '1' && contains(github.event.head_commit.message, '[seller-v3-live]')
+    needs: [js-tests, contract-tests, build-contract]
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: bouncer-wasm
+          path: .
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      # One native testnet OutLayer call and three Circle testnet USDC payments
+      # to our local development seller, never an independent FT merchant.
+      - name: Run authenticated orders and key-free recovery
+        shell: bash
+        run: |
+          set +e
+          node bouncer/demo-oracle-mission.mjs --seller-v3-workflow 2>&1 | tee "$RUNNER_TEMP/seller-v3-live.log"
+          result=${PIPESTATUS[0]}
+          if [ "$result" -ne 0 ]; then
+            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-4500).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=Seller-v3 testnet check failed::"+s)' "$RUNNER_TEMP/seller-v3-live.log"
+          fi
+          exit "$result"
+      # Repository-restricted artifact: the buyer journal contains replayable
+      # testnet claim signatures and task data, but never private keys. Preserve
+      # the original on both success and failure for safe reconciliation.
+      - name: Preserve sensitive testnet recovery evidence, never keys
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: seller-v3-restricted-recovery-evidence
+          path: |
+            /tmp/bouncer-seller-v3-live-*/journal.json
+            /tmp/bouncer-seller-v3-live-*/setup-journal.json
+            /tmp/bouncer-seller-v3-live-*/oracle-goal.json
+            /tmp/bouncer-seller-v3-live-*/workflow.json
+            /tmp/bouncer-seller-v3-live-*/derived-orders.json
+            /tmp/bouncer-seller-v3-live-*/evidence.json
+            /tmp/bouncer-seller-v3-live-*/provider-config.json
+            /tmp/bouncer-seller-v3-live-*/development-provider/**
+          if-no-files-found: ignore
+          retention-days: 90
+
   piprail-onchain-proof-live:
     name: One-shot onchain-proof SDK interoperability (testnet)
     # A fresh self-hosted SDK gate and one Circle testnet USDC payment only.
@@ -502,7 +553,7 @@ jobs:
         run: |
           set -euo pipefail
           archive=$(npm pack ./bouncer/packages/provider-sdk --pack-destination "$RUNNER_TEMP" --silent)
-          test "$archive" = 'bouncer-near-testnet-provider-sdk-0.2.0.tgz'
+          test "$archive" = 'bouncer-near-testnet-provider-sdk-0.3.0.tgz'
           mkdir -p "$RUNNER_TEMP/seller-client"
           printf '{"name":"seller-check","version":"1.0.0","private":true,"type":"module"}\n' > "$RUNNER_TEMP/seller-client/package.json"
           npm install --prefix "$RUNNER_TEMP/seller-client" --ignore-scripts --no-audit --no-fund "$RUNNER_TEMP/$archive"

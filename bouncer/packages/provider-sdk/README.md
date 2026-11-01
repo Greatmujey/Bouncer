@@ -13,7 +13,7 @@ install that local file in the seller's application:
 
 ```sh
 npm pack ./bouncer/packages/provider-sdk --pack-destination /path/to/output
-npm install /path/to/output/bouncer-near-testnet-provider-sdk-0.2.0.tgz near-api-js@6.5.1
+npm install /path/to/output/bouncer-near-testnet-provider-sdk-0.3.0.tgz near-api-js@6.5.1
 ```
 
 `npm pack` only creates the archive; it does not publish anything. The package
@@ -100,6 +100,49 @@ synthesized and unrelated receipts were omitted, so that fixture alone is not a
 complete RPC response. The SDK does not support Bouncer's
 `execute_ft_call`, OutLayer prepaid projects or arbitrary `execute` gas values.
 A buyer and seller must agree on the exact order/memo and handling of failures.
+
+## Opt-in authenticated orders (v3)
+
+V3 adds a NEP-413 claim signed by the **actual FINAL transaction key**, with the
+seller origin and the seller-issued exact task, chain, contract, owner, payment
+terms and transaction hash in the signed message. It remains a custom testnet
+protocol: no independent seller adoption or production security is established.
+The signature is a replayable bearer credential, so use TLS and protect journals,
+logs and responses. It does not provide general user identity or solve a
+malicious seller, retention, expiry, refunds or distributed replay protection.
+V1/v2 do not gain authentication merely by installing this SDK.
+
+The seller must create and durably save a random 16-byte challenge and its own
+reviewed product/order terms, then return `orderMemoV3(resource, input,
+challenge)` and the configured canonical origin with auth scheme
+`bouncer-nep413-claim-v1`. Match the buyer request to that stored quote, not
+untrusted client-supplied financial terms. With a trusted testnet RPC, seller's
+own `expectation`, seller-created `claimTerms` and the buyer's `authorization`:
+
+```js
+import { readAndVerifyAuthenticatedProviderPayment } from 'bouncer-near-testnet-provider-sdk';
+const payment = await readAndVerifyAuthenticatedProviderPayment({
+  provider: trustedTestnetRpc,
+  expectation: storedPaymentExpectation,
+  claimTerms: storedClaimTerms,
+  authorization: request.authorization,
+});
+// payment.agent_public_key came from the FINAL transaction and must be stored
+// with an atomic claim of both quote and hash BEFORE doing work. Require the
+// signature again for cached results and storage reads, not just the first call.
+```
+
+The `expectation` has `tx_hash`, `contract_id`, `owner_account_id`, `policy_id`,
+`token`, `payee`, `amount` and `memo`. `claimTerms` has those same fields plus
+`network: 'near:testnet'`, `seller_origin` and `resource`. The SDK checks the
+FINAL receipt graph, compares terms, and verifies the NEP-413 signature against
+its actual signer key. It does not operate the seller's quote/replay database or
+make side effects transactional. `orderMemoV3`, `challengeFromOrderMemoV3`,
+`signClaimAuthorization` and `verifyClaimAuthorization` are also exported.
+See the checkout's `bouncer/docs/SELLER_V3.md` for exact canonical bytes, a fixed
+vector, HTTP flow, state migration, bearer-credential handling and limitations.
+The Node package test independently imports the packed archive and exercises
+v3; it does not prove real merchant compatibility.
 
 ## Opt-in seller-issued orders (v2)
 
@@ -219,7 +262,10 @@ it belongs to the configured contract/owner; then explicitly set
 writes version 2 before starting; pending entries remain pending. Remove the
 flag afterward. Do not adopt a file of uncertain origin.
 
-The first v2 quote upgrades a version-2 state file to version 3. Version 3
+The first v3 quote upgrades the local store to version 4 with the configured
+seller origin and transaction-key claims. Older binaries cannot read version
+4; never roll state back, and protect buyer journals containing v3 bearer
+signatures. The first v2 quote upgrades a version-2 state file to version 3. Version 3
 persists each quote and its claimed hash along with legacy redemptions; older
 provider binaries cannot read it. Do not roll back the software or restore an
 older snapshot over newer claims: doing so can lose replay protection. A v2

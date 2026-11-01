@@ -11,12 +11,13 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import nearApi from 'near-api-js';
 import { fetchPublicRepository } from './github-data.mjs';
-import { normalizeOrder, orderMemo, orderMemoV2, challengeFromOrderMemo } from '../packages/provider-sdk/lib/resource-order.mjs';
-export { normalizeOrder, orderMemo, orderMemoV2, challengeFromOrderMemo };
+import { normalizeOrder, orderMemo, orderMemoV2, challengeFromOrderMemo, orderMemoV3, challengeFromOrderMemoV3 } from '../packages/provider-sdk/lib/resource-order.mjs';
+export { normalizeOrder, orderMemo, orderMemoV2, challengeFromOrderMemo, orderMemoV3, challengeFromOrderMemoV3 };
 import { validateRpcEndpoint } from '../shared/rpc-endpoint.mjs';
 import { isTestnetAccount, isTestnetToken } from '../shared/account-id.mjs';
 import { isTransactionHash } from '../shared/direct-payment-settlement.mjs';
-import { readAndVerifyProviderPayment, verifyProviderPayment } from '../packages/provider-sdk/index.mjs';
+import { CLAIM_SCHEME, canonicalClaimOrigin, readAndVerifyAuthenticatedProviderPayment, readAndVerifyProviderPayment,
+  verifyClaimAuthorization, verifyProviderPayment } from '../packages/provider-sdk/index.mjs';
 
 const digest = value => crypto.createHash('sha256').update(value).digest('hex');
 const plainObject = value => value && typeof value === 'object' && !Array.isArray(value);
@@ -32,6 +33,11 @@ export const MAX_SELLER_QUOTES = 1024;
 const RESOURCES = ['compute', 'storage', 'api'];
 const CHALLENGE = /^[a-f0-9]{32}$/;
 const exactKeys = (obj, keys) => plainObject(obj) && Object.keys(obj).length === keys.length && keys.every(key => Object.hasOwn(obj, key));
+function validEd25519Key(value) {
+  if (typeof value !== 'string' || !value.startsWith('ed25519:')) return false;
+  try { const key = nearApi.utils.PublicKey.from(value); return key.keyType === 0 && key.toString() === value; }
+  catch { return false; }
+}
 function validProduct(p) {
   return exactKeys(p, ['policy_id', 'token', 'payee', 'amount']) && typeof p.policy_id === 'string' && p.policy_id.trim() &&
     bytes(p.policy_id) <= 128 && isTestnetToken(p.token) && isTestnetAccount(p.payee) && typeof p.amount === 'string' &&
@@ -40,7 +46,7 @@ function validProduct(p) {
 function savedMemoChallenge(resource, memo) {
   if (!RESOURCES.includes(resource) || typeof memo !== 'string') throw new Error('invalid redemption memo');
   if (new RegExp(`^bouncer-order-v1:${resource}:[a-f0-9]{64}$`).test(memo)) return null;
-  const match = /^bouncer-order-v2:(compute|storage|api):([a-f0-9]{32}):[a-f0-9]{64}$/.exec(memo);
+  const match = /^bouncer-order-v[23]:(compute|storage|api):([a-f0-9]{32}):[a-f0-9]{64}$/.exec(memo);
   if (!match || match[1] !== resource) throw new Error('invalid redemption memo');
   return match[2];
 }
@@ -48,7 +54,10 @@ function savedMemoChallenge(resource, memo) {
 /** Seller-pinned order evidence; trusted RPC, Bouncer and token, not a light-client proof. */
 function expectation({ txHash, contractId, ownerAccountId = contractId, product, resource, input, memo }) {
   if (!plainObject(product)) throw new Error('invalid seller product');
-  if (memo !== undefined) challengeFromOrderMemo(resource, input, memo);
+  if (memo !== undefined) {
+    if (memo.startsWith('bouncer-order-v3:')) challengeFromOrderMemoV3(resource, input, memo);
+    else challengeFromOrderMemo(resource, input, memo);
+  }
   return { tx_hash: txHash, contract_id: contractId, owner_account_id: ownerAccountId, policy_id: product.policy_id,
     token: product.token, payee: product.payee, amount: product.amount, memo: memo ?? orderMemo(resource, input) };
 }
@@ -160,10 +169,13 @@ async function fulfill(resource, input, txHash, storageDir, dataFetch) {
  * it is not distributed replay protection across independent directories/hosts.
  */
 export function createResourceProvider({ rpcProvider, contractId, ownerAccountId = contractId, products, dataDir,
-  dataFetch = globalThis.fetch, adoptLegacyState = false }) {
+  dataFetch = globalThis.fetch, adoptLegacyState = false, sellerOrigin }) {
   if (!rpcProvider || typeof rpcProvider.viewNodeStatus !== 'function' || typeof rpcProvider.txStatusReceipts !== 'function' ||
       !isTestnetAccount(contractId) || !isTestnetAccount(ownerAccountId) || !plainObject(products) ||
       typeof dataDir !== 'string' || !dataDir || typeof adoptLegacyState !== 'boolean') throw new Error('provider configuration is invalid');
+  // Independently configured identity, not the untrusted Host header. It is
+  // mandatory for seller-v3 and remains fixed across journal restarts.
+  if (sellerOrigin !== undefined) canonicalClaimOrigin(sellerOrigin);
   const pinnedProducts = Object.create(null);
   for (const name of RESOURCES) {
     const p = products[name];
@@ -186,35 +198,41 @@ export function createResourceProvider({ rpcProvider, contractId, ownerAccountId
     syncDirectory(root);
     if (fs.existsSync(statePath)) {
       const saved = JSON.parse(fs.readFileSync(statePath, 'utf8'));
-      if (!plainObject(saved) || ![1, 2, 3].includes(saved.version) || !plainObject(saved.redemptions) ||
-          (saved.version === 3 && (!plainObject(saved.quotes) || Object.keys(saved.quotes).length > MAX_SELLER_QUOTES)) ||
-          (saved.version !== 3 && Object.hasOwn(saved, 'quotes'))) throw new Error('invalid redemption state');
+      if (!plainObject(saved) || ![1, 2, 3, 4].includes(saved.version) || !plainObject(saved.redemptions) ||
+          (saved.version >= 3 && (!plainObject(saved.quotes) || Object.keys(saved.quotes).length > MAX_SELLER_QUOTES)) ||
+          (saved.version < 3 && Object.hasOwn(saved, 'quotes'))) throw new Error('invalid redemption state');
       if (saved.version >= 2 && (saved.contract_id !== contractId || saved.owner_account_id !== ownerAccountId || saved.network !== 'testnet')) {
         throw new Error('redemption state belongs to a different contract, owner or network');
       }
       if (saved.version === 1 && Object.keys(saved.redemptions).length && !adoptLegacyState) {
         throw new Error('legacy redemption state is not bound to an owner/contract; stop all old writers, review it and explicitly adopt it');
       }
-      if (saved.version === 3) {
+      if (saved.version >= 3) {
         const claimed = new Set();
         for (const [challenge, quote] of Object.entries(saved.quotes)) {
-          if (!CHALLENGE.test(challenge) || !exactKeys(quote, ['resource', 'memo', 'product', 'read_only', 'tx_hash']) ||
+          const authenticated = typeof quote?.memo === 'string' && quote.memo.startsWith('bouncer-order-v3:');
+          const fields = ['resource', 'memo', 'product', 'read_only', 'tx_hash', ...(authenticated ? ['seller_origin', 'agent_public_key'] : [])];
+          if (!CHALLENGE.test(challenge) || !exactKeys(quote, fields) || (authenticated && saved.version !== 4) ||
               savedMemoChallenge(quote.resource, quote.memo) !== challenge || !validProduct(quote.product) ||
               typeof quote.read_only !== 'boolean' || (quote.read_only && quote.resource !== 'api') ||
               !(quote.tx_hash === null || isTransactionHash(quote.tx_hash))) throw new Error('invalid saved seller quote');
+          if (authenticated && (!sellerOrigin || quote.seller_origin !== sellerOrigin ||
+              (quote.tx_hash === null ? quote.agent_public_key !== null : !validEd25519Key(quote.agent_public_key)))) {
+            throw new Error('authenticated seller quote has an invalid origin or signing key');
+          }
           if (quote.tx_hash !== null) {
             if (claimed.has(quote.tx_hash)) throw new Error('transaction claimed by multiple seller quotes');
             claimed.add(quote.tx_hash);
           }
         }
         quotes = Object.assign(Object.create(null), saved.quotes);
-        stateVersion = 3;
+        stateVersion = saved.version;
       }
       for (const [hash, item] of Object.entries(saved.redemptions)) {
         if (!isTransactionHash(hash) || !plainObject(item) || !['pending', 'completed'].includes(item.status) ||
             (item.status === 'completed' && !plainObject(item.result))) throw new Error('invalid redemption entry');
         const challenge = savedMemoChallenge(item.resource, item.memo);
-        if (challenge !== null && (saved.version !== 3 || !quotes[challenge] || quotes[challenge].tx_hash !== hash ||
+        if (challenge !== null && (saved.version < 3 || !quotes[challenge] || quotes[challenge].tx_hash !== hash ||
             quotes[challenge].resource !== item.resource || quotes[challenge].memo !== item.memo)) throw new Error('redemption does not match its seller quote');
       }
       redemptions = Object.assign(Object.create(null), saved.redemptions);
@@ -243,7 +261,7 @@ export function createResourceProvider({ rpcProvider, contractId, ownerAccountId
   function persist() {
     assertStore();
     try { atomicJson(statePath, { version: stateVersion, network: 'testnet', contract_id: contractId, owner_account_id: ownerAccountId,
-      redemptions, ...(stateVersion === 3 ? { quotes } : {}) }); }
+      redemptions, ...(stateVersion >= 3 ? { quotes } : {}) }); }
     catch (error) {
       stateFailed = true;
       throw new Error('provider state persistence failed; stop and reconcile manually', { cause: error });
@@ -255,9 +273,11 @@ export function createResourceProvider({ rpcProvider, contractId, ownerAccountId
     if (!plainObject(order) || !Object.hasOwn(pinnedProducts, order.resource)) throw new Error('unknown product');
     const input = normalizeOrder(order.resource, order.input), product = pinnedProducts[order.resource];
     if (!Object.hasOwn(order, 'order_binding')) return { resource: order.resource, ...product, memo: orderMemo(order.resource, input) };
-    if (order.order_binding !== 'seller-v2' || !exactKeys(order, ['resource', 'input', 'order_binding'])) {
+    if (!['seller-v2', 'seller-v3'].includes(order.order_binding) || !exactKeys(order, ['resource', 'input', 'order_binding'])) {
       throw new Error('unsupported or invalid order binding');
     }
+    const authenticated = order.order_binding === 'seller-v3';
+    if (authenticated && !sellerOrigin) throw new Error('seller-v3 requires a configured canonical seller origin');
     if (Object.keys(quotes).length >= MAX_SELLER_QUOTES) throw new Error('seller quote capacity reached; stop and reconcile existing orders');
     let challenge;
     for (let attempt = 0; attempt < 8; attempt++) {
@@ -265,44 +285,57 @@ export function createResourceProvider({ rpcProvider, contractId, ownerAccountId
       if (!Object.hasOwn(quotes, candidate)) { challenge = candidate; break; }
     }
     if (!challenge) throw new Error('could not allocate a unique seller challenge');
-    const memo = orderMemoV2(order.resource, input, challenge);
+    const memo = authenticated ? orderMemoV3(order.resource, input, challenge) : orderMemoV2(order.resource, input, challenge);
     // Persist the seller-owned challenge and exact product BEFORE handing the
     // quote to a buyer. No expiry/automatic deletion: an apparently unpaid
     // order may already have a payment in an unavailable RPC.
     quotes[challenge] = { resource: order.resource, memo, product: { ...product },
-      read_only: order.resource === 'api' && Object.hasOwn(input, 'repo'), tx_hash: null };
-    stateVersion = 3;
+      read_only: order.resource === 'api' && Object.hasOwn(input, 'repo'), tx_hash: null,
+      ...(authenticated ? { seller_origin: sellerOrigin, agent_public_key: null } : {}) };
+    stateVersion = Math.max(stateVersion, authenticated ? 4 : 3);
     persist();
-    return { resource: order.resource, ...product, memo };
+    return { resource: order.resource, ...product, memo,
+      ...(authenticated ? { seller_origin: sellerOrigin, auth_scheme: CLAIM_SCHEME } : {}) };
   }
   // Independent transactions can make progress concurrently, but a payment
   // hash has only one in-process redemption. A store lock excludes other
   // processes using this same directory. Excess work fails instead of queuing.
   const inFlight = new Map();
-  function singleFlight(txHash, resource, memo, fn) {
+  function singleFlight(txHash, resource, memo, claimKey, fn) {
     if (closing) throw new Error('provider is closing');
     assertStore();
     const existing = inFlight.get(txHash);
     if (existing) {
-      if (existing.resource !== resource || existing.memo !== memo) throw new Error('transaction already belongs to a different order');
+      // An attacker with a different key must not join a legitimate caller's
+      // in-flight promise and receive its authenticated result.
+      if (existing.resource !== resource || existing.memo !== memo || existing.claimKey !== claimKey) throw new Error('transaction already belongs to a different order or claimant');
       return existing.promise;
     }
     if (inFlight.size >= MAX_IN_FLIGHT_REDEMPTIONS) throw new Error('provider busy: too many redemptions in flight');
     const promise = Promise.resolve().then(fn);
-    const entry = { resource, memo, promise };
+    const entry = { resource, memo, claimKey, promise };
     inFlight.set(txHash, entry);
     const clear = () => { if (inFlight.get(txHash) === entry) inFlight.delete(txHash); };
     promise.then(clear, clear);
     return promise;
   }
+  function termsForQuote(quote, txHash) {
+    return { network: 'near:testnet', contract_id: contractId, owner_account_id: ownerAccountId,
+      seller_origin: quote.seller_origin, resource: quote.resource, policy_id: quote.product.policy_id,
+      token: quote.product.token, payee: quote.product.payee, amount: quote.product.amount, memo: quote.memo, tx_hash: txHash };
+  }
   async function redeem(order) {
     if (!plainObject(order) || !isTransactionHash(order.tx_hash)) throw new Error('invalid transaction hash');
     const { tx_hash: txHash, resource } = order;
-    const input = normalizeOrder(resource, order.input), readOnlyData = resource === 'api' && Object.hasOwn(input, 'repo');
+    const input = Object.freeze(normalizeOrder(resource, order.input)), readOnlyData = resource === 'api' && Object.hasOwn(input, 'repo');
     const unique = Object.hasOwn(order, 'memo');
-    if (unique && !exactKeys(order, ['tx_hash', 'resource', 'input', 'memo'])) throw new Error('invalid seller-v2 redemption');
     const memo = unique ? order.memo : orderMemo(resource, input);
-    const challenge = unique ? challengeFromOrderMemo(resource, input, memo) : null;
+    const authenticated = unique && typeof memo === 'string' && memo.startsWith('bouncer-order-v3:');
+    if (unique && !exactKeys(order, ['tx_hash', 'resource', 'input', 'memo', ...(authenticated ? ['authorization'] : [])])) {
+      throw new Error('invalid seller-bound redemption');
+    }
+    if (!unique && Object.hasOwn(order, 'authorization')) throw new Error('legacy orders do not accept claim authorization');
+    const challenge = unique ? (authenticated ? challengeFromOrderMemoV3(resource, input, memo) : challengeFromOrderMemo(resource, input, memo)) : null;
     const savedQuote = challenge === null ? null : quotes[challenge];
     if (unique && (!savedQuote || savedQuote.resource !== resource || savedQuote.memo !== memo || savedQuote.read_only !== readOnlyData)) {
       throw new Error('seller quote is missing or does not match this order');
@@ -312,25 +345,41 @@ export function createResourceProvider({ rpcProvider, contractId, ownerAccountId
     }
     const product = savedQuote?.product ?? pinnedProducts[resource];
     if (!product) throw new Error('unknown product');
-    return singleFlight(txHash, resource, memo, async () => {
+    const terms = authenticated ? termsForQuote(savedQuote, txHash) : null;
+    const authorization = authenticated ? structuredClone(order.authorization) : null;
+    if (authenticated) {
+      // Validate every request, including cached and concurrent replays. Before
+      // the first claim this proves possession, then FINAL receipt verification
+      // below anchors that key to the actual transaction.
+      verifyClaimAuthorization(terms, authorization, authorization?.public_key);
+      if (savedQuote.agent_public_key !== null && authorization.public_key !== savedQuote.agent_public_key) {
+        throw new Error('claimant does not match the recorded transaction key');
+      }
+    }
+    const claimKey = authorization?.public_key ?? null;
+    return singleFlight(txHash, resource, memo, claimKey, async () => {
       assertStore();
       const prior = Object.hasOwn(redemptions, txHash) ? redemptions[txHash] : undefined;
       if (prior) {
-        if (prior.memo !== memo || prior.resource !== resource || (savedQuote && savedQuote.tx_hash !== txHash)) {
-          throw new Error('transaction already belongs to a different order');
+        if (prior.memo !== memo || prior.resource !== resource || (savedQuote && savedQuote.tx_hash !== txHash) ||
+            (authenticated && savedQuote.agent_public_key !== claimKey)) {
+          throw new Error('transaction already belongs to a different order or claimant');
         }
         if (prior.status !== 'completed') throw new Error('redemption pending: manual reconciliation required');
         return prior.result;
       }
-      await readAndVerifyProviderPayment({ provider: rpcProvider,
-        expectation: expectation({ txHash, contractId, ownerAccountId, product, resource, input, ...(unique ? { memo } : {}) }) });
+      const expected = expectation({ txHash, contractId, ownerAccountId, product, resource, input, ...(unique ? { memo } : {}) });
+      if (authenticated) await readAndVerifyAuthenticatedProviderPayment({ provider: rpcProvider, expectation: expected, terms, authorization });
+      else await readAndVerifyProviderPayment({ provider: rpcProvider, expectation: expected });
       assertStore();
       // Different hashes may finish their RPC reads concurrently. Recheck and
       // synchronously persist the quote claim with the pending redemption
       // before either can run a non-repeatable side effect.
       if (savedQuote) {
         if (savedQuote.tx_hash !== null && savedQuote.tx_hash !== txHash) throw new Error('seller quote already claimed by a different transaction');
+        if (authenticated && savedQuote.agent_public_key !== null && savedQuote.agent_public_key !== claimKey) throw new Error('seller quote already belongs to a different claimant');
         savedQuote.tx_hash = txHash;
+        if (authenticated) savedQuote.agent_public_key = claimKey;
       }
       // Public GitHub GETs can be repeated, but their v2 quote claim must be
       // durable even if the fetch fails before recording a completed result.
@@ -352,17 +401,36 @@ export function createResourceProvider({ rpcProvider, contractId, ownerAccountId
       return result;
     });
   }
+  function storageResult(objectId) {
+    const matches = Object.entries(redemptions).filter(([, item]) => item.status === 'completed' && item.resource === 'storage' && item.result?.object_id === objectId);
+    return matches.length === 1 ? matches[0] : null;
+  }
+  function authenticatedStorage(order) {
+    if (!exactKeys(order, ['tx_hash', 'object_id', 'authorization']) || !isTransactionHash(order.tx_hash) ||
+        typeof order.object_id !== 'string' || !/^[a-f0-9]{64}$/.test(order.object_id)) throw new Error('invalid authenticated storage request');
+    const found = storageResult(order.object_id), item = found?.[1];
+    if (!found || found[0] !== order.tx_hash || !item.memo.startsWith('bouncer-order-v3:')) throw new Error('authenticated storage object not found');
+    const challenge = savedMemoChallenge('storage', item.memo), quote = quotes[challenge];
+    if (!quote || quote.tx_hash !== order.tx_hash || !validEd25519Key(quote.agent_public_key)) throw new Error('authenticated storage claim missing');
+    verifyClaimAuthorization(termsForQuote(quote, order.tx_hash), order.authorization, quote.agent_public_key);
+    return path.join(storageDir, order.object_id);
+  }
   const server = http.createServer(async (request, response) => {
     try {
       if (closing) { response.writeHead(503).end('provider is closing'); return; }
       assertStore();
       if (request.method === 'GET' && /^\/storage\/[a-f0-9]{64}$/.test(request.url)) {
-        const file = path.join(storageDir, request.url.slice('/storage/'.length));
+        const objectId = request.url.slice('/storage/'.length), found = storageResult(objectId);
+        // Never let an unauthenticated legacy GET bypass a v3 claim, including
+        // a partially created object whose completed redemption is absent.
+        if (!found) { response.writeHead(404).end('not found'); return; }
+        if (found[1].memo.startsWith('bouncer-order-v3:')) { response.writeHead(403).end('authenticated read required'); return; }
+        const file = path.join(storageDir, objectId);
         if (!fs.existsSync(file)) { response.writeHead(404).end('not found'); return; }
         response.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' }).end(fs.readFileSync(file));
         return;
       }
-      if (request.method !== 'POST' || !['/quote', '/redeem'].includes(request.url)) { response.writeHead(404).end('not found'); return; }
+      if (request.method !== 'POST' || !['/quote', '/redeem', '/storage-read'].includes(request.url)) { response.writeHead(404).end('not found'); return; }
       const chunks = [];
       let size = 0;
       for await (const chunk of request) {
@@ -371,6 +439,12 @@ export function createResourceProvider({ rpcProvider, contractId, ownerAccountId
         chunks.push(chunk);
       }
       const order = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+      if (request.url === '/storage-read') {
+        const file = authenticatedStorage(order);
+        if (!fs.existsSync(file)) { response.writeHead(404).end('not found'); return; }
+        response.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' }).end(fs.readFileSync(file));
+        return;
+      }
       if (request.url === '/quote') {
         const offered = quote(order);
         response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ ok: true, quote: offered }));
@@ -414,7 +488,8 @@ Starts the development resource provider on 127.0.0.1 only, with local storage.
 The config pins a testnet contract_id, optional owner_account_id (defaulting
 to contract_id), three products, data_dir and port. A local exclusive lock and
 fsync-backed writes protect one shared directory, not different machines or
-directories. No authentication, TLS or commercial hosting. Do not use real funds.
+directories. V1/v2 are unauthenticated; v3 uses a replayable bearer signature.
+No TLS, general user identity or commercial hosting. Do not use real funds.
 `;
 export async function startConfiguredProvider(config) {
   if (!plainObject(config) || !isTestnetAccount(config.contract_id) ||
@@ -434,7 +509,7 @@ export async function startConfiguredProvider(config) {
   if ((await rpcProvider.viewNodeStatus())?.chain_id !== 'testnet') throw new Error('provider RPC must report the NEAR testnet chain');
   const provider = createResourceProvider({ rpcProvider, contractId: config.contract_id,
     ownerAccountId: config.owner_account_id ?? config.contract_id, products: config.products, dataDir: config.data_dir,
-    adoptLegacyState: config.adopt_legacy_state === true });
+    adoptLegacyState: config.adopt_legacy_state === true, sellerOrigin: config.seller_origin });
   try {
     await new Promise((resolve, reject) => {
       provider.server.once('error', reject);

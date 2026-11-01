@@ -92,9 +92,19 @@ The current runner follows no redirects. Quotes and redemption bodies are JSON;
 client response bodies are bounded to 64 KiB and storage readback to 4096 bytes.
 The reference server accepts request bodies of at most 32 KiB (allowing for JSON
 escaping of bounded input). Orders disclose their full inputs to the provider.
-The reference server is loopback-only and unauthenticated, without TLS or
-distributed durability. It
-is not a suitable public deployment.
+The reference server is loopback-only, without TLS, general user identity or
+distributed durability. V1/v2 are unauthenticated; the opt-in [seller-v3](SELLER_V3.md)
+claim checks the FINAL transaction key, but its signature is still a replayable
+bearer credential. It is not a suitable public deployment.
+
+### Optional authenticated seller-v3
+
+The newer [seller-v3 protocol](SELLER_V3.md) adds an owner-reviewed seller
+origin and a NEP-413 claim signed by the actual payment transaction key. The
+reference buyer, seller, SDK and storage readback implement it behind explicit
+opt-in. Do not mix its bearer credentials with public v1/v2 recovery artifacts.
+It has offline tests but is not an adopted merchant standard or a production
+identity/security system.
 
 ## 1. Quote an exact order
 

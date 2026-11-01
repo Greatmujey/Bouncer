@@ -24,7 +24,8 @@ The model did not choose or generate the independent example.
   itself is sent to the chosen model endpoint**: do not put passwords, private
   keys, confidential data or other secrets in it. A remote model service can
   log or retain it. The local development resource provider also receives order
-  contents; its storage is plaintext and unauthenticated.
+  contents; its storage is plaintext. V1/v2 reads are unauthenticated; optional
+  v3 uses a replayable signed bearer claim.
 - Supported work is a bounded SHA-256 job, a bounded local text object with a
   safe name, a text-statistics request, or public GitHub repository metadata.
   The GitHub API request is an unauthenticated GET to a fixed HTTPS origin;
@@ -84,8 +85,8 @@ coalesces identical concurrent requests for the same transaction; excess work is
 rejected, not queued. A local exclusive lock excludes other provider processes
 using the **same directory**; pending, object and completion writes synchronize
 files and directories on filesystems that honor fsync. A failed write stops the
-instance for manual reconciliation. This is still synchronous, plaintext,
-unauthenticated local software: separate directories/hosts can redeem twice,
+instance for manual reconciliation. This is still synchronous, plaintext local
+software with no general user authentication: separate directories/hosts can redeem twice,
 there is no TLS or replicated/distributed replay protection, and it is **not
 production infrastructure**. See the [provider SDK and recovery notes](../packages/provider-sdk/README.md).
 
@@ -315,7 +316,8 @@ protocols, not a generic proof of any cloud service:
 - **Storage:** validate the order/transaction-bound object ID, byte count and
   hash, then fetch up to 4096 bytes from the same pinned provider and compare
   the exact content. This is one readback, not proof of persistence, replication
-  or future availability. The development provider has no authentication.
+  or future availability. V1/v2 reads have no authentication; v3 requires a
+  replayable bearer claim, not a secure user session.
 - **Text API:** independently recompute word count and UTF-8 byte count.
 - **GitHub data:** make a separate, fixed-origin GitHub API request and compare
   the repository name and ID. **Only identity is checked**; descriptions,

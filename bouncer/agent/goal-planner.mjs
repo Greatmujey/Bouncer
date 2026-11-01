@@ -53,7 +53,7 @@ export function validatePlanningConfig(input) {
   for (const name of names) {
     const item = input.resources[name];
     if (!keysExactly(item, ['policy_id', 'token', 'payee', 'max_amount', 'max_tasks', 'max_total_amount'], ['alternatives', 'order_binding'])) throw new Error(`invalid ${name} catalog entry`);
-    if (item.order_binding !== undefined && item.order_binding !== 'seller-v2') throw new Error(`invalid ${name} order binding`);
+    if (item.order_binding !== undefined && !['seller-v2', 'seller-v3'].includes(item.order_binding)) throw new Error(`invalid ${name} order binding`);
     if (typeof item.policy_id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(item.policy_id)) throw new Error(`invalid ${name} policy_id`);
     if (!isTestnetToken(item.token) || !testnetAccount(item.payee)) throw new Error(`${name} token and payee must be valid testnet accounts`);
     const maxAmount = positiveU128(item.max_amount, `${name} max_amount`);
@@ -66,7 +66,7 @@ export function validatePlanningConfig(input) {
       // A candidate never declares a token: it inherits this resource's one
       // pinned FT. Reject even an apparently equivalent extra token field.
       if (!keysExactly(offer, ['id', 'provider_url', 'policy_id', 'payee', 'max_amount'], ['order_binding']) ||
-          (offer.order_binding !== undefined && offer.order_binding !== 'seller-v2') ||
+          (offer.order_binding !== undefined && !['seller-v2', 'seller-v3'].includes(offer.order_binding)) ||
           typeof offer.id !== 'string' || !/^[A-Za-z0-9_-]{1,32}$/.test(offer.id) || ids.has(offer.id)) {
         throw new Error(`invalid or duplicate ${name} alternative`);
       }

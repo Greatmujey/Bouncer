@@ -2,8 +2,10 @@
 // workflow runner is shared with normal use; this harness deliberately loses
 // one response *after* a real broadcast to exercise hash-only recovery.
 import { isDeepStrictEqual } from 'node:util';
+import crypto from 'node:crypto';
+import nearApi from 'near-api-js';
 import { runWorkflow, validateWorkflow } from './workflow.mjs';
-import { challengeFromOrderMemo, orderMemo } from '../packages/provider-sdk/index.mjs';
+import { challengeFromOrderMemo, challengeFromOrderMemoV3, orderMemo, signClaimAuthorization, verifyClaimAuthorization } from '../packages/provider-sdk/index.mjs';
 
 export function makeOracleDependentWorkflow({ goal, token, payee, policyId, price, providerUrl, orderBinding }) {
   const route = { policy_id: policyId, token, payee, max_amount: String(price),
@@ -123,9 +125,10 @@ export async function runDependentLiveProof({ workflow: raw, provider, source, r
   for (let i = 0; i < workflow.steps.length; i++) {
     const step = workflow.steps[i], observed = quoted[i], memo = journal().get(step.id)?.request?.memo;
     assert(observed.context?.goalId === step.id && observed.quote?.memo === memo, `${step.id} quoted memo changed before payment`);
-    if (step.order_binding === 'seller-v2') {
-      assert(observed.order.order_binding === 'seller-v2', `${step.id} did not request seller-v2`);
-      const challenge = challengeFromOrderMemo(step.resource, observed.order.input, memo);
+    if (['seller-v2', 'seller-v3'].includes(step.order_binding)) {
+      assert(observed.order.order_binding === step.order_binding, `${step.id} did not request its reviewed seller binding`);
+      const challenge = step.order_binding === 'seller-v3'
+        ? challengeFromOrderMemoV3(step.resource, observed.order.input, memo) : challengeFromOrderMemo(step.resource, observed.order.input, memo);
       assert(!challenges.includes(challenge), `${step.id} reused a seller challenge`);
       challenges.push(challenge);
     } else {
@@ -178,6 +181,72 @@ export function verifySellerV2ProofState({ workflow: raw, proof, journal, state 
       isDeepStrictEqual(quote.product, { policy_id: request.policy_id, token: request.token, payee: request.payee, amount: request.amount }) &&
       redeemed?.status === 'completed' && redeemed.resource === step.resource && redeemed.memo === request.memo,
     `${step.id} persisted seller claim does not match the verified payment`);
+  }
+  assert(proof.firstHash === journal.get(steps[0].id)?.tx_hash, 'first recovered hash changed');
+  return { quote_count: challenges.size, claimed_transaction_count: hashes.size, first_hash: proof.firstHash };
+}
+
+/** Probe access control using only an existing completed test order; never pays. */
+export async function verifySellerV3AccessControls({ workflow: raw, proof, journal, fulfill, readStorage }) {
+  const workflow = validateWorkflow(raw), [first, storageStep] = workflow.steps;
+  assert(workflow.steps.length === 3 && workflow.steps.every(step => step.order_binding === 'seller-v3') &&
+    typeof fulfill === 'function' && typeof readStorage === 'function', 'v3 access probe needs a completed authenticated workflow');
+  const entry = journal.get(first.id), request = entry?.request, input = proof.quoted?.[0]?.input;
+  assert(entry?.status === 'completed' && request && input, 'v3 access probe requires completed evidence');
+  const rejected = async (label, pattern, operation) => {
+    try { await operation(); } catch (error) {
+      if (!pattern.test(String(error?.message))) throw new Error(`${label}: unexpected rejection`, { cause: error });
+      return;
+    }
+    throw new Error(`${label}: unexpectedly succeeded`);
+  };
+  // Anyone can observe this proof; it must not reveal a cached result.
+  const publicProof = { tx_hash: entry.tx_hash, resource: request.resource, input, memo: request.memo };
+  await rejected('public proof without claim signature', /invalid seller-bound redemption/,
+    () => fulfill(publicProof, { goalId: first.id }));
+  const other = nearApi.KeyPair.fromRandom('ed25519');
+  const forged = await signClaimAuthorization({ signer: new nearApi.KeyPairSigner(other), publicKey: other.getPublicKey(), terms: {
+    network: 'near:testnet', contract_id: workflow.source.goal.contract_id, owner_account_id: workflow.source.goal.owner_account_id,
+    seller_origin: new URL(workflow.provider_url).origin, resource: request.resource, policy_id: request.policy_id,
+    token: request.token, payee: request.payee, amount: request.amount, memo: request.memo, tx_hash: entry.tx_hash } });
+  await rejected('wrong-key signed claim', /recorded transaction key/,
+    () => fulfill({ ...publicProof, authorization: forged }, { goalId: first.id }));
+  const storage = proof.result.deliveries[1].result, stored = journal.get(storageStep.id);
+  await rejected('unauthenticated storage read', /HTTP 403/, () => readStorage(storage.object_id));
+  const content = await readStorage(storage.object_id, { txHash: stored.tx_hash, authorization: stored.resource_authorization });
+  assert(crypto.createHash('sha256').update(content).digest('hex') === storage.sha256, 'authenticated storage readback did not match delivery');
+  return { public_proof_only_rejected: true, wrong_signing_key_rejected: true, authenticated_storage_read_checked: true };
+}
+
+/** Read-only consistency check; signed claim bytes stay in the private buyer journal. */
+export function verifySellerV3ProofState({ workflow: raw, proof, journal, state }) {
+  const workflow = validateWorkflow(raw), steps = workflow.steps;
+  assert(steps.length === 3 && steps.every(step => step.order_binding === 'seller-v3'), 'seller-v3 proof needs three authenticated steps');
+  assert(journal && typeof journal.get === 'function' && Array.isArray(proof?.quoted) && proof.quoted.length === 3 &&
+    Array.isArray(proof.challenges) && proof.challenges.length === 3, 'seller-v3 proof data is incomplete');
+  assert(state?.version === 4 && state.network === 'testnet' && state.contract_id === workflow.source.goal.contract_id &&
+    state.owner_account_id === workflow.source.goal.owner_account_id && state.quotes && state.redemptions &&
+    Object.keys(state.quotes).length === 3 && Object.keys(state.redemptions).length === 3, 'seller-v3 state is not the fresh three-quote store');
+  const hashes = new Set(), challenges = new Set(), origin = new URL(workflow.provider_url).origin;
+  for (let i = 0; i < steps.length; i++) {
+    const step = steps[i], order = proof.quoted[i], entry = journal.get(step.id), request = entry?.request;
+    assert(order?.resource === step.resource && order.order_binding === 'seller-v3' && entry?.status === 'completed' &&
+      entry.payment_version === 'direct-signed-v1' && entry.settlement?.tx_hash === entry.tx_hash &&
+      entry.delivery?.status === 'verified' && entry.delivery.receipt?.tx_hash === entry.tx_hash &&
+      proof.quoteMemos?.[step.resource] === request?.memo, `${step.id} authenticated buyer evidence is incomplete`);
+    const challenge = challengeFromOrderMemoV3(step.resource, order.input, request.memo);
+    assert(proof.challenges[i] === challenge && !challenges.has(challenge) && !hashes.has(entry.tx_hash), `${step.id} challenge or hash was reused`);
+    challenges.add(challenge); hashes.add(entry.tx_hash);
+    const quote = state.quotes[challenge], redeemed = state.redemptions[entry.tx_hash];
+    assert(quote?.resource === step.resource && quote.memo === request.memo && quote.tx_hash === entry.tx_hash && quote.read_only === false &&
+      quote.seller_origin === origin && quote.agent_public_key === entry.agent_public_key &&
+      isDeepStrictEqual(quote.product, { policy_id: request.policy_id, token: request.token, payee: request.payee, amount: request.amount }) &&
+      redeemed?.status === 'completed' && redeemed.resource === step.resource && redeemed.memo === request.memo,
+    `${step.id} persisted authenticated seller claim does not match the payment`);
+    verifyClaimAuthorization({ network: 'near:testnet', contract_id: workflow.source.goal.contract_id,
+      owner_account_id: workflow.source.goal.owner_account_id, seller_origin: origin, resource: request.resource,
+      policy_id: request.policy_id, token: request.token, payee: request.payee, amount: request.amount, memo: request.memo, tx_hash: entry.tx_hash },
+    entry.resource_authorization, entry.agent_public_key);
   }
   assert(proof.firstHash === journal.get(steps[0].id)?.tx_hash, 'first recovered hash changed');
   return { quote_count: challenges.size, claimed_transaction_count: hashes.size, first_hash: proof.firstHash };

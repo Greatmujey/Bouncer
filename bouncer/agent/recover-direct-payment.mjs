@@ -54,7 +54,7 @@ export async function recoverDirectResourcePayment({ config, requestId, provider
   // as completed to that read-only validator. No quote is fetched, no actual
   // journal state is changed, and the settlement verifier still checks pending.
   const facade = { get: id => id === requestId ? { ...previous, status: 'completed' } : undefined };
-  const plan = await planFromQuotes({ contractId: config.contract_id, ownerAccountId: config.owner_account_id, goals: [goal],
+  const plan = await planFromQuotes({ contractId: config.contract_id, ownerAccountId: config.owner_account_id, goals: [goal], providerUrl: config.provider_url,
     getQuote: async () => { throw new Error('recovery must not request a quote'); }, journal: facade });
   return recoverDirectPayment({ plan, requestId, provider, journal, update, log });
 }

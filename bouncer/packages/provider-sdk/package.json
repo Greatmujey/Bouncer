@@ -1,6 +1,6 @@
 {
   "name": "bouncer-near-testnet-provider-sdk",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Experimental receipt-aware Bouncer payment verification for NEAR testnet sellers",
   "type": "module",
   "private": true,
