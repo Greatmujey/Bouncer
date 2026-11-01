@@ -413,7 +413,7 @@ jobs:
     # The branch, exact parent, marker and first attempt deliberately fence this
     # disposable one-shot. Never rerun an ambiguous transaction. The job ID is
     # hypothetical and cannot satisfy the production paid-publication runner.
-    if: github.event_name == 'push' && github.ref == 'refs/heads/arena/d00d7f93-near-hub' && github.event.before == '32beadafa7b5088b69543b0da15537f69af0f350' && github.event.repository.private == true && github.run_attempt == '1' && contains(github.event.head_commit.message, '[youtick-grant-probe-once-20261101]')
+    if: github.event_name == 'push' && github.ref == 'refs/heads/arena/d00d7f93-near-hub' && github.event.before == 'dd161c79f06c20338ce93b62fada59704bd99e88' && github.event.repository.private == true && github.run_attempt == '1' && contains(github.event.head_commit.message, '[youtick-grant-probe-once-20261101]')
     needs: [js-tests, contract-tests, build-contract]
     runs-on: ubuntu-latest
     timeout-minutes: 20
