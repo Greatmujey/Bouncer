@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { createHash, generateKeyPairSync, sign } from 'node:crypto';
 import { extractYoutickV1QuoteKey, verifyYoutickQuote, YOUTICK_ADAPTIVE_PROFILE } from '../agent/youtick-quote.mjs';
 import { TESTNET_CIRCLE_USDC, YOUTICK_MARKET } from '../agent/youtick-capabilities.mjs';
+import { prepareYoutickFtCall, matchYoutickJob } from '../agent/youtick-ft-plan.mjs';
 
 const sha = x => createHash('sha256').update(x).digest('hex');
 const now = 1_770_000_000_000;
@@ -63,4 +64,44 @@ test('extracts the expected key from a bounded reviewed V1 state layout and fail
   assert.throws(() => extractYoutickV1QuoteKey(wrong, 1), /version/);
   const bogusLength = Buffer.from(bytes); bogusLength.writeUInt32LE(4000000, 4);
   assert.throws(() => extractYoutickV1QuoteKey(bogusLength, 1), /field/);
+});
+
+function planFixture() {
+  const offer = fixture(), plan = prepareYoutickFtCall({ offer, id: 'video1', ownerAccountId: 'owner.testnet',
+    policyId: 'storage', policyRevision: 1, routeRevision: 3 });
+  const { request, quote } = offer;
+  const job = { job_id: request.job_id, creator_id: request.creator_id, title: request.title, price_usdc: request.price_usdc,
+    expected_source_bytes: request.expected_source_bytes, profile_id: request.profile_id, profile_config_sha256: request.profile_config_sha256,
+    upload_public_key: request.upload_public_key, upload_key_expires_at_ms: request.upload_key_expires_at_ms,
+    generation: 1, status: 'Authorized', published_at_ms: null, fee_asset: 'USDC', fee_amount: quote.total_fee_usdc,
+    fee_usd_micro: quote.total_fee_usdc, fee_quote_hash: quote.quote_id };
+  return { offer, plan, job };
+}
+test('prepares only an exact bounded owner-reviewed FT route, not an approval or payment', () => {
+  const { offer, plan } = planFixture(), { goal } = plan, msg = JSON.parse(goal.msg);
+  assert.equal(goal.contract_id, offer.request.creator_id); assert.equal(goal.payee, YOUTICK_MARKET);
+  assert.equal(goal.token, TESTNET_CIRCLE_USDC); assert.equal(goal.amount, '600000');
+  assert.ok(Buffer.byteLength(goal.msg) <= 2048); assert.equal(msg.action, 'create_paid_job');
+  assert.equal(msg.sponsor_quote.quote_id, offer.quote.quote_id); assert.equal(msg.sponsor_quote_signature, offer.signature);
+  assert.ok(!Object.hasOwn(msg, 'creator_id')); // provider derives creator from FT sender
+  assert.match(plan.warning, /approve exact route with 1 yocto/);
+  const options = { offer, id: 'video1', ownerAccountId: 'owner.testnet', policyId: 'storage', policyRevision: 1, routeRevision: 3 };
+  assert.throws(() => prepareYoutickFtCall({ ...options, offer: { ...offer, market: 'attacker.testnet' } }), /fixed reviewed market/);
+  assert.throws(() => prepareYoutickFtCall({ ...options, offer: { ...offer, signature: Buffer.alloc(64).toString('base64') } }), /signature/);
+  assert.throws(() => prepareYoutickFtCall({ ...options, ownerAccountId: 'owner.near' }), /testnet/);
+});
+
+test('matching provider job is a state observation, not proof of payment or delivery', () => {
+  const { plan, job } = planFixture();
+  assert.equal(matchYoutickJob(plan.goal, job).status, 'MATCHING_AUTHORIZED_JOB');
+  assert.match(matchYoutickJob(plan.goal, job).scope, /not payment-receipt, uploaded-content or retrieval/);
+  assert.equal(matchYoutickJob(plan.goal, { ...job, status: 'Published', published_at_ms: now }).status, 'MATCHING_PUBLISHED_JOB');
+  for (const mutate of [
+    j => { j.creator_id = 'attacker.testnet'; }, j => { j.job_id = 'different'; }, j => { j.fee_amount = '1'; },
+    j => { j.expected_source_bytes = '999'; }, j => { j.profile_config_sha256 = 'a'.repeat(64); },
+    j => { j.upload_public_key = 'ed25519:other'; }, j => { j.fee_quote_hash = 'b'.repeat(64); },
+    j => { j.status = 'Published'; }, j => { j.status = 'Cancelled'; }, j => { j.generation = 2; },
+  ]) { const copy = structuredClone(job); mutate(copy); assert.throws(() => matchYoutickJob(plan.goal, copy)); }
+  assert.throws(() => matchYoutickJob({ ...plan.goal, payee: 'attacker.testnet' }, job));
+  assert.throws(() => matchYoutickJob({ ...plan.goal, msg: '{"action":"steal"}' }, job));
 });

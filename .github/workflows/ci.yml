@@ -355,6 +355,22 @@ jobs:
       - name: Reinspect retained setup hashes and balances without signing or sending
         run: node bouncer/scripts/inspect-vrf-setup.mjs original-vrf-evidence
 
+  youtick-funding-read:
+    name: Estimate independent provider funding (read only)
+    if: github.event_name == 'push' && github.event.repository.private == true && github.run_attempt == '1' && contains(github.event.head_commit.message, '[inspect-youtick-funding-20261101]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      - name: Read fixed testnet balances and Ref pool quotes without signing
+        run: node bouncer/scripts/inspect-youtick-funding.mjs
+
   youtick-testnet-quote-only:
     name: Verify independent provider testnet quote (no payment)
     if: github.event_name == 'push' && github.event.repository.private == true && github.run_attempt == '1' && contains(github.event.head_commit.message, '[youtick-testnet-quote-only-20261101]')

@@ -451,6 +451,9 @@ export class FileJournal {
       throw error;
     }
   }
+  // Report the private encryption state, not the mutable compatibility flag.
+  // Protocols holding credentials can require this before their first write.
+  get encryptionEnabled() { return this.#key !== null; }
   assertAvailable() {
     if (this.lockFd === null) throw new Error('journal is closed');
     if (this.failed) throw new Error('journal has a failed write; close, reopen and reconcile it before continuing');

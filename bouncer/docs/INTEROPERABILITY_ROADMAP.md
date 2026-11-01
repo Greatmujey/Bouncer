@@ -132,8 +132,33 @@ consent, and no offers or payments were requested:
   same-block state layout, extracts the market's quote key, and checks the
   signature, vault/job/request binding, token, fee ceiling and expiry. The
   layout and RPC remain trusted; source/code equivalence is not established.
-  Even a verified quote is not a purchase or fulfillment. Never assume
-  merchant consent or deployed/source equivalence from this research.
+  On November 1, [a quote-only test](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41303152030/job/124838094936)
+  verified one signed 600,000-micro-USDC offer for the Bouncer vault and a
+  hypothetical 100,000-byte clip. The temporary upload key was discarded;
+  there was no payment or upload. Even a verified quote is not a purchase or
+  fulfillment. A pure planning helper can form the exact ≤2048-byte message
+  and match a later job view, but the owner must still approve the exact route
+  with 1 yocto and independently verify the original payment receipts and
+  delivery. The reviewed V1 source credits an accepted job fee to the platform;
+  an immediate unused FT amount may be resolved by NEP-141, but no general
+  post-authorization service-failure refund was established. The vault is the
+  job creator, yet Bouncer does not expose the market's `replace_upload_key`
+  call. Losing the upload session key may therefore strand the job. An
+  experimental single-host preparation helper now stores that key in the
+  original owner/vault-scoped encrypted journal before returning a quote
+  request, reuses it on restart, and fingerprints the source both fully and
+  using the provider's separate head/tail algorithm. It refuses plaintext and
+  missing original journals; it cannot detect a deleted or stale restored
+  journal before a fresh start. A synthetic-tested control preparer requires
+  the original fully settled FT receipt graph, an exact matching market job and
+  unchanged source, then journals the initial attempt before returning a
+  short-lived signed control envelope. It refuses to prepare the initial
+  request twice; later reconciliation/resume must be explicit. It does not
+  send an HTTP request, implement TUS upload/heartbeats, verify delivery, or
+  coordinate multiple hosts. Signed control envelopes are bearer capabilities
+  and must not be logged or shared. Those remaining capabilities are
+  prerequisites to a real order. Never assume merchant consent or
+  deployed/source equivalence from this research.
 - [PatchBond at `a448538`](https://github.com/PatchBond/patchbond/blob/a4485389453818d495e48b7d46a299401833213b/contract/vault/src/deposit.rs)
   documents testnet Circle USDC bonds for GitHub submissions, not a compute,
   storage or API purchase. The source uses the FT `sender_id` as the bond payer;

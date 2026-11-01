@@ -236,7 +236,13 @@ burn account or hash. It acquired and funded fake test tokens, then stopped
 before any OutLayer deposit or project payment when the separately journaled
 wNEAR refund-test funding returned `Expired`. Its original setup hash
 `HUW8m6dQjyhBEr1KihELt6qXA92cuWzjSJ84q7AbRy3D` and artifact `13081947040`
-must be retained and reconciled; do not resend it automatically. Before
+must be retained and reconciled; do not resend it automatically. A later
+[key-free inspection](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41303152030/job/124838094977)
+confirmed the first two original hashes FINAL and fake-token ledger/balance
+`10000`, but the third remained unavailable, with the observed wNEAR vault
+ledger and OutLayer prepaid balance both zero. These point-in-time balances
+are not proof that the missing hash never paid. The inspection made no sends
+or journal writes. Before
 creating an account, the harness seals its disposable owner, deployment,
 funding and project keys to a dedicated
 RSA recovery public key; the corresponding private key remains owner-only
