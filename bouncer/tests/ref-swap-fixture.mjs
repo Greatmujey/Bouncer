@@ -4,6 +4,8 @@ import { REF_SWAP_INPUT, REF_SWAP_OUTPUT, REF_SWAP_EXCHANGE, REF_SWAP_INPUT_MESS
   refSwapFtGoal, REF_SWEEP_GAS } from '../agent/ref-swap-evidence.mjs';
 
 const enc = value => Buffer.from(JSON.stringify(value)).toString('base64');
+const event = (old_owner_id, new_owner_id, amount) => `EVENT_JSON:${JSON.stringify({ standard: 'nep141', version: '1.0.0',
+  event: 'ft_transfer', data: [{ old_owner_id, new_owner_id, amount }] })}`;
 const id = byte => nearApi.utils.serialize.base_encode(Buffer.alloc(32, byte));
 const goal = { version: 1, id: 'guarded-swap', contract_id: 'bouncer.testnet', owner_account_id: 'owner.testnet',
   router_id: 'router.testnet', router_code_hash: id(1), policy_id: 'swap', policy_revision: 1, route_revision: 2,
@@ -46,7 +48,7 @@ function swapResult() {
       outcome(inner, REF_SWAP_INPUT, { SuccessReceiptId: id(31) }, [], [refHook]),
       outcome(routerCallback, goal.router_id, { SuccessValue: enc('0') }, ['BOUNCER ref-router inner input settled; used=100; output unverified']),
       outcome(refHook, REF_SWAP_EXCHANGE, { SuccessValue: enc('0') }, [], [output]),
-      outcome(output, REF_SWAP_OUTPUT, { SuccessValue: '' }),
+      outcome(output, REF_SWAP_OUTPUT, { SuccessValue: '' }, [event(REF_SWAP_EXCHANGE, goal.router_id, '70')]),
     ] };
 }
 function sweepResult({ hash = sweepHash, publicKey = key } = {}) {
@@ -59,7 +61,7 @@ function sweepResult({ hash = sweepHash, publicKey = key } = {}) {
       memo: 'bouncer:ref-sweep', msg: REF_SWAP_OUTPUT_MESSAGE }, '1'),
       receipt(hook, REF_SWAP_OUTPUT, goal.contract_id, 'ft_on_transfer', { sender_id: goal.router_id, amount: '70', msg: REF_SWAP_OUTPUT_MESSAGE })],
     receipts_outcome: [outcome(init, goal.router_id, { SuccessReceiptId: send }, [], [send]),
-      outcome(send, REF_SWAP_OUTPUT, { SuccessReceiptId: id(50) }, [], [hook]),
+      outcome(send, REF_SWAP_OUTPUT, { SuccessReceiptId: id(50) }, [event(goal.router_id, goal.contract_id, '70')], [hook]),
       outcome(hook, goal.contract_id, { SuccessValue: enc('0') }, ['BOUNCER deposit received'])] };
 }
 

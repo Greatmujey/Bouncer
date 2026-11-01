@@ -92,6 +92,19 @@ function childCall(g, parent, predecessor, receiver, method, label) {
   if (found.length !== 1) throw new Error(`missing unique ${label} receipt`);
   return found[0];
 }
+function assertTransferEvent(outcome, oldOwner, newOwner, units, label) {
+  const events = [];
+  for (const log of outcome.logs || []) {
+    if (typeof log !== 'string' || !log.startsWith('EVENT_JSON:') || log.length > 16_384) continue;
+    try {
+      const event = JSON.parse(log.slice('EVENT_JSON:'.length));
+      if (event.standard === 'nep141' && event.version === '1.0.0' && event.event === 'ft_transfer') events.push(event);
+    } catch { /* malformed or unrelated logs are never evidence */ }
+  }
+  if (events.length !== 1 || !Array.isArray(events[0].data) || events[0].data.length !== 1 ||
+      events[0].data[0]?.old_owner_id !== oldOwner || events[0].data[0]?.new_owner_id !== newOwner ||
+      events[0].data[0]?.amount !== units) throw new Error(`missing exact ${label} NEP-141 transfer event`);
+}
 function initialOutcome(g, result, executor, log, label) {
   const children = result?.transaction_outcome?.outcome?.receipt_ids;
   if (!Array.isArray(children) || new Set(children).size !== children.length) throw new Error(`invalid ${label} transaction children`);
@@ -153,6 +166,7 @@ export function verifyRefSwapOutput(rawGoal, result, publicKey) {
   if (typeof outOutcome.status.SuccessValue !== 'string' || !['', 'bnVsbA=='].includes(outOutcome.status.SuccessValue)) {
     throw new Error('Ref output transfer did not finish synchronously');
   }
+  assertTransferEvent(outOutcome, REF_SWAP_EXCHANGE, goal.router_id, output.toString(), 'Ref output');
   return { tx_hash: settlement.tx_hash, router: goal.router_id, token_in: REF_SWAP_INPUT, input_amount: goal.input_amount,
     token_out: REF_SWAP_OUTPUT, output_amount: output.toString(), output_receipt_id: out.receipt.receipt_id,
     verification: 'linked FINAL Ref output transfer to the one-shot router; vault credit is not yet established' };
@@ -178,6 +192,7 @@ export function verifyRefSweep(rawGoal, expectedOutput, result, publicKey) {
       !isDeepStrictEqual(decode(send.call.args, 'router sweep arguments'), { receiver_id: goal.contract_id, amount: expectedOutput,
         memo: 'bouncer:ref-sweep', msg: REF_SWAP_OUTPUT_MESSAGE })) throw new Error('router sweep did not target the original vault');
   const sendOutcome = outcomeFor(g, send.receipt.receipt_id, REF_SWAP_OUTPUT, 'router sweep');
+  assertTransferEvent(sendOutcome, goal.router_id, goal.contract_id, expectedOutput, 'vault sweep');
   const hook = childCall(g, sendOutcome, REF_SWAP_OUTPUT, goal.contract_id, 'ft_on_transfer', 'vault output deposit');
   if (String(hook.call.deposit) !== '0' || !isDeepStrictEqual(decode(hook.call.args, 'vault deposit arguments'),
       { sender_id: goal.router_id, amount: expectedOutput, msg: REF_SWAP_OUTPUT_MESSAGE })) throw new Error('vault deposit is not the reviewed sweep');

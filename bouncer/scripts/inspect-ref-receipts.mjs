@@ -34,7 +34,8 @@ async function main() {
       if (!functions.length) continue;
       const out = outcomes.get(receipt.receipt_id);
       notice(`${label} receipt`, { id: receipt.receipt_id, predecessor: receipt.predecessor_id, receiver: receipt.receiver_id,
-        functions, outcome: out ? { executor: out.executor_id, status: out.status, children: out.receipt_ids, logs: out.logs } : null });
+        functions, outcome: out ? { executor: out.executor_id, status: out.status, gas_burnt: out.gas_burnt,
+          children: out.receipt_ids, logs: out.logs } : null });
     }
   }
   console.log('Read-only historical receipt inspection; the first swap was NOT Bouncer-guarded. No transaction submitted.');

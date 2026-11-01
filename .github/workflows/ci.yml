@@ -35,7 +35,16 @@ jobs:
       # Isolated, lockfile-pinned third-party seller SDK. Its NEAR driver is
       # wrapped only in tests because the published preset is mainnet-only.
       - run: npm ci --prefix interop/piprail --ignore-scripts --legacy-peer-deps --no-audit --no-fund
-      - run: npm test
+      - name: Run JavaScript test suite
+        shell: bash
+        run: |
+          set +e
+          npm test 2>&1 | tee "$RUNNER_TEMP/bouncer-js-tests.log"
+          result=${PIPESTATUS[0]}
+          if [ "$result" -ne 0 ]; then
+            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8");const lines=s.split("\n");const failed=[];for(let i=0;i<lines.length;i++)if(/^not ok\b/.test(lines[i]))failed.push(lines.slice(i,i+24).join("\n"));const text=(failed.join("\n---\n")||s.slice(-4000)).slice(0,7500).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=JavaScript tests failed::"+text)' "$RUNNER_TEMP/bouncer-js-tests.log"
+          fi
+          exit "$result"
         env:
           BOUNCER_PIPRAIL_PACKAGE_ROOT: ${{ github.workspace }}/bouncer/interop/piprail/node_modules/@piprail/sdk
           BOUNCER_TEST_POSTGRES_URL: postgresql://bouncer:bouncer-ci-only@127.0.0.1:5432/bouncer_test
