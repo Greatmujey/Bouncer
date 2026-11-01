@@ -189,3 +189,38 @@ test('paid-project runner never broadcasts if the pending journal cannot be pers
   await assert.rejects(run(f, { execute: true }), /simulated fsync failure/);
   assert.equal(f.sends(), 0); assert.equal(f.state.size, 0);
 });
+
+test('project execution prefers the bounded one-shot provider path', async () => {
+  const f = fixture(), original = f.provider.sendTransactionUntil.bind(f.provider);
+  f.provider.sendTransactionOnce = original;
+  f.provider.sendTransactionUntil = async () => { throw new Error('unbounded send path must not run'); };
+  assert.equal((await run(f, { execute: true })).status, 'FULFILLED');
+  assert.equal(f.sends(), 1);
+});
+
+test('concurrent project operations sharing a journal cannot reserve or send twice', async () => {
+  const f = fixture(); let release, entered;
+  const gate = new Promise(resolve => { release = resolve; });
+  const started = new Promise(resolve => { entered = resolve; });
+  const check = f.provider.viewNodeStatus.bind(f.provider);
+  f.provider.viewNodeStatus = async () => { entered(); await gate; return check(); };
+  const first = run(f, { execute: true });
+  await started;
+  await assert.rejects(run(f, { execute: true }), /another payment operation.*journal/);
+  await assert.rejects(recoverProjectGoal({ goal, provider: f.provider, journal: f.journal }), /another payment operation.*journal/);
+  release();
+  assert.equal((await first).status, 'FULFILLED');
+  assert.equal(f.sends(), 1);
+});
+
+test('project execution will not overwrite a journal entry inserted while signing', async () => {
+  const f = fixture(), create = f.account.createTransaction.bind(f.account);
+  f.account.createTransaction = async (...args) => {
+    const tx = await create(...args);
+    f.journal.put(goal.id, { status: 'pending', tx_hash: 'unrelated reservation' });
+    return tx;
+  };
+  await assert.rejects(run(f, { execute: true }), /entry appeared before broadcast/);
+  assert.equal(f.sends(), 0);
+  assert.equal(f.journal.get(goal.id).tx_hash, 'unrelated reservation');
+});

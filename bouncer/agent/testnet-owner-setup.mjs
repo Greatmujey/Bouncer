@@ -8,11 +8,12 @@ import crypto from 'node:crypto';
 import { signReviewedOneYoctoOwnerCall } from './reviewed-transaction.mjs';
 import { isTestnetAccount, isTestnetToken } from '../shared/account-id.mjs';
 import { isTransactionHash } from '../shared/direct-payment-settlement.mjs';
+import { withExclusiveJournalOperation } from './journal-operation.mjs';
 
 const MAX_U128 = (1n << 128n) - 1n;
 const MAX_GAS = 300n * 10n ** 12n;
 
-export async function submitOwnerSetupOnce({ id, account, publicKey, token, args, gas, provider, journal }) {
+async function submitOwnerSetupOnceUnlocked({ id, account, publicKey, token, args, gas, provider, journal }) {
   if (typeof id !== 'string' || !/^[a-z][a-z0-9-]{0,63}$/.test(id) ||
       !isTestnetAccount(account?.accountId) || !isTestnetToken(token) ||
       !args || typeof args !== 'object' || Array.isArray(args) ||
@@ -21,7 +22,8 @@ export async function submitOwnerSetupOnce({ id, account, publicKey, token, args
       !/^[1-9][0-9]{0,38}$/.test(args.amount) || BigInt(args.amount) > MAX_U128 ||
       typeof args.msg !== 'string' || Buffer.byteLength(args.msg) > 4096 ||
       typeof gas !== 'bigint' || gas <= 0n || gas > MAX_GAS ||
-      !provider || typeof provider.viewNodeStatus !== 'function' || typeof provider.sendTransactionUntil !== 'function' ||
+      !provider || typeof provider.viewNodeStatus !== 'function' ||
+      (typeof provider.sendTransactionOnce !== 'function' && typeof provider.sendTransactionUntil !== 'function') ||
       !journal || typeof journal.get !== 'function' || typeof journal.put !== 'function' ||
       journal.data?.owner_account_id !== account.accountId) throw new Error('invalid owner testnet setup call');
   // Snapshot public inputs before any asynchronous provider or signer call.
@@ -44,7 +46,8 @@ export async function submitOwnerSetupOnce({ id, account, publicKey, token, args
   // signed transaction bytes and the private key are never persisted.
   journal.put(id, pending);
   try {
-    const result = await provider.sendTransactionUntil(signed, 'FINAL');
+    const result = typeof provider.sendTransactionOnce === 'function'
+      ? await provider.sendTransactionOnce(signed, 'FINAL') : await provider.sendTransactionUntil(signed, 'FINAL');
     if (result?.transaction_outcome?.id !== txHash || result.final_execution_status !== 'FINAL' ||
         typeof result.status?.SuccessValue !== 'string' || !Array.isArray(result.receipts_outcome) ||
         !result.receipts_outcome.length || result.receipts_outcome.some(r => r.outcome?.status?.Failure)) {
@@ -55,4 +58,8 @@ export async function submitOwnerSetupOnce({ id, account, publicKey, token, args
   } catch (error) {
     throw new Error(`${id}: setup transaction ${txHash} is not safely confirmed; retain the journal and reconcile, never retry automatically: ${error.message}`, { cause: error });
   }
+}
+
+export function submitOwnerSetupOnce(options) {
+  return withExclusiveJournalOperation(options?.journal, () => submitOwnerSetupOnceUnlocked(options));
 }

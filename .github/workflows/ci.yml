@@ -585,6 +585,54 @@ jobs:
       - name: Inspect original FINAL receipt and balances without a key or send
         run: node bouncer/scripts/inspect-original-ref-swap.mjs original-ref-evidence
 
+  paid-vrf2-one-shot:
+    name: Fresh independent FT-paid VRF2 diagnostic (testnet)
+    # One explicitly reviewed push only. A rerun, another parent, branch or
+    # marker cannot create accounts, acquire test tokens or submit payments.
+    # Prior unresolved burn/VRF setup hashes are never touched.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/arena/d00d7f93-near-hub' && github.event.before == 'VRF2_UNARMED_PARENT' && github.event.repository.private == true && github.run_attempt == '1' && contains(github.event.head_commit.message, '[paid-vrf2-proof-20261101]')
+    needs: [js-tests, contract-tests, build-contract]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: bouncer-wasm
+          path: .
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      - name: Recheck pinned independent testnet VRF terms without payment
+        run: node bouncer/scripts/probe-outlayer-vrf.mjs
+      - name: Create a distinct bounded testnet diagnostic and recover original hashes
+        shell: bash
+        env:
+          BOUNCER_VRF2_ACK: fresh-testnet-fake-token-vrf-one-shot
+          BOUNCER_VRF2_DIR: ${{ runner.temp }}/bouncer-vrf2-proof
+          BOUNCER_VRF2_WASM: ${{ github.workspace }}/bouncer.wasm
+        run: |
+          set +e
+          node bouncer/scripts/paid-vrf2-once.mjs 2>&1 | tee "$RUNNER_TEMP/paid-vrf2.log"
+          result=${PIPESTATUS[0]}
+          if [ "$result" -ne 0 ]; then
+            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-4000).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=One-shot VRF2 stopped; inspect original hashes::"+s)' "$RUNNER_TEMP/paid-vrf2.log"
+          fi
+          exit "$result"
+      - name: Independently re-read original FINAL receipts and pinned block views
+        run: node bouncer/scripts/inspect-paid-vrf2.mjs "$RUNNER_TEMP/bouncer-vrf2-proof"
+      - name: Preserve encrypted recovery journal and public original-hash evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: paid-vrf2-testnet-recovery
+          path: ${{ runner.temp }}/bouncer-vrf2-proof/**
+          if-no-files-found: ignore
+          retention-days: 90
+
   paid-vrf-one-shot:
     name: Independent FT-paid VRF diagnostic (testnet)
     # Fresh testnet account and seed, never the separate unresolved burn hash.

@@ -16,7 +16,9 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import nearApi from 'near-api-js';
 import { FileJournal } from '../agent/procurement.mjs';
 import { MonotonicAccount, PaymentRpcProvider } from '../agent/near-account.mjs';
-import { signReviewedCall, signReviewedOneYoctoOwnerCall } from '../agent/reviewed-transaction.mjs';
+import { signReviewedCall, signReviewedOneYoctoOwnerCall, signReviewedProbeSetup } from '../agent/reviewed-transaction.mjs';
+import { redactProbeReceipt } from '../agent/testnet-receipt.mjs';
+export { signReviewedProbeSetup, redactProbeReceipt };
 import { sealTestnetCredentials, testnetRecoveryKeyId } from '../agent/testnet-credential-envelope.mjs';
 import { makeYoutickPlayGrantArgs, YOUTICK_PLAY_ORIGIN_HASH } from '../agent/youtick-play-proof.mjs';
 import { YOUTICK_PLAY_GRANT_GAS } from '../agent/youtick-playback.mjs';
@@ -39,48 +41,6 @@ function writeExclusive(dir, name, value) {
   const parent = fs.openSync(dir, 'r'); try { fs.fsyncSync(parent); } finally { fs.closeSync(parent); }
 }
 
-/** Public FINAL RPC results can include the original transaction signature.
- * Retain the outcome and reviewed action for inspection, but not fields that
- * would allow a retained receipt to reconstruct replayable signed bytes. */
-export function redactProbeReceipt(result) {
-  const copy = structuredClone(result);
-  if (copy?.transaction && typeof copy.transaction === 'object') {
-    delete copy.transaction.signature;
-    delete copy.transaction.nonce;
-    delete copy.transaction.block_hash;
-  }
-  return copy;
-}
-
-/** Pin setup transaction actions and verify the returned signature before use.
- * No signed bytes are written to disk. The sender still must journal the hash. */
-export async function signReviewedProbeSetup({ account, signerId, publicKey, receiverId, actions }) {
-  if (!account || account.accountId !== signerId || !account.signer || typeof account.createTransaction !== 'function' ||
-      String(await account.signer.getPublicKey()) !== String(publicKey) || !Array.isArray(actions) || !actions.length) {
-    throw new Error('invalid reviewed diagnostic setup signer');
-  }
-  const key = utils.PublicKey.from(String(publicKey));
-  if (key.keyType !== 0) throw new Error('diagnostic setup needs an Ed25519 key');
-  // Snapshot action bytes before calling an untrusted builder. It may share and
-  // mutate action objects; comparing only the references afterward is unsafe.
-  const canonical = list => Buffer.from(transactions.encodeTransaction(transactions.createTransaction(signerId, key, receiverId, 1n, list, Buffer.alloc(32))));
-  const reviewedActions = canonical(actions);
-  const tx = await account.createTransaction(receiverId, actions, key);
-  if (!tx || typeof tx.nonce !== 'bigint' || tx.nonce < 1n || !(tx.blockHash instanceof Uint8Array) || tx.blockHash.length !== 32) {
-    throw new Error('invalid diagnostic setup nonce or block');
-  }
-  if (tx.signerId !== signerId || tx.receiverId !== receiverId || String(tx.publicKey) !== String(key) ||
-      !Array.isArray(tx.actions) || !canonical(tx.actions).equals(reviewedActions)) throw new Error('diagnostic setup transaction differs from review');
-  const bytes = Buffer.from(transactions.encodeTransaction(tx));
-  const digest = crypto.createHash('sha256').update(bytes).digest();
-  const [returned, signed] = await account.signer.signTransaction(tx);
-  if (!(returned instanceof Uint8Array) || !Buffer.from(returned).equals(digest) || !signed?.transaction ||
-      !Buffer.from(transactions.encodeTransaction(signed.transaction)).equals(bytes) || signed.signature?.enum !== 'ed25519Signature' ||
-      !(signed.signature.data instanceof Uint8Array) || !key.verify(digest, signed.signature.data)) {
-    throw new Error('signed diagnostic setup differs from review');
-  }
-  return { txHash: utils.serialize.base_encode(digest), signed };
-}
 
 async function createFunded(provider, id, key) {
   // This is one helper POST per freshly generated account, never retried after

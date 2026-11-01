@@ -17,6 +17,7 @@ import { MonotonicAccount, PaymentRpcProvider } from './near-account.mjs';
 import { isTestnetAccount } from '../shared/account-id.mjs';
 import { signReviewedCall } from './reviewed-transaction.mjs';
 import { verifyOutlayerProbeVrf } from './outlayer-vrf.mjs';
+import { withExclusiveJournalOperation } from './journal-operation.mjs';
 
 const { KeyPair, KeyPairSigner } = nearApi;
 const OUTLAYER = 'outlayer.testnet', PROJECT = 'connectors.outlayer.testnet/connector-probe', TOKEN = 'usdc.fakes.testnet';
@@ -271,7 +272,7 @@ export function verifyProjectResult(rawGoal, result, publicKey) {
     near_charged: charge.toString(), near_refunded_to_owner: refund.toString(), result: verifiedResult, verification };
 }
 
-export async function recoverProjectGoal({ goal: rawGoal, provider, journal, publicKey, update = true, log = console.log }) {
+async function recoverProjectGoalUnlocked({ goal: rawGoal, provider, journal, publicKey, update = true, log = console.log }) {
   if (journal?.sharedDirectV3 === true) throw new Error('shared buyer journal does not coordinate project payments');
   const goal = validateProjectGoal(rawGoal);
   if (!journal || typeof journal.get !== 'function' || typeof journal.put !== 'function') throw new Error('recovery requires the original journal');
@@ -291,7 +292,7 @@ export async function recoverProjectGoal({ goal: rawGoal, provider, journal, pub
   return { status: 'REUSED', delivery };
 }
 
-export async function runProjectGoal({ goal: rawGoal, provider, account, publicKey, journal, execute = false, log = console.log }) {
+async function runProjectGoalUnlocked({ goal: rawGoal, provider, account, publicKey, journal, execute = false, log = console.log }) {
   if (journal?.sharedDirectV3 === true) throw new Error('shared buyer journal does not coordinate project payments');
   const goal = validateProjectGoal(rawGoal), p = goal.route.project;
   if (!account || account.accountId !== goal.owner_account_id || !publicKey) throw new Error('agent key account does not match owner');
@@ -305,7 +306,7 @@ export async function runProjectGoal({ goal: rawGoal, provider, account, publicK
   if (!permission || permission.receiver_id !== goal.contract_id || !equal(permission.method_names, ['execute_outlayer_project'])) throw new Error('agent key must be scoped ONLY to execute_outlayer_project on this contract');
   const previous = journal?.get(goal.id), hash = fingerprint(goal);
   if (previous && previous.fingerprint !== hash) throw new Error(`${goal.id}: journal does not match the reviewed goal`);
-  if (previous) return recoverProjectGoal({ goal, provider, journal, publicKey, update: execute, log });
+  if (previous) return recoverProjectGoalUnlocked({ goal, provider, journal, publicKey, update: execute, log });
   const [route, nativePolicy, usdPolicy, nativeGrant, usdGrant, verdict, credit, usdSpent, configuredToken, pricing, versionInfo] = await Promise.all([
     provider.callFunction(goal.contract_id, 'get_outlayer_project', { native_policy_id: goal.native_policy_id }, final),
     provider.callFunction(goal.contract_id, 'get_policy', { policy_id: goal.native_policy_id }, final),
@@ -340,9 +341,14 @@ export async function runProjectGoal({ goal: rawGoal, provider, account, publicK
     method: 'execute_outlayer_project', args: signedArgs(goal), gas: GAS });
   if (!validHash(txHash)) throw new Error('invalid transaction hash');
   const pending = { fingerprint: hash, status: 'pending', project_goal: goal, agent_public_key: String(publicKey), tx_hash: txHash, started_at: new Date().toISOString() };
+  // Do not overwrite another protocol's reservation made during signing.
+  if (journal.get(goal.id)) throw new Error(`${goal.id}: journal entry appeared before broadcast; reconcile, do not overwrite`);
   journal.put(goal.id, pending);
   try {
-    const sent = await provider.sendTransactionUntil(signed, 'FINAL');
+    // The built-in provider bounds the request and disables redirects/retries.
+    // Injected providers without this method must provide equivalent behavior.
+    const sent = typeof provider.sendTransactionOnce === 'function'
+      ? await provider.sendTransactionOnce(signed, 'FINAL') : await provider.sendTransactionUntil(signed, 'FINAL');
     if (sent?.transaction_outcome?.id !== txHash) throw new Error('RPC returned a different or missing transaction hash');
     const chain = await provider.txStatusReceipts(txHash, goal.owner_account_id, 'FINAL');
     const delivery = verifyProjectResult(goal, chain, publicKey);
@@ -354,6 +360,13 @@ export async function runProjectGoal({ goal: rawGoal, provider, account, publicK
     throw new Error(`${goal.id}: paid project unresolved (tx ${txHash}); do not resend automatically: ${error.message}`, { cause: error });
   }
 }
+export function recoverProjectGoal(options) {
+  return withExclusiveJournalOperation(options?.journal, () => recoverProjectGoalUnlocked(options));
+}
+export function runProjectGoal(options) {
+  return withExclusiveJournalOperation(options?.journal, () => runProjectGoalUnlocked(options));
+}
+
 function home(value) { return value.startsWith('~/') ? path.join(os.homedir(), value.slice(2)) : value; }
 function parseArgs(args) {
   const options = { execute: false };

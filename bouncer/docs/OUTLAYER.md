@@ -243,16 +243,53 @@ confirmed the first two original hashes FINAL and fake-token ledger/balance
 ledger and OutLayer prepaid balance both zero. These point-in-time balances
 are not proof that the missing hash never paid. The inspection made no sends
 or journal writes. Before
-creating an account, the harness seals its disposable owner, deployment,
-funding and project keys to a dedicated
-RSA recovery public key; the corresponding private key remains owner-only
-outside Git at `~/.near-credentials/testnet/bouncer-outlayer-vrf-recovery-private.pem`.
-Its owner setup transfers, OutLayer prepaid deposit and project payment each
-record an original hash before broadcast. An uncertain outcome stops and is not
-retried. The envelope is testnet-only, does not authenticate its creator, and
-does not replace checking recovered keys against FINAL chain state. A genuine
-signed diagnostic would still not establish an independent commercial seller,
-Circle-USDC acceptance, unbiased key selection or a TEE attestation.
+creating an account, the earlier harness sealed its disposable keys to a
+recovery public key. **Its matching private key has not been located in this
+workspace**; do not assume the old envelope can be opened. Its owner setup
+transfers, OutLayer prepaid deposit and project payment each record an original
+hash before broadcast. An uncertain outcome stops and is not retried. The
+envelope is testnet-only, does not authenticate its creator, and does not replace
+checking recovered keys against FINAL chain state. A genuine signed diagnostic
+would still not establish an independent commercial seller, Circle-USDC
+acceptance, unbiased key selection or a TEE attestation.
+
+### Fresh one-shot VRF2 attempt
+
+`paid-vrf2-once.mjs` is a separately fenced, **testnet-only** diagnostic: a
+fresh vault, owner, keys and random seed; a known local recovery private key;
+and no dependency on the earlier unrelated wNEAR refund test. It first checks
+the provider's exact current token, version, VRF key, price and bounded native
+estimate. A small **owner-setup** Ref swap acquires fake `usdc.fakes.testnet`,
+not Circle USDC. An owner funds and configures the fresh V9 vault using reviewed
+1-yocto policy calls and two restricted agent keys. The project is preflighted
+before moving any FT to OutLayer. The maximum provider deposit is 10,000 fake
+micro-units; the separate project cap is 10,000 fake micro-units plus at most
+0.1 testnet NEAR. Provider terms are rechecked, but these views are non-atomic
+and do not prevent later changes or prove worker code.
+
+Every signed setup/payment hash and public intent is persisted and annotated
+before its single bounded send; an unknown result is inspected by the original
+hash and never automatically repeated. Both payment stages deliberately discard
+one complete receipt response, then reopen the encrypted journal and recover by
+hash without using a NEAR signing key. The runner requires exact same-FINAL-block
+vault/provider balance and rolling-budget snapshots. `inspect-paid-vrf2.mjs`
+is a separate read-only reinspection of the original FINAL receipts, owner
+1-yocto configuration actions, scoped keys, pinned vault code, snapshots,
+provider settlement and the seed/identity-bound VRF signature. Its signature
+verification relies on an independently pinned key and trusted RPC; it does not
+prove key selection is unbiased or a TEE was used. Send counts are local
+instrumentation, not a chain-wide proof that nobody else submitted a payment.
+
+The encrypted credential envelope and journal are retained separately. The
+local `unseal-vrf2-journal-key.mjs` can derive the journal key to a new private
+file without writing any NEAR signing keys; losing the RSA private key prevents
+journal recovery. Neither the file lock nor in-process FT/project exclusion
+protects against discarded or rolled-back journals, other journal paths,
+bypassing callers or multiple independent databases. Injected RPC providers
+must independently provide bounded one-attempt sending. Do not rerun the
+one-shot CI job or issue a replacement payment if an original hash is unknown.
+A successful diagnostic would narrow the independent-FT gap, **not** prove an
+independent commercial Circle-USDC compute, storage or API purchase.
 
 Provider-held credit is distinct from Bouncer's FT vault. In this path a project
 refund can be credited to Bouncer's balance **at OutLayer**, not returned to
