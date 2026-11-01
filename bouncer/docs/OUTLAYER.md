@@ -304,8 +304,18 @@ journal were retained in artifact `13088557059`. **Do not resend the original
 funding transaction**, even if a later view appears to show no balance. The
 read-only `inspect-vrf2-setup.mjs` examines only those original hashes on two
 RPC endpoints and a same-block vault/provider snapshot; an unavailable hash
-remains unresolved. Any later continuation must first verify the original
-funding and use its journal, not silently create a replacement payment.
+remains unresolved. A [subsequent read-only inspection](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41319333855/job/124886012566)
+verified the first five setup hashes FINAL on both FastNear and archival RPCs,
+but the original funding hash was still unavailable on both. At FINAL block
+`5skusbW8qh6FXDYGqJcya2QWRtqQza4XbBtQ553YCYDF` the owner held 227,853 fake
+micro-units, while the vault ledger/token balances and OutLayer prepaid balance
+were zero; the funding/project policies had not yet been created. Those views
+do **not** prove the unavailable transaction was never accepted. The inspection
+sent nothing and wrote no journal entries. The original encrypted journal was
+reconstructed from its bounded ciphertext annotations, authenticated locally
+with the separately retained recovery key, and still records that hash pending.
+Any later continuation must first verify the original funding and use its
+journal, not silently create a replacement payment.
 
 The encrypted credential envelope and journal are retained separately. The
 local `unseal-vrf2-journal-key.mjs` can derive the journal key to a new private

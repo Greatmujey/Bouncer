@@ -601,6 +601,22 @@ jobs:
       - name: Inspect original FINAL receipt and balances without a key or send
         run: node bouncer/scripts/inspect-original-ref-swap.mjs original-ref-evidence
 
+  multiagency-readiness:
+    name: Inspect independent Circle testnet research-provider readiness (read only)
+    if: github.event_name == 'push' && github.ref == 'refs/heads/arena/d00d7f93-near-hub' && github.run_attempt == '1' && contains(github.event.head_commit.message, '[multiagency-read]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      - name: Public GETs and historical FastNear read-only index queries only
+        run: node bouncer/scripts/probe-multiagency.mjs
+
   vrf2-setup-inspection:
     name: Reinspect original VRF2 setup and preserve encrypted journal (read only)
     if: github.event_name == 'push' && github.ref == 'refs/heads/arena/d00d7f93-near-hub' && github.run_attempt == '1' && contains(github.event.head_commit.message, '[vrf2-setup-read]')
