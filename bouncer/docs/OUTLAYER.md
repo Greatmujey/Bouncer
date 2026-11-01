@@ -287,9 +287,14 @@ on November 1 observed the reviewed terms and a bounded test-token quote; it
 created no accounts and sent nothing. The [first fenced VRF2 job](https://github.com/Greatmujey/Bouncer/actions/runs/41318427551/job/124883910483)
 stopped at the WASM hash gate **before key generation, account creation or any
 send**: the newly compiled CI artifact did not equal the reviewed committed V9
-binary. It produced no VRF2 recovery artifact. The corrected fence uses the
-exact committed binary and rechecks its full pinned SHA-256; this does not
-prove source-to-binary reproducibility. These observations are preserved under
+binary. It produced no VRF2 recovery artifact. The corrected fence used the
+exact committed binary and rechecked its full pinned SHA-256; this does not
+prove source-to-binary reproducibility. On a later push, CI automatically
+committed a different 452,675-byte build (`0b64d56ba4de76d63a915dc96887d1eb5ec63d11c09e110b5caa589dea163994`)
+over the reviewed binary despite no contract source change. It was not deployed.
+The reviewed SHA-256 (`835f0baa51d08ddf3af6812df0caefb93283480735a63e3d382073e04fbaf8ee`)
+was restored, and CI now only uploads its new builds for review instead of
+pushing them into the branch. These observations are preserved under
 `evidence/outlayer-vrf2-preflight-20261101/` and do not establish delivery.
 
 The [fresh pinned attempt](https://github.com/Greatmujey/Bouncer/actions/runs/41318744634/job/124885009403)
