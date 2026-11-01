@@ -111,6 +111,22 @@ consent, and no offers or payments were requested:
   agent bearer authentication and internal payment request flow. The inspected
   API does not establish acceptance of Bouncer's v3 claim or an independently
   available compute, storage or data service. No request or payment was sent.
+- [YouTick at `410dd18`](https://github.com/4rmus/youtick/blob/410dd180f42d25f77c2317b9659923f6a4149245/contracts/market-v2/src/lib.rs)
+  is a potentially useful independent **video upload/processing** candidate,
+  not a general object store. Its reviewed source accepts Circle testnet USDC
+  through `ft_on_transfer`, derives the creator from the token `sender_id`,
+  and, for public uploads, requires a short-lived provider-signed quote. Its
+  bridge source verifies a separate upload-session key against the finalized
+  job. A Bouncer payment would therefore identify the **vault** as creator;
+  whether a vault-funded exact-message call and session-key upload work on the
+  currently deployed service remains unproven. Exact quote approval, expiry,
+  provider capacity, upload/download authorization, delivery, refund and
+  independently deployed code must all be reviewed before sending. The
+  source's 600,000-micro-USDC minimum for a sponsored upload is much larger
+  than the `6926` micro-USDC in the demonstrated swap's vault. A bounded
+  `probe-youtick.mjs` reads only public chain views and bridge health; it does
+  not request a quote or reserve, pay or upload. Never assume merchant consent
+  or deployed/source equivalence from this research.
 - [PatchBond at `a448538`](https://github.com/PatchBond/patchbond/blob/a4485389453818d495e48b7d46a299401833213b/contract/vault/src/deposit.rs)
   documents testnet Circle USDC bonds for GitHub submissions, not a compute,
   storage or API purchase. The source uses the FT `sender_id` as the bond payer;

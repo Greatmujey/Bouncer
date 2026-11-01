@@ -229,10 +229,16 @@ endpoint](https://testnet-api.outlayer.ai/vrf/pubkey) and current registry views
 must be rechecked before any new, explicitly approved order. Do not use this as
 a substitute for resolving or replaying the separate ambiguous burn transaction.
 
-An opt-in one-shot harness for this VRF diagnostic is prepared but has not yet
-shown a live result. It uses a fresh testnet contract, account and fixed new
-seed—not the unresolved burn account or hash. Before creating an account it
-seals its disposable owner, deployment, funding and project keys to a dedicated
+An opt-in one-shot harness for this VRF diagnostic has not yet shown a live
+result. Its [first live attempt](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41301880679/job/124834811981)
+used a fresh testnet contract, account and fixed new seed—not the unresolved
+burn account or hash. It acquired and funded fake test tokens, then stopped
+before any OutLayer deposit or project payment when the separately journaled
+wNEAR refund-test funding returned `Expired`. Its original setup hash
+`HUW8m6dQjyhBEr1KihELt6qXA92cuWzjSJ84q7AbRy3D` and artifact `13081947040`
+must be retained and reconciled; do not resend it automatically. Before
+creating an account, the harness seals its disposable owner, deployment,
+funding and project keys to a dedicated
 RSA recovery public key; the corresponding private key remains owner-only
 outside Git at `~/.near-credentials/testnet/bouncer-outlayer-vrf-recovery-private.pem`.
 Its owner setup transfers, OutLayer prepaid deposit and project payment each

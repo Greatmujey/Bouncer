@@ -110,10 +110,11 @@ methods after checking the original finalized receipts and provider balances.
 ### One-shot testnet proof harness
 
 `demo-ref-swap.mjs` is gated by an explicit testnet acknowledgement and a
-separate CI marker; it has not yet established a live swap. The first attempt
-stopped during account creation because the initial helper grant could not
-cover storage and the proposed subaccount funding. It failed before vault
-funding, the swap input or any sweep. Its owner-key envelope was retained, but
+separate CI marker. Its third attempt ultimately produced the live testnet
+proof described below. The first attempt stopped during account creation
+because the initial helper grant could not cover storage and the proposed
+subaccount funding. It failed before vault funding, the swap input or any
+sweep. Its owner-key envelope was retained, but
 that first envelope did not contain the Bouncer deploy key; the disposable
 account may therefore be unrecoverable. A second attempt used a separate
 helper-funded router and sealed both deployment keys, but its router became
@@ -131,9 +132,15 @@ callback's zero-byte argument encoding; after fixing it, a [second read-only
 inspection](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41299832993/job/124828302526)
 verified the linked FINAL Ref output receipt
 `7KEWv6Ux5EHX6R1F7ipdZmvFZKp7p6iQkpRsynXieSSX` for those same `6926` units.
-The original input was not resent and no sweep has yet been sent, so vault
-credit and completion are not claimed. Preserve the original journal and
-reconcile the same hash before separately considering a sweep.
+The original input was not resent. A [separately journaled scoped sweep](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41302114643/job/124835616044)
+then transferred those `6926` micro testnet USDC to the vault in FINAL
+transaction [`iprMyDVgVhFZDDBp152KDGUwpZBRehQEdvJDU29QEkP`](https://testnet.nearblocks.io/txns/iprMyDVgVhFZDDBp152KDGUwpZBRehQEdvJDU29QEkP).
+The job verified the linked vault deposit hook
+`39Vb1fnLjqs17KYE4DeJPud3nWJCvGQxfd3zgLcKf4Ga`, Bouncer ledger and token
+balances of `6926`, and zero output remaining at the router. It reported zero
+new input sends and exactly one sweep send. The original recovery journal and
+receipt evidence are retained in Action artifact `13081399331`. Never resend
+either hash. This is testnet-only and does not prove a commercial purchase.
 
 A narrowly gated recovery job can verify that original output again and accept
 **only** the previously scoped `sweep_output` key through a challenge-bound,
@@ -141,14 +148,17 @@ RSA-encrypted handoff to an ephemeral GitHub Actions worker. The private repo
 and Actions worker must be trusted; the request's public metadata is published
 as a run-bound GitHub Actions check, and a run-specific ciphertext-only file is
 committed to the private branch for the worker to read. The full-access owner
-key and input key are not shared. The job requires the original journal, verifies the pinned account/key
-and exact receipt, and records a new sweep hash before its sole broadcast. A
+key and input key are not shared. The job requires the original journal,
+verifies the pinned account/key and exact receipt, and records a new sweep hash
+before its sole broadcast. A
 missing or uncertain sweep remains pending and must never be resent blindly.
 The first handoff attempt failed when GitHub denied its comment-write request;
-that attempt emitted no key request and no sweep. Its retained journal is
-checked alongside the original before another attempt. This testnet handoff
-is not a production key-management or distributed recovery service; it has
-synthetic tests but no completed live sweep proof yet.
+that attempt emitted no key request and no sweep. Its retained journal was
+checked alongside the original before the successful sweep. The temporary
+ciphertext file was removed from the branch afterward; its historical commit
+contains only ciphertext, and the worker's ephemeral private key is gone. This
+testnet handoff is not a production key-management or distributed recovery
+service.
 
 The harness creates fresh, disposable testnet accounts, obtains a fresh bounded
 quote, deploys the exact router and removes its deploy key, funds only the capped

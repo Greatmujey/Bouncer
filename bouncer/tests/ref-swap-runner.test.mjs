@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import nearApi from 'near-api-js';
 import { runRefSwap, runRefSweepOnly, recoverRefSwap, checkRefRouter } from '../agent/ref-swap.mjs';
+import { inspectCompletedRefSwap } from '../agent/ref-swap-reinspection.mjs';
 import { createSweepHandoffRequest, sealSweepHandoff, openSweepHandoff } from '../agent/ref-sweep-handoff.mjs';
 import { REF_SWAP_INPUT, REF_SWAP_OUTPUT, REF_SWAP_EXCHANGE, REF_SWAP_INPUT_MESSAGE, REF_SWEEP_GAS } from '../agent/ref-swap-evidence.mjs';
 import { goal, ftGoal, signing, key, inputHash, swapResult, sweepResult, id } from './ref-swap-fixture.mjs';
@@ -181,6 +182,26 @@ test('encrypted scoped-key handoff completes a verified sweep without an input s
     journal: f.journal, execute: true, log: () => {} });
   assert.equal(result.status, 'COMPLETED'); assert.deepEqual(f.sends, [inputHash, f.sweep.hash]);
   assert(!JSON.stringify(response).includes(f.sweep.secret));
+});
+
+test('completed swap and sweep are reverified without writes, keys or new sends', async () => {
+  const f = fixture(), first = await runRefSwap(f.opts), sends = [...f.sends];
+  const provider = new Proxy(f.provider, { get(target, property) {
+    if (property === 'callFunction') return async (account, method, args, ...rest) => {
+      if (method === 'vault_balance') return '70';
+      if (method === 'ft_balance_of') return args.account_id === goal.contract_id ? '70' : '0';
+      return target.callFunction(account, method, args, ...rest);
+    };
+    const value = Reflect.get(target, property, target); return typeof value === 'function' ? value.bind(target) : value;
+  } });
+  const expected = { expectedInput: inputHash, expectedSweep: f.sweep.hash,
+    expectedReceipt: first.swap.output_receipt_id, expectedAmount: '70' };
+  const result = await inspectCompletedRefSwap({ goal, provider, journal: f.journal, ...expected });
+  assert.equal(result.status, 'COMPLETED'); assert.equal(result.sends, 0); assert.equal(result.journal_writes, 0);
+  assert.deepEqual(f.sends, sends);
+  await assert.rejects(inspectCompletedRefSwap({ goal, provider, journal: f.journal, ...expected, expectedSweep: id(99) }), /expected completed/);
+  await assert.rejects(inspectCompletedRefSwap({ goal, provider, journal: f.journal, ...expected, expectedAmount: '71' }), /expected completed/);
+  assert.deepEqual(f.sends, sends);
 });
 
 test('sweep-only never resends an existing ambiguous sweep', async () => {

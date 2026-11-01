@@ -332,6 +332,45 @@ jobs:
           if-no-files-found: ignore
           retention-days: 90
 
+  youtick-capability-read:
+    name: Discover independent testnet video provider (read only)
+    if: github.event_name == 'push' && github.run_attempt == '1' && contains(github.event.head_commit.message, '[youtick-capability-read-20261101]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      - name: Inspect independent public health and on-chain policy, without ordering
+        run: node bouncer/scripts/probe-youtick.mjs
+
+  reinspect-completed-ref:
+    name: Reinspect completed guarded Ref swap (read only)
+    if: github.event_name == 'push' && github.event.repository.private == true && github.run_attempt == '1' && contains(github.event.head_commit.message, '[reinspect-completed-ref-20261101]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: original-ref-sweep-recovery
+          run-id: 41302114643
+          github-token: ${{ github.token }}
+          path: completed-ref-evidence
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      - name: Reverify both original hashes without keys, writes, or sends
+        run: node bouncer/scripts/inspect-completed-ref-swap.mjs completed-ref-evidence
+
   inspect-original-guarded-ref:
     name: Inspect the original guarded Ref input (read only)
     if: github.event_name == 'push' && contains(github.event.head_commit.message, '[inspect-original-ref-20261101]')
