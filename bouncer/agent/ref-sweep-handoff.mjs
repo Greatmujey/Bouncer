@@ -40,6 +40,21 @@ export function validateSweepHandoffRequest(request, expected) {
   return structuredClone(request);
 }
 
+// A canonical, bounded single-line encoding survives GitHub job annotations
+// without treating JSON newlines or percent signs as workflow commands. The
+// decoded request still needs validation against independently reviewed data.
+export function encodeSweepHandoffRequest(request) {
+  const encoded = Buffer.from(JSON.stringify(request), 'utf8').toString('base64url');
+  if (!encoded || encoded.length > 6000) throw new Error('invalid encoded handoff request');
+  return encoded;
+}
+export function decodeSweepHandoffRequest(encoded) {
+  if (typeof encoded !== 'string' || !/^[A-Za-z0-9_-]{1,6000}$/.test(encoded)) throw new Error('invalid encoded handoff request');
+  const bytes = Buffer.from(encoded, 'base64url');
+  if (bytes.toString('base64url') !== encoded) throw new Error('non-canonical encoded handoff request');
+  try { return JSON.parse(bytes.toString('utf8')); } catch { throw new Error('invalid encoded handoff request'); }
+}
+
 export function createSweepHandoffRequest({ runId, context }) {
   const pair = crypto.generateKeyPairSync('rsa', { modulusLength: 3072, publicKeyEncoding: { type: 'spki', format: 'pem' },
     privateKeyEncoding: { type: 'pkcs8', format: 'pem' } });

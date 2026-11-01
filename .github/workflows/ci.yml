@@ -217,6 +217,53 @@ jobs:
       - name: Inspect finalized accounts, storage and quote without signing
         run: node bouncer/scripts/probe-ref-demo-setup.mjs bouncer-ref-5b2d78f8.testnet owner.bouncer-ref-5b2d78f8.testnet
 
+  ref-sweep-channel-probe:
+    name: Inspect scoped recovery channel (no signing)
+    if: github.event_name == 'push' && github.ref == 'refs/heads/arena/88d70c7c-near-hub' && github.event.repository.private == true && github.run_attempt == '1' && contains(github.event.head_commit.message, '[ref-sweep-channel-probe-20261101]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    permissions:
+      actions: read
+      contents: read
+      issues: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: guarded-ref-testnet-recovery
+          run-id: 41299191712
+          github-token: ${{ github.token }}
+          path: original-ref-evidence
+      - uses: actions/download-artifact@v4
+        with:
+          name: original-ref-sweep-recovery
+          run-id: 41300346933
+          github-token: ${{ github.token }}
+          path: prior-ref-sweep-attempt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      - name: Check both retained journals without signing or transaction broadcasts
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          BOUNCER_REF_SWEEP_ACK: testnet-original-sweep-only
+          BOUNCER_REF_SWEEP_ARTIFACT_CHECK_ONLY: '1'
+        run: node bouncer/scripts/resume-original-ref-sweep.mjs original-ref-evidence prior-ref-sweep-attempt "$RUNNER_TEMP/artifact-check-only"
+      - name: Check private comment read and annotation visibility
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          node --input-type=module - <<'NODE'
+          const response = await fetch('https://api.github.com/repos/abdullahimujeeb0505-stack/Bouncer/issues/6/comments?per_page=1', {
+            headers: { authorization: `Bearer ${process.env.GITHUB_TOKEN}`, accept: 'application/vnd.github+json', 'x-github-api-version': '2022-11-28' },
+            signal: AbortSignal.timeout(15_000), redirect: 'error'
+          });
+          if (!response.ok || !Array.isArray(await response.json())) throw new Error(`Private comment read failed: HTTP ${response.status}`);
+          console.log('::notice title=Scoped Ref sweep channel probe::Private comments are readable; this is not a sweep request.');
+          await new Promise(resolve => setTimeout(resolve, 45_000));
+          NODE
+
   resume-original-ref-sweep:
     name: Resume original Ref output sweep (testnet)
     # This has NO input-swap key and will reuse only the preserved input hash.
@@ -229,7 +276,7 @@ jobs:
     permissions:
       actions: read
       contents: read
-      issues: write
+      issues: read
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -238,6 +285,14 @@ jobs:
           run-id: 41299191712
           github-token: ${{ github.token }}
           path: original-ref-evidence
+      # Inspect the prior attempt's preserved journal: it failed before the
+      # key handoff. An existing sweep in either journal forbids any send.
+      - uses: actions/download-artifact@v4
+        with:
+          name: original-ref-sweep-recovery
+          run-id: 41300346933
+          github-token: ${{ github.token }}
+          path: prior-ref-sweep-attempt
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -249,7 +304,7 @@ jobs:
           BOUNCER_REF_SWEEP_ACK: testnet-original-sweep-only
         run: |
           set +e
-          node bouncer/scripts/resume-original-ref-sweep.mjs original-ref-evidence "$RUNNER_TEMP/ref-sweep-recovery" 2>&1 | tee "$RUNNER_TEMP/ref-sweep-recovery.log"
+          node bouncer/scripts/resume-original-ref-sweep.mjs original-ref-evidence prior-ref-sweep-attempt "$RUNNER_TEMP/ref-sweep-recovery" 2>&1 | tee "$RUNNER_TEMP/ref-sweep-recovery.log"
           result=${PIPESTATUS[0]}
           if [ "$result" -ne 0 ]; then
             node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-2500).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=Original Ref sweep did not complete::"+s)' "$RUNNER_TEMP/ref-sweep-recovery.log"

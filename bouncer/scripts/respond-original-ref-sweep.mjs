@@ -9,10 +9,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import nearApi from 'near-api-js';
-import { sealSweepHandoff } from '../agent/ref-sweep-handoff.mjs';
+import { decodeSweepHandoffRequest, sealSweepHandoff } from '../agent/ref-sweep-handoff.mjs';
 
 const REPO = 'abdullahimujeeb0505-stack/Bouncer', BRANCH = 'arena/88d70c7c-near-hub', ISSUE = 6;
-const REQUEST = 'BOUNCER_REF_SWEEP_REQUEST_V1\n', RESPONSE = 'BOUNCER_REF_SWEEP_RESPONSE_V1\n';
+const REQUEST_TITLE = 'Scoped Ref sweep handoff request', RESPONSE = 'BOUNCER_REF_SWEEP_RESPONSE_V1\n';
 const ORIGINAL_HASH = 'DzWVHLp51KuoUoy8oaYNQTgLNAMgSRcegYT4mjuXCXrz';
 const OUTPUT_RECEIPT = '7KEWv6Ux5EHX6R1F7ipdZmvFZKp7p6iQkpRsynXieSSX';
 const OWNER = 'owner.bouncer-ref-44f619d9.testnet', VAULT = 'bouncer-ref-44f619d9.testnet', ROUTER = 'ref-router-44f619d9.testnet';
@@ -29,26 +29,26 @@ function readOwnerOnly(file) {
   } finally { fs.closeSync(fd); }
 }
 function main() {
-  const commentId = process.argv[2], runId = process.argv[3];
-  if (!/^[1-9][0-9]{0,19}$/.test(commentId || '') || !/^[1-9][0-9]{0,19}$/.test(runId || '') || process.argv.length !== 4) {
-    throw new Error('usage: node respond-original-ref-sweep.mjs REQUEST_COMMENT_ID RUN_ID');
+  const jobId = process.argv[2], runId = process.argv[3];
+  if (!/^[1-9][0-9]{0,19}$/.test(jobId || '') || !/^[1-9][0-9]{0,19}$/.test(runId || '') || process.argv.length !== 4) {
+    throw new Error('usage: node respond-original-ref-sweep.mjs REQUEST_JOB_ID RUN_ID');
   }
-  const comment = gh(`/repos/${REPO}/issues/comments/${commentId}`);
-  if (comment?.user?.login !== 'github-actions[bot]' || typeof comment.body !== 'string' || !comment.body.startsWith(REQUEST) || comment.body.length > 5000) {
-    throw new Error('request must be the expected GitHub Actions bot comment');
-  }
-  let request;
-  try { request = JSON.parse(comment.body.slice(REQUEST.length)); } catch { throw new Error('invalid handoff request'); }
   const run = gh(`/repos/${REPO}/actions/runs/${runId}`);
+  const job = gh(`/repos/${REPO}/actions/jobs/${jobId}`);
   const localHead = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
-  if (request.run_id !== runId || run?.id?.toString() !== runId || run.event !== 'push' || run.run_attempt !== 1 ||
-      run.status !== 'in_progress' || run.head_branch !== BRANCH || run.head_sha !== localHead || run.repository?.private !== true) {
-    throw new Error('handoff request is not from the current private first-attempt branch run');
+  if (run?.id?.toString() !== runId || run.event !== 'push' || run.run_attempt !== 1 ||
+      run.status !== 'in_progress' || run.path !== '.github/workflows/ci.yml' || run.head_branch !== BRANCH ||
+      run.head_sha !== localHead || run.repository?.private !== true || job?.id?.toString() !== jobId ||
+      job.run_id?.toString() !== runId || job.run_attempt !== 1 || job.head_sha !== localHead ||
+      job.name !== 'Resume original Ref output sweep (testnet)' || job.status !== 'in_progress' ||
+      !job.steps?.some(step => step.name === 'Recover original receipts and perform one scoped sweep' && step.status === 'in_progress')) {
+    throw new Error('expected private first-attempt original-sweep job is not running at the current HEAD');
   }
-  const jobs = gh(`/repos/${REPO}/actions/runs/${runId}/jobs?per_page=100`);
-  if (!Array.isArray(jobs.jobs) || !jobs.jobs.some(job => job.name === 'Resume original Ref output sweep (testnet)' && job.status === 'in_progress')) {
-    throw new Error('expected original-sweep job is not running');
-  }
+  const annotations = gh(`/repos/${REPO}/check-runs/${jobId}/annotations?per_page=100`);
+  const matches = Array.isArray(annotations) ? annotations.filter(item => item?.annotation_level === 'notice' && item.title === REQUEST_TITLE) : [];
+  if (matches.length !== 1) throw new Error('expected exactly one authenticated job handoff annotation');
+  const request = decodeSweepHandoffRequest(matches[0].message);
+  if (request?.run_id !== runId) throw new Error('handoff run does not match its Actions job');
   const file = path.join(os.homedir(), '.near-credentials/testnet/bouncer-ref-v3-20261101/sweep.json');
   const credentials = readOwnerOnly(file);
   if (credentials.account_id !== OWNER || typeof credentials.private_key !== 'string') throw new Error('wrong testnet sweep credential');

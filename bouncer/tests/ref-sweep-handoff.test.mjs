@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import nearApi from 'near-api-js';
-import { createSweepHandoffRequest, validateSweepHandoffRequest, sealSweepHandoff, openSweepHandoff } from '../agent/ref-sweep-handoff.mjs';
+import { createSweepHandoffRequest, validateSweepHandoffRequest, encodeSweepHandoffRequest, decodeSweepHandoffRequest,
+  sealSweepHandoff, openSweepHandoff } from '../agent/ref-sweep-handoff.mjs';
 
 const pair = nearApi.KeyPair.fromRandom('ed25519'), other = nearApi.KeyPair.fromRandom('ed25519');
 const context = { owner_account_id: 'owner.testnet', contract_id: 'vault.testnet', router_id: 'router.testnet',
@@ -16,6 +17,15 @@ test('a one-use handoff encrypts only the reviewed scoped testnet key', () => {
   assert(!JSON.stringify(first).includes(credentials.private_key));
   assert.notEqual(first.envelope.ciphertext, second.envelope.ciphertext);
   assert.equal(String(openSweepHandoff({ request, expected: context, response: first, privateKey }).getPublicKey()), context.sweep_public_key);
+});
+
+test('job annotation request is bounded, canonical and contains no secret', () => {
+  const encoded = encodeSweepHandoffRequest(request);
+  assert.deepEqual(decodeSweepHandoffRequest(encoded), request);
+  assert(!encoded.includes('\n')); assert(!encoded.includes(credentials.private_key));
+  for (const bad of ['', 'a=', `${encoded}\n`, 'a'.repeat(6001), Buffer.from('not-json').toString('base64url'), 'A']) {
+    assert.throws(() => decodeSweepHandoffRequest(bad));
+  }
 });
 
 test('changed trade, scope, key, challenge or unknown fields fail closed', () => {
@@ -48,4 +58,83 @@ test('live handoff commands fail before network without the explicit recovery co
   const response = spawnSync(process.execPath, ['scripts/respond-original-ref-sweep.mjs'],
     { cwd, env, encoding: 'utf8', timeout: 5000 });
   assert.notEqual(response.status, 0); assert.match(response.stderr, /usage/);
+});
+
+test('operator authenticates the exact running job annotation before encrypting its scoped key', async () => {
+  const fs = await import('node:fs'), path = await import('node:path'), os = await import('node:os');
+  const { spawnSync, execFileSync } = await import('node:child_process'), { fileURLToPath } = await import('node:url');
+  const cwd = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'bouncer-handoff-test-'));
+  try {
+    const bin = path.join(home, 'bin'), keys = path.join(home, '.near-credentials/testnet/bouncer-ref-v3-20261101');
+    fs.mkdirSync(bin, { recursive: true }); fs.mkdirSync(keys, { recursive: true });
+    const operatorContext = { owner_account_id: 'owner.bouncer-ref-44f619d9.testnet', contract_id: 'bouncer-ref-44f619d9.testnet',
+      router_id: 'ref-router-44f619d9.testnet', original_hash: 'DzWVHLp51KuoUoy8oaYNQTgLNAMgSRcegYT4mjuXCXrz',
+      output_receipt_id: '7KEWv6Ux5EHX6R1F7ipdZmvFZKp7p6iQkpRsynXieSSX', expected_output: '6926',
+      sweep_public_key: pair.getPublicKey().toString() };
+    fs.writeFileSync(path.join(keys, 'sweep.json'), JSON.stringify({ account_id: operatorContext.owner_account_id, private_key: pair.toString() }), { mode: 0o600 });
+    const { request: operatorRequest, privateKey: operatorPrivate } = createSweepHandoffRequest({ runId: '123456', context: operatorContext });
+    const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd, encoding: 'utf8' }).trim();
+    const dataFile = path.join(home, 'gh-data.json'), posted = path.join(home, 'posted.json');
+    const mock = { run: { id: 123456, event: 'push', run_attempt: 1, status: 'in_progress', path: '.github/workflows/ci.yml',
+      head_branch: 'arena/88d70c7c-near-hub', head_sha: head, repository: { private: true } },
+    job: { id: 987654, run_id: 123456, run_attempt: 1, head_sha: head, name: 'Resume original Ref output sweep (testnet)',
+      status: 'in_progress', steps: [{ name: 'Recover original receipts and perform one scoped sweep', status: 'in_progress' }] },
+    annotations: [{ annotation_level: 'notice', title: 'Scoped Ref sweep handoff request', message: encodeSweepHandoffRequest(operatorRequest) }] };
+    fs.writeFileSync(path.join(bin, 'gh'), `#!/usr/bin/env node
+const fs = require('node:fs'); const data = JSON.parse(fs.readFileSync(process.env.MOCK_DATA, 'utf8'));
+const endpoint = process.argv[3] || '';
+if (endpoint.includes('/actions/runs/123456')) console.log(JSON.stringify(data.run));
+else if (endpoint.includes('/actions/jobs/987654')) console.log(JSON.stringify(data.job));
+else if (endpoint.includes('/check-runs/987654/annotations')) console.log(JSON.stringify(data.annotations));
+else if (endpoint.endsWith('/issues/6/comments') && process.argv.includes('POST')) {
+  const arg = process.argv.find(value => value.startsWith('body=')); fs.writeFileSync(process.env.MOCK_POSTED, arg.slice(5)); console.log('{"id":42}');
+} else { console.error('unexpected mock endpoint'); process.exit(1); }
+`, { mode: 0o755 });
+    const env = { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH}`, MOCK_DATA: dataFile, MOCK_POSTED: posted };
+    const runOperator = () => spawnSync(process.execPath, ['scripts/respond-original-ref-sweep.mjs', '987654', '123456'],
+      { cwd, env, encoding: 'utf8', timeout: 5000 });
+    fs.writeFileSync(dataFile, JSON.stringify({ ...mock, job: { ...mock.job, head_sha: 'f'.repeat(40) } }));
+    let child = runOperator(); assert.notEqual(child.status, 0); assert(!fs.existsSync(posted));
+    fs.writeFileSync(dataFile, JSON.stringify({ ...mock, annotations: [mock.annotations[0], mock.annotations[0]] }));
+    child = runOperator(); assert.notEqual(child.status, 0); assert(!fs.existsSync(posted));
+    fs.writeFileSync(dataFile, JSON.stringify(mock)); child = runOperator(); assert.equal(child.status, 0, child.stderr);
+    const body = fs.readFileSync(posted, 'utf8'), prefix = 'BOUNCER_REF_SWEEP_RESPONSE_V1\n';
+    assert(body.startsWith(prefix)); assert(!body.includes(pair.toString())); assert(!child.stdout.includes(pair.toString()));
+    const response = JSON.parse(body.slice(prefix.length));
+    assert.equal(String(openSweepHandoff({ request: operatorRequest, expected: operatorContext, response, privateKey: operatorPrivate }).getPublicKey()),
+      operatorContext.sweep_public_key);
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
+
+test('artifact-only recovery check refuses any prior recorded sweep without contacting RPC', async () => {
+  const fs = await import('node:fs'), path = await import('node:path'), os = await import('node:os');
+  const { spawnSync } = await import('node:child_process'), { fileURLToPath } = await import('node:url');
+  const { goal: sample } = await import('./ref-swap-fixture.mjs');
+  const cwd = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bouncer-artifact-check-'));
+  try {
+    const original = path.join(root, 'original'), prior = path.join(root, 'prior'), out = path.join(root, 'out');
+    fs.mkdirSync(original); fs.mkdirSync(prior);
+    const vault = 'bouncer-ref-44f619d9.testnet', owner = 'owner.bouncer-ref-44f619d9.testnet', router = 'ref-router-44f619d9.testnet';
+    const originalHash = 'DzWVHLp51KuoUoy8oaYNQTgLNAMgSRcegYT4mjuXCXrz';
+    const goal = { ...sample, contract_id: vault, owner_account_id: owner, router_id: router };
+    const input = { id: `${goal.id}-input`, status: 'pending', fingerprint: 'fixture', tx_hash: originalHash };
+    const journal = { version: 1, contract_id: vault, owner_account_id: owner, entries: [input] };
+    for (const dir of [original, prior]) {
+      fs.writeFileSync(path.join(dir, 'goal.json'), JSON.stringify(goal));
+      fs.writeFileSync(path.join(dir, 'journal.json'), JSON.stringify(journal));
+    }
+    fs.writeFileSync(path.join(original, 'identity.json'), JSON.stringify({ contract: vault, owner, router, sweep_key: context.sweep_public_key }));
+    const env = { ...process.env, GITHUB_TOKEN: 'test-token', GITHUB_RUN_ID: '123456', NEAR_TESTNET_RPC: 'http://127.0.0.1:1',
+      BOUNCER_REF_SWEEP_ACK: 'testnet-original-sweep-only', BOUNCER_REF_SWEEP_ARTIFACT_CHECK_ONLY: '1' };
+    delete env.BOUNCER_FILE_JOURNAL_KEY_FILE;
+    const check = () => spawnSync(process.execPath, ['scripts/resume-original-ref-sweep.mjs', original, prior, out],
+      { cwd, env, encoding: 'utf8', timeout: 5000 });
+    let child = check(); assert.equal(child.status, 0, child.stderr); assert.match(child.stdout, /no sweep is recorded/);
+    assert.deepEqual(fs.readdirSync(out), []);
+    journal.entries.push({ id: `${goal.id}-sweep`, status: 'pending', fingerprint: 'fixture', tx_hash: context.original_hash });
+    fs.writeFileSync(path.join(prior, 'journal.json'), JSON.stringify(journal));
+    child = check(); assert.notEqual(child.status, 0); assert.match(child.stderr, /existing sweep; do not send/);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
