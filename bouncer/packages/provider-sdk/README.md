@@ -236,5 +236,7 @@ SDK's verifier. Offline tests cover v2 issuance, conflicting claims, crashes,
 restarts and buyer recovery. A [separate live testnet run](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41263055741/job/124720514951)
 paid three v2 orders to our self-hosted reference seller and recovered the
 original compute hash after a seller restart. The previous installed-SDK
-historical receipt check used v1. Neither run proves independent seller adoption
-or real-value payment.
+historical receipt check used v1. A subsequent [read-only installed-SDK check](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41263695312/job/124721960599)
+verified the v2 source and three existing FINAL receipts and rejected substituted
+sellers and challenges without new payments. These checks do not prove independent
+seller adoption or real-value payment.

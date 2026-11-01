@@ -81,9 +81,11 @@ archive, rejecting substituted sellers; it sent no transactions. For the v2
 run, `tests/seller-v2-history.test.mjs` reconstructs its source-dependent inputs
 and three observed v2 memos offline; `scripts/verify-seller-v2-history.mjs`
 optionally re-reads the source and each FINAL payment through a testnet RPC,
-checking substituted sellers and challenges without signing or paying. The
-`[seller-sdk-check]` job runs it with a separately installed SDK. These vectors
-are not raw RPC receipts; historical RPC availability is not guaranteed.
+checking substituted sellers and challenges without signing or paying. A
+[read-only job](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41263695312/job/124721960599)
+ran that check with a separately installed SDK and accepted the existing source
+and three FINAL receipts while rejecting substitutions. These vectors are not
+raw RPC receipts; historical RPC availability is not guaranteed.
 
 ## What is reviewed
 

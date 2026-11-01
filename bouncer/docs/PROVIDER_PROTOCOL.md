@@ -168,7 +168,10 @@ or run older software against it. V2 has adversarial offline coverage and a
 [live testnet run](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41263055741/job/124720514951)
 with three distinct challenges, a seller restart and original-hash recovery.
 That run used our own development seller; it does not demonstrate independent
-FT seller adoption or real-value transactions.
+FT seller adoption or real-value transactions. A separate [read-only check](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41263695312/job/124721960599)
+installed this SDK in another application, verified the existing v2 source and
+three FINAL receipts, and rejected changed payees and challenges; it made no
+payments.
 
 ## 2. Confirm payment and redeem
 

@@ -390,8 +390,11 @@ seller and recovered the original compute hash before continuing; the run
 checked one source broadcast, three resource-payment broadcasts and three
 persisted local claims. Owner setup transactions were separate. An [offline
 regression](bouncer/tests/seller-v2-history.test.mjs) reconstructs the chained
-inputs and observed v2 memos; it is not a raw RPC proof. The [public
-artifact](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41263055741/artifacts/13066031406)
+inputs and observed v2 memos; it is not a raw RPC proof. A separate [read-only
+SDK check](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41263695312/job/124721960599)
+installed the SDK in another application, fetched the existing source and three
+FINAL receipts, and rejected altered sellers and challenges; it paid nothing.
+The [public artifact](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41263055741/artifacts/13066031406)
 expires 30 January 2027; it contains task data, not keys.
 
 The Circle seller is **not independent**, the independently operated oracle
