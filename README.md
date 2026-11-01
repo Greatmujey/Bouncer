@@ -12,9 +12,12 @@ or a commercial service. An optional model translates objectives into tasks with
 an owner-controlled catalog; it does not choose financial authority. Bounded
 delivery checks and a local journal gate later payments. See
 [AI agent setup](bouncer/docs/AI_AGENT.md) and
-[guarded independent compute](bouncer/docs/OUTLAYER.md). A separate marketplace
-catalog search is read-only. No model or inference service is bundled. This is
-unaudited testnet software, not suitable for real funds.
+[guarded independent compute](bouncer/docs/OUTLAYER.md). The experimental
+[MultiAgency research adapter](bouncer/docs/MULTIAGENCY_RESEARCH.md) has
+synthetic quote/payment/recovery tests and read-only historical compatibility
+checks, but **no Bouncer purchase or independent FT-paid fulfillment**. A separate
+marketplace catalog search is read-only. No model or inference service is
+bundled. This is unaudited testnet software, not suitable for real funds.
 
 ## Website preview (read-only)
 
@@ -86,9 +89,11 @@ migration from older state is provided. Two incompatible earlier layouts both
 reported v6, so a version string alone does not establish upgrade safety. The
 checked-in `bouncer.wasm` is the CI-built v9 artifact (SHA-256
 `835f0baa51d08ddf3af6812df0caefb93283480735a63e3d382073e04fbaf8ee`).
-CI checks that its version marker matches the source; this sanity check is not
-an audit or proof that a deployed contract has the same code. Earlier live
-runs used the fresh WASM built by their own CI jobs.
+CI checks that a newly built artifact's version marker matches the source and
+uploads it for review; it does not automatically overwrite the pinned binary.
+This sanity check is not an audit, a reproducible-build guarantee or proof that
+a deployed contract has the same code. Earlier live runs used the fresh WASM
+built by their own CI jobs.
 
 - NEP-141 deposits; token-specific vault balances and per-policy caps.
 - A direct `execute` call must come from the owner account, with **zero**
@@ -222,7 +227,7 @@ Ordinary CI runs do not create testnet accounts.
 
 ## Multi-token procurement check (testnet only)
 
-After CI has attached the matching `bouncer.wasm`, this optional script creates
+With a reviewed `bouncer.wasm` available, this optional script creates
 new testnet accounts, wNEAR plus **two synthetic testnet credit tokens**, three
 vendor accounts, policies and an execute-only key. It fetches quotes, makes
 payments and verifies each token's recorded vault, actual vault and vendor

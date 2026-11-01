@@ -6,7 +6,8 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import nearApi from 'near-api-js';
 import { FileJournal } from '../agent/procurement.mjs';
-import { requestMultiAgencyQuoteOnce, payMultiAgencyQuoteOnce, recoverMultiAgencyPayment } from '../agent/multiagency-runner.mjs';
+import { inspectMultiAgencyResearchTask, requestMultiAgencyQuoteOnce, payMultiAgencyQuoteOnce,
+  recoverMultiAgencyPayment } from '../agent/multiagency-runner.mjs';
 import { MULTIAGENCY_TREASURY as TREASURY } from '../agent/multiagency-readiness.mjs';
 import { CIRCLE_TESTNET_USDC as TOKEN } from '../scripts/circle-testnet-setup.mjs';
 import { mockGuardedPayment, mockHash } from './mock-guarded-payment.mjs';
@@ -146,5 +147,52 @@ test('expiry after journal reservation stops before broadcast and keeps the orig
       now: advancing, log: () => {} }), /pre-broadcast guard rejected/);
     assert.equal(f.sends, 0); assert.equal(f.journal.get(goal.id).status, 'pending');
     await assert.rejects(p(f), /already recorded/); assert.equal(f.sends, 0);
+  } finally { f.close(); }
+});
+
+test('key-free task inspection ties provider status, original FINAL payment and complete public handoff without side effects', async () => {
+  const f = fixture(); try {
+    await q(f); await p(f);
+    const tx = f.journal.get(goal.id).tx_hash, board = 'https://github.com/MultiAgency/kanban-sandbox';
+    const api = 'https://api.github.com/repos/MultiAgency/kanban-sandbox/issues';
+    const fence = (name, value) => `\`\`\`${name}\n${JSON.stringify(value)}\n\`\`\``;
+    const seller = { ...structuredClone(quote), status: 'open', issue: 32, issue_url: `${board}/issues/32`,
+      deposit: { transaction: tx, org: goal.vault, amount: goal.amount, memo: quote.code } };
+    const engagement = { engagement_id: quote.code, channel: 'wallet', org: goal.vault,
+      deposit: { amount: goal.amount, asset: TOKEN, treasury: TREASURY, transaction: tx, network: 'testnet' } };
+    const team = { members: [{ issue: 40, engagement: 32, key: 'report', amount: '1000000', asset: TOKEN }] };
+    const epic = { number: 32, html_url: `${board}/issues/32`, user: { id: 334725530 }, title: `Job: ${goal.title}`,
+      state: 'closed', state_reason: 'completed', closed_at: '2026-11-01T16:10:00Z', body: `intro\n\n${goal.brief}\n\n${fence('engagement', engagement)}\n\n${fence('team', team)}` };
+    const task = { number: 40, html_url: `${board}/issues/40`, user: { id: 334725530 }, state: 'closed', state_reason: 'completed',
+      closed_at: '2026-11-01T16:00:00Z', assignees: [{ id: 42 }], comments: 2,
+      body: fence('terms', { engagement: 32, key: 'report', amount: '1000000', asset: TOKEN }) };
+    const text = '**Deliverable**\n\nIndependent public report.', url = `${board}/issues/40#issuecomment-51`;
+    const delivered = { id: 51, user: { id: 42 }, issue_url: `${api}/40`, html_url: url, body: text,
+      created_at: '2026-11-01T15:30:00Z', updated_at: '2026-11-01T15:30:00Z' };
+    const handoff = { id: 52, user: { id: 42 }, issue_url: `${api}/40`, html_url: `${board}/issues/40#issuecomment-52`,
+      body: fence('handoff', { deliverable: { url, sha256: crypto.createHash('sha256').update(text).digest('hex') } }),
+      created_at: '2026-11-01T15:31:00Z', updated_at: '2026-11-01T15:31:00Z' };
+    let tamper = false, reads = 0;
+    const fetchImpl = async (address, opts) => {
+      reads++; assert.equal(opts.method, 'GET'); assert.equal(opts.redirect, 'error');
+      if (address.startsWith('https://demo.multiagency.ai/')) {
+        assert.equal(opts.headers?.authorization, undefined); assert.equal(address, `https://demo.multiagency.ai/api/quotes/${quote.code}`);
+        return new Response(JSON.stringify(seller), { status: 200 });
+      }
+      assert.equal(opts.headers.authorization, 'Bearer test-read-token');
+      const values = { [`${api}/32`]: epic, [`${api}/40`]: task, [`${api}/40/comments?per_page=100`]: [delivered, handoff] };
+      assert.ok(Object.hasOwn(values, address));
+      const value = structuredClone(values[address]); if (tamper && Array.isArray(value)) value[0].body += ' modified';
+      return new Response(JSON.stringify(value), { status: 200 });
+    };
+    const before = fs.readFileSync(f.file);
+    const args = { goal, journal: f.journal, provider: f.provider, task: 40, githubToken: 'test-read-token', fetchImpl, now };
+    const result = await inspectMultiAgencyResearchTask(args);
+    assert.equal(result.status, 'PUBLISHED_TASK_AFTER_FINAL_PAYMENT'); assert.equal(result.text, text); assert.equal(result.sends, 0);
+    assert.equal(result.quote_posts, 0); assert.equal(result.journal_writes, 0); assert.equal(reads, 4);
+    assert.deepEqual(fs.readFileSync(f.file), before); assert.equal(f.sends, 1); assert.equal(f.quotes, 1);
+    tamper = true; await assert.rejects(inspectMultiAgencyResearchTask(args), /deliverable content/);
+    await assert.rejects(inspectMultiAgencyResearchTask({ ...args, task: 0 }), /valid public task/);
+    assert.deepEqual(fs.readFileSync(f.file), before); assert.equal(f.sends, 1); assert.equal(f.quotes, 1);
   } finally { f.close(); }
 });
