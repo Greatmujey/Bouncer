@@ -94,6 +94,10 @@ package and documentation links use the new owner directly instead of relying
 on the old username's redirect. The repository remains private, so its GitHub
 Actions evidence links still require access. GitHub's old redirects are not a
 permanent identity guarantee and can stop working if the former name is reused.
+After the rename, a push produced a Vercel preview from `Greatmujey/Bouncer`,
+and the website was promoted from working-branch commit `2bd4a04`. Future
+feature-branch changes normally receive previews, not automatic production
+updates; the configured production branch is `main`.
 
 An archived evidence JSON and the original, already-completed one-shot Ref
 sweep scripts deliberately retain their historical repository identifiers. Do
