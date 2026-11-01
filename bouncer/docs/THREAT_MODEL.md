@@ -88,6 +88,10 @@ not prove all possible callback, provider or token failure cases.
    denominated in token units, not USD; the contract does not enforce oracle prices. Rebinding a
    policy to another token retains numeric spend history in the old units. Use
    a new policy for each token rather than changing an existing policy's token.
+   A contract regression exercises one delayed direct-transfer failure and an
+   FT-call partial refund after a token change: the newer reservation remains
+   counted and the FT-call budget stays conservative. This one interleaving is
+   not a proof of all callback schedules; the callback ABI is unchanged.
 7. **Untrusted model and development-only provider.** An optional model can
    propose resource inputs but not financial authority. Injection or errors can
    still produce an unwanted task within an authorized budget; review output

@@ -1196,6 +1196,43 @@ mod tests {
 
     const PINNED_FT_MSG: &str = r#"{"action":"purchase","plan":"basic"}"#;
 
+    // A policy revision does not clear the hour's numeric spend. Exercise a
+    // delayed old-token refund alongside a partially refunded FT call and a
+    // newer-token transfer, without changing the existing callback ABI.
+    #[test]
+    #[allow(deprecated)]
+    fn delayed_refunds_after_policy_change_do_not_release_newer_reservations() {
+        let (mut contract, agent) = ft_call_fixture();
+        testing_env!(owner_context(&agent, 0, NS_PER_DAY));
+        drop(contract.execute("compute".into(), id("vendor.testnet"), U128(100), None, id("token.testnet")));
+        send_ft_call(&mut contract, 100);
+        assert_eq!(contract.daily_spent("compute".into()).0, 200);
+        assert_eq!(contract.vault_balance(id("token.testnet")).0, 800);
+
+        testing_env!(owner_context(&key(1), 1, NS_PER_DAY));
+        contract.set_policy("compute".into(), id("other-token.testnet"), U128(200), Some(U128(300)));
+        contract.balances.insert(id("other-token.testnet"), 500);
+        testing_env!(owner_context(&agent, 0, NS_PER_DAY));
+        drop(contract.execute("compute".into(), id("vendor.testnet"), U128(50), None, id("other-token.testnet")));
+        assert_eq!(contract.daily_spent("compute".into()).0, 250);
+
+        testing_env_with_promise_results(context("bouncer.testnet", "bouncer.testnet", &agent, 0, NS_PER_DAY),
+            PromiseResult::Successful(b"\"60\"".to_vec()));
+        assert_eq!(contract.after_execute_ft_call("compute".into(), id("token.testnet"), U128(100), WINDOW_HOURS,
+            1, id("vendor.testnet"), PINNED_FT_MSG.into()).map(|u| u.0), Some(60));
+        // Changed FT policy revision retains the original full numeric budget.
+        assert_eq!(contract.daily_spent("compute".into()).0, 250);
+        testing_env_with_promise_results(context("bouncer.testnet", "bouncer.testnet", &agent, 0, NS_PER_DAY),
+            PromiseResult::Failed);
+        contract.after_execute("compute".into(), id("token.testnet"), U128(100), WINDOW_HOURS);
+        assert_eq!(contract.vault_balance(id("token.testnet")).0, 940);
+        assert_eq!(contract.vault_balance(id("other-token.testnet")).0, 450);
+        // Old FT reservation (100) plus newer-token transfer (50) remain.
+        assert_eq!(contract.daily_spent("compute".into()).0, 150);
+        assert_eq!(contract.check("compute".into(), id("vendor.testnet"), U128(151)).1,
+            "BLOCKED: daily cap exceeded for this policy");
+    }
+
     fn ft_call_fixture() -> (Bouncer, PublicKey) {
         let (mut contract, agent) = fixture();
         testing_env!(owner_context(&key(1), 1, NS_PER_DAY));

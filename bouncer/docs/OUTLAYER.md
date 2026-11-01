@@ -167,6 +167,16 @@ FINAL transaction. Incomplete or altered graphs remain unresolved; never
 resend them automatically. It assumes the RPC, token and Bouncer code are
 trustworthy and does not make raw Ref output a vault deposit.
 
+The strengthened verifier was checked read-only against an [existing finalized
+fake-token funding call](https://testnet.nearblocks.io/txns/3uMBAaenMBQzJyxPxEdH8tBg5M3rvAuoQy5oRpNx56MY/execution)
+using [archival testnet receipts](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41287377861/job/124791317765).
+It matched the independently pinned transaction, signing key, route and 10,000
+base-unit settlement and rejected substituted receipt links and payee. The
+check sent no payment and inspected neither the unresolved project transaction
+nor a service result. It proves neither independent FT-paid delivery nor Circle
+USDC support. `node scripts/verify-ft-call-history.mjs` repeats only this fixed
+read-only check; old receipts may require an archival RPC.
+
 The [live paid-provider test](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40699116807/job/122854642930)
 funded OutLayer with fake testnet USDC.e, then paid for a version-pinned
 connectivity probe using that prepaid balance and native NEAR. The probe
