@@ -47,6 +47,7 @@ test('wallet origin policy blocks shared origins, unapproved sites, HTTP and ifr
   assert.equal(walletOriginAllowed(location('https://owner.github.io/Bouncer/'), true), false);
   assert.equal(walletOriginAllowed(location('https://owner.github.io/Bouncer/'), true, 'https://owner.github.io'), false);
   assert.equal(walletOriginAllowed(location('https://bouncer-testnet.vercel.app/'), true), false);
+  assert.equal(walletOriginAllowed(location('https://bouncer-near.vercel.app/'), true), false);
   assert.equal(walletOriginAllowed(location('https://other.example/'), true), false);
   assert.equal(walletOriginAllowed(location('http://other.example/'), true, 'http://other.example'), false);
   assert.equal(walletOriginAllowed(location('https://other.example/'), true, 'https://other.example'), true);
@@ -70,6 +71,7 @@ test('shared guest, GitHub Pages and embedded preview never instantiate the wall
     ['https://www.madethis.website/s/abc/', true, ''],
     ['https://owner.github.io/Bouncer/', true, 'https://owner.github.io'],
     ['https://bouncer-testnet.vercel.app/', true, ''],
+    ['https://bouncer-near.vercel.app/', true, ''],
     ['https://4173-example.e2b.app/', false, ''],
   ];
   for (const [url, top, approved] of cases) {

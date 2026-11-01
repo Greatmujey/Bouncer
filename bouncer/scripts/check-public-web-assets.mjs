@@ -8,7 +8,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PUBLIC_WEB_FILES, validatePublicWeb } from './stage-public-web.mjs';
 
-const origin = 'https://bouncer-testnet.vercel.app/';
+const origin = 'https://bouncer-near.vercel.app/';
 const web = fileURLToPath(new URL('../web/', import.meta.url));
 const typeFor = file => file.endsWith('.html') ? 'text/html'
   : file.endsWith('.css') ? 'text/css'

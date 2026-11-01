@@ -85,5 +85,5 @@ jobs:
           BOUNCER_PREVIEW_URL_FILE: ${{ runner.temp }}/bouncer-production-url.txt
         run: |
           npm install --prefix "$RUNNER_TEMP/bouncer-browser" --no-save --no-audit --no-fund playwright-core@1.64.1
-          printf '%s\n' 'https://bouncer-testnet.vercel.app/' > "$BOUNCER_PREVIEW_URL_FILE"
+          printf '%s\n' 'https://bouncer-near.vercel.app/' > "$BOUNCER_PREVIEW_URL_FILE"
           node bouncer/scripts/test-public-web-preview.mjs

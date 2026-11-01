@@ -6,7 +6,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 const url = fs.readFileSync(process.env.BOUNCER_PREVIEW_URL_FILE, 'utf8').trim();
 const isGuestPreview = /^https:\/\/www\.madethis\.website\/s\/[a-z2-9]{6,16}\/$/.test(url);
-const isReadOnlyProduction = url === 'https://bouncer-testnet.vercel.app/';
+const isReadOnlyProduction = url === 'https://bouncer-near.vercel.app/';
 if (!isGuestPreview && !isReadOnlyProduction) throw new Error('Unexpected public site URL');
 const playwright = await import(pathToFileURL(path.join(process.env.RUNNER_TEMP, 'bouncer-browser/node_modules/playwright-core/index.mjs')));
 const candidates = ['/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/usr/bin/chromium', '/usr/bin/chromium-browser'];

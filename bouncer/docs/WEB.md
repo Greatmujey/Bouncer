@@ -51,14 +51,15 @@ wallet connection stays disabled on that shared-origin preview.
 
 ## Durable public hosting
 
-The public site is available at `https://bouncer-testnet.vercel.app/` while the
-source repository stays private. The initial Vercel deployment used working-
-branch commit `a05fc8d`. The site is a historical walkthrough, **not** a live
-agent dashboard: only its optional balance-refresh button performs read-only
-NEAR testnet RPC calls. Links to GitHub Actions evidence in a private repository
-will not be accessible to visitors without repository access. A durable URL is
-not a security audit, real wallet sign-in, or proof of independent FT-paid
-fulfillment.
+The public site address is `https://bouncer-near.vercel.app/` while the source
+repository stays private. The original `bouncer-testnet` Vercel project and its
+old URL were removed; the replacement `bouncer` project is linked to the
+private repository and has the new domain attached. The site is a historical
+walkthrough, **not** a live agent dashboard: only its optional balance-refresh
+button performs read-only NEAR testnet RPC calls. Links to GitHub Actions
+evidence in a private repository will not be accessible to visitors without
+repository access. A durable URL is not a security audit, real wallet sign-in,
+or proof of independent FT-paid fulfillment.
 
 `.github/workflows/github-pages.yml` is prepared to publish on changes to the
 website on `main`, or by manual dispatch, **after** it is merged and GitHub
@@ -104,10 +105,11 @@ package and documentation links use the new owner directly instead of relying
 on the old username's redirect. The repository remains private, so its GitHub
 Actions evidence links still require access. GitHub's old redirects are not a
 permanent identity guarantee and can stop working if the former name is reused.
-After the rename, a push produced a Vercel preview from `Greatmujey/Bouncer`,
-and the website was promoted from working-branch commit `2bd4a04`. Future
-feature-branch changes normally receive previews, not automatic production
-updates; the configured production branch is `main`.
+After the rename, the original (now deleted) Vercel project built a preview
+from `Greatmujey/Bouncer`, and promoted working-branch commit `2bd4a04`.
+The replacement project's configured production branch is `main`; until the
+staging script is merged there, builds from `main` cannot use this configuration.
+Feature-branch changes are not a guarantee of automatic production updates.
 
 An archived evidence JSON and the original, already-completed one-shot Ref
 sweep scripts deliberately retain their historical repository identifiers. Do
