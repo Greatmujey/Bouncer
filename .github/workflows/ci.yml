@@ -747,6 +747,74 @@ jobs:
           if-no-files-found: ignore
           retention-days: 90
 
+  seller-v3-fresh-proof:
+    name: Fresh authenticated multi-resource proof (testnet)
+    # A DIFFERENT fresh account, journal, artifact and explicit marker from the
+    # earlier timed-out run. No Actions reruns and no production funds.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/arena/88d70c7c-near-hub' && github.event.before == 'a1abce25721de00c6123dcb2cbe23d51077a1c12' && github.event.repository.private == true && github.run_attempt == '1' && contains(github.event.head_commit.message, '[seller-v3-fresh-20261101]')
+    needs: [js-tests, contract-tests, build-contract]
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: bouncer-wasm
+          path: .
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      - name: Run a new bounded testnet workflow, with hash-only recovery
+        shell: bash
+        run: |
+          set +e
+          node bouncer/demo-oracle-mission.mjs --seller-v3-fresh 2>&1 | tee "$RUNNER_TEMP/seller-v3-fresh.log"
+          result=${PIPESTATUS[0]}
+          if [ "$result" -ne 0 ]; then
+            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-4500).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=Fresh seller-v3 testnet check failed::"+s)' "$RUNNER_TEMP/seller-v3-fresh.log"
+          fi
+          exit "$result"
+      # Contains replayable testnet claim signatures and task data, never keys.
+      # Preserve even on failure; do not change visibility while it is retained.
+      - name: Preserve restricted recovery evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: seller-v3-fresh-restricted-recovery
+          path: |
+            /tmp/bouncer-seller-v3-fresh-*/journal.json
+            /tmp/bouncer-seller-v3-fresh-*/setup-journal.json
+            /tmp/bouncer-seller-v3-fresh-*/oracle-goal.json
+            /tmp/bouncer-seller-v3-fresh-*/workflow.json
+            /tmp/bouncer-seller-v3-fresh-*/derived-orders.json
+            /tmp/bouncer-seller-v3-fresh-*/evidence.json
+            /tmp/bouncer-seller-v3-fresh-*/provider-config.json
+            /tmp/bouncer-seller-v3-fresh-*/development-provider/**
+          if-no-files-found: ignore
+          retention-days: 90
+
+  x402-independent-inspection:
+    name: Inspect one independent x402 endpoint (read only)
+    # One publicly documented endpoint, one unauthenticated GET, no proof,
+    # private key or transaction. The buyer cannot pay its Base-mainnet rail.
+    if: github.event_name == 'push' && github.run_attempt == '1' && contains(github.event.head_commit.message, '[x402-inspect]')
+    needs: js-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      - name: Classify public offer without credentials or payment
+        run: node bouncer/agent/inspect-x402.mjs --url https://piprail.com/x402/demo
+
   independent-market-discovery:
     name: Independent marketplace catalog (read only)
     if: github.event_name == 'push' && contains(github.event.head_commit.message, '[independent-discovery]')

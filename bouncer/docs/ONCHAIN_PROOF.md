@@ -38,6 +38,31 @@ challenge to an exact order, but is **not** interchangeable with this SDK and
 still does not authenticate a claimant. No protection is claimed across
 separate buyer journals or processes using different journals.
 
+## Inspecting a possible independent seller
+
+```sh
+node bouncer/agent/inspect-x402.mjs --url https://seller.example/api
+```
+
+This makes **one unauthenticated GET** to the explicitly selected canonical
+HTTPS URL (or development loopback), refuses redirects, and classifies at most
+16 offers from the bounded x402 v2 `PAYMENT-REQUIRED` header. It has no key,
+proof, payment, redemption or policy-change path. It omits the nonce from its
+output. The seller still sees the request and may implement GET with side
+effects; do not feed untrusted URLs into this local operator tool or expose it
+as an unrestricted server-side fetch. A `wire_candidate: true` means only that
+an advertised offer passes this buyer's wire-shape checks. It is **not** an
+approved price, seller endorsement or proof the service accepts nested Bouncer
+transfers, has durable replay protection, or will deliver.
+
+For example, a read-only fetch on 1 November 2026 found that the independent
+[`piprail.com/x402/demo`](https://piprail.com/x402/demo) advertises Base mainnet
+USDC, **not** `near:testnet`. It is incompatible with this buyer and has not
+been paid. Some open indexes return Base services for NEAR-related queries or
+ignore a network filter; listing data must not be treated as an executable
+quote. A compatible, independently operated NEAR testnet FT seller remains
+unidentified.
+
 ## Owner-reviewed configuration and operation
 
 The initial adapter only accepts Circle's canonical NEAR **testnet** USDC
@@ -138,6 +163,13 @@ the supplied clients.
   is retained until 30 January 2027 and contains public transaction details and
   the fixture response, not keys. The job is explicitly gated and skips Actions
   reruns. This test proves neither an independent merchant nor a valuable purchase.
+
+A new [dependent-workflow adapter](DEPENDENT_WORKFLOWS.md#paid-x402-data-as-a-workflow-source-experimental)
+can pass an owner-selected primitive from a paid x402 JSON response to later
+compute, storage and API steps. It has synthetic end-to-end tests with the
+published SDK and a self-hosted seller; it has not been demonstrated with an
+independent seller or with a live combined workflow. It does not upgrade the
+public x402 proof into an authenticated claim.
 
 The source inspection is pinned to [PipRail's NEAR verifier](https://github.com/piprail/piprail/blob/a8d7c35995f4c0b8b844c2a76110b38eb2228e37/sdk/src/drivers/near/verify.ts)
 and [gate implementation](https://github.com/piprail/piprail/blob/a8d7c35995f4c0b8b844c2a76110b38eb2228e37/sdk/src/server.ts).

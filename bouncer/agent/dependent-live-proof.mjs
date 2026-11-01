@@ -40,11 +40,13 @@ function parseArtifact(text, id) {
  * key-free recovery callback that must reopen its journal after recovery.
  * Any unexpected/ambiguous error escapes; there is no payment retry here.
  */
-export async function runDependentLiveProof({ workflow: raw, provider, source, resources, getJournal, recoverWithoutKeys, log = () => {} }) {
+export async function runDependentLiveProof({ workflow: raw, provider, source, resources, getJournal, recoverWithoutKeys,
+  recoverSourceWithoutKeys, log = () => {} }) {
   const workflow = validateWorkflow(raw);
   assert(workflow.source.kind === 'oracle' && workflow.steps.length === 3 &&
     workflow.steps.map(step => step.id).join(',') === 'dependent-compute,dependent-storage,dependent-api', 'unexpected proof workflow');
-  assert(typeof getJournal === 'function' && typeof recoverWithoutKeys === 'function', 'journal and recovery callback required');
+  assert(typeof getJournal === 'function' && typeof recoverWithoutKeys === 'function' &&
+    (recoverSourceWithoutKeys === undefined || typeof recoverSourceWithoutKeys === 'function'), 'journal and recovery callback required');
   const journal = () => getJournal();
   // This fault-injection proof MUST NOT be run against an existing journal.
   for (const id of [`workflow:${workflow.id}`, workflow.source.goal.id, ...workflow.steps.map(step => step.id)]) {
@@ -83,12 +85,28 @@ export async function runDependentLiveProof({ workflow: raw, provider, source, r
   const preview = await runWorkflow(common());
   assert(preview.status === 'READY' && preview.preview?.payments?.blocked === 0 &&
     sourceBroadcasts === 0 && resourceBroadcasts === 0 && quoted.length === 0, 'maximum-budget preview was not read-only and ready');
-  try {
-    await runWorkflow({ ...common(), execute: true });
-    throw new Error('dependent proof: lost-response injection unexpectedly completed');
-  } catch (error) {
-    if (!/payment could not be confirmed.*injected lost response after actual broadcast/.test(error.message)) throw error;
+  let executionError, sourceRecovered = false;
+  try { await runWorkflow({ ...common(), execute: true }); }
+  catch (error) { executionError = error; }
+  // A transport timeout on the single source broadcast need not strand a fresh
+  // proof if a key-free reader can reconcile that SAME hash. There is never a
+  // second source submission. Failure to find FINAL evidence stops the proof.
+  const pendingSource = journal().get(workflow.source.goal.id);
+  if (executionError && recoverSourceWithoutKeys && /payment\/delivery unresolved/.test(String(executionError.message)) &&
+      sourceBroadcasts === 1 && resourceBroadcasts === 0 && pendingSource?.status === 'pending' && pendingSource.tx_hash &&
+      !workflow.steps.some(step => journal().get(step.id))) {
+    const sourceHash = pendingSource.tx_hash;
+    const recovered = await recoverSourceWithoutKeys({ sourceHash, workflow });
+    assert(recovered?.status === 'RECOVERED' && recovered.next === workflow.steps[0].id && recovered.new_payments === 0 &&
+      journal().get(workflow.source.goal.id)?.status === 'completed' && journal().get(workflow.source.goal.id)?.tx_hash === sourceHash &&
+      sourceBroadcasts === 1 && resourceBroadcasts === 0, 'key-free source recovery did not reconcile the original hash');
+    sourceRecovered = true;
+    executionError = undefined;
+    try { await runWorkflow({ ...common(), source: {}, execute: true }); }
+    catch (error) { executionError = error; }
   }
+  if (!executionError) throw new Error('dependent proof: lost-response injection unexpectedly completed');
+  if (!/payment could not be confirmed.*injected lost response after actual broadcast/.test(executionError.message)) throw executionError;
   const first = journal().get(workflow.steps[0].id), firstHash = first?.tx_hash;
   const sourceHash = journal().get(workflow.source.goal.id)?.tx_hash;
   assert(injected && sourceBroadcasts === 1 && resourceBroadcasts === 1 && sourceHash && firstHash &&
@@ -150,7 +168,7 @@ export async function runDependentLiveProof({ workflow: raw, provider, source, r
     storageArtifact.tx_hash === journal().get(workflow.steps[1].id).tx_hash &&
     isDeepStrictEqual(storageArtifact.result, result.deliveries[1].result), 'API input was not the verified storage result');
   return { result, quoted: quoted.map(item => item.order), quoteMemos, challenges,
-    sourceHash, firstHash, sourceBroadcasts, resourceBroadcasts };
+    sourceHash, firstHash, sourceBroadcasts, resourceBroadcasts, sourceRecovered };
 }
 
 /**

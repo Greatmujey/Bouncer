@@ -13,9 +13,9 @@ function amount(value) {
 }
 
 /** Mutates checks to mark newly blocked requests; never sends a transaction. */
-export async function reservePreview(provider, plan, checks, summary, { policyReservations = [] } = {}) {
-  if (!Array.isArray(policyReservations)) throw new Error('invalid prior policy reservations');
-  const prior = new Map();
+export async function reservePreview(provider, plan, checks, summary, { policyReservations = [], vaultReservations = [] } = {}) {
+  if (!Array.isArray(policyReservations) || !Array.isArray(vaultReservations)) throw new Error('invalid prior reservations');
+  const prior = new Map(), priorVault = new Map();
   for (const item of policyReservations) {
     if (!item || typeof item !== 'object' || Array.isArray(item) || Object.keys(item).length !== 3 ||
         typeof item.policy_id !== 'string' || !item.policy_id || typeof item.token !== 'string' || !item.token ||
@@ -25,6 +25,15 @@ export async function reservePreview(provider, plan, checks, summary, { policyRe
     const previous = prior.get(item.policy_id);
     if (previous && previous.token !== item.token) throw new Error('conflicting reservation tokens');
     prior.set(item.policy_id, { token: item.token, reserved: (previous?.reserved ?? 0n) + reserved });
+  }
+  // Some earlier purchases (unlike prepaid provider credit) will debit the
+  // same FT vault as the planned steps, even under a different policy.
+  for (const item of vaultReservations) {
+    if (!item || typeof item !== 'object' || Array.isArray(item) || Object.keys(item).length !== 2 ||
+        typeof item.token !== 'string' || !item.token || !Object.hasOwn(item, 'amount')) throw new Error('invalid prior vault reservation');
+    const reserved = amount(item.amount);
+    if (reserved === 0n) throw new Error('invalid prior vault reservation');
+    priorVault.set(item.token, (priorVault.get(item.token) ?? 0n) + reserved);
   }
   const counts = status => checks.filter(check => check.status === status).length;
   if (!Array.isArray(checks) || checks.length !== plan.requests.length ||
@@ -56,7 +65,7 @@ export async function reservePreview(provider, plan, checks, summary, { policyRe
     let vault = tokens.get(request.token);
     if (!vault) {
       const balance = await provider.callFunction(plan.contract_id, 'vault_balance', { token: request.token }, final);
-      vault = { balance: amount(balance), reserved: 0n };
+      vault = { balance: amount(balance), reserved: priorVault.get(request.token) ?? 0n };
       tokens.set(request.token, vault);
     }
     const payment = amount(request.amount);

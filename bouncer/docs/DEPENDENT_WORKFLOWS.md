@@ -1,9 +1,10 @@
 # Owner-reviewed dependent resource workflows
 
 **Status: unaudited testnet prototype. Do not use real funds.** The workflow
-runner connects a verified independent OutLayer result to later, ordered
-compute, storage and API requests. Offline adversarial tests use synthetic
-chain receipts. A [1 November 2026 live testnet run](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41258992192/job/124708664361)
+runner connects a verified independent OutLayer result, or an explicitly
+approved x402 seller response, to later, ordered compute, storage and API
+requests. The x402 source is **not** authenticated or proven truthful by its
+payment. Offline adversarial tests use synthetic chain receipts. A [1 November 2026 live testnet run](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41258992192/job/124708664361)
 verified the full chain and key-free payment recovery; its OutLayer lookup used
 native testnet NEAR, while the three Circle testnet USDC resource payments went
 to a self-hosted development provider. It is not evidence of an independent
@@ -14,6 +15,69 @@ checked one source broadcast, three resource broadcasts and the locally
 persisted seller claims. The [public evidence artifact](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41263055741/artifacts/13066031406)
 contains task data, not keys. Transaction links and limitations are in the
 [README](../../README.md).
+
+## Paid x402 data as a workflow source (experimental)
+
+The optional [`onchain-proof-workflow.example.json`](../examples/onchain-proof-workflow.example.json)
+shows how a testnet x402 GET can supply one value to seller-v3 compute → storage
+→ API steps. **It is a placeholder, not a real seller or funded deployment.**
+There is currently no demonstrated independently operated NEAR-testnet seller
+supporting this buyer. The example deliberately sets three risk flags to `false`;
+the owner must vet the services, configure the actual deployment, account,
+policy, seller URL, payees and limits, and explicitly accept all three risks.
+The buyer accepts only `onchain-proof` on `near:testnet` with Circle testnet
+USDC. Standard NEAR x402 `exact`, Base and mainnet offers are rejected.
+
+The source's `output` pins a path of zero to five simple JSON object keys, a
+primitive type (`string`, `number` or `boolean`), a maximum local receipt age
+of 1–900 seconds and `accept_untrusted_data_risk: true`. The seller must return
+bounded UTF-8 `application/json`; only the selected value enters the artifact.
+Strings are capped at 512 bytes and control characters are rejected; integers
+must be safely representable JavaScript numbers. JSON floating-point precision
+is limited. Unrecognized fields cannot choose a payee, token, URL, policy,
+input binding or spending cap. The selected value is still untrusted text/data:
+it must not be treated as a command, financial advice, authenticated oracle or
+proof of truth. The local receipt age is checked before each new downstream
+payment and immediately before broadcast; it relies on the local clock and
+says nothing about when the seller's underlying data was produced.
+
+The source's maximum is included in the conservative preflight for both its
+policy's daily budget **and** its token's vault, even when downstream steps
+use different policies. These views are not a reservation or atomic guarantee;
+on-chain checks remain decisive. The source, then each resource, are separate
+purchases; there is no rollback. A preview GET obtains a quote without signing,
+but the seller can still observe the request or have side effects. Execution
+obtains a fresh quote and may therefore make an additional quote GET.
+
+```sh
+# Dry-run the reviewed manifest; no signature, payment or redemption.
+node bouncer/agent/workflow.mjs --workflow reviewed.json --journal private-journal.json --source-key execute-only.json --ft-key execute-only.json
+# Only after review: spend bounded testnet funds. Keep the original journal private.
+node bouncer/agent/workflow.mjs --workflow reviewed.json --journal private-journal.json --source-key execute-only.json --ft-key execute-only.json --execute
+# If interrupted, reconcile the original hashes without keys or new payments.
+node bouncer/agent/workflow.mjs --workflow reviewed.json --journal private-journal.json --recover-only
+# ONLY if recovery reports that the x402 seller request has not started:
+node bouncer/agent/workflow.mjs --workflow reviewed.json --journal private-journal.json --recover-only --redeem-source
+```
+
+`--redeem-source` explicitly permits the **first** seller request for a confirmed
+payment; it cannot retry a previously attempted request or repay. A crash,
+timeout, bad response, or invalid selected data may leave a purchase unusable:
+keep the journal and investigate. Recovery of already-paid resource steps can
+contact the supporting resource seller, but never signs or pays again. A stale
+source may be inspected as historical evidence, not used to start new purchases.
+The x402 proof is publicly observable and neither claimant- nor order-bound;
+it can be stolen and is not made secure by the later seller-v3 steps. V3 claims
+are themselves replayable bearer credentials. The journal can contain both
+claims and paid data: protect it, do not publish it, and see [x402 risks](ONCHAIN_PROOF.md)
+and [seller-v3 risks](SELLER_V3.md).
+
+The new source-to-resource composition is tested with the independently published
+PipRail 3.3.0 verifier, a test-only NEAR-testnet wrapper, synthetic FINAL receipts
+and our local authenticated development seller. Those tests send **no live
+transactions**, and do not demonstrate independent seller adoption or real
+purchases. The existing separate self-hosted x402 live check is described in
+[ONCHAIN_PROOF.md](ONCHAIN_PROOF.md); it did not run this combined workflow.
 
 ## Optional isolated testnet check
 
@@ -130,8 +194,10 @@ independent seller adoption or safe distributed replay protection.
 
 A data binding such as `{"from":"price"}` is permitted **only** in compute
 `text`, storage `content`, or text-API `text`. It inserts a bounded JSON
-artifact from an **earlier, verified** stage: `version`, `kind`, `goal_id`,
-`tx_hash` and a canonical `result`. Oracle warnings and unrecognized output
+artifact from an **earlier stage with verified payment and checked delivery**:
+`version`, `kind`, `goal_id`, `tx_hash` and a canonical `result`. Neither a
+verified payment nor an HTTP response proves that seller-supplied data is true.
+Oracle warnings and unrecognized output
 fields are not forwarded. Storage artifacts contain verified metadata, not the
 file's contents. Resource-specific byte and CPU bounds are rechecked after
 substitution. A literal GitHub `repo` remains supported, but its repository

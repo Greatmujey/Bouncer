@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 /**
- * Owner-reviewed, ordered testnet resource workflow. One verified independent
- * OutLayer result may be passed as opaque, bounded JSON to later compute,
- * storage and text-API inputs. Outputs never select financial authority.
- * This is a local, non-atomic prototype, not a distributed workflow engine.
+ * Owner-reviewed, ordered testnet resource workflow. One paid OutLayer result
+ * or x402 seller response may be passed as bounded JSON to later compute,
+ * storage and text-API inputs. Payment verification does not prove data truth.
+ * Outputs never select financial authority. This is a non-atomic prototype,
+ * not a distributed workflow engine.
  */
 import fs from 'node:fs';
 import os from 'node:os';
@@ -18,6 +19,9 @@ import { reservePreview } from './preflight.mjs';
 import { runOutlayerGoal, recoverOutlayerGoal, validateOutlayerGoal } from './outlayer.mjs';
 import { runOracleGoal, recoverOracleGoal, validateOracleGoal, assertOracleFreshForUse } from './oracle-outlayer.mjs';
 import { runProjectGoal, recoverProjectGoal, validateProjectGoal, expectedBurnChecksum } from './outlayer-project.mjs';
+import { validateOnchainProofGoal } from './onchain-proof.mjs';
+import { validateOnchainProofOutput, validateOnchainProofProjection, assertOnchainProofResponseFresh, runOnchainProofWorkflowSource,
+  recoverOnchainProofWorkflowSource } from './onchain-proof-workflow.mjs';
 import { runResourceAgent, routedResourceProvider } from './resource-agent.mjs';
 import { recoverResourceDelivery } from './recover-direct-payment.mjs';
 import { normalizeOrder, challengeFromOrderMemo, challengeFromOrderMemoV3, startConfiguredProvider } from '../services/resource-provider.mjs';
@@ -81,12 +85,17 @@ function freezeDeep(value) {
 
 /** A strict owner-reviewed manifest; no model/provider can add payment fields. */
 export function validateWorkflow(raw) {
-  if (!keys(raw, ['version', 'id', 'source', 'provider_url', 'steps']) || raw.version !== 1 ||
-      !keys(raw.source, ['kind', 'goal']) || !['random', 'oracle', 'project'].includes(raw.source.kind)) throw new Error('invalid workflow manifest');
+  if (!keys(raw, ['version', 'id', 'source', 'provider_url', 'steps']) || raw.version !== 1 || !plain(raw.source) ||
+      !['random', 'oracle', 'project', 'onchain-proof'].includes(raw.source.kind) ||
+      !(raw.source.kind === 'onchain-proof' ? keys(raw.source, ['kind', 'goal', 'output']) : keys(raw.source, ['kind', 'goal']))) {
+    throw new Error('invalid workflow manifest');
+  }
   const workflowId = id(raw.id, 'workflow id');
   validateProviderOrigin(raw.provider_url);
   const kind = raw.source.kind;
-  const sourceGoal = kind === 'oracle' ? validateOracleGoal(raw.source.goal) : kind === 'project' ? validateProjectGoal(raw.source.goal) : validateOutlayerGoal(raw.source.goal);
+  const sourceGoal = kind === 'oracle' ? validateOracleGoal(raw.source.goal) : kind === 'project' ? validateProjectGoal(raw.source.goal) :
+    kind === 'onchain-proof' ? validateOnchainProofGoal(raw.source.goal) : validateOutlayerGoal(raw.source.goal);
+  const output = kind === 'onchain-proof' ? validateOnchainProofOutput(raw.source.output) : undefined;
   id(sourceGoal.id, 'source id');
   if (!Array.isArray(raw.steps) || !raw.steps.length || raw.steps.length > 10) throw new Error('workflow requires 1 to 10 ordered resource steps');
   const earlier = new Set([sourceGoal.id]);
@@ -115,7 +124,8 @@ export function validateWorkflow(raw) {
     earlier.add(stepId);
     return result;
   });
-  return freezeDeep({ version: 1, id: workflowId, source: { kind, goal: sourceGoal }, provider_url: raw.provider_url, steps });
+  return freezeDeep({ version: 1, id: workflowId, source: { kind, goal: sourceGoal, ...(output === undefined ? {} : { output }) },
+    provider_url: raw.provider_url, steps });
 }
 
 function fingerprint(workflow) { return crypto.createHash('sha256').update(`bouncer-workflow-v1\0${JSON.stringify(workflow)}`).digest('hex'); }
@@ -139,9 +149,10 @@ function inspectPrefix(workflow, journal) {
   if (!journal?.get(workflow.source.goal.id) && entries.some(Boolean)) throw new Error('resource payment exists without the original independent source');
   return entries;
 }
-function projectedSource(kind, goal, delivery) {
-  if (!isTransactionHash(delivery?.tx_hash) || !plain(delivery.result)) throw new Error('independent delivery lacks a valid transaction and result');
+function projectedSource(kind, goal, delivery, output) {
+  if (!isTransactionHash(delivery?.tx_hash) || !plain(delivery.result)) throw new Error('source delivery lacks a valid transaction and result');
   const r = delivery.result;
+  if (kind === 'onchain-proof') return validateOnchainProofProjection(r, output);
   if (kind === 'random') {
     if (!Number.isSafeInteger(r.random_number) || r.random_number < goal.input.min || r.random_number > goal.input.max) throw new Error('invalid independent random result');
     return { random_number: r.random_number };
@@ -199,8 +210,13 @@ export async function previewWorkflowBudget({ workflow, remaining, provider, acc
   // current FT vault a second time. Include that future spend if the source has
   // not run yet and a resource step shares its policy.
   const project = includeSource && workflow.source.kind === 'project' ? goal.route.project : null;
-  const policyReservations = project ? [{ policy_id: project.usd_policy_id, token: project.token, amount: project.attached_usd }] : [];
-  const payments = await reservePreview(provider, plan, checks, summary, { policyReservations });
+  const x402 = includeSource && workflow.source.kind === 'onchain-proof' ? goal : null;
+  const policyReservations = project ? [{ policy_id: project.usd_policy_id, token: project.token, amount: project.attached_usd }] :
+    x402 ? [{ policy_id: x402.policy_id, token: x402.token, amount: x402.max_amount }] : [];
+  // An x402 source is a future vault transfer, not provider-held credit. Use
+  // its owner maximum for both shared daily and shared-token vault previews.
+  const vaultReservations = x402 ? [{ token: x402.token, amount: x402.max_amount }] : [];
+  const payments = await reservePreview(provider, plan, checks, summary, { policyReservations, vaultReservations });
   return { checks, payments };
 }
 
@@ -210,14 +226,21 @@ export async function previewWorkflowBudget({ workflow, remaining, provider, acc
  * or new sends. Every new FT step uses durable signed-hash journaling.
  */
 export async function runWorkflow({ workflow: rawWorkflow, source = {}, resources = {}, provider, journal, execute = false,
-  recoverOnly = false, log = console.log, runners = {} }) {
+  recoverOnly = false, redeemSource = false, log = console.log, runners = {} }) {
   const workflow = validateWorkflow(rawWorkflow), goal = workflow.source.goal, kind = workflow.source.kind;
   if (execute && recoverOnly) throw new Error('execute and recoverOnly cannot be combined');
+  if (typeof redeemSource !== 'boolean' || (redeemSource && (!recoverOnly || kind !== 'onchain-proof'))) {
+    throw new Error('redeemSource is only available for key-free x402 source recovery');
+  }
   if ((execute || recoverOnly) && (!journal || typeof journal.get !== 'function' || typeof journal.put !== 'function')) throw new Error('the original shared journal is required');
   if (journal && (typeof journal.get !== 'function' || typeof journal.put !== 'function')) throw new Error('invalid workflow journal');
   if (resources.beforePayment !== undefined && typeof resources.beforePayment !== 'function') throw new Error('invalid pre-payment guard');
-  const runSource = runners.source ?? (kind === 'oracle' ? runOracleGoal : kind === 'project' ? runProjectGoal : runOutlayerGoal);
-  const recoverSource = runners.recoverSource ?? (kind === 'oracle' ? recoverOracleGoal : kind === 'project' ? recoverProjectGoal : recoverOutlayerGoal);
+  const runSource = runners.source ?? (kind === 'onchain-proof'
+    ? options => runOnchainProofWorkflowSource({ ...options, selection: workflow.source.output, fetchImpl: source.fetchImpl })
+    : kind === 'oracle' ? runOracleGoal : kind === 'project' ? runProjectGoal : runOutlayerGoal);
+  const recoverSource = runners.recoverSource ?? (kind === 'onchain-proof'
+    ? options => recoverOnchainProofWorkflowSource({ ...options, selection: workflow.source.output, redeemSource, fetchImpl: source.fetchImpl })
+    : kind === 'oracle' ? recoverOracleGoal : kind === 'project' ? recoverProjectGoal : recoverOutlayerGoal);
   const runResource = runners.resource ?? runResourceAgent, recoverResource = runners.recoverResource ?? recoverResourceDelivery;
   const budget = runners.budget ?? previewWorkflowBudget;
   if ([runSource, recoverSource, runResource, recoverResource, budget].some(fn => typeof fn !== 'function')) throw new Error('invalid workflow runner');
@@ -230,7 +253,11 @@ export async function runWorkflow({ workflow: rawWorkflow, source = {}, resource
   let independent;
   if (priorSource) {
     independent = await recoverSource({ goal, provider, journal, update: execute || recoverOnly, log });
-    if (independent?.status !== 'REUSED' || !independent.delivery) throw new Error('independent recovery did not verify delivery');
+    if (independent?.status === 'RECOVERY_REQUIRED' && kind === 'onchain-proof') {
+      if (priorCount || record?.status === 'completed') throw new Error('workflow has downstream payments without a delivered x402 source; stop');
+      return { status: 'RECOVERY_REQUIRED', stage: 'source-redemption', independent, new_payments: 0, note: independent.note };
+    }
+    if (independent?.status !== 'REUSED' || !independent.delivery) throw new Error('source recovery did not verify delivery');
   } else {
     independent = await runSource({ goal, provider, account: source.account, publicKey: source.publicKey, execute: false, log });
     if (['BLOCKED', 'FUNDING_REQUIRED'].includes(independent?.status)) return { status: 'BLOCKED', stage: 'source-preflight', independent };
@@ -266,7 +293,7 @@ export async function runWorkflow({ workflow: rawWorkflow, source = {}, resource
   if (sourceRecord?.status !== 'completed' || sourceRecord.tx_hash !== independent.delivery?.tx_hash) {
     throw new Error('independent source was not durably recorded under the recovered transaction hash');
   }
-  const sourceResult = projectedSource(kind, goal, independent.delivery);
+  const sourceResult = projectedSource(kind, goal, independent.delivery, workflow.source.output);
   if (record?.status === 'completed' && record.tx_hash !== independent.delivery.tx_hash) throw new Error('completed workflow source hash differs from recovery evidence');
   const artifacts = new Map([[goal.id, artifact(kind, goal.id, independent.delivery.tx_hash, sourceResult)]]), deliveries = [], challenges = new Set();
   const common = { contractId: goal.contract_id, ownerAccountId: goal.owner_account_id, providerUrl: workflow.provider_url,
@@ -294,18 +321,22 @@ export async function runWorkflow({ workflow: rawWorkflow, source = {}, resource
     if (!Number.isSafeInteger(preview?.payments?.blocked) || preview.payments.blocked < 0) throw new Error('invalid workflow budget preview');
     if (preview.payments.blocked) return { status: 'BLOCKED', stage: 'budget-preview', independent, deliveries, preview };
   }
-  for (const template of remaining) {
-    // A recovered historical oracle can replay past work, but must still be
-    // fresh immediately before a new downstream purchase and after any guard.
+  const checkSourceAge = () => {
     if (kind === 'oracle') assertOracleFreshForUse(independent.delivery);
+    if (kind === 'onchain-proof') assertOnchainProofResponseFresh(independent.delivery, workflow.source.output);
+  };
+  for (const template of remaining) {
+    // Historical evidence can be replayed, but new purchases require a fresh
+    // oracle or a recent local x402 receipt, including immediately before send.
+    checkSourceAge();
     const stage = materializeWorkflowStep(template, artifacts);
     const result = await runResource({ ...common, goals: [stage], getQuote: resources.getQuote, account: resources.account, publicKey: resources.publicKey,
       execute: true, durablePayment: true, beforePayment: async request => {
         checkChallenge(stage, request);
-        if (kind === 'oracle') assertOracleFreshForUse(independent.delivery);
+        checkSourceAge();
         if (resources.beforePayment) await resources.beforePayment(request);
-        if (kind === 'oracle') assertOracleFreshForUse(independent.delivery);
-      }, beforeBroadcast: () => { if (kind === 'oracle') assertOracleFreshForUse(independent.delivery); } });
+        checkSourceAge();
+      }, beforeBroadcast: checkSourceAge });
     if (!result?.payments || !Array.isArray(result.deliveries)) throw new Error(`${stage.id}: invalid resource execution result`);
     if (result.payments.blocked || result.payments.deferred) return { status: 'BLOCKED', stage: stage.id, independent, deliveries, resource: result };
     const delivery = result.deliveries[0], stored = journal.get(stage.id);
@@ -330,6 +361,7 @@ function parseArgs(args) {
     if (arg === '--help') out.help = true;
     else if (arg === '--execute') out.execute = true;
     else if (arg === '--recover-only') out.recoverOnly = true;
+    else if (arg === '--redeem-source') out.redeemSource = true;
     else if (['--workflow', '--source-key', '--ft-key', '--journal', '--rpc', '--local-provider'].includes(arg) && args[i + 1] && !args[i + 1].startsWith('--')) {
       const name = arg.slice(2); if (out[name]) throw new Error(`duplicate ${arg}`); out[name] = args[++i];
     } else throw new Error(`unknown or incomplete argument: ${arg}`);
@@ -345,11 +377,12 @@ function accountFromFile(file, owner, provider) {
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   if (options.help) {
-    console.log('Usage: node bouncer/agent/workflow.mjs --workflow FILE --journal FILE [--source-key KEY --ft-key KEY] [--rpc URL] [--local-provider CONFIG] [--execute | --recover-only]');
+    console.log('Usage: node bouncer/agent/workflow.mjs --workflow FILE --journal FILE [--source-key KEY --ft-key KEY] [--rpc URL] [--local-provider CONFIG] [--execute | --recover-only [--redeem-source]]');
     console.log('Dry run by default. --execute spends testnet funds; --recover-only uses the original journal without keys or new payments. No real funds.');
-    console.log('A source key is required only for a new independent source; an FT key is required to resume unpaid resource steps.'); return;
+    console.log('--redeem-source explicitly permits the first, previously unattempted paid x402 seller request; never retries an attempted request.');
+    console.log('A source key is required only for a new source; an FT key is required to resume unpaid resource steps.'); return;
   }
-  if (!options.workflow || !options.journal || (options.execute && options.recoverOnly) ||
+  if (!options.workflow || !options.journal || (options.execute && options.recoverOnly) || (options.redeemSource && !options.recoverOnly) ||
       (options.recoverOnly && (options['source-key'] || options['ft-key'])) || (!options.recoverOnly && !options['ft-key'])) {
     throw new Error('provide --workflow and --journal; supply --ft-key except with --recover-only without keys or --execute; see --help');
   }
@@ -376,7 +409,7 @@ async function main() {
     }
     const client = routedResourceProvider({ providerUrl: workflow.provider_url, goals: workflow.steps, overrides });
     const result = await runWorkflow({ workflow, source, resources: { ...ft, ...client }, provider, journal,
-      execute: !!options.execute, recoverOnly: !!options.recoverOnly });
+      execute: !!options.execute, recoverOnly: !!options.recoverOnly, redeemSource: !!options.redeemSource });
     console.log(`[workflow] ${result.status}${result.stage ? ` at ${result.stage}` : ''}; journal ${state}; ${result.note ?? 'no automatic repayment'}`);
     for (const check of result.preview?.checks ?? []) console.log(`[workflow] ${check.status} ${check.id}${check.reason ? `: ${check.reason}` : ''}`);
     if (result.deliveries) console.log(`[workflow] Verified resource steps: ${result.deliveries.map(item => item.id).join(', ') || 'none'}`);

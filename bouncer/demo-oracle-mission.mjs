@@ -99,11 +99,12 @@ function notice(title, data) {
 
 async function main() {
   const args = process.argv.slice(2);
-  if (args.length > 1 || (args.length === 1 && !['--dependent-workflow', '--seller-v2-workflow', '--seller-v3-workflow'].includes(args[0]))) {
-    throw new Error('optional argument: --dependent-workflow, --seller-v2-workflow or --seller-v3-workflow');
+  if (args.length > 1 || (args.length === 1 && !['--dependent-workflow', '--seller-v2-workflow', '--seller-v3-workflow', '--seller-v3-fresh'].includes(args[0]))) {
+    throw new Error('optional argument: --dependent-workflow, --seller-v2-workflow, --seller-v3-workflow or --seller-v3-fresh');
   }
   const sellerV2 = args[0] === '--seller-v2-workflow';
-  const sellerV3 = args[0] === '--seller-v3-workflow';
+  const sellerV3Fresh = args[0] === '--seller-v3-fresh';
+  const sellerV3 = args[0] === '--seller-v3-workflow' || sellerV3Fresh;
   const dependent = sellerV2 || sellerV3 || args[0] === '--dependent-workflow';
   if ((await provider.viewNodeStatus())?.chain_id !== 'testnet') throw new Error('RPC must report testnet');
   const meta = await view(TOKEN, 'ft_metadata');
@@ -140,7 +141,8 @@ async function main() {
   // purchase. The swap and vault funding are each sent once, never retried.
   for (const [token, id] of [[WRAP, ownerId], [TOKEN, ownerId], [TOKEN, contractId], [TOKEN, vendorId]]) await register(owner, token, id);
   await call(owner, WRAP, 'near_deposit', {}, OWNER_SETUP_INPUT, 50n * TGAS);
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), sellerV3 ? 'bouncer-seller-v3-live-' : sellerV2 ? 'bouncer-seller-v2-live-' : dependent ? 'bouncer-dependent-live-' : 'bouncer-oracle-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), sellerV3Fresh ? 'bouncer-seller-v3-fresh-' : sellerV3 ? 'bouncer-seller-v3-live-' :
+    sellerV2 ? 'bouncer-seller-v2-live-' : dependent ? 'bouncer-dependent-live-' : 'bouncer-oracle-'));
   const setupJournal = new FileJournal(path.join(dir, 'setup-journal.json'), contractId, ownerId);
   let swap, funding;
   try {
@@ -228,28 +230,30 @@ async function main() {
         fulfill: (order, context) => client.fulfill(order, context),
         readStorage: (objectId, context) => client.readStorage(objectId, context),
       };
+      const recoverWithCli = async ({ hash, next }) => {
+        // Stop both exclusive owners before launching a completely separate
+        // CLI process, with no key files or signer arguments. It may only
+        // reconcile the original hash; it cannot send another transaction.
+        await service.close(); service = undefined;
+        journal.close(); journal = undefined;
+        let recovered = false;
+        try {
+          const cli = await util.promisify(execFile)(process.execPath, [path.join(ROOT, 'bouncer/agent/workflow.mjs'),
+            '--workflow', workflowPath, '--journal', state, '--rpc', RPC, '--local-provider', configPath, '--recover-only'],
+          { timeout: 120_000, maxBuffer: 128 * 1024, env: { ...process.env, NEAR_TESTNET_RPC: RPC } });
+          if (!cli.stdout.includes('[workflow] RECOVERED') || !cli.stdout.includes(`Next unpaid step: ${next}`) ||
+              !cli.stdout.includes(hash)) throw new Error('key-free workflow CLI did not recover the recorded hash');
+          console.log(cli.stdout.trim()); recovered = true;
+        } finally {
+          journal = new FileJournal(state, contractId, ownerId);
+          if (recovered) await startService();
+        }
+        return { status: 'RECOVERED', next, new_payments: 0 };
+      };
       const proof = await runDependentLiveProof({ workflow, provider, source: { account: oracleAgent, publicKey: oracleKey.getPublicKey() },
         resources, getJournal: () => journal, log: console.log,
-        recoverWithoutKeys: async ({ firstHash }) => {
-          // Stop both exclusive owners before launching a completely separate
-          // CLI process, with no key files or signer arguments. The process
-          // restarts the same local provider state at an ephemeral port.
-          await service.close(); service = undefined;
-          journal.close(); journal = undefined;
-          let recovered = false;
-          try {
-            const cli = await util.promisify(execFile)(process.execPath, [path.join(ROOT, 'bouncer/agent/workflow.mjs'),
-              '--workflow', workflowPath, '--journal', state, '--rpc', RPC, '--local-provider', configPath, '--recover-only'],
-            { timeout: 120_000, maxBuffer: 128 * 1024, env: { ...process.env, NEAR_TESTNET_RPC: RPC } });
-            if (!cli.stdout.includes('[workflow] RECOVERED') || !cli.stdout.includes('Next unpaid step: dependent-storage') ||
-                !cli.stdout.includes(firstHash)) throw new Error('key-free workflow CLI did not recover the recorded hash');
-            console.log(cli.stdout.trim()); recovered = true;
-          } finally {
-            journal = new FileJournal(state, contractId, ownerId);
-            if (recovered) await startService();
-          }
-          return { status: 'RECOVERED', next: 'dependent-storage', new_payments: 0 };
-        } });
+        ...(sellerV3Fresh ? { recoverSourceWithoutKeys: ({ sourceHash }) => recoverWithCli({ hash: sourceHash, next: 'dependent-compute' }) } : {}),
+        recoverWithoutKeys: ({ firstHash }) => recoverWithCli({ hash: firstHash, next: 'dependent-storage' }) });
       const sellerState = sellerV2 || sellerV3 ? JSON.parse(fs.readFileSync(path.join(config.data_dir, 'redemptions.json'), 'utf8')) : undefined;
       const sellerClaims = sellerV3 ? verifySellerV3ProofState({ workflow, proof, journal, state: sellerState })
         : sellerV2 ? verifySellerV2ProofState({ workflow, proof, journal, state: sellerState }) : undefined;
@@ -271,6 +275,7 @@ async function main() {
         owner_vault_funding: funding.transaction_outcome.id, micro_usdc_per_resource: PRICE.toString(),
         workflow: 'verified oracle -> compute -> storage -> api', exact_data_dependencies_checked: true,
         source_broadcasts: proof.sourceBroadcasts, resource_broadcasts: proof.resourceBroadcasts,
+        source_response_recovered_with_key_free_cli: proof.sourceRecovered,
         lost_ft_response_recovered_with_key_free_cli: true, first_ft_hash_reused: true,
         order_binding: sellerV3 ? 'seller-v3' : sellerV2 ? 'seller-v2' : 'legacy-v1', resource_memos: proof.quoteMemos,
         ...(sellerClaims ? { persisted_seller_claims: sellerClaims } : {}),

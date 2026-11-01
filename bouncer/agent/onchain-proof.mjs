@@ -51,7 +51,7 @@ function safeText(value, label, max) {
   if (typeof value !== 'string' || !value || Buffer.byteLength(value) > max || /[\x00-\x1f\x7f]/.test(value)) throw new Error(`invalid ${label}`);
   return value;
 }
-function resourceUrl(value) {
+export function validateOnchainProofResourceUrl(value) {
   safeText(value, 'resource URL', 2048);
   let url;
   try { url = new URL(value); } catch { throw new Error('invalid resource URL'); }
@@ -76,7 +76,7 @@ export function validateOnchainProofGoal(input) {
   // testnet contract; generic NEP-141 implementations need separate review.
   if (input.token !== CIRCLE_TESTNET_USDC) throw new Error('onchain-proof v1 supports only Circle NEAR testnet USDC');
   positive(input.max_amount, 'maximum amount');
-  const url = resourceUrl(input.resource_url);
+  const url = validateOnchainProofResourceUrl(input.resource_url);
   if (!Number.isSafeInteger(input.max_quote_age_seconds) || input.max_quote_age_seconds < 1 || input.max_quote_age_seconds > 600) {
     throw new Error('quote age must be 1–600 seconds');
   }
@@ -272,21 +272,24 @@ export async function runOnchainProofGoal({ goal: rawGoal, provider, account, pu
 }
 
 /** Only reads FINAL receipts by the original hash. Never contacts the seller. */
-export async function recoverOnchainProofGoal({ goal: rawGoal, provider, journal, log = console.log }) {
+export async function recoverOnchainProofGoal({ goal: rawGoal, provider, journal, update = true, log = console.log }) {
   const goal = validateOnchainProofGoal(rawGoal);
+  if (typeof update !== 'boolean') throw new Error('invalid reconciliation mode');
   requireJournal(journal);
   const entry = journal.get(goal.id), { request } = validateEntry(goal, entry);
   if ((await provider.viewNodeStatus())?.chain_id !== 'testnet') throw new Error('RPC must report testnet');
   const result = await provider.txStatusReceipts(entry.tx_hash, goal.owner_account_id, 'FINAL');
   const settlement = verifyOnchainProofSettlement({ result, goal, request, publicKey: entry.agent_public_key, txHash: entry.tx_hash });
   if (entry.status === 'completed' && !eq(entry.settlement, settlement)) throw new Error('recorded settlement differs from chain');
-  if (entry.status === 'pending') {
+  if (entry.status === 'pending' && update) {
     // Do not overwrite an entry that changed while waiting for RPC.
     const current = journal.get(goal.id);
     if (!eq(current, entry)) throw new Error('journal changed during reconciliation; stop');
     journal.put(goal.id, { ...entry, status: 'completed', settlement, completed_at: new Date().toISOString() });
   }
-  const current = journal.get(goal.id), response = delivered(current);
+  const current = journal.get(goal.id);
+  if (!update && !eq(current, entry)) throw new Error('journal changed during read-only reconciliation; stop');
+  const response = delivered(current);
   log(`[onchain-proof] RECONCILED ${goal.id}: ${entry.tx_hash}; no payment or seller request`);
   return { status: 'RECONCILED', settlement, redemption_status: current.redemption.status, ...(response ? { response } : {}) };
 }

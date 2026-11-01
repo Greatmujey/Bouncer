@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "id": "x402-data-workflow",
+  "source": {
+    "kind": "onchain-proof",
+    "goal": {
+      "version": 1,
+      "id": "data",
+      "contract_id": "bouncer.example.testnet",
+      "owner_account_id": "owner.example.testnet",
+      "policy_id": "external-api",
+      "token": "3e2210e1184b45b64c8a434c0a7e7b23cc04ea7eb7a6c3c32520d03d4afcb8af",
+      "payee": "api-provider.example.testnet",
+      "max_amount": "1000",
+      "resource_url": "https://x402-seller.example/data",
+      "max_quote_age_seconds": 120,
+      "accept_public_proof_risk": false,
+      "accept_unbound_resource_risk": false
+    },
+    "output": {
+      "path": ["data", "value"],
+      "type": "number",
+      "max_age_seconds": 300,
+      "accept_untrusted_data_risk": false
+    }
+  },
+  "provider_url": "https://resource-seller.example",
+  "steps": [
+    {
+      "id": "compute",
+      "resource": "compute",
+      "policy_id": "resources",
+      "token": "3e2210e1184b45b64c8a434c0a7e7b23cc04ea7eb7a6c3c32520d03d4afcb8af",
+      "payee": "resource-provider.example.testnet",
+      "max_amount": "1000",
+      "order_binding": "seller-v3",
+      "input": { "text": { "from": "data" }, "rounds": 25 }
+    },
+    {
+      "id": "storage",
+      "resource": "storage",
+      "policy_id": "resources",
+      "token": "3e2210e1184b45b64c8a434c0a7e7b23cc04ea7eb7a6c3c32520d03d4afcb8af",
+      "payee": "resource-provider.example.testnet",
+      "max_amount": "1000",
+      "order_binding": "seller-v3",
+      "input": { "name": "x402-report", "content": { "from": "compute" } }
+    },
+    {
+      "id": "api",
+      "resource": "api",
+      "policy_id": "resources",
+      "token": "3e2210e1184b45b64c8a434c0a7e7b23cc04ea7eb7a6c3c32520d03d4afcb8af",
+      "payee": "resource-provider.example.testnet",
+      "max_amount": "1000",
+      "order_binding": "seller-v3",
+      "input": { "text": { "from": "storage" } }
+    }
+  ]
+}

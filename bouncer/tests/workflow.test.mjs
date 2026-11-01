@@ -516,6 +516,42 @@ test('dependent live-proof harness verifies chained artifacts and hash-only reco
   assert.deepEqual(proof.quoted.map(o => o.resource), ['compute', 'storage', 'api']);
 }));
 
+test('dependent proof reconciles one lost source response by the original hash, without a second source send', () => withFixture(async f => {
+  const workflow = makeOracleDependentWorkflow({ goal: f.workflow.source.goal, token, payee, policyId: 'resources',
+    price: '100', providerUrl: f.workflow.provider_url });
+  const oracle = attachSyntheticOracle({ provider: f.provider, goal: workflow.source.goal, journal: f.journal,
+    events: f.events, workflowId: workflow.id, ambiguous: true });
+  let sourceRecoveries = 0;
+  const noKeys = { fulfill: f.resources.fulfill, readStorage: f.resources.readStorage };
+  const recover = async () => {
+    f.reopen();
+    return runWorkflow({ workflow, provider: f.provider, source: {}, resources: noKeys, journal: f.journal, recoverOnly: true });
+  };
+  const proof = await runDependentLiveProof({ workflow, provider: f.provider,
+    source: { account: oracle.account, publicKey: oracle.publicKey }, resources: f.resources, getJournal: () => f.journal,
+    recoverSourceWithoutKeys: async ({ sourceHash }) => {
+      sourceRecoveries++; assert.equal(sourceHash, oracle.hash); assert.equal(f.sends, 0);
+      return recover();
+    }, recoverWithoutKeys: recover });
+  assert.equal(proof.sourceRecovered, true); assert.equal(sourceRecoveries, 1); assert.equal(oracle.sends, 1);
+  assert.equal(f.sends, 3); assert.equal(proof.sourceHash, oracle.hash);
+}));
+
+test('failed source reconciliation never resubmits or starts downstream payments', () => withFixture(async f => {
+  const workflow = makeOracleDependentWorkflow({ goal: f.workflow.source.goal, token, payee, policyId: 'resources',
+    price: '100', providerUrl: f.workflow.provider_url });
+  const oracle = attachSyntheticOracle({ provider: f.provider, goal: workflow.source.goal, journal: f.journal,
+    events: f.events, workflowId: workflow.id, ambiguous: true });
+  let reads = 0;
+  await assert.rejects(runDependentLiveProof({ workflow, provider: f.provider,
+    source: { account: oracle.account, publicKey: oracle.publicKey }, resources: f.resources, getJournal: () => f.journal,
+    recoverSourceWithoutKeys: async ({ sourceHash }) => { reads++; assert.equal(sourceHash, oracle.hash); throw new Error('FINAL receipt unavailable'); },
+    recoverWithoutKeys: async () => { throw new Error('must not recover a nonexistent resource'); } }), /FINAL receipt unavailable/);
+  assert.equal(reads, 1); assert.equal(oracle.sends, 1); assert.equal(f.sends, 0);
+  assert.equal(f.journal.get(workflow.source.goal.id).status, 'pending');
+  assert.ok(workflow.steps.every(step => !f.journal.get(step.id)));
+}));
+
 test('dependent proof stops after recovery failure, leaving the first hash pending and never paying later stages', () => withFixture(async f => {
   const workflow = makeOracleDependentWorkflow({ goal: f.workflow.source.goal, token, payee, policyId: 'resources',
     price: '100', providerUrl: f.workflow.provider_url });

@@ -14,6 +14,7 @@ that agent.
 | Native NEAR to independently operated OutLayer | The [dependent workflow](DEPENDENT_WORKFLOWS.md) used a single-source price result in later compute, storage and API orders. | Native payment, not Circle USDC. The oracle is not a guarantee of market truth or authenticated freshness. |
 | Circle testnet USDC to Bouncer's development seller | A [seller-v2 run](DEPENDENT_WORKFLOWS.md) verified three FINAL guarded transfers and one key-free lost-response recovery. | Seller and resources were self-hosted; storage readback is not a future-availability guarantee. |
 | Circle testnet USDC to a PipRail SDK gate | A [fresh testnet run](ONCHAIN_PROOF.md#evidence-and-limitations) obtained a quote, sent one guarded payment, recovered it, and obtained a response verified by the published SDK. | The gate was local and self-hosted; testnet support used our wrapper. It is custom `onchain-proof`, not x402 `exact`. |
+| x402 source → three dependent resources | [Synthetic tests](DEPENDENT_WORKFLOWS.md#paid-x402-data-as-a-workflow-source-experimental) compose the published PipRail verifier with seller-v3 compute, storage, API and recovery. | No live combined workflow or independent FT seller; x402 content and public proof remain untrusted. |
 | Authenticated Bouncer seller-v3 | [Offline tests](SELLER_V3.md) exercise signed claims, three resources, seller restart and key-free workflow recovery. | This is a custom testnet protocol with a self-hosted seller, not independent adoption. Claim signatures remain bearer credentials. |
 | Owner-only Ref testnet setup | Owner acquired test tokens and separately funded the vault in the live runs. | This is **not** an agent-guarded swap. Plain outgoing Ref `ft_transfer` does not call Bouncer's deposit hook. |
 
@@ -31,7 +32,11 @@ with that SDK/configuration, not adoption by someone else.
    Verify with the operator that a current testnet service is actually willing
    to issue offers and fulfill orders, which token/network and cap it accepts,
    and whether its verifier accepts Bouncer's *nested* token transfer. Do not
-   pay an endpoint whose operator has disabled deposits. Keep discovery
+   pay an endpoint whose operator has disabled deposits. The [single-URL
+   inspector](ONCHAIN_PROOF.md#inspecting-a-possible-independent-seller) makes
+   one unauthenticated GET and classifies wire offers without paying. On 1
+   November 2026 the independent PipRail demo advertised Base mainnet rather
+   than NEAR testnet; it is not a candidate for this buyer. Keep discovery
    read-only; the owner approves the exact endpoint, payee, token, policy,
    maximum price and data to disclose.
 2. **Choose the protocol by its real settlement semantics.** PipRail

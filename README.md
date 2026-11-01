@@ -73,7 +73,7 @@ for the independent-seller gap, experimental authentication and outstanding swap
 | Track | Evidence today | Still needed |
 | --- | --- | --- |
 | AI Security & Defense | 1-yocto guard, scoped keys, caps, pinned project/input and delivery gating. | Independent audit and stronger prompt defenses. |
-| Agent Economy | Native-paid independent price execution feeds three FT-paid development resources; x402 compatibility and an authenticated seller-v3 protocol have self-hosted tests. | Independent FT-paid commercial API/storage providers, audited authentication and signed receipts. |
+| Agent Economy | Native-paid independent price execution feeds three FT-paid development resources; x402 compatibility and authenticated seller-v3 have self-hosted tests. A new [synthetic x402-to-resources workflow](bouncer/docs/DEPENDENT_WORKFLOWS.md#paid-x402-data-as-a-workflow-source-experimental) composes both. | Independent FT-paid commercial API/storage providers, live combined x402 workflow, audited authentication and signed receipts. |
 | Autonomous Business | AI planning in a separate run; multi-resource payments, delivery checks and recovery. | Real customers, invoicing and production operations. |
 | Real-World Money | Circle testnet USDC paid for three self-hosted resources; fake USDC.e funded a separate probe. | Independent providers and real-money rails; testnet USDC has no real value. |
 | Unstoppable DeFi | Owner-setup Ref testnet swaps acquired test tokens, including Circle testnet USDC. | Agent-guarded swaps with safe output accounting and cross-chain settlement. |

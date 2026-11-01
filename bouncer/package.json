@@ -11,6 +11,7 @@
     "agent": "node agent/procurement.mjs",
     "recover-direct": "node agent/recover-direct-payment.mjs",
     "onchain-proof": "node agent/onchain-proof.mjs",
+    "inspect-x402": "node agent/inspect-x402.mjs",
     "outlayer": "node agent/outlayer.mjs",
     "oracle": "node agent/oracle-outlayer.mjs",
     "ft-call": "node agent/ft-call.mjs",
