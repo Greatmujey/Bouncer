@@ -527,7 +527,10 @@ original hash remains pending. PostgreSQL/process tests use **synthetic** receip
 no live shared-database payment has been made. It requires one properly fenced,
 durable primary and stable mission IDs; file journals, different fresh missions,
 FT-call, x402, OutLayer and mixed/dependent workflows are not covered. The fence
-is conservative serialization, not a distributed nonce allocator.
+is conservative serialization, not a distributed nonce allocator. Bounded
+journals can [rotate their encryption key](bouncer/docs/SHARED_BUYER.md#rotate-an-existing-journal-encryption-key)
+atomically without deleting pending payments; leaked bearer claims and old backups
+are not revoked by re-encryption.
 
 ### Delivery checks and local receipts
 

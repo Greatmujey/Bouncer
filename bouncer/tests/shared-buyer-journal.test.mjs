@@ -936,3 +936,240 @@ dbtest('lost verified-delivery COMMIT acknowledgment never rolls back the confir
     assert.equal(checked.settlement.tx_hash, entry.tx_hash); assert.equal(runtime.sends, 1); assert.equal(deliveries, 1);
   } finally { await f.cleanup(); }
 });
+
+dbtest('atomic buyer key rotation preserves completed and pending payments and their owner quarantine', async () => {
+  const f = await fixture(), next = crypto.randomBytes(32), runtime = syntheticRuntime(f.journal, { loseSend: false });
+  try {
+    await runtime.run();
+    const pending = await pendingEntry({ requestId: 'z-pending' });
+    await reserveSynthetic(f.journal, 'z-pending', pending);
+    const original = f.journal.list();
+    assert.equal(original.find(item => item.id === 'work').status, 'completed');
+    assert.equal(original.find(item => item.id === 'z-pending').status, 'pending');
+    const before = await f.pool.query(`SELECT entry_id, status, tx_hash, challenge, revision, nonce, ciphertext, tag
+      FROM bouncer_buyer_v1.entries WHERE journal_id=$1 ORDER BY entry_id`, [f.journalId]);
+    await assert.rejects(f.journal.rotateEncryptionKey(f.key), /must differ/);
+    assert.deepEqual(await f.journal.rotateEncryptionKey(next), { rotated_entries: 2 });
+    assert.deepEqual(f.journal.list(), original); assert.equal(runtime.sends, 1);
+    const after = await f.pool.query(`SELECT entry_id, status, tx_hash, challenge, revision, nonce, ciphertext, tag
+      FROM bouncer_buyer_v1.entries WHERE journal_id=$1 ORDER BY entry_id`, [f.journalId]);
+    for (let i = 0; i < before.rows.length; i++) {
+      const a = before.rows[i], b = after.rows[i];
+      for (const field of ['entry_id', 'status', 'tx_hash', 'challenge', 'revision']) assert.deepEqual(b[field], a[field]);
+      assert.notDeepEqual(b.nonce, a.nonce); assert.notDeepEqual(b.ciphertext, a.ciphertext); assert.notDeepEqual(b.tag, a.tag);
+    }
+    assert.ok(!JSON.stringify(after.rows).includes(pending.resource_authorization.signature));
+    await f.journal.close();
+    await assert.rejects(f.open(), error => error.code === 'KEY_MISMATCH');
+    const reopened = await f.open({ key: next });
+    assert.deepEqual(reopened.list(), original);
+    await assert.rejects(reopened.withOwnerFence(async () => {}), error => error.code === 'OWNER_UNRESOLVED');
+    assert.equal(runtime.sends, 1);
+  } finally { next.fill(0); await f.cleanup(); }
+});
+
+dbtest('uncertain rotation COMMIT preserves exactly the old or new key and never changes a pending hash', async () => {
+  for (const afterCommit of [false, true]) {
+    const f = await fixture(), next = crypto.randomBytes(32); let journal;
+    try {
+      const pending = await pendingEntry(); await reserveSynthetic(f.journal, 'work', pending); await f.journal.close();
+      const broken = faultPool(f.pool, 'UPDATE bouncer_buyer_v1.journals SET key_check', afterCommit);
+      journal = await openPostgresBuyerJournal({ pool: broken, contractId: contract, ownerAccountId: owner, journalId: f.journalId, key: f.key });
+      broken.enable();
+      await assert.rejects(journal.rotateEncryptionKey(next), error => error.code === 'ROTATION_UNCERTAIN' &&
+        /preserve BOTH keys/.test(error.message) && !error.message.includes('secret-value'));
+      assert.equal(broken.fired, true); assert.throws(() => journal.list(), /journal failed/); await journal.close();
+      const winningKey = afterCommit ? next : f.key, losingKey = afterCommit ? f.key : next;
+      await assert.rejects(f.open({ key: losingKey }), error => error.code === 'KEY_MISMATCH');
+      const reopened = await f.open({ key: winningKey });
+      assert.equal(reopened.get('work').tx_hash, pending.tx_hash); assert.equal(reopened.get('work').status, 'pending');
+      await assert.rejects(reopened.withOwnerFence(async () => {}), error => error.code === 'OWNER_UNRESOLVED');
+    } finally { if (journal) await journal.close(); next.fill(0); await f.cleanup(); }
+  }
+});
+
+dbtest('tampering during key rotation rolls back already re-encrypted rows and fails closed', async () => {
+  const f = await fixture(), next = crypto.randomBytes(32), runtime = syntheticRuntime(f.journal, { loseSend: false });
+  try {
+    await runtime.run(); await reserveSynthetic(f.journal, 'z-pending', await pendingEntry({ requestId: 'z-pending' }));
+    const before = await f.pool.query(`SELECT entry_id, ciphertext FROM bouncer_buyer_v1.entries WHERE journal_id=$1 ORDER BY entry_id`, [f.journalId]);
+    const keyBefore = (await f.pool.query('SELECT key_check FROM bouncer_buyer_v1.journals WHERE journal_id=$1', [f.journalId])).rows[0].key_check;
+    const corrupted = Buffer.from(before.rows[1].ciphertext); corrupted[0] ^= 1;
+    await f.pool.query('UPDATE bouncer_buyer_v1.entries SET ciphertext=$3 WHERE journal_id=$1 AND entry_id=$2', [f.journalId, 'z-pending', corrupted]);
+    await assert.rejects(f.journal.rotateEncryptionKey(next), error => error.code === 'CORRUPT');
+    assert.throws(() => f.journal.list(), /journal failed/); await f.journal.close();
+    const after = await f.pool.query('SELECT entry_id, ciphertext FROM bouncer_buyer_v1.entries WHERE journal_id=$1 ORDER BY entry_id', [f.journalId]);
+    assert.deepEqual(after.rows[0].ciphertext, before.rows[0].ciphertext);
+    assert.deepEqual(after.rows[1].ciphertext, corrupted);
+    assert.deepEqual((await f.pool.query('SELECT key_check FROM bouncer_buyer_v1.journals WHERE journal_id=$1', [f.journalId])).rows[0].key_check, keyBefore);
+    await assert.rejects(f.open({ key: next }), error => error.code === 'KEY_MISMATCH');
+    await f.pool.query('UPDATE bouncer_buyer_v1.entries SET ciphertext=$3 WHERE journal_id=$1 AND entry_id=$2', [f.journalId, 'z-pending', before.rows[1].ciphertext]);
+    const recovered = await f.open(); assert.equal(recovered.get('work').status, 'completed'); assert.equal(recovered.get('z-pending').status, 'pending');
+    assert.equal(runtime.sends, 1);
+  } finally { next.fill(0); await f.cleanup(); }
+});
+
+dbtest('rotation excludes active payments, other journal sessions and overlapping rotation', async () => {
+  const f = await fixture(), next = crypto.randomBytes(32); let journal, releaseUpdate;
+  try {
+    let enteredFence, releaseFence;
+    const inFence = new Promise(resolve => { enteredFence = resolve; }), fenceGate = new Promise(resolve => { releaseFence = resolve; });
+    const payment = f.journal.withOwnerFence(async () => { enteredFence(); await fenceGate; });
+    await inFence; await assert.rejects(f.journal.rotateEncryptionKey(next), error => error.code === 'BUSY');
+    releaseFence(); await payment;
+    await reserveSynthetic(f.journal, 'work', await pendingEntry()); await f.journal.close();
+    let enabled = false, notifyUpdate;
+    const updating = new Promise(resolve => { notifyUpdate = resolve; }), updateGate = new Promise(resolve => { releaseUpdate = resolve; });
+    const blocked = { async connect() {
+      const c = await f.pool.connect();
+      return { on: c.on.bind(c), removeListener: c.removeListener.bind(c), release: c.release.bind(c), async query(sql, args) {
+        if (enabled && typeof sql === 'string' && sql.includes('UPDATE bouncer_buyer_v1.entries SET nonce')) {
+          enabled = false; notifyUpdate(); await updateGate;
+        }
+        return c.query(sql, args);
+      } };
+    } };
+    journal = await openPostgresBuyerJournal({ pool: blocked, contractId: contract, ownerAccountId: owner, journalId: f.journalId, key: f.key });
+    enabled = true; const rotating = journal.rotateEncryptionKey(next); await updating;
+    await assert.rejects(journal.withOwnerFence(async () => {}), error => error.code === 'BUSY');
+    await assert.rejects(journal.rotateEncryptionKey(crypto.randomBytes(32)), error => error.code === 'BUSY');
+    await assert.rejects(f.open(), error => error.code === 'BUSY');
+    releaseUpdate(); releaseUpdate = null; assert.deepEqual(await rotating, { rotated_entries: 1 });
+    await journal.close(); const reopened = await f.open({ key: next }); assert.equal(reopened.get('work').status, 'pending');
+  } finally { if (releaseUpdate) releaseUpdate(); if (journal) await journal.close(); next.fill(0); await f.cleanup(); }
+});
+
+dbtest('a restricted rotation role can rewrite only key material, not delete payments or alter their status', async () => {
+  const f = await fixture(), next = crypto.randomBytes(32), client = await f.pool.connect();
+  const role = `bouncer_buyer_rotate_${crypto.randomBytes(5).toString('hex')}`; let created = false, journal;
+  try {
+    await reserveSynthetic(f.journal, 'work', await pendingEntry()); await f.journal.close();
+    await client.query(`CREATE ROLE ${role} NOLOGIN`); created = true;
+    await client.query(`GRANT USAGE ON SCHEMA bouncer_buyer_v1 TO ${role}`);
+    await client.query(`GRANT SELECT ON bouncer_buyer_v1.meta, bouncer_buyer_v1.journals, bouncer_buyer_v1.entries TO ${role}`);
+    await client.query(`GRANT UPDATE (key_check) ON bouncer_buyer_v1.journals TO ${role}`);
+    await client.query(`GRANT UPDATE (nonce, tag, ciphertext) ON bouncer_buyer_v1.entries TO ${role}`);
+    await client.query(`SET ROLE ${role}`);
+    const restricted = { async connect() { return { query: client.query.bind(client), on: client.on.bind(client),
+      removeListener: client.removeListener.bind(client), release() {} }; } };
+    journal = await openPostgresBuyerJournal({ pool: restricted, contractId: contract, ownerAccountId: owner, journalId: f.journalId, key: f.key });
+    assert.deepEqual(await journal.rotateEncryptionKey(next), { rotated_entries: 1 });
+    await assert.rejects(client.query(`UPDATE bouncer_buyer_v1.entries SET status='completed' WHERE journal_id=$1`, [f.journalId]), /permission denied/);
+    await assert.rejects(client.query('DELETE FROM bouncer_buyer_v1.entries WHERE journal_id=$1', [f.journalId]), /permission denied/);
+    await journal.close(); journal = null;
+    await client.query('RESET ROLE'); const reopened = await f.open({ key: next }); assert.equal(reopened.get('work').status, 'pending');
+  } finally {
+    if (journal) await journal.close(); await client.query('RESET ROLE');
+    if (created) { await client.query(`DROP OWNED BY ${role}`); await client.query(`DROP ROLE ${role}`); }
+    client.release(); next.fill(0); await f.cleanup();
+  }
+});
+
+dbtest('rotation CLI checks both protected key files and can recover the current key without signing', async () => {
+  const f = await fixture(), next = crypto.randomBytes(32), root = fs.mkdtempSync(path.join(os.tmpdir(), 'bouncer-buyer-rotation-'));
+  try {
+    await reserveSynthetic(f.journal, 'work', await pendingEntry()); await f.journal.close();
+    const oldPath = path.join(root, 'old.key'), nextPath = path.join(root, 'next.key');
+    fs.writeFileSync(oldPath, f.key, { mode: 0o600 }); fs.writeFileSync(nextPath, next, { mode: 0o600 });
+    const env = { BOUNCER_BUYER_DATABASE_URL: databaseUrl, BOUNCER_BUYER_JOURNAL_KEY_FILE: oldPath,
+      BOUNCER_BUYER_NEW_JOURNAL_KEY_FILE: nextPath };
+    const args = ['--contract', contract, '--owner', owner, '--journal', f.journalId];
+    let result = await runCli('scripts/rotate-shared-buyer-key.mjs', [...args, '--check'], env);
+    assert.equal(result.code, 0, result.stderr); assert.equal(JSON.parse(result.stdout).matching_key, 'original');
+    result = await runCli('scripts/rotate-shared-buyer-key.mjs', [...args, '--confirm-rotate'], env);
+    assert.equal(result.code, 0, result.stderr); assert.equal(JSON.parse(result.stdout).rotated_entries, 1);
+    result = await runCli('scripts/rotate-shared-buyer-key.mjs', [...args, '--check'], env);
+    assert.equal(result.code, 0, result.stderr); assert.equal(JSON.parse(result.stdout).matching_key, 'new');
+    assert.ok(fs.existsSync(oldPath) && fs.existsSync(nextPath));
+    assert.ok(!result.stdout.includes(f.key.toString('hex')) && !result.stdout.includes(next.toString('hex')));
+    const reopened = await f.open({ key: next }); assert.equal(reopened.get('work').status, 'pending');
+  } finally { next.fill(0); await f.cleanup(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+dbtest('SIGKILL during staged key rotation rolls back the transaction and preserves the pending hash', async () => {
+  const f = await fixture(), next = crypto.randomBytes(32); let child;
+  try {
+    const pending = await pendingEntry(); await reserveSynthetic(f.journal, 'work', pending); await f.journal.close();
+    child = fork(fileURLToPath(new URL('./fixtures/rotate-buyer-worker.mjs', import.meta.url)), [], {
+      env: { ...process.env, BOUNCER_TEST_POSTGRES_URL: databaseUrl, BOUNCER_TEST_OWNER: owner, BOUNCER_TEST_JOURNAL: f.journalId,
+        BOUNCER_TEST_OLD_KEY: f.key.toString('hex'), BOUNCER_TEST_NEW_KEY: next.toString('hex') },
+      stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+    });
+    const [message] = await Promise.race([
+      once(child, 'message'),
+      new Promise((_, reject) => { const timer = setTimeout(() => reject(new Error('rotation worker timed out')), 15000); timer.unref(); }),
+    ]);
+    assert.equal(message.type, 'staged-before-commit');
+    await assert.rejects(f.open(), error => error.code === 'BUSY');
+    const done = once(child, 'exit'); child.kill('SIGKILL'); await done; child = null;
+    // Wait for PostgreSQL, not just the OS, to release the journal session lock.
+    const words = crypto.createHash('sha256').update(JSON.stringify(['bouncer-buyer-lock-v1', contract, owner, f.journalId])).digest();
+    const fence = await f.pool.connect();
+    try {
+      await fence.query("SET lock_timeout = '5s'");
+      await fence.query('SELECT pg_catalog.pg_advisory_lock($1::integer,$2::integer)', [words.readInt32BE(0), words.readInt32BE(4)]);
+      await fence.query('SELECT pg_catalog.pg_advisory_unlock($1::integer,$2::integer)', [words.readInt32BE(0), words.readInt32BE(4)]);
+    } finally { fence.release(); }
+    await assert.rejects(f.open({ key: next }), error => error.code === 'KEY_MISMATCH');
+    const reopened = await f.open();
+    assert.equal(reopened.get('work').tx_hash, pending.tx_hash); assert.equal(reopened.get('work').status, 'pending');
+    await assert.rejects(reopened.withOwnerFence(async () => {}), error => error.code === 'OWNER_UNRESOLVED');
+  } finally {
+    if (child && child.exitCode === null && child.signalCode === null) { const done = once(child, 'exit'); child.kill('SIGKILL'); await done; }
+    next.fill(0); await f.cleanup();
+  }
+});
+
+dbtest('rotation limits and lost journal lock fail without partially changing encrypted state', async () => {
+  for (const mode of ['entry-limit', 'byte-limit', 'lost-lock']) {
+    const f = await fixture(), next = crypto.randomBytes(32); let journal;
+    try {
+      const pending = await pendingEntry(); await reserveSynthetic(f.journal, 'work', pending); await f.journal.close();
+      const before = (await f.pool.query('SELECT ciphertext FROM bouncer_buyer_v1.entries WHERE journal_id=$1', [f.journalId])).rows[0].ciphertext;
+      let enabled = false, lockChecks = 0;
+      const faulty = { async connect() {
+        const c = await f.pool.connect();
+        return { on: c.on.bind(c), removeListener: c.removeListener.bind(c), release: c.release.bind(c), async query(sql, args) {
+          if (enabled && mode === 'lost-lock' && typeof sql === 'string' && sql.includes('FROM pg_catalog.pg_locks') && ++lockChecks === 2) {
+            return { rows: [{ pid: -1, locked: false, owner_locked: false }] };
+          }
+          const result = await c.query(sql, args);
+          if (enabled && typeof sql === 'string' && sql.includes('ORDER BY entry_id LIMIT $4 FOR UPDATE')) {
+            if (mode === 'entry-limit') return { ...result, rows: Array.from({ length: 257 }, () => result.rows[0]) };
+            if (mode === 'byte-limit') return { ...result, rows: [{ ...result.rows[0], ciphertext: Buffer.alloc(8 * 1024 * 1024 + 1) }] };
+          }
+          return result;
+        } };
+      } };
+      journal = await openPostgresBuyerJournal({ pool: faulty, contractId: contract, ownerAccountId: owner, journalId: f.journalId, key: f.key });
+      enabled = true;
+      await assert.rejects(journal.rotateEncryptionKey(next), error => error.code === (mode === 'lost-lock' ? 'SESSION_LOST' : 'ROTATION_LIMIT'));
+      await journal.close();
+      assert.deepEqual((await f.pool.query('SELECT ciphertext FROM bouncer_buyer_v1.entries WHERE journal_id=$1', [f.journalId])).rows[0].ciphertext, before);
+      await assert.rejects(f.open({ key: next }), error => error.code === 'KEY_MISMATCH');
+      const reopened = await f.open(); assert.equal(reopened.get('work').tx_hash, pending.tx_hash); assert.equal(reopened.get('work').status, 'pending');
+    } finally { if (journal) await journal.close(); next.fill(0); await f.cleanup(); }
+  }
+});
+
+test('key rotation CLI refuses unsafe inputs without printing key material or database credentials', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bouncer-rotation-input-'));
+  try {
+    const key = crypto.randomBytes(32), file = path.join(root, 'old.key'), same = path.join(root, 'same.key'), symlink = path.join(root, 'link');
+    fs.writeFileSync(file, key, { mode: 0o600 }); fs.writeFileSync(same, key, { mode: 0o600 }); fs.symlinkSync(file, symlink);
+    const args = ['--contract', contract, '--owner', owner, '--journal', 'journal', '--check'];
+    const env = { BOUNCER_BUYER_DATABASE_URL: 'postgresql://u:secret-value@bad.example/buyer',
+      BOUNCER_BUYER_JOURNAL_KEY_FILE: file, BOUNCER_BUYER_NEW_JOURNAL_KEY_FILE: same };
+    let result = await runCli('scripts/rotate-shared-buyer-key.mjs', args, env);
+    assert.equal(result.code, 1); assert.match(result.stderr, /keys must differ/);
+    assert.ok(!result.stderr.includes('secret-value') && !result.stderr.includes(key.toString('hex')));
+    result = await runCli('scripts/rotate-shared-buyer-key.mjs', args, { ...env, BOUNCER_BUYER_NEW_JOURNAL_KEY_FILE: symlink });
+    assert.equal(result.code, 1); assert.match(result.stderr, /owner-only/);
+    fs.chmodSync(same, 0o644);
+    result = await runCli('scripts/rotate-shared-buyer-key.mjs', args, env);
+    assert.equal(result.code, 1); assert.match(result.stderr, /owner-only/);
+    result = await runCli('scripts/rotate-shared-buyer-key.mjs', [...args, '--confirm-rotate'], env);
+    assert.equal(result.code, 1); assert.match(result.stderr, /exactly one/);
+    key.fill(0);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});

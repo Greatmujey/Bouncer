@@ -23,6 +23,11 @@ import { canonicalClaimOrigin, verifyClaimAuthorization } from '../packages/prov
 const SCHEMA = 'bouncer_buyer_v1';
 const MAX_RECORD_BYTES = 128 * 1024;
 const MAX_ENTRIES = 10_000;
+// One short, all-or-nothing re-encryption transaction; large journals need a
+// separately reviewed offline migration, never a partially rotated journal.
+const MAX_ROTATION_ENTRIES = 256;
+const MAX_ROTATION_BYTES = 8 * 1024 * 1024;
+const MAX_ROTATION_MS = 20_000;
 const idPattern = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const fingerprintPattern = /^[a-f0-9]{64}$/;
 const plain = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -238,7 +243,7 @@ export async function openPostgresBuyerJournal({ pool, contractId, ownerAccountI
   let failed = false, closing = false, closed = false, locked = false, pid;
   // Session advisory locks are reentrant. A local guard is also necessary so
   // two asynchronous calls on this *same* journal cannot share one owner lock.
-  let ownerBusy = false, ownerLocked = false;
+  let ownerBusy = false, ownerLocked = false, rotating = false;
   const onError = () => { failed = true; };
   client.on?.('error', onError);
   const entries = new Map(), revisions = new Map();
@@ -331,6 +336,7 @@ export async function openPostgresBuyerJournal({ pool, contractId, ownerAccountI
     async withOwnerFence(run) {
       assertAvailable();
       if (typeof run !== 'function') throw new Error('owner fence requires a payment operation');
+      if (rotating) throw new BuyerJournalError('BUSY', 'shared buyer journal encryption key rotation is in progress');
       if (ownerBusy) throw new BuyerJournalError('OWNER_BUSY', 'another shared buyer payment is using this owner account');
       ownerBusy = true;
       let operationError;
@@ -431,6 +437,86 @@ export async function openPostgresBuyerJournal({ pool, contractId, ownerAccountI
         }
         entries.set(id, entry); revisions.set(id, meta.revision);
       });
+    },
+    /**
+     * Re-encrypt one entire journal under a new key in a single bounded DB
+     * transaction. The same journal session lock excludes cooperating workers;
+     * no seller, signer or NEAR call is involved. A lost COMMIT acknowledgement
+     * poisons this session: preserve BOTH keys and reopen the original journal.
+     */
+    async rotateEncryptionKey(newKey) {
+      assertAvailable();
+      if (!Buffer.isBuffer(newKey) || newKey.length !== 32) throw new Error('new buyer journal key must contain exactly 32 bytes');
+      if (rotating || ownerBusy || ownerLocked) throw new BuyerJournalError('BUSY', 'stop active journal operations before key rotation');
+      if (crypto.timingSafeEqual(secret, newKey)) throw new Error('new buyer journal key must differ from the current key');
+      if (entries.size > MAX_ROTATION_ENTRIES) throw new BuyerJournalError('ROTATION_LIMIT', 'journal exceeds the atomic rotation entry limit; do not partially rotate it');
+      const next = Buffer.from(newKey);
+      rotating = true;
+      try {
+        return await enqueue(async () => {
+          try {
+            let count = 0;
+            const start = performance.now();
+            const checkTime = () => {
+              if (performance.now() - start > MAX_ROTATION_MS) throw new BuyerJournalError('ROTATION_LIMIT', 'key rotation exceeded its time limit; do not partially rotate the journal');
+            };
+            await transaction(client, async c => {
+              await verifySchema(c); checkTime();
+              const oldCheck = keyCheck(secret, scope), newCheck = keyCheck(next, scope);
+              const stored = await c.query(`SELECT key_check FROM ${SCHEMA}.journals
+                WHERE contract_id=$1 AND owner_account_id=$2 AND journal_id=$3 FOR UPDATE`, scopeValues(scope));
+              const actual = stored.rows[0]?.key_check;
+              if (stored.rowCount !== 1 || !Buffer.isBuffer(actual) || actual.length !== oldCheck.length || !crypto.timingSafeEqual(actual, oldCheck)) {
+                throw new BuyerJournalError('KEY_MISMATCH', 'the journal key changed; close and reconcile before continuing');
+              }
+              const rows = await c.query(`SELECT entry_id, fingerprint, status, tx_hash, seller_origin, challenge, revision, nonce, tag, ciphertext
+                FROM ${SCHEMA}.entries WHERE contract_id=$1 AND owner_account_id=$2 AND journal_id=$3
+                ORDER BY entry_id LIMIT $4 FOR UPDATE`, [...scopeValues(scope), MAX_ROTATION_ENTRIES + 1]);
+              if (rows.rows.length > MAX_ROTATION_ENTRIES) throw new BuyerJournalError('ROTATION_LIMIT', 'journal exceeds the atomic rotation entry limit; do not partially rotate it');
+              if (rows.rows.length !== entries.size) throw new BuyerJournalError('CORRUPT', 'journal changed during key rotation; close and reconcile');
+              let bytes = 0;
+              for (const row of rows.rows) {
+                if (!Buffer.isBuffer(row.ciphertext)) throw new BuyerJournalError('CORRUPT', 'journal ciphertext is invalid');
+                bytes += row.ciphertext.length;
+                if (bytes > MAX_ROTATION_BYTES) throw new BuyerJournalError('ROTATION_LIMIT', 'journal exceeds the atomic rotation byte limit; do not partially rotate it');
+              }
+              for (const row of rows.rows) {
+                checkTime();
+                const meta = { id: row.entry_id, fingerprint: row.fingerprint, status: row.status, tx_hash: row.tx_hash,
+                  seller_origin: row.seller_origin, challenge: row.challenge, revision: row.revision };
+                const entry = decrypt(secret, scope, meta, row);
+                if (!Number.isSafeInteger(meta.revision) || meta.revision < 1 || revisions.get(meta.id) !== meta.revision ||
+                    !isDeepStrictEqual(entry, entries.get(meta.id)) || !isDeepStrictEqual(entryMetadata(scope, meta.id, entry, meta.revision), meta)) {
+                  throw new BuyerJournalError('CORRUPT', 'journal changed during key rotation; close and reconcile');
+                }
+                const encrypted = encrypt(next, scope, meta, entry);
+                const updated = await c.query(`UPDATE ${SCHEMA}.entries SET nonce=$5, tag=$6, ciphertext=$7
+                  WHERE contract_id=$1 AND owner_account_id=$2 AND journal_id=$3 AND entry_id=$4 AND revision=$8 AND tx_hash=$9
+                  RETURNING nonce, tag, ciphertext`, [...scopeValues(scope), meta.id, encrypted.nonce, encrypted.tag, encrypted.ciphertext, meta.revision, meta.tx_hash]);
+                if (updated.rowCount !== 1 || !isDeepStrictEqual(decrypt(next, scope, meta, updated.rows[0]), entry)) {
+                  throw new BuyerJournalError('CORRUPT', 'journal re-encryption did not preserve the original entry');
+                }
+              }
+              checkTime();
+              const changed = await c.query(`UPDATE ${SCHEMA}.journals SET key_check=$4
+                WHERE contract_id=$1 AND owner_account_id=$2 AND journal_id=$3 AND key_check=$5 RETURNING key_check`,
+              [...scopeValues(scope), newCheck, oldCheck]);
+              if (changed.rowCount !== 1 || !Buffer.isBuffer(changed.rows[0]?.key_check) ||
+                  changed.rows[0].key_check.length !== newCheck.length || !crypto.timingSafeEqual(changed.rows[0].key_check, newCheck)) {
+                throw new BuyerJournalError('CORRUPT', 'journal key check changed during rotation');
+              }
+              await verifySession(); checkTime();
+              count = rows.rows.length;
+            }, verifySession);
+            secret.fill(0); next.copy(secret);
+            return { rotated_entries: count };
+          } catch (error) {
+            failed = true;
+            if (error instanceof BuyerJournalError && ['ROTATION_LIMIT', 'CORRUPT', 'KEY_MISMATCH', 'UNSAFE_SCHEMA', 'UNSAFE_DATABASE', 'SESSION_LOST'].includes(error.code)) throw error;
+            throw new BuyerJournalError('ROTATION_UNCERTAIN', 'key rotation failed or its commit is uncertain; preserve BOTH keys, close and reopen the original journal');
+          }
+        });
+      } finally { next.fill(0); rotating = false; }
     },
     async close() {
       if (closed || closing) return;

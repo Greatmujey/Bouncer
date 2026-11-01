@@ -164,6 +164,10 @@ not prove all possible callback, provider or token failure cases.
    economic operation. It has synthetic tests, not a live shared-database
    payment or production exactly-once proof.
    FT-call, OutLayer, x402 and mixed/dependent workflows are not covered.
+   Bounded atomic key rotation preserves the existing encrypted entries and
+   pending quarantine; a stolen old key, an old backup or previously exposed
+   bearer claim is not revoked. Preserve both keys if COMMIT is uncertain and
+   check the original primary with all workers stopped.
    These checks do not protect against a compromised host or owner key. Recovery
    requires trusted FINAL RPC receipts, Bouncer code and token code; it verifies
    payment, not delivery. An unknown or expired hash stays unresolved and is

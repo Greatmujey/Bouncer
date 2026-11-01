@@ -115,12 +115,15 @@ secure operations, disaster recovery and an audit remain open work. The on-chain
    reconcile all external transactions before resuming after any uncertain
    failover/restore. The tests do not simulate real power loss, partitions,
    multi-host failover or production load.
-6. A journal currently holds at most **10,000** entries. No eviction, key
-   rotation, re-encryption, migration, pending-reset or automatic replacement is
-   supplied. Losing its encryption key can permanently lose the ability to
-   recover the saved bearer claim; preserve the key and database separately in
-   protected backups. Losing, corrupting or rolling back the database is not
-   permission to start a fresh journal for the same operation.
+6. A journal currently holds at most **10,000** entries. Atomic encryption-key
+   rotation is available only for a bounded journal (at most 256 entries and
+   8 MiB of ciphertext, with a 20-second operation deadline); larger journals
+   need a separately reviewed offline migration, never a partial rotation.
+   No eviction, automatic migration, pending-reset or replacement is supplied.
+   Losing the journal key can permanently lose the ability to recover the saved
+   bearer claim; preserve keys and database separately in protected backups.
+   Losing, corrupting or rolling back the database is not permission to start a
+   fresh journal for the same operation.
 
 ## Upgrading existing shared-buyer workers
 
@@ -208,6 +211,63 @@ payments** if the reviewed policy and seller permit them. It is not a dry run:
 ```sh
 node agent/resource-agent.mjs --goals reviewed-v3-goals.json --key execute-only-key.json --shared-journal mission-001 --durable --execute
 ```
+
+## Rotate an existing journal encryption key
+
+The opt-in rotation command rewrites **one original journal** and its key check
+in a single PostgreSQL transaction. It takes the same session advisory lock as a
+normal journal, authenticates the original records and metadata, and keeps
+payment hashes, challenges, statuses, revisions and delivery state unchanged.
+Pending rows remain pending and continue to quarantine the owner. It does not
+call NEAR or the seller, sign, send, or clear anything. PostgreSQL and the
+configured workers are still trusted; this is not a distributed failover proof.
+
+**Stop and fence every worker first.** Protect a verified database backup and
+both separate key files before beginning. The old and new keys must be different
+random 32-byte files owned by the operator, mode `0600` or `0400`, not symlinks.
+Do not send their contents to the database as configuration, place them in
+arguments, or share them in chat. The original database, journal ID and keys
+must be retained: do not replace the journal to work around an error.
+
+A separately provisioned **rotation role** may use the following grants (this
+role can still corrupt encrypted state and is trusted):
+
+```sql
+GRANT USAGE ON SCHEMA bouncer_buyer_v1 TO buyer_rotator;
+GRANT SELECT ON bouncer_buyer_v1.meta, bouncer_buyer_v1.journals, bouncer_buyer_v1.entries TO buyer_rotator;
+GRANT UPDATE (key_check) ON bouncer_buyer_v1.journals TO buyer_rotator;
+GRANT UPDATE (nonce, tag, ciphertext) ON bouncer_buyer_v1.entries TO buyer_rotator;
+```
+
+The ordinary worker role need not receive `UPDATE (key_check)`. With the
+rotator's URL already supplied via `BOUNCER_BUYER_DATABASE_URL`, and the old
+and new file **paths** supplied through `BOUNCER_BUYER_JOURNAL_KEY_FILE` and
+`BOUNCER_BUYER_NEW_JOURNAL_KEY_FILE`, inspect first, rotate once, then check:
+
+```sh
+cd bouncer
+npm run rotate-shared-buyer-key -- --contract bouncer.example.testnet --owner owner.example.testnet --journal mission-001 --check
+npm run rotate-shared-buyer-key -- --contract bouncer.example.testnet --owner owner.example.testnet --journal mission-001 --confirm-rotate
+npm run rotate-shared-buyer-key -- --contract bouncer.example.testnet --owner owner.example.testnet --journal mission-001 --check
+```
+
+`--check` opens the original primary, obtains the journal lock and authenticates
+all its encrypted entries with one supplied key; it prints only `original` or
+`new` and a record count. If the rotation fails or its COMMIT acknowledgment
+is lost, **preserve both keys and stop**. Once the original session is gone,
+run `--check` against the same primary and both protected keys. A busy lock,
+neither key matching, corrupt data, a failed primary or an uncertain failover
+requires operator investigation, not a replacement journal or another payment.
+After a successful new-key check and a verified new backup, upgrade all workers
+together to use the new file; keep the old key as long as needed to read secured
+older backups. Restore of a stale backup can lose later payments regardless of
+which key is used and requires transaction reconciliation before resuming.
+
+Rotation is capped at 256 records, 8 MiB total ciphertext and a 20-second
+in-transaction processing deadline. It never partially rotates an oversized
+journal. These controls bound work but do not prove durable storage, fault-free
+networking or safe HA. A stolen old key may already have exposed prior backups
+and replayable seller claims: re-encryption **does not revoke leaked claims**.
 
 ## Inspection and recovery
 
