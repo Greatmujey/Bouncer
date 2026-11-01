@@ -1,0 +1,63 @@
+#!/usr/bin/env node
+/**
+ * Operator-side response to an ephemeral GitHub Actions testnet sweep request.
+ * Reads only the separately scoped sweep key, encrypts it to the worker's
+ * ephemeral RSA public key and posts ciphertext. Never prints the secret.
+ */
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { execFileSync } from 'node:child_process';
+import nearApi from 'near-api-js';
+import { sealSweepHandoff } from '../agent/ref-sweep-handoff.mjs';
+
+const REPO = 'abdullahimujeeb0505-stack/Bouncer', BRANCH = 'arena/88d70c7c-near-hub', ISSUE = 6;
+const REQUEST = 'BOUNCER_REF_SWEEP_REQUEST_V1\n', RESPONSE = 'BOUNCER_REF_SWEEP_RESPONSE_V1\n';
+const ORIGINAL_HASH = 'DzWVHLp51KuoUoy8oaYNQTgLNAMgSRcegYT4mjuXCXrz';
+const OUTPUT_RECEIPT = '7KEWv6Ux5EHX6R1F7ipdZmvFZKp7p6iQkpRsynXieSSX';
+const OWNER = 'owner.bouncer-ref-44f619d9.testnet', VAULT = 'bouncer-ref-44f619d9.testnet', ROUTER = 'ref-router-44f619d9.testnet';
+function gh(endpoint, args = []) {
+  return JSON.parse(execFileSync('gh', ['api', endpoint, ...args], { encoding: 'utf8', maxBuffer: 2_000_000, stdio: ['ignore', 'pipe', 'pipe'] }));
+}
+function readOwnerOnly(file) {
+  const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+  try {
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile() || stat.nlink !== 1 || (stat.mode & 0o077) !== 0 || stat.size > 8192 ||
+        (typeof process.getuid === 'function' && stat.uid !== process.getuid())) throw new Error('sweep credential must be owner-only');
+    return JSON.parse(fs.readFileSync(fd, 'utf8'));
+  } finally { fs.closeSync(fd); }
+}
+function main() {
+  const commentId = process.argv[2], runId = process.argv[3];
+  if (!/^[1-9][0-9]{0,19}$/.test(commentId || '') || !/^[1-9][0-9]{0,19}$/.test(runId || '') || process.argv.length !== 4) {
+    throw new Error('usage: node respond-original-ref-sweep.mjs REQUEST_COMMENT_ID RUN_ID');
+  }
+  const comment = gh(`/repos/${REPO}/issues/comments/${commentId}`);
+  if (comment?.user?.login !== 'github-actions[bot]' || typeof comment.body !== 'string' || !comment.body.startsWith(REQUEST) || comment.body.length > 5000) {
+    throw new Error('request must be the expected GitHub Actions bot comment');
+  }
+  let request;
+  try { request = JSON.parse(comment.body.slice(REQUEST.length)); } catch { throw new Error('invalid handoff request'); }
+  const run = gh(`/repos/${REPO}/actions/runs/${runId}`);
+  const localHead = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+  if (request.run_id !== runId || run?.id?.toString() !== runId || run.event !== 'push' || run.run_attempt !== 1 ||
+      run.status !== 'in_progress' || run.head_branch !== BRANCH || run.head_sha !== localHead || run.repository?.private !== true) {
+    throw new Error('handoff request is not from the current private first-attempt branch run');
+  }
+  const jobs = gh(`/repos/${REPO}/actions/runs/${runId}/jobs?per_page=100`);
+  if (!Array.isArray(jobs.jobs) || !jobs.jobs.some(job => job.name === 'Resume original Ref output sweep (testnet)' && job.status === 'in_progress')) {
+    throw new Error('expected original-sweep job is not running');
+  }
+  const file = path.join(os.homedir(), '.near-credentials/testnet/bouncer-ref-v3-20261101/sweep.json');
+  const credentials = readOwnerOnly(file);
+  if (credentials.account_id !== OWNER || typeof credentials.private_key !== 'string') throw new Error('wrong testnet sweep credential');
+  const sweepKey = nearApi.KeyPair.fromString(credentials.private_key).getPublicKey().toString();
+  const expected = { owner_account_id: OWNER, contract_id: VAULT, router_id: ROUTER, original_hash: ORIGINAL_HASH,
+    output_receipt_id: OUTPUT_RECEIPT, expected_output: '6926', sweep_public_key: sweepKey };
+  const sealed = sealSweepHandoff({ request, expected, credentials });
+  const reply = gh(`/repos/${REPO}/issues/${ISSUE}/comments`, ['--method', 'POST', '-f', `body=${RESPONSE}${JSON.stringify(sealed)}`]);
+  if (!Number.isSafeInteger(reply?.id)) throw new Error('encrypted handoff reply was not acknowledged');
+  console.log(`Encrypted scoped testnet sweep credential delivered for run ${runId}; reply comment ${reply.id}. No owner key or input key was shared.`);
+}
+try { main(); } catch (error) { console.error(`[ref-sweep-handoff] ${error.message}`); process.exitCode = 1; }

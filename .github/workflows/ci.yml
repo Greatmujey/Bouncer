@@ -217,6 +217,53 @@ jobs:
       - name: Inspect finalized accounts, storage and quote without signing
         run: node bouncer/scripts/probe-ref-demo-setup.mjs bouncer-ref-5b2d78f8.testnet owner.bouncer-ref-5b2d78f8.testnet
 
+  resume-original-ref-sweep:
+    name: Resume original Ref output sweep (testnet)
+    # This has NO input-swap key and will reuse only the preserved input hash.
+    # It requests a short-lived, encrypted, sweep-only key handoff and never
+    # resends an existing sweep. First attempt, private repo and exact parent.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/arena/88d70c7c-near-hub' && github.event.before == 'ccd58e4b05455d1b72706904fb702cce14f17dbd' && github.event.repository.private == true && github.run_attempt == '1' && contains(github.event.head_commit.message, '[resume-original-ref-sweep-20261101]')
+    needs: [js-tests, contract-tests, build-contract, ref-router-contract]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: guarded-ref-testnet-recovery
+          run-id: 41299191712
+          github-token: ${{ github.token }}
+          path: original-ref-evidence
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      - name: Recover original receipts and perform one scoped sweep
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          BOUNCER_REF_SWEEP_ACK: testnet-original-sweep-only
+        run: |
+          set +e
+          node bouncer/scripts/resume-original-ref-sweep.mjs original-ref-evidence "$RUNNER_TEMP/ref-sweep-recovery" 2>&1 | tee "$RUNNER_TEMP/ref-sweep-recovery.log"
+          result=${PIPESTATUS[0]}
+          if [ "$result" -ne 0 ]; then
+            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-2500).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=Original Ref sweep did not complete::"+s)' "$RUNNER_TEMP/ref-sweep-recovery.log"
+          fi
+          exit "$result"
+      - name: Preserve original and sweep recovery evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: original-ref-sweep-recovery
+          path: ${{ runner.temp }}/ref-sweep-recovery/**
+          if-no-files-found: ignore
+          retention-days: 90
+
   inspect-original-guarded-ref:
     name: Inspect the original guarded Ref input (read only)
     if: github.event_name == 'push' && contains(github.event.head_commit.message, '[inspect-original-ref-20261101]')

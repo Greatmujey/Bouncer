@@ -39,6 +39,17 @@ test('version 3 binds distinct testnet OutLayer owner, deploy and scoped payment
   }
 });
 
+test('version 4 permits only a challenge-bound testnet sweep-key handoff', () => {
+  const v4 = { version: 4, purpose: 'ref-sweep-once-testnet', owner_account_id: 'owner.testnet', contract_id: 'vault.testnet',
+    router_id: 'router.testnet', sweep_secret: nearApi.KeyPair.fromRandom('ed25519').toString(), original_hash: '1'.repeat(32),
+    challenge: 'a'.repeat(64), run_id: '123456' };
+  assert.deepEqual(openTestnetCredentials(sealTestnetCredentials(v4, rsa.publicKey), rsa.privateKey), v4);
+  for (const bad of [{ ...v4, purpose: 'other' }, { ...v4, original_hash: 'no-hash' }, { ...v4, run_id: '01' },
+    { ...v4, challenge: 'not-32-bytes' }, { ...v4, router_id: 'router.near' }, { ...v4, owner_secret: v4.sweep_secret }]) {
+    assert.throws(() => sealTestnetCredentials(bad, rsa.publicKey));
+  }
+});
+
 test('tampering, wrong keys and malformed envelopes fail authentication', () => {
   const sealed = sealTestnetCredentials(credentials(), rsa.publicKey);
   for (const field of ['wrapped_key', 'iv', 'ciphertext', 'tag']) {

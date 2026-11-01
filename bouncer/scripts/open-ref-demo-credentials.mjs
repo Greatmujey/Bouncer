@@ -29,6 +29,7 @@ function main() {
   const file = fs.statSync(process.argv[2]);
   if (!file.isFile() || file.size > 16_384) throw new Error('invalid recovery envelope file');
   const payload = openTestnetCredentials(JSON.parse(fs.readFileSync(process.argv[2], 'utf8')), readPrivate(process.argv[3]));
+  if (payload.version === 4) throw new Error('transient scoped handoff is not a recoverable key bundle');
   const parent = path.join(os.homedir(), '.near-credentials'), root = path.join(parent, 'testnet');
   fs.mkdirSync(root, { recursive: true, mode: 0o700 });
   for (const directory of [parent, root]) {

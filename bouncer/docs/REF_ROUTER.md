@@ -126,11 +126,25 @@ A third fresh testnet attempt sent one input transaction,
 [`DzWVHLp51KuoUoy8oaYNQTgLNAMgSRcegYT4mjuXCXrz`](https://testnet.nearblocks.io/txns/DzWVHLp51KuoUoy8oaYNQTgLNAMgSRcegYT4mjuXCXrz).
 A [read-only inspection](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41299603195/job/124827621907)
 confirmed full input settlement and saw `6926` micro testnet USDC in the router,
-with zero in the Bouncer output vault. The verifier stopped on the callback's
-argument encoding; the original input was not resent and no sweep was sent.
-The router balance alone is not proof of the linked Ref output, so no vault
-credit or completed trade is claimed. Preserve its original journal and
-reconcile that same hash before separately considering a sweep.
+with zero in the Bouncer output vault. The first verifier stopped on the
+callback's zero-byte argument encoding; after fixing it, a [second read-only
+inspection](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41299832993/job/124828302526)
+verified the linked FINAL Ref output receipt
+`7KEWv6Ux5EHX6R1F7ipdZmvFZKp7p6iQkpRsynXieSSX` for those same `6926` units.
+The original input was not resent and no sweep has yet been sent, so vault
+credit and completion are not claimed. Preserve the original journal and
+reconcile the same hash before separately considering a sweep.
+
+A narrowly gated recovery job can verify that original output again and accept
+**only** the previously scoped `sweep_output` key through a challenge-bound,
+RSA-encrypted handoff to an ephemeral GitHub Actions worker. The private repo
+and Actions worker must be trusted; public request metadata and ciphertext pass
+through private PR comments. The full-access owner key and input key are not
+shared. The job requires the original journal, verifies the pinned account/key
+and exact receipt, and records a new sweep hash before its sole broadcast. A
+missing or uncertain sweep remains pending and must never be resent blindly.
+This testnet handoff is not a production key-management or distributed recovery
+service; it has synthetic tests but no completed live sweep proof yet.
 
 The harness creates fresh, disposable testnet accounts, obtains a fresh bounded
 quote, deploys the exact router and removes its deploy key, funds only the capped

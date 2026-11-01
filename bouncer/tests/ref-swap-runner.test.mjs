@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import nearApi from 'near-api-js';
 import { runRefSwap, runRefSweepOnly, recoverRefSwap, checkRefRouter } from '../agent/ref-swap.mjs';
+import { createSweepHandoffRequest, sealSweepHandoff, openSweepHandoff } from '../agent/ref-sweep-handoff.mjs';
 import { REF_SWAP_INPUT, REF_SWAP_OUTPUT, REF_SWAP_EXCHANGE, REF_SWAP_INPUT_MESSAGE, REF_SWEEP_GAS } from '../agent/ref-swap-evidence.mjs';
 import { goal, ftGoal, signing, key, inputHash, swapResult, sweepResult, id } from './ref-swap-fixture.mjs';
 
@@ -11,7 +12,7 @@ function sweepSigner() {
   const create = (receiver, actions) => nearApi.transactions.createTransaction(goal.owner_account_id, publicKey, receiver, 1n, actions, Buffer.alloc(32, 3));
   const expected = create(goal.router_id, [nearApi.transactions.functionCall('sweep_output', { amount: '70' }, REF_SWEEP_GAS, 0n)]);
   const hash = nearApi.utils.serialize.base_encode(crypto.createHash('sha256').update(nearApi.transactions.encodeTransaction(expected)).digest());
-  return { publicKey: publicKey.toString(), hash, account: { accountId: goal.owner_account_id, signer,
+  return { publicKey: publicKey.toString(), secret: pair.toString(), hash, account: { accountId: goal.owner_account_id, signer,
     async createTransaction(receiver, actions, keyArg) {
       assert.equal(receiver, goal.router_id); assert.equal(String(keyArg), publicKey.toString()); assert.equal(actions.length, 1);
       const call = actions[0].functionCall; assert.equal(call.methodName, 'sweep_output'); assert.equal(call.gas, REF_SWEEP_GAS);
@@ -163,6 +164,23 @@ test('sweep-only recovery needs the original verified input and never signs anot
   f.setSweepPermission('FullAccess');
   await assert.rejects(runRefSweepOnly({ ...sweepOnly(), execute: true }), /scoped ONLY/);
   assert.deepEqual(f.sends, [inputHash]);
+});
+
+test('encrypted scoped-key handoff completes a verified sweep without an input signer', async () => {
+  const f = fixture(); f.failSend('input'); await assert.rejects(runRefSwap(f.opts), /FT call unresolved/); f.failSend('');
+  const original = await recoverRefSwap({ goal, provider: f.provider, journal: f.journal, log: () => {} });
+  assert.equal(original.status, 'OUTPUT_RECEIVED');
+  const context = { owner_account_id: goal.owner_account_id, contract_id: goal.contract_id, router_id: goal.router_id,
+    original_hash: inputHash, output_receipt_id: original.swap.output_receipt_id, expected_output: original.swap.output_amount,
+    sweep_public_key: f.sweep.publicKey };
+  const { request, privateKey } = createSweepHandoffRequest({ runId: '123456', context });
+  const response = sealSweepHandoff({ request, expected: context, credentials: { account_id: goal.owner_account_id, private_key: f.sweep.secret } });
+  const recovered = openSweepHandoff({ request, expected: context, response, privateKey });
+  const sweepAccount = { ...f.sweep.account, signer: new nearApi.KeyPairSigner(recovered) };
+  const result = await runRefSweepOnly({ goal, provider: f.provider, sweepAccount, sweepPublicKey: recovered.getPublicKey(),
+    journal: f.journal, execute: true, log: () => {} });
+  assert.equal(result.status, 'COMPLETED'); assert.deepEqual(f.sends, [inputHash, f.sweep.hash]);
+  assert(!JSON.stringify(response).includes(f.sweep.secret));
 });
 
 test('sweep-only never resends an existing ambiguous sweep', async () => {
