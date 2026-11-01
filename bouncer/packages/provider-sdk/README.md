@@ -22,8 +22,11 @@ is marked private to prevent accidental publication. Installation resolves
 verify the archive and dependency integrity, and review the code before use.
 The package includes its runtime verification modules, with the same canonical
 implementation used by the Bouncer buyer. Packing and isolated verification are
-covered offline by the repository tests. There is no warranty, independent audit
-or production support.
+covered offline by the repository tests. A [read-only CI check](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41259817473/job/124710584367)
+also installed the archive in a separate application, verified three existing
+Circle testnet payment receipts and rejected substituted sellers without making
+new payments. The seller was still self-hosted development software. There is
+no warranty, independent audit or production support.
 
 ## Seller integration
 

@@ -54,8 +54,10 @@ these vectors are not raw RPC responses. The optional
 and payment receipts from a testnet RPC, verify the source and seller proofs,
 and reject seller substitution. It has no key and sends no transactions. The
 `[provider-inspect]` CI marker packs and installs the private SDK in an isolated
-seller directory for this read-only verification; historical RPC availability
-is not guaranteed.
+seller directory for this read-only verification. A [1 November check](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41259817473/job/124710584367)
+verified the source and all three FINAL payment receipts using that installed
+archive, rejecting substituted sellers; it sent no transactions. Historical RPC
+availability is not guaranteed.
 
 ## What is reviewed
 

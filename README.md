@@ -370,7 +370,10 @@ its delivery before the remaining two payments. The test checked one source
 broadcast, three FT broadcasts, the on-chain budgets and the exact chained
 inputs. An [offline regression](bouncer/tests/dependent-history.test.mjs)
 reconstructs those orders and their three observed on-chain memos; it is not a
-raw RPC receipt proof. The [public testnet evidence artifact](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41258992192/artifacts/13064860428)
+raw RPC receipt proof. A subsequent [read-only check](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41259817473/job/124710584367)
+installed the seller SDK from a local tarball in a separate application, fetched
+the source and three FINAL payment receipts, and rejected substituted sellers.
+It sent no new transactions. The [public testnet evidence artifact](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41258992192/artifacts/13064860428)
 is retained until 30 January 2027; it contains no keys but includes task data.
 
 The Circle seller is **not independent**, the independently operated oracle

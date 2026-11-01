@@ -1,10 +1,9 @@
 // Read-only compatibility check against three previously completed Circle
 // TESTNET payments to our development provider. No signing or new transaction.
 // Passing this does NOT mean an independent seller has integrated the SDK.
-import nearApi from 'near-api-js';
+import { PaymentRpcProvider } from '../agent/near-account.mjs';
 import { orderMemo } from '../services/resource-provider.mjs';
 import { readAndVerifyProviderPayment, verifyProviderPayment } from '../packages/provider-sdk/index.mjs';
-import { validateRpcEndpoint } from '../shared/rpc-endpoint.mjs';
 
 const contract_id = 'bouncer-oracle-6a42bf32.testnet';
 const owner_account_id = 'owner.bouncer-oracle-6a42bf32.testnet';
@@ -17,7 +16,9 @@ const cases = [
   { resource: 'storage', tx_hash: 'GJkJMWBF2CCh1H5uh9uAKJJciTsqcvcgKvNXvnJrEvjL', input: { name: 'oracle-price-report', content: report } },
   { resource: 'api', tx_hash: '7RxBwG4G6FRqG1o2shYRN2ES2WsxVFdEMd8NWp7zA5vy', input: { text: report } },
 ];
-const provider = new nearApi.providers.JsonRpcProvider({ url: validateRpcEndpoint(process.env.NEAR_TESTNET_RPC || 'https://test.rpc.fastnear.com') });
+// Bound receipt reads as well as submissions: an unavailable historical RPC
+// must fail rather than hang or repeatedly query for minutes.
+const provider = new PaymentRpcProvider(process.env.NEAR_TESTNET_RPC || 'https://test.rpc.fastnear.com');
 async function main() {
   const verified = [];
   for (const item of cases) {
