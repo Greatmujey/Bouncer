@@ -428,15 +428,15 @@ impl Bouncer {
             outlayer_input_routes: LookupMap::new(b"i"),
             outlayer_native_projects: LookupMap::new(b"q"),
             #[cfg(feature = "exact-ft-v11")]
-            exact_ft_policies: LookupMap::new(b"x1"),
+            exact_ft_policies: LookupMap::new(&b"x1"[..]),
             #[cfg(feature = "exact-ft-v11")]
-            exact_ft_intents: LookupMap::new(b"x2"),
+            exact_ft_intents: LookupMap::new(&b"x2"[..]),
             #[cfg(feature = "exact-ft-v11")]
-            exact_ft_memos: LookupMap::new(b"x3"),
+            exact_ft_memos: LookupMap::new(&b"x3"[..]),
             #[cfg(feature = "exact-ft-v11")]
-            exact_ft_payees: LookupMap::new(b"x4"),
+            exact_ft_payees: LookupMap::new(&b"x4"[..]),
             #[cfg(feature = "exact-ft-v11")]
-            exact_agent_revisions: LookupMap::new(b"x5"),
+            exact_agent_revisions: LookupMap::new(&b"x5"[..]),
         }
     }
 

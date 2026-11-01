@@ -24,6 +24,17 @@ test('default artifact sanity check reads only the distinct conditional V9 arm',
   assert.throws(() => checkWasmArtifact(wasm('bouncer-agent-v9'), conditional + conditional), /unique/);
 });
 
+test('two separate experimental features still check only the default V9 artifact', () => {
+  const conditional = `pub fn contract_version(&self) -> &'static str {
+    #[cfg(feature = "exact-ft-v11")] { "bouncer-agent-v11-exact-ft-testnet" }
+    #[cfg(feature = "youtick-playback-v10")] { "bouncer-agent-v10-youtick-testnet" }
+    #[cfg(not(any(feature = "youtick-playback-v10", feature = "exact-ft-v11")))] { "bouncer-agent-v9" }
+  }`;
+  assert.equal(checkWasmArtifact(wasm('bouncer-agent-v9'), conditional).version, 'bouncer-agent-v9');
+  assert.throws(() => checkWasmArtifact(wasm('bouncer-agent-v11-exact-ft-testnet'), conditional), /rebuild/);
+  assert.throws(() => checkWasmArtifact(wasm('bouncer-agent-v9'), conditional + conditional), /unique/);
+});
+
 test('checked-in deployment artifact carries the current source marker', () => {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
   const checked = checkWasmArtifact(fs.readFileSync(path.join(root, 'bouncer.wasm')),
