@@ -160,12 +160,17 @@ consent, and no offers or payments were requested:
   the original fully settled FT receipt graph, an exact matching market job and
   unchanged source, then journals the initial attempt before returning a
   short-lived signed control envelope. It refuses to prepare the initial
-  request twice; later reconciliation/resume must be explicit. It does not
-  send an HTTP request, implement TUS upload/heartbeats, verify delivery, or
-  coordinate multiple hosts. Signed control envelopes are bearer capabilities
-  and must not be logged or shared. Those remaining capabilities are
-  prerequisites to a real order. Never assume merchant consent or
-  deployed/source equivalence from this research.
+  request twice; later reconciliation/resume must be explicit. A separate
+  experimental transport implements the fixed-host intent, heartbeat and
+  sequential TUS calls with encrypted capabilities and write-ahead chunk
+  recovery. It has synthetic and loopback tests, **not a live provider
+  upload**, and is not wired into a user-facing workflow or coordinated across
+  hosts. Signed envelopes and TUS URLs are bearer capabilities and must not be
+  logged or shared. A separate playback prototype and its remaining blockers
+  are described in [YouTick playback](YOUTICK_PLAYBACK.md). The existing V9
+  vault cannot issue the legacy grant needed by this candidate path. Never
+  assume merchant consent, delivery or deployed/source equivalence from this
+  research.
 - [PatchBond at `a448538`](https://github.com/PatchBond/patchbond/blob/a4485389453818d495e48b7d46a299401833213b/contract/vault/src/deposit.rs)
   documents testnet Circle USDC bonds for GitHub submissions, not a compute,
   storage or API purchase. The source uses the FT `sender_id` as the bond payer;

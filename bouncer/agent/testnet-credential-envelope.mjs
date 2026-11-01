@@ -16,6 +16,7 @@ const payloadFieldsV1 = ['version', 'owner_account_id', 'contract_id', 'router_i
 const payloadFieldsV2 = [...payloadFieldsV1, 'contract_secret', 'router_secret'];
 const payloadFieldsV3 = ['version', 'purpose', 'owner_account_id', 'contract_id', 'owner_secret', 'contract_secret', 'funding_secret', 'project_secret'];
 const payloadFieldsV4 = ['version', 'purpose', 'owner_account_id', 'contract_id', 'router_id', 'sweep_secret', 'original_hash', 'challenge', 'run_id'];
+const payloadFieldsV5 = ['version', 'purpose', 'owner_account_id', 'contract_id', 'owner_secret', 'contract_secret', 'agent_secret', 'session_secret'];
 const owns = (obj, fields) => !!obj && typeof obj === 'object' && !Array.isArray(obj) &&
   Object.keys(obj).length === fields.length && fields.every(k => Object.hasOwn(obj, k));
 function keyInfo(raw, privateRequired = false) {
@@ -30,15 +31,17 @@ function keyInfo(raw, privateRequired = false) {
 }
 function payloadCheck(payload) {
   const fields = payload?.version === 1 ? payloadFieldsV1 : payload?.version === 2 ? payloadFieldsV2 :
-    payload?.version === 3 ? payloadFieldsV3 : payload?.version === 4 ? payloadFieldsV4 : null;
-  const accounts = payload?.version === 3 ? [payload.owner_account_id, payload.contract_id] :
+    payload?.version === 3 ? payloadFieldsV3 : payload?.version === 4 ? payloadFieldsV4 : payload?.version === 5 ? payloadFieldsV5 : null;
+  const accounts = [3, 5].includes(payload?.version) ? [payload.owner_account_id, payload.contract_id] :
     [payload?.owner_account_id, payload?.contract_id, payload?.router_id];
   if (!fields || !owns(payload, fields) || !accounts.every(isTestnetAccount) || new Set(accounts).size !== accounts.length ||
       (payload.version === 3 && payload.purpose !== 'outlayer-vrf-testnet') ||
+      (payload.version === 5 && payload.purpose !== 'youtick-play-grant-testnet') ||
       (payload.version === 4 && (payload.purpose !== 'ref-sweep-once-testnet' || !isTransactionHash(payload.original_hash) ||
         typeof payload.challenge !== 'string' || !/^[a-f0-9]{64}$/.test(payload.challenge) ||
         typeof payload.run_id !== 'string' || !/^[1-9][0-9]{0,19}$/.test(payload.run_id)))) throw new Error('invalid disposable testnet recovery payload');
   const secrets = payload.version === 4 ? ['sweep_secret'] : payload.version === 3 ? ['owner_secret', 'contract_secret', 'funding_secret', 'project_secret'] :
+    payload.version === 5 ? ['owner_secret', 'contract_secret', 'agent_secret', 'session_secret'] :
     ['owner_secret', 'input_secret', 'sweep_secret', ...(payload.version === 2 ? ['contract_secret', 'router_secret'] : [])];
   if (new Set(secrets.map(field => payload[field])).size !== secrets.length) throw new Error('testnet recovery keys must be distinct');
   for (const field of secrets) {

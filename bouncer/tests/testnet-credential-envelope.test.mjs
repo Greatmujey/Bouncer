@@ -50,6 +50,19 @@ test('version 4 permits only a challenge-bound testnet sweep-key handoff', () =>
   }
 });
 
+test('version 5 binds a distinct testnet vault, owner, agent and playback-session key', () => {
+  const v5 = { version: 5, purpose: 'youtick-play-grant-testnet', owner_account_id: 'owner.testnet', contract_id: 'vault.testnet',
+    owner_secret: nearApi.KeyPair.fromRandom('ed25519').toString(), contract_secret: nearApi.KeyPair.fromRandom('ed25519').toString(),
+    agent_secret: nearApi.KeyPair.fromRandom('ed25519').toString(), session_secret: nearApi.KeyPair.fromRandom('ed25519').toString() };
+  const sealed = sealTestnetCredentials(v5, rsa.publicKey);
+  assert.deepEqual(openTestnetCredentials(sealed, rsa.privateKey), v5);
+  assert(!JSON.stringify(sealed).includes(v5.session_secret));
+  for (const bad of [{ ...v5, purpose: 'other' }, { ...v5, contract_id: 'vault.near' },
+    { ...v5, session_secret: v5.agent_secret }, { ...v5, owner_account_id: v5.contract_id }, { ...v5, extra: true }]) {
+    assert.throws(() => sealTestnetCredentials(bad, rsa.publicKey));
+  }
+});
+
 test('tampering, wrong keys and malformed envelopes fail authentication', () => {
   const sealed = sealTestnetCredentials(credentials(), rsa.publicKey);
   for (const field of ['wrapped_key', 'iv', 'ciphertext', 'tag']) {
@@ -117,6 +130,16 @@ test('credential recovery CLI writes owner-only testnet files without printing o
       const file = path.join(dir3, `${name}.json`), data = JSON.parse(fs.readFileSync(file));
       assert.equal(fs.statSync(file).mode & 0o777, 0o600); assert.equal(data.account_id, account); assert.equal(data.private_key, secret);
     }
+    const v5 = { version: 5, purpose: 'youtick-play-grant-testnet', owner_account_id: 'owner.testnet', contract_id: 'vault.testnet',
+      owner_secret: nearApi.KeyPair.fromRandom('ed25519').toString(), contract_secret: nearApi.KeyPair.fromRandom('ed25519').toString(),
+      agent_secret: nearApi.KeyPair.fromRandom('ed25519').toString(), session_secret: nearApi.KeyPair.fromRandom('ed25519').toString() };
+    fs.writeFileSync(envelope, JSON.stringify(sealTestnetCredentials(v5, rsa.publicKey)));
+    child = spawnSync(process.execPath, [path.resolve('scripts/open-testnet-demo-credentials.mjs'), envelope, privateFile, 'grant-v5'],
+      { env: { ...process.env, HOME: root }, encoding: 'utf8' });
+    assert.equal(child.status, 0, child.stderr); assert(!child.stdout.includes(v5.session_secret));
+    const sessionFile = path.join(root, '.near-credentials/testnet/grant-v5/playback-session.json');
+    assert.equal(fs.statSync(sessionFile).mode & 0o777, 0o600);
+    assert.deepEqual(JSON.parse(fs.readFileSync(sessionFile)), { kind: 'youtick-playback-session-not-account-key', vault_id: v5.contract_id, private_key: v5.session_secret });
     fs.chmodSync(privateFile, 0o644); child = run(); assert.notEqual(child.status, 0); assert.match(child.stderr, /owner-only/);
     fs.chmodSync(privateFile, 0o600);
     const link = path.join(root, 'private-link.pem'); fs.symlinkSync(privateFile, link);

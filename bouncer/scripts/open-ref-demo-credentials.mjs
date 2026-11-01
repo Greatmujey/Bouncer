@@ -41,6 +41,9 @@ function main() {
   const keys = payload.version === 3 ? [
     ['owner', payload.owner_account_id, payload.owner_secret], ['contract', payload.contract_id, payload.contract_secret],
     ['funding', payload.owner_account_id, payload.funding_secret], ['project', payload.owner_account_id, payload.project_secret],
+  ] : payload.version === 5 ? [
+    ['owner', payload.owner_account_id, payload.owner_secret], ['contract', payload.contract_id, payload.contract_secret],
+    ['agent', payload.owner_account_id, payload.agent_secret],
   ] : [
     ['owner', payload.owner_account_id, payload.owner_secret], ['input', payload.owner_account_id, payload.input_secret],
     ['sweep', payload.owner_account_id, payload.sweep_secret], ...(payload.version === 2 ? [
@@ -48,9 +51,12 @@ function main() {
     ] : []),
   ];
   for (const [name, account_id, secret] of keys) writeExclusive(dir, `${name}.json`, { account_id, private_key: secret });
+  if (payload.version === 5) writeExclusive(dir, 'playback-session.json', { kind: 'youtick-playback-session-not-account-key',
+    vault_id: payload.contract_id, private_key: payload.session_secret });
   writeExclusive(dir, 'identity.json', { version: payload.version, owner_account_id: payload.owner_account_id, contract_id: payload.contract_id,
-    ...(payload.version === 3 ? { purpose: payload.purpose } : { router_id: payload.router_id }),
-    public_keys: Object.fromEntries(keys.map(([name, , secret]) => [name, nearApi.KeyPair.fromString(secret).getPublicKey().toString()])) });
+    ...([3, 5].includes(payload.version) ? { purpose: payload.purpose } : { router_id: payload.router_id }),
+    public_keys: { ...Object.fromEntries(keys.map(([name, , secret]) => [name, nearApi.KeyPair.fromString(secret).getPublicKey().toString()])),
+      ...(payload.version === 5 ? { playback_session: nearApi.KeyPair.fromString(payload.session_secret).getPublicKey().toString() } : {}) } });
   const dfd = fs.openSync(dir, 'r'), pfd = fs.openSync(root, 'r');
   try { fs.fsyncSync(dfd); fs.fsyncSync(pfd); } finally { fs.closeSync(dfd); fs.closeSync(pfd); }
   console.log(`Restored disposable testnet keys into ${dir}. Verify each public key and route against FINAL chain state before use; never resend an uncertain transaction.`);
