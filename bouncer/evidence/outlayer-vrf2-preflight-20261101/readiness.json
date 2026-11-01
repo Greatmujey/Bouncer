@@ -1,0 +1,7 @@
+{
+  "job_id": 124882513959,
+  "annotation_level": "notice",
+  "title": "Read-only VRF2 terms and funding readiness",
+  "message": "{\"terms\":{\"provider\":\"outlayer.testnet\",\"token\":\"usdc.fakes.testnet\",\"project\":\"connectors.outlayer.testnet/connector-probe\",\"version\":\"2d406ed8005a422c38aec0616990989970e2c444c1386d4f09d54cce59468fb9\",\"price\":\"10000\",\"author\":\"zavodil.testnet\",\"native_estimate\":\"7000100000000000000000\",\"native_maximum\":\"100000000000000000000000\",\"vrf_public_key\":\"c0c5aeae1688c2f7cc2350aae1ee3ce96eddc0de84d678db873de48268f8cfa8\",\"scope\":\"read-only, non-atomic provider terms; no deployed-worker attestation or commercial claim\"},\"setup\":{\"pool_id\":54,\"quote\":\"227853\",\"wrap_storage_min\":\"1250000000000000000000\",\"fake_storage_min\":\"1250000000000000000000\",\"storage_price\":\"10000000000000000000\"},\"sends\":0,\"helper_posts\":0,\"accounts_created\":0,\"scope\":\"read-only, non-atomic testnet availability; fake USDC.e only; no independent fulfillment or reservation established\"}",
+  "run_id": 41318158244
+}

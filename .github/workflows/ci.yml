@@ -606,7 +606,7 @@ jobs:
     # One explicitly reviewed push only. A rerun, another parent, branch or
     # marker cannot create accounts, acquire test tokens or submit payments.
     # Prior unresolved burn/VRF setup hashes are never touched.
-    if: github.event_name == 'push' && github.ref == 'refs/heads/arena/d00d7f93-near-hub' && github.event.before == '7e84aaf405eee77c4ea3691bcae5a26a814e0e4e' && github.event.repository.private == true && github.run_attempt == '1' && contains(github.event.head_commit.message, '[paid-vrf2-proof-20261101]')
+    if: github.event_name == 'push' && github.ref == 'refs/heads/arena/d00d7f93-near-hub' && github.event.before == 'VRF2_UNARMED_RETRY_PARENT' && github.event.repository.private == true && github.run_attempt == '1' && contains(github.event.head_commit.message, '[paid-vrf2-proof-20261101]')
     needs: [js-tests, contract-tests, build-contract]
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -614,10 +614,9 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          name: bouncer-wasm
-          path: .
+      # Use the exact reviewed, committed V9 binary, not a newly compiled
+      # artifact: runner/toolchain drift changed that artifact's hash. The
+      # one-shot script checks its full SHA-256 before any account creation.
       - uses: actions/setup-node@v4
         with:
           node-version: '22'

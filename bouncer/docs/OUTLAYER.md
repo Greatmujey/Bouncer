@@ -282,6 +282,16 @@ verification relies on an independently pinned key and trusted RPC; it does not
 prove key selection is unbiased or a TEE was used. Send counts are local
 instrumentation, not a chain-wide proof that nobody else submitted a payment.
 
+A [read-only readiness check](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41318158244/job/124882513959)
+on November 1 observed the reviewed terms and a bounded test-token quote; it
+created no accounts and sent nothing. The [first fenced VRF2 job](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41318427551/job/124883910483)
+stopped at the WASM hash gate **before key generation, account creation or any
+send**: the newly compiled CI artifact did not equal the reviewed committed V9
+binary. It produced no VRF2 recovery artifact. The corrected fence uses the
+exact committed binary and rechecks its full pinned SHA-256; this does not
+prove source-to-binary reproducibility. These observations are preserved under
+`evidence/outlayer-vrf2-preflight-20261101/` and do not establish delivery.
+
 The encrypted credential envelope and journal are retained separately. The
 local `unseal-vrf2-journal-key.mjs` can derive the journal key to a new private
 file without writing any NEAR signing keys; losing the RSA private key prevents
