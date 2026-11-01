@@ -221,7 +221,7 @@ jobs:
     name: One-shot guarded Ref swap and vault credit (testnet)
     # The explicit parent and marker prohibit reruns or incidental paid runs.
     # This never touches the separate unresolved OutLayer project transaction.
-    if: github.event_name == 'push' && github.ref == 'refs/heads/arena/88d70c7c-near-hub' && github.event.before == 'fcd87db9766e909f995dd0228f3c9ac510b1fbe2' && github.event.repository.private == true && github.run_attempt == '1' && contains(github.event.head_commit.message, '[guarded-ref-demo-v2-20261101]')
+    if: github.event_name == 'push' && github.ref == 'refs/heads/arena/88d70c7c-near-hub' && github.event.before == 'ee2c21ee457090c6d2bd9b548883786f7f50e714' && github.event.repository.private == true && github.run_attempt == '1' && contains(github.event.head_commit.message, '[guarded-ref-demo-v3-20261101]')
     needs: [js-tests, contract-tests, build-contract, ref-router-contract]
     runs-on: ubuntu-latest
     timeout-minutes: 25
