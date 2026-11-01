@@ -119,6 +119,15 @@ test('sweep-only CLI refuses a missing original journal and cannot create replac
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('V2 routes require an explicitly pinned V2 immutable router, not a V1 deployment', async () => {
+  const f = fixture(), v2 = { ...goal, version: 2 };
+  await assert.rejects(checkRefRouter(v2, f.provider, { ready: true }), /immutable configuration/);
+  f.setRoute({ version: 'bouncer-ref-router-v2' });
+  assert.equal((await checkRefRouter(v2, f.provider, { ready: true })).version, 'bouncer-ref-router-v2');
+  await assert.rejects(checkRefRouter(goal, f.provider, { ready: true }), /immutable configuration/);
+  assert.deepEqual(f.sends, []);
+});
+
 test('dry run verifies immutable router, storage and both key scopes without writes or broadcasts', async () => {
   const f = fixture(), result = await runRefSwap({ ...f.opts, execute: false });
   assert.equal(result.status, 'READY'); assert.equal(f.entries.size, 0); assert.deepEqual(f.sends, []);

@@ -15,7 +15,13 @@ export const REF_SWAP_EXCHANGE = 'ref-finance-101.testnet';
 export const REF_SWAP_INPUT_MESSAGE = '{"action":"bouncer-ref-swap-v1"}';
 export const REF_SWAP_OUTPUT_MESSAGE = 'bouncer:ref-output-v1';
 export const REF_SWEEP_GAS = 120n * 10n ** 12n;
-const MAX_INPUT = 10n ** 22n, MAX_MIN_OUTPUT = 100_000n, MAX_U128 = (1n << 128n) - 1n;
+// V2 is a distinct, explicitly built testnet router. V1's reviewed bounds
+// remain unchanged; neither version by itself authorizes a trade.
+const ROUTER_LIMITS = Object.freeze({
+  1: { input: 10n ** 22n, minOutput: 100_000n },
+  2: { input: 10n ** 24n, minOutput: 1_000_000n },
+});
+const MAX_U128 = (1n << 128n) - 1n;
 const keys = ['version', 'id', 'contract_id', 'owner_account_id', 'router_id', 'router_code_hash', 'policy_id',
   'policy_revision', 'route_revision', 'pool_id', 'input_amount', 'min_output'];
 const ownKeys = (obj, fields) => !!obj && typeof obj === 'object' && !Array.isArray(obj) &&
@@ -25,11 +31,12 @@ function amount(value, max, label) {
   return BigInt(value);
 }
 export function validateRefSwapGoal(goal) {
-  if (!ownKeys(goal, keys) || goal.version !== 1 || typeof goal.id !== 'string' || !/^[A-Za-z0-9_-]{1,50}$/.test(goal.id) ||
+  if (!ownKeys(goal, keys) || ![1, 2].includes(goal.version) || typeof goal.id !== 'string' || !/^[A-Za-z0-9_-]{1,50}$/.test(goal.id) ||
       !isTestnetAccount(goal.contract_id) || !isTestnetAccount(goal.owner_account_id) || !isTestnetAccount(goal.router_id) ||
       new Set([goal.contract_id, goal.owner_account_id, goal.router_id]).size !== 3 ||
       !isTransactionHash(goal.router_code_hash) || ![1845, 2206].includes(goal.pool_id)) throw new Error('invalid bounded testnet Ref swap goal');
-  amount(goal.input_amount, MAX_INPUT, 'testnet swap input'); amount(goal.min_output, MAX_MIN_OUTPUT, 'testnet minimum output');
+  const limits = ROUTER_LIMITS[goal.version];
+  amount(goal.input_amount, limits.input, 'testnet swap input'); amount(goal.min_output, limits.minOutput, 'testnet minimum output');
   const result = structuredClone(goal);
   validateFtCallGoal({ id: `${result.id}-input`, contract_id: result.contract_id, owner_account_id: result.owner_account_id,
     policy_id: result.policy_id, payee: result.router_id, token: REF_SWAP_INPUT, amount: result.input_amount,

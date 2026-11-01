@@ -17,8 +17,17 @@ const INPUT: &str = "wrap.testnet";
 const OUTPUT: &str = "3e2210e1184b45b64c8a434c0a7e7b23cc04ea7eb7a6c3c32520d03d4afcb8af";
 const INPUT_MESSAGE: &str = r#"{"action":"bouncer-ref-swap-v1"}"#;
 const OUTPUT_MESSAGE: &str = "bouncer:ref-output-v1";
+// The default artifact keeps the original V1 limits unchanged. The separately
+// compiled V2 feature permits at most one testnet NEAR for a reviewed funding
+// trade; it does not authorize a swap or change any deployed V1 contract.
+#[cfg(not(feature = "funding-v2"))]
 const MAX_INPUT: u128 = 10_000_000_000_000_000_000_000; // 0.01 testnet wNEAR
+#[cfg(feature = "funding-v2")]
+const MAX_INPUT: u128 = 1_000_000_000_000_000_000_000_000; // 1 testnet wNEAR
+#[cfg(not(feature = "funding-v2"))]
 const MAX_MIN_OUTPUT: u128 = 100_000; // 0.1 testnet USDC, six decimals
+#[cfg(feature = "funding-v2")]
+const MAX_MIN_OUTPUT: u128 = 1_000_000; // 1 testnet USDC, six decimals
 const NATIVE_RESERVE: u128 = 50_000_000_000_000_000_000_000; // 0.05 testnet NEAR
 const GAS_FOR_REF_CALL: Gas = Gas::from_tgas(140);
 const GAS_FOR_INPUT_CALLBACK: Gas = Gas::from_tgas(12);
@@ -109,7 +118,12 @@ impl RefRouter {
             started: false, input_state: 0, inner_used: None }
     }
 
-    pub fn contract_version(&self) -> &'static str { "bouncer-ref-router-v1" }
+    pub fn contract_version(&self) -> &'static str {
+        #[cfg(feature = "funding-v2")]
+        { "bouncer-ref-router-v2" }
+        #[cfg(not(feature = "funding-v2"))]
+        { "bouncer-ref-router-v1" }
+    }
 
     pub fn get_route(&self) -> RouteView {
         let state = match self.input_state { 0 => "ready", 1 => "inner_pending", 2 => "inner_settled", _ => "inner_unknown" };
@@ -269,6 +283,38 @@ mod tests {
     fn route_cannot_exceed_its_testnet_input_bound() {
         testing_env!(context("router.testnet", "router.testnet", 0));
         RefRouter::new(id("owner.testnet"), id("vault.testnet"), 1845, U128(MAX_INPUT + 1), U128(42));
+    }
+
+    #[test]
+    #[should_panic(expected = "minimum output exceeds the testnet bound")]
+    fn route_cannot_exceed_its_testnet_minimum_output_bound() {
+        testing_env!(context("router.testnet", "router.testnet", 0));
+        RefRouter::new(id("owner.testnet"), id("vault.testnet"), 1845, U128(100), U128(MAX_MIN_OUTPUT + 1));
+    }
+
+    #[test]
+    #[should_panic(expected = "minimum output exceeds the testnet bound")]
+    fn route_cannot_set_zero_minimum_output() {
+        testing_env!(context("router.testnet", "router.testnet", 0));
+        RefRouter::new(id("owner.testnet"), id("vault.testnet"), 1845, U128(100), U128(0));
+    }
+
+    #[cfg(feature = "funding-v2")]
+    #[test]
+    fn larger_testnet_artifact_is_separately_versioned_and_still_bounded() {
+        testing_env!(context("router.testnet", "router.testnet", 0));
+        let router = RefRouter::new(id("owner.testnet"), id("vault.testnet"), 1845, U128(MAX_INPUT), U128(615_000));
+        assert_eq!(router.get_route().version, "bouncer-ref-router-v2");
+        assert_eq!(router.get_route().amount_in.0, MAX_INPUT);
+        assert_eq!(router.get_route().min_amount_out.0, 615_000);
+    }
+
+    #[cfg(not(feature = "funding-v2"))]
+    #[test]
+    #[should_panic(expected = "input exceeds the testnet bound")]
+    fn original_v1_artifact_cannot_be_used_for_a_one_near_trade() {
+        testing_env!(context("router.testnet", "router.testnet", 0));
+        RefRouter::new(id("owner.testnet"), id("vault.testnet"), 1845, U128(1_000_000_000_000_000_000_000_000), U128(42));
     }
 
     #[test]

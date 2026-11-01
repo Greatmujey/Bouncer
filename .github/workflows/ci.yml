@@ -144,6 +144,26 @@ jobs:
           name: ref-router-wasm
           path: bouncer/contracts/ref-router/target/wasm32-unknown-unknown/release/bouncer_ref_router.wasm
           if-no-files-found: error
+      - name: Test separately bounded funding V2
+        working-directory: bouncer/contracts/ref-router
+        shell: bash
+        run: |
+          set +e
+          CARGO_TERM_COLOR=never CARGO_PROFILE_DEV_DEBUG=0 cargo test --lib --features funding-v2 2>&1 | tee "$RUNNER_TEMP/ref-router-v2-tests.log"
+          result=${PIPESTATUS[0]}
+          if [ "$result" -ne 0 ]; then
+            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-3000).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=Ref router V2 tests failed::"+s)' "$RUNNER_TEMP/ref-router-v2-tests.log"
+          fi
+          exit "$result"
+      - name: Build separate testnet funding V2 WASM
+        working-directory: bouncer/contracts/ref-router
+        run: RUSTFLAGS="-C link-arg=-s" cargo build --target wasm32-unknown-unknown --release --features funding-v2
+      - name: Save the non-deployed V2 artifact for review
+        uses: actions/upload-artifact@v4
+        with:
+          name: ref-router-funding-v2-wasm
+          path: bouncer/contracts/ref-router/target/wasm32-unknown-unknown/release/bouncer_ref_router.wasm
+          if-no-files-found: error
 
   build-contract:
     name: Build Rust contract (wasm)

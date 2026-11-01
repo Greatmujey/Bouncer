@@ -17,6 +17,21 @@ test('reviewed Ref route is testnet-only, bounded, immutable, and mapped to one 
   }
 });
 
+test('explicit V2 funding bounds do not widen the original V1 route', () => {
+  const large = { ...goal, version: 2, input_amount: '1000000000000000000000000', min_output: '615000' };
+  assert.deepEqual(validateRefSwapGoal(large), large);
+  for (const bad of [
+    { ...large, version: 1 }, { ...large, version: 3 },
+    { ...large, input_amount: '1000000000000000000000001' }, { ...large, min_output: '1000001' },
+    { ...large, router_id: 'router.near' },
+  ]) assert.throws(() => validateRefSwapGoal(bad));
+  // Both versions share the receipt ABI, but each version remains a distinct
+  // code/configuration pin checked before a transaction can be sent.
+  const proof = verifyCompleteRefSwap({ goal: { ...goal, version: 2 }, swapResult: swapResult(), swapPublicKey: key,
+    sweepResult: sweepResult(), sweepPublicKey: key });
+  assert.equal(proof.swap.output_amount, '70'); assert.equal(proof.vault_credit.credited, '70');
+});
+
 test('linked FINAL swap and actual deposit-hook sweep prove a complete bounded testnet route', () => {
   const proof = verifyCompleteRefSwap({ goal, swapResult: swapResult(), swapPublicKey: key, sweepResult: sweepResult(), sweepPublicKey: key });
   assert.equal(proof.swap.tx_hash, inputHash); assert.equal(proof.swap.output_amount, '70');

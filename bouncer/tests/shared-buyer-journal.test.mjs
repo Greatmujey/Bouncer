@@ -63,6 +63,19 @@ function waitForPoolConnections(pool) {
 }
 const id = () => `buyer-${crypto.randomBytes(8).toString('hex')}`;
 const challenge = () => crypto.randomBytes(16).toString('hex');
+// A poisoned connection is destroyed asynchronously. Wait for PostgreSQL to
+// release its original lock before tests that inspect persisted state; an
+// immediate BUSY is safe and expected, not evidence that the state is corrupt.
+async function waitForJournalRelease(pool, journalId) {
+  const bytes = crypto.createHash('sha256').update(JSON.stringify(['bouncer-buyer-lock-v1', contract, owner, journalId])).digest();
+  const barrier = await pool.connect();
+  try {
+    await barrier.query('BEGIN'); await barrier.query("SET LOCAL lock_timeout = '5s'");
+    await barrier.query('SELECT pg_catalog.pg_advisory_xact_lock($1::integer, $2::integer)', [bytes.readInt32BE(0), bytes.readInt32BE(4)]);
+    await barrier.query('COMMIT');
+  } catch (error) { await barrier.query('ROLLBACK'); throw error; }
+  finally { barrier.release(); }
+}
 const goal = { id: 'work', resource: 'compute', policy_id: 'resources', token, payee, max_amount: '1000',
   order_binding: 'seller-v3', input: { text: 'sensitive order contents', rounds: 2 } };
 const products = Object.fromEntries(['compute', 'storage', 'api'].map(resource => [resource,
@@ -186,7 +199,9 @@ dbtest('journal creation is explicit, locked, scoped, immutable and requires the
     assert.throws(() => f.journal.put('work', {}), /cannot be used/);
     await f.journal.close();
     await assert.rejects(f.open({ createNew: true }), error => error.code === 'ALREADY_EXISTS');
+    await waitForJournalRelease(f.pool, f.journalId);
     await assert.rejects(f.open({ key: crypto.randomBytes(32) }), error => error.code === 'KEY_MISMATCH');
+    await waitForJournalRelease(f.pool, f.journalId);
     await assert.rejects(f.open({ journalId: id() }), error => error.code === 'NOT_FOUND');
     const reopened = await f.open(); assert.deepEqual(reopened.list(), []);
   } finally { await f.cleanup(); }
@@ -230,7 +245,7 @@ dbtest('lost reservation COMMIT acknowledgement never broadcasts and leaves the 
     await assert.rejects(runtime.run(), error => /reservation failed or its commit is uncertain/.test(error.message) && !error.message.includes('secret-value'));
     assert.equal(broken.fired, true); assert.equal(runtime.sends, 0);
     assert.throws(() => journal.get(goal.id), /journal failed/);
-    await journal.close();
+    await journal.close(); await waitForJournalRelease(f.pool, f.journalId);
     const reopened = await f.open(); assert.equal(reopened.get(goal.id).status, 'pending');
     let quotes = 0;
     await assert.rejects(runtime.run({ journal: reopened, getQuote: async () => { quotes++; } }), /unresolved pending payment/);
@@ -249,7 +264,8 @@ dbtest('lost owner-fence COMMIT acknowledgment stops before signing or broadcast
     runtime.account.createTransaction = async (...args) => { signs++; return prepare(...args); };
     await assert.rejects(runtime.run(), error => /owner fence failed/.test(error.message) && !error.message.includes('secret-value'));
     assert.equal(broken.fired, true); assert.equal(signs, 0); assert.equal(runtime.sends, 0);
-    await journal.close(); const reopened = await f.open(); assert.deepEqual(reopened.list(), []);
+    await journal.close(); await waitForJournalRelease(f.pool, f.journalId);
+    const reopened = await f.open(); assert.deepEqual(reopened.list(), []);
   } finally { if (journal) await journal.close(); await f.cleanup(); }
 });
 
@@ -262,6 +278,7 @@ dbtest('lost completion acknowledgment retains one payment; reopening uses origi
     const runtime = syntheticRuntime(journal, { loseSend: false }); broken.enable();
     await assert.rejects(runtime.run(), /update failed or its commit is uncertain/);
     assert.equal(broken.fired, true); assert.equal(runtime.sends, 1); await journal.close();
+    await waitForJournalRelease(f.pool, f.journalId);
     const reopened = await f.open(); const entry = reopened.get(goal.id); assert.equal(entry.status, 'completed');
     const result = await recoverDirectResourcePayment({ config: { contract_id: contract, owner_account_id: owner, provider_url: origin, goals: [goal] },
       requestId: goal.id, provider: runtime.provider, journal: reopened, log: () => {} });
@@ -277,6 +294,7 @@ dbtest('completion failure before COMMIT leaves pending and recovers the same ha
     const journal = await openPostgresBuyerJournal({ pool: broken, contractId: contract, ownerAccountId: owner, journalId: f.journalId, key: f.key });
     const runtime = syntheticRuntime(journal, { loseSend: false }); broken.enable();
     await assert.rejects(runtime.run(), /commit is uncertain/); assert.equal(runtime.sends, 1); await journal.close();
+    await waitForJournalRelease(f.pool, f.journalId);
     const reopened = await f.open(), original = reopened.get(goal.id); assert.equal(original.status, 'pending');
     await recoverDirectResourcePayment({ config: { contract_id: contract, owner_account_id: owner, provider_url: origin, goals: [goal] },
       requestId: goal.id, provider: runtime.provider, journal: reopened, log: () => {} });
@@ -508,7 +526,7 @@ dbtest('a lost database session lock stops reservation before any simulated broa
     const journal = await openPostgresBuyerJournal({ pool: broken, contractId: contract, ownerAccountId: owner, journalId: f.journalId, key: f.key });
     const runtime = syntheticRuntime(journal); sabotage = true;
     await assert.rejects(runtime.run(), error => error.code === 'SESSION_LOST' || /session lock was lost/.test(error.message));
-    assert.equal(runtime.sends, 0); await journal.close();
+    assert.equal(runtime.sends, 0); await journal.close(); await waitForJournalRelease(f.pool, f.journalId);
     const reopened = await f.open(); assert.deepEqual(reopened.list(), []);
   } finally { await f.cleanup(); }
 });
@@ -534,7 +552,7 @@ dbtest('losing only the owner fence before reservation prevents a broadcast', as
     journal = await openPostgresBuyerJournal({ pool: broken, contractId: contract, ownerAccountId: owner, journalId: f.journalId, key: f.key });
     const runtime = syntheticRuntime(journal);
     await assert.rejects(runtime.run({ beforePayment: async () => { sabotage = true; } }), error => error.code === 'SESSION_LOST');
-    assert.equal(runtime.sends, 0); await journal.close();
+    assert.equal(runtime.sends, 0); await journal.close(); await waitForJournalRelease(f.pool, f.journalId);
     const reopened = await f.open(); assert.deepEqual(reopened.list(), []);
   } finally { if (journal) await journal.close(); await f.cleanup(); }
 });
@@ -566,7 +584,7 @@ dbtest('a lost owner fence after reservation stops broadcast and leaves the comm
     assert.equal(runtime.sends, 0);
     let called = false;
     await assert.rejects(second.withOwnerFence(async () => { called = true; }), error => error.code === 'OWNER_UNRESOLVED');
-    assert.equal(called, false); await journal.close();
+    assert.equal(called, false); await journal.close(); await waitForJournalRelease(f.pool, f.journalId);
     const reopened = await f.open(); assert.equal(reopened.get('work').status, 'pending');
     await assert.rejects(second.withOwnerFence(async () => {}), error => error.code === 'OWNER_UNRESOLVED');
   } finally { if (journal) await journal.close(); await f.cleanup(); }
@@ -1025,6 +1043,7 @@ dbtest('atomic buyer key rotation preserves completed and pending payments and t
     assert.ok(!JSON.stringify(after.rows).includes(pending.resource_authorization.signature));
     await f.journal.close();
     await assert.rejects(f.open(), error => error.code === 'KEY_MISMATCH');
+    await waitForJournalRelease(f.pool, f.journalId);
     const reopened = await f.open({ key: next });
     assert.deepEqual(reopened.list(), original);
     await assert.rejects(reopened.withOwnerFence(async () => {}), error => error.code === 'OWNER_UNRESOLVED');
@@ -1044,7 +1063,9 @@ dbtest('uncertain rotation COMMIT preserves exactly the old or new key and never
         /preserve BOTH keys/.test(error.message) && !error.message.includes('secret-value'));
       assert.equal(broken.fired, true); assert.throws(() => journal.list(), /journal failed/); await journal.close();
       const winningKey = afterCommit ? next : f.key, losingKey = afterCommit ? f.key : next;
+      await waitForJournalRelease(f.pool, f.journalId);
       await assert.rejects(f.open({ key: losingKey }), error => error.code === 'KEY_MISMATCH');
+      await waitForJournalRelease(f.pool, f.journalId);
       const reopened = await f.open({ key: winningKey });
       assert.equal(reopened.get('work').tx_hash, pending.tx_hash); assert.equal(reopened.get('work').status, 'pending');
       await assert.rejects(reopened.withOwnerFence(async () => {}), error => error.code === 'OWNER_UNRESOLVED');
@@ -1066,7 +1087,9 @@ dbtest('tampering during key rotation rolls back already re-encrypted rows and f
     assert.deepEqual(after.rows[0].ciphertext, before.rows[0].ciphertext);
     assert.deepEqual(after.rows[1].ciphertext, corrupted);
     assert.deepEqual((await f.pool.query('SELECT key_check FROM bouncer_buyer_v1.journals WHERE journal_id=$1', [f.journalId])).rows[0].key_check, keyBefore);
+    await waitForJournalRelease(f.pool, f.journalId);
     await assert.rejects(f.open({ key: next }), error => error.code === 'KEY_MISMATCH');
+    await waitForJournalRelease(f.pool, f.journalId);
     await f.pool.query('UPDATE bouncer_buyer_v1.entries SET ciphertext=$3 WHERE journal_id=$1 AND entry_id=$2', [f.journalId, 'z-pending', before.rows[1].ciphertext]);
     const recovered = await f.open(); assert.equal(recovered.get('work').status, 'completed'); assert.equal(recovered.get('z-pending').status, 'pending');
     assert.equal(runtime.sends, 1);
@@ -1177,6 +1200,7 @@ dbtest('SIGKILL during staged key rotation rolls back the transaction and preser
       await fence.query('SELECT pg_catalog.pg_advisory_unlock($1::integer,$2::integer)', [words.readInt32BE(0), words.readInt32BE(4)]);
     } finally { fence.release(); }
     await assert.rejects(f.open({ key: next }), error => error.code === 'KEY_MISMATCH');
+    await waitForJournalRelease(f.pool, f.journalId);
     const reopened = await f.open();
     assert.equal(reopened.get('work').tx_hash, pending.tx_hash); assert.equal(reopened.get('work').status, 'pending');
     await assert.rejects(reopened.withOwnerFence(async () => {}), error => error.code === 'OWNER_UNRESOLVED');
@@ -1212,7 +1236,9 @@ dbtest('rotation limits and lost journal lock fail without partially changing en
       await assert.rejects(journal.rotateEncryptionKey(next), error => error.code === (mode === 'lost-lock' ? 'SESSION_LOST' : 'ROTATION_LIMIT'));
       await journal.close();
       assert.deepEqual((await f.pool.query('SELECT ciphertext FROM bouncer_buyer_v1.entries WHERE journal_id=$1', [f.journalId])).rows[0].ciphertext, before);
+      await waitForJournalRelease(f.pool, f.journalId);
       await assert.rejects(f.open({ key: next }), error => error.code === 'KEY_MISMATCH');
+      await waitForJournalRelease(f.pool, f.journalId);
       const reopened = await f.open(); assert.equal(reopened.get('work').tx_hash, pending.tx_hash); assert.equal(reopened.get('work').status, 'pending');
     } finally { if (journal) await journal.close(); next.fill(0); await f.cleanup(); }
   }
@@ -1623,6 +1649,7 @@ dbtest('strict intent and pending payment commit atomically across a lost acknow
       const intents = await f.pool.query('SELECT tx_hash FROM bouncer_buyer_v1.intents WHERE journal_id=$1', [f.journalId]);
       assert.equal(rows.rowCount, afterCommit ? 1 : 0); assert.equal(intents.rowCount, rows.rowCount);
       if (afterCommit) assert.equal(intents.rows[0].tx_hash, rows.rows[0].tx_hash);
+      await waitForJournalRelease(f.pool, f.journalId);
       const reopened = await f.open();
       if (afterCommit) {
         assert.equal(reopened.get('work').intent_id, 'uncertain-op');
@@ -1642,6 +1669,7 @@ dbtest('strict intent mapping is rechecked before broadcast and after reopening'
       await f.pool.query("UPDATE bouncer_buyer_v1.intents SET intent_id='tampered' WHERE owner_account_id=$1", [owner]);
     } }), /shared journal pre-broadcast check failed.*no payment was sent/);
     assert.equal(runtime.sends, 0); await f.journal.close();
+    await waitForJournalRelease(f.pool, f.journalId);
     await assert.rejects(f.open(), error => error.code === 'CORRUPT');
     const rows = await f.pool.query('SELECT status, tx_hash FROM bouncer_buyer_v1.entries WHERE journal_id=$1', [f.journalId]);
     assert.equal(rows.rowCount, 1); assert.equal(rows.rows[0].status, 'pending');

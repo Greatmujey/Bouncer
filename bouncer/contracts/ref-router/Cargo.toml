@@ -6,6 +6,10 @@ edition = "2021"
 [lib]
 crate-type = ["cdylib"]
 
+[features]
+# Separate, explicitly built testnet-only artifact. Default V1 limits do not change.
+funding-v2 = []
+
 [dependencies]
 near-sdk = "5.14"
 

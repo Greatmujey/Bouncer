@@ -1,9 +1,9 @@
 # Experimental one-shot Ref testnet adapter
 
-This is an unaudited testnet prototype. The router builds and its contract and
-client have synthetic tests, but the combined path has **not** yet been
-proven against a live Ref pool. It is not production-ready. Do not use real
-funds or assume a successful input transfer is an output.
+This is an unaudited testnet prototype. The V1 router completed one guarded
+live Ref swap and separately verified vault sweep, as detailed below. That proof
+is not production readiness, a commercial purchase, or proof for any newer
+router. Do not use real funds or assume a successful input transfer is an output.
 
 ## Why an adapter
 
@@ -19,7 +19,13 @@ are not proof of deployed code or a swap.
 
 The separate `contracts/ref-router` prototype instead isolates **one** bounded
 `wrap.testnet` → Circle **testnet** USDC trade on one of two reviewed Ref
-pools. The owner deploys and initializes a fresh router from its own account;
+pools. The default V1 artifact is capped at 0.01 testnet wNEAR. A separate
+compile-time `funding-v2` variant is capped at 1 testnet wNEAR and a 1-USDC
+minimum-output parameter, uses the same receipt ABI but exposes a distinct V2
+version, and has not been deployed or exercised live. Raising the bound does
+not grant permission: each new trade still requires an owner-reviewed exact
+policy, immutable router and minimum, a separately scoped key, retained journal
+and original-hash recovery. The owner deploys and initializes a fresh router from its own account;
 the owner and destination Bouncer vault, exact input, pool and minimum output
 are immutable. Bouncer's owner must explicitly allow the router and pin its
 exact receiver message under an FT spending policy. The restricted agent still

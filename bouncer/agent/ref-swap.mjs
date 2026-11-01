@@ -64,7 +64,7 @@ export async function checkRefRouter(rawGoal, provider, { ready = false, forSwee
   if (!account || account.code_hash !== goal.router_code_hash || !Array.isArray(keys?.keys) || keys.keys.length !== 0) {
     throw new Error('router bytecode hash differs or router still has access keys; stop before spending');
   }
-  const expected = { version: 'bouncer-ref-router-v1', owner: goal.owner_account_id, vault: goal.contract_id,
+  const expected = { version: `bouncer-ref-router-v${goal.version}`, owner: goal.owner_account_id, vault: goal.contract_id,
     exchange: REF_SWAP_EXCHANGE, token_in: REF_SWAP_INPUT, token_out: REF_SWAP_OUTPUT, pool_id: goal.pool_id,
     amount_in: goal.input_amount, min_amount_out: goal.min_output, input_message: REF_SWAP_INPUT_MESSAGE };
   if (!route || typeof route !== 'object' || Object.keys(route).length !== Object.keys(expected).length + 3 ||
