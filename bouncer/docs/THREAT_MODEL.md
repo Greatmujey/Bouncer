@@ -167,7 +167,15 @@ not prove all possible callback, provider or token failure cases.
    Bounded atomic key rotation preserves the existing encrypted entries and
    pending quarantine; a stolen old key, an old backup or previously exposed
    bearer claim is not revoked. Preserve both keys if COMMIT is uncertain and
-   check the original primary with all workers stopped.
+   check the original primary with all workers stopped. An authenticated
+   encrypted checkpoint can detect a rollback relative to that one checkpoint;
+   the direct resource-agent can optionally write one before each broadcast and
+   compare the latest on restart. It cannot establish freshness if the directory
+   is also lost or rolled back, cover other journals or replace database/WAL
+   backups, independent retention and transaction reconciliation. Database
+   session/owner fences and the pending row are rechecked immediately before
+   the final synchronous guard and broadcast; network/primary failure can still
+   happen afterward, so an ambiguous hash stays quarantined.
    These checks do not protect against a compromised host or owner key. Recovery
    requires trusted FINAL RPC receipts, Bouncer code and token code; it verifies
    payment, not delivery. An unknown or expired hash stays unresolved and is

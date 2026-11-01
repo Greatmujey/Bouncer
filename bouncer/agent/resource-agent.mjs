@@ -190,7 +190,7 @@ export async function fulfillPaidResource({ goal, request, contractId, ownerAcco
  * same order again. The provider must implement its own replay protection.
  */
 export async function runResourceAgent({ contractId, ownerAccountId, goals, getQuote, fulfill, readStorage, repositoryLookup, providerUrl, onPlan = () => {},
-  beforePayment = async () => {}, beforeBroadcast = () => {}, provider, account, publicKey, runtimeFactory, journal, execute = false, durablePayment = false, log = console.log }) {
+  beforePayment = async () => {}, beforeBroadcast = () => {}, beforeBroadcastCheckpoint, provider, account, publicKey, runtimeFactory, journal, execute = false, durablePayment = false, log = console.log }) {
   if (Array.isArray(goals)) goals = structuredClone(goals);
   if (execute && (typeof fulfill !== 'function' || typeof journal?.get !== 'function' || typeof journal?.put !== 'function')) {
     throw new Error('live execution requires a readable/writable journal and fulfillment source');
@@ -202,7 +202,10 @@ export async function runResourceAgent({ contractId, ownerAccountId, goals, getQ
     if (goals.some(goal => typeof goal?.id !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(goal.id))) throw new Error('invalid shared buyer request ID');
     if (execute && !durablePayment) throw new Error('shared buyer execution requires durable signed-hash payments');
   }
-  if (typeof beforePayment !== 'function' || typeof beforeBroadcast !== 'function') throw new Error('invalid pre-payment guard');
+  if (typeof beforePayment !== 'function' || typeof beforeBroadcast !== 'function' ||
+      (beforeBroadcastCheckpoint !== undefined && (typeof beforeBroadcastCheckpoint !== 'function' || !execute || !durablePayment || journal?.sharedDirectV3 !== true))) {
+    throw new Error('invalid pre-payment guard');
+  }
   if (repositoryLookup !== undefined && typeof repositoryLookup !== 'function') throw new Error('invalid GitHub reference lookup');
   if (execute && Array.isArray(goals) && goals.some(goal => goal?.resource === 'storage') && typeof readStorage !== 'function') {
     throw new Error('live storage execution requires provider readback before payment');
@@ -274,7 +277,7 @@ export async function runResourceAgent({ contractId, ownerAccountId, goals, getQ
     log('[resource-agent] Batch preflight passed; these non-atomic views are not a guarantee.');
     const indexById = new Map(plan.requests.map((request, index) => [request.id, index]));
     payments = await runProcurement({ plan, provider, account, publicKey, journal, journalRoutes, claimOrigins, execute: true, durablePayment, log, stopOnBlocked: true,
-      beforePayment, beforeBroadcast,
+      beforePayment, beforeBroadcast, beforeBroadcastCheckpoint,
       onCheck: check => {
         if (check.status === 'BLOCKED' || check.status === 'DEFERRED') {
           const index = indexById.get(check.id);
@@ -361,7 +364,7 @@ export function routedResourceProvider({ providerUrl, goals, overrides = new Map
   };
 }
 
-const USAGE = `Usage: node bouncer/agent/resource-agent.mjs --goals goals.json --key agent-key.json [--journal journal.json | --shared-journal STABLE_ID] [--local-provider provider.json] [--execute] [--durable]
+const USAGE = `Usage: node bouncer/agent/resource-agent.mjs --goals goals.json --key agent-key.json [--journal journal.json | --shared-journal STABLE_ID] [--checkpoint-dir DIR] [--local-provider provider.json] [--execute] [--durable]
 
 Quote configured providers and preflight owner-pinned resource goals.
 Default sends no payments; a seller-v2 quote may persist an order at the seller.
@@ -372,6 +375,9 @@ seller-v3 execution.
 --shared-journal uses a separately initialized, encrypted PostgreSQL buyer
 journal for direct seller-v3 goals only. It requires --execute --durable and
 secure BOUNCER_BUYER_DATABASE_URL / BOUNCER_BUYER_JOURNAL_KEY_FILE settings.
+--checkpoint-dir opts a fresh shared journal into encrypted, fsync-backed local
+pre-broadcast checkpoints in an existing, dedicated owner-only directory. A
+checkpoint is not a full backup or proof that this directory is the latest.
 Checks happen after payment and do not guarantee delivery or refunds. Use a function-call
 key scoped only to Bouncer execute. Amounts are token smallest units, not USD.
 Never use real funds.
@@ -383,7 +389,7 @@ function parseCli(args) {
     if (arg === '--help') return { help: true };
     if (arg === '--execute') { options.execute = true; continue; }
     if (arg === '--durable') { options.durable = true; continue; }
-    if (['--goals', '--key', '--journal', '--shared-journal', '--local-provider'].includes(arg) && args[i + 1] && !args[i + 1].startsWith('--')) {
+    if (['--goals', '--key', '--journal', '--shared-journal', '--checkpoint-dir', '--local-provider'].includes(arg) && args[i + 1] && !args[i + 1].startsWith('--')) {
       const key = arg.slice(2);
       if (options[key]) throw new Error(`duplicate ${arg}`);
       options[key] = args[++i];
@@ -393,6 +399,7 @@ function parseCli(args) {
   if (options['shared-journal'] && (options.journal || !options.execute || !options.durable)) {
     throw new Error('--shared-journal requires --execute --durable and cannot be combined with --journal');
   }
+  if (options['checkpoint-dir'] && !options['shared-journal']) throw new Error('--checkpoint-dir requires --shared-journal');
   return options;
 }
 async function main() {
@@ -411,7 +418,7 @@ async function main() {
   httpResourceProvider(config.provider_url);
   // Check every selected route before starting a development provider.
   routedResourceProvider({ providerUrl: config.provider_url, goals: config.goals });
-  let journal, journalPool, local;
+  let journal, journalPool, local, checkpointDirectory;
   try {
     let providerUrl = config.provider_url;
     const overrides = new Map();
@@ -434,6 +441,20 @@ async function main() {
         ({ journal, pool: journalPool } = await openConfiguredBuyerJournal({ contractId: config.contract_id,
           ownerAccountId: config.owner_account_id, journalId: options['shared-journal'] }));
         console.log(`[resource-agent] Using the original shared buyer journal: ${options['shared-journal']}`);
+        if (options['checkpoint-dir']) {
+          const { readBuyerKeyFile } = await import('./shared-buyer-config.mjs');
+          const { openBuyerCheckpointDirectory } = await import('./buyer-checkpoint-directory.mjs');
+          let current, previous;
+          try {
+            current = readBuyerKeyFile(process.env.BOUNCER_BUYER_JOURNAL_KEY_FILE);
+            if (process.env.BOUNCER_BUYER_SNAPSHOT_KEY_FILE) previous = readBuyerKeyFile(process.env.BOUNCER_BUYER_SNAPSHOT_KEY_FILE);
+            checkpointDirectory = await openBuyerCheckpointDirectory({ directory: options['checkpoint-dir'], journal, currentKey: current, previousKey: previous });
+          } finally { current?.fill(0); previous?.fill(0); }
+          // Reject an oversized batch before quotes or payments, rather than
+          // discovering the 256-checkpoint limit after an earlier batch item.
+          checkpointDirectory.assertCapacity(config.goals.filter(goal => !journal.get(goal.id)).length);
+          console.log('[resource-agent] Encrypted pre-broadcast checkpoints enabled; directory freshness remains an operator responsibility.');
+        }
       } else {
         const journalPath = options.journal || config.journal_path || `${options.goals}.bouncer-journal.json`;
         journal = new FileJournal(journalPath, config.contract_id, config.owner_account_id);
@@ -443,12 +464,15 @@ async function main() {
     const result = await runResourceAgent({
       contractId: config.contract_id, ownerAccountId: config.owner_account_id, providerUrl: config.provider_url, goals: config.goals,
       getQuote: client.getQuote, fulfill: client.fulfill, readStorage: client.readStorage, journal, execute: options.execute, durablePayment: options.durable === true,
+      ...(checkpointDirectory ? { beforePayment: async () => checkpointDirectory.assertCapacity(),
+        beforeBroadcastCheckpoint: record => checkpointDirectory.checkpoint(record) } : {}),
       onPlan: plan => console.log(`[resource-agent] Validated quote plan:\n${JSON.stringify(plan, null, 2)}`),
       runtimeFactory: plan => createRuntime({ plan, keyFile: options.key }),
     });
     console.log(`[resource-agent] ${options.execute ? 'Finished' : 'Dry run only'}: ${JSON.stringify(result.payments)}; deliveries=${result.deliveries.length}`);
     if (result.payments.blocked) process.exitCode = 2;
   } finally {
+    if (checkpointDirectory) checkpointDirectory.close();
     if (journal) await journal.close();
     if (journalPool) await journalPool.end();
     if (local) await local.close();

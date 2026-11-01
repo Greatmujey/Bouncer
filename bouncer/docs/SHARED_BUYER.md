@@ -269,6 +269,85 @@ journal. These controls bound work but do not prove durable storage, fault-free
 networking or safe HA. A stolen old key may already have exposed prior backups
 and replayable seller claims: re-encryption **does not revoke leaked claims**.
 
+## Authenticate an encrypted checkpoint and detect a known rollback
+
+For a **bounded journal** (at most 256 entries and 8 MiB total ciphertext), the
+optional snapshot command exports one authenticated, encrypted checkpoint while
+holding that journal's session lock. It validates each entry against the open
+journal and adds a domain-separated MAC; claims and task contents stay encrypted.
+The file still contains payment IDs, statuses, hashes and seller metadata, so it
+is sensitive. Store it in protected, separate, append-only or versioned storage;
+keep its original encryption key separately. Export never overwrites a file.
+
+With the original primary and journal key configured, stop cooperating workers
+and run the following. `--verify` is offline and needs no database or signer;
+`--compare` opens the original journal and checks that no checkpointed payment,
+revision or immutable identity is missing or regressed. It permits legitimate
+new entries and pending-to-completed transitions.
+
+```sh
+cd bouncer
+npm run snapshot-shared-buyer -- --export /secure/checkpoint-001.json --contract bouncer.example.testnet --owner owner.example.testnet --journal mission-001
+npm run snapshot-shared-buyer -- --verify /secure/checkpoint-001.json
+npm run snapshot-shared-buyer -- --compare /secure/checkpoint-001.json --contract bouncer.example.testnet --owner owner.example.testnet --journal mission-001
+```
+
+After rotating the journal key, keep `BOUNCER_BUYER_JOURNAL_KEY_FILE` pointing
+to the **current** key and set `BOUNCER_BUYER_SNAPSHOT_KEY_FILE` to the old
+key's protected file path when verifying or comparing an old checkpoint. If the
+comparison reports rollback, corruption, a wrong key, missing journal or busy
+lock, **stop and reconcile**; never delete, replace or repay pending operations.
+
+An authenticated checkpoint can itself be old or lost. Comparison only detects
+rollback relative to the exact supplied checkpoint, for **one** journal; it does
+not prove that the checkpoint is the latest, cover other journals for the owner,
+verify NEAR settlement or delivery, or make a stale failover safe. It is **not**
+a PostgreSQL backup, restore tool, automatic failover mechanism or permission to
+resume after data loss. Use consistent database backups/WAL plus independently
+protected, monotonic checkpoint retention and reconcile all original hashes.
+
+### Optional pre-broadcast checkpoint directory
+
+The direct `resource-agent` CLI can opt a **new, empty** shared journal into a
+separate, dedicated existing directory, owned by the process user with mode
+`0700`. For example, after the normal shared-buyer provisioning:
+
+```sh
+mkdir -m 700 /secure/bouncer-mission-001-checkpoints
+node agent/resource-agent.mjs --goals reviewed-goals.json --key execute-only-agent.json --shared-journal mission-001 --checkpoint-dir /secure/bouncer-mission-001-checkpoints --execute --durable
+```
+
+After committing a pending hash and **before** the final synchronous freshness
+guard and one broadcast, the agent creates an encrypted `0600` checkpoint file,
+fsyncs it and its directory, and rechecks its database owner/session fence and
+pending row. If checkpointing or that check fails, no broadcast is attempted;
+the already-reserved hash remains pending and quarantined. A crash at that point
+also leaves the pending row: do not delete it or automatically repay.
+
+On restart with the **same directory**, the CLI validates its numbered files,
+authenticates the latest checkpoint and compares it with the original database
+before quoting or paying. It fails closed on a missing file, unexpected file,
+unsafe permissions, inconsistent count, changed payment, wrong key or detected
+rollback. For a checkpoint made before key rotation, provide its old key path in
+`BOUNCER_BUYER_SNAPSHOT_KEY_FILE` while the current key remains in
+`BOUNCER_BUYER_JOURNAL_KEY_FILE`; the CLI tries the current key first. The old
+key can be removed from that environment after the next new-key checkpoint,
+though it may still be needed for older protected backups.
+
+The mode is intentionally limited to 256 payments / 8 MiB ciphertext and checks
+batch entry capacity before new work. Unpredictable entry growth can still reach
+the byte limit after reservation and leave a quarantined, unbroadcast hash. It
+cannot be retroactively enabled on a nonempty journal by starting with an empty
+directory. This option applies only to the direct resource-agent CLI and its
+shared seller-v3 journal; other entry points do not automatically checkpoint.
+
+These checks assume the directory and local filesystem honor owner permissions,
+exclusive creation and `fsync`. Keep independently protected, versioned copies
+on a separate failure domain. If both the database and checkpoint directory
+are lost or rolled back together, or a user omits the option, the tool cannot
+detect newer missing payments. It is not a full backup, an external monotonic
+ledger, a safe failover protocol or production exactly-once payment guarantee.
+
 ## Inspection and recovery
 
 Using a restricted read-only URL, the metadata inspector requires no encryption

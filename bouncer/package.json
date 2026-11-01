@@ -15,6 +15,7 @@
     "init-shared-buyer-journal": "node scripts/init-shared-buyer-journal.mjs",
     "inspect-shared-buyer": "node scripts/inspect-shared-buyer.mjs",
     "rotate-shared-buyer-key": "node scripts/rotate-shared-buyer-key.mjs",
+    "snapshot-shared-buyer": "node scripts/snapshot-shared-buyer.mjs",
     "onchain-proof": "node agent/onchain-proof.mjs",
     "inspect-x402": "node agent/inspect-x402.mjs",
     "shared-provider": "node services/shared-resource-provider.mjs",

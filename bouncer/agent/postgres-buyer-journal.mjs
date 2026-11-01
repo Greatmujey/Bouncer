@@ -28,6 +28,11 @@ const MAX_ENTRIES = 10_000;
 const MAX_ROTATION_ENTRIES = 256;
 const MAX_ROTATION_BYTES = 8 * 1024 * 1024;
 const MAX_ROTATION_MS = 20_000;
+// A portable, authenticated forensic snapshot is deliberately bounded. It is
+// not a replacement for a consistent, externally protected PostgreSQL backup.
+const MAX_SNAPSHOT_ENTRIES = 256;
+const MAX_SNAPSHOT_CIPHERTEXT_BYTES = 8 * 1024 * 1024;
+export const MAX_BUYER_SNAPSHOT_BYTES = 12 * 1024 * 1024;
 const idPattern = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const fingerprintPattern = /^[a-f0-9]{64}$/;
 const plain = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -133,6 +138,90 @@ function assertTransition(previous, next) {
   } else if (next.status !== 'completed') {
     throw new Error('a reserved shared payment cannot be replaced or reset');
   }
+}
+
+const exact = (value, keys) => plain(value) && Object.keys(value).length === keys.length && keys.every(key => own(value, key));
+const snapshotInvalid = () => new BuyerJournalError('SNAPSHOT_INVALID', 'encrypted buyer snapshot failed authentication or validation');
+function decodeSnapshotBytes(value, length) {
+  if (typeof value !== 'string' || value.length > Math.ceil(length / 3) * 4 + 4 || !/^[A-Za-z0-9+/]*={0,2}$/.test(value)) throw snapshotInvalid();
+  const bytes = Buffer.from(value, 'base64');
+  if (bytes.length !== length || bytes.toString('base64') !== value) throw snapshotInvalid();
+  return bytes;
+}
+function snapshotMac(key, payload) {
+  // Separate the snapshot authentication key from the AES-GCM encryption key.
+  const macKey = Buffer.from(crypto.hkdfSync('sha256', key, Buffer.alloc(0), Buffer.from('bouncer-buyer-snapshot-mac-v1'), 32));
+  try { return crypto.createHmac('sha256', macKey).update(JSON.stringify(payload), 'utf8').digest(); }
+  finally { macKey.fill(0); }
+}
+function parseBuyerSnapshot(serialized, inputKey) {
+  if (typeof serialized !== 'string' || Buffer.byteLength(serialized, 'utf8') > MAX_BUYER_SNAPSHOT_BYTES ||
+      !Buffer.isBuffer(inputKey) || inputKey.length !== 32) throw snapshotInvalid();
+  const key = Buffer.from(inputKey);
+  try {
+    const envelope = JSON.parse(serialized);
+    if (!exact(envelope, ['format', 'payload', 'mac']) || envelope.format !== 'bouncer-buyer-snapshot-v1' ||
+        !exact(envelope.payload, ['network', 'scope', 'key_check', 'entries'])) throw snapshotInvalid();
+    const payload = envelope.payload;
+    const mac = decodeSnapshotBytes(envelope.mac, 32), expected = snapshotMac(key, payload);
+    if (!crypto.timingSafeEqual(mac, expected)) throw snapshotInvalid();
+    if (payload.network !== 'near:testnet' || !exact(payload.scope, ['contract_id', 'owner_account_id', 'journal_id']) ||
+        !Array.isArray(payload.entries) || payload.entries.length > MAX_SNAPSHOT_ENTRIES) throw snapshotInvalid();
+    const scope = validateScope({ contractId: payload.scope.contract_id, ownerAccountId: payload.scope.owner_account_id, journalId: payload.scope.journal_id });
+    const storedCheck = decodeSnapshotBytes(payload.key_check, 32), expectedCheck = keyCheck(key, scope);
+    if (!crypto.timingSafeEqual(storedCheck, expectedCheck)) throw snapshotInvalid();
+    const entries = new Map(), hashes = new Set(), challenges = new Set(); let bytes = 0, previousId = null;
+    for (const row of payload.entries) {
+      if (!exact(row, ['id', 'fingerprint', 'status', 'tx_hash', 'seller_origin', 'challenge', 'revision', 'nonce', 'tag', 'ciphertext']) ||
+          typeof row.id !== 'string' || (previousId !== null && row.id <= previousId) ||
+          !Number.isSafeInteger(row.revision) || row.revision < 1 || typeof row.ciphertext !== 'string') throw snapshotInvalid();
+      previousId = row.id;
+      const cipherLength = Math.floor(row.ciphertext.length * 3 / 4) - (row.ciphertext.endsWith('==') ? 2 : row.ciphertext.endsWith('=') ? 1 : 0);
+      if (!Number.isSafeInteger(cipherLength) || cipherLength < 0 || cipherLength > MAX_RECORD_BYTES ||
+          (bytes += cipherLength) > MAX_SNAPSHOT_CIPHERTEXT_BYTES) throw snapshotInvalid();
+      const encrypted = { nonce: decodeSnapshotBytes(row.nonce, 12), tag: decodeSnapshotBytes(row.tag, 16),
+        ciphertext: decodeSnapshotBytes(row.ciphertext, cipherLength) };
+      const meta = { id: row.id, fingerprint: row.fingerprint, status: row.status, tx_hash: row.tx_hash,
+        seller_origin: row.seller_origin, challenge: row.challenge, revision: row.revision };
+      const entry = decrypt(key, scope, meta, encrypted);
+      if (!isDeepStrictEqual(entryMetadata(scope, meta.id, entry, meta.revision), meta) || hashes.has(meta.tx_hash) || challenges.has(meta.challenge)) throw snapshotInvalid();
+      hashes.add(meta.tx_hash); challenges.add(meta.challenge);
+      entries.set(meta.id, { entry, revision: meta.revision });
+    }
+    return { scope, entries };
+  } catch { throw snapshotInvalid(); }
+  finally { key.fill(0); }
+}
+function snapshotSummary(snapshot) {
+  const records = [...snapshot.entries].map(([id, row]) => ({ id, status: row.entry.status, tx_hash: row.entry.tx_hash, revision: row.revision }));
+  return { network: 'near:testnet', contract_id: snapshot.scope.contractId, owner_account_id: snapshot.scope.ownerAccountId,
+    journal_id: snapshot.scope.journalId, count: records.length, entries: records,
+    warning: 'Authenticated snapshot only; it may be stale and does not prove chain settlement or delivery.' };
+}
+/** Authenticate/decrypt in memory; return only safe metadata, never bearer claims. */
+export function verifyEncryptedBuyerSnapshot(serialized, key) {
+  return snapshotSummary(parseBuyerSnapshot(serialized, key));
+}
+/**
+ * Compare two independently authenticated snapshots, including snapshots across
+ * a key rotation. This detects rollback relative to the supplied checkpoint;
+ * it does not prove that checkpoint is the latest, or cover other journals.
+ */
+export function compareEncryptedBuyerSnapshots({ previous, previousKey, current, currentKey }) {
+  const older = parseBuyerSnapshot(previous, previousKey), newer = parseBuyerSnapshot(current, currentKey);
+  if (!isDeepStrictEqual(older.scope, newer.scope)) throw new BuyerJournalError('SNAPSHOT_SCOPE', 'buyer snapshots belong to different journals');
+  for (const [id, before] of older.entries) {
+    const after = newer.entries.get(id);
+    if (!after || after.revision < before.revision) throw new BuyerJournalError('SNAPSHOT_ROLLBACK', 'current journal is missing a checkpointed payment or revision; stop and reconcile');
+    if (after.revision === before.revision) {
+      if (!isDeepStrictEqual(before.entry, after.entry)) throw new BuyerJournalError('SNAPSHOT_ROLLBACK', 'checkpointed payment changed without a new revision');
+    } else {
+      try { assertTransition(before.entry, after.entry); }
+      catch { throw new BuyerJournalError('SNAPSHOT_ROLLBACK', 'checkpointed payment regressed or changed identity; stop and reconcile'); }
+    }
+  }
+  return { ...snapshotSummary(newer), checkpoint_count: older.entries.size,
+    warning: 'No rollback relative to this authenticated checkpoint; it may be stale and cannot prove other journals or chain state.' };
 }
 
 async function checkPrimary(client) {
@@ -436,6 +525,94 @@ export async function openPostgresBuyerJournal({ pool, contractId, ownerAccountI
           throw new BuyerJournalError('DATABASE', 'shared buyer update failed or its commit is uncertain; retain the original transaction and reconcile');
         }
         entries.set(id, entry); revisions.set(id, meta.revision);
+      });
+    },
+    /** Recheck the owner/session fences and the exact pending row immediately
+     * before the final synchronous guard and one broadcast. */
+    assertPendingForBroadcast(id, txHash) {
+      assertAvailable();
+      if (!ownerBusy || !ownerLocked) throw new BuyerJournalError('OWNER_FENCE_REQUIRED', 'shared buyer broadcast requires the owner payment fence');
+      return enqueue(async () => {
+        try {
+          await transaction(client, async c => {
+            await verifySchema(c);
+            const rows = await c.query(`SELECT entry_id, fingerprint, status, tx_hash, seller_origin, challenge, revision, nonce, tag, ciphertext
+              FROM ${SCHEMA}.entries WHERE contract_id=$1 AND owner_account_id=$2 AND journal_id=$3 AND entry_id=$4`, [...scopeValues(scope), id]);
+            const row = rows.rows[0], cached = entries.get(id);
+            if (rows.rowCount !== 1 || !cached || cached.status !== 'pending' || cached.tx_hash !== txHash ||
+                row.status !== 'pending' || row.tx_hash !== txHash || row.revision !== revisions.get(id)) {
+              throw new BuyerJournalError('STALE', 'original pending payment changed before broadcast; stop and reconcile');
+            }
+            const meta = { id: row.entry_id, fingerprint: row.fingerprint, status: row.status, tx_hash: row.tx_hash,
+              seller_origin: row.seller_origin, challenge: row.challenge, revision: row.revision };
+            const original = decrypt(secret, scope, meta, row);
+            if (!isDeepStrictEqual(original, cached) || !isDeepStrictEqual(entryMetadata(scope, meta.id, original, meta.revision), meta)) {
+              throw new BuyerJournalError('CORRUPT', 'original pending payment changed before broadcast; stop and reconcile');
+            }
+            const ownerPending = await c.query(`SELECT tx_hash FROM ${SCHEMA}.entries
+              WHERE owner_account_id=$1 AND status='pending' LIMIT 2`, [scope.ownerAccountId]);
+            if (ownerPending.rows.length !== 1 || ownerPending.rows[0].tx_hash !== txHash) {
+              throw new BuyerJournalError('OWNER_UNRESOLVED', 'owner has another unresolved payment; stop and reconcile');
+            }
+          }, verifySession);
+        } catch (error) {
+          failed = true;
+          if (error instanceof BuyerJournalError) throw error;
+          throw new BuyerJournalError('DATABASE', 'shared buyer pre-broadcast check failed; retain the pending hash and reconcile');
+        }
+      });
+    },
+    /**
+     * Export one bounded, authenticated forensic checkpoint while holding the
+     * journal session lock. Encrypted entries remain encrypted in the result.
+     * This does not capture other journals, WAL, or the rest of the database.
+     */
+    exportEncryptedSnapshot() {
+      assertAvailable();
+      if (rotating) throw new BuyerJournalError('BUSY', 'shared buyer journal encryption key rotation is in progress');
+      return enqueue(async () => {
+        try {
+          return await transaction(client, async c => {
+            await verifySchema(c);
+            const original = await c.query(`SELECT key_check FROM ${SCHEMA}.journals
+              WHERE contract_id=$1 AND owner_account_id=$2 AND journal_id=$3`, scopeValues(scope));
+            const check = keyCheck(secret, scope), stored = original.rows[0]?.key_check;
+            if (original.rowCount !== 1 || !Buffer.isBuffer(stored) || stored.length !== check.length || !crypto.timingSafeEqual(stored, check)) {
+              throw new BuyerJournalError('CORRUPT', 'shared buyer key check changed; stop and reconcile');
+            }
+            const selected = await c.query(`SELECT entry_id, fingerprint, status, tx_hash, seller_origin, challenge, revision, nonce, tag, ciphertext
+              FROM ${SCHEMA}.entries WHERE contract_id=$1 AND owner_account_id=$2 AND journal_id=$3 ORDER BY entry_id LIMIT $4`,
+            [...scopeValues(scope), MAX_SNAPSHOT_ENTRIES + 1]);
+            if (selected.rows.length > MAX_SNAPSHOT_ENTRIES) throw new BuyerJournalError('SNAPSHOT_LIMIT', 'buyer snapshot exceeds 256 entries; use a full protected PostgreSQL backup');
+            if (selected.rows.length !== entries.size) throw new BuyerJournalError('CORRUPT', 'shared buyer entries changed during the session; stop and reconcile');
+            let totalBytes = 0;
+            const rows = selected.rows.map(row => {
+              const meta = { id: row.entry_id, fingerprint: row.fingerprint, status: row.status, tx_hash: row.tx_hash,
+                seller_origin: row.seller_origin, challenge: row.challenge, revision: row.revision };
+              if (!Buffer.isBuffer(row.ciphertext) || (totalBytes += row.ciphertext.length) > MAX_SNAPSHOT_CIPHERTEXT_BYTES) {
+                throw new BuyerJournalError('SNAPSHOT_LIMIT', 'buyer snapshot exceeds 8 MiB ciphertext; use a full protected PostgreSQL backup');
+              }
+              const entry = decrypt(secret, scope, meta, row);
+              if (!Number.isSafeInteger(meta.revision) || meta.revision < 1 || !isDeepStrictEqual(entryMetadata(scope, meta.id, entry, meta.revision), meta) ||
+                  !entries.has(meta.id) || !isDeepStrictEqual(entries.get(meta.id), entry) || revisions.get(meta.id) !== meta.revision) {
+                throw new BuyerJournalError('CORRUPT', 'shared buyer entry changed during the session; stop and reconcile');
+              }
+              return { ...meta, nonce: row.nonce.toString('base64'), tag: row.tag.toString('base64'), ciphertext: row.ciphertext.toString('base64') };
+            });
+            // PostgreSQL's configured collation may differ from byte ordering.
+            rows.sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+            const payload = { network: 'near:testnet', scope: { contract_id: scope.contractId, owner_account_id: scope.ownerAccountId,
+              journal_id: scope.journalId }, key_check: stored.toString('base64'), entries: rows };
+            const serialized = JSON.stringify({ format: 'bouncer-buyer-snapshot-v1', payload, mac: snapshotMac(secret, payload).toString('base64') });
+            if (Buffer.byteLength(serialized, 'utf8') > MAX_BUYER_SNAPSHOT_BYTES) throw new BuyerJournalError('SNAPSHOT_LIMIT', 'buyer snapshot exceeds its file size limit');
+            return serialized;
+          }, verifySession);
+        } catch (error) {
+          if (error instanceof BuyerJournalError && error.code === 'SNAPSHOT_LIMIT') throw error;
+          failed = true;
+          if (error instanceof BuyerJournalError) throw error;
+          throw new BuyerJournalError('DATABASE', 'buyer snapshot failed; stop and reconcile the original journal');
+        }
       });
     },
     /**

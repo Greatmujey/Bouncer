@@ -530,7 +530,13 @@ FT-call, x402, OutLayer and mixed/dependent workflows are not covered. The fence
 is conservative serialization, not a distributed nonce allocator. Bounded
 journals can [rotate their encryption key](bouncer/docs/SHARED_BUYER.md#rotate-an-existing-journal-encryption-key)
 atomically without deleting pending payments; leaked bearer claims and old backups
-are not revoked by re-encryption.
+are not revoked by re-encryption. Authenticated, encrypted
+[checkpoints](bouncer/docs/SHARED_BUYER.md#authenticate-an-encrypted-checkpoint-and-detect-a-known-rollback)
+can detect rollback relative to a saved checkpoint for one bounded journal, not
+prove that the checkpoint is latest or replace a full database backup. The direct
+resource-agent CLI can also opt into fsync-backed checkpoints before broadcast
+and refuse a detected rollback on restart; this requires a separate protected
+directory and does not guarantee safety if both copies are lost or stale.
 
 ### Delivery checks and local receipts
 

@@ -99,9 +99,13 @@ export async function runProcurement(options) {
 }
 
 async function runProcurementCore({ plan: rawPlan, provider, account, publicKey, journal, journalRoutes, claimOrigins, execute = false,
-  durablePayment = false, log = console.log, onCheck = () => {}, beforePayment = async () => {}, beforeBroadcast = () => {}, onPaid = async () => {}, stopOnBlocked = false }) {
+  durablePayment = false, log = console.log, onCheck = () => {}, beforePayment = async () => {}, beforeBroadcast = () => {}, beforeBroadcastCheckpoint,
+  onPaid = async () => {}, stopOnBlocked = false }) {
   const plan = validatePlan(rawPlan);
-  if (typeof beforePayment !== 'function' || typeof beforeBroadcast !== 'function' || typeof onPaid !== 'function' || typeof stopOnBlocked !== 'boolean' || typeof durablePayment !== 'boolean') throw new Error('invalid procurement execution hooks');
+  if (typeof beforePayment !== 'function' || typeof beforeBroadcast !== 'function' || typeof onPaid !== 'function' || typeof stopOnBlocked !== 'boolean' || typeof durablePayment !== 'boolean' ||
+      (beforeBroadcastCheckpoint !== undefined && (typeof beforeBroadcastCheckpoint !== 'function' || !execute || !durablePayment || journal?.sharedDirectV3 !== true))) {
+    throw new Error('invalid procurement execution hooks');
+  }
   let routes;
   if (journalRoutes !== undefined) {
     if (!(journalRoutes instanceof Map) || journalRoutes.size !== plan.requests.length) throw new Error('invalid payment journal routes');
@@ -264,6 +268,18 @@ async function runProcurementCore({ plan: rawPlan, provider, account, publicKey,
       })) throw new Error(`${request.id}: seller challenge is already recorded in this journal; never pay again`);
     }
     await reserveJournal(journal, request.id, pending);
+    // Optional shared-buyer checkpointing must finish before the final
+    // synchronous guard and the only broadcast. Failure leaves the original
+    // pending hash quarantined; it never authorizes a replacement payment.
+    if (beforeBroadcastCheckpoint) {
+      try { await beforeBroadcastCheckpoint(Object.freeze({ id: request.id, tx_hash: txHash })); }
+      catch { throw new Error(`${request.id}: encrypted checkpoint failed before broadcast; no payment was sent; preserve the pending journal and reconcile`); }
+    }
+    if (journal?.sharedDirectV3 === true) {
+      if (typeof journal.assertPendingForBroadcast !== 'function') throw new Error(`${request.id}: shared journal pre-broadcast fence is required; no payment was sent`);
+      try { await journal.assertPendingForBroadcast(request.id, txHash); }
+      catch { throw new Error(`${request.id}: shared journal pre-broadcast check failed; no payment was sent; preserve the pending hash and reconcile`); }
+    }
     // A synchronous final guard can enforce a time-sensitive condition after
     // fsync but immediately before submission. If it rejects, nothing was sent;
     // retain the pending hash conservatively rather than inventing a retry.

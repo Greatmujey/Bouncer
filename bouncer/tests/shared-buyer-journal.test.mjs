@@ -11,12 +11,14 @@ import { once } from 'node:events';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import nearApi from 'near-api-js';
-import { initializePostgresBuyerSchema, openPostgresBuyerJournal } from '../agent/postgres-buyer-journal.mjs';
+import { initializePostgresBuyerSchema, openPostgresBuyerJournal, verifyEncryptedBuyerSnapshot,
+  compareEncryptedBuyerSnapshots, MAX_BUYER_SNAPSHOT_BYTES } from '../agent/postgres-buyer-journal.mjs';
 import { readBuyerKeyFile, validateBuyerDatabaseUrl } from '../agent/shared-buyer-config.mjs';
 import { requestFingerprint, runProcurement, validatePlan } from '../agent/procurement.mjs';
 import { runResourceAgent, routedResourceProvider } from '../agent/resource-agent.mjs';
 import { recoverDirectResourcePayment, recoverResourceDelivery } from '../agent/recover-direct-payment.mjs';
 import { inspectSharedBuyer, inspectSharedBuyerOwner } from '../scripts/inspect-shared-buyer.mjs';
+import { openBuyerCheckpointDirectory } from '../agent/buyer-checkpoint-directory.mjs';
 import { createResourceProvider } from '../services/resource-provider.mjs';
 import { orderMemoV3 } from '../packages/provider-sdk/lib/resource-order.mjs';
 import { signClaimAuthorization, verifyClaimAuthorization } from '../packages/provider-sdk/lib/resource-claim.mjs';
@@ -502,8 +504,8 @@ dbtest('losing only the owner fence before reservation prevents a broadcast', as
   } finally { if (journal) await journal.close(); await f.cleanup(); }
 });
 
-dbtest('a committed pending row still quarantines the owner if its advisory lock is lost before broadcast', async () => {
-  const f = await fixture(); let journal, release;
+dbtest('a lost owner fence after reservation stops broadcast and leaves the committed hash quarantined', async () => {
+  const f = await fixture(); let journal;
   try {
     await f.journal.close();
     const second = await f.open({ journalId: id(), createNew: true });
@@ -524,17 +526,15 @@ dbtest('a committed pending row still quarantines the owner if its advisory lock
         } };
     } };
     journal = await openPostgresBuyerJournal({ pool: broken, contractId: contract, ownerAccountId: owner, journalId: f.journalId, key: f.key });
-    const runtime = syntheticRuntime(journal), send = runtime.provider.sendTransactionUntil; let reached;
-    const entered = new Promise(resolve => { reached = resolve; }), gate = new Promise(resolve => { release = resolve; });
-    runtime.provider.sendTransactionUntil = async signedTx => { reached(); await gate; return send(signedTx); };
-    const operation = runtime.run(); await entered;
+    const runtime = syntheticRuntime(journal);
+    await assert.rejects(runtime.run(), /shared journal pre-broadcast check failed.*no payment was sent/);
+    assert.equal(runtime.sends, 0);
     let called = false;
     await assert.rejects(second.withOwnerFence(async () => { called = true; }), error => error.code === 'OWNER_UNRESOLVED');
-    assert.equal(called, false); assert.equal(journal.get('work').status, 'pending');
-    release(); await assert.rejects(operation, /synthetic lost response/);
-    assert.equal(runtime.sends, 1); await journal.close();
+    assert.equal(called, false); await journal.close();
+    const reopened = await f.open(); assert.equal(reopened.get('work').status, 'pending');
     await assert.rejects(second.withOwnerFence(async () => {}), error => error.code === 'OWNER_UNRESOLVED');
-  } finally { release?.(); if (journal) await journal.close(); await f.cleanup(); }
+  } finally { if (journal) await journal.close(); await f.cleanup(); }
 });
 
 dbtest('closing an in-flight fenced journal destroys its session without releasing a pending owner', async () => {
@@ -598,11 +598,12 @@ dbtest('direct seller-v3 compute, storage and API recover with a real local sell
   } finally { if (seller) await seller.close(); await f.cleanup(); fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-function worker({ journalId, key, c, nonce, barrier = false, hold = false, workerOwner = owner, workerAgent = agent }) {
+function worker({ journalId, key, c, nonce, barrier = false, hold = false, checkpointDir = '', checkpointHold = false, workerOwner = owner, workerAgent = agent }) {
   const child = fork(fileURLToPath(new URL('./fixtures/shared-buyer-worker.mjs', import.meta.url)), [], {
     env: { ...process.env, BOUNCER_TEST_POSTGRES_URL: databaseUrl, BOUNCER_TEST_JOURNAL: journalId, BOUNCER_TEST_OWNER: workerOwner,
       BOUNCER_TEST_JOURNAL_KEY: key.toString('hex'), BOUNCER_TEST_AGENT_KEY: workerAgent.toString(),
-      BOUNCER_TEST_CHALLENGE: c, BOUNCER_TEST_NONCE: String(nonce), BOUNCER_TEST_BARRIER: barrier ? '1' : '0', BOUNCER_TEST_HOLD: hold ? '1' : '0' },
+      BOUNCER_TEST_CHALLENGE: c, BOUNCER_TEST_NONCE: String(nonce), BOUNCER_TEST_BARRIER: barrier ? '1' : '0', BOUNCER_TEST_HOLD: hold ? '1' : '0',
+      BOUNCER_TEST_CHECKPOINT_DIR: checkpointDir, BOUNCER_TEST_CHECKPOINT_HOLD: checkpointHold ? '1' : '0' },
     stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
   });
   const messages = []; let stderr = '';
@@ -903,20 +904,37 @@ dbtest('resource-agent CLI uses the shared journal for one synthetic payment and
     await f.journal.close(); await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
     sellerOrigin = `http://127.0.0.1:${server.address().port}`;
     const goalsPath = path.join(root, 'goals.json'), journalKeyPath = path.join(root, 'journal.key'), agentPath = path.join(root, 'agent.json');
-    const stateFile = path.join(root, 'synthetic-rpc.json');
+    const stateFile = path.join(root, 'synthetic-rpc.json'), checkpointDir = path.join(root, 'checkpoints');
+    fs.mkdirSync(checkpointDir, { mode: 0o700 });
     fs.writeFileSync(goalsPath, JSON.stringify({ contract_id: contract, owner_account_id: owner, provider_url: sellerOrigin, goals: [goal] }));
     fs.writeFileSync(journalKeyPath, f.key, { mode: 0o600 });
     fs.writeFileSync(agentPath, JSON.stringify({ account_id: owner, private_key: agent.toString() }), { mode: 0o600 });
     const preload = fileURLToPath(new URL('./fixtures/mock-shared-buyer-cli.mjs', import.meta.url));
-    const env = { BOUNCER_BUYER_DATABASE_URL: databaseUrl, BOUNCER_BUYER_JOURNAL_KEY_FILE: journalKeyPath,
-      BOUNCER_TEST_OWNER: owner, BOUNCER_TEST_BUYER_CLI_STATE: stateFile, NODE_OPTIONS: `--import=${preload}` };
-    const args = ['--goals', goalsPath, '--key', agentPath, '--shared-journal', f.journalId, '--durable', '--execute'];
+    const env = { BOUNCER_BUYER_DATABASE_URL: databaseUrl, BOUNCER_BUYER_JOURNAL_KEY_FILE: journalKeyPath, BOUNCER_BUYER_SNAPSHOT_KEY_FILE: '',
+      BOUNCER_TEST_OWNER: owner, BOUNCER_TEST_BUYER_CLI_STATE: stateFile, BOUNCER_TEST_CHECKPOINT_DIR: checkpointDir, NODE_OPTIONS: `--import=${preload}` };
+    const args = ['--goals', goalsPath, '--key', agentPath, '--shared-journal', f.journalId, '--checkpoint-dir', checkpointDir, '--durable', '--execute'];
     const first = await runCli('agent/resource-agent.mjs', args, env);
     assert.equal(first.code, 0, first.stderr); assert.match(first.stdout, /PAID work/); assert.match(first.stdout, /FULFILLED work/);
     const again = await runCli('agent/resource-agent.mjs', args, env);
     assert.equal(again.code, 0, again.stderr); assert.match(again.stdout, /SKIP work/); assert.doesNotMatch(again.stdout, /PAID work/);
     assert.equal(JSON.parse(fs.readFileSync(stateFile, 'utf8')).sends, 1); assert.equal(quotes, 1); assert.equal(redemptions, 2);
+    const files = fs.readdirSync(checkpointDir); assert.equal(files.length, 1);
+    const checkpointFile = path.join(checkpointDir, files[0]), snapshot = fs.readFileSync(checkpointFile, 'utf8');
+    assert.equal(verifyEncryptedBuyerSnapshot(snapshot, f.key).entries[0].status, 'pending');
+    // Losing a checkpoint while the database has a payment blocks restart before
+    // any quote or synthetic broadcast; do not silently recreate the directory.
+    fs.unlinkSync(checkpointFile);
+    const missing = await runCli('agent/resource-agent.mjs', args, env);
+    assert.equal(missing.code, 1); assert.match(missing.stderr, /checkpoint directory/);
+    assert.equal(JSON.parse(fs.readFileSync(stateFile, 'utf8')).sends, 1); assert.equal(quotes, 1);
+    fs.writeFileSync(checkpointFile, snapshot, { mode: 0o600 });
     const reopened = await f.open(); assert.equal(reopened.get('work').delivery.status, 'verified');
+    await reopened.close();
+    // Test-only stale restore: deleting an entry is forbidden operationally.
+    await f.pool.query('DELETE FROM bouncer_buyer_v1.entries WHERE journal_id=$1', [f.journalId]);
+    const stale = await runCli('agent/resource-agent.mjs', args, env);
+    assert.equal(stale.code, 1); assert.match(stale.stderr, /checkpoint directory/);
+    assert.equal(JSON.parse(fs.readFileSync(stateFile, 'utf8')).sends, 1); assert.equal(quotes, 1);
   } finally { await new Promise(resolve => server.close(resolve)); await f.cleanup(); fs.rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -1032,6 +1050,7 @@ dbtest('rotation excludes active payments, other journal sessions and overlappin
     journal = await openPostgresBuyerJournal({ pool: blocked, contractId: contract, ownerAccountId: owner, journalId: f.journalId, key: f.key });
     enabled = true; const rotating = journal.rotateEncryptionKey(next); await updating;
     await assert.rejects(journal.withOwnerFence(async () => {}), error => error.code === 'BUSY');
+    assert.throws(() => journal.exportEncryptedSnapshot(), error => error.code === 'BUSY');
     await assert.rejects(journal.rotateEncryptionKey(crypto.randomBytes(32)), error => error.code === 'BUSY');
     await assert.rejects(f.open(), error => error.code === 'BUSY');
     releaseUpdate(); releaseUpdate = null; assert.deepEqual(await rotating, { rotated_entries: 1 });
@@ -1172,4 +1191,290 @@ test('key rotation CLI refuses unsafe inputs without printing key material or da
     assert.equal(result.code, 1); assert.match(result.stderr, /exactly one/);
     key.fill(0);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+dbtest('authenticated encrypted snapshots detect stale payment state across key rotation', async () => {
+  const f = await fixture(), next = crypto.randomBytes(32); let pendingSnapshot;
+  try {
+    const pending = await pendingEntry();
+    await f.journal.withOwnerFence(async () => {
+      await f.journal.reservePending('work', pending);
+      // Export is usable before broadcast while the payment owner fence is held.
+      pendingSnapshot = await f.journal.exportEncryptedSnapshot();
+    });
+    assert.ok(!pendingSnapshot.includes(pending.resource_authorization.signature));
+    assert.ok(!pendingSnapshot.includes(JSON.stringify(pending.resource_authorization)));
+    const first = verifyEncryptedBuyerSnapshot(pendingSnapshot, f.key);
+    assert.equal(first.count, 1); assert.deepEqual(first.entries.map(row => [row.id, row.status, row.tx_hash]), [['work', 'pending', pending.tx_hash]]);
+    const completed = { ...f.journal.get('work'), status: 'completed', completed_at: new Date().toISOString(),
+      settlement: { tx_hash: pending.tx_hash, token: pending.request.token, payee: pending.request.payee, amount: pending.request.amount,
+        verification: 'FINAL trusted-RPC Bouncer and token receipts; provider delivery not established' } };
+    await f.journal.writeDurable('work', completed);
+    const completeSnapshot = await f.journal.exportEncryptedSnapshot();
+    await f.journal.rotateEncryptionKey(next);
+    const rotated = await f.journal.exportEncryptedSnapshot();
+    assert.equal(verifyEncryptedBuyerSnapshot(rotated, next).entries[0].status, 'completed');
+    assert.throws(() => verifyEncryptedBuyerSnapshot(rotated, f.key), error => error.code === 'SNAPSHOT_INVALID');
+    const result = compareEncryptedBuyerSnapshots({ previous: pendingSnapshot, previousKey: f.key, current: rotated, currentKey: next });
+    assert.equal(result.checkpoint_count, 1); assert.equal(result.entries[0].tx_hash, pending.tx_hash);
+    assert.throws(() => compareEncryptedBuyerSnapshots({ previous: completeSnapshot, previousKey: f.key, current: pendingSnapshot, currentKey: f.key }),
+      error => error.code === 'SNAPSHOT_ROLLBACK');
+    assert.equal(f.journal.get('work').tx_hash, pending.tx_hash);
+  } finally { next.fill(0); await f.cleanup(); }
+});
+
+dbtest('snapshot authentication rejects tampering, truncation, wrong keys and a different scope', async () => {
+  const f = await fixture(), other = await fixture(), wrong = crypto.randomBytes(32);
+  try {
+    const pending = await pendingEntry(); await reserveSynthetic(f.journal, 'work', pending);
+    const snapshot = await f.journal.exportEncryptedSnapshot(), parsed = JSON.parse(snapshot);
+    for (const mutate of [
+      value => { value.payload.entries[0].tx_hash = mockHash('changed'); },
+      value => { value.payload.entries = []; },
+      value => { value.payload.entries[0].ciphertext = 'AA=='; },
+      value => { value.mac = Buffer.alloc(32).toString('base64'); },
+      value => { value.payload.extra = true; },
+    ]) {
+      const altered = structuredClone(parsed); mutate(altered);
+      assert.throws(() => verifyEncryptedBuyerSnapshot(JSON.stringify(altered), f.key), error => error.code === 'SNAPSHOT_INVALID');
+    }
+    // Even a recomputed outer MAC cannot make malformed inner ciphertext or
+    // duplicated rows into an authenticated, valid journal snapshot.
+    const reauthenticate = value => {
+      const k = Buffer.from(crypto.hkdfSync('sha256', f.key, Buffer.alloc(0), Buffer.from('bouncer-buyer-snapshot-mac-v1'), 32));
+      try { value.mac = crypto.createHmac('sha256', k).update(JSON.stringify(value.payload)).digest('base64'); }
+      finally { k.fill(0); }
+      return JSON.stringify(value);
+    };
+    const badCipher = structuredClone(parsed); badCipher.payload.entries[0].ciphertext = 'AA==';
+    const duplicate = structuredClone(parsed); duplicate.payload.entries.push(structuredClone(duplicate.payload.entries[0]));
+    for (const altered of [reauthenticate(badCipher), reauthenticate(duplicate), snapshot.slice(0, -1), 'x'.repeat(MAX_BUYER_SNAPSHOT_BYTES + 1)]) {
+      assert.throws(() => verifyEncryptedBuyerSnapshot(altered, f.key), error => error.code === 'SNAPSHOT_INVALID');
+    }
+    assert.throws(() => verifyEncryptedBuyerSnapshot(snapshot, wrong), error => error.code === 'SNAPSHOT_INVALID');
+    const otherSnapshot = await other.journal.exportEncryptedSnapshot();
+    assert.throws(() => compareEncryptedBuyerSnapshots({ previous: snapshot, previousKey: f.key, current: otherSnapshot, currentKey: other.key }),
+      error => error.code === 'SNAPSHOT_SCOPE');
+  } finally { wrong.fill(0); await other.cleanup(); await f.cleanup(); }
+});
+
+dbtest('snapshot refuses database corruption rather than certifying stale in-memory state', async () => {
+  const f = await fixture();
+  try {
+    const pending = await pendingEntry(); await reserveSynthetic(f.journal, 'work', pending);
+    await f.pool.query('UPDATE bouncer_buyer_v1.entries SET ciphertext=decode($2,\'hex\') WHERE journal_id=$1', [f.journalId, 'ff']);
+    await assert.rejects(f.journal.exportEncryptedSnapshot(), error => error.code === 'CORRUPT');
+    assert.throws(() => f.journal.get('work'), error => error.code === 'FAILED');
+  } finally { await f.cleanup(); }
+});
+
+dbtest('snapshot CLI exports securely, verifies offline and compares after key rotation without signing', async () => {
+  const f = await fixture(), root = fs.mkdtempSync(path.join(os.tmpdir(), 'bouncer-buyer-checkpoint-')), next = crypto.randomBytes(32);
+  try {
+    const pending = await pendingEntry(); await reserveSynthetic(f.journal, 'work', pending); await f.journal.close();
+    const oldKey = path.join(root, 'old.key'), newKey = path.join(root, 'new.key'), file = path.join(root, 'checkpoint.json');
+    fs.writeFileSync(oldKey, f.key, { mode: 0o600 }); fs.writeFileSync(newKey, next, { mode: 0o600 });
+    const scope = ['--contract', contract, '--owner', owner, '--journal', f.journalId];
+    const env = { BOUNCER_BUYER_DATABASE_URL: databaseUrl, BOUNCER_BUYER_JOURNAL_KEY_FILE: oldKey, BOUNCER_BUYER_SNAPSHOT_KEY_FILE: '' };
+    const exported = await runCli('scripts/snapshot-shared-buyer.mjs', ['--export', file, ...scope], env);
+    assert.equal(exported.code, 0, exported.stderr); assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+    assert.ok(!fs.readFileSync(file, 'utf8').includes(pending.resource_authorization.signature));
+    const offline = await runCli('scripts/snapshot-shared-buyer.mjs', ['--verify', file], { ...env, BOUNCER_BUYER_DATABASE_URL: '' });
+    assert.equal(offline.code, 0, offline.stderr); assert.match(offline.stdout, new RegExp(pending.tx_hash));
+    assert.ok(!offline.stdout.includes(pending.resource_authorization.signature));
+    const overwrite = await runCli('scripts/snapshot-shared-buyer.mjs', ['--export', file, ...scope], env);
+    assert.equal(overwrite.code, 1); assert.match(overwrite.stderr, /never overwritten/);
+    const originalBytes = fs.readFileSync(file, 'utf8'); assert.equal(verifyEncryptedBuyerSnapshot(originalBytes, f.key).entries[0].tx_hash, pending.tx_hash);
+    const journal = await f.open(); await journal.rotateEncryptionKey(next); await journal.close();
+    const compared = await runCli('scripts/snapshot-shared-buyer.mjs', ['--compare', file, ...scope],
+      { ...env, BOUNCER_BUYER_JOURNAL_KEY_FILE: newKey, BOUNCER_BUYER_SNAPSHOT_KEY_FILE: oldKey });
+    assert.equal(compared.code, 0, compared.stderr); assert.match(compared.stdout, new RegExp(pending.tx_hash));
+    assert.match(compared.stdout, /may be stale/); assert.ok(!compared.stdout.includes(pending.resource_authorization.signature));
+    const wrongKey = await runCli('scripts/snapshot-shared-buyer.mjs', ['--verify', file],
+      { ...env, BOUNCER_BUYER_JOURNAL_KEY_FILE: newKey });
+    assert.equal(wrongKey.code, 1); assert.match(wrongKey.stderr, /failed authentication/);
+    const link = path.join(root, 'link'); fs.symlinkSync(file, link);
+    const badFile = await runCli('scripts/snapshot-shared-buyer.mjs', ['--verify', link], env);
+    assert.equal(badFile.code, 1); assert.match(badFile.stderr, /owner-only/);
+  } finally { next.fill(0); await f.cleanup(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+dbtest('snapshot entry and byte limits abort without changing or poisoning the live journal', async () => {
+  for (const mode of ['entry-limit', 'byte-limit']) {
+    const f = await fixture(); let journal;
+    try {
+      const pending = await pendingEntry(); await reserveSynthetic(f.journal, 'work', pending); await f.journal.close();
+      let enabled = false;
+      const faulty = { async connect() {
+        const c = await f.pool.connect();
+        return { on: c.on.bind(c), removeListener: c.removeListener.bind(c), release: c.release.bind(c), async query(sql, args) {
+          const result = await c.query(sql, args);
+          if (enabled && typeof sql === 'string' && sql.includes('ORDER BY entry_id LIMIT $4') && !sql.includes('FOR UPDATE')) {
+            if (mode === 'entry-limit') return { ...result, rows: Array.from({ length: 257 }, () => result.rows[0]) };
+            return { ...result, rows: [{ ...result.rows[0], ciphertext: Buffer.alloc(8 * 1024 * 1024 + 1) }] };
+          }
+          return result;
+        } };
+      } };
+      journal = await openPostgresBuyerJournal({ pool: faulty, contractId: contract, ownerAccountId: owner, journalId: f.journalId, key: f.key });
+      enabled = true;
+      await assert.rejects(journal.exportEncryptedSnapshot(), error => error.code === 'SNAPSHOT_LIMIT');
+      assert.equal(journal.get('work').tx_hash, pending.tx_hash);
+      enabled = false;
+      assert.equal(verifyEncryptedBuyerSnapshot(await journal.exportEncryptedSnapshot(), f.key).entries[0].tx_hash, pending.tx_hash);
+    } finally { if (journal) await journal.close(); await f.cleanup(); }
+  }
+});
+
+dbtest('a checkpoint detects a missing later payment, while allowing added pending entries', async () => {
+  const f = await fixture();
+  try {
+    const first = await pendingEntry(); await reserveSynthetic(f.journal, 'work', first);
+    await f.journal.writeDurable('work', { ...f.journal.get('work'), status: 'completed', completed_at: new Date().toISOString(),
+      settlement: { tx_hash: first.tx_hash, token: first.request.token, payee: first.request.payee, amount: first.request.amount,
+        verification: 'FINAL trusted-RPC Bouncer and token receipts; provider delivery not established' } });
+    const before = await f.journal.exportEncryptedSnapshot();
+    const second = await pendingEntry({ requestId: 'Another' }); await reserveSynthetic(f.journal, 'Another', second);
+    const after = await f.journal.exportEncryptedSnapshot();
+    const compared = compareEncryptedBuyerSnapshots({ previous: before, previousKey: f.key, current: after, currentKey: f.key });
+    assert.equal(compared.count, 2); assert.deepEqual(compared.entries.map(row => row.id), ['Another', 'work']);
+    assert.throws(() => compareEncryptedBuyerSnapshots({ previous: after, previousKey: f.key, current: before, currentKey: f.key }),
+      error => error.code === 'SNAPSHOT_ROLLBACK');
+    await assert.rejects(f.journal.withOwnerFence(async () => {}), error => error.code === 'OWNER_UNRESOLVED');
+  } finally { await f.cleanup(); }
+});
+
+dbtest('a pre-broadcast encrypted checkpoint retains the same pending hash after a lost payment response', async () => {
+  const f = await fixture(), runtime = syntheticRuntime(f.journal); let checkpoint, hash;
+  try {
+    const send = runtime.provider.sendTransactionUntil.bind(runtime.provider);
+    runtime.provider.sendTransactionUntil = async (...args) => {
+      checkpoint = await f.journal.exportEncryptedSnapshot();
+      const summary = verifyEncryptedBuyerSnapshot(checkpoint, f.key);
+      assert.equal(summary.count, 1); assert.equal(summary.entries[0].status, 'pending');
+      hash = summary.entries[0].tx_hash;
+      return send(...args);
+    };
+    await assert.rejects(runtime.run(), /synthetic lost response/);
+    assert.equal(runtime.sends, 1); assert.equal(f.journal.get(goal.id).tx_hash, hash);
+    await recoverDirectResourcePayment({ config: { contract_id: contract, owner_account_id: owner, provider_url: origin, goals: [goal] },
+      requestId: goal.id, provider: runtime.provider, journal: f.journal, log: () => {} });
+    const current = await f.journal.exportEncryptedSnapshot();
+    const result = compareEncryptedBuyerSnapshots({ previous: checkpoint, previousKey: f.key, current, currentKey: f.key });
+    assert.equal(result.entries[0].tx_hash, hash); assert.equal(result.entries[0].status, 'completed'); assert.equal(runtime.sends, 1);
+  } finally { await f.cleanup(); }
+});
+
+dbtest('pre-broadcast checkpoint failure leaves the original hash quarantined and sends nothing', async () => {
+  const f = await fixture(), root = fs.mkdtempSync(path.join(os.tmpdir(), 'bouncer-checkpoint-fail-'));
+  const dir = path.join(root, 'checkpoints'); fs.mkdirSync(dir, { mode: 0o700 });
+  let checkpoints;
+  try {
+    checkpoints = await openBuyerCheckpointDirectory({ directory: dir, journal: f.journal, currentKey: f.key });
+    const runtime = syntheticRuntime(f.journal, { loseSend: false });
+    await assert.rejects(runtime.run({ beforePayment: async () => checkpoints.assertCapacity(), beforeBroadcastCheckpoint: async record => {
+      fs.renameSync(dir, `${dir}.moved`); // Simulate losing the trusted mount after the DB reservation.
+      await checkpoints.checkpoint(record);
+    } }), /checkpoint failed before broadcast.*no payment was sent/);
+    assert.equal(runtime.sends, 0);
+    const pending = f.journal.get(goal.id); assert.equal(pending.status, 'pending'); assert.ok(pending.tx_hash);
+    await assert.rejects(f.journal.withOwnerFence(async () => {}), error => error.code === 'OWNER_UNRESOLVED');
+    checkpoints.close(); checkpoints = null;
+    await f.journal.close();
+    const reopened = await f.open(); assert.equal(reopened.get(goal.id).tx_hash, pending.tx_hash);
+    await assert.rejects(openBuyerCheckpointDirectory({ directory: `${dir}.moved`, journal: reopened, currentKey: f.key }),
+      error => error.code === 'CHECKPOINT_DIRECTORY');
+  } finally { checkpoints?.close(); await f.cleanup(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+dbtest('checkpoint directory persists every synthetic broadcast and reopens across key rotation', async () => {
+  const f = await fixture(), root = fs.mkdtempSync(path.join(os.tmpdir(), 'bouncer-checkpoint-two-')), next = crypto.randomBytes(32);
+  const dir = path.join(root, 'checkpoints'); fs.mkdirSync(dir, { mode: 0o700 }); let checkpoints;
+  try {
+    checkpoints = await openBuyerCheckpointDirectory({ directory: dir, journal: f.journal, currentKey: f.key });
+    const runtime = syntheticRuntime(f.journal, { loseSend: false }), goals = [goal, { ...goal, id: 'work-2', input: { text: 'another reviewed task', rounds: 2 } }];
+    const send = runtime.provider.sendTransactionUntil.bind(runtime.provider);
+    runtime.provider.sendTransactionUntil = async signed => {
+      const hash = nearApi.utils.serialize.base_encode(crypto.createHash('sha256').update(nearApi.transactions.encodeTransaction(signed.transaction)).digest());
+      const matching = fs.readdirSync(dir).filter(name => name.endsWith(`-${hash}.json`)); assert.equal(matching.length, 1);
+      const snapshot = verifyEncryptedBuyerSnapshot(fs.readFileSync(path.join(dir, matching[0]), 'utf8'), f.key);
+      assert.ok(snapshot.entries.some(entry => entry.tx_hash === hash && entry.status === 'pending'));
+      return send(signed);
+    };
+    const result = await runtime.run({ goals, beforePayment: async () => checkpoints.assertCapacity(),
+      beforeBroadcastCheckpoint: record => checkpoints.checkpoint(record) });
+    assert.equal(result.payments.paid, 2); assert.equal(runtime.sends, 2);
+    const files = fs.readdirSync(dir).sort(); assert.equal(files.length, 2);
+    assert.match(files[0], /^000001-/); assert.match(files[1], /^000002-/);
+    assert.equal(verifyEncryptedBuyerSnapshot(fs.readFileSync(path.join(dir, files[1]), 'utf8'), f.key).count, 2);
+    checkpoints.close(); checkpoints = null;
+    await f.journal.rotateEncryptionKey(next); await f.journal.close();
+    const reopened = await f.open({ key: next });
+    await assert.rejects(openBuyerCheckpointDirectory({ directory: dir, journal: reopened, currentKey: next }), error => error.code === 'SNAPSHOT_INVALID');
+    checkpoints = await openBuyerCheckpointDirectory({ directory: dir, journal: reopened, currentKey: next, previousKey: f.key });
+    checkpoints.assertCapacity();
+  } finally { checkpoints?.close(); next.fill(0); await f.cleanup(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+dbtest('checkpoint directory rejects symlinks, unsafe permissions, unexpected files and gaps', async () => {
+  const f = await fixture(), root = fs.mkdtempSync(path.join(os.tmpdir(), 'bouncer-checkpoint-invalid-'));
+  try {
+    const dir = path.join(root, 'dir'), link = path.join(root, 'link'); fs.mkdirSync(dir, { mode: 0o700 }); fs.symlinkSync(dir, link);
+    await assert.rejects(openBuyerCheckpointDirectory({ directory: dir, journal: f.journal, currentKey: crypto.randomBytes(32) }), error => error.code === 'SNAPSHOT_INVALID');
+    await assert.rejects(openBuyerCheckpointDirectory({ directory: link, journal: f.journal, currentKey: f.key }), error => error.code === 'CHECKPOINT_DIRECTORY');
+    fs.chmodSync(dir, 0o755);
+    await assert.rejects(openBuyerCheckpointDirectory({ directory: dir, journal: f.journal, currentKey: f.key }), error => error.code === 'CHECKPOINT_DIRECTORY');
+    fs.chmodSync(dir, 0o700); fs.writeFileSync(path.join(dir, 'unrelated'), 'x', { mode: 0o600 });
+    await assert.rejects(openBuyerCheckpointDirectory({ directory: dir, journal: f.journal, currentKey: f.key }), error => error.code === 'CHECKPOINT_DIRECTORY');
+    fs.unlinkSync(path.join(dir, 'unrelated'));
+    fs.writeFileSync(path.join(dir, `000002-${mockHash('gap')}.json`), '{}', { mode: 0o600 });
+    await assert.rejects(openBuyerCheckpointDirectory({ directory: dir, journal: f.journal, currentKey: f.key }), error => error.code === 'CHECKPOINT_DIRECTORY');
+  } finally { await f.cleanup(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+dbtest('SIGKILL after a synced checkpoint but before broadcast leaves the hash and owner quarantined', async () => {
+  const f = await fixture(), root = fs.mkdtempSync(path.join(os.tmpdir(), 'bouncer-checkpoint-kill-'));
+  const dir = path.join(root, 'checkpoints'); fs.mkdirSync(dir, { mode: 0o700 }); let processWorker, checkpoints;
+  try {
+    await f.journal.close();
+    processWorker = worker({ journalId: f.journalId, key: f.key, c: challenge(), nonce: 71, checkpointDir: dir, checkpointHold: true });
+    const saved = await processWorker.wait('checkpointed'); await processWorker.stop();
+    assert.equal(processWorker.messages.filter(message => message.type === 'broadcast').length, 0);
+    const files = fs.readdirSync(dir); assert.equal(files.length, 1);
+    assert.equal(verifyEncryptedBuyerSnapshot(fs.readFileSync(path.join(dir, files[0]), 'utf8'), f.key).entries[0].tx_hash, saved.hash);
+    const words = crypto.createHash('sha256').update(JSON.stringify(['bouncer-buyer-lock-v1', contract, owner, f.journalId])).digest();
+    const lock = await f.pool.connect();
+    try {
+      await lock.query("SET lock_timeout = '5s'");
+      await lock.query('SELECT pg_catalog.pg_advisory_lock($1::integer,$2::integer)', [words.readInt32BE(0), words.readInt32BE(4)]);
+      await lock.query('SELECT pg_catalog.pg_advisory_unlock($1::integer,$2::integer)', [words.readInt32BE(0), words.readInt32BE(4)]);
+    } finally { lock.release(); }
+    const reopened = await f.open();
+    assert.equal(reopened.get('work').tx_hash, saved.hash); assert.equal(reopened.get('work').status, 'pending');
+    checkpoints = await openBuyerCheckpointDirectory({ directory: dir, journal: reopened, currentKey: f.key });
+    await assert.rejects(reopened.withOwnerFence(async () => {}), error => error.code === 'OWNER_UNRESOLVED');
+  } finally { checkpoints?.close(); if (processWorker) await processWorker.stop(); await f.cleanup(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+dbtest('a corrupted pending row after checkpoint is caught by the final fence before broadcast', async () => {
+  const f = await fixture(), runtime = syntheticRuntime(f.journal, { loseSend: false });
+  try {
+    await assert.rejects(runtime.run({ beforeBroadcastCheckpoint: async () => {
+      await f.pool.query('UPDATE bouncer_buyer_v1.entries SET revision=revision+1 WHERE journal_id=$1', [f.journalId]);
+    } }), /shared journal pre-broadcast check failed.*no payment was sent/);
+    assert.equal(runtime.sends, 0);
+    const rows = await f.pool.query('SELECT status, tx_hash FROM bouncer_buyer_v1.entries WHERE journal_id=$1', [f.journalId]);
+    assert.equal(rows.rowCount, 1); assert.equal(rows.rows[0].status, 'pending');
+    await f.journal.close(); await assert.rejects(f.open(), error => error.code === 'CORRUPT');
+  } finally { await f.cleanup(); }
+});
+
+dbtest('the synchronous freshness guard remains after checkpointing and immediately before a broadcast', async () => {
+  const f = await fixture(), runtime = syntheticRuntime(f.journal, { loseSend: false }), events = [];
+  try {
+    const send = runtime.provider.sendTransactionUntil.bind(runtime.provider);
+    runtime.provider.sendTransactionUntil = async signed => { events.push('broadcast'); return send(signed); };
+    await runtime.run({ beforeBroadcastCheckpoint: async () => { events.push('checkpoint'); }, beforeBroadcast: () => { events.push('guard'); } });
+    assert.deepEqual(events, ['checkpoint', 'guard', 'broadcast']); assert.equal(runtime.sends, 1);
+  } finally { await f.cleanup(); }
 });

@@ -4,6 +4,7 @@ import pg from 'pg';
 import nearApi from 'near-api-js';
 import { openPostgresBuyerJournal } from '../../agent/postgres-buyer-journal.mjs';
 import { runResourceAgent } from '../../agent/resource-agent.mjs';
+import { openBuyerCheckpointDirectory } from '../../agent/buyer-checkpoint-directory.mjs';
 import { orderMemoV3 } from '../../packages/provider-sdk/lib/resource-order.mjs';
 
 const owner = process.env.BOUNCER_TEST_OWNER || 'owner.testnet', contract = 'bouncer.testnet', token = 'token.testnet', payee = 'seller.testnet';
@@ -13,13 +14,17 @@ const goal = { id: 'work', resource: 'compute', policy_id: 'resources', token, p
 const keyPair = nearApi.KeyPair.fromString(process.env.BOUNCER_TEST_AGENT_KEY), signer = new nearApi.KeyPairSigner(keyPair);
 const publicKey = keyPair.getPublicKey();
 const pool = new pg.Pool({ connectionString: process.env.BOUNCER_TEST_POSTGRES_URL, max: 1 });
-let journal;
+let journal, checkpoints;
+const journalKey = Buffer.from(process.env.BOUNCER_TEST_JOURNAL_KEY, 'hex');
 let allow;
 const gate = new Promise(resolve => { allow = resolve; });
 process.on('message', message => { if (message?.type === 'go') allow(); });
 try {
   journal = await openPostgresBuyerJournal({ pool, contractId: contract, ownerAccountId: owner,
-    journalId: process.env.BOUNCER_TEST_JOURNAL, key: Buffer.from(process.env.BOUNCER_TEST_JOURNAL_KEY, 'hex') });
+    journalId: process.env.BOUNCER_TEST_JOURNAL, key: journalKey });
+  if (process.env.BOUNCER_TEST_CHECKPOINT_DIR) {
+    checkpoints = await openBuyerCheckpointDirectory({ directory: process.env.BOUNCER_TEST_CHECKPOINT_DIR, journal, currentKey: journalKey });
+  }
   process.send?.({ type: 'opened' });
   const provider = {
     async viewNodeStatus() { return { chain_id: 'testnet' }; },
@@ -53,12 +58,17 @@ try {
       auth_scheme: 'bouncer-nep413-claim-v1', seller_origin: origin }; },
     fulfill: async () => { throw new Error('must not fulfill a pending payment'); }, provider, account, publicKey, journal,
     execute: true, durablePayment: true, log: () => {},
-    beforePayment: async () => { if (process.env.BOUNCER_TEST_BARRIER === '1') { process.send?.({ type: 'prepared' }); await gate; } },
+    beforePayment: async () => { checkpoints?.assertCapacity(); if (process.env.BOUNCER_TEST_BARRIER === '1') { process.send?.({ type: 'prepared' }); await gate; } },
+    ...(checkpoints ? { beforeBroadcastCheckpoint: async record => {
+      await checkpoints.checkpoint(record); process.send?.({ type: 'checkpointed', hash: record.tx_hash });
+      if (process.env.BOUNCER_TEST_CHECKPOINT_HOLD === '1') await new Promise(() => {});
+    } } : {}),
   });
   process.send?.({ type: 'result', ok: true });
 } catch (error) {
   process.send?.({ type: 'result', ok: false, code: error.code ?? null, message: String(error.message).slice(0, 300) });
 } finally {
+  checkpoints?.close(); journalKey.fill(0);
   if (journal) await journal.close();
   await pool.end();
   process.disconnect?.();

@@ -100,6 +100,17 @@ consent, and no offers or payments were requested:
   documents a testnet escrow and agent builds, but its job budget and compute
   deposits are native NEAR, not an FT payment. The existence of deployment
   metadata does not establish current service availability or fulfillment.
+- [TabWrit's x402-style demo at `7c294f4`](https://github.com/Lesnak1/tabwrit/blob/7c294f4180aa01ac9aaff7a6d3bd09a0d3df4243/scripts/x402-api.ts)
+  checks its own vault's charge event; the inspected localhost demo does not
+  establish acceptance of Bouncer's nested FT payment or a hosted independent
+  seller. [Kibble at `fa88784`](https://github.com/isaacessuman/kibble/blob/fa8878433939651779cf89dc76522c08ead8a68a/apps/web/app/api/hire/%5Bid%5D/route.ts)
+  describes a mainnet native-NEAR `feed` hire flow, not the reviewed testnet FT
+  route. Neither was quoted or paid.
+- [AgentSpend at `17a567a`](https://github.com/sufianweb3/tridon/blob/17a567a0734082f8877608faa2a699a21d1ce50c/apps/web/src/app/v1/agent/payment-requests/route.ts)
+  is another testnet spending-vault project, using its own TESTUSD demo token,
+  agent bearer authentication and internal payment request flow. The inspected
+  API does not establish acceptance of Bouncer's v3 claim or an independently
+  available compute, storage or data service. No request or payment was sent.
 
 The right next step is seller cooperation or a compatible deployed protocol,
 not weakening the owner guard or claiming a self-hosted adapter is independent.

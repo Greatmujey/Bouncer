@@ -5,6 +5,8 @@ import pg from 'pg';
 import nearApi from 'near-api-js';
 import { MonotonicAccount, PaymentRpcProvider } from '../../agent/near-account.mjs';
 import { mockGuardedPayment } from '../mock-guarded-payment.mjs';
+import { readBuyerKeyFile } from '../../agent/shared-buyer-config.mjs';
+import { verifyEncryptedBuyerSnapshot } from '../../agent/postgres-buyer-journal.mjs';
 
 const owner = process.env.BOUNCER_TEST_OWNER || 'owner.testnet', contract = 'bouncer.testnet', token = 'token.testnet';
 const stateFile = process.env.BOUNCER_TEST_BUYER_CLI_STATE;
@@ -32,6 +34,15 @@ PaymentRpcProvider.prototype.sendTransactionUntil = async signed => {
     const found = await pool.query('SELECT status FROM bouncer_buyer_v1.entries WHERE tx_hash=$1', [txHash]);
     if (found.rowCount !== 1 || found.rows[0].status !== 'pending') throw new Error('hash was not committed before simulated broadcast');
   } finally { await pool.end(); }
+  if (process.env.BOUNCER_TEST_CHECKPOINT_DIR) {
+    const files = fs.readdirSync(process.env.BOUNCER_TEST_CHECKPOINT_DIR).filter(name => name.endsWith(`-${txHash}.json`));
+    if (files.length !== 1) throw new Error('encrypted checkpoint was not persisted before synthetic broadcast');
+    const key = readBuyerKeyFile(process.env.BOUNCER_BUYER_JOURNAL_KEY_FILE);
+    try {
+      const snapshot = verifyEncryptedBuyerSnapshot(fs.readFileSync(`${process.env.BOUNCER_TEST_CHECKPOINT_DIR}/${files[0]}`, 'utf8'), key);
+      if (!snapshot.entries.some(entry => entry.tx_hash === txHash && entry.status === 'pending')) throw new Error('checkpoint does not include the original pending hash');
+    } finally { key.fill(0); }
+  }
   const args = JSON.parse(Buffer.from(signed.transaction.actions[0].functionCall.args).toString());
   const result = mockGuardedPayment({ hash: txHash, owner, contract, publicKey: String(signed.transaction.publicKey), args });
   const state = read(); state.sends++; state.balance = String(BigInt(state.balance) + BigInt(args.amount));
