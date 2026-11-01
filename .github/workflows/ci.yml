@@ -219,10 +219,16 @@ jobs:
       - name: Build separate experimental testnet playback WASM
         working-directory: bouncer/contracts/bouncer
         run: RUSTFLAGS="-C link-arg=-s" cargo build --target wasm32-unknown-unknown --release --features youtick-playback-v10
-      - name: Optimize separately built experimental playback WASM
+      # Keep the previously tested unoptimized V10 artifact. Diagnose the
+      # optimizer separately without publishing or silently deploying its output.
+      - name: Diagnose experimental playback optimization
+        shell: bash
         run: |
-          wasm-opt -O1 --strip-debug -o playback.opt.wasm bouncer/contracts/bouncer/target/wasm32-unknown-unknown/release/bouncer.wasm
-          mv playback.opt.wasm bouncer/contracts/bouncer/target/wasm32-unknown-unknown/release/bouncer.wasm
+          if wasm-opt -O1 --strip-debug -o "$RUNNER_TEMP/playback.opt.wasm" bouncer/contracts/bouncer/target/wasm32-unknown-unknown/release/bouncer.wasm >"$RUNNER_TEMP/playback-opt.log" 2>&1; then
+            echo 'Experimental playback optimizer succeeded; artifact remains unoptimized.'
+          else
+            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-2500).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::warning title=Experimental playback optimizer failed; artifact unchanged::"+s)' "$RUNNER_TEMP/playback-opt.log"
+          fi
       - name: Check experimental playback marker
         run: |
           node -e 'const fs=require("fs"),c=require("crypto"),p="bouncer/contracts/bouncer/target/wasm32-unknown-unknown/release/bouncer.wasm",b=fs.readFileSync(p);if(!b.subarray(0,8).equals(Buffer.from([0,97,115,109,1,0,0,0]))||!b.includes(Buffer.from("bouncer-agent-v10-youtick-testnet")))throw Error("invalid experimental playback artifact");console.log("Experimental playback WASM SHA-256",c.createHash("sha256").update(b).digest("hex"))'
