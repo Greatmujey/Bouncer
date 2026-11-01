@@ -27,17 +27,17 @@ const providerArgs = () => ({ source: { Project: { project_id: projectId, versio
   input_data: goal.route.project.input_data, secrets_ref: null, response_format: 'Json', payer_account_id: goal.owner_account_id,
   params: { attached_usd: '10000' } });
 const split = `Split 10000 stablecoin for project ${projectId}: 3333 to author ${goal.expected_author}, 6667 to owner connectors.outlayer.testnet (attached=10000, refund=0)`;
-const outcome = (id, executor_id, status, logs = []) => ({ id, outcome: { executor_id, status, logs } });
+const outcome = (id, executor_id, status, logs = [], receipt_ids = []) => ({ id, outcome: { executor_id, status, logs, receipt_ids } });
 const receipt = (id, predecessor_id, receiver_id, actions) => ({ receipt_id: id, predecessor_id, receiver_id, receipt: { Action: { actions } } });
 function finalResult(raw = output(checksum1)) {
   const value = raw64(raw);
   const requestData = { sender_id: goal.owner_account_id, predecessor_id: goal.contract_id, payment: goal.amount, attached_usd: '10000',
     input_data: goal.route.project.input_data, project_id: projectId, code_source: source() };
   const completion = { success: true, sender_id: goal.owner_account_id, code_source: source(), payment_charged: '10', payment_refunded: '90' };
-  return { final_execution_status: 'FINAL', status: { SuccessValue: value }, transaction_outcome: { id: hash },
+  return { final_execution_status: 'FINAL', status: { SuccessValue: value }, transaction_outcome: { id: hash, outcome: { receipt_ids: [ids[0]] } },
     transaction: { hash, signer_id: goal.owner_account_id, receiver_id: goal.contract_id, public_key: key,
-      actions: [{ FunctionCall: { method_name: 'execute_outlayer_project', deposit: '0', args: encode(signedArgs()) } }] },
-    receipts_outcome: [outcome(ids[0], goal.contract_id, { SuccessReceiptId: ids[1] }, ['BOUNCER independent paid project initiated; native and prepaid maxima reserved']),
+      actions: [{ FunctionCall: { method_name: 'execute_outlayer_project', deposit: '0', gas: '300000000000000', args: encode(signedArgs()) } }] },
+    receipts_outcome: [outcome(ids[0], goal.contract_id, { SuccessReceiptId: ids[1] }, ['BOUNCER independent paid project initiated; native and prepaid maxima reserved'], [ids[1]]),
       outcome(ids[1], 'outlayer.testnet', { SuccessReceiptId: ids[2] }, [event('execution_requested', { request_data: JSON.stringify(requestData) })]),
       outcome(ids[2], 'outlayer.testnet', { SuccessValue: value }, [split, event('execution_completed', completion)]),
       outcome(ids[3], goal.owner_account_id, { SuccessValue: '' })],

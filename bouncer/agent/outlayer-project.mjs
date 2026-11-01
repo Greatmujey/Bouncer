@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /**
  * Narrow paid OutLayer connector-probe integration, testnet only. The owner
- * pins a project version, exact fetch or bounded burn input, fake-USDC.e fee
- * and separate native/token policy budgets on chain. Burn is a deterministic
- * diagnostic workload, not general-purpose compute or TEE attestation.
+ * pins a project version, exact fetch, bounded burn, or diagnostic VRF input,
+ * fake-USDC.e fee and separate native/token policy budgets on chain. These are
+ * test probes, not commercial compute, market data, or TEE attestation.
  */
 import fs from 'node:fs';
 import os from 'node:os';
@@ -16,6 +16,7 @@ import { openConfiguredFileJournal } from './procurement.mjs';
 import { MonotonicAccount, PaymentRpcProvider } from './near-account.mjs';
 import { isTestnetAccount } from '../shared/account-id.mjs';
 import { signReviewedCall } from './reviewed-transaction.mjs';
+import { verifyOutlayerProbeVrf } from './outlayer-vrf.mjs';
 
 const { KeyPair, KeyPairSigner } = nearApi;
 const OUTLAYER = 'outlayer.testnet', PROJECT = 'connectors.outlayer.testnet/connector-probe', TOKEN = 'usdc.fakes.testnet';
@@ -39,8 +40,8 @@ function text(value, label, limit) {
   return value;
 }
 
-// Only two independently priced, owner-pinned test-connector operations are
-// supported. Canonical JSON prevents alternate fields, duplicate keys and
+// Only narrowly priced, owner-pinned test-connector operations are supported.
+// Canonical JSON prevents alternate fields, duplicate keys and
 // unreviewed inputs from being smuggled into a price-equivalent route.
 function probeTerms(project) {
   if (project.project_id !== PROJECT || project.token !== TOKEN) throw new Error('only the pinned testnet connector-probe and fake test token are supported');
@@ -55,7 +56,12 @@ function probeTerms(project) {
       project.input_data === JSON.stringify({ operation: 'burn', rounds: input.rounds })) {
     return { operation: 'burn', rounds: input.rounds, developerShareBp: 3333 };
   }
-  throw new Error('only the explicitly priced testnet connector-probe fetch or bounded burn is supported');
+  if (ownKeys(input, ['operation', 'seed']) && input.operation === 'vrf' && typeof input.seed === 'string' &&
+      /^[A-Za-z0-9_-]{1,64}$/.test(input.seed) && project.attached_usd === '10000' &&
+      project.input_data === JSON.stringify({ operation: 'vrf', seed: input.seed })) {
+    return { operation: 'vrf', seed: input.seed, developerShareBp: 0 };
+  }
+  throw new Error('only explicitly priced testnet connector-probe fetch, bounded burn, or pinned VRF is supported');
 }
 
 // The published probe hashes SHA256("probe"), then 1,000 successive hashes per
@@ -95,12 +101,16 @@ export function assertProjectRegistry({ project, expectedAuthor, configuredToken
 }
 
 export function validateProjectGoal(value) {
-  if (!ownKeys(value, FIELDS) || !ownKeys(value.route, ROUTE) || !ownKeys(value.route.project, CONFIG)) throw new Error('project goal must contain exactly the reviewed fields');
+  if (!value || typeof value !== 'object' || !ownKeys(value.route, ROUTE) || !ownKeys(value.route.project, CONFIG)) throw new Error('project goal must contain exactly the reviewed fields');
+  const p = value.route.project, terms = probeTerms(p);
+  if (!ownKeys(value, terms.operation === 'vrf' ? [...FIELDS, 'expected_vrf_pubkey'] : FIELDS)) throw new Error('project goal must contain exactly the reviewed fields');
+  if (terms.operation === 'vrf' && (typeof value.expected_vrf_pubkey !== 'string' || !/^[a-f0-9]{64}$/.test(value.expected_vrf_pubkey))) {
+    throw new Error('VRF requires an independently pinned 32-byte public key');
+  }
   const id = text(value.id, 'goal id', 64);
   if (!/^[A-Za-z0-9_-]+$/.test(id)) throw new Error('invalid goal id');
   if (![value.contract_id, value.owner_account_id, value.expected_author].every(isTestnetAccount)) throw new Error('only named testnet accounts are supported');
-  const nativePolicy = text(value.native_policy_id, 'native policy', 128), p = value.route.project;
-  probeTerms(p);
+  const nativePolicy = text(value.native_policy_id, 'native policy', 128);
   if (typeof p.version_key !== 'string' || !/^[a-f0-9]{64}$/.test(p.version_key)) throw new Error('invalid pinned project version');
   const usdPolicy = text(p.usd_policy_id, 'prepaid policy', 128);
   if (usdPolicy === nativePolicy) throw new Error('project requires separate native and prepaid policies');
@@ -118,7 +128,8 @@ export function validateProjectGoal(value) {
   const amount = unsigned(value.amount, 'maximum NEAR deposit');
   if (amount === 0n) throw new Error('maximum NEAR deposit must be positive');
   return { id, contract_id: value.contract_id, owner_account_id: value.owner_account_id, native_policy_id: nativePolicy,
-    amount: amount.toString(), route, expected_author: value.expected_author };
+    amount: amount.toString(), route, expected_author: value.expected_author,
+    ...(terms.operation === 'vrf' ? { expected_vrf_pubkey: value.expected_vrf_pubkey } : {}) };
 }
 const fingerprint = goal => crypto.createHash('sha256').update(JSON.stringify(goal)).digest('hex');
 const signedArgs = goal => ({ native_policy_id: goal.native_policy_id, amount: goal.amount, expected_route: goal.route });
@@ -173,7 +184,7 @@ export function verifyProjectResult(rawGoal, result, publicKey) {
   if (!tx || tx.hash !== hash || tx.signer_id !== goal.owner_account_id || tx.receiver_id !== goal.contract_id ||
       (publicKey !== undefined && tx.public_key !== String(publicKey)) || !Array.isArray(tx.actions) || tx.actions.length !== 1) throw new Error('transaction owner, contract or key mismatch');
   const signed = tx.actions[0]?.FunctionCall;
-  if (!signed || signed.method_name !== 'execute_outlayer_project' || String(signed.deposit) !== '0' ||
+  if (!signed || signed.method_name !== 'execute_outlayer_project' || String(signed.deposit) !== '0' || String(signed.gas) !== GAS.toString() ||
       !equal(decode(signed.args, 'signed project arguments'), signedArgs(goal))) throw new Error('signed project does not match the reviewed goal');
   if (!Array.isArray(result.receipts_outcome) || !result.receipts_outcome.length || result.receipts_outcome.some(r => !successful(r?.outcome?.status)) || !Array.isArray(result.receipts)) throw new Error('receipt outcomes failed, incomplete or missing');
   const outcomeIds = result.receipts_outcome.map(r => r?.id), receiptIds = result.receipts.map(r => r?.receipt_id);
@@ -188,6 +199,12 @@ export function verifyProjectResult(rawGoal, result, publicKey) {
   });
   if (requests.length !== 1 || String(requests[0].call.deposit) !== goal.amount ||
       !result.receipts_outcome.some(r => r.id === requests[0].receipt.receipt_id && successful(r.outcome?.status))) throw new Error('missing exact Bouncer-to-OutLayer request');
+  if (!Array.isArray(result.transaction_outcome?.outcome?.receipt_ids) ||
+      !result.transaction_outcome.outcome.receipt_ids.includes(initiations[0].id) ||
+      !Array.isArray(initiations[0].outcome.receipt_ids) || !initiations[0].outcome.receipt_ids.includes(requests[0].receipt.receipt_id) ||
+      initiations[0].outcome.status?.SuccessReceiptId !== requests[0].receipt.receipt_id) {
+    throw new Error('provider request is not linked to the original guarded transaction');
+  }
   const args = decode(requests[0].call.args, 'provider project arguments');
   if (!equal(args.source, { Project: { project_id: p.project_id, version_key: p.version_key } }) ||
       !equal(args.resource_limits, { max_instructions: p.max_instructions, max_memory_mb: p.max_memory_mb, max_execution_seconds: p.max_execution_seconds }) ||
@@ -208,6 +225,9 @@ export function verifyProjectResult(rawGoal, result, publicKey) {
     outcome.status?.SuccessValue === result.status.SuccessValue);
   if (requested.length !== 1 || completed.length !== 1 || !equal(requested[0].data && JSON.parse(requested[0].data.request_data).code_source, completed[0].data.code_source)) {
     throw new Error('missing matching provider request and successful completion');
+  }
+  if (requested[0].outcome.status?.SuccessReceiptId !== completed[0].receiptId) {
+    throw new Error('provider completion is not linked to this request');
   }
   // The project's current on-chain row is checked before sending, and this
   // transaction's provider log must confirm the exact operation-specific
@@ -236,6 +256,11 @@ export function verifyProjectResult(rawGoal, result, publicKey) {
     }
     verifiedResult = { operation: 'burn', rounds_done: terms.rounds, hashes: terms.rounds * 1_000, checksum: output.checksum };
     verification = 'trusted RPC and OutLayer receipts; deterministic checksum independently recomputed; no proof of execution location or TEE';
+  } else if (terms.operation === 'vrf') {
+    const request = JSON.parse(requested[0].data.request_data);
+    verifiedResult = verifyOutlayerProbeVrf({ output, requestId: request.request_id, owner: goal.owner_account_id,
+      seed: terms.seed, expectedPublicKey: goal.expected_vrf_pubkey });
+    verification = 'trusted RPC, OutLayer receipts and independently pinned public key; signature and output verified; no TEE or key-unbiasedness proof';
   } else {
     if (!Number.isSafeInteger(output.http_status) || output.http_status < 100 || output.http_status > 599) throw new Error('provider did not deliver the expected connectivity-probe result');
     verifiedResult = { operation: 'fetch', http_status: output.http_status };

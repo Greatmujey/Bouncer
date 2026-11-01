@@ -215,6 +215,20 @@ failure details rather than logging potentially credential-bearing RPC paths.
 The RPC is still trusted for its response. This diagnostic uses neither Circle
 USDC nor a TEE attestation.
 
+The runner also has a **synthetic-only `vrf` diagnostic path**. The goal pins a
+canonical seed, the fake-token price, project/version, and an independently
+obtained 32-byte testnet public key. It verifies the exact guarded transaction,
+linked provider request/completion, fee split and native refund, then checks an
+Ed25519 signature over `vrf:{request_id}:{owner}:{seed}` and recomputes the
+SHA-256-derived output. A returned public key alone is not sufficient: the goal
+must contain a separately reviewed pin, and a mismatched key is rejected. This
+checks a signed value, not the fairness of the key or a TEE attestation. The
+connector's own documentation calls it a test probe, not a commercial API; no
+live FT-paid VRF fulfillment has been demonstrated. The [public testnet key
+endpoint](https://testnet-api.outlayer.ai/vrf/pubkey) and current registry views
+must be rechecked before any new, explicitly approved order. Do not use this as
+a substitute for resolving or replaying the separate ambiguous burn transaction.
+
 Provider-held credit is distinct from Bouncer's FT vault. In this path a project
 refund can be credited to Bouncer's balance **at OutLayer**, not returned to
 Bouncer's vault. The conservative local ledger can understate returned credit

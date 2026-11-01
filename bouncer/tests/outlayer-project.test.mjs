@@ -19,17 +19,17 @@ const { key, hash } = signing;
 const providerArgs = () => ({ source: { Project: { project_id: route.project.project_id, version_key: route.project.version_key } },
   resource_limits: limits(), input_data: route.project.input_data, secrets_ref: null, response_format: 'Json', payer_account_id: goal.owner_account_id, params: { attached_usd: '15000' } });
 const split = `Split 15000 stablecoin for project ${route.project.project_id}: 15000 to author ${goal.expected_author}, 0 to owner connectors.outlayer.testnet (attached=15000, refund=0)`;
-function outcome(id, executor_id, status, logs = []) { return { id, outcome: { executor_id, status, logs } }; }
+function outcome(id, executor_id, status, logs = [], receipt_ids = []) { return { id, outcome: { executor_id, status, logs, receipt_ids } }; }
 function receipt(id, predecessor_id, receiver_id, actions) { return { receipt_id: id, predecessor_id, receiver_id, receipt: { Action: { actions } } }; }
 function finalResult() {
   const output = encode({ ok: true, operation: 'fetch', http_status: 200, detail: 'declared host reachable' });
   const requestData = { sender_id: goal.owner_account_id, predecessor_id: goal.contract_id, payment: goal.amount, attached_usd: '15000',
     input_data: route.project.input_data, project_id: route.project.project_id, code_source: source() };
   const completion = { success: true, sender_id: goal.owner_account_id, code_source: source(), payment_charged: '10', payment_refunded: '90' };
-  return { final_execution_status: 'FINAL', status: { SuccessValue: output }, transaction_outcome: { id: hash },
+  return { final_execution_status: 'FINAL', status: { SuccessValue: output }, transaction_outcome: { id: hash, outcome: { receipt_ids: [initId] } },
     transaction: { hash, signer_id: goal.owner_account_id, receiver_id: goal.contract_id, public_key: key,
-      actions: [{ FunctionCall: { method_name: 'execute_outlayer_project', deposit: '0', args: encode(signedArgs()) } }] },
-    receipts_outcome: [outcome(initId, goal.contract_id, { SuccessReceiptId: requestId }, ['BOUNCER independent paid project initiated; native and prepaid maxima reserved']),
+      actions: [{ FunctionCall: { method_name: 'execute_outlayer_project', deposit: '0', gas: '300000000000000', args: encode(signedArgs()) } }] },
+    receipts_outcome: [outcome(initId, goal.contract_id, { SuccessReceiptId: requestId }, ['BOUNCER independent paid project initiated; native and prepaid maxima reserved'], [requestId]),
       outcome(requestId, 'outlayer.testnet', { SuccessReceiptId: completeId }, [event('execution_requested', { request_data: JSON.stringify(requestData) })]),
       outcome(completeId, 'outlayer.testnet', { SuccessValue: output }, [split, event('execution_completed', completion)]),
       outcome(refundId, goal.owner_account_id, { SuccessValue: '' })],
@@ -87,6 +87,10 @@ test('rejects misleading, incomplete, mutated or unbound paid-provider evidence'
   const mutations = [
     r => { r.final_execution_status = 'EXECUTED'; }, r => { r.transaction.signer_id = 'attacker.testnet'; },
     r => { r.transaction.public_key = 'ed25519:other'; }, r => { r.transaction.actions[0].FunctionCall.deposit = '1'; },
+    r => { r.transaction.actions[0].FunctionCall.gas = '1'; },
+    r => { r.transaction_outcome.outcome.receipt_ids = []; }, r => { r.receipts_outcome[0].outcome.receipt_ids = []; },
+    r => { r.receipts_outcome[0].outcome.status.SuccessReceiptId = '2'.repeat(44); },
+    r => { r.receipts_outcome[1].outcome.status.SuccessReceiptId = '2'.repeat(44); },
     r => { const a = signedArgs(); a.expected_route = structuredClone(a.expected_route); a.expected_route.project.input_data = '{}'; r.transaction.actions[0].FunctionCall.args = encode(a); },
     r => { r.receipts_outcome[0].outcome.logs = []; }, r => { r.receipts_outcome[1].outcome.status = { Failure: {} }; },
     r => { r.receipts[0].receipt.Action.actions[0].FunctionCall.deposit = '101'; },

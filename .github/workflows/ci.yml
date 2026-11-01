@@ -81,6 +81,22 @@ jobs:
           fi
           exit "$result"
 
+  outlayer-vrf-read:
+    name: Discover pinned testnet VRF probe terms (read only)
+    if: github.event_name == 'push' && github.run_attempt == '1' && contains(github.event.head_commit.message, '[vrf-capability-read]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      - name: Read public key and registry, without execution or payment
+        run: node bouncer/scripts/probe-outlayer-vrf.mjs
+
   ref-graph-read:
     name: Inspect existing public Ref and vault receipt graphs (read only)
     if: github.event_name == 'push' && github.run_attempt == '1' && contains(github.event.head_commit.message, '[ref-graph-read]')
