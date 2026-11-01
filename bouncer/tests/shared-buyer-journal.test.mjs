@@ -392,7 +392,12 @@ dbtest('worker role can reserve without DDL, journal creation or DELETE permissi
     const restrictedPool = { async connect() { return { query: client.query.bind(client), on: client.on.bind(client),
       removeListener: client.removeListener.bind(client), release() {} }; } };
     const journal = await openPostgresBuyerJournal({ pool: restrictedPool, contractId: contract, ownerAccountId: owner, journalId: f.journalId, key: f.key });
-    await reserveSynthetic(journal, 'work', await pendingEntry());
+    await journal.withOwnerFence(async () => {
+      await journal.reservePending('work', await pendingEntry());
+      const original = journal.get('work');
+      assert.equal(verifyEncryptedBuyerSnapshot(await journal.exportEncryptedSnapshot(), f.key).entries[0].tx_hash, original.tx_hash);
+      await journal.assertPendingForBroadcast('work', original.tx_hash);
+    });
     const pending = journal.get('work'); assert.equal(pending.status, 'pending');
     await journal.writeDurable('work', { ...pending, status: 'completed', completed_at: new Date().toISOString(), settlement: {
       tx_hash: pending.tx_hash, token, payee, amount: '1000', verification: 'FINAL trusted-RPC Bouncer and token receipts; provider delivery not established' } });
@@ -1421,6 +1426,8 @@ dbtest('checkpoint directory rejects symlinks, unsafe permissions, unexpected fi
   try {
     const dir = path.join(root, 'dir'), link = path.join(root, 'link'); fs.mkdirSync(dir, { mode: 0o700 }); fs.symlinkSync(dir, link);
     await assert.rejects(openBuyerCheckpointDirectory({ directory: dir, journal: f.journal, currentKey: crypto.randomBytes(32) }), error => error.code === 'SNAPSHOT_INVALID');
+    const capacity = await openBuyerCheckpointDirectory({ directory: dir, journal: f.journal, currentKey: f.key });
+    capacity.assertCapacity(256); assert.throws(() => capacity.assertCapacity(257), error => error.code === 'CHECKPOINT_LIMIT'); capacity.close();
     await assert.rejects(openBuyerCheckpointDirectory({ directory: link, journal: f.journal, currentKey: f.key }), error => error.code === 'CHECKPOINT_DIRECTORY');
     fs.chmodSync(dir, 0o755);
     await assert.rejects(openBuyerCheckpointDirectory({ directory: dir, journal: f.journal, currentKey: f.key }), error => error.code === 'CHECKPOINT_DIRECTORY');
