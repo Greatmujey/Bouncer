@@ -39,6 +39,19 @@ function writeExclusive(dir, name, value) {
   const parent = fs.openSync(dir, 'r'); try { fs.fsyncSync(parent); } finally { fs.closeSync(parent); }
 }
 
+/** Public FINAL RPC results can include the original transaction signature.
+ * Retain the outcome and reviewed action for inspection, but not fields that
+ * would allow a retained receipt to reconstruct replayable signed bytes. */
+export function redactProbeReceipt(result) {
+  const copy = structuredClone(result);
+  if (copy?.transaction && typeof copy.transaction === 'object') {
+    delete copy.transaction.signature;
+    delete copy.transaction.nonce;
+    delete copy.transaction.block_hash;
+  }
+  return copy;
+}
+
 /** Pin setup transaction actions and verify the returned signature before use.
  * No signed bytes are written to disk. The sender still must journal the hash. */
 export async function signReviewedProbeSetup({ account, signerId, publicKey, receiverId, actions }) {
@@ -180,7 +193,7 @@ async function main() {
       let result;
       try { result = await provider.txStatusReceipts(signed.txHash, signerId, 'FINAL'); }
       catch { throw new Error(`${id} has unresolved hash ${signed.txHash}; inspect it without resending`); }
-      writeExclusive(dir, `${id}-receipt.json`, result);
+      writeExclusive(dir, `${id}-receipt.json`, redactProbeReceipt(result));
       return result;
     }
     function complete(id, proof) { const entry = journal.get(id); journal.put(id, { ...entry, status: 'completed', proof }); }

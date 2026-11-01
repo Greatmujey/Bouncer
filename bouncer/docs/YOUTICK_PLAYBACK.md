@@ -101,7 +101,10 @@ access receipt `2VAPLpVfQVNmwtvYp2ivu94VX76S3ifsRaGugHNmC2Ny`). The public
 original review and hashes are retained in `evidence/youtick-hypothetical-grant-20261101/`;
 the encrypted journal and sealed disposable keys are in the workflow artifact
 `youtick-hypothetical-grant-testnet-evidence` (retention ends 30 January 2027).
-A separate [read-only reinspection](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41312275565/job/124864955447)
+The original artifact also contains full public RPC receipts, which can include
+transaction signatures and nonces; do not resend them. Later diagnostic runs
+redact those fields from stored receipt copies. No private keys were put in the
+artifact. A separate [read-only reinspection](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41312275565/job/124864955447)
 rechecked both original FINAL hashes and the current views without signing or
 sending; at that finalized block the hypothetical job and publication were
 absent and the vault had no entitlement. The grant was active at that point and

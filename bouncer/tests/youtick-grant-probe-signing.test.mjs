@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import nearApi from 'near-api-js';
-import { signReviewedProbeSetup, assertProbeRuntime } from '../scripts/probe-youtick-owner-grant.mjs';
+import { signReviewedProbeSetup, assertProbeRuntime, redactProbeReceipt } from '../scripts/probe-youtick-owner-grant.mjs';
 
 function setup() {
   const key = nearApi.KeyPair.fromRandom('ed25519'), signer = new nearApi.KeyPairSigner(key), signerId = 'vault.testnet';
@@ -33,4 +33,14 @@ test('diagnostic rejects mainnet, unknown/old protocol and unexpected storage be
     { ...valid, protocol_version: '84' }, { ...valid, runtime_config: {} }, null]) {
     assert.throws(() => assertProbeRuntime(bad), /not compatible/);
   }
+});
+
+test('retained diagnostic receipts omit signature, nonce and block hash without mutating live evidence', () => {
+  const raw = { transaction: { hash: 'public', signer_id: 'owner.testnet', signature: 'public-chain-signature', nonce: 10,
+    block_hash: 'public-block', actions: [{ FunctionCall: { method_name: 'issue_youtick_play_grant' } }] },
+    status: { SuccessValue: 'e30=' } };
+  const saved = redactProbeReceipt(raw);
+  assert.equal(saved.transaction.signature, undefined); assert.equal(saved.transaction.nonce, undefined);
+  assert.equal(saved.transaction.block_hash, undefined); assert.equal(raw.transaction.signature, 'public-chain-signature');
+  assert.equal(saved.transaction.actions[0].FunctionCall.method_name, 'issue_youtick_play_grant');
 });
