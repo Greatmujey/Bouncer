@@ -82,6 +82,7 @@ export async function planFromQuotes({ contractId, ownerAccountId, goals, getQuo
   for (const item of prepared) {
     const { id, resource, policyId, token, payee, max, selectedAmount, unique } = item;
     const previous = journal?.get(id);
+    if (previous && previous.intent_id !== item.goal.intent_id) throw new Error(`${id}: recorded payment has a different stable intent ID`);
     if (previous && previous.status !== 'completed') throw new Error(`${id}: unresolved pending payment; inspect the chain and journal before retrying`);
     if (previous?.request !== undefined) {
       const raw = previous.request;
@@ -201,6 +202,8 @@ export async function runResourceAgent({ contractId, ownerAccountId, goals, getQ
     if (!Array.isArray(goals) || goals.some(goal => goal?.order_binding !== 'seller-v3')) throw new Error('shared buyer supports only seller-v3 resource goals');
     if (goals.some(goal => typeof goal?.id !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(goal.id))) throw new Error('invalid shared buyer request ID');
     if (execute && !durablePayment) throw new Error('shared buyer execution requires durable signed-hash payments');
+  } else if (Array.isArray(goals) && goals.some(goal => goal && Object.hasOwn(goal, 'intent_id'))) {
+    throw new Error('intent_id requires the shared buyer and strict owner intent mode');
   }
   if (typeof beforePayment !== 'function' || typeof beforeBroadcast !== 'function' ||
       (beforeBroadcastCheckpoint !== undefined && (typeof beforeBroadcastCheckpoint !== 'function' || !execute || !durablePayment || journal?.sharedDirectV3 !== true))) {
@@ -237,6 +240,11 @@ export async function runResourceAgent({ contractId, ownerAccountId, goals, getQ
       throw new Error(`${goal.id}: recorded provider route does not match the reviewed goal`);
     }
   }
+  let intentIds;
+  if (journal?.sharedDirectV3 === true) {
+    if (typeof journal.checkOwnerIntents !== 'function') throw new Error('shared buyer intent mode check is required');
+    if (await journal.checkOwnerIntents(goals)) intentIds = new Map(goals.map(goal => [goal.id, goal.intent_id]));
+  }
   const plan = await planFromQuotes({ contractId, ownerAccountId, goals, getQuote, journal, providerUrl });
   // Reject corrupted or mismatched prior receipts before paying another goal.
   for (let i = 0; i < plan.requests.length; i++) {
@@ -255,7 +263,7 @@ export async function runResourceAgent({ contractId, ownerAccountId, goals, getQ
   // The views are non-atomic: the contract still decides each real payment,
   // and another actor can change state after this preview.
   const checks = [], blockedReasons = new Map();
-  const preview = await runProcurement({ plan, provider, account, publicKey, journal, journalRoutes, claimOrigins, execute: false, log: () => {}, onCheck: check => {
+  const preview = await runProcurement({ plan, provider, account, publicKey, journal, journalRoutes, claimOrigins, intentIds, execute: false, log: () => {}, onCheck: check => {
     checks.push({ id: check.id, status: check.status });
     if (check.status === 'BLOCKED') blockedReasons.set(check.id, typeof check.reason === 'string' ? check.reason.replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 200) : 'Policy rejected the request.');
   } });
@@ -276,7 +284,7 @@ export async function runResourceAgent({ contractId, ownerAccountId, goals, getQ
   if (execute && !summary.blocked) {
     log('[resource-agent] Batch preflight passed; these non-atomic views are not a guarantee.');
     const indexById = new Map(plan.requests.map((request, index) => [request.id, index]));
-    payments = await runProcurement({ plan, provider, account, publicKey, journal, journalRoutes, claimOrigins, execute: true, durablePayment, log, stopOnBlocked: true,
+    payments = await runProcurement({ plan, provider, account, publicKey, journal, journalRoutes, claimOrigins, intentIds, execute: true, durablePayment, log, stopOnBlocked: true,
       beforePayment, beforeBroadcast, beforeBroadcastCheckpoint,
       onCheck: check => {
         if (check.status === 'BLOCKED' || check.status === 'DEFERRED') {
@@ -375,6 +383,8 @@ seller-v3 execution.
 --shared-journal uses a separately initialized, encrypted PostgreSQL buyer
 journal for direct seller-v3 goals only. It requires --execute --durable and
 secure BOUNCER_BUYER_DATABASE_URL / BOUNCER_BUYER_JOURNAL_KEY_FILE settings.
+An owner explicitly opted into strict intent mode must assign each goal an
+owner-stable intent_id; keep the same ID across journals for the same payment.
 --checkpoint-dir opts a fresh shared journal into encrypted, fsync-backed local
 pre-broadcast checkpoints in an existing, dedicated owner-only directory. A
 checkpoint is not a full backup or proof that this directory is the latest.

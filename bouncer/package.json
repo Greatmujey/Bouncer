@@ -13,6 +13,7 @@
     "recover-direct-delivery": "node agent/recover-direct-delivery.mjs",
     "init-shared-buyer-db": "node scripts/init-shared-buyer-db.mjs",
     "init-shared-buyer-journal": "node scripts/init-shared-buyer-journal.mjs",
+    "activate-buyer-intents": "node scripts/activate-buyer-intents.mjs",
     "inspect-shared-buyer": "node scripts/inspect-shared-buyer.mjs",
     "rotate-shared-buyer-key": "node scripts/rotate-shared-buyer-key.mjs",
     "snapshot-shared-buyer": "node scripts/snapshot-shared-buyer.mjs",

@@ -159,10 +159,13 @@ not prove all possible callback, provider or token failure cases.
    and keys. It is not a distributed nonce allocator and does not coordinate
    other protocols or older/bypassing workers. Stop all old workers before
    upgrading. It requires a stable mission ID, original encryption key, correct
-   fencing and no stale restore; a different ID with a fresh challenge after a
-   completed payment, a file journal or another database can still duplicate an
-   economic operation. It has synthetic tests, not a live shared-database
-   payment or production exactly-once proof.
+   fencing and no stale restore. A new owner can opt into stable business-intent
+   IDs, atomically unique across participating journals/contracts even with
+   fresh challenges; the same economic operation must retain the same owner-
+   assigned ID. Legacy owners, a changed ID, a file journal, an old/bypassing
+   worker or another database can still duplicate an operation. This has
+   synthetic tests, not a live shared-database payment or production
+   exactly-once proof.
    FT-call, OutLayer, x402 and mixed/dependent workflows are not covered.
    Bounded atomic key rotation preserves the existing encrypted entries and
    pending quarantine; a stolen old key, an old backup or previously exposed

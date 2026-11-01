@@ -6,9 +6,11 @@ import { initializePostgresBuyerSchema } from '../agent/postgres-buyer-journal.m
 
 const USAGE = `Usage: node bouncer/scripts/init-shared-buyer-db.mjs --confirm-testnet-schema
 
-Creates the experimental bouncer_buyer_v1 schema using
-BOUNCER_BUYER_DATABASE_URL. Requires a privileged schema initializer role.
-Does not create a journal, contact NEAR or a seller, reset state or send funds.
+Creates or upgrades the experimental bouncer_buyer_v1 schema to version 2
+using BOUNCER_BUYER_DATABASE_URL. Requires a privileged schema initializer.
+STOP AND FENCE ALL old workers before upgrading. The upgrade adds intent tables
+without rewriting existing journals; old workers must not continue. It does not
+create a journal, contact NEAR or a seller, reset state or send funds.
 `;
 async function main() {
   const args = process.argv.slice(2);

@@ -10,7 +10,8 @@ import { orderMemoV3 } from '../../packages/provider-sdk/lib/resource-order.mjs'
 const owner = process.env.BOUNCER_TEST_OWNER || 'owner.testnet', contract = 'bouncer.testnet', token = 'token.testnet', payee = 'seller.testnet';
 const origin = 'https://synthetic-seller.example';
 const goal = { id: 'work', resource: 'compute', policy_id: 'resources', token, payee,
-  max_amount: '1000', order_binding: 'seller-v3', input: { text: 'process race', rounds: 2 } };
+  max_amount: '1000', order_binding: 'seller-v3', input: { text: 'process race', rounds: 2 },
+  ...(process.env.BOUNCER_TEST_INTENT_ID ? { intent_id: process.env.BOUNCER_TEST_INTENT_ID } : {}) };
 const keyPair = nearApi.KeyPair.fromString(process.env.BOUNCER_TEST_AGENT_KEY), signer = new nearApi.KeyPairSigner(keyPair);
 const publicKey = keyPair.getPublicKey();
 const pool = new pg.Pool({ connectionString: process.env.BOUNCER_TEST_POSTGRES_URL, max: 1 });

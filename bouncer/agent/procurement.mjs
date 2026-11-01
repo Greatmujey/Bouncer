@@ -10,6 +10,7 @@ import { pathToFileURL } from 'node:url';
 import nearApi from 'near-api-js';
 import { validateRpcEndpoint } from '../shared/rpc-endpoint.mjs';
 import { validateProviderOrigin } from '../shared/provider-origin.mjs';
+import { validBuyerIntentId } from '../shared/buyer-intent.mjs';
 import { assertFinalPaymentReceipts } from '../shared/final-payment.mjs';
 import { isTransactionHash, verifyDirectPayment } from '../shared/direct-payment-settlement.mjs';
 import { MonotonicAccount, PaymentRpcProvider } from './near-account.mjs';
@@ -98,7 +99,7 @@ export async function runProcurement(options) {
   return runProcurementCore(options);
 }
 
-async function runProcurementCore({ plan: rawPlan, provider, account, publicKey, journal, journalRoutes, claimOrigins, execute = false,
+async function runProcurementCore({ plan: rawPlan, provider, account, publicKey, journal, journalRoutes, claimOrigins, intentIds, execute = false,
   durablePayment = false, log = console.log, onCheck = () => {}, beforePayment = async () => {}, beforeBroadcast = () => {}, beforeBroadcastCheckpoint,
   onPaid = async () => {}, stopOnBlocked = false }) {
   const plan = validatePlan(rawPlan);
@@ -136,10 +137,24 @@ async function runProcurementCore({ plan: rawPlan, provider, account, publicKey,
     }
   }
   assertJournalScope(journal, plan.contract_id, plan.owner_account_id);
+  if (intentIds !== undefined) {
+    if (journal?.sharedDirectV3 !== true || !(intentIds instanceof Map) || intentIds.size !== plan.requests.length ||
+        plan.requests.some(request => !intentIds.has(request.id) || !validBuyerIntentId(intentIds.get(request.id))) ||
+        new Set(intentIds.values()).size !== intentIds.size) throw new Error('invalid shared buyer intent IDs');
+    intentIds = new Map(intentIds);
+  }
   if (journal?.sharedDirectV3 === true) {
     if (execute && !durablePayment) throw new Error('shared buyer execution requires durable signed-hash payments');
     if (claims.size !== plan.requests.length) throw new Error('shared buyer supports only authenticated seller-v3 direct payments');
     if (plan.requests.some(request => !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(request.id))) throw new Error('invalid shared buyer request ID');
+    if (execute) {
+      if (typeof journal.checkOwnerIntents !== 'function') throw new Error('shared buyer intent mode check is required');
+      // Recheck under the owner fence: two workers may both have quoted before
+      // either reserved an intent. This check is still followed by an atomic
+      // unique insert before the only broadcast.
+      await journal.checkOwnerIntents(plan.requests.map(request => ({ id: request.id,
+        ...(intentIds ? { intent_id: intentIds.get(request.id) } : {}) })));
+    }
   }
   if (!account || account.accountId !== plan.owner_account_id) throw new Error('agent key account does not match the plan owner');
   if (execute && !journal) throw new Error('a journal is required for live execution');
@@ -161,7 +176,9 @@ async function runProcurementCore({ plan: rawPlan, provider, account, publicKey,
   for (const request of plan.requests) {
     const hash = requestFingerprint(request);
     const previous = journal?.get(request.id);
-    if (previous && previous.fingerprint !== hash) throw new Error(`${request.id}: journal entry does not match the request`);
+    if (previous && (previous.fingerprint !== hash || previous.intent_id !== intentIds?.get(request.id))) {
+      throw new Error(`${request.id}: journal entry does not match the request or stable intent`);
+    }
     if (previous?.status === 'completed') {
       onCheck({ id: request.id, status: 'SKIPPED' });
       log(`[procurement] SKIP ${request.id}: already paid (${previous.tx_hash})`);
@@ -213,7 +230,8 @@ async function runProcurementCore({ plan: rawPlan, provider, account, publicKey,
     const args = { policy_id: request.policy_id, payee: request.payee, amount: request.amount,
       memo: request.memo, expected_token: request.token };
     let pending = { fingerprint: hash, status: 'pending', request,
-      ...(routes ? { provider_route: routes.get(request.id) } : {}), started_at: new Date().toISOString() };
+      ...(routes ? { provider_route: routes.get(request.id) } : {}),
+      ...(intentIds ? { intent_id: intentIds.get(request.id) } : {}), started_at: new Date().toISOString() };
     let txHash, signed;
     if (durablePayment) {
       if (!account.signer || typeof account.createTransaction !== 'function' ||

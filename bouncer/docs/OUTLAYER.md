@@ -201,8 +201,11 @@ send remained unresolved. Its journaled hash is
 `DTJyQq7zMVtQFExeAtVSfKLSEkDSdmZerP3CJkWx8YUD` for
 `owner.bouncer-ft-69756b49.testnet`. A [read-only reconciliation](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41212677218/job/124570783704)
 could not retrieve FINAL receipts: one RPC timed out and the other returned HTTP
-408. The explorer did not show the hash, but absence there is **not** proof of
-non-execution. The [public recovery evidence artifact](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41212677218)
+408. A [later status-only recheck](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41290865530/job/124801658634)
+received RPC errors or missing results from both configured endpoints and did
+not resolve the transaction; it submitted **zero** new payments. The explorer
+did not show the hash, but absence there is **not** proof of non-execution. The
+[public recovery evidence artifact](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41212677218)
 contains the original journal and goal and expires 29 January 2027. Preserve them
 and never automatically resend this transaction. The reconciliation script makes
 only bounded status reads: it first asks for the current status, then requests

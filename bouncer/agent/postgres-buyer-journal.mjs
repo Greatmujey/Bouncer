@@ -9,15 +9,17 @@
  * deletion, automatic retry or resend.
  *
  * This protects only upgraded callers using this database and the supported
- * direct v3 runner. It cannot protect a second database, a restored stale
- * backup, a file journal, a different mission ID for a newly issued quote, a
- * bypassing worker or a stale primary.
+ * direct v3 runner. Optional strict owner intent IDs can prevent reuse across
+ * journals only when operators keep the same ID for the same economic action.
+ * This cannot protect a second database, a restored stale backup, a file
+ * journal, a bypassing worker, a changed intent ID or a stale primary.
  */
 import crypto from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { validatePlan, requestFingerprint, normalizeProviderRoute } from './procurement.mjs';
 import { isTransactionHash } from '../shared/direct-payment-settlement.mjs';
 import { isTestnetAccount } from '../shared/account-id.mjs';
+import { validBuyerIntentId } from '../shared/buyer-intent.mjs';
 import { canonicalClaimOrigin, verifyClaimAuthorization } from '../packages/provider-sdk/lib/resource-claim.mjs';
 
 const SCHEMA = 'bouncer_buyer_v1';
@@ -91,8 +93,10 @@ function entryMetadata(scope, id, raw, revision) {
       typeof raw.agent_public_key !== 'string' || typeof raw.started_at !== 'string' ||
       !Number.isFinite(Date.parse(raw.started_at))) throw new Error('invalid signed shared buyer entry');
   const allowed = ['id', 'fingerprint', 'status', 'request', 'provider_route', 'started_at', 'payment_version',
-    'agent_public_key', 'tx_hash', 'resource_authorization', 'settlement', 'completed_at', 'delivery'];
-  if (Object.keys(raw).some(key => !allowed.includes(key))) throw new Error('unsupported shared buyer entry fields');
+    'agent_public_key', 'tx_hash', 'resource_authorization', 'settlement', 'completed_at', 'delivery', 'intent_id'];
+  if (Object.keys(raw).some(key => !allowed.includes(key)) || (own(raw, 'intent_id') && !validBuyerIntentId(raw.intent_id))) {
+    throw new Error('unsupported shared buyer entry fields or invalid intent ID');
+  }
   const request = validatePlan({ contract_id: scope.contractId, owner_account_id: scope.ownerAccountId, requests: [raw.request] }).requests[0];
   if (!isDeepStrictEqual(request, raw.request) || request.id !== id || requestFingerprint(request) !== raw.fingerprint) {
     throw new Error('shared buyer request does not match its fingerprint');
@@ -125,7 +129,7 @@ function entryMetadata(scope, id, raw, revision) {
 
 function assertTransition(previous, next) {
   for (const key of ['id', 'fingerprint', 'request', 'provider_route', 'started_at', 'payment_version',
-    'agent_public_key', 'tx_hash', 'resource_authorization']) {
+    'agent_public_key', 'tx_hash', 'resource_authorization', 'intent_id']) {
     if (!isDeepStrictEqual(previous[key], next[key])) throw new Error('shared buyer payment identity is immutable');
   }
   if (previous.status === 'completed') {
@@ -253,7 +257,7 @@ async function transaction(client, run, verifySession = null) {
 
 async function verifySchema(client) {
   const version = await client.query(`SELECT version FROM ${SCHEMA}.meta WHERE singleton = true`);
-  if (version.rows.length !== 1 || version.rows[0].version !== 1) throw new Error('unsupported shared buyer schema version');
+  if (version.rows.length !== 1 || version.rows[0].version !== 2) throw new BuyerJournalError('UNSAFE_SCHEMA', 'unsupported shared buyer schema version; stop all workers before upgrading');
   // IF NOT EXISTS cannot establish replay safety. Check the exact key columns of
   // all critical, valid, non-partial unique indexes at every open.
   const found = await client.query(`SELECT t.relname AS table_name, array_agg(a.attname::text ORDER BY k.ordinality) AS columns
@@ -267,15 +271,35 @@ async function verifySchema(client) {
     GROUP BY i.indexrelid, t.relname`);
   const indexes = new Set(found.rows.map(row => `${row.table_name}:${row.columns.join(',')}`));
   const required = ['meta:singleton', 'journals:contract_id,owner_account_id,journal_id',
-    'entries:contract_id,owner_account_id,journal_id,entry_id', 'entries:challenge', 'entries:tx_hash'];
+    'entries:contract_id,owner_account_id,journal_id,entry_id', 'entries:challenge', 'entries:tx_hash',
+    'owner_intent_modes:owner_account_id', 'intents:owner_account_id,intent_id', 'intents:tx_hash',
+    'intents:contract_id,owner_account_id,journal_id,entry_id'];
   if (required.some(index => !indexes.has(index))) throw new BuyerJournalError('UNSAFE_SCHEMA', 'shared buyer schema is missing critical replay constraints');
   // A role-filtered view of pending rows would make the owner fence unsafe.
   // Worker roles need SELECT on the whole table and RLS must remain disabled.
-  const visibility = await client.query(`SELECT t.relrowsecurity, t.relforcerowsecurity FROM pg_catalog.pg_class t
+  const visibility = await client.query(`SELECT t.relname, t.relrowsecurity, t.relforcerowsecurity FROM pg_catalog.pg_class t
     JOIN pg_catalog.pg_namespace n ON n.oid=t.relnamespace
-    WHERE n.nspname='bouncer_buyer_v1' AND t.relname='entries' AND t.relkind='r'`);
-  if (visibility.rowCount !== 1 || visibility.rows[0].relrowsecurity || visibility.rows[0].relforcerowsecurity) {
-    throw new BuyerJournalError('UNSAFE_SCHEMA', 'shared buyer entries must not use row-level security');
+    WHERE n.nspname='bouncer_buyer_v1' AND t.relname IN ('entries','owner_intent_modes','intents') AND t.relkind='r'`);
+  if (visibility.rowCount !== 3 || visibility.rows.some(row => row.relrowsecurity || row.relforcerowsecurity)) {
+    throw new BuyerJournalError('UNSAFE_SCHEMA', 'shared buyer coordination tables must not use row-level security');
+  }
+  // The registry and the encrypted pending row must be committed together and
+  // neither may be orphaned or cascade-deleted by ordinary schema operations.
+  const foreign = await client.query(`SELECT s.relname AS source, r.relname AS target, c.convalidated, c.condeferrable,
+      c.confdeltype, c.confupdtype,
+      ARRAY(SELECT a.attname::text FROM unnest(c.conkey) WITH ORDINALITY k(n,ord)
+        JOIN pg_catalog.pg_attribute a ON a.attrelid=c.conrelid AND a.attnum=k.n ORDER BY k.ord) AS cols,
+      ARRAY(SELECT a.attname::text FROM unnest(c.confkey) WITH ORDINALITY k(n,ord)
+        JOIN pg_catalog.pg_attribute a ON a.attrelid=c.confrelid AND a.attnum=k.n ORDER BY k.ord) AS refs
+    FROM pg_catalog.pg_constraint c JOIN pg_catalog.pg_class s ON s.oid=c.conrelid
+    JOIN pg_catalog.pg_class r ON r.oid=c.confrelid
+    JOIN pg_catalog.pg_namespace n ON n.oid=s.relnamespace
+    WHERE n.nspname='bouncer_buyer_v1' AND r.relnamespace=n.oid AND s.relname='intents' AND c.contype='f'`);
+  const validFks = new Set(foreign.rows.filter(row => row.convalidated && !row.condeferrable && row.confdeltype === 'a' && row.confupdtype === 'a')
+    .map(row => `${row.source}:${row.cols.join(',')}->${row.target}:${row.refs.join(',')}`));
+  if (!validFks.has('intents:owner_account_id->owner_intent_modes:owner_account_id') ||
+      !validFks.has('intents:contract_id,owner_account_id,journal_id,entry_id->entries:contract_id,owner_account_id,journal_id,entry_id')) {
+    throw new BuyerJournalError('UNSAFE_SCHEMA', 'shared buyer intent registry is missing required foreign keys');
   }
 }
 
@@ -310,14 +334,81 @@ export async function initializePostgresBuyerSchema({ pool }) {
         FOREIGN KEY (contract_id, owner_account_id, journal_id)
           REFERENCES ${SCHEMA}.journals (contract_id, owner_account_id, journal_id)
       )`);
+      await c.query(`CREATE TABLE IF NOT EXISTS ${SCHEMA}.owner_intent_modes (
+        owner_account_id text PRIMARY KEY, activated_at timestamptz NOT NULL DEFAULT clock_timestamp()
+      )`);
+      await c.query(`CREATE TABLE IF NOT EXISTS ${SCHEMA}.intents (
+        owner_account_id text NOT NULL, intent_id text NOT NULL,
+        contract_id text NOT NULL, journal_id text NOT NULL, entry_id text NOT NULL, tx_hash text NOT NULL UNIQUE,
+        created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+        PRIMARY KEY (owner_account_id, intent_id), UNIQUE (contract_id, owner_account_id, journal_id, entry_id),
+        FOREIGN KEY (owner_account_id) REFERENCES ${SCHEMA}.owner_intent_modes (owner_account_id),
+        FOREIGN KEY (contract_id, owner_account_id, journal_id, entry_id)
+          REFERENCES ${SCHEMA}.entries (contract_id, owner_account_id, journal_id, entry_id)
+      )`);
+      // Schema v2 makes old v1 workers reject startup and their later schema
+      // checks. Operators must stop all old/in-flight workers before upgrading.
+      await c.query(`UPDATE ${SCHEMA}.meta SET version=2 WHERE singleton=true AND version=1`);
       // Optional performance index: safety does not depend on it being present
       // in an older schema. Pending lookup otherwise remains a full-table scan.
       await c.query(`CREATE INDEX IF NOT EXISTS entries_owner_pending_idx
         ON ${SCHEMA}.entries (owner_account_id) WHERE status = 'pending'`);
+      await c.query(`CREATE INDEX IF NOT EXISTS entries_owner_idx ON ${SCHEMA}.entries (owner_account_id, tx_hash)`);
       await verifySchema(c);
     });
   } catch (error) { destroy = true; throw error; }
   finally { client.release(destroy); }
+}
+
+/**
+ * Explicitly opt a NEW owner into stable cross-journal business intents.
+ * An empty database history is necessary, not proof that no payment happened
+ * in another database, local file, old backup or directly on chain.
+ */
+export async function activateBuyerOwnerIntents({ pool, ownerAccountId }) {
+  if (!pool || typeof pool.connect !== 'function' || !isTestnetAccount(ownerAccountId)) throw new Error('invalid intent activation owner or pool');
+  const client = await pool.connect(); let destroy = false;
+  try {
+    await transaction(client, async c => {
+      await verifySchema(c);
+      const locked = await c.query('SELECT pg_catalog.pg_try_advisory_xact_lock($1::integer, $2::integer) AS locked', ownerLockWords(ownerAccountId).signed);
+      if (locked.rows[0]?.locked !== true) throw new BuyerJournalError('OWNER_BUSY', 'owner has an active shared buyer; stop all workers before activation');
+      const existing = await c.query(`SELECT EXISTS (SELECT 1 FROM ${SCHEMA}.entries WHERE owner_account_id=$1) AS has_entries,
+        EXISTS (SELECT 1 FROM ${SCHEMA}.owner_intent_modes WHERE owner_account_id=$1) AS active`, [ownerAccountId]);
+      if (existing.rows[0]?.active) throw new BuyerJournalError('ALREADY_EXISTS', 'owner intent mode is already active; do not reset it');
+      if (existing.rows[0]?.has_entries !== false) throw new BuyerJournalError('OWNER_HAS_HISTORY', 'owner has existing shared payments; do not automatically enable intent mode or replace their history');
+      await c.query(`INSERT INTO ${SCHEMA}.owner_intent_modes (owner_account_id) VALUES ($1)`, [ownerAccountId]);
+    });
+  } catch (error) { destroy = true; if (error instanceof BuyerJournalError) throw error;
+    throw new BuyerJournalError('DATABASE', 'intent activation failed or its commit is uncertain; inspect the original database before continuing'); }
+  finally { client.release(destroy); }
+}
+
+async function readOwnerIntentMode(c, owner) {
+  const result = await c.query(`SELECT EXISTS (SELECT 1 FROM ${SCHEMA}.owner_intent_modes WHERE owner_account_id=$1) AS active,
+    EXISTS (SELECT 1 FROM ${SCHEMA}.intents WHERE owner_account_id=$1) AS has_intents,
+    EXISTS (SELECT 1 FROM ${SCHEMA}.entries e WHERE e.owner_account_id=$1 AND NOT EXISTS (
+      SELECT 1 FROM ${SCHEMA}.intents i WHERE i.owner_account_id=e.owner_account_id AND i.tx_hash=e.tx_hash
+        AND i.contract_id=e.contract_id AND i.journal_id=e.journal_id AND i.entry_id=e.entry_id)) AS untracked`, [owner]);
+  const row = result.rows[0];
+  if (!row || typeof row.active !== 'boolean' || (row.active && row.untracked) || (!row.active && row.has_intents)) {
+    throw new BuyerJournalError('CORRUPT', 'owner intent mode and recorded payments disagree; stop and reconcile');
+  }
+  return row.active;
+}
+
+async function assertRecordedIntent(c, scope, entry) {
+  const strict = await readOwnerIntentMode(c, scope.ownerAccountId);
+  if (strict !== own(entry, 'intent_id')) throw new BuyerJournalError('CORRUPT', 'owner intent mode does not match the recorded payment');
+  if (strict) {
+    const result = await c.query(`SELECT contract_id, journal_id, entry_id, tx_hash FROM ${SCHEMA}.intents
+      WHERE owner_account_id=$1 AND intent_id=$2`, [scope.ownerAccountId, entry.intent_id]);
+    const mapped = result.rows[0];
+    if (result.rowCount !== 1 || mapped.contract_id !== scope.contractId || mapped.journal_id !== scope.journalId ||
+        mapped.entry_id !== entry.id || mapped.tx_hash !== entry.tx_hash) {
+      throw new BuyerJournalError('CORRUPT', 'owner intent registry does not match the authenticated payment');
+    }
+  }
 }
 
 /** Open a single logical journal. The caller owns and later closes pool. */
@@ -398,6 +489,19 @@ export async function openPostgresBuyerJournal({ pool, contractId, ownerAccountI
         }
         entries.set(meta.id, entry); revisions.set(meta.id, meta.revision);
       }
+      const strict = await readOwnerIntentMode(c, scope.ownerAccountId);
+      const mapped = await c.query(`SELECT entry_id, intent_id, tx_hash FROM ${SCHEMA}.intents
+        WHERE contract_id=$1 AND owner_account_id=$2 AND journal_id=$3 LIMIT $4`, [...scopeValues(scope), MAX_ENTRIES + 1]);
+      if (mapped.rows.length !== (strict ? entries.size : 0)) throw new BuyerJournalError('CORRUPT', 'shared buyer intent registry is incomplete');
+      for (const row of mapped.rows) {
+        const entry = entries.get(row.entry_id);
+        if (!entry || entry.intent_id !== row.intent_id || entry.tx_hash !== row.tx_hash) {
+          throw new BuyerJournalError('CORRUPT', 'shared buyer intent registry does not match the authenticated payment');
+        }
+      }
+      if ([...entries.values()].some(entry => strict !== own(entry, 'intent_id'))) {
+        throw new BuyerJournalError('CORRUPT', 'shared buyer intent mode does not match the authenticated payment');
+      }
     }, verifySession);
   } catch (error) {
     secret.fill(0);
@@ -416,6 +520,43 @@ export async function openPostgresBuyerJournal({ pool, contractId, ownerAccountI
     },
     get(id) { assertAvailable(); return entries.has(id) ? clone(entries.get(id)) : undefined; },
     list() { assertAvailable(); return [...entries.values()].map(clone); },
+    /** Fail before seller quotes when a reviewed intent is already reserved. */
+    checkOwnerIntents(goals) {
+      if (!Array.isArray(goals) || !goals.length || goals.length > MAX_ENTRIES) throw new Error('invalid shared buyer intent batch');
+      const reviewed = goals.map(goal => ({ id: goal?.id, hasIntent: goal && own(goal, 'intent_id'), intent: goal?.intent_id }));
+      return enqueue(async () => {
+        try {
+          return await transaction(client, async c => {
+            await verifySchema(c);
+            const strict = await readOwnerIntentMode(c, scope.ownerAccountId);
+            if (strict && reviewed.some(item => !item.hasIntent || !validBuyerIntentId(item.intent))) {
+              throw new BuyerJournalError('INTENT_REQUIRED', 'strict owner mode requires a stable intent_id for every goal');
+            }
+            if (!strict && reviewed.some(item => item.hasIntent)) {
+              throw new BuyerJournalError('INTENT_MODE_REQUIRED', 'activate strict owner intent mode before using intent_id');
+            }
+            if (!strict) return false;
+            const byIntent = new Map(reviewed.map(item => [item.intent, item])), ids = [...byIntent.keys()];
+            if (ids.length !== reviewed.length) throw new BuyerJournalError('INTENT_CONFLICT', 'an intent ID is duplicated in this batch');
+            const found = await c.query(`SELECT intent_id, contract_id, journal_id, entry_id, tx_hash FROM ${SCHEMA}.intents
+              WHERE owner_account_id=$1 AND intent_id=ANY($2::text[])`, [scope.ownerAccountId, ids]);
+            for (const row of found.rows) {
+              const item = byIntent.get(row.intent_id), previous = item && entries.get(item.id);
+              if (!item || row.contract_id !== scope.contractId || row.journal_id !== scope.journalId || row.entry_id !== item.id ||
+                  !previous || previous.intent_id !== row.intent_id || previous.tx_hash !== row.tx_hash) {
+                throw new BuyerJournalError('INTENT_CONFLICT', 'owner intent is already reserved in another payment; recover the original journal and hash');
+              }
+            }
+            return true;
+          }, verifySession);
+        } catch (error) {
+          if (error instanceof BuyerJournalError && ['INTENT_REQUIRED', 'INTENT_MODE_REQUIRED', 'INTENT_CONFLICT'].includes(error.code)) throw error;
+          failed = true;
+          if (error instanceof BuyerJournalError) throw error;
+          throw new BuyerJournalError('DATABASE', 'shared buyer intent check failed; do not request a quote or send a payment');
+        }
+      });
+    },
     /**
      * Hold one database-wide owner fence around transaction preparation,
      * reservation, its only broadcast and durable completion. On a crash the
@@ -486,15 +627,26 @@ export async function openPostgresBuyerJournal({ pool, contractId, ownerAccountI
         const encrypted = encrypt(secret, scope, meta, entry);
         try {
           await transaction(client, async c => {
+            await verifySchema(c);
             // Also enforce the quarantine for manual API callers and a batch:
             // a later reservation must wait for the prior FINAL completion.
             await assertNoOwnerPending(c);
+            const strict = await readOwnerIntentMode(c, scope.ownerAccountId);
+            if (strict && !own(entry, 'intent_id')) throw new BuyerJournalError('INTENT_REQUIRED', 'strict owner mode requires a stable intent ID');
+            if (!strict && own(entry, 'intent_id')) throw new BuyerJournalError('INTENT_MODE_REQUIRED', 'activate strict owner intent mode before using intent ID');
             const result = await c.query(`INSERT INTO ${SCHEMA}.entries
               (contract_id, owner_account_id, journal_id, entry_id, fingerprint, status, tx_hash, seller_origin, challenge, revision, nonce, tag, ciphertext)
               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) ON CONFLICT DO NOTHING RETURNING entry_id`,
             [...scopeValues(scope), id, meta.fingerprint, meta.status, meta.tx_hash, meta.seller_origin, meta.challenge,
               meta.revision, encrypted.nonce, encrypted.tag, encrypted.ciphertext]);
             if (result.rowCount !== 1) throw conflict();
+            if (strict) {
+              const intent = await c.query(`INSERT INTO ${SCHEMA}.intents
+                (owner_account_id,intent_id,contract_id,journal_id,entry_id,tx_hash) VALUES ($1,$2,$3,$4,$5,$6)
+                ON CONFLICT DO NOTHING RETURNING intent_id`,
+              [scope.ownerAccountId, entry.intent_id, scope.contractId, scope.journalId, id, meta.tx_hash]);
+              if (intent.rowCount !== 1) throw new BuyerJournalError('INTENT_CONFLICT', 'owner intent is already reserved; recover the original journal and hash');
+            }
           }, verifySession);
         } catch (error) {
           failed = true;
@@ -514,6 +666,8 @@ export async function openPostgresBuyerJournal({ pool, contractId, ownerAccountI
         const meta = entryMetadata(scope, id, entry, revision + 1), encrypted = encrypt(secret, scope, meta, entry);
         try {
           await transaction(client, async c => {
+            await verifySchema(c);
+            await assertRecordedIntent(c, scope, previous);
             const result = await c.query(`UPDATE ${SCHEMA}.entries SET status=$5, revision=$6, nonce=$7, tag=$8, ciphertext=$9, updated_at=clock_timestamp()
               WHERE contract_id=$1 AND owner_account_id=$2 AND journal_id=$3 AND entry_id=$4 AND revision=$10 AND tx_hash=$11 RETURNING entry_id`,
             [...scopeValues(scope), id, meta.status, meta.revision, encrypted.nonce, encrypted.tag, encrypted.ciphertext, revision, meta.tx_hash]);
@@ -549,6 +703,7 @@ export async function openPostgresBuyerJournal({ pool, contractId, ownerAccountI
             if (!isDeepStrictEqual(original, cached) || !isDeepStrictEqual(entryMetadata(scope, meta.id, original, meta.revision), meta)) {
               throw new BuyerJournalError('CORRUPT', 'original pending payment changed before broadcast; stop and reconcile');
             }
+            await assertRecordedIntent(c, scope, original);
             const ownerPending = await c.query(`SELECT tx_hash FROM ${SCHEMA}.entries
               WHERE owner_account_id=$1 AND status='pending' LIMIT 2`, [scope.ownerAccountId]);
             if (ownerPending.rows.length !== 1 || ownerPending.rows[0].tx_hash !== txHash) {

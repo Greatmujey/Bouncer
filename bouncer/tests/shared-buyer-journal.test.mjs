@@ -11,13 +11,13 @@ import { once } from 'node:events';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import nearApi from 'near-api-js';
-import { initializePostgresBuyerSchema, openPostgresBuyerJournal, verifyEncryptedBuyerSnapshot,
+import { initializePostgresBuyerSchema, activateBuyerOwnerIntents, openPostgresBuyerJournal, verifyEncryptedBuyerSnapshot,
   compareEncryptedBuyerSnapshots, MAX_BUYER_SNAPSHOT_BYTES } from '../agent/postgres-buyer-journal.mjs';
 import { readBuyerKeyFile, validateBuyerDatabaseUrl } from '../agent/shared-buyer-config.mjs';
 import { requestFingerprint, runProcurement, validatePlan } from '../agent/procurement.mjs';
 import { runResourceAgent, routedResourceProvider } from '../agent/resource-agent.mjs';
 import { recoverDirectResourcePayment, recoverResourceDelivery } from '../agent/recover-direct-payment.mjs';
-import { inspectSharedBuyer, inspectSharedBuyerOwner } from '../scripts/inspect-shared-buyer.mjs';
+import { inspectSharedBuyer, inspectSharedBuyerOwner, inspectSharedBuyerIntent } from '../scripts/inspect-shared-buyer.mjs';
 import { openBuyerCheckpointDirectory } from '../agent/buyer-checkpoint-directory.mjs';
 import { createResourceProvider } from '../services/resource-provider.mjs';
 import { orderMemoV3 } from '../packages/provider-sdk/lib/resource-order.mjs';
@@ -53,10 +53,10 @@ if (databaseUrl) test.before(async () => {
   try { await initializePostgresBuyerSchema({ pool }); } finally { await pool.end(); }
 });
 async function fixture() {
-  const pool = makePool(), key = crypto.randomBytes(32), journalId = id(), journals = new Set(), created = new Set();
+  const pool = makePool(), key = crypto.randomBytes(32), journalId = id(), journals = new Set(), created = new Set(), owners = new Set();
   async function open(overrides = {}) {
     const journal = await openPostgresBuyerJournal({ pool, contractId: contract, ownerAccountId: owner, journalId, key, ...overrides });
-    if (overrides.createNew) created.add(overrides.journalId ?? journalId);
+    if (overrides.createNew) { created.add(overrides.journalId ?? journalId); owners.add(overrides.ownerAccountId ?? owner); }
     journals.add(journal); return journal;
   }
   const journal = await open({ createNew: true });
@@ -64,23 +64,28 @@ async function fixture() {
     await Promise.allSettled([...journals].map(item => item.close()));
     // Test-only cleanup in a disposable superuser database. Operational
     // journals must never be deleted to escape an unresolved payment.
+    await pool.query('DELETE FROM bouncer_buyer_v1.intents WHERE journal_id=ANY($1::text[])', [[...created]]);
     await pool.query('DELETE FROM bouncer_buyer_v1.entries WHERE journal_id=ANY($1::text[])', [[...created]]);
     await pool.query('DELETE FROM bouncer_buyer_v1.journals WHERE journal_id=ANY($1::text[])', [[...created]]);
+    await pool.query(`DELETE FROM bouncer_buyer_v1.owner_intent_modes m WHERE m.owner_account_id=ANY($1::text[])
+      AND NOT EXISTS (SELECT 1 FROM bouncer_buyer_v1.entries e WHERE e.owner_account_id=m.owner_account_id)`, [[...owners]]);
     await pool.end();
   } };
 }
 const reserveSynthetic = (journal, entryId, entry) => journal.withOwnerFence(() => journal.reservePending(entryId, entry));
-async function pendingEntry({ requestId = 'work', c = challenge(), hash = mockHash(id()), sellerOrigin = origin, order = goal } = {}) {
+async function pendingEntry({ requestId = 'work', c = challenge(), hash = mockHash(id()), sellerOrigin = origin, order = goal,
+  contractId = contract, ownerAccountId = owner, intentId } = {}) {
   const memo = orderMemoV3(order.resource, order.input, c);
-  const request = validatePlan({ contract_id: contract, owner_account_id: owner, requests: [{ id: requestId,
+  const request = validatePlan({ contract_id: contractId, owner_account_id: ownerAccountId, requests: [{ id: requestId,
     resource: order.resource, policy_id: order.policy_id, token: order.token, payee: order.payee, amount: '1000', memo }] }).requests[0];
-  const terms = { network: 'near:testnet', contract_id: contract, owner_account_id: owner, seller_origin: sellerOrigin,
+  const terms = { network: 'near:testnet', contract_id: contractId, owner_account_id: ownerAccountId, seller_origin: sellerOrigin,
     resource: request.resource, policy_id: request.policy_id, token: request.token, payee: request.payee,
     amount: request.amount, memo: request.memo, tx_hash: hash };
   const authorization = await signClaimAuthorization({ terms, signer, publicKey });
   return { fingerprint: requestFingerprint(request), status: 'pending', request,
     provider_route: { provider_id: null, provider_origin: sellerOrigin }, started_at: new Date().toISOString(),
-    payment_version: 'direct-signed-v1', agent_public_key: String(publicKey), tx_hash: hash, resource_authorization: authorization };
+    payment_version: 'direct-signed-v1', agent_public_key: String(publicKey), tx_hash: hash, resource_authorization: authorization,
+    ...(intentId === undefined ? {} : { intent_id: intentId }) };
 }
 function syntheticRuntime(journal, { loseSend = true } = {}) {
   let sends = 0, balance = 0n, nonce = 0n, currentJournal = journal, shouldLoseSend = loseSend; const chains = new Map();
@@ -127,7 +132,7 @@ function faultPool(pool, marker, afterCommit = true) {
   return { enable() { enabled = true; }, get fired() { return fired; }, async connect() {
     const c = await pool.connect(); let touched = false;
     return { on: c.on.bind(c), removeListener: c.removeListener.bind(c), release: c.release.bind(c), async query(sql, args) {
-      if (typeof sql === 'string' && sql.includes(marker)) touched = true;
+      if (enabled && typeof sql === 'string' && sql.includes(marker)) touched = true;
       if (enabled && touched && !fired && sql === 'COMMIT') {
         fired = true; if (afterCommit) await c.query(sql, args); throw new Error('synthetic lost acknowledgment password=secret-value');
       }
@@ -383,17 +388,18 @@ dbtest('worker role can reserve without DDL, journal creation or DELETE permissi
   let created = false;
   try {
     await f.journal.close();
+    await activateBuyerOwnerIntents({ pool: f.pool, ownerAccountId: owner });
     await client.query(`CREATE ROLE ${role} NOLOGIN`); created = true;
     await client.query(`GRANT USAGE ON SCHEMA bouncer_buyer_v1 TO ${role}`);
-    await client.query(`GRANT SELECT ON bouncer_buyer_v1.meta, bouncer_buyer_v1.journals TO ${role}`);
-    await client.query(`GRANT SELECT, INSERT ON bouncer_buyer_v1.entries TO ${role}`);
+    await client.query(`GRANT SELECT ON bouncer_buyer_v1.meta, bouncer_buyer_v1.journals, bouncer_buyer_v1.owner_intent_modes TO ${role}`);
+    await client.query(`GRANT SELECT, INSERT ON bouncer_buyer_v1.entries, bouncer_buyer_v1.intents TO ${role}`);
     await client.query(`GRANT UPDATE (status, revision, nonce, tag, ciphertext, updated_at) ON bouncer_buyer_v1.entries TO ${role}`);
     await client.query(`SET ROLE ${role}`);
     const restrictedPool = { async connect() { return { query: client.query.bind(client), on: client.on.bind(client),
       removeListener: client.removeListener.bind(client), release() {} }; } };
     const journal = await openPostgresBuyerJournal({ pool: restrictedPool, contractId: contract, ownerAccountId: owner, journalId: f.journalId, key: f.key });
     await journal.withOwnerFence(async () => {
-      await journal.reservePending('work', await pendingEntry());
+      await journal.reservePending('work', await pendingEntry({ intentId: 'restricted-operation' }));
       const original = journal.get('work');
       assert.equal(verifyEncryptedBuyerSnapshot(await journal.exportEncryptedSnapshot(), f.key).entries[0].tx_hash, original.tx_hash);
       await journal.assertPendingForBroadcast('work', original.tx_hash);
@@ -404,6 +410,9 @@ dbtest('worker role can reserve without DDL, journal creation or DELETE permissi
     assert.equal(journal.get('work').status, 'completed');
     await assert.rejects(client.query("UPDATE bouncer_buyer_v1.entries SET challenge='00000000000000000000000000000000'"), /permission denied/);
     await assert.rejects(client.query('DELETE FROM bouncer_buyer_v1.entries'), /permission denied/);
+    await assert.rejects(client.query('DELETE FROM bouncer_buyer_v1.intents'), /permission denied/);
+    await assert.rejects(client.query("UPDATE bouncer_buyer_v1.intents SET intent_id='changed'"), /permission denied/);
+    await assert.rejects(client.query('DELETE FROM bouncer_buyer_v1.owner_intent_modes'), /permission denied/);
     await assert.rejects(client.query('CREATE TABLE bouncer_buyer_v1.must_not_exist(id int)'), /permission denied/);
     await journal.close();
     await assert.rejects(openPostgresBuyerJournal({ pool: restrictedPool, contractId: contract, ownerAccountId: owner, journalId: id(), key: f.key, createNew: true }));
@@ -603,12 +612,12 @@ dbtest('direct seller-v3 compute, storage and API recover with a real local sell
   } finally { if (seller) await seller.close(); await f.cleanup(); fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-function worker({ journalId, key, c, nonce, barrier = false, hold = false, checkpointDir = '', checkpointHold = false, workerOwner = owner, workerAgent = agent }) {
+function worker({ journalId, key, c, nonce, barrier = false, hold = false, checkpointDir = '', checkpointHold = false, intentId = '', workerOwner = owner, workerAgent = agent }) {
   const child = fork(fileURLToPath(new URL('./fixtures/shared-buyer-worker.mjs', import.meta.url)), [], {
     env: { ...process.env, BOUNCER_TEST_POSTGRES_URL: databaseUrl, BOUNCER_TEST_JOURNAL: journalId, BOUNCER_TEST_OWNER: workerOwner,
       BOUNCER_TEST_JOURNAL_KEY: key.toString('hex'), BOUNCER_TEST_AGENT_KEY: workerAgent.toString(),
       BOUNCER_TEST_CHALLENGE: c, BOUNCER_TEST_NONCE: String(nonce), BOUNCER_TEST_BARRIER: barrier ? '1' : '0', BOUNCER_TEST_HOLD: hold ? '1' : '0',
-      BOUNCER_TEST_CHECKPOINT_DIR: checkpointDir, BOUNCER_TEST_CHECKPOINT_HOLD: checkpointHold ? '1' : '0' },
+      BOUNCER_TEST_CHECKPOINT_DIR: checkpointDir, BOUNCER_TEST_CHECKPOINT_HOLD: checkpointHold ? '1' : '0', BOUNCER_TEST_INTENT_ID: intentId },
     stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
   });
   const messages = []; let stderr = '';
@@ -884,7 +893,7 @@ dbtest('journal initialization CLI is explicit and a file/shared journal mix fai
   } finally { await f.cleanup(); fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-dbtest('resource-agent CLI uses the shared journal for one synthetic payment and reuses it on restart', async () => {
+dbtest('resource-agent CLI uses strict intents for one synthetic payment, restart and cross-journal conflict', async () => {
   const f = await fixture(), root = fs.mkdtempSync(path.join(os.tmpdir(), 'bouncer-pg-resource-cli-'));
   let sellerOrigin, quotes = 0, redemptions = 0; const c = challenge();
   const server = http.createServer(async (req, res) => {
@@ -906,12 +915,14 @@ dbtest('resource-agent CLI uses the shared journal for one synthetic payment and
     } catch { res.statusCode = 500; res.end('{}'); }
   });
   try {
-    await f.journal.close(); await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    await f.journal.close(); await activateBuyerOwnerIntents({ pool: f.pool, ownerAccountId: owner });
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
     sellerOrigin = `http://127.0.0.1:${server.address().port}`;
     const goalsPath = path.join(root, 'goals.json'), journalKeyPath = path.join(root, 'journal.key'), agentPath = path.join(root, 'agent.json');
     const stateFile = path.join(root, 'synthetic-rpc.json'), checkpointDir = path.join(root, 'checkpoints');
     fs.mkdirSync(checkpointDir, { mode: 0o700 });
-    fs.writeFileSync(goalsPath, JSON.stringify({ contract_id: contract, owner_account_id: owner, provider_url: sellerOrigin, goals: [goal] }));
+    const strictGoal = { ...goal, intent_id: 'cli-economic-operation' };
+    fs.writeFileSync(goalsPath, JSON.stringify({ contract_id: contract, owner_account_id: owner, provider_url: sellerOrigin, goals: [strictGoal] }));
     fs.writeFileSync(journalKeyPath, f.key, { mode: 0o600 });
     fs.writeFileSync(agentPath, JSON.stringify({ account_id: owner, private_key: agent.toString() }), { mode: 0o600 });
     const preload = fileURLToPath(new URL('./fixtures/mock-shared-buyer-cli.mjs', import.meta.url));
@@ -923,6 +934,14 @@ dbtest('resource-agent CLI uses the shared journal for one synthetic payment and
     const again = await runCli('agent/resource-agent.mjs', args, env);
     assert.equal(again.code, 0, again.stderr); assert.match(again.stdout, /SKIP work/); assert.doesNotMatch(again.stdout, /PAID work/);
     assert.equal(JSON.parse(fs.readFileSync(stateFile, 'utf8')).sends, 1); assert.equal(quotes, 1); assert.equal(redemptions, 2);
+    const secondId = id(), second = await f.open({ journalId: secondId, createNew: true }); await second.close();
+    const duplicateGoals = path.join(root, 'different-goals.json');
+    fs.writeFileSync(duplicateGoals, JSON.stringify({ contract_id: contract, owner_account_id: owner, provider_url: sellerOrigin,
+      goals: [{ ...strictGoal, id: 'different-work' }] }));
+    const duplicate = await runCli('agent/resource-agent.mjs', ['--goals', duplicateGoals, '--key', agentPath,
+      '--shared-journal', secondId, '--durable', '--execute'], env);
+    assert.equal(duplicate.code, 1); assert.match(duplicate.stderr, /intent is already reserved/);
+    assert.equal(JSON.parse(fs.readFileSync(stateFile, 'utf8')).sends, 1); assert.equal(quotes, 1);
     const files = fs.readdirSync(checkpointDir); assert.equal(files.length, 1);
     const checkpointFile = path.join(checkpointDir, files[0]), snapshot = fs.readFileSync(checkpointFile, 'utf8');
     assert.equal(verifyEncryptedBuyerSnapshot(snapshot, f.key).entries[0].status, 'pending');
@@ -935,7 +954,8 @@ dbtest('resource-agent CLI uses the shared journal for one synthetic payment and
     fs.writeFileSync(checkpointFile, snapshot, { mode: 0o600 });
     const reopened = await f.open(); assert.equal(reopened.get('work').delivery.status, 'verified');
     await reopened.close();
-    // Test-only stale restore: deleting an entry is forbidden operationally.
+    // Test-only stale restore: deleting the intent and entry is forbidden operationally.
+    await f.pool.query('DELETE FROM bouncer_buyer_v1.intents WHERE journal_id=$1', [f.journalId]);
     await f.pool.query('DELETE FROM bouncer_buyer_v1.entries WHERE journal_id=$1', [f.journalId]);
     const stale = await runCli('agent/resource-agent.mjs', args, env);
     assert.equal(stale.code, 1); assert.match(stale.stderr, /checkpoint directory/);
@@ -1070,7 +1090,8 @@ dbtest('a restricted rotation role can rewrite only key material, not delete pay
     await reserveSynthetic(f.journal, 'work', await pendingEntry()); await f.journal.close();
     await client.query(`CREATE ROLE ${role} NOLOGIN`); created = true;
     await client.query(`GRANT USAGE ON SCHEMA bouncer_buyer_v1 TO ${role}`);
-    await client.query(`GRANT SELECT ON bouncer_buyer_v1.meta, bouncer_buyer_v1.journals, bouncer_buyer_v1.entries TO ${role}`);
+    await client.query(`GRANT SELECT ON bouncer_buyer_v1.meta, bouncer_buyer_v1.journals, bouncer_buyer_v1.entries,
+      bouncer_buyer_v1.owner_intent_modes, bouncer_buyer_v1.intents TO ${role}`);
     await client.query(`GRANT UPDATE (key_check) ON bouncer_buyer_v1.journals TO ${role}`);
     await client.query(`GRANT UPDATE (nonce, tag, ciphertext) ON bouncer_buyer_v1.entries TO ${role}`);
     await client.query(`SET ROLE ${role}`);
@@ -1489,4 +1510,311 @@ dbtest('the synchronous freshness guard remains after checkpointing and immediat
     await runtime.run({ beforeBroadcastCheckpoint: async () => { events.push('checkpoint'); }, beforeBroadcast: () => { events.push('guard'); } });
     assert.deepEqual(events, ['checkpoint', 'guard', 'broadcast']); assert.equal(runtime.sends, 1);
   } finally { await f.cleanup(); }
+});
+
+const completeSynthetic = (entry) => ({ ...entry, status: 'completed', completed_at: new Date().toISOString(), settlement: {
+  tx_hash: entry.tx_hash, token: entry.request.token, payee: entry.request.payee, amount: entry.request.amount,
+  verification: 'FINAL trusted-RPC Bouncer and token receipts; provider delivery not established' } });
+
+dbtest('strict intents reject missing, duplicate or previously reserved goals before seller quotes', async () => {
+  const f = await fixture(), runtime = syntheticRuntime(f.journal, { loseSend: false });
+  try {
+    await activateBuyerOwnerIntents({ pool: f.pool, ownerAccountId: owner });
+    let quotes = 0;
+    const getQuote = async (...args) => { quotes++; return runtime.getQuote(...args); };
+    for (const goals of [[goal], [{ ...goal, intent_id: '../bad' }],
+      [{ ...goal, intent_id: 'one' }, { ...goal, id: 'another', intent_id: 'one' }]]) {
+      await assert.rejects(runtime.run({ goals, getQuote }), error => ['INTENT_REQUIRED', 'INTENT_CONFLICT'].includes(error.code));
+    }
+    assert.equal(quotes, 0); assert.equal(runtime.sends, 0);
+    const reviewed = { ...goal, intent_id: 'economic-op-001' };
+    const first = await runtime.run({ goals: [reviewed], getQuote });
+    assert.equal(first.payments.paid, 1); assert.equal(quotes, 1); assert.equal(runtime.sends, 1);
+    assert.equal(f.journal.get('work').intent_id, reviewed.intent_id);
+    const replay = await runtime.run({ goals: [reviewed], getQuote });
+    assert.equal(replay.payments.skipped, 1); assert.equal(quotes, 1); assert.equal(runtime.sends, 1);
+    await assert.rejects(runtime.run({ goals: [{ ...reviewed, intent_id: 'changed-id' }], getQuote }), /different stable intent ID/);
+    const other = await f.open({ journalId: id(), createNew: true });
+    const alternate = syntheticRuntime(other, { loseSend: false });
+    await assert.rejects(alternate.run({ goals: [{ ...reviewed, id: 'different-goal' }], getQuote }), error => error.code === 'INTENT_CONFLICT');
+    assert.equal(quotes, 1); assert.equal(alternate.sends, 0);
+    await assert.rejects(recoverDirectResourcePayment({ config: { contract_id: contract, owner_account_id: owner,
+      provider_url: origin, goals: [{ ...reviewed, intent_id: 'different' }] }, requestId: 'work', provider: runtime.provider,
+    journal: f.journal, log: () => {} }), /different stable intent ID/);
+    const distinct = { ...goal, id: 'new-work', intent_id: 'economic-op-002' };
+    assert.equal((await alternate.run({ goals: [distinct], getQuote })).payments.paid, 1);
+    assert.equal(alternate.sends, 1); assert.equal(quotes, 2);
+  } finally { await f.cleanup(); }
+});
+
+dbtest('atomic intent uniqueness spans journals and contracts despite fresh challenges', async () => {
+  const f = await fixture();
+  try {
+    await activateBuyerOwnerIntents({ pool: f.pool, ownerAccountId: owner });
+    const first = await pendingEntry({ intentId: 'one-economic-operation' });
+    await reserveSynthetic(f.journal, 'work', first);
+    await f.journal.writeDurable('work', completeSynthetic({ ...first, id: 'work' }));
+    const otherContract = 'other-bouncer.testnet';
+    const second = await f.open({ contractId: otherContract, journalId: id(), createNew: true });
+    const different = await pendingEntry({ requestId: 'other-work', contractId: otherContract, intentId: first.intent_id });
+    assert.notEqual(first.request.memo, different.request.memo); assert.notEqual(first.tx_hash, different.tx_hash);
+    await assert.rejects(second.checkOwnerIntents([{ id: 'other-work', intent_id: first.intent_id }]), error => error.code === 'INTENT_CONFLICT');
+    // Also bypass the early quote check: the transactional insert itself must
+    // roll back the new entry if the owner/intent unique key already exists.
+    await assert.rejects(reserveSynthetic(second, 'other-work', different), error => error.code === 'INTENT_CONFLICT');
+    const rows = await f.pool.query('SELECT contract_id, entry_id, tx_hash FROM bouncer_buyer_v1.entries WHERE owner_account_id=$1', [owner]);
+    const intents = await f.pool.query('SELECT intent_id, tx_hash FROM bouncer_buyer_v1.intents WHERE owner_account_id=$1', [owner]);
+    assert.equal(rows.rowCount, 1); assert.equal(intents.rowCount, 1);
+    assert.equal(rows.rows[0].tx_hash, first.tx_hash); assert.equal(intents.rows[0].tx_hash, first.tx_hash);
+  } finally { await f.cleanup(); }
+});
+
+dbtest('strict owner activation never silently migrates existing payments or races an active owner fence', async () => {
+  const f = await fixture();
+  try {
+    const runtime = syntheticRuntime(f.journal); let quotes = 0;
+    await assert.rejects(runtime.run({ goals: [{ ...goal, intent_id: 'not-yet-active' }], getQuote: async () => { quotes++; } }),
+      error => error.code === 'INTENT_MODE_REQUIRED');
+    assert.equal(quotes, 0);
+    let release, entered; const gate = new Promise(resolve => { release = resolve; }), ready = new Promise(resolve => { entered = resolve; });
+    const holding = f.journal.withOwnerFence(async () => { entered(); await gate; });
+    await ready;
+    await assert.rejects(activateBuyerOwnerIntents({ pool: f.pool, ownerAccountId: owner }), error => error.code === 'OWNER_BUSY');
+    release(); await holding;
+    const prior = await pendingEntry(); await reserveSynthetic(f.journal, 'work', prior);
+    await assert.rejects(activateBuyerOwnerIntents({ pool: f.pool, ownerAccountId: owner }), error => error.code === 'OWNER_HAS_HISTORY');
+    assert.equal(f.journal.get('work').tx_hash, prior.tx_hash);
+  } finally { await f.cleanup(); }
+});
+
+dbtest('strict intent and pending payment commit atomically across a lost acknowledgement', async () => {
+  for (const afterCommit of [true, false]) {
+    const f = await fixture(); let journal;
+    try {
+      await activateBuyerOwnerIntents({ pool: f.pool, ownerAccountId: owner }); await f.journal.close();
+      const broken = faultPool(f.pool, 'INSERT INTO bouncer_buyer_v1.intents', afterCommit);
+      journal = await openPostgresBuyerJournal({ pool: broken, contractId: contract, ownerAccountId: owner, journalId: f.journalId, key: f.key });
+      const runtime = syntheticRuntime(journal); broken.enable();
+      await assert.rejects(runtime.run({ goals: [{ ...goal, intent_id: 'uncertain-op' }] }),
+        error => /reservation failed or its commit is uncertain/.test(error.message) && !error.message.includes('secret-value'));
+      assert.equal(runtime.sends, 0); assert.equal(broken.fired, true); await journal.close();
+      const rows = await f.pool.query('SELECT tx_hash FROM bouncer_buyer_v1.entries WHERE journal_id=$1', [f.journalId]);
+      const intents = await f.pool.query('SELECT tx_hash FROM bouncer_buyer_v1.intents WHERE journal_id=$1', [f.journalId]);
+      assert.equal(rows.rowCount, afterCommit ? 1 : 0); assert.equal(intents.rowCount, rows.rowCount);
+      if (afterCommit) assert.equal(intents.rows[0].tx_hash, rows.rows[0].tx_hash);
+      const reopened = await f.open();
+      if (afterCommit) {
+        assert.equal(reopened.get('work').intent_id, 'uncertain-op');
+        await assert.rejects(reopened.withOwnerFence(async () => {}), error => error.code === 'OWNER_UNRESOLVED');
+      } else assert.deepEqual(reopened.list(), []);
+    } finally { if (journal) await journal.close(); await f.cleanup(); }
+  }
+});
+
+dbtest('strict intent mapping is rechecked before broadcast and after reopening', async () => {
+  const f = await fixture(), runtime = syntheticRuntime(f.journal, { loseSend: false });
+  try {
+    await activateBuyerOwnerIntents({ pool: f.pool, ownerAccountId: owner });
+    const reviewed = { ...goal, intent_id: 'preserve-op' };
+    await assert.rejects(runtime.run({ goals: [reviewed], beforeBroadcastCheckpoint: async () => {
+      // Malicious/accidental DBA change; ordinary worker roles cannot update it.
+      await f.pool.query("UPDATE bouncer_buyer_v1.intents SET intent_id='tampered' WHERE owner_account_id=$1", [owner]);
+    } }), /shared journal pre-broadcast check failed.*no payment was sent/);
+    assert.equal(runtime.sends, 0); await f.journal.close();
+    await assert.rejects(f.open(), error => error.code === 'CORRUPT');
+    const rows = await f.pool.query('SELECT status, tx_hash FROM bouncer_buyer_v1.entries WHERE journal_id=$1', [f.journalId]);
+    assert.equal(rows.rowCount, 1); assert.equal(rows.rows[0].status, 'pending');
+  } finally { await f.cleanup(); }
+});
+
+dbtest('strict intent survives encrypted snapshots, key rotation and same-hash recovery', async () => {
+  const f = await fixture(), runtime = syntheticRuntime(f.journal), reviewed = { ...goal, intent_id: 'recoverable-op' }, next = crypto.randomBytes(32);
+  try {
+    await activateBuyerOwnerIntents({ pool: f.pool, ownerAccountId: owner });
+    await assert.rejects(runtime.run({ goals: [reviewed] }), /synthetic lost response/);
+    const pending = f.journal.get('work'), before = await f.journal.exportEncryptedSnapshot();
+    await f.journal.rotateEncryptionKey(next);
+    const after = await f.journal.exportEncryptedSnapshot();
+    compareEncryptedBuyerSnapshots({ previous: before, previousKey: f.key, current: after, currentKey: next });
+    const result = await recoverDirectResourcePayment({ config: { contract_id: contract, owner_account_id: owner, provider_url: origin,
+      goals: [reviewed] }, requestId: 'work', provider: runtime.provider, journal: f.journal, log: () => {} });
+    assert.equal(result.settlement.tx_hash, pending.tx_hash); assert.equal(runtime.sends, 1);
+    assert.equal(f.journal.get('work').intent_id, reviewed.intent_id);
+    await f.journal.close(); const reopened = await f.open({ key: next });
+    assert.equal(reopened.get('work').tx_hash, pending.tx_hash); assert.equal(reopened.get('work').status, 'completed');
+  } finally { next.fill(0); await f.cleanup(); }
+});
+
+dbtest('strict cross-process race and crash preserve the original intent and never broadcast twice', async () => {
+  const f = await fixture(); let a, b, c;
+  try {
+    await activateBuyerOwnerIntents({ pool: f.pool, ownerAccountId: owner });
+    const secondId = id(), second = await f.open({ journalId: secondId, createNew: true });
+    await second.close(); await f.journal.close();
+    a = worker({ journalId: f.journalId, key: f.key, c: challenge(), nonce: 1, barrier: true, hold: true, intentId: 'cross-process-op' });
+    await a.wait('prepared');
+    b = worker({ journalId: secondId, key: f.key, c: challenge(), nonce: 2, intentId: 'cross-process-op' });
+    assert.equal((await b.wait('result')).code, 'OWNER_BUSY');
+    assert.equal(b.messages.filter(message => message.type === 'signed' || message.type === 'broadcast').length, 0);
+    a.child.send({ type: 'go' }); const broadcast = await a.wait('broadcast'); await a.stop();
+    c = worker({ journalId: secondId, key: f.key, c: challenge(), nonce: 3, intentId: 'cross-process-op' });
+    assert.equal((await c.wait('result')).code, 'INTENT_CONFLICT');
+    assert.equal(c.messages.filter(message => ['quote', 'signed', 'broadcast'].includes(message.type)).length, 0);
+    const rows = await f.pool.query('SELECT status, tx_hash FROM bouncer_buyer_v1.entries WHERE owner_account_id=$1', [owner]);
+    const intents = await f.pool.query('SELECT intent_id, tx_hash FROM bouncer_buyer_v1.intents WHERE owner_account_id=$1', [owner]);
+    assert.equal(rows.rowCount, 1); assert.equal(intents.rowCount, 1); assert.equal(rows.rows[0].status, 'pending');
+    assert.equal(rows.rows[0].tx_hash, broadcast.hash); assert.equal(intents.rows[0].tx_hash, broadcast.hash);
+  } finally { if (a) await a.stop(); if (b) await b.stop(); if (c) await c.stop(); await f.cleanup(); }
+});
+
+dbtest('strict activation CLI requires explicit confirmation and does not sign or contact a seller', async () => {
+  const f = await fixture();
+  try {
+    const env = { BOUNCER_BUYER_DATABASE_URL: databaseUrl, BOUNCER_BUYER_JOURNAL_KEY_FILE: '' };
+    const denied = await runCli('scripts/activate-buyer-intents.mjs', ['--owner', owner], env);
+    assert.equal(denied.code, 1); assert.match(denied.stderr, /confirm-new-owner/);
+    const enabled = await runCli('scripts/activate-buyer-intents.mjs', ['--owner', owner, '--confirm-new-owner'], env);
+    assert.equal(enabled.code, 0, enabled.stderr); assert.match(enabled.stdout, /no seller or NEAR was contacted/);
+    const again = await runCli('scripts/activate-buyer-intents.mjs', ['--owner', owner, '--confirm-new-owner'], env);
+    assert.equal(again.code, 1); assert.match(again.stderr, /already active/);
+    assert.equal((await f.pool.query('SELECT 1 FROM bouncer_buyer_v1.entries WHERE owner_account_id=$1', [owner])).rowCount, 0);
+  } finally { await f.cleanup(); }
+});
+
+dbtest('schema v1 upgrade preserves legacy pending ciphertext and rejects missing intent safety constraints', async () => {
+  const admin = makePool(), dbName = `bouncer_intent_${crypto.randomBytes(6).toString('hex')}`;
+  let created = false, isolated, journal;
+  try {
+    await admin.query(`CREATE DATABASE ${dbName}`); created = true;
+    const url = new URL(databaseUrl); url.pathname = `/${dbName}`;
+    isolated = new pg.Pool({ connectionString: url.toString(), max: 3 });
+    await initializePostgresBuyerSchema({ pool: isolated });
+    const key = crypto.randomBytes(32), journalId = id(), entry = await pendingEntry();
+    journal = await openPostgresBuyerJournal({ pool: isolated, contractId: contract, ownerAccountId: owner, journalId, key, createNew: true });
+    await reserveSynthetic(journal, 'work', entry); await journal.close(); journal = null;
+    await isolated.query('DROP TABLE bouncer_buyer_v1.intents, bouncer_buyer_v1.owner_intent_modes');
+    await isolated.query('UPDATE bouncer_buyer_v1.meta SET version=1');
+    await assert.rejects(openPostgresBuyerJournal({ pool: isolated, contractId: contract, ownerAccountId: owner, journalId, key }),
+      error => error.code === 'UNSAFE_SCHEMA');
+    await initializePostgresBuyerSchema({ pool: isolated });
+    assert.equal((await isolated.query('SELECT version FROM bouncer_buyer_v1.meta')).rows[0].version, 2);
+    journal = await openPostgresBuyerJournal({ pool: isolated, contractId: contract, ownerAccountId: owner, journalId, key });
+    assert.equal(journal.get('work').tx_hash, entry.tx_hash);
+    await assert.rejects(journal.withOwnerFence(async () => {}), error => error.code === 'OWNER_UNRESOLVED');
+    await journal.close(); journal = null;
+    await isolated.query('ALTER TABLE bouncer_buyer_v1.intents ENABLE ROW LEVEL SECURITY');
+    await assert.rejects(openPostgresBuyerJournal({ pool: isolated, contractId: contract, ownerAccountId: owner, journalId, key }),
+      error => error.code === 'UNSAFE_SCHEMA');
+    await isolated.query('ALTER TABLE bouncer_buyer_v1.intents DISABLE ROW LEVEL SECURITY');
+    const fk = await isolated.query(`SELECT c.conname FROM pg_catalog.pg_constraint c
+      JOIN pg_catalog.pg_class t ON t.oid=c.conrelid JOIN pg_catalog.pg_class r ON r.oid=c.confrelid
+      JOIN pg_catalog.pg_namespace n ON n.oid=t.relnamespace
+      WHERE n.nspname='bouncer_buyer_v1' AND t.relname='intents' AND r.relname='entries' AND c.contype='f'`);
+    assert.equal(fk.rowCount, 1);
+    await isolated.query(`ALTER TABLE bouncer_buyer_v1.intents DROP CONSTRAINT "${fk.rows[0].conname.replace(/"/g, '""')}"`);
+    await assert.rejects(openPostgresBuyerJournal({ pool: isolated, contractId: contract, ownerAccountId: owner, journalId, key }),
+      error => error.code === 'UNSAFE_SCHEMA');
+  } finally {
+    if (journal) await journal.close();
+    if (isolated) await isolated.end();
+    if (created) await admin.query(`DROP DATABASE ${dbName} WITH (FORCE)`);
+    await admin.end();
+  }
+});
+
+dbtest('a competing intent committed while quoting is caught under the owner fence before signing', async () => {
+  const f = await fixture();
+  try {
+    await activateBuyerOwnerIntents({ pool: f.pool, ownerAccountId: owner });
+    const other = await f.open({ journalId: id(), createNew: true });
+    const runtime = syntheticRuntime(other, { loseSend: false }), reviewed = { ...goal, intent_id: 'quote-race' };
+    let signs = 0, quotes = 0; const prepare = runtime.account.createTransaction;
+    runtime.account.createTransaction = async (...args) => { signs++; return prepare(...args); };
+    await assert.rejects(runtime.run({ goals: [reviewed], getQuote: async (...args) => {
+      quotes++;
+      const competing = await pendingEntry({ intentId: reviewed.intent_id });
+      await reserveSynthetic(f.journal, 'work', competing);
+      await f.journal.writeDurable('work', completeSynthetic({ ...competing, id: 'work' }));
+      return runtime.getQuote(...args);
+    } }), error => error.code === 'INTENT_CONFLICT');
+    assert.equal(quotes, 1); assert.equal(signs, 0); assert.equal(runtime.sends, 0);
+    assert.equal(other.get('work'), undefined);
+    assert.equal((await f.pool.query('SELECT 1 FROM bouncer_buyer_v1.intents WHERE owner_account_id=$1', [owner])).rowCount, 1);
+  } finally { await f.cleanup(); }
+});
+
+dbtest('read-only intent inspector finds the original hash without a key or claim and rejects inconsistent mappings', async () => {
+  const f = await fixture(), client = await f.pool.connect(), role = `bouncer_intent_read_${crypto.randomBytes(5).toString('hex')}`;
+  let created = false;
+  try {
+    await activateBuyerOwnerIntents({ pool: f.pool, ownerAccountId: owner });
+    const entry = await pendingEntry({ intentId: 'inspect-operation' });
+    await reserveSynthetic(f.journal, 'work', entry);
+    await client.query(`CREATE ROLE ${role} NOLOGIN`); created = true;
+    await client.query(`GRANT USAGE ON SCHEMA bouncer_buyer_v1 TO ${role}`);
+    await client.query(`GRANT SELECT (owner_account_id, intent_id, contract_id, journal_id, entry_id, tx_hash) ON bouncer_buyer_v1.intents TO ${role}`);
+    await client.query(`GRANT SELECT (contract_id, owner_account_id, journal_id, entry_id, tx_hash, status, seller_origin, challenge, created_at, updated_at)
+      ON bouncer_buyer_v1.entries TO ${role}`);
+    await client.query(`SET ROLE ${role}`);
+    const readOnly = { async connect() { return { query: client.query.bind(client), release() {} }; } };
+    const found = await inspectSharedBuyerIntent({ pool: readOnly, ownerAccountId: owner, intentId: entry.intent_id });
+    assert.equal(found.entry.tx_hash, entry.tx_hash); assert.equal(found.entry.status, 'pending');
+    assert.equal(found.entry.journal_id, f.journalId); assert.match(found.warning, /not proof of payment or non-payment/);
+    assert.ok(!JSON.stringify(found).includes(entry.resource_authorization.signature));
+    assert.equal((await inspectSharedBuyerIntent({ pool: readOnly, ownerAccountId: owner, intentId: 'not-found' })).entry, null);
+    await assert.rejects(client.query('SELECT ciphertext FROM bouncer_buyer_v1.entries'), /permission denied/);
+    await client.query('RESET ROLE');
+    const cli = await runCli('scripts/inspect-shared-buyer.mjs', ['--owner', owner, '--intent', entry.intent_id],
+      { BOUNCER_BUYER_DATABASE_URL: databaseUrl, BOUNCER_BUYER_JOURNAL_KEY_FILE: '' });
+    assert.equal(cli.code, 0, cli.stderr); assert.match(cli.stdout, new RegExp(entry.tx_hash));
+    assert.ok(!cli.stdout.includes(entry.resource_authorization.signature));
+    const badArgs = await runCli('scripts/inspect-shared-buyer.mjs', ['--owner', owner, '--intent', entry.intent_id, '--pending-owner'],
+      { BOUNCER_BUYER_DATABASE_URL: databaseUrl });
+    assert.equal(badArgs.code, 1);
+    await f.pool.query('UPDATE bouncer_buyer_v1.intents SET tx_hash=$2 WHERE owner_account_id=$1', [owner, mockHash('tampered-intent')]);
+    await assert.rejects(inspectSharedBuyerIntent({ pool: f.pool, ownerAccountId: owner, intentId: entry.intent_id }), /inconsistent/);
+  } finally {
+    await client.query('RESET ROLE');
+    if (created) { await client.query(`DROP OWNED BY ${role}`); await client.query(`DROP ROLE ${role}`); }
+    client.release(); await f.cleanup();
+  }
+});
+
+dbtest('strict intent IDs are owner-scoped, so independent owners can use the same ID', async () => {
+  const f = await fixture(), otherOwner = `other-${crypto.randomBytes(6).toString('hex')}.testnet`;
+  try {
+    await activateBuyerOwnerIntents({ pool: f.pool, ownerAccountId: owner });
+    await activateBuyerOwnerIntents({ pool: f.pool, ownerAccountId: otherOwner });
+    const other = await f.open({ ownerAccountId: otherOwner, journalId: id(), createNew: true });
+    const first = await pendingEntry({ intentId: 'same-id' });
+    const second = await pendingEntry({ intentId: 'same-id', ownerAccountId: otherOwner });
+    await Promise.all([reserveSynthetic(f.journal, 'work', first), reserveSynthetic(other, 'work', second)]);
+    const rows = await f.pool.query('SELECT owner_account_id, tx_hash FROM bouncer_buyer_v1.intents WHERE intent_id=$1', ['same-id']);
+    assert.equal(rows.rowCount, 2);
+    assert.deepEqual(new Set(rows.rows.map(row => row.owner_account_id)), new Set([owner, otherOwner]));
+    assert.deepEqual(new Set(rows.rows.map(row => row.tx_hash)), new Set([first.tx_hash, second.tx_hash]));
+  } finally { await f.cleanup(); }
+});
+
+dbtest('intent activation works with a restricted registrar and cannot create or delete payments', async () => {
+  const f = await fixture(), client = await f.pool.connect(), role = `bouncer_intent_admin_${crypto.randomBytes(5).toString('hex')}`;
+  let created = false;
+  try {
+    await client.query(`CREATE ROLE ${role} NOLOGIN`); created = true;
+    await client.query(`GRANT USAGE ON SCHEMA bouncer_buyer_v1 TO ${role}`);
+    await client.query(`GRANT SELECT ON bouncer_buyer_v1.meta, bouncer_buyer_v1.entries,
+      bouncer_buyer_v1.owner_intent_modes, bouncer_buyer_v1.intents TO ${role}`);
+    await client.query(`GRANT INSERT ON bouncer_buyer_v1.owner_intent_modes TO ${role}`);
+    await client.query(`SET ROLE ${role}`);
+    const restricted = { async connect() { return { query: client.query.bind(client), release() {} }; } };
+    await activateBuyerOwnerIntents({ pool: restricted, ownerAccountId: owner });
+    await assert.rejects(client.query('DELETE FROM bouncer_buyer_v1.owner_intent_modes'), /permission denied/);
+    await assert.rejects(client.query('DELETE FROM bouncer_buyer_v1.entries'), /permission denied/);
+    await assert.rejects(client.query("INSERT INTO bouncer_buyer_v1.intents (owner_account_id) VALUES ('example.testnet')"), /permission denied/);
+    assert.equal((await f.pool.query('SELECT 1 FROM bouncer_buyer_v1.entries WHERE owner_account_id=$1', [owner])).rowCount, 0);
+  } finally {
+    await client.query('RESET ROLE');
+    if (created) { await client.query(`DROP OWNED BY ${role}`); await client.query(`DROP ROLE ${role}`); }
+    client.release(); await f.cleanup();
+  }
 });

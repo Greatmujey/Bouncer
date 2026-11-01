@@ -523,11 +523,15 @@ direct seller-v3 request IDs, seller challenges and signed transaction hashes
 before broadcast, encrypts bearer claims at rest, and supports same-hash recovery
 without the NEAR signing key. Upgraded workers also serialize shared direct
 payments per owner and quarantine that owner's new shared payments while any
-original hash remains pending. PostgreSQL/process tests use **synthetic** receipts;
-no live shared-database payment has been made. It requires one properly fenced,
-durable primary and stable mission IDs; file journals, different fresh missions,
-FT-call, x402, OutLayer and mixed/dependent workflows are not covered. The fence
-is conservative serialization, not a distributed nonce allocator. Bounded
+original hash remains pending. New owners may opt into **stable business-intent
+IDs**, atomically unique across participating journals and contracts even when
+sellers issue fresh challenges. The owner must retain the same ID for the same
+operation; legacy owners and changed IDs are not protected by this mechanism.
+PostgreSQL/process tests use **synthetic** receipts; no live shared-database
+payment has been made. It requires one properly fenced primary; file journals,
+other databases, FT-call, x402, OutLayer and mixed/dependent workflows are not
+covered. The fence is conservative serialization, not a distributed nonce
+allocator. Bounded
 journals can [rotate their encryption key](bouncer/docs/SHARED_BUYER.md#rotate-an-existing-journal-encryption-key)
 atomically without deleting pending payments; leaked bearer claims and old backups
 are not revoked by re-encryption. Authenticated, encrypted
