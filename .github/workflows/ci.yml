@@ -299,6 +299,53 @@ jobs:
           if-no-files-found: ignore
           retention-days: 90
 
+  piprail-onchain-proof-live:
+    name: One-shot onchain-proof SDK interoperability (testnet)
+    # A fresh self-hosted SDK gate and one Circle testnet USDC payment only.
+    # Re-running an Actions run never repeats setup or payment.
+    if: github.event_name == 'push' && github.run_attempt == '1' && contains(github.event.head_commit.message, '[piprail-live]')
+    needs: [js-tests, contract-tests, build-contract]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: bouncer-wasm
+          path: .
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      - run: npm ci --prefix bouncer/interop/piprail --ignore-scripts --legacy-peer-deps --no-audit --no-fund
+      - name: Run one guarded payment and recover its original hash
+        env:
+          BOUNCER_PIPRAIL_PACKAGE_ROOT: ${{ github.workspace }}/bouncer/interop/piprail/node_modules/@piprail/sdk
+        shell: bash
+        run: |
+          set +e
+          node bouncer/demo-onchain-proof.mjs 2>&1 | tee "$RUNNER_TEMP/piprail-live.log"
+          result=${PIPESTATUS[0]}
+          if [ "$result" -ne 0 ]; then
+            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-4500).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=Onchain-proof testnet check failed::"+s)' "$RUNNER_TEMP/piprail-live.log"
+          fi
+          exit "$result"
+      # Public testnet inputs, responses and hashes; never private keys.
+      - name: Preserve onchain-proof recovery evidence, never keys
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: piprail-onchain-proof-public-evidence
+          path: |
+            /tmp/bouncer-piprail-live-*/setup-journal.json
+            /tmp/bouncer-piprail-live-*/journal.json
+            /tmp/bouncer-piprail-live-*/goal.json
+            /tmp/bouncer-piprail-live-*/evidence.json
+          if-no-files-found: ignore
+          retention-days: 90
+
   ft-call-live:
     name: Guarded independent FT funding, paid test connector and refund (testnet)
     if: github.event_name == 'push' && (contains(github.event.head_commit.message, '[ft-call-live]') || contains(github.event.head_commit.message, '[paid-compute-live]'))

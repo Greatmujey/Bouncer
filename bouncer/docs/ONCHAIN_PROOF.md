@@ -109,10 +109,12 @@ the supplied clients.
   GET, negative substitutions, same-instance replay and replay after a fresh
   default gate. It proves SDK wire compatibility under these conditions, not
   blockchain activity.
-- An optional read-only check fetches the **previously completed** seller-v2
-  [testnet payment](https://testnet.nearblocks.io/txns/HwQB5RTFgascGDjPUmkCkiexF2WEHShHX69d6yGw7JMc)
-  at FINAL, checks its Bouncer/token receipts, and passes the actual receipt to
-  the installed SDK via a loopback RPC. Its gate deliberately uses the old
+- A [read-only CI check](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41265215053/job/124726506415)
+  fetched the **previously completed** seller-v2 [testnet payment](https://testnet.nearblocks.io/txns/HwQB5RTFgascGDjPUmkCkiexF2WEHShHX69d6yGw7JMc)
+  at FINAL, checked its Bouncer/token receipts, and passed the actual receipt to
+  the installed SDK via a loopback RPC. It rejected substituted payee/nonce
+  and same-instance replay, and accepted the proof after a fresh default gate.
+  Its gate deliberately uses the old
   memo as a *retrospective* nonce; block time is omitted from the SDK's
   loopback view, so this is not a fresh quote or evidence of the SDK checking
   recency. It sends no payment or merchant request. The original payment was
