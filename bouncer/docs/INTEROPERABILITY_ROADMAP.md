@@ -111,7 +111,8 @@ consent, and no offers or payments were requested:
   agent bearer authentication and internal payment request flow. The inspected
   API does not establish acceptance of Bouncer's v3 claim or an independently
   available compute, storage or data service. No request or payment was sent.
-- [YouTick at `410dd18`](https://github.com/4rmus/youtick/blob/410dd180f42d25f77c2317b9659923f6a4149245/contracts/market-v2/src/lib.rs)
+- [YouTick V1 at `b53e00e`](https://github.com/4rmus/youtick/blob/b53e00e962b595f0edf4f1283c146d73d1f76b57/contracts/nft-ticket/src/lib.rs)
+  and its [current source](https://github.com/4rmus/youtick/blob/410dd180f42d25f77c2317b9659923f6a4149245/contracts/nft-ticket/src/lib.rs)
   is a potentially useful independent **video upload/processing** candidate,
   not a general object store. Its reviewed source accepts Circle testnet USDC
   through `ft_on_transfer`, derives the creator from the token `sender_id`,
@@ -124,9 +125,15 @@ consent, and no offers or payments were requested:
   independently deployed code must all be reviewed before sending. The
   source's 600,000-micro-USDC minimum for a sponsored upload is much larger
   than the `6926` micro-USDC in the demonstrated swap's vault. A bounded
-  `probe-youtick.mjs` reads only public chain views and bridge health; it does
-  not request a quote or reserve, pay or upload. Never assume merchant consent
-  or deployed/source equivalence from this research.
+  `probe-youtick.mjs` reads only public chain views and bridge health; on
+  November 1 those views reported an enabled testnet market/bridge and Circle
+  testnet USDC. It did not request a quote, reserve, pay or upload. An
+  experimental quote-only verifier now pins the observed V1 code hash and
+  same-block state layout, extracts the market's quote key, and checks the
+  signature, vault/job/request binding, token, fee ceiling and expiry. The
+  layout and RPC remain trusted; source/code equivalence is not established.
+  Even a verified quote is not a purchase or fulfillment. Never assume
+  merchant consent or deployed/source equivalence from this research.
 - [PatchBond at `a448538`](https://github.com/PatchBond/patchbond/blob/a4485389453818d495e48b7d46a299401833213b/contract/vault/src/deposit.rs)
   documents testnet Circle USDC bonds for GitHub submissions, not a compute,
   storage or API purchase. The source uses the FT `sender_id` as the bond payer;

@@ -7,6 +7,7 @@ import path from 'node:path';
 import nearApi from 'near-api-js';
 import { FileJournal } from '../agent/procurement.mjs';
 import { submitOwnerSetupOnce } from '../agent/testnet-owner-setup.mjs';
+import { inspectOwnerSetupResult } from '../agent/testnet-owner-setup-evidence.mjs';
 
 const owner = 'owner.fixture.testnet', contract = 'vault.fixture.testnet', token = 'wrap.testnet';
 const gas = 200n * 10n ** 12n;
@@ -108,5 +109,27 @@ test('concurrent requests sharing one journal cannot submit the same setup id tw
   const results = await Promise.allSettled([f.submit(), f.submit()]);
   assert.equal(results.filter(result => result.status === 'fulfilled').length, 1);
   assert.equal(results.filter(result => result.status === 'rejected').length, 1);
+  assert.equal(f.sends, 1);
+}));
+
+test('read-only owner setup evidence binds the finalized action to its original journal', () => withFixture(async f => {
+  await f.submit();
+  const entry = f.journal.get('swap'), call = entry.call;
+  const result = () => ({ final_execution_status: 'FINAL', transaction_outcome: { id: entry.tx_hash },
+    transaction: { hash: entry.tx_hash, signer_id: call.signer_id, public_key: call.public_key, receiver_id: call.token,
+      actions: [{ FunctionCall: { method_name: call.method, gas: call.gas, deposit: call.deposit,
+        args: Buffer.from(JSON.stringify(call.args)).toString('base64') } }] },
+    status: { SuccessValue: '' }, receipts_outcome: [{ outcome: { status: { SuccessValue: '' } } }] });
+  assert.equal(inspectOwnerSetupResult(entry, result()).status, 'FINAL_SUCCESS');
+  const failed = result(); failed.status = { Failure: { ActionError: {} } };
+  assert.equal(inspectOwnerSetupResult({ ...entry, status: 'pending' }, failed).status, 'FINAL_FAILURE_OR_FAILED_RECEIPT');
+  assert.throws(() => inspectOwnerSetupResult(entry, failed), /contradicts/);
+  for (const mutate of [
+    r => { r.final_execution_status = 'EXECUTED'; }, r => { r.transaction.hash = 'other'; },
+    r => { r.transaction.public_key = 'ed25519:other'; }, r => { r.transaction.actions[0].FunctionCall.deposit = '0'; },
+    r => { r.transaction.actions[0].FunctionCall.args = Buffer.from('{"amount":"999"}').toString('base64'); },
+    r => { r.receipts_outcome[0].outcome.status = { Unknown: null }; },
+  ]) { const r = result(); mutate(r); assert.throws(() => inspectOwnerSetupResult(entry, r)); }
+  assert.throws(() => inspectOwnerSetupResult({ ...entry, fingerprint: '0'.repeat(64) }, result()), /invalid recorded/);
   assert.equal(f.sends, 1);
 }));

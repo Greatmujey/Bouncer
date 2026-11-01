@@ -332,6 +332,45 @@ jobs:
           if-no-files-found: ignore
           retention-days: 90
 
+  inspect-original-vrf-setup:
+    name: Inspect original VRF setup (read only)
+    if: github.event_name == 'push' && github.event.repository.private == true && github.run_attempt == '1' && contains(github.event.head_commit.message, '[inspect-original-vrf-setup-20261101]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: paid-vrf-testnet-recovery
+          run-id: 41301880679
+          github-token: ${{ github.token }}
+          path: original-vrf-evidence
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      - name: Reinspect retained setup hashes and balances without signing or sending
+        run: node bouncer/scripts/inspect-vrf-setup.mjs original-vrf-evidence
+
+  youtick-testnet-quote-only:
+    name: Verify independent provider testnet quote (no payment)
+    if: github.event_name == 'push' && github.event.repository.private == true && github.run_attempt == '1' && contains(github.event.head_commit.message, '[youtick-testnet-quote-only-20261101]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      - name: Request and authenticate one bounded testnet offer without paying or uploading
+        run: node bouncer/scripts/quote-youtick-testnet.mjs
+
   youtick-capability-read:
     name: Discover independent testnet video provider (read only)
     if: github.event_name == 'push' && github.run_attempt == '1' && contains(github.event.head_commit.message, '[youtick-capability-read-20261101]')
