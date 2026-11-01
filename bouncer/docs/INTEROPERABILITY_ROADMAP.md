@@ -168,7 +168,11 @@ consent, and no offers or payments were requested:
   hosts. Signed envelopes and TUS URLs are bearer capabilities and must not be
   logged or shared. A separate playback prototype and its remaining blockers
   are described in [YouTick playback](YOUTICK_PLAYBACK.md). The existing V9
-  vault cannot issue the legacy grant needed by this candidate path. Never
+  vault cannot issue the legacy grant needed by this candidate path. A fresh V10
+  vault has now passed a [one-yocto grant diagnostic](YOUTICK_PLAYBACK.md#evidence-and-remaining-work)
+  against the independent access contract on a **hypothetical** job; a later
+  read-only check found no such job, publication or entitlement. This is not an
+  independent FT-paid service or playback proof. Never
   assume merchant consent, delivery or deployed/source equivalence from this
   research.
 - [PatchBond at `a448538`](https://github.com/PatchBond/patchbond/blob/a4485389453818d495e48b7d46a299401833213b/contract/vault/src/deposit.rs)

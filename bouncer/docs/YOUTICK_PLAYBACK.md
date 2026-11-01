@@ -101,8 +101,13 @@ access receipt `2VAPLpVfQVNmwtvYp2ivu94VX76S3ifsRaGugHNmC2Ny`). The public
 original review and hashes are retained in `evidence/youtick-hypothetical-grant-20261101/`;
 the encrypted journal and sealed disposable keys are in the workflow artifact
 `youtick-hypothetical-grant-testnet-evidence` (retention ends 30 January 2027).
-This is **authorization evidence only**: no quote, FT provider payment, upload,
-publication, playback token or retrieval was performed.
+A separate [read-only reinspection](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41312275565/job/124864955447)
+rechecked both original FINAL hashes and the current views without signing or
+sending; at that finalized block the hypothetical job and publication were
+absent and the vault had no entitlement. The grant was active at that point and
+expires at `2026-11-01T13:46:36.933Z`. This is **authorization evidence only**:
+no quote, FT provider payment, upload, publication, playback token or retrieval
+was performed.
 
 For programmatic use, open the **original** encrypted `FileJournal` for the
 owner/vault, use a non-retrying `PaymentRpcProvider`, and call
