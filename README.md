@@ -72,10 +72,10 @@ that all six are complete.
 | Track | Evidence today | Still needed |
 | --- | --- | --- |
 | AI Security & Defense | 1-yocto guard, scoped keys, caps, pinned project/input and delivery gating. | Independent audit and stronger prompt defenses. |
-| Agent Economy | Native-paid independent price execution feeds three FT-paid development resources. | Independent FT-paid commercial API/storage providers and signed receipts. |
+| Agent Economy | Native-paid independent price execution feeds three FT-paid development resources; an experimental x402 onchain-proof adapter has third-party-SDK fixture tests. | Independent FT-paid commercial API/storage providers, order-bound authentication and signed receipts. |
 | Autonomous Business | AI planning in a separate run; multi-resource payments, delivery checks and recovery. | Real customers, invoicing and production operations. |
 | Real-World Money | Circle testnet USDC paid for three self-hosted resources; fake USDC.e funded a separate probe. | Independent providers and real-money rails; testnet USDC has no real value. |
-| Unstoppable DeFi | Owner-setup Ref testnet swaps acquired test tokens, including Circle testnet USDC. | Agent-guarded swaps and cross-chain settlement. |
+| Unstoppable DeFi | Owner-setup Ref testnet swaps acquired test tokens, including Circle testnet USDC. | Agent-guarded swaps with safe output accounting and cross-chain settlement. |
 | AI Swarms | One coordinator sequences multiple resources. | Multiple autonomous agents and secure handoffs. |
 
 ## Contract capabilities in this branch
@@ -466,6 +466,20 @@ restricted-key policy. Bouncer deliberately does not perform that flow. The
 [read-only live check](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40675524400/job/122772818985)
 returned three public listings without credentials or payments; it did not
 validate, hire or transact with their providers.
+
+### Experimental receipt-aware x402 adapter
+
+An explicitly opt-in [onchain-proof buyer](bouncer/docs/ONCHAIN_PROOF.md) can
+translate a compatible Circle **testnet** USDC offer into the existing guarded
+`execute` path and prove the nested transfer to a receipt-aware verifier. Its
+synthetic integration test uses the independently published PipRail SDK with
+an explicit test-only NEAR testnet wrapper. This is **not** standard x402
+`exact`, a live independent seller purchase, or proof of merchant adoption.
+The proof and nonce are public and not bound to a URL or authenticated buyer;
+the SDK's default replay memory is not durable across restarts. The owner must
+explicitly accept those risks. Payments and seller requests are each attempted
+at most once per preserved local journal; uncertain outcomes are never
+repurchased or automatically re-redeemed.
 
 ### Delivery checks and local receipts
 

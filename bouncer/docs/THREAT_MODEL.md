@@ -97,7 +97,12 @@ not prove all possible callback, provider or token failure cases.
    provider or marketplace. GitHub data is untrusted and can be unavailable
    after payment. The older multi-token test uses synthetic testnet FTs; a
    separate Circle testnet USDC mission also pays this self-hosted provider.
-   Testnet USDC has no real value. There is no cross-chain settlement. The old
+   Testnet USDC has no real value. There is no cross-chain settlement. Ref's
+   observed instant-swap output arrives by plain `ft_transfer`, not the vault's
+   `ft_on_transfer`, and can also remain in Ref's internal balance on withdrawal
+   failure. Simply pinning a swap message would not credit the Bouncer vault or
+   prove output settlement. Comparing raw balances across asynchronous token
+   operations can over-credit; no guarded Ref swap is claimed here. The old
    solver is disabled because it previously used fake fill hashes; the older
    standalone quote comparator does not settle anything. The agent's optional
    curated quote selection is separate: it contacts only owner-configured
@@ -117,6 +122,14 @@ not prove all possible callback, provider or token failure cases.
    changed routes; legacy entries may lack either safeguard and still require
    the original quote. Provider or independent-source outages can still block
    recovery. Preserve the original goals and journal rather than selecting again.
+   The optional [x402 onchain-proof adapter](ONCHAIN_PROOF.md) is a different,
+   public transaction-hash/memo rail, not standard `exact`. A claimant can
+   copy its public proof, and the seller SDK does not bind it to the requested
+   URL or authenticate the buyer. Its default replay set is not durable across
+   gate restarts. The adapter requires explicit risk acceptance and stops after
+   an ambiguous seller request; it cannot enforce seller-side replay protection
+   or guarantee delivery. Its independent-SDK test uses a synthetic testnet
+   wrapper, not an independent live merchant.
 8. **Local journal and nonce tracker are not distributed coordination.** The
    file journal synchronizes its content and directory before returning, and
    blocks automatic retries of uncertain payments in one local file. Sync

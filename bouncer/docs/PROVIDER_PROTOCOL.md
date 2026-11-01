@@ -10,6 +10,17 @@ prepaid-project interfaces, not this protocol. The Circle testnet USDC mission
 also uses this self-hosted provider; its tokens have no real value. Do not use
 any path with valuable funds.
 
+### Experimental third-party onchain-proof compatibility
+
+The separate [onchain-proof buyer](ONCHAIN_PROOF.md) targets PipRail-style x402
+v2 `onchain-proof` rather than this document's Bouncer seller-v2 wire format.
+A synthetic test exercises the independently published PipRail 3.3.0 NEAR
+verifier with an explicitly wrapped testnet driver and nested Bouncer receipts.
+Its public proof is not authenticated or bound to the purchased URL/order, and
+the SDK's default replay store is in memory. Both risks require explicit owner
+acceptance. This is not the standard x402 `exact` delegate flow, a live
+independent purchase, or evidence that a merchant offers the testnet scheme.
+
 ### Independent-provider research: MultiAgency
 
 MultiAgency's public testnet demo historically accepted a seller-generated memo

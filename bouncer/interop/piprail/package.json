@@ -1,0 +1,1 @@
+{"name":"piprail-compat-check","version":"1.0.0","private":true,"type":"module","dependencies":{"@piprail/sdk":"3.3.0","near-api-js":"7.4.0","viem":"2.57.13"}}

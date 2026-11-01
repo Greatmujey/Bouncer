@@ -12,3 +12,6 @@ contracts/bouncer/.near/
 *.bouncer-journal.json
 *.bouncer-journal.json.lock
 *.bouncer-journal.json.*.tmp
+*.bouncer-proof-journal.json
+*.bouncer-proof-journal.json.lock
+*.bouncer-proof-journal.json.*.tmp

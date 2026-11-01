@@ -19,7 +19,12 @@ jobs:
         with:
           node-version: '22'
       - run: npm ci --no-audit --no-fund
+      # Isolated, lockfile-pinned third-party seller SDK. Its NEAR driver is
+      # wrapped only in tests because the published preset is mainnet-only.
+      - run: npm ci --prefix interop/piprail --ignore-scripts --legacy-peer-deps --no-audit --no-fund
       - run: npm test
+        env:
+          BOUNCER_PIPRAIL_PACKAGE_ROOT: ${{ github.workspace }}/bouncer/interop/piprail/node_modules/@piprail/sdk
       - name: Check the committed wallet bundle matches its source
         run: npm run build:web && git diff --exit-code -- web/wallet.bundle.js
       - name: Test onboarding, mobile layout and testnet wallet UI
@@ -470,6 +475,33 @@ jobs:
         run: node bouncer/scripts/verify-seller-v2-history.mjs
       - name: Verify the existing legacy source and seller receipts without paying
         run: node bouncer/scripts/verify-dependent-history.mjs
+
+  piprail-receipt-compatibility:
+    name: Third-party SDK compatibility with an existing testnet receipt (read only)
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[piprail-sdk-check]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      - run: npm ci --prefix bouncer/interop/piprail --ignore-scripts --legacy-peer-deps --no-audit --no-fund
+      - name: Recheck old FINAL receipt with the independently published SDK (no payment)
+        env:
+          BOUNCER_PIPRAIL_PACKAGE_ROOT: ${{ github.workspace }}/bouncer/interop/piprail/node_modules/@piprail/sdk
+        shell: bash
+        run: |
+          set +e
+          node bouncer/scripts/verify-piprail-history.mjs 2>&1 | tee "$RUNNER_TEMP/piprail-history.log"
+          result=${PIPESTATUS[0]}
+          if [ "$result" -ne 0 ]; then
+            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-3000).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=Read-only PipRail receipt check failed::"+s)' "$RUNNER_TEMP/piprail-history.log"
+          fi
+          exit "$result"
 
   oracle-transaction-inspection:
     name: Reconcile one existing oracle transaction (read only)

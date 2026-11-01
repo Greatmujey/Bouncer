@@ -293,6 +293,9 @@ export class FileJournal {
     if (this.failed) throw new Error('journal has a failed write; close, reopen and reconcile it before continuing');
   }
   get(id) { this.assertAvailable(); return this.data.entries.find(entry => entry.id === id); }
+  // A snapshot lets protocols reject reused seller challenges across this
+  // journal without handing callers a mutable reference to its entries.
+  list() { this.assertAvailable(); return structuredClone(this.data.entries); }
   put(id, entry) {
     this.assertAvailable();
     if (typeof id !== 'string' || !id || !entry || typeof entry !== 'object' || Array.isArray(entry) ||
