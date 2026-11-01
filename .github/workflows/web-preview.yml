@@ -45,6 +45,25 @@ jobs:
           fi
           exit "$result"
 
+  github-pages-path-smoke:
+    # Offline path/origin simulation only: never contacts or publishes Pages.
+    if: contains(github.event.head_commit.message, '[test-github-pages]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Test the staged site at the GitHub Pages project path
+        run: |
+          npm install --prefix "$RUNNER_TEMP/bouncer-browser" --no-save --no-audit --no-fund playwright-core@1.64.1
+          node bouncer/scripts/test-github-pages-path.mjs
+
   durable-site-smoke:
     # Read-only verification; never publishes, signs, or spends.
     if: contains(github.event.head_commit.message, '[test-durable-web]')

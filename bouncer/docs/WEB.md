@@ -67,7 +67,17 @@ on Pages or change the repository's visibility. GitHub Pages is available for
 private repositories only on supported paid plans; the current plan and Pages
 permissions must be checked separately. The conventional project URL would be
 `https://greatmujey.github.io/Bouncer/`, but it must not be
-advertised as live until deployment and public access have been verified.
+advertised as live until deployment and public access have been verified. An
+attempt to enable Pages through the GitHub API on 1 November 2026 was rejected
+with HTTP 403 because the connected integration lacks the required Pages and
+repository-administration write permissions. The account plan was not exposed.
+The site workflow and these settings must both be in place; if Pages is enabled
+after the workflow is merged, run the workflow on `main` to publish it.
+
+The opt-in `[test-github-pages]` CI job serves staged files to a phone-sized
+browser by intercepting requests at the GitHub Pages origin and `/Bouncer/`
+path. It checks nested asset loading and wallet safety without contacting Pages;
+this is an offline simulation, not a deployed GitHub Pages site.
 
 The Pages workflow, the temporary preview uploader, and a production hosting
 build can all use `scripts/stage-public-web.mjs`'s common allowlist. Staging
