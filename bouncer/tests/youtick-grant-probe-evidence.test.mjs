@@ -86,6 +86,8 @@ test('key-free inspection reads only original FINAL hashes and same-block pinned
       calls.push(`view:${method}`); assert.equal(block.blockId, blockHash);
       if (method === 'get_owner') return e.probe.owner;
       if (method === 'contract_version') return 'bouncer-agent-v10-youtick-testnet';
+      if (method === 'get_media_job' || method === 'get_publication') return null;
+      if (method === 'has_entitlement') return false;
       if (method === 'get_session_grant') return e.grant;
       if (method === 'verify_session_grant') return e.verification;
       throw new Error('unexpected view');
@@ -99,8 +101,12 @@ test('key-free inspection reads only original FINAL hashes and same-block pinned
   };
   const report = await inspectYoutickGrantProbe({ probe: e.probe, provider, zeroHash: e.zeroHash, grantHash: e.grantHash, nowMs: now });
   assert.equal(report.zero_guard.rejected_by_one_yocto_guard, true); assert.equal(report.grant.status, 'GRANTED');
+  assert.equal(report.hypothetical_job_absent, true);
   assert.equal(calls.filter(call => call.startsWith('tx:')).length, 2); assert.ok(!calls.some(call => /send|sign/.test(call)));
   await assert.rejects(inspectYoutickGrantProbe({ probe: e.probe, provider, zeroHash: e.zeroHash, grantHash: e.zeroHash }), /options/);
+  const priorView = provider.callFunction;
+  provider.callFunction = async (...args) => args[1] === 'get_media_job' ? { job_id: e.probe.prepared.args.job_id } : priorView(...args);
+  await assert.rejects(inspectYoutickGrantProbe({ probe: e.probe, provider, zeroHash: e.zeroHash, nowMs: now }), /job is not absent/);
   provider.viewNodeStatus = async () => ({ chain_id: 'mainnet' });
   await assert.rejects(inspectYoutickGrantProbe({ probe: e.probe, provider, zeroHash: e.zeroHash }), /testnet/);
 });

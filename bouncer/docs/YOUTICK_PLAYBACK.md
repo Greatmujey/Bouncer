@@ -24,9 +24,9 @@ Never spend on that route assuming playback is solved.
 
 The separately compiled `youtick-playback-v10` testnet-focused artifact adds
 `issue_youtick_play_grant`. The default V9 artifact and existing immutable
-vaults are unchanged. CI has built and tested the feature as a separate artifact;
-this is still an unaudited proposal, **not yet deployed or proven against the
-external access contract**. It:
+vaults are unchanged. A fresh disposable V10 vault was deployed for the
+**hypothetical grant diagnostic** below; this is still unaudited and has not
+been used to buy, upload or retrieve a video. It:
 
 - requires the actual owner and exactly 1 yoctoNEAR; zero-deposit restricted
   agent keys cannot issue grants;
@@ -92,6 +92,18 @@ key-free, read-only reinspection of retained hashes. It is not a way to bypass
 the paid-publication requirement in the grant runner. No diagnostic result
 implies an upload, token, playback, delivery or commercial purchase.
 
+On November 1, the [one-shot testnet diagnostic](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41311832349/job/124864256616)
+deployed and locked a fresh V10 vault, then verified that a zero-yocto owner
+call was rejected by the guard ([transaction](https://testnet.nearblocks.io/txns/5x9iGNBgrPaEbncnNhRHwRA5Eu3zz4QRTKASBGPK81n7)).
+A separate one-yocto owner call produced a matching FINAL access grant for the
+hypothetical job ([transaction](https://testnet.nearblocks.io/txns/Dh1H9ojhsHUqnnLQHpKhqPYkQEJZ3u34Gbzn566Vaqe),
+access receipt `2VAPLpVfQVNmwtvYp2ivu94VX76S3ifsRaGugHNmC2Ny`). The public
+original review and hashes are retained in `evidence/youtick-hypothetical-grant-20261101/`;
+the encrypted journal and sealed disposable keys are in the workflow artifact
+`youtick-hypothetical-grant-testnet-evidence` (retention ends 30 January 2027).
+This is **authorization evidence only**: no quote, FT provider payment, upload,
+publication, playback token or retrieval was performed.
+
 For programmatic use, open the **original** encrypted `FileJournal` for the
 owner/vault, use a non-retrying `PaymentRpcProvider`, and call
 `runYoutickPlayGrant({ journal, grantId, sessionId, goal, sourceFile,
@@ -110,8 +122,8 @@ and available. These prototypes are unaudited and not a scalable distributed
 execution service.
 
 The upload transport similarly has synthetic and loopback recovery tests but has
-not uploaded to YouTick. Before any paid job we still need a verified grant
-transaction and authorized HLS/segment retrieval, a provider-tested uploader,
+not uploaded to YouTick. Before any paid job we still need a demonstrated
+retrieval path for a real publication, an independently provider-tested uploader,
 an appropriate fresh vault/funding plan, an unexpired owner-reviewed
 policy/quote, and acceptance of provider/refund risk. Even those checks cannot
 prove the provider's integrity or deployed/source equivalence.

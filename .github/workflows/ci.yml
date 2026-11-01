@@ -455,6 +455,28 @@ jobs:
           if-no-files-found: ignore
           retention-days: 90
 
+  youtick-grant-reinspection:
+    name: Reinspect original YouTick grant hashes (read only)
+    if: github.event_name == 'push' && github.ref == 'refs/heads/arena/d00d7f93-near-hub' && github.run_attempt == '1' && contains(github.event.head_commit.message, '[youtick-grant-reinspect-20261101]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      - name: Inspect original FINAL hashes and prove the hypothetical job is absent
+        shell: bash
+        run: |
+          set +e
+          node bouncer/scripts/inspect-youtick-grant-probe.mjs bouncer/evidence/youtick-hypothetical-grant-20261101 >"$RUNNER_TEMP/youtick-reinspection.log" 2>&1
+          result=$?
+          node -e 'const fs=require("fs");const ok=process.argv[2]==="0",s=fs.readFileSync(process.argv[1],"utf8").slice(-3500).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log(`::${ok?"notice":"error"} title=Original YouTick grant reinspection (read only)::`+s)' "$RUNNER_TEMP/youtick-reinspection.log" "$result"
+          exit "$result"
+
   youtick-playback-read:
     name: Inspect independent testnet playback readiness (read only)
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/arena/') && contains(github.event.head_commit.message, '[youtick-playback-read]')

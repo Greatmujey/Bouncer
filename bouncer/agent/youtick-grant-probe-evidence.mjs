@@ -90,19 +90,26 @@ export async function inspectYoutickGrantProbe({ probe: raw, provider, zeroHash,
   const vault = await provider.query({ request_type: 'view_account', account_id: probe.vault, finality: 'final' });
   if (!isTransactionHash(vault?.block_hash) || vault?.code_hash !== probe.vault_code_hash) throw new Error('diagnostic vault code changed or is unavailable');
   const block = { blockId: vault.block_hash };
-  const [access, market, owner, version] = await Promise.all([
+  const jobId = probe.prepared.args.job_id;
+  const [access, market, owner, version, job, publication, entitlement] = await Promise.all([
     provider.query({ request_type: 'view_account', account_id: YOUTICK_ACCESS, ...block }),
     provider.query({ request_type: 'view_account', account_id: YOUTICK_MARKET, ...block }),
     provider.callFunction(probe.vault, 'get_owner', {}, block),
     provider.callFunction(probe.vault, 'contract_version', {}, block),
+    provider.callFunction(YOUTICK_MARKET, 'get_media_job', { job_id: jobId }, block),
+    provider.callFunction(YOUTICK_MARKET, 'get_publication', { publication_id: jobId }, block),
+    provider.callFunction(YOUTICK_MARKET, 'has_entitlement', { account_id: probe.vault, publication_id: jobId }, block),
   ]);
   if (access?.block_hash !== vault.block_hash || market?.block_hash !== vault.block_hash ||
       access?.code_hash !== probe.access_code_hash || market?.code_hash !== probe.market_code_hash ||
       owner !== probe.owner || version !== 'bouncer-agent-v10-youtick-testnet') {
     throw new Error('diagnostic FINAL code, block, version or owner changed');
   }
-  const report = { zero_guard: null, grant: null, block_hash: vault.block_hash,
-    scope: 'read-only original hashes; unknown or absent evidence is not proof a transaction was never sent' };
+  if (job !== null || publication !== null || entitlement !== false) {
+    throw new Error('diagnostic job is not absent or its market status is unknown; stop and review');
+  }
+  const report = { zero_guard: null, grant: null, block_hash: vault.block_hash, hypothetical_job_absent: true,
+    scope: 'read-only original hashes; absent market views or unknown hashes do not prove that a transaction was never sent' };
   if (zeroHash !== undefined) {
     const result = await provider.txStatusReceipts(zeroHash, probe.owner, 'FINAL');
     report.zero_guard = verifyYoutickZeroGrantProbe({ probe, result, txHash: zeroHash });

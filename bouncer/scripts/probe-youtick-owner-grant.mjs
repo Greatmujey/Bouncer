@@ -79,15 +79,18 @@ async function createFunded(provider, id, key) {
   return waitForFinalTestnetAccount(provider, id, key.getPublicKey());
 }
 
-async function upstreamReady(provider, sessionPk, jobId, deviceHash) {
+async function upstreamReady(provider, vault, sessionPk, jobId, deviceHash) {
   if ((await provider.viewNodeStatus())?.chain_id !== 'testnet') throw new Error('diagnostic requires testnet');
   const access = await provider.query({ request_type: 'view_account', account_id: YOUTICK_ACCESS, finality: 'final' });
   if (access?.code_hash !== YOUTICK_ACCESS_CODE_HASH || typeof access.block_hash !== 'string') throw new Error('access code hash changed before diagnostic');
   const block = { blockId: access.block_hash };
-  const [market, state, policy, existing, verification] = await Promise.all([
+  const [market, state, policy, job, publication, entitlement, existing, verification] = await Promise.all([
     provider.query({ request_type: 'view_account', account_id: YOUTICK_MARKET, ...block }),
     provider.callFunction(YOUTICK_ACCESS, 'get_contract_state', {}, block),
     provider.callFunction(YOUTICK_ACCESS, 'get_scope_policy', { scope: 'Play' }, block),
+    provider.callFunction(YOUTICK_MARKET, 'get_media_job', { job_id: jobId }, block),
+    provider.callFunction(YOUTICK_MARKET, 'get_publication', { publication_id: jobId }, block),
+    provider.callFunction(YOUTICK_MARKET, 'has_entitlement', { account_id: vault, publication_id: jobId }, block),
     provider.callFunction(YOUTICK_ACCESS, 'get_session_grant', { session_pk: sessionPk }, block),
     provider.callFunction(YOUTICK_ACCESS, 'verify_session_grant', { session_pk: sessionPk, scope: 'Play', resource_id: jobId,
       origin_hash: YOUTICK_PLAY_ORIGIN_HASH, device_hash: deviceHash }, block),
@@ -95,7 +98,8 @@ async function upstreamReady(provider, sessionPk, jobId, deviceHash) {
   if (market?.block_hash !== access.block_hash || market?.code_hash !== YOUTICK_V1_CODE_HASH ||
       state?.market_contract_id !== YOUTICK_MARKET || state.paused !== false || state.grant_issuance_enabled !== true ||
       !Number.isSafeInteger(policy?.max_ttl_ms) || policy.max_ttl_ms < 600_000 || policy.require_origin !== true || policy.require_device !== true ||
-      existing !== null || verification?.valid !== false || verification?.owner_id !== null || verification?.reason !== 'Session grant not found') {
+      job !== null || publication !== null || entitlement !== false || existing !== null ||
+      verification?.valid !== false || verification?.owner_id !== null || verification?.reason !== 'Session grant not found') {
     throw new Error('pinned upstream access state, scope or fresh key is not ready');
   }
 }
@@ -133,7 +137,7 @@ async function main() {
   // Read-only upstream and runtime checks happen before the helper can create
   // accounts. This V10 build contains bulk-memory instructions; NEAR enabled
   // those at protocol 84. Do not assume an older testnet can run the artifact.
-  await upstreamReady(provider, args.session_pk, jobId, deviceHash);
+  await upstreamReady(provider, vault, args.session_pk, jobId, deviceHash);
   const protocol = await provider.experimental_protocolConfig({ finality: 'final' });
   assertProbeRuntime(protocol);
   fs.mkdirSync(dir, { mode: 0o700 }); // refuse a prior directory: never reuse a failed run
@@ -201,7 +205,7 @@ async function main() {
     if (version !== 'bouncer-agent-v10-youtick-testnet' || actualOwner !== owner || !Array.isArray(keys?.keys) || keys.keys.length ||
         keys.block_hash !== deployed.block_hash || ownerAccess?.permission !== 'FullAccess') throw new Error('FINAL vault identity, locked keys or owner key differs');
     complete('deployment', { tx_hash: deploy.txHash, code_hash: vaultCodeHash, locked_vault_keys: true });
-    await upstreamReady(provider, args.session_pk, jobId, deviceHash);
+    await upstreamReady(provider, vault, args.session_pk, jobId, deviceHash);
     const signOptions = { account: ownerAccount, publicKey: ownerKey.getPublicKey(), ownerId: owner, contractId: vault,
       method: probe.prepared.method, args, gas: GAS };
     const zero = await signReviewedCall(signOptions);
@@ -209,7 +213,7 @@ async function main() {
     const zeroProof = verifyYoutickZeroGrantProbe({ probe, result: zeroResult, txHash: zero.txHash });
     complete('zero-guard', zeroProof);
     // Do not issue the positive call unless the failed call left no grant.
-    await upstreamReady(provider, args.session_pk, jobId, deviceHash);
+    await upstreamReady(provider, vault, args.session_pk, jobId, deviceHash);
     const grant = await signReviewedOneYoctoOwnerCall(signOptions);
     await submitOnce('grant', owner, grant, probe.prepared);
     const report = await inspectYoutickGrantProbe({ probe, provider, zeroHash: zero.txHash, grantHash: grant.txHash });

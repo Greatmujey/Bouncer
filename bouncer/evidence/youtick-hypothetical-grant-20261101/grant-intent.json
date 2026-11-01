@@ -1,0 +1,18 @@
+{
+  "id": "grant",
+  "signer_id": "owner-ygrant-b211b2da22.testnet",
+  "tx_hash": "Dh1H9ojhsHUqnnLQHpKhqPYkQEJZ3u34Gbzn566Vaqe",
+  "review": {
+    "owner_id": "owner-ygrant-b211b2da22.testnet",
+    "vault": "bouncer-ygrant-b211b2da22.testnet",
+    "method": "issue_youtick_play_grant",
+    "deposit": "1",
+    "gas": "100000000000000",
+    "args": {
+      "job_id": "bouncer-probe-b211b2da22",
+      "session_pk": "ed25519:3Ljj9hWpdnmbBJqAnqaoF2NgPA6kWVqNyZfQJof7BLDz",
+      "device_hash": "8a28c9e1100c19a7922892ddaf8e5a7bda89e83080c448f8f8fcab88e3ee43fe",
+      "session_pok": "8540d6a7a6a4f36535dcf8845bd31657bca5f7ebbd8bc47dd062fa0d1fce5a644b917fb4090b562c1ffb31738d1f13e211e049fb419d14b2158940472e51f405"
+    }
+  }
+}
