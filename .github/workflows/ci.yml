@@ -274,9 +274,40 @@ jobs:
       # Optional fallback when the standard artifact host is unreachable. The
       # compressed WASM is visible to private-repository check/log readers; it
       # must never contain secrets. A marker is not proof of human approval.
+      # The first approved export revealed a 4,096-character live truncation.
+      # Split into 4,000-character notices, at most nine in each separate step.
+      # All ten guarded steps must use the same WASM and complete successfully;
+      # extraction still fails closed if GitHub drops or changes any part.
       - name: Export V11 WASM in private review annotations
         if: github.event_name == 'push' && github.event.repository.private == true && github.run_attempt == '1' && github.ref == 'refs/heads/arena/3ee8cb60-near-hub' && contains(github.event.head_commit.message, '[v11-wasm-review-export]')
-        run: node bouncer/scripts/v11-wasm-annotations.mjs emit bouncer/contracts/bouncer/target/wasm32-unknown-unknown/release/bouncer.wasm
+        run: node bouncer/scripts/v11-wasm-annotations.mjs emit bouncer/contracts/bouncer/target/wasm32-unknown-unknown/release/bouncer.wasm 1
+      - name: Export V11 WASM review batch 02 of 10
+        if: github.event_name == 'push' && github.event.repository.private == true && github.run_attempt == '1' && github.ref == 'refs/heads/arena/3ee8cb60-near-hub' && contains(github.event.head_commit.message, '[v11-wasm-review-export]')
+        run: node bouncer/scripts/v11-wasm-annotations.mjs emit bouncer/contracts/bouncer/target/wasm32-unknown-unknown/release/bouncer.wasm 2
+      - name: Export V11 WASM review batch 03 of 10
+        if: github.event_name == 'push' && github.event.repository.private == true && github.run_attempt == '1' && github.ref == 'refs/heads/arena/3ee8cb60-near-hub' && contains(github.event.head_commit.message, '[v11-wasm-review-export]')
+        run: node bouncer/scripts/v11-wasm-annotations.mjs emit bouncer/contracts/bouncer/target/wasm32-unknown-unknown/release/bouncer.wasm 3
+      - name: Export V11 WASM review batch 04 of 10
+        if: github.event_name == 'push' && github.event.repository.private == true && github.run_attempt == '1' && github.ref == 'refs/heads/arena/3ee8cb60-near-hub' && contains(github.event.head_commit.message, '[v11-wasm-review-export]')
+        run: node bouncer/scripts/v11-wasm-annotations.mjs emit bouncer/contracts/bouncer/target/wasm32-unknown-unknown/release/bouncer.wasm 4
+      - name: Export V11 WASM review batch 05 of 10
+        if: github.event_name == 'push' && github.event.repository.private == true && github.run_attempt == '1' && github.ref == 'refs/heads/arena/3ee8cb60-near-hub' && contains(github.event.head_commit.message, '[v11-wasm-review-export]')
+        run: node bouncer/scripts/v11-wasm-annotations.mjs emit bouncer/contracts/bouncer/target/wasm32-unknown-unknown/release/bouncer.wasm 5
+      - name: Export V11 WASM review batch 06 of 10
+        if: github.event_name == 'push' && github.event.repository.private == true && github.run_attempt == '1' && github.ref == 'refs/heads/arena/3ee8cb60-near-hub' && contains(github.event.head_commit.message, '[v11-wasm-review-export]')
+        run: node bouncer/scripts/v11-wasm-annotations.mjs emit bouncer/contracts/bouncer/target/wasm32-unknown-unknown/release/bouncer.wasm 6
+      - name: Export V11 WASM review batch 07 of 10
+        if: github.event_name == 'push' && github.event.repository.private == true && github.run_attempt == '1' && github.ref == 'refs/heads/arena/3ee8cb60-near-hub' && contains(github.event.head_commit.message, '[v11-wasm-review-export]')
+        run: node bouncer/scripts/v11-wasm-annotations.mjs emit bouncer/contracts/bouncer/target/wasm32-unknown-unknown/release/bouncer.wasm 7
+      - name: Export V11 WASM review batch 08 of 10
+        if: github.event_name == 'push' && github.event.repository.private == true && github.run_attempt == '1' && github.ref == 'refs/heads/arena/3ee8cb60-near-hub' && contains(github.event.head_commit.message, '[v11-wasm-review-export]')
+        run: node bouncer/scripts/v11-wasm-annotations.mjs emit bouncer/contracts/bouncer/target/wasm32-unknown-unknown/release/bouncer.wasm 8
+      - name: Export V11 WASM review batch 09 of 10
+        if: github.event_name == 'push' && github.event.repository.private == true && github.run_attempt == '1' && github.ref == 'refs/heads/arena/3ee8cb60-near-hub' && contains(github.event.head_commit.message, '[v11-wasm-review-export]')
+        run: node bouncer/scripts/v11-wasm-annotations.mjs emit bouncer/contracts/bouncer/target/wasm32-unknown-unknown/release/bouncer.wasm 9
+      - name: Export V11 WASM review batch 10 of 10
+        if: github.event_name == 'push' && github.event.repository.private == true && github.run_attempt == '1' && github.ref == 'refs/heads/arena/3ee8cb60-near-hub' && contains(github.event.head_commit.message, '[v11-wasm-review-export]')
+        run: node bouncer/scripts/v11-wasm-annotations.mjs emit bouncer/contracts/bouncer/target/wasm32-unknown-unknown/release/bouncer.wasm 10
       - name: Save the non-deployed exact FT variant for review
         uses: actions/upload-artifact@v4
         with:

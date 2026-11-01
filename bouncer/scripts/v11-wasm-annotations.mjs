@@ -5,8 +5,9 @@
  * or audit WASM. Emission puts compressed binary into GitHub check annotations
  * and logs; use only for non-secret contract code in a private repository.
  * Extraction requires an independently retained expected SHA-256 and refuses
- * incomplete, duplicated, altered or oversized data. GitHub's real annotation
- * behavior and limits still need to be checked on an approved run.
+ * incomplete, duplicated, altered or oversized data. One CI run showed 60,000
+ * character messages truncated to 4,096 characters, so this version uses
+ * smaller notices in separate steps. The new live transport remains unverified.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -15,8 +16,13 @@ import zlib from 'node:zlib';
 import { pathToFileURL } from 'node:url';
 
 const MAX_WASM = 4 * 1024 * 1024;
-const CHUNK = 60_000; // under the Checks API's 64 KiB per-message ceiling
-const MAX_PARTS = 10; // GitHub Actions documents 10 notices per step
+// A real Actions run truncated every 60,000-character annotation to 4,096.
+// Stay below the observed limit and use separate steps for the per-step cap.
+// These smaller batches have synthetic tests only, not a successful live run.
+const CHUNK = 4_000;
+const PARTS_PER_STEP = 9; // leave one of GitHub's documented ten notices spare
+const MAX_STEPS = 10;
+const MAX_PARTS = PARTS_PER_STEP * MAX_STEPS;
 const MAX_JSON = 2 * 1024 * 1024;
 const MAGIC = Buffer.from([0, 97, 115, 109, 1, 0, 0, 0]);
 const MARKER = Buffer.from('bouncer-agent-v11-exact-ft-testnet');
@@ -39,7 +45,8 @@ function checkedWasm(input) {
   return wasm; // these checks can be forged; no source/behavior is proven
 }
 
-/** Produce at most 10 non-secret notice annotations. The raw SHA is an
+/** Produce at most 90 non-secret notice annotations, to be emitted in
+ * separately guarded groups of at most nine per step. The raw SHA is an
  * integrity identifier, not a trust anchor or evidence of a reproducible build. */
 export function packV11WasmAnnotations(input) {
   const wasm = checkedWasm(input), hash = sha256(wasm);
@@ -98,12 +105,15 @@ function readBounded(file, max) {
 function main(args) {
   if (args.length === 1 && args[0] === '--help') {
     console.log('Private CI annotation transport for non-secret V11 WASM only; no build, audit or deployment.');
-    console.log('emit WASM | extract EXPECTED_SHA256 ANNOTATIONS.json NEW_OUTPUT.wasm');
+    console.log('emit WASM BATCH_1_TO_10 | extract EXPECTED_SHA256 ANNOTATIONS.json NEW_OUTPUT.wasm');
     return;
   }
-  if (args[0] === 'emit' && args.length === 2) {
+  if (args[0] === 'emit' && args.length === 3 && /^(?:[1-9]|10)$/.test(args[2])) {
     const packed = packV11WasmAnnotations(readBounded(args[1], MAX_WASM));
-    for (const { title, message } of packed.annotations) console.log(`::notice title=${title}::${message}`);
+    const start = (Number(args[2]) - 1) * PARTS_PER_STEP;
+    for (const { title, message } of packed.annotations.slice(start, start + PARTS_PER_STEP)) {
+      console.log(`::notice title=${title}::${message}`);
+    }
     return;
   }
   if (args[0] === 'extract' && args.length === 4) {

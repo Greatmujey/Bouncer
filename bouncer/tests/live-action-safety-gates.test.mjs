@@ -97,9 +97,14 @@ test('Svalin read-only opt-in cannot enable any historical transaction or seller
 });
 
 test('private V11 artifact annotation export is opt-in and cannot enable historical live jobs', () => {
-  const found = /- name: Export V11 WASM in private review annotations\n\s+if: ([^\n]+)/.exec(workflow);
-  assert.ok(found, 'missing the guarded V11 annotation step');
-  const expr = found[1], ctx = { github: { event_name: 'push', ref: 'refs/heads/arena/3ee8cb60-near-hub', run_attempt: '1',
+  const steps = [...workflow.matchAll(/^      - name: (Export V11 WASM (?:in private review annotations|review batch \d{2} of 10))\n        if: ([^\n]+)\n        run: node bouncer\/scripts\/v11-wasm-annotations\.mjs emit bouncer\/contracts\/bouncer\/target\/wasm32-unknown-unknown\/release\/bouncer\.wasm (\d+)$/gm)];
+  assert.equal(steps.length, 10, 'each annotation batch must have its own guarded step');
+  assert.equal([...workflow.matchAll(/^\s+run: node bouncer\/scripts\/v11-wasm-annotations\.mjs emit\b/gm)].length, 10,
+    'no extra unguarded annotation export commands');
+  assert.deepEqual(steps.map(step => Number(step[3])), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+  const expr = steps[0][2];
+  for (const step of steps) assert.equal(step[2], expr, `${step[1]} must use the identical privacy gate`);
+  const ctx = { github: { event_name: 'push', ref: 'refs/heads/arena/3ee8cb60-near-hub', run_attempt: '1',
     event: { repository: { private: true }, before: 'a'.repeat(40), head_commit: { message: 'Review V11 [v11-wasm-review-export]' } } },
     inputs: { run_testnet_smoke: false } };
   assert.equal(evaluate(expr, ctx), true);

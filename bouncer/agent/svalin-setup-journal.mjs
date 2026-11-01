@@ -1,5 +1,5 @@
 /**
- * Local-only write-ahead fence for the four reviewed Svalin testnet setup
+ * Local-only write-ahead fence for the five reviewed Svalin testnet setup
  * batches. It verifies an already-signed transaction and fsyncs only its public
  * original hash; it has no signer, RPC client, broadcaster or retry path.
  *

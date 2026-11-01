@@ -347,24 +347,30 @@ its actions in the transaction and root receipt. The resolver/callback graph
 check is stricter than a successful `ft_transfer_call` alone. It has not been
 exercised against a real V11 deployment or funding transaction; independent
 review and a future authorized live workflow remain necessary.
-The CI workflow is configured to expose the built V11 WASM's SHA-256 and byte
-length in a check annotation; that identifies the job's output but does not
-retrieve the artifact, establish reproducibility, audit it or prove deployment.
-A future run is required to produce that annotation. As an optional fallback
-for an unreachable artifact host, a separately approved private-repository push
-with `[v11-wasm-review-export]` would place compressed, non-secret V11 binary
-chunks in check annotations and build logs. The local transport can reconstruct
-only a complete matching SHA-256 and is limited to ten notices of 60,000
-characters each. It has synthetic tests only: GitHub's live annotation behavior
-and capacity are unverified. This exposes the binary to repository log/check
-readers and could become visible if the repository becomes public; never use it
-for credentials or private data. The marker triggers normal CI and may create
-a Vercel preview; it does not authorize deployment,
-registration, seller contact or payment. The Rust contract has no
-tracked Cargo lockfile, and CI currently selects a stable toolchain and installs
-Binaryen rather than pinning a complete reproducible build environment. A CI
-artifact or its hash is therefore not, by itself, an independent source-to-
-binary review.
+On 1 November 2026, the approved private push build `41361570652` and its PR
+build `41361575492` succeeded and independently reported the same 536,325-byte
+V11 artifact SHA-256,
+`1acf931c07a530257999478c121193863ecf7201d357812a44b4d61c16a77921`.
+Both builds ran the same GitHub workflow around the same time; matching hashes
+are not an independent audit or proof of reproducibility. The sandbox could not
+reach the standard artifact host. The approved fallback exported four long
+notices, but GitHub returned only 4,096 characters from each. The extractor
+correctly rejected those incomplete chunks and wrote no WASM file; the hash
+annotation alone does not retrieve or review the artifact.
+
+A revised, **not yet live-tested** fallback splits non-secret V11 binary into
+at most 90 notices of 4,000 characters, with at most nine in each of ten
+separately guarded steps. The local extractor accepts only a complete artifact
+matching the exact run's separately retained SHA-256. Synthetic tests cannot
+establish that GitHub will retain every part. A future retry requires a
+separately approved private-repository push with `[v11-wasm-review-export]`;
+it triggers normal CI and may create a Vercel preview. It exposes the binary to
+repository log/check readers and could become visible if the repository becomes
+public; never use it for credentials or private data. It does not authorize
+deployment, registration, seller contact or payment. The Rust contract has no
+tracked Cargo lockfile, and CI selects a stable toolchain and installs Binaryen
+rather than pinning a complete reproducible build environment. A CI artifact or
+its hash is therefore not, by itself, an independent source-to-binary review.
 
 The five batches respectively create/init the keyless vault, configure its
 locked policy, add the restricted agent key on the owner, register the vault

@@ -27,10 +27,13 @@ function stubWasm(extraBytes = 0) {
 }
 
 test('bounded compressed annotation chunks reconstruct the exact bytes, in any order', () => {
-  const wasm = stubWasm(300_000), packed = packV11WasmAnnotations(wasm);
+  const wasm = stubWasm(240_000), packed = packV11WasmAnnotations(wasm);
   assert.equal(packed.sha256, crypto.createHash('sha256').update(wasm).digest('hex'));
-  assert.equal(packed.bytes, wasm.length); assert.ok(packed.annotations.length > 1 && packed.annotations.length <= 10);
-  assert.ok(packed.annotations.every(a => a.message.length <= 60_000 && /^BOUNCER-V11-WASM-/.test(a.title)));
+  assert.equal(packed.bytes, wasm.length); assert.ok(packed.annotations.length > 9 && packed.annotations.length <= 90);
+  assert.ok(packed.annotations.every(a => a.message.length <= 4_000 && /^BOUNCER-V11-WASM-/.test(a.title)));
+  // GitHub returned only the first 4,096 chars of each previous long notice.
+  // The revised notices remain intact under the same observed truncation.
+  assert.deepEqual(unpackV11WasmAnnotations(packed.annotations.map(a => ({ ...a, message: a.message.slice(0, 4_096) })), packed.sha256), wasm);
   const annotations = [{ title: 'unrelated', message: 'notice' }, ...packed.annotations.toReversed()];
   assert.deepEqual(unpackV11WasmAnnotations(annotations, packed.sha256), wasm);
   // The fixture has all expected names and a marker but does nothing useful.
@@ -43,7 +46,8 @@ test('missing, mixed, duplicate, corrupted or oversized parts never reconstruct 
   const cases = [
     [parts.slice(1), packed.sha256], [[...parts, parts[0]], packed.sha256],
     [parts, '0'.repeat(64)], [[{ ...parts[0], title: 'BOUNCER-V11-WASM-malformed' }, ...parts.slice(1)], packed.sha256],
-    [[{ ...parts[0], message: 'a'.repeat(60_001) }, ...parts.slice(1)], packed.sha256],
+    [[{ ...parts[0], message: 'a'.repeat(4_001) }, ...parts.slice(1)], packed.sha256],
+    [[{ ...parts[0], message: parts[0].message.slice(0, 3_000) }, ...parts.slice(1)], packed.sha256],
     [[{ ...parts[0], message: '!!' }, ...parts.slice(1)], packed.sha256],
     [[{ ...parts[0], message: (parts[0].message[0] === 'A' ? 'B' : 'A') + parts[0].message.slice(1) }, ...parts.slice(1)], packed.sha256],
     [[{ title: `BOUNCER-V11-WASM-01-OF-01-SHA256-${packed.sha256}`,
@@ -51,7 +55,7 @@ test('missing, mixed, duplicate, corrupted or oversized parts never reconstruct 
   ];
   for (const [annotations, hash] of cases) assert.throws(() => unpackV11WasmAnnotations(annotations, hash));
   assert.throws(() => packV11WasmAnnotations(Buffer.from('not wasm')), /WASM|marker|header/);
-  assert.throws(() => packV11WasmAnnotations(stubWasm(500_000)), /transport limits/);
+  assert.throws(() => packV11WasmAnnotations(stubWasm(400_000)), /transport limits/);
   assert.throws(() => unpackV11WasmAnnotations(Array(201).fill({}), packed.sha256), /bounded/);
 });
 
@@ -63,10 +67,21 @@ test('CLI emits only notice chunks and extraction refuses existing files, bad ha
   const run = args => spawnSync(process.execPath, [cli, ...args], { encoding: 'utf8', timeout: 10_000 });
   try {
     fs.writeFileSync(input, wasm);
-    const emitted = run(['emit', input]); assert.equal(emitted.status, 0, emitted.stderr);
-    const annotations = emitted.stdout.trim().split('\n').map(line => {
-      const m = /^::notice title=([^:]+)::(.+)$/.exec(line); assert.ok(m); return { title: m[1], message: m[2] };
-    });
+    const annotations = [];
+    for (let batch = 1; batch <= 10; batch++) {
+      const emitted = run(['emit', input, String(batch)]); assert.equal(emitted.status, 0, emitted.stderr);
+      const lines = emitted.stdout.trim() ? emitted.stdout.trim().split('\n') : [];
+      assert.ok(lines.length <= 9, `batch ${batch} exceeds the step's notice cap`);
+      for (const line of lines) {
+        const m = /^::notice title=([^:]+)::(.+)$/.exec(line); assert.ok(m);
+        assert.ok(m[2].length <= 4_000); annotations.push({ title: m[1], message: m[2] });
+      }
+    }
+    for (const invalid of [[], ['0'], ['11'], ['01'], ['1.0'], ['-1']]) {
+      const r = run(['emit', input, ...invalid]); assert.equal(r.status, 1, `batch ${invalid} must be rejected`);
+      assert.equal(r.stdout, '');
+    }
+    assert.ok(annotations.length > 9);
     fs.writeFileSync(json, JSON.stringify(annotations));
     const hash = crypto.createHash('sha256').update(wasm).digest('hex');
     let r = run(['extract', hash, json, output]); assert.equal(r.status, 0, r.stderr);
@@ -76,7 +91,7 @@ test('CLI emits only notice chunks and extraction refuses existing files, bad ha
     r = run(['extract', hash, json, output]); assert.equal(r.status, 1); assert.deepEqual(fs.readFileSync(output), wasm);
     r = run(['extract', '0'.repeat(64), json, path.join(dir, 'wrong.wasm')]); assert.equal(r.status, 1);
     const link = path.join(dir, 'link'); fs.symlinkSync(input, link);
-    r = run(['emit', link]); assert.equal(r.status, 1); assert.match(r.stderr, /bounded regular/);
+    r = run(['emit', link, '1']); assert.equal(r.status, 1); assert.match(r.stderr, /bounded regular/);
     r = run(['--help']); assert.equal(r.status, 0); assert.match(r.stdout, /no build, audit or deployment/);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
