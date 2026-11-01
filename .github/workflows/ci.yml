@@ -378,6 +378,34 @@ jobs:
       - name: Verify historical Circle testnet receipts and seller substitution
         run: node bouncer/scripts/verify-provider-history.mjs
 
+  dependent-historical-verification:
+    name: Verify dependent workflow with installed seller SDK (read only)
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[provider-inspect]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      # Install the exact local tarball in a separate seller application. This
+      # job only reads existing transactions; it has no key and cannot pay.
+      - name: Pack and install the private testnet SDK locally
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive=$(npm pack ./bouncer/packages/provider-sdk --pack-destination "$RUNNER_TEMP" --silent)
+          test "$archive" = 'bouncer-near-testnet-provider-sdk-0.1.0.tgz'
+          mkdir -p "$RUNNER_TEMP/seller-client"
+          printf '{"name":"seller-check","version":"1.0.0","private":true,"type":"module"}\n' > "$RUNNER_TEMP/seller-client/package.json"
+          npm install --prefix "$RUNNER_TEMP/seller-client" --ignore-scripts --no-audit --no-fund "$RUNNER_TEMP/$archive"
+          echo "BOUNCER_SELLER_SDK_MODULE=$RUNNER_TEMP/seller-client/node_modules/bouncer-near-testnet-provider-sdk/index.mjs" >> "$GITHUB_ENV"
+      - name: Verify the existing source and three seller receipts without paying
+        run: node bouncer/scripts/verify-dependent-history.mjs
+
   oracle-transaction-inspection:
     name: Reconcile one existing oracle transaction (read only)
     if: github.event_name == 'push' && contains(github.event.head_commit.message, '[oracle-inspect]')

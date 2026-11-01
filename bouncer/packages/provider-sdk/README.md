@@ -1,16 +1,36 @@
 # Bouncer seller verification (experimental, testnet)
 
 This reference SDK helps a seller independently check a **direct** Bouncer
-NEP-141 payment. It is included in this repository, not a published package or
-a standard. No independent seller is known to have adopted it. The live
-resource providers used so far are self-hosted development services, and Circle
-**testnet** USDC has no real value.
+NEP-141 payment. It is a self-contained local npm package, not a published
+package or a standard. No independent seller is known to have adopted it. The
+live resource providers used so far are self-hosted development services, and
+Circle **testnet** USDC has no real value.
+
+## Package for a seller
+
+Requires Node.js 22 or newer. From a trusted checkout, create an archive and
+install that local file in the seller's application:
+
+```sh
+npm pack ./bouncer/packages/provider-sdk --pack-destination /path/to/output
+npm install /path/to/output/bouncer-near-testnet-provider-sdk-0.1.0.tgz near-api-js@6.5.1
+```
+
+`npm pack` only creates the archive; it does not publish anything. The package
+is marked private to prevent accidental publication. Installation resolves
+`near-api-js` 6.5.1 and its dependencies; use your application's lockfile,
+verify the archive and dependency integrity, and review the code before use.
+The package includes its runtime verification modules, with the same canonical
+implementation used by the Bouncer buyer. Packing and isolated verification are
+covered offline by the repository tests. There is no warranty, independent audit
+or production support.
 
 ## Seller integration
 
-Import `readAndVerifyProviderPayment` from `./packages/provider-sdk/index.mjs`
-relative to the `bouncer` directory. Provide a `near-api-js` provider and a
-seller-created expectation with these exact string fields:
+Import `readAndVerifyProviderPayment` from the installed package, or from
+`./packages/provider-sdk/index.mjs` relative to the `bouncer` directory in a
+checkout. Provide a `near-api-js` provider and a seller-created expectation with
+these exact string fields:
 
 - `tx_hash`: the buyer's finalized transaction hash;
 - `contract_id` and `owner_account_id`: the seller's vetted testnet Bouncer
@@ -18,8 +38,9 @@ seller-created expectation with these exact string fields:
 - `policy_id`, `token`, `payee` and `amount`: the seller's own configured
   policy, testnet token, receiving account and exact smallest-unit price;
 - `memo`: the seller's expected order binding, computed from the order received
-  by the seller. A seller can use the example [resource protocol](../../docs/PROVIDER_PROTOCOL.md)
-  or a different agreed, unique order-binding memo.
+  by the seller. A seller can use the example protocol in the corresponding
+  checkout's `bouncer/docs/PROVIDER_PROTOCOL.md`, or a different agreed, unique
+  order-binding memo.
 
 For a real multi-customer seller, create and persist a fresh seller-owned order
 ID or challenge for every order and bind it to the exact memo and price. Atomically
@@ -40,7 +61,7 @@ escalation requires the owner-only **1 yoctoNEAR** call.
 
 ```js
 import nearApi from 'near-api-js';
-import { readAndVerifyProviderPayment } from './packages/provider-sdk/index.mjs';
+import { readAndVerifyProviderPayment } from 'bouncer-near-testnet-provider-sdk';
 
 // Stored by the seller when it accepted the order, not supplied as authority
 // in a buyer's later redemption request. All fields are exact strings.

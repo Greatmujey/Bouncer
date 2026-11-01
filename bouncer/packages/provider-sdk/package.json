@@ -1,0 +1,22 @@
+{
+  "name": "bouncer-near-testnet-provider-sdk",
+  "version": "0.1.0",
+  "description": "Experimental receipt-aware Bouncer payment verification for NEAR testnet sellers",
+  "type": "module",
+  "private": true,
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
+  "exports": {
+    ".": "./index.mjs"
+  },
+  "files": [
+    "index.mjs",
+    "lib/*.mjs",
+    "README.md"
+  ],
+  "dependencies": {
+    "near-api-js": "6.5.1"
+  }
+}

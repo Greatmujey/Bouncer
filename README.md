@@ -24,8 +24,8 @@ temporary preview hosted by madethis.website, expiring **6 November 2026 at
 production deployment, and the private repository remains private.
 
 `bouncer/web/` explains the prototype's request → quote → guarded payment →
-fulfillment flow and links to the latest oracle-led Circle testnet mission and
-recovery proof. It also retains an interactive walkthrough of three real,
+fulfillment flow and links to an earlier oracle-led Circle testnet mission and
+recovery proof; the snapshot predates the dependent-workflow run below. It also retains an interactive walkthrough of three real,
 **recorded** requests from an earlier multi-token run. A separate test used a
 local AI model to propose tasks; the latest oracle mission used prepared goals. The
 two credit tokens in the earlier example are synthetic and fulfillment was
@@ -354,10 +354,31 @@ preflight aggregates shared budgets, and every signed FT payment is journaled
 before broadcast. Recovery rechecks the original source and paid steps without
 keys or repayment before any new purchase.
 
-This dependency runner has been exercised **offline with synthetic receipts**
-and the self-hosted development provider; it has not yet been run live. It does
-not resolve or resend the pending project transaction below, demonstrate an
-independent FT-paid vendor, or guarantee truth, future storage or atomicity.
+A [1 November 2026 live testnet run](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41258992192/job/124708664361)
+exercised this runner on a fresh v9 contract. A single-source price from
+[independent OutLayer](https://testnet.nearblocks.io/txns/CMFUYVjguSqsnv65tFVnPA2uiTdvJGx4pssDTNBtFY7L),
+paid in native testnet NEAR, became the input to
+[compute](https://testnet.nearblocks.io/txns/3Vc4fohkHLmkUXqyjp2DcVaxw9B792Wi9hCVK2K3zDF1),
+whose verified result became the input to
+[storage](https://testnet.nearblocks.io/txns/EDyE96KjV6csc8s4tLsRAnw4hMzsBVdzHj1dj4sDRp8W),
+whose verified metadata became the input to
+[an API request](https://testnet.nearblocks.io/txns/BGDy5nfZ9iBLZg7gpqbGuN3nox5MHEg59Du3uf5Ki37R).
+Each resource cost 0.001 Circle **testnet** USDC and was provided by local
+development software. The run deliberately lost the first FT response after
+broadcast, then a separate, key-free CLI recovered that exact hash and verified
+its delivery before the remaining two payments. The test checked one source
+broadcast, three FT broadcasts, the on-chain budgets and the exact chained
+inputs. An [offline regression](bouncer/tests/dependent-history.test.mjs)
+reconstructs those orders and their three observed on-chain memos; it is not a
+raw RPC receipt proof. The [public testnet evidence artifact](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41258992192/artifacts/13064860428)
+is retained until 30 January 2027; it contains no keys but includes task data.
+
+The Circle seller is **not independent**, the independently operated oracle
+was **not paid in Circle USDC**, and testnet tokens have no real value. This
+run does not resolve or resend the separate pending project transaction below,
+demonstrate an independent FT-paid vendor, or guarantee data truth, future
+storage or atomicity. The reported price was one unauthenticated Coinbase source
+through OutLayer; its worker timestamp is not authenticated market freshness.
 
 ### Paid-provider mission and recovery
 
@@ -426,8 +447,10 @@ validate, hire or transact with their providers.
 
 The experimental [seller verification SDK](bouncer/packages/provider-sdk/README.md)
 lets a testnet provider check a reviewed order against the finalized Bouncer
-transaction, actual token-transfer receipt and callback. The local development
-provider now uses it and protects one data directory with an exclusive lock and
+transaction, actual token-transfer receipt and callback. It can be packed as a
+self-contained local npm package and installed by a seller; it is not published.
+The local development provider uses the same verifier and protects one data
+directory with an exclusive lock and
 fsync-backed state/object writes. A [read-only check of three existing Circle
 testnet payments](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41101505909/job/124219376411)
 passed against FINAL RPC receipts and rejected a substituted seller. These

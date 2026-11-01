@@ -119,7 +119,8 @@ After a finalized payment the client sends:
 The endpoint is `POST /redeem`. Before any paid side effect, a provider should
 fetch the transaction from its trusted NEAR testnet RPC with `FINAL` execution
 and fail closed unless the expected receipts have completed successfully. The
-[provider SDK](../packages/provider-sdk/README.md) checks the transaction hash,
+[provider SDK](../packages/provider-sdk/README.md) can be packed and installed
+locally by a seller (it is not published) and checks the transaction hash,
 pinned owner and contract, zero-deposit signed `execute` and exact order fields.
 It also binds the guarded initiation to the actual Bouncer-to-token
 `ft_transfer` and settlement callback, verifies their arguments and successful

@@ -2,10 +2,13 @@
 
 **Status: unaudited testnet prototype. Do not use real funds.** The workflow
 runner connects a verified independent OutLayer result to later, ordered
-compute, storage and API requests. The end-to-end coverage for this new runner
-uses **synthetic chain receipts and a self-hosted development provider**; it is
-not a new live test or evidence that an independent FT seller supports Bouncer.
-Earlier live transactions are documented separately in the [README](../../README.md).
+compute, storage and API requests. Offline adversarial tests use synthetic
+chain receipts. A [1 November 2026 live testnet run](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41258992192/job/124708664361)
+verified the full chain and key-free payment recovery; its OutLayer lookup used
+native testnet NEAR, while the three Circle testnet USDC resource payments went
+to a self-hosted development provider. It is not evidence of an independent
+FT seller or a real-value purchase. Transaction links and scope are in the
+[README](../../README.md).
 
 ## Optional isolated testnet check
 
@@ -40,9 +43,19 @@ state; when relocating the artifact, update only the local provider config's
 The opt-in script makes new testnet transactions each time: do not rerun it to
 "fix" an ambiguous outcome. Preserve its logs and artifacts and investigate the
 recorded hash without paying again. It never adopts or touches the unrelated
-unresolved project transaction described below. The presence of this harness or
-passing synthetic tests alone is **not** a claim of a successful live run or an
-independent FT-paid service.
+unresolved project transaction described below. The published live run above is
+one testnet observation, not a guarantee that another run will work or that an
+independent FT-paid service has adopted this protocol.
+
+`tests/dependent-history.test.mjs` reconstructs the chained inputs and checks
+all three memos against the public execution receipts, entirely **offline**;
+these vectors are not raw RPC responses. The optional
+`scripts/verify-dependent-history.mjs` can additionally read the existing source
+and payment receipts from a testnet RPC, verify the source and seller proofs,
+and reject seller substitution. It has no key and sends no transactions. The
+`[provider-inspect]` CI marker packs and installs the private SDK in an isolated
+seller directory for this read-only verification; historical RPC availability
+is not guaranteed.
 
 ## What is reviewed
 
