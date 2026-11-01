@@ -813,7 +813,10 @@ jobs:
           node-version: '22'
       - run: npm ci --prefix bouncer --no-audit --no-fund
       - name: Classify public offer without credentials or payment
-        run: node bouncer/agent/inspect-x402.mjs --url https://piprail.com/x402/demo
+        shell: bash
+        run: |
+          node bouncer/agent/inspect-x402.mjs --url https://piprail.com/x402/demo > "$RUNNER_TEMP/x402-report.json"
+          node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").trim().replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::notice title=Read-only independent x402 inspection::"+s.slice(0,3500))' "$RUNNER_TEMP/x402-report.json"
 
   independent-market-discovery:
     name: Independent marketplace catalog (read only)

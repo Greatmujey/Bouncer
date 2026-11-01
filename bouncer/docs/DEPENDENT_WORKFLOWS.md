@@ -13,8 +13,11 @@ used distinct seller-issued challenges for all three development-provider orders
 and recovered the original compute hash in a restarted, key-free process. It
 checked one source broadcast, three resource broadcasts and the locally
 persisted seller claims. The [public evidence artifact](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41263055741/artifacts/13066031406)
-contains task data, not keys. Transaction links and limitations are in the
-[README](../../README.md).
+contains task data, not keys. A [separate fresh seller-v3 testnet proof](SELLER_V3.md#separate-fresh-seller-v3-testnet-proof)
+used authenticated v3 claims for all three self-hosted resource orders, with
+key-free recovery of the original compute hash. Its restricted artifact contains
+replayable signatures and must remain private. Transaction links and limitations
+are in the [README](../../README.md).
 
 ## Paid x402 data as a workflow source (experimental)
 
@@ -186,8 +189,9 @@ v2 challenge reuse, state tampering and recovery.
 For claim authentication instead, explicitly use `"order_binding":"seller-v3"`
 with a supporting seller and durable execution. The exact reviewed origin is
 bound into a signature by the payment transaction key, saved before broadcast;
-key-free workflow recovery reuses it. Offline tests exercise the real recovery
-CLI after a seller restart. The signature is a replayable bearer credential:
+key-free workflow recovery reuses it. Offline tests and the separate fresh
+self-hosted v3 testnet proof exercise the real recovery CLI after a seller
+restart. The signature is a replayable bearer credential:
 never publish a v3 journal or expose it through the older public-artifact job.
 See [v3 terms, wire bytes and limitations](SELLER_V3.md). This does not prove
 independent seller adoption or safe distributed replay protection.

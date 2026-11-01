@@ -27,8 +27,46 @@ charge of `1121700000000000000000` yoctoNEAR and owner refund of
 verified the original journal, FINAL transaction, provider receipts, refund and
 completion block against a trusted archival RPC, and confirmed no resource
 payment was recorded. It did not change the original journal or send anything.
-The observation is stale and not valid for new purchases. No live-v3 delivery
-or independent FT-seller adoption is established.
+The observation is stale and not valid for new purchases. **That attempt** did
+not establish v3 delivery; the separate fresh proof below did not reuse its
+journal or transaction.
+
+## Separate fresh seller-v3 testnet proof
+
+A [separately gated fresh run](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41270510338/job/124742560421)
+passed on 1 November 2026 using a new account, new deployment and new journals.
+It paid independently operated OutLayer in **native testnet NEAR** for a
+[single-source price](https://testnet.nearblocks.io/txns/8nyaDkKPN1VT87S5T7sKYD6oBRwzgdfSHoYpa5RgNqh/execution):
+`4.40235` USD, with a provider-reported charge of `1112800000000000000000`
+yoctoNEAR and owner refund of `98887200000000000000000` yoctoNEAR. It then
+passed that observation through three sequential authenticated v3 orders:
+[compute](https://testnet.nearblocks.io/txns/zhqQHDfcF12wHQbQSMCWJR5z3fi7FZSsAWEfzXF4Yf9/execution),
+[storage](https://testnet.nearblocks.io/txns/AFdnc45JXaGpNpRcF2Espnx8CmE9kEKiKTdCit2aQG6t/execution),
+and [API](https://testnet.nearblocks.io/txns/GdU2G3AEgoR15az9iS6RCF2incRf5Q2cwQjbhENdPW4i/execution).
+Each resource cost 1,000 micro-units (0.001) of Circle **testnet** USDC and
+was fulfilled by our **self-hosted development seller**, not an independent
+merchant. Testnet tokens have no real value.
+
+The harness checked the exact data dependencies, one source broadcast and
+three resource broadcasts. It deliberately discarded the first resource
+payment response after broadcast; a separate key-free CLI restarted the seller,
+reconciled the same compute hash and verified delivery before the remaining
+two payments. It checked three seller claims, rejected a public memo/hash
+without a signature and a wrong-key claim, and checked authenticated v3
+storage readback. The source did not time out in this run; the new optional
+same-hash source-recovery path was exercised only in synthetic tests. The
+full-access owner's [Ref setup swap](https://testnet.nearblocks.io/txns/Eb12GAnB1ZNxF3d2zTmoTEKJ4FrZuCbccEJuCKYtDwE7/execution)
+and [vault funding](https://testnet.nearblocks.io/txns/2y15D2wLxjwRxXegskCcRGMLMVyxtwoP5EdXuA7XviP4/execution)
+were setup operations, **not** guarded agent swaps. The price is a historical
+single-source observation, not authenticated market truth or freshness.
+
+The [repository-restricted recovery artifact](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41270510338/artifacts/13069540535)
+expires 30 January 2027 and may contain replayable claim signatures and task
+data. Keep it private and preserve it for reconciliation; changing repository
+visibility may expose artifacts. The one-shot gate pins the branch and prior
+commit and skips Actions reruns. Do not repeat a paid attempt to repair an
+ambiguous result. This proof is not a live x402-source workflow, independent
+FT-seller adoption, an audit, or a production guarantee.
 
 ## What is protected—and what is not
 

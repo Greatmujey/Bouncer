@@ -497,12 +497,14 @@ the development seller checks it against the FINAL payment signer and protects
 v3 storage readback. Offline tests cover public-proof theft, wrong keys,
 concurrency, seller restart and key-free dependent-workflow recovery. The first
 [one-shot live attempt](bouncer/docs/SELLER_V3.md#first-testnet-attempt-stopped-before-v3-resource-payments)
-timed out at its native oracle and stopped before any v3 resource payment; a
-subsequent read-only check verified that oracle transaction without resending.
-Its original restricted recovery journal is preserved. Signatures are
-**bearer credentials**: protect journals and transport. This is
-a custom, unaudited testnet protocol—not an independent merchant integration,
-x402 `exact`, or a guarantee of confidential hosting.
+timed out at its native oracle before v3 resource payments; its original hash
+was later verified without resending. A [separate fresh testnet proof](bouncer/docs/SELLER_V3.md#separate-fresh-seller-v3-testnet-proof)
+then passed an independent native-paid OutLayer lookup followed by authenticated
+compute → storage → API payments to our self-hosted seller, including key-free
+recovery of the first FT payment. Signatures are **bearer credentials**: keep
+both recovery artifacts private. This remains a custom, unaudited testnet
+protocol—not an independent FT merchant integration, x402 `exact`, or a
+guarantee of confidential hosting.
 
 ### Delivery checks and local receipts
 
