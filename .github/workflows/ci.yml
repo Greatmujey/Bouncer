@@ -92,6 +92,18 @@ jobs:
           fi
           exit "$result"
 
+      - name: Test separate one-shot exact FT intent variant
+        working-directory: bouncer/contracts/bouncer
+        shell: bash
+        run: |
+          set +e
+          CARGO_TERM_COLOR=never CARGO_PROFILE_DEV_DEBUG=0 cargo test --lib --features exact-ft-v11 2>&1 | tee "$RUNNER_TEMP/rust-exact-ft-tests.log"
+          result=${PIPESTATUS[0]}
+          if [ "$result" -ne 0 ]; then
+            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-3500).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=Exact FT variant tests failed::"+s)' "$RUNNER_TEMP/rust-exact-ft-tests.log"
+          fi
+          exit "$result"
+
   outlayer-vrf-read:
     name: Discover pinned testnet VRF probe terms (read only)
     if: github.event_name == 'push' && github.run_attempt == '1' && contains(github.event.head_commit.message, '[vrf-capability-read]')
@@ -245,6 +257,18 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: bouncer-youtick-playback-v10-wasm
+          path: bouncer/contracts/bouncer/target/wasm32-unknown-unknown/release/bouncer.wasm
+          if-no-files-found: error
+      - name: Build separate experimental exact FT intent WASM
+        working-directory: bouncer/contracts/bouncer
+        run: RUSTFLAGS="-C link-arg=-s" cargo build --target wasm32-unknown-unknown --release --features exact-ft-v11
+      - name: Check experimental exact FT marker
+        run: |
+          node -e 'const fs=require("fs"),c=require("crypto"),p="bouncer/contracts/bouncer/target/wasm32-unknown-unknown/release/bouncer.wasm",b=fs.readFileSync(p);if(!b.subarray(0,8).equals(Buffer.from([0,97,115,109,1,0,0,0]))||!b.includes(Buffer.from("bouncer-agent-v11-exact-ft-testnet")))throw Error("invalid experimental exact FT artifact");console.log("Experimental exact FT WASM SHA-256",c.createHash("sha256").update(b).digest("hex"))'
+      - name: Save the non-deployed exact FT variant for review
+        uses: actions/upload-artifact@v4
+        with:
+          name: bouncer-exact-ft-v11-wasm
           path: bouncer/contracts/bouncer/target/wasm32-unknown-unknown/release/bouncer.wasm
           if-no-files-found: error
       # Builds are uploaded for review, never auto-committed over the pinned

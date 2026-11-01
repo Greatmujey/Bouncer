@@ -1,0 +1,74 @@
+# Experimental exact, one-shot FT intents (V11)
+
+**Fresh testnet state only; not deployed, audited, migrated, or an independent
+purchase.** This is a separately compiled `exact-ft-v11` feature, not a change
+to the pinned V9 `bouncer.wasm` or the separate YouTick V10 variant. V11 adds
+state fields and **must not be installed over any V9/V10 vault**: no migration
+or source-to-binary reproducibility is established. The two experimental
+features must not be enabled together. CI tests and uploads a build for review;
+it never deploys or overwrites the pinned artifact. A `.testnet` suffix does
+not prove the chain: the operator must independently check the RPC network,
+code hash, access keys and reviewed deployment before using a fresh vault.
+
+## The boundary
+
+V9's unrestricted `execute` lets a granted key choose a transfer memo. A
+public MultiAgency code is payment-routing information, and its reviewed
+watcher matches a memo *containing* that code. V11 adds an owner-approved,
+one-shot direct FT intent. The owner explicitly:
+
+1. Configures an FT policy, caps, payee and agent key under the existing
+   **exactly 1 yoctoNEAR** owner guard.
+2. Irreversibly locks that policy to exact intents, then signs a second
+   1-yocto intent that pins a unique ID, token, payee, exact amount, printable
+   memo, expiry, agent key and a SHA-256 review commitment. Pinning does not
+   pay or authenticate the quote. The public commitment should be to a public
+   brief; hashes do not safely hide low-entropy secrets.
+3. Separately installs the agent's NEAR function-call key on the owner account
+   with receiver equal to the vault and **only** `execute_exact_ft` allowed.
+   An empty method list means all methods and is unsafe. Never use a full-access
+   agent key. The contract's per-policy key grant is necessary but not a
+   substitute for that protocol restriction.
+
+The restricted key supplies only the intent ID and attaches zero NEAR. The
+contract verifies the pinned key, policy/payee/key revisions and expiry; the
+normal token balance, allowlist, per-transaction cap and rolling daily budget
+still apply. It consumes the intent before creating a transfer. The token call
+uses the exact pinned memo and 1 yocto from the vault. A successful transfer
+remains consumed. On a failed FT receipt the callback restores the tracked
+vault balance and, if the policy revision has not changed, the original
+budget bucket. **It never reopens the intent**, even after a refund. A missing
+or failed callback may leave accounting conservative and requires manual
+reconciliation; `consumed` means initiated, not paid or delivered.
+
+Policy edits, payee revoke/re-allow, agent revoke/re-grant, expiry and explicit
+cancellation invalidate pending intents. IDs and `(token, payee, memo)`
+reservations remain permanently used even when cancelled, expired or failed;
+there is no automatic retry. Once any intent is pinned for a token/payee, the
+legacy `execute` and `execute_ft_call` routes to that pair are also permanently
+blocked **across policies**, even for a different or containing memo. The
+locked policy cannot switch to native. This is deliberately irreversible and
+uses storage for each owner-approved reservation; do not lock an existing
+policy or recipient without understanding the operational impact. Other
+policies, other vaults, the owner and a malicious or nonstandard token remain
+separate trust boundaries.
+
+The chain guard does not identify all earlier or already-in-flight legacy
+transfers, or transfers from another vault/account. Use a new vault and a
+restricted key; preserve and reconcile the original durable journal and
+transaction hash. A duplicate/missing journal, lost encryption key, stale
+backup, changed vault or different RPC/provider can still undermine recovery.
+Do not automatically repeat a quote, signed call or ambiguous broadcast.
+
+## What it does not solve
+
+The seller's quote is unsigned and its memo is public. A different sender can
+pay a matching code first, and the watcher, deployed code, capacity, terms,
+refunds and useful delivery are **not** established by this contract. A token
+transfer or callback is not fulfillment. MultiAgency's provider response,
+public job and independently checked deliverable need separate verification,
+followed by owner assessment. The operator must obtain explicit approval of
+the exact public brief, amount, policy and risks before a quote or payment;
+this feature does not create consent or authorize a live purchase. Testnet
+Circle USDC has no financial value. Never use this unaudited prototype with
+real funds.

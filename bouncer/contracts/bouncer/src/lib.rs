@@ -1,4 +1,6 @@
 use near_sdk::json_types::U128;
+#[cfg(feature = "exact-ft-v11")]
+use near_sdk::json_types::U64;
 use near_sdk::store::LookupMap;
 use near_sdk::{env, ext_contract, near, AccountId, Gas, NearToken, PanicOnDefault, Promise, PromiseOrValue, PublicKey};
 
@@ -19,6 +21,14 @@ const OUTLAYER_DEPOSIT_MSG: &str = r#"{"action":"deposit_balance"}"#;
 const NATIVE_SURPLUS_RESERVE: u128 = 50_000_000_000_000_000_000_000; // 0.05 NEAR
 const MAX_OUTLAYER_INPUT_BYTES: usize = 4096;
 const MAX_FT_CALL_MESSAGE_BYTES: usize = 2048;
+// This is a fresh-state testnet variant, not an upgrade to a deployed V9/V10.
+// Combining the two experimental variants would create an unreviewed ABI.
+#[cfg(all(feature = "exact-ft-v11", feature = "youtick-playback-v10"))]
+compile_error!("exact-ft-v11 and youtick-playback-v10 are separate artifacts");
+#[cfg(feature = "exact-ft-v11")]
+const MAX_EXACT_FT_MEMO_BYTES: usize = 128;
+#[cfg(feature = "exact-ft-v11")]
+const MAX_EXACT_FT_EXPIRY_MS: u64 = 73 * 60 * 60 * 1_000;
 // Only the separately built V10 testnet artifact exposes this narrow, owner-
 // authorized playback grant. It does not change deployed V9 contracts.
 #[cfg(feature = "youtick-playback-v10")]
@@ -78,6 +88,13 @@ trait ExtSelf {
         policy_revision: u64, payee: AccountId, msg: String) -> Option<U128>;
     fn after_withdraw(&mut self, token: AccountId, amount: U128);
     fn after_native_withdraw(&mut self, amount: U128);
+}
+
+#[cfg(feature = "exact-ft-v11")]
+#[ext_contract(ext_exact_self)]
+trait ExtExactSelf {
+    fn after_exact_ft_transfer(&mut self, intent_id: String, policy_id: String, token: AccountId,
+        amount: U128, bucket: u64, policy_revision: u64);
 }
 
 /// Owner-reviewed source and resource limits; the agent must sign these exact
@@ -179,6 +196,49 @@ pub struct OutlayerNativeProjectRouteView {
     pub active: bool,
 }
 
+/// A V11 intent is immutable once pinned. Its ID and token/payee/memo are
+/// permanently reserved even if it is cancelled, expires or a transfer fails.
+#[cfg(feature = "exact-ft-v11")]
+#[near(serializers = [borsh])]
+#[derive(Clone)]
+struct ExactFtIntent {
+    policy_id: String,
+    token: AccountId,
+    payee: AccountId,
+    amount: u128,
+    memo: String,
+    review_hash: String,
+    expires_at_ms: u64,
+    agent_public_key: PublicKey,
+    policy_revision: u64,
+    payee_revision: u64,
+    agent_revision: u64,
+    consumed: bool,
+    cancelled: bool,
+}
+
+#[cfg(feature = "exact-ft-v11")]
+#[derive(near_sdk::serde::Serialize)]
+#[serde(crate = "near_sdk::serde")]
+pub struct ExactFtIntentView {
+    pub intent_id: String,
+    pub policy_id: String,
+    pub token: AccountId,
+    pub payee: AccountId,
+    pub amount: U128,
+    pub memo: String,
+    pub review_hash: String,
+    pub expires_at_ms: U64,
+    pub agent_public_key: PublicKey,
+    pub policy_revision: u64,
+    pub payee_revision: u64,
+    pub agent_revision: u64,
+    pub consumed: bool,
+    pub cancelled: bool,
+    /// Checks revisions, authority and time, not current funding or budget.
+    pub active: bool,
+}
+
 #[near(contract_state)]
 #[derive(PanicOnDefault)]
 pub struct Bouncer {
@@ -216,6 +276,55 @@ pub struct Bouncer {
     outlayer_input_routes: LookupMap<String, (u64, Option<(String, String, u64, u64)>)>,
     // Exact native-only project source, version and input plus revisions.
     outlayer_native_projects: LookupMap<String, (u64, Option<(String, u64, u64)>)>,
+    // These fields exist ONLY in the separate, fresh-state V11 artifact. Do
+    // not deploy it over V9/V10 state; no migration has been implemented.
+    #[cfg(feature = "exact-ft-v11")]
+    exact_ft_policies: LookupMap<String, bool>,
+    #[cfg(feature = "exact-ft-v11")]
+    exact_ft_intents: LookupMap<String, ExactFtIntent>,
+    #[cfg(feature = "exact-ft-v11")]
+    exact_ft_memos: LookupMap<Vec<u8>, bool>,
+    // Once any intent reserves this token/payee, unrestricted legacy FT
+    // transfers to that pair stay disabled even under a different policy.
+    #[cfg(feature = "exact-ft-v11")]
+    exact_ft_payees: LookupMap<(AccountId, AccountId), bool>,
+    #[cfg(feature = "exact-ft-v11")]
+    exact_agent_revisions: LookupMap<(String, PublicKey), u64>,
+}
+
+#[cfg(feature = "exact-ft-v11")]
+fn exact_memo_key(token: &AccountId, payee: &AccountId, memo: &str) -> Vec<u8> {
+    // Account IDs and printable memo cannot contain NUL, so the encoding is
+    // unambiguous. Omit amount/policy: a quote code is reserved globally for
+    // this token/recipient, even under another policy or a different amount.
+    let mut bytes = b"bouncer:exact-ft:v11\0".to_vec();
+    for part in [token.as_str(), payee.as_str(), memo] {
+        bytes.extend_from_slice(part.as_bytes());
+        bytes.push(0);
+    }
+    env::sha256(&bytes)
+}
+
+#[cfg(feature = "exact-ft-v11")]
+fn exact_intent_active(s: &Bouncer, i: &ExactFtIntent) -> bool {
+    let payee_key = (i.policy_id.clone(), i.payee.clone());
+    let agent_key = (i.policy_id.clone(), i.agent_public_key.clone());
+    !i.consumed && !i.cancelled && env::block_timestamp() / 1_000_000 < i.expires_at_ms &&
+        s.exact_ft_policies.get(&i.policy_id) == Some(&true) &&
+        s.token_of.get(&i.policy_id) == Some(&i.token) &&
+        s.ft_policy_revisions.get(&i.policy_id) == Some(&i.policy_revision) &&
+        s.allow.get(&allow_key(&i.policy_id, i.payee.as_str())) == Some(&true) &&
+        s.allow_revisions.get(&payee_key) == Some(&i.payee_revision) &&
+        s.agents.get(&agent_key) == Some(&true) &&
+        s.exact_agent_revisions.get(&agent_key) == Some(&i.agent_revision)
+}
+
+#[cfg(feature = "exact-ft-v11")]
+fn advance_exact_agent_revision(s: &mut Bouncer, policy: &str, public_key: &PublicKey) {
+    let key = (policy.to_owned(), public_key.clone());
+    let revision = s.exact_agent_revisions.get(&key).copied().unwrap_or(0)
+        .checked_add(1).unwrap_or_else(|| abort_with("agent revision overflow"));
+    s.exact_agent_revisions.insert(key, revision);
 }
 
 fn allow_key(pid: &str, p: &str) -> String {
@@ -318,6 +427,16 @@ impl Bouncer {
             outlayer_project_routes: LookupMap::new(b"j"),
             outlayer_input_routes: LookupMap::new(b"i"),
             outlayer_native_projects: LookupMap::new(b"q"),
+            #[cfg(feature = "exact-ft-v11")]
+            exact_ft_policies: LookupMap::new(b"x1"),
+            #[cfg(feature = "exact-ft-v11")]
+            exact_ft_intents: LookupMap::new(b"x2"),
+            #[cfg(feature = "exact-ft-v11")]
+            exact_ft_memos: LookupMap::new(b"x3"),
+            #[cfg(feature = "exact-ft-v11")]
+            exact_ft_payees: LookupMap::new(b"x4"),
+            #[cfg(feature = "exact-ft-v11")]
+            exact_agent_revisions: LookupMap::new(b"x5"),
         }
     }
 
@@ -325,6 +444,9 @@ impl Bouncer {
     pub fn set_policy(&mut self, policy_id: String, token: AccountId, per_tx_cap: U128, daily_cap: Option<U128>) {
         require_owner(self, env::attached_deposit()).unwrap_or_else(|m| abort_with(&m));
         if per_tx_cap.0 == 0 { abort_with("per_tx_cap must be > 0"); }
+        #[cfg(feature = "exact-ft-v11")]
+        require(self.exact_ft_policies.get(&policy_id) != Some(&true) || token.as_str() != NATIVE_ASSET,
+            "locked exact FT policy cannot become native");
         let revision = self.ft_policy_revisions.get(&policy_id).copied().unwrap_or(0)
             .checked_add(1).unwrap_or_else(|| abort_with("policy revision overflow"));
         self.ft_policy_revisions.insert(policy_id.clone(), revision);
@@ -340,12 +462,16 @@ impl Bouncer {
     pub fn grant_agent_key(&mut self, policy_id: String, public_key: PublicKey) {
         require_owner(self, env::attached_deposit()).unwrap_or_else(|m| abort_with(&m));
         require(self.cap_of.contains_key(&policy_id), "policy does not exist");
+        #[cfg(feature = "exact-ft-v11")]
+        advance_exact_agent_revision(self, &policy_id, &public_key);
         self.agents.insert((policy_id, public_key), true);
     }
 
     #[payable]
     pub fn revoke_agent_key(&mut self, policy_id: String, public_key: PublicKey) {
         require_owner(self, env::attached_deposit()).unwrap_or_else(|m| abort_with(&m));
+        #[cfg(feature = "exact-ft-v11")]
+        advance_exact_agent_revision(self, &policy_id, &public_key);
         self.agents.remove(&(policy_id, public_key));
     }
 
@@ -424,10 +550,128 @@ impl Bouncer {
         })
     }
 
+    /// Irreversibly dedicate an FT policy to exact, one-shot intents. The
+    /// owner can still change its caps/payees with 1 yocto; such changes make
+    /// older intents stale. Use a new policy for any unrestricted payments.
+    #[cfg(feature = "exact-ft-v11")]
+    #[payable]
+    pub fn lock_ft_policy_to_intents(&mut self, policy_id: String) {
+        require_owner(self, env::attached_deposit()).unwrap_or_else(|m| abort_with(&m));
+        require(env::current_account_id().as_str().ends_with(".testnet") && self.owner.as_str().ends_with(".testnet"),
+            "testnet-named vault and owner required");
+        let token = self.token_of.get(&policy_id).unwrap_or_else(|| abort_with("policy does not exist"));
+        require(token.as_str() != NATIVE_ASSET, "exact intent policy must use an FT");
+        self.exact_ft_policies.insert(policy_id, true);
+    }
+
+    #[cfg(feature = "exact-ft-v11")]
+    pub fn is_exact_ft_policy_locked(&self, policy_id: String) -> bool {
+        self.exact_ft_policies.get(&policy_id) == Some(&true)
+    }
+
+    #[cfg(feature = "exact-ft-v11")]
+    pub fn is_exact_ft_payee_locked(&self, token: AccountId, payee: AccountId) -> bool {
+        self.exact_ft_payees.get(&(token, payee)) == Some(&true)
+    }
+
+    /// Pin all transfer terms and a public review commitment under the 1-yocto
+    /// owner guard. An intent ID and (token,payee,memo) can never be reused on
+    /// this vault, including after cancellation, expiration or failed transfer.
+    /// No token is transferred and no provider quote is authenticated here.
+    #[cfg(feature = "exact-ft-v11")]
+    #[payable]
+    pub fn set_exact_ft_intent(&mut self, intent_id: String, policy_id: String, expected_token: AccountId,
+        payee: AccountId, amount: U128, memo: String, review_hash: String, expires_at_ms: U64,
+        agent_public_key: PublicKey) {
+        require_owner(self, env::attached_deposit()).unwrap_or_else(|m| abort_with(&m));
+        require(self.exact_ft_policies.get(&policy_id) == Some(&true), "exact FT policy must be locked first");
+        require(!intent_id.is_empty() && intent_id.len() <= 64 && intent_id.bytes().all(|b|
+            b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-')), "invalid exact FT intent ID");
+        require(!self.exact_ft_intents.contains_key(&intent_id), "exact FT intent ID already reserved");
+        require(!memo.is_empty() && memo.len() <= MAX_EXACT_FT_MEMO_BYTES &&
+            memo.bytes().all(|b| (0x20..=0x7e).contains(&b)) &&
+            memo != "bouncer:withdraw" && memo != "bouncer:guarded-ft-call", "invalid exact FT memo");
+        require(review_hash.len() == 64 && review_hash.bytes().all(|b|
+            (b'0'..=b'9').contains(&b) || (b'a'..=b'f').contains(&b)), "invalid exact FT review hash");
+        let now = env::block_timestamp() / 1_000_000;
+        require(expires_at_ms.0 > now && expires_at_ms.0 <= now.saturating_add(MAX_EXACT_FT_EXPIRY_MS),
+            "invalid exact FT expiry");
+        let token = self.token_of.get(&policy_id).cloned().unwrap_or_else(|| abort_with("policy does not exist"));
+        require(token == expected_token && token.as_str() != NATIVE_ASSET, "exact FT policy token differs from review");
+        let cap = self.cap_of.get(&policy_id).copied().unwrap_or(0);
+        require(amount.0 > 0 && amount.0 <= cap, "exact FT amount exceeds policy cap or is zero");
+        require(self.allow.get(&allow_key(&policy_id, payee.as_str())) == Some(&true), "payee must already be allowed");
+        let agent_key = (policy_id.clone(), agent_public_key.clone());
+        require(self.agents.get(&agent_key) == Some(&true), "agent key must already be granted for policy");
+        let policy_revision = self.ft_policy_revisions.get(&policy_id).copied().unwrap_or_else(|| abort_with("missing policy revision"));
+        let payee_revision = self.allow_revisions.get(&(policy_id.clone(), payee.clone())).copied()
+            .unwrap_or_else(|| abort_with("missing payee revision"));
+        let agent_revision = self.exact_agent_revisions.get(&agent_key).copied().unwrap_or_else(|| abort_with("missing agent revision"));
+        let memo_key = exact_memo_key(&token, &payee, &memo);
+        require(!self.exact_ft_memos.contains_key(&memo_key), "token, payee and memo already reserved");
+        self.exact_ft_memos.insert(memo_key, true);
+        self.exact_ft_payees.insert((token.clone(), payee.clone()), true);
+        self.exact_ft_intents.insert(intent_id, ExactFtIntent { policy_id, token, payee, amount: amount.0, memo,
+            review_hash, expires_at_ms: expires_at_ms.0, agent_public_key, policy_revision, payee_revision,
+            agent_revision, consumed: false, cancelled: false });
+        env::log_str("BOUNCER exact FT intent pinned; no transfer");
+    }
+
+    #[cfg(feature = "exact-ft-v11")]
+    #[payable]
+    pub fn cancel_exact_ft_intent(&mut self, intent_id: String) {
+        require_owner(self, env::attached_deposit()).unwrap_or_else(|m| abort_with(&m));
+        let mut intent = self.exact_ft_intents.get(&intent_id).cloned().unwrap_or_else(|| abort_with("unknown exact FT intent"));
+        require(!intent.consumed && !intent.cancelled, "exact FT intent already consumed or cancelled");
+        intent.cancelled = true;
+        self.exact_ft_intents.insert(intent_id, intent);
+        env::log_str("BOUNCER exact FT intent cancelled; ID and memo remain reserved");
+    }
+
+    #[cfg(feature = "exact-ft-v11")]
+    pub fn get_exact_ft_intent(&self, intent_id: String) -> Option<ExactFtIntentView> {
+        let i = self.exact_ft_intents.get(&intent_id)?;
+        Some(ExactFtIntentView { intent_id, policy_id: i.policy_id.clone(), token: i.token.clone(), payee: i.payee.clone(),
+            amount: U128(i.amount), memo: i.memo.clone(), review_hash: i.review_hash.clone(), expires_at_ms: U64(i.expires_at_ms),
+            agent_public_key: i.agent_public_key.clone(), policy_revision: i.policy_revision, payee_revision: i.payee_revision,
+            agent_revision: i.agent_revision, consumed: i.consumed, cancelled: i.cancelled, active: exact_intent_active(self, i) })
+    }
+
+    /// The agent supplies only an immutable intent ID, not an amount, token,
+    /// payee, quote code or expiry. Consume before dispatch and never reset on
+    /// failure: recovery must inspect the original transaction, not rebroadcast.
+    #[cfg(feature = "exact-ft-v11")]
+    #[payable]
+    pub fn execute_exact_ft(&mut self, intent_id: String) -> Promise {
+        require(env::attached_deposit() == ZERO_NEAR, "BLOCKED: execute_exact_ft requires zero deposit");
+        require(env::predecessor_account_id() == self.owner && env::signer_account_id() == self.owner,
+            "BLOCKED: caller is not the owner account");
+        let mut intent = self.exact_ft_intents.get(&intent_id).cloned().unwrap_or_else(|| abort_with("BLOCKED: unknown exact FT intent"));
+        require(env::signer_account_pk() == intent.agent_public_key, "BLOCKED: wrong exact FT agent key");
+        require(exact_intent_active(self, &intent), "BLOCKED: exact FT intent is consumed, cancelled, expired or stale");
+        let (token, bal) = validate(self, &intent.policy_id, &intent.payee, intent.amount).unwrap_or_else(|m| abort_with(&m));
+        require(token == intent.token, "BLOCKED: exact FT token changed");
+        let bucket = env::block_timestamp() / NS_PER_HOUR;
+        let dk = daily_key(&intent.policy_id, bucket);
+        let spent = self.daily_spent.get(&dk).copied().unwrap_or(0);
+        let next = spent.checked_add(intent.amount).unwrap_or_else(|| abort_with("daily spend overflow"));
+        intent.consumed = true;
+        self.exact_ft_intents.insert(intent_id.clone(), intent.clone());
+        self.balances.insert(token.clone(), bal - intent.amount);
+        self.daily_spent.insert(dk, next);
+        env::log_str("BOUNCER exact FT intent consumed; transfer initiated");
+        ext_ft::ext(token.clone()).with_attached_deposit(ONE_YOCTO).with_static_gas(GAS_FOR_FT_TRANSFER)
+            .ft_transfer(intent.payee, U128(intent.amount), Some(intent.memo))
+            .then(ext_exact_self::ext(env::current_account_id()).with_static_gas(GAS_FOR_RESOLVE)
+                .after_exact_ft_transfer(intent_id, intent.policy_id, token, U128(intent.amount), bucket, intent.policy_revision))
+    }
+
     pub fn contract_version(&self) -> &'static str {
+        #[cfg(feature = "exact-ft-v11")]
+        { "bouncer-agent-v11-exact-ft-testnet" }
         #[cfg(feature = "youtick-playback-v10")]
         { "bouncer-agent-v10-youtick-testnet" }
-        #[cfg(not(feature = "youtick-playback-v10"))]
+        #[cfg(not(any(feature = "youtick-playback-v10", feature = "exact-ft-v11")))]
         { "bouncer-agent-v9" }
     }
 
@@ -524,7 +768,12 @@ impl Bouncer {
         let signing_key = env::signer_account_pk();
         require(self.agents.get(&(policy_id.clone(), signing_key)) == Some(&true),
             "BLOCKED: signing key is not authorized for this policy");
+        #[cfg(feature = "exact-ft-v11")]
+        require(self.exact_ft_policies.get(&policy_id) != Some(&true), "BLOCKED: policy requires exact FT intents");
         let (token, bal) = validate(self, &policy_id, &payee, amount.0).unwrap_or_else(|m| abort_with(&m));
+        #[cfg(feature = "exact-ft-v11")]
+        require(self.exact_ft_payees.get(&(token.clone(), payee.clone())) != Some(&true),
+            "BLOCKED: token and payee require exact FT intents");
         // Bind the signed payment to the token the agent reviewed, even if the
         // owner changes the policy between preflight and transaction execution.
         require(token == expected_token, "BLOCKED: policy token does not match expected token");
@@ -556,6 +805,8 @@ impl Bouncer {
             "BLOCKED: caller is not the owner account");
         require(self.agents.get(&(policy_id.clone(), env::signer_account_pk())) == Some(&true),
             "BLOCKED: signing key is not authorized for this policy");
+        #[cfg(feature = "exact-ft-v11")]
+        require(self.exact_ft_policies.get(&policy_id) != Some(&true), "BLOCKED: policy requires exact FT intents");
         require(expected_msg.len() <= MAX_FT_CALL_MESSAGE_BYTES, "FT receiver message is too large");
         let route = self.get_ft_call_route(policy_id.clone(), payee.clone())
             .unwrap_or_else(|| abort_with("BLOCKED: no owner-approved FT call route"));
@@ -565,6 +816,9 @@ impl Bouncer {
         let (token, bal) = validate(self, &policy_id, &payee, amount.0).unwrap_or_else(|m| abort_with(&m));
         require(token == expected_token && token.as_str() != NATIVE_ASSET,
             "BLOCKED: FT policy token changed since review");
+        #[cfg(feature = "exact-ft-v11")]
+        require(self.exact_ft_payees.get(&(token.clone(), payee.clone())) != Some(&true),
+            "BLOCKED: token and payee require exact FT intents");
         let bucket = env::block_timestamp() / NS_PER_HOUR;
         let dk = daily_key(&policy_id, bucket);
         let spent = self.daily_spent.get(&dk).copied().unwrap_or(0);
@@ -871,6 +1125,8 @@ impl Bouncer {
             .unwrap_or_else(|| abort_with("BLOCKED: no owner-approved OutLayer project"));
         require(route.active && route == expected_route, "BLOCKED: OutLayer project route changed since review");
         let project = route.project;
+        #[cfg(feature = "exact-ft-v11")]
+        require(self.exact_ft_policies.get(&project.usd_policy_id) != Some(&true), "BLOCKED: policy requires exact FT intents");
         let signing_key = env::signer_account_pk();
         require(self.agents.get(&(native_policy_id.clone(), signing_key.clone())) == Some(&true) &&
             self.agents.get(&(project.usd_policy_id.clone(), signing_key)) == Some(&true),
@@ -1010,6 +1266,30 @@ impl Bouncer {
         }
         env::log_str(&format!("BOUNCER ft_transfer_call settled; used={}; unused={}", used, unused));
         Some(U128(used))
+    }
+
+    /// A failed token receipt restores the vault balance, but never reopens
+    /// the intent or its memo. A changed policy keeps the old spend counted
+    /// conservatively rather than releasing a differently reviewed budget.
+    #[cfg(feature = "exact-ft-v11")]
+    #[private]
+    pub fn after_exact_ft_transfer(&mut self, intent_id: String, policy_id: String, token: AccountId,
+        amount: U128, bucket: u64, policy_revision: u64) {
+        if !matches!(env::promise_result(0), near_sdk::PromiseResult::Successful(_)) {
+            let bal = self.balances.get(&token).copied().unwrap_or(0);
+            let updated = bal.checked_add(amount.0).unwrap_or_else(|| abort_with("exact FT refund balance overflow"));
+            self.balances.insert(token, updated);
+            if self.ft_policy_revisions.get(&policy_id) == Some(&policy_revision) {
+                let dk = daily_key(&policy_id, bucket);
+                if let Some(spent) = self.daily_spent.get(&dk).copied() {
+                    self.daily_spent.insert(dk, spent.saturating_sub(amount.0));
+                }
+            }
+            env::log_str("BOUNCER exact FT transfer failed; vault refunded, intent stays consumed");
+        } else {
+            env::log_str("BOUNCER exact FT transfer succeeded; intent stays consumed");
+        }
+        let _ = intent_id;
     }
 
     #[private]
@@ -2124,3 +2404,7 @@ mod tests {
         drop(contract.withdraw_native_surplus(U128(u128::MAX)));
     }
 }
+
+#[cfg(all(test, feature = "exact-ft-v11"))]
+#[path = "exact_ft_tests.rs"]
+mod exact_ft_tests;
