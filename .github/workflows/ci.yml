@@ -350,6 +350,47 @@ jobs:
           if-no-files-found: ignore
           retention-days: 90
 
+  reconcile-seller-v3-oracle:
+    name: Reconcile the seller-v3 run's original oracle (read only)
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[seller-v3-reconcile]')
+    needs: js-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: seller-v3-restricted-recovery-evidence
+          path: ${{ runner.temp }}/seller-v3-original
+          github-token: ${{ github.token }}
+          run-id: 41268548592
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      # Read the preserved original only. No keys, writes, new orders, or sends.
+      - name: Verify the original source hash and no resource broadcasts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t journals < <(find "$RUNNER_TEMP/seller-v3-original" -type f -name journal.json)
+          mapfile -t goals < <(find "$RUNNER_TEMP/seller-v3-original" -type f -name oracle-goal.json)
+          test "${#journals[@]}" -eq 1 && test "${#goals[@]}" -eq 1
+          node --input-type=module - "${journals[0]}" "${goals[0]}" <<'NODE'
+          import fs from 'node:fs';
+          import { selectJournalOracle } from './bouncer/scripts/reconcile-oracle-journal.mjs';
+          const journal = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          const goal = JSON.parse(fs.readFileSync(process.argv[3], 'utf8'));
+          const { entry } = selectJournalOracle(goal, journal);
+          if (entry.tx_hash !== 'CCbbcM73XZc1r8WcmyPMYHaudaR7qfjKKYhihZpHcuZ8') throw new Error('unexpected source hash');
+          if (journal.entries.some(e => e?.request?.resource || e?.resource_authorization)) throw new Error('unexpected resource payment or authorization in journal');
+          console.log('Original journal confirms zero resource broadcasts; no signed claims or entries were printed.');
+          NODE
+          node bouncer/scripts/reconcile-oracle-journal.mjs "${journals[0]}" "${goals[0]}"
+
   piprail-onchain-proof-live:
     name: One-shot onchain-proof SDK interoperability (testnet)
     # A fresh self-hosted SDK gate and one Circle testnet USDC payment only.

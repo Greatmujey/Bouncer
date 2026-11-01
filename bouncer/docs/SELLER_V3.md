@@ -9,8 +9,24 @@ zero NEAR, and Bouncer's owner-only policy changes still require one yoctoNEAR.
 Do not use real funds. Both parties must explicitly support this protocol.
 
 The implementation has synthetic tests with the actual signer, seller, journal
-and key-free workflow CLI. A testnet run, if completed, is documented separately
-below; offline tests alone are not live-chain evidence.
+and key-free workflow CLI. Offline tests alone are not live-chain evidence.
+
+## First testnet attempt: stopped before v3 resource payments
+
+The first [one-shot testnet attempt](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41268548592/job/124736728081)
+created a fresh deployment and started the native OutLayer oracle, but its RPC
+submission timed out. The workflow stopped **before any seller-v3 compute,
+storage or API payment**. The original restricted recovery artifact
+[13068257781](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41268548592/artifacts/13068257781)
+contains the original journal and expires 30 January 2027; preserve it. Do not
+rerun the paid job or resend the recorded hash. A public explorer later showed
+that [source transaction `CCbbcM73XZc1r8WcmyPMYHaudaR7qfjKKYhihZpHcuZ8`](https://testnet.nearblocks.io/txns/CCbbcM73XZc1r8WcmyPMYHaudaR7qfjKKYhihZpHcuZ8/execution)
+completed and returned a single-source price of `4.4301`, with a reported
+charge of `1121700000000000000000` yoctoNEAR and owner refund of
+`98878300000000000000000` yoctoNEAR. Explorer inspection is not yet the
+journal's independent FINAL-receipt verification, and the stale observation is
+not valid for new purchases. No live-v3 delivery or independent FT-seller
+adoption is established.
 
 ## What is protected—and what is not
 
