@@ -369,7 +369,11 @@ export class FileJournal {
     this.file = path.resolve(file);
     this.lockFile = `${this.file}.lock`;
     if (!requireExisting) fs.mkdirSync(path.dirname(this.file), { recursive: true, mode: 0o700 });
-    this.lockFd = fs.openSync(this.lockFile, 'wx', 0o600);
+    try { this.lockFd = fs.openSync(this.lockFile, 'wx', 0o600); }
+    catch (error) {
+      if (requireExisting && error.code === 'ENOENT') throw new Error('original journal not found; refusing to create an empty journal', { cause: error });
+      throw error;
+    }
     this.#key = encryptionKey ? Buffer.from(encryptionKey) : null;
     this.#keyFile = keyFile === undefined ? null : path.resolve(keyFile);
     this.#contractId = contractId;
@@ -522,12 +526,12 @@ export function validateConfiguredFileJournalKey() {
 }
 
 /** All file-journal CLIs use the same explicit opt-in, including recovery. */
-export function openConfiguredFileJournal(file, contractId, ownerId) {
+export function openConfiguredFileJournal(file, contractId, ownerId, { requireExisting = false } = {}) {
   const configured = process.env.BOUNCER_FILE_JOURNAL_KEY_FILE;
   let key;
   try {
     if (configured !== undefined) key = readFileJournalKeyFile(configured);
-    return new FileJournal(file, contractId, ownerId, { encryptionKey: key, keyFile: configured });
+    return new FileJournal(file, contractId, ownerId, { encryptionKey: key, keyFile: configured, requireExisting });
   } finally { key?.fill(0); }
 }
 

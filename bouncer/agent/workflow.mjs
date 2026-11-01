@@ -390,11 +390,12 @@ async function main() {
   }
   const workflow = validateWorkflow(JSON.parse(fs.readFileSync(home(options.workflow), 'utf8'))), goal = workflow.source.goal;
   const state = path.resolve(home(options.journal));
-  if (options.recoverOnly && !fs.existsSync(state)) throw new Error('original journal not found; recovery cannot create one');
   const provider = new PaymentRpcProvider(options.rpc || process.env.NEAR_TESTNET_RPC || 'https://test.rpc.fastnear.com');
   let journal, local, source = {}, ft = {};
   try {
-    if (options.execute || options.recoverOnly || fs.existsSync(state)) journal = openConfiguredFileJournal(state, goal.contract_id, goal.owner_account_id);
+    if (options.execute || options.recoverOnly || fs.existsSync(state)) {
+      journal = openConfiguredFileJournal(state, goal.contract_id, goal.owner_account_id, { requireExisting: !options.execute });
+    }
     if (!options.recoverOnly) {
       if (!options['source-key'] && !journal?.get(goal.id)) throw new Error('a source key is required for an unpaid independent source');
       if (options['source-key']) source = accountFromFile(options['source-key'], goal.owner_account_id, provider);

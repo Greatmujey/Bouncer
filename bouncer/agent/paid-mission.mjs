@@ -171,7 +171,9 @@ async function main() {
       overrides.set(original, local.url);
     }
     const client = routedResourceProvider({ providerUrl: resources.provider_url, goals: resources.goals, overrides });
-    if (options.execute || fs.existsSync(journalPath)) journal = openConfiguredFileJournal(journalPath, paid.contract_id, paid.owner_account_id);
+    if (options.execute || fs.existsSync(journalPath)) {
+      journal = openConfiguredFileJournal(journalPath, paid.contract_id, paid.owner_account_id, { requireExisting: !options.execute });
+    }
     const result = await runPaidProjectMission({ funding: { goal: fund, ...funding }, project: { goal: paid, ...project }, provider, journal, execute: options.execute,
       resources: { contractId: resources.contract_id, ownerAccountId: resources.owner_account_id, providerUrl: resources.provider_url,
         goals: resources.goals, getQuote: client.getQuote, fulfill: client.fulfill, readStorage: client.readStorage, durablePayment: options.durable === true, ...ft } });

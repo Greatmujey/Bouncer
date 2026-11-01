@@ -50,8 +50,7 @@ async function main() {
         journalId: opts['--shared-journal'] }));
     } else {
       const state = path.resolve(home(opts['--state']));
-      if (!fs.existsSync(state)) throw new Error('original journal not found; recovery cannot create one');
-      journal = openConfiguredFileJournal(state, config.contract_id, config.owner_account_id);
+      journal = openConfiguredFileJournal(state, config.contract_id, config.owner_account_id, { requireExisting: true });
     }
     const delivery = await recoverResourceDelivery({ goal: matches[0], contractId: config.contract_id, ownerAccountId: config.owner_account_id,
       providerUrl: config.provider_url, provider, journal, fulfill: client.fulfill, readStorage: client.readStorage });

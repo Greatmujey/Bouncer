@@ -106,6 +106,15 @@ recovery can contact the seller and requires its idempotent redemption policy;
 it cannot prove an arbitrary seller's external side effect was not performed.
 A failed or unknown RPC lookup remains unresolved; never repay automatically.
 
+Recovery and in-place conversion require the original file **after acquiring
+its local lock**; they refuse to create a missing parent directory or an empty
+replacement. The testnet demo recovery reopens use the same rule. This narrows
+a disappearance race in recovery, but the lock only coordinates cooperating
+local processes. A malicious or misconfigured process can still remove, replace
+or roll back a file after it is opened, and ordinary new execution cannot tell
+a lost original from a genuinely new path. Keep workers fenced and preserve the
+original journal; this is not a cross-host lock or freshness proof.
+
 The standalone historical `scripts/reconcile-oracle-journal.mjs` and
 `scripts/reconcile-project-journal.mjs` currently read **plaintext** snapshots
 only and do not decrypt these envelopes. Use the corresponding normal recovery

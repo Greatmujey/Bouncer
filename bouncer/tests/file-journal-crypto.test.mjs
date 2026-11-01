@@ -226,6 +226,41 @@ test('configured journal detects a replaced or missing key before the next write
   }
 });
 
+test('requireExisting refuses missing parents and a journal lost after its lock is acquired', () => {
+  const previous = process.env.BOUNCER_FILE_JOURNAL_KEY_FILE;
+  try {
+    for (const encrypted of [false, true]) {
+      const f = fixture(), lstat = fs.lstatSync;
+      try {
+        if (encrypted) process.env.BOUNCER_FILE_JOURNAL_KEY_FILE = f.keyFile;
+        else delete process.env.BOUNCER_FILE_JOURNAL_KEY_FILE;
+        const missingParent = path.join(f.dir, 'absent', 'journal.json');
+        assert.throws(() => openConfiguredFileJournal(missingParent, contract, owner, { requireExisting: true }), /original journal not found/);
+        assert.equal(fs.existsSync(path.dirname(missingParent)), false);
+        assert.throws(() => openConfiguredFileJournal(f.file, contract, owner, { requireExisting: true }), /original journal not found/);
+        assert.equal(fs.existsSync(f.file), false); assert.equal(fs.existsSync(`${f.file}.lock`), false);
+        const journal = openConfiguredFileJournal(f.file, contract, owner);
+        journal.put('pending', { status: 'pending', fingerprint: 'fp', tx_hash: 'original-hash' }); journal.close();
+        const original = fs.readFileSync(f.file);
+        let sawLock = false;
+        fs.lstatSync = function (name, ...args) {
+          if (name === f.file) {
+            sawLock = fs.existsSync(`${f.file}.lock`);
+            fs.renameSync(f.file, `${f.file}.disappeared`); // synthetic, retain the original bytes
+          }
+          return lstat.call(this, name, ...args);
+        };
+        assert.throws(() => openConfiguredFileJournal(f.file, contract, owner, { requireExisting: true }), /original journal not found/);
+        fs.lstatSync = lstat;
+        assert.equal(sawLock, true); assert.equal(fs.existsSync(f.file), false); assert.equal(fs.existsSync(`${f.file}.lock`), false);
+        assert.deepEqual(fs.readFileSync(`${f.file}.disappeared`), original);
+      } finally { fs.lstatSync = lstat; f.cleanup(); }
+    }
+  } finally {
+    if (previous === undefined) delete process.env.BOUNCER_FILE_JOURNAL_KEY_FILE; else process.env.BOUNCER_FILE_JOURNAL_KEY_FILE = previous;
+  }
+});
+
 test('explicit CLI conversion preserves every entry, never creates a replacement and is idempotent', () => {
   const f = fixture();
   try {
@@ -235,6 +270,9 @@ test('explicit CLI conversion preserves every entry, never creates a replacement
     const missing = path.join(f.dir, 'missing.json');
     result = runCli(f, ['--state', missing, '--contract', contract, '--owner', owner]);
     assert.equal(result.status, 1); assert.match(result.stderr, /original journal not found/); assert.equal(fs.existsSync(missing), false);
+    const missingParent = path.join(f.dir, 'missing-parent', 'journal.json');
+    result = runCli(f, ['--state', missingParent, '--contract', contract, '--owner', owner]);
+    assert.equal(result.status, 1); assert.match(result.stderr, /original journal not found/); assert.equal(fs.existsSync(path.dirname(missingParent)), false);
     const held = new FileJournal(f.file, contract, owner);
     try { result = runCli(f); assert.equal(result.status, 1); assert.match(result.stderr, /EEXIST/); }
     finally { held.close(); }

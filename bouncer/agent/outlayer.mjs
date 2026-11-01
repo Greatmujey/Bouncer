@@ -311,8 +311,8 @@ async function main() {
   const goal = validateOutlayerGoal(JSON.parse(fs.readFileSync(goalPath, 'utf8')));
   const provider = new PaymentRpcProvider(options.rpc || process.env.NEAR_TESTNET_RPC || 'https://test.rpc.fastnear.com');
   const state = path.resolve(expandHome(options.state || `${goalPath}.bouncer-journal.json`));
-  if (options.recover && !fs.existsSync(state)) throw new Error('original journal not found; recovery cannot create one');
-  const journal = options.execute || options.recover ? openConfiguredFileJournal(state, goal.contract_id, goal.owner_account_id) : null;
+  const journal = options.execute || options.recover
+    ? openConfiguredFileJournal(state, goal.contract_id, goal.owner_account_id, { requireExisting: !!options.recover }) : null;
   try {
     let outcome;
     if (options.recover) outcome = await recoverOutlayerGoal({ goal, provider, journal });

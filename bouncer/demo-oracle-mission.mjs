@@ -246,7 +246,7 @@ async function main() {
               !cli.stdout.includes(hash)) throw new Error('key-free workflow CLI did not recover the recorded hash');
           console.log(cli.stdout.trim()); recovered = true;
         } finally {
-          journal = openConfiguredFileJournal(state, contractId, ownerId);
+          journal = openConfiguredFileJournal(state, contractId, ownerId, { requireExisting: true });
           if (recovered) await startService();
         }
         return { status: 'RECOVERED', next, new_payments: 0 };
@@ -317,7 +317,7 @@ async function main() {
     const cli = await util.promisify(execFile)(process.execPath, [path.join(ROOT, 'bouncer/agent/oracle-outlayer.mjs'),
       '--goal', goalPath, '--state', state, '--rpc', RPC, '--recover'], { timeout: 90_000, maxBuffer: 64 * 1024 });
     if (!cli.stdout.includes('REUSED') || !cli.stdout.includes(tx)) throw new Error('key-free oracle recovery did not reuse the transaction');
-    journal = openConfiguredFileJournal(state, contractId, ownerId);
+    journal = openConfiguredFileJournal(state, contractId, ownerId, { requireExisting: true });
     const recovered = await recoverOracleGoal({ goal, provider, journal });
     assertOracleFreshForUse(recovered.delivery);
     if (recovered.delivery.tx_hash !== tx || broadcasts !== 1 || journal.get(goal.id)?.status !== 'completed') throw new Error('oracle recovery mismatch');

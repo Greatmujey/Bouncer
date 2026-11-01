@@ -165,7 +165,9 @@ async function main() {
       console.log(`[mission] Local development provider: ${local.url}`);
     }
     const client = routedResourceProvider({ providerUrl: resources.provider_url, goals: resources.goals, overrides });
-    if (options.execute || fs.existsSync(journalPath)) journal = openConfiguredFileJournal(journalPath, goal.contract_id, goal.owner_account_id);
+    if (options.execute || fs.existsSync(journalPath)) {
+      journal = openConfiguredFileJournal(journalPath, goal.contract_id, goal.owner_account_id, { requireExisting: !options.execute });
+    }
     const result = await runMixedMission({
       outlayer: { kind, goal, ...outlayer }, provider, journal, execute: options.execute,
       resources: { contractId: resources.contract_id, ownerAccountId: resources.owner_account_id, providerUrl: resources.provider_url,

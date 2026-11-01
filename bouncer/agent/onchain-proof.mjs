@@ -361,8 +361,8 @@ async function main() {
   const goalPath = path.resolve(home(opts.goal)), goal = validateOnchainProofGoal(JSON.parse(fs.readFileSync(goalPath, 'utf8')));
   const provider = new PaymentRpcProvider(opts.rpc || process.env.NEAR_TESTNET_RPC || 'https://test.rpc.fastnear.com');
   const statePath = path.resolve(home(opts.state || `${goalPath}.bouncer-proof-journal.json`));
-  if (opts.recover && !fs.existsSync(statePath)) throw new Error('original journal not found; recovery cannot create one');
-  const journal = opts.execute || opts.recover ? openConfiguredFileJournal(statePath, goal.contract_id, goal.owner_account_id) : null;
+  const journal = opts.execute || opts.recover
+    ? openConfiguredFileJournal(statePath, goal.contract_id, goal.owner_account_id, { requireExisting: !!opts.recover }) : null;
   try {
     let result;
     if (opts.recover) result = opts.redeem ? await redeemOnchainProofOnce({ goal, provider, journal }) : await recoverOnchainProofGoal({ goal, provider, journal });

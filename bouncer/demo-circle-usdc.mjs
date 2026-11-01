@@ -185,7 +185,7 @@ async function main() {
     if (broadcasts !== 1 || pending?.status !== 'pending' || pending.payment_version !== 'direct-signed-v1' || !firstHash ||
         journal.get(goals[1].id) || journal.get(goals[2].id) ||
         BigInt(await view(TOKEN, 'ft_balance_of', { account_id: vendorId })) !== PRICE) throw new Error('lost-response journal or payment mismatch');
-    journal.close(); journal = openConfiguredFileJournal(state, contractId, ownerId);
+    journal.close(); journal = openConfiguredFileJournal(state, contractId, ownerId, { requireExisting: true });
     const recovered = await recoverDirectPayment({ plan: reviewedPlan, requestId: goals[0].id, provider, journal });
     if (recovered.settlement.tx_hash !== firstHash || journal.get(goals[0].id)?.status !== 'completed') throw new Error('key-free payment recovery mismatch');
     let injected = false;
@@ -203,7 +203,7 @@ async function main() {
     const first = journal.get(goals[0].id);
     if (!injected || first?.tx_hash !== firstHash || first.delivery?.status !== 'unverified' || journal.get(goals[1].id) || journal.get(goals[2].id) ||
         BigInt(await view(TOKEN, 'ft_balance_of', { account_id: vendorId })) !== PRICE) throw new Error('verify-before-next-payment gate failed');
-    journal.close(); journal = openConfiguredFileJournal(state, contractId, ownerId);
+    journal.close(); journal = openConfiguredFileJournal(state, contractId, ownerId, { requireExisting: true });
     const result = await runResourceAgent({ ...common, journal, fulfill: client.fulfill });
     if (result.payments.skipped !== 1 || result.payments.paid !== 2 || result.deliveries.length !== 3 ||
         journal.get(goals[0].id)?.tx_hash !== firstHash || goals.some(goal => journal.get(goal.id)?.delivery?.status !== 'verified') ||

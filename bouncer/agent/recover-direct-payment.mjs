@@ -113,8 +113,7 @@ async function main() {
       ({ journal, pool } = await openConfiguredBuyerJournal({ contractId, ownerAccountId: ownerId, journalId: options['shared-journal'] }));
     } else {
       const state = path.resolve(home(options.state));
-      if (!fs.existsSync(state)) throw new Error('original journal not found; recovery cannot create one');
-      journal = openConfiguredFileJournal(state, contractId, ownerId);
+      journal = openConfiguredFileJournal(state, contractId, ownerId, { requireExisting: true });
     }
     const result = plan ? await recoverDirectPayment({ plan, requestId: options.id, provider, journal })
       : await recoverDirectResourcePayment({ config, requestId: options.id, provider, journal });

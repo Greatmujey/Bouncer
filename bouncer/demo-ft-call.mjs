@@ -294,7 +294,7 @@ async function main() {
     const cli = await util.promisify(execFile)(process.execPath, [path.join(ROOT, 'bouncer/agent/ft-call.mjs'),
       '--goal', goalPath, '--state', state, '--rpc', RPC, '--recover'], { timeout: 90_000, maxBuffer: 64 * 1024 });
     if (!cli.stdout.includes('REUSED') || !cli.stdout.includes(tx)) throw new Error('separate key-free recovery did not reuse the transaction');
-    journal = openConfiguredFileJournal(state, contractId, ownerId);
+    journal = openConfiguredFileJournal(state, contractId, ownerId, { requireExisting: true });
     const recovered = await recoverFtCallGoal({ goal, provider, journal });
     if (recovered.settlement.used !== USD_AMOUNT.toString() || recovered.settlement.unused !== '0' || sends !== 1) throw new Error('unexpected FT settlement');
     const afterProvider = BigInt(await view(OUTLAYER, 'get_user_stablecoin_balance', { account_id: contractId }));
@@ -356,7 +356,7 @@ async function main() {
     const projectCli = await util.promisify(execFile)(process.execPath, [path.join(ROOT, 'bouncer/agent/outlayer-project.mjs'),
       '--goal', projectPath, '--state', state, '--rpc', RPC, '--recover'], { timeout: 90_000, maxBuffer: 64 * 1024 });
     if (!projectCli.stdout.includes('REUSED') || !projectCli.stdout.includes(projectTx)) throw new Error('paid project key-free recovery did not reuse the transaction');
-    journal = openConfiguredFileJournal(state, contractId, ownerId);
+    journal = openConfiguredFileJournal(state, contractId, ownerId, { requireExisting: true });
     const projectResult = await recoverProjectGoal({ goal: projectGoal, provider, journal });
     if (projectResult.delivery.prepaid_charged !== USD_AMOUNT.toString() || projectSends !== 1 ||
         BigInt(await view(contractId, 'outlayer_prepaid_balance', { token: TOKEN })) !== 0n ||

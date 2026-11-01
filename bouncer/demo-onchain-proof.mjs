@@ -169,7 +169,7 @@ async function main() {
     const state = path.join(dir, 'journal.json');
     journal = openConfiguredFileJournal(state, contractId, ownerId);
     const proof = await runOnchainProofLiveProof({ goal, provider, account: agent, publicKey: agentKey.getPublicKey(),
-      getJournal: () => journal, reopenJournal: () => { journal.close(); journal = openConfiguredFileJournal(state, contractId, ownerId); }, log: console.log });
+      getJournal: () => journal, reopenJournal: () => { journal.close(); journal = openConfiguredFileJournal(state, contractId, ownerId, { requireExisting: true }); }, log: console.log });
     assert(sellerCalls === 1 && JSON.stringify(JSON.parse(Buffer.from(proof.response.body_base64, 'base64').toString())) === JSON.stringify(payload),
       'SDK-backed seller response mismatch');
     assert(BigInt(await view(TOKEN, 'ft_balance_of', { account_id: vendorId })) === PRICE &&

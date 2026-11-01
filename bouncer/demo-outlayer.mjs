@@ -164,7 +164,7 @@ async function main() {
     const cli = await util.promisify(execFile)(process.execPath, [path.join(ROOT, 'bouncer/agent/outlayer.mjs'),
       '--goal', goalPath, '--state', journalPath, '--rpc', RPC, '--recover'], { timeout: 90_000, maxBuffer: 64 * 1024 });
     if (!cli.stdout.includes('REUSED') || !cli.stdout.includes(paidHash)) throw new Error('key-free recovery CLI did not reuse the recorded transaction');
-    journal = openConfiguredFileJournal(journalPath, contractId, ownerId);
+    journal = openConfiguredFileJournal(journalPath, contractId, ownerId, { requireExisting: true });
     if (journal.get(goal.id)?.status !== 'completed' || journal.get(goal.id)?.tx_hash !== paidHash) throw new Error('key-free CLI did not persist verified recovery');
     console.log('    ✅ A separate key-free recovery CLI verified and persisted the same transaction.');
     const recovered = await recoverOutlayerGoal({ goal, provider, journal });
