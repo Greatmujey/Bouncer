@@ -81,6 +81,14 @@ see [FILE_JOURNALS.md](FILE_JOURNALS.md). Do not create a replacement journal
 or restore an old snapshot after a crash. Journaling is local/cooperative; it
 is not distributed fencing or protection against rollback.
 
+After an input was already recorded, `--sweep-only --state ORIGINAL_JOURNAL
+--sweep-key SWEEP_KEY.json` can preview the separately authorized output
+transfer without an input key. With explicit `--execute`, it first verifies the
+original FINAL input/output receipts and router state, then journals the sweep
+hash before its only broadcast. It never signs or sends an input swap; if a
+sweep hash already exists, it recovers that hash instead of resending. Preview
+and key-free `--recover` do not authorize a new sweep.
+
 The input and output sweep have separate hashes, each written before its one
 broadcast. The client checks the FINAL receipt graph from the exact Bouncer
 input through the router and Ref to a successful Circle transfer to that
@@ -112,8 +120,17 @@ helper-funded router and sealed both deployment keys, but its router became
 visible optimistically before the FINAL account view caught up; it stopped
 before initializing or funding the vault, input or sweep. Its encrypted
 credentials were retained. The harness now waits through bounded **read-only**
-FINAL account/key checks before proceeding. No payment is retried. These
-corrections are not yet a live swap proof.
+FINAL account/key checks before proceeding.
+
+A third fresh testnet attempt sent one input transaction,
+[`DzWVHLp51KuoUoy8oaYNQTgLNAMgSRcegYT4mjuXCXrz`](https://testnet.nearblocks.io/txns/DzWVHLp51KuoUoy8oaYNQTgLNAMgSRcegYT4mjuXCXrz).
+A [read-only inspection](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41299603195/job/124827621907)
+confirmed full input settlement and saw `6926` micro testnet USDC in the router,
+with zero in the Bouncer output vault. The verifier stopped on the callback's
+argument encoding; the original input was not resent and no sweep was sent.
+The router balance alone is not proof of the linked Ref output, so no vault
+credit or completed trade is claimed. Preserve its original journal and
+reconcile that same hash before separately considering a sweep.
 
 The harness creates fresh, disposable testnet accounts, obtains a fresh bounded
 quote, deploys the exact router and removes its deploy key, funds only the capped

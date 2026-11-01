@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import nearApi from 'near-api-js';
-import { runRefSwap, recoverRefSwap, checkRefRouter } from '../agent/ref-swap.mjs';
+import { runRefSwap, runRefSweepOnly, recoverRefSwap, checkRefRouter } from '../agent/ref-swap.mjs';
 import { REF_SWAP_INPUT, REF_SWAP_OUTPUT, REF_SWAP_EXCHANGE, REF_SWAP_INPUT_MESSAGE, REF_SWEEP_GAS } from '../agent/ref-swap-evidence.mjs';
 import { goal, ftGoal, signing, key, inputHash, swapResult, sweepResult, id } from './ref-swap-fixture.mjs';
 
@@ -102,6 +102,21 @@ test('dry-run CLI opens an existing journal and fails closed before network acce
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('sweep-only CLI refuses a missing original journal and cannot create replacement history', async () => {
+  const fs = await import('node:fs'), os = await import('node:os'), path = await import('node:path');
+  const { spawnSync } = await import('node:child_process');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ref-sweep-only-cli-'));
+  try {
+    const goalPath = path.join(dir, 'goal.json'), keyPath = path.join(dir, 'key.json'), journalPath = path.join(dir, 'missing.json');
+    fs.writeFileSync(goalPath, JSON.stringify(goal));
+    fs.writeFileSync(keyPath, JSON.stringify({ account_id: goal.owner_account_id, private_key: nearApi.KeyPair.fromRandom('ed25519').toString() }), { mode: 0o600 });
+    const child = spawnSync(process.execPath, ['agent/ref-swap.mjs', '--goal', goalPath, '--sweep-only', '--sweep-key', keyPath,
+      '--state', journalPath, '--rpc', 'http://127.0.0.1:1', '--execute'], { cwd: process.cwd(), encoding: 'utf8', timeout: 5000 });
+    assert.notEqual(child.status, 0); assert.match(child.stderr, /journal.*(missing|not found|does not exist)/i);
+    assert.equal(fs.existsSync(journalPath), false);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('dry run verifies immutable router, storage and both key scopes without writes or broadcasts', async () => {
   const f = fixture(), result = await runRefSwap({ ...f.opts, execute: false });
   assert.equal(result.status, 'READY'); assert.equal(f.entries.size, 0); assert.deepEqual(f.sends, []);
@@ -129,6 +144,34 @@ test('dry-run verifies pending input and sweep without changing their durable hi
   assert.deepEqual([...f.entries], before); assert.deepEqual(f.sends, [inputHash, f.sweep.hash]);
   assert.equal((await recoverRefSwap({ goal, provider: f.provider, journal: f.journal, log: () => {} })).status, 'COMPLETED');
   assert.equal(f.journal.get(`${goal.id}-route`).status, 'completed');
+});
+
+test('sweep-only recovery needs the original verified input and never signs another swap', async () => {
+  let f = fixture();
+  const sweepOnly = () => ({ goal, provider: f.provider, sweepAccount: f.sweep.account, sweepPublicKey: f.sweep.publicKey, journal: f.journal, log: () => {} });
+  await assert.rejects(runRefSweepOnly({ ...sweepOnly(), execute: true }), /route is missing/); assert.deepEqual(f.sends, []);
+  f.failSend('input'); await assert.rejects(runRefSwap(f.opts), /FT call unresolved/); f.failSend('');
+  const before = structuredClone([...f.entries]);
+  assert.equal((await runRefSweepOnly(sweepOnly())).status, 'OUTPUT_RECEIVED');
+  assert.deepEqual([...f.entries], before); assert.deepEqual(f.sends, [inputHash]);
+  const done = await runRefSweepOnly({ ...sweepOnly(), execute: true });
+  assert.equal(done.status, 'COMPLETED'); assert.equal(done.vault_credit.credited, '70');
+  assert.deepEqual(f.sends, [inputHash, f.sweep.hash]);
+  assert.equal((await runRefSweepOnly({ ...sweepOnly(), execute: true })).status, 'COMPLETED');
+  assert.deepEqual(f.sends, [inputHash, f.sweep.hash]);
+  f = fixture(); f.failSend('input'); await assert.rejects(runRefSwap(f.opts)); f.failSend('');
+  f.setSweepPermission('FullAccess');
+  await assert.rejects(runRefSweepOnly({ ...sweepOnly(), execute: true }), /scoped ONLY/);
+  assert.deepEqual(f.sends, [inputHash]);
+});
+
+test('sweep-only never resends an existing ambiguous sweep', async () => {
+  const f = fixture(); f.failSend('sweep'); await assert.rejects(runRefSwap(f.opts), /sweep unresolved/);
+  const opts = { goal, provider: f.provider, sweepAccount: f.sweep.account, sweepPublicKey: f.sweep.publicKey, journal: f.journal, execute: true, log: () => {} };
+  f.failSend(''); f.failLookup('sweep');
+  await assert.rejects(runRefSweepOnly(opts), /temporarily missing/); assert.deepEqual(f.sends, [inputHash, f.sweep.hash]);
+  f.failLookup(''); assert.equal((await runRefSweepOnly(opts)).status, 'COMPLETED');
+  assert.deepEqual(f.sends, [inputHash, f.sweep.hash]);
 });
 
 test('lost input response recovers the same hash before a single independent sweep', async () => {

@@ -66,10 +66,14 @@ async function main() {
   const report = { original_hash: EXPECTED_HASH, owner: EXPECTED_OWNER, vault: EXPECTED_VAULT, router: EXPECTED_ROUTER,
     journal_input_status: input.status, sweep_recorded: false, settlement, route, input_vault: inputVault,
     output_vault: outputVault, router_output_balance: routerOutput, ref_internal_deposits: refDeposits,
-    verified_output: output, receipt_calls: relevant, scope: 'read_only_original_transaction_no_new_sweep_or_payment' };
-  const text = JSON.stringify(report);
-  if (text.length > 30_000) throw new Error('inspection report too large');
-  console.log(`::notice title=Original guarded Ref input inspection::${text}`);
+    verified_output: output, scope: 'read_only_original_transaction_no_new_sweep_or_payment' };
+  console.log(`::notice title=Original guarded Ref input inspection::${JSON.stringify(report)}`);
+  for (const [index, item] of relevant.entries()) {
+    const brief = { ...item, logs: item.logs?.map(line => String(line).slice(0, 700)) };
+    const text = JSON.stringify(brief);
+    if (text.length > 3800) throw new Error(`inspection receipt ${index} too large`);
+    console.log(`::notice title=Original Ref receipt ${index} ${item.method}::${text}`);
+  }
 }
 main().catch(error => {
   const text = String(error.stack || error).slice(0, 3000).replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A');

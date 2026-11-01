@@ -163,6 +163,10 @@ export async function runRefSwap({ goal: rawGoal, provider, account, publicKey, 
   if (inputResult.status === 'BLOCKED' || inputResult.status === 'READY') return inputResult;
   const proof = await readVerifiedSwap(goal, provider, journal, log, execute);
   if (!proof) throw new Error('original input is missing from journal; stop and reconcile');
+  return finishVerifiedSweep({ goal, provider, sweepAccount, sweepPublicKey, journal, proof, routeEntry, execute, log });
+}
+
+async function finishVerifiedSweep({ goal, provider, sweepAccount, sweepPublicKey, journal, proof, routeEntry, execute, log }) {
   const prior = await readVerifiedSweep(goal, provider, journal, proof, log, execute);
   if (prior) return { status: 'COMPLETED', swap: proof, vault_credit: prior };
   if (routeEntry?.status === 'completed') throw new Error('completed route is missing its original sweep; stop and reconcile');
@@ -185,11 +189,28 @@ export async function runRefSwap({ goal: rawGoal, provider, account, publicKey, 
   }
 }
 
+/**
+ * Resume only the separately authorized output sweep. The original route and
+ * input hash must already exist and verify from FINAL receipts. This function
+ * never constructs, signs or broadcasts an input transaction. Existing sweep
+ * hashes are recovered, not resent. A preview does not mutate the journal.
+ */
+export async function runRefSweepOnly({ goal: rawGoal, provider, sweepAccount, sweepPublicKey, journal, execute = false, log = console.log }) {
+  const goal = validateRefSwapGoal(rawGoal); requireJournal(journal);
+  const routeEntry = matchingRouteEntry(goal, journal);
+  if (!journal.get(refSwapFtGoal(goal).id)) throw new Error('original input is missing; sweep-only recovery cannot submit a swap');
+  await checkRefRouter(goal, provider);
+  await checkSweepKey(goal, provider, sweepAccount, sweepPublicKey);
+  const proof = await readVerifiedSwap(goal, provider, journal, log, execute);
+  if (!proof) throw new Error('original input is missing; sweep-only recovery cannot submit a swap');
+  return finishVerifiedSweep({ goal, provider, sweepAccount, sweepPublicKey, journal, proof, routeEntry, execute, log });
+}
+
 function home(value) { return value.startsWith('~/') ? path.join(os.homedir(), value.slice(2)) : value; }
 function parseArgs(args) {
   const options = { execute: false, recover: false };
   for (let i = 0; i < args.length; i++) {
-    if (['--execute', '--recover', '--help'].includes(args[i])) options[args[i].slice(2)] = true;
+    if (['--execute', '--recover', '--sweep-only', '--help'].includes(args[i])) options[args[i].slice(2)] = true;
     else if (['--goal', '--key', '--sweep-key', '--state', '--rpc'].includes(args[i]) && args[i + 1] && !args[i + 1].startsWith('--')) options[args[i].slice(2)] = args[++i];
     else throw new Error(`unknown or incomplete argument: ${args[i]}`);
   }
@@ -206,24 +227,29 @@ async function main() {
   if (options.help) {
     console.log('Usage: node bouncer/agent/ref-swap.mjs --goal GOAL.json --key INPUT_KEY.json --sweep-key SWEEP_KEY.json [--state JOURNAL.json] [--rpc URL] [--execute]');
     console.log('       node bouncer/agent/ref-swap.mjs --goal GOAL.json --state ORIGINAL_JOURNAL.json [--rpc URL] --recover');
-    console.log('Testnet only. Dry-run by default. Two separate zero-deposit function-call keys are required; recovery sends nothing and requires the original journal.');
+    console.log('       node bouncer/agent/ref-swap.mjs --goal GOAL.json --state ORIGINAL_JOURNAL.json --sweep-key SWEEP_KEY.json --sweep-only [--execute]');
+    console.log('Testnet only. Dry-run by default. Recovery sends nothing; sweep-only can never sign an input and requires the original journal.');
     return;
   }
-  if (!options.goal || (options.recover && (options.execute || options.key || options['sweep-key'])) ||
-      (!options.recover && (!options.key || !options['sweep-key'])) || (options.recover && !options.state)) {
-    throw new Error('provide --goal with both scoped keys, or --goal and the original --state with --recover');
+  if (!options.goal || (options.recover && (options.execute || options.key || options['sweep-key'] || options['sweep-only'] || !options.state)) ||
+      (options['sweep-only'] && (options.key || !options['sweep-key'] || !options.state)) ||
+      (!options.recover && !options['sweep-only'] && (!options.key || !options['sweep-key']))) {
+    throw new Error('provide --goal with both scoped keys, --recover with the original --state, or --sweep-only with the original --state and sweep key');
   }
   const goalPath = path.resolve(home(options.goal)), goal = validateRefSwapGoal(JSON.parse(fs.readFileSync(goalPath, 'utf8')));
   const provider = new PaymentRpcProvider(options.rpc || process.env.NEAR_TESTNET_RPC || 'https://test.rpc.fastnear.com');
   const state = path.resolve(home(options.state || `${goalPath}.bouncer-journal.json`));
   // Dry runs must see an existing history, but must not create a new journal.
-  const requireExisting = !!options.recover || fs.existsSync(state);
+  const requireExisting = !!options.recover || !!options['sweep-only'] || fs.existsSync(state);
   const journal = options.execute || requireExisting
     ? openConfiguredFileJournal(state, goal.contract_id, goal.owner_account_id, { requireExisting }) : null;
   try {
     let result;
     if (options.recover) result = await recoverRefSwap({ goal, provider, journal });
-    else {
+    else if (options['sweep-only']) {
+      const sweep = loadAccount(options['sweep-key'], goal.owner_account_id, provider);
+      result = await runRefSweepOnly({ goal, provider, sweepAccount: sweep.account, sweepPublicKey: sweep.publicKey, journal, execute: options.execute });
+    } else {
       const input = loadAccount(options.key, goal.owner_account_id, provider), sweep = loadAccount(options['sweep-key'], goal.owner_account_id, provider);
       result = await runRefSwap({ goal, provider, account: input.account, publicKey: input.publicKey,
         sweepAccount: sweep.account, sweepPublicKey: sweep.publicKey, journal, execute: options.execute });
