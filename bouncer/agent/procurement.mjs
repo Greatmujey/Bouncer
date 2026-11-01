@@ -16,6 +16,8 @@ import { isTransactionHash, verifyDirectPayment } from '../shared/direct-payment
 import { MonotonicAccount, PaymentRpcProvider } from './near-account.mjs';
 import { canonicalClaimOrigin, signClaimAuthorization } from '../packages/provider-sdk/lib/resource-claim.mjs';
 import { assertJournalScope, reserveJournal, writeJournal } from './journal-write.mjs';
+import { decryptFileJournal, encryptFileJournal, isEncryptedFileJournal, MAX_ENCRYPTED_JOURNAL_FILE,
+  readFileJournalKeyFile } from './file-journal-crypto.mjs';
 
 const { KeyPair, KeyPairSigner, transactions, utils } = nearApi;
 const DEFAULT_RPC = 'https://test.rpc.fastnear.com';
@@ -353,17 +355,68 @@ async function runProcurementCore({ plan: rawPlan, provider, account, publicKey,
 
 /** Atomic local journal and exclusive lock; not a distributed idempotency system. */
 export class FileJournal {
-  constructor(file, contractId, ownerId) {
+  #key;
+  #keyFile;
+  #contractId;
+  #ownerId;
+  constructor(file, contractId, ownerId, { encryptionKey, keyFile, migratePlaintext = false, requireExisting = false } = {}) {
+    if ((encryptionKey !== undefined && (!Buffer.isBuffer(encryptionKey) || encryptionKey.length !== 32)) ||
+        (keyFile !== undefined && (!encryptionKey || typeof keyFile !== 'string' || !keyFile)) ||
+        typeof migratePlaintext !== 'boolean' || typeof requireExisting !== 'boolean' ||
+        (migratePlaintext && (!encryptionKey || !requireExisting))) {
+      throw new Error('invalid file journal encryption options');
+    }
     this.file = path.resolve(file);
     this.lockFile = `${this.file}.lock`;
-    fs.mkdirSync(path.dirname(this.file), { recursive: true, mode: 0o700 });
+    if (!requireExisting) fs.mkdirSync(path.dirname(this.file), { recursive: true, mode: 0o700 });
     this.lockFd = fs.openSync(this.lockFile, 'wx', 0o600);
+    this.#key = encryptionKey ? Buffer.from(encryptionKey) : null;
+    this.#keyFile = keyFile === undefined ? null : path.resolve(keyFile);
+    this.#contractId = contractId;
+    this.#ownerId = ownerId;
     this.failed = false;
+    this.encrypted = Boolean(this.#key);
+    this.migratedPlaintext = false;
     try {
-      this.data = fs.existsSync(this.file)
-        ? JSON.parse(fs.readFileSync(this.file, 'utf8'))
-        : { version: 1, contract_id: contractId, owner_account_id: ownerId, entries: [] };
-      if (this.data.version !== 1 || this.data.contract_id !== contractId ||
+      let exists;
+      try { fs.lstatSync(this.file); exists = true; }
+      catch (error) { if (error.code !== 'ENOENT') throw error; exists = false; }
+      if (!exists && requireExisting) throw new Error('original journal not found; refusing to create an empty journal');
+      let stored;
+      if (exists && this.#key) {
+        // In encryption/migration mode never follow a symlink, read an unsafe
+        // plaintext source, or allocate an unbounded envelope. Exclusive lock
+        // and a trusted local filesystem are still required.
+        let fd;
+        try {
+          fd = fs.openSync(this.file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+          const stat = fs.fstatSync(fd);
+          if (!stat.isFile() || stat.nlink !== 1 || stat.size <= 0 || stat.size > MAX_ENCRYPTED_JOURNAL_FILE ||
+              (stat.mode & 0o077) !== 0 || (typeof process.getuid === 'function' && stat.uid !== process.getuid())) {
+            throw new Error('encrypted file journal must be an owner-only regular file within the size limit');
+          }
+          const bytes = fs.readFileSync(fd);
+          try {
+            if (bytes.length !== stat.size) throw new Error('file journal changed while reading; stop and reconcile');
+            try { stored = JSON.parse(bytes.toString('utf8')); }
+            catch { throw new Error('file journal has invalid JSON; stop and reconcile'); }
+          } finally { bytes.fill(0); }
+        } finally { if (fd !== undefined) fs.closeSync(fd); }
+      } else if (exists) {
+        try { stored = JSON.parse(fs.readFileSync(this.file, 'utf8')); }
+        catch { throw new Error('file journal is unreadable or has invalid JSON; stop and reconcile'); }
+      }
+      if (exists && isEncryptedFileJournal(stored)) {
+        if (!this.#key) throw new Error('encrypted file journal requires its original key; stop and reconcile');
+        this.data = decryptFileJournal(stored, this.#key, contractId, ownerId);
+      } else if (exists) {
+        if (this.#key && !migratePlaintext) throw new Error('existing plaintext journal needs explicit in-place encryption; do not create a replacement journal');
+        this.data = stored;
+        this.migratedPlaintext = Boolean(this.#key);
+      } else {
+        this.data = { version: 1, contract_id: contractId, owner_account_id: ownerId, entries: [] };
+      }
+      if (!this.data || this.data.version !== 1 || this.data.contract_id !== contractId ||
           this.data.owner_account_id !== ownerId || !Array.isArray(this.data.entries)) {
         throw new Error('journal belongs to a different contract/account or has an invalid format');
       }
@@ -385,6 +438,10 @@ export class FileJournal {
         }
         ids.add(entry.id);
       }
+      // Preserve all original entries, including pending hashes and bearer
+      // claims. Only ciphertext is written to the temporary file; a failed
+      // rename/fsync leaves the original or the encrypted copy to reconcile.
+      if (this.migratedPlaintext) this.#persist(this.data);
     } catch (error) {
       this.close();
       throw error;
@@ -406,13 +463,27 @@ export class FileJournal {
     const entries = this.data.entries.slice();
     const next = { ...entry, id };
     if (index === -1) entries.push(next); else entries[index] = next;
-    const data = { ...this.data, entries };
+    this.#persist({ ...this.data, entries });
+  }
+  #persist(data) {
     const temp = `${this.file}.${crypto.randomBytes(6).toString('hex')}.tmp`;
     try {
+      // Configured CLIs recheck the original key file before every durable
+      // write. This detects many accidental replacements/deletions before a
+      // reservation, but is not an atomic guarantee against later key loss.
+      if (this.#keyFile) {
+        let current;
+        try {
+          current = readFileJournalKeyFile(this.#keyFile);
+          if (!crypto.timingSafeEqual(current, this.#key)) throw new Error();
+        } catch { throw new Error('file journal key changed or is unreadable; stop and reconcile'); }
+        finally { current?.fill(0); }
+      }
+      const serialized = this.#key ? encryptFileJournal(data, this.#key, this.#contractId, this.#ownerId) : JSON.stringify(data, null, 2) + '\n';
       const fd = fs.openSync(temp, 'wx', 0o600);
       try {
         fs.fchmodSync(fd, 0o600);
-        fs.writeFileSync(fd, JSON.stringify(data, null, 2) + '\n');
+        fs.writeFileSync(fd, serialized);
         fs.fsyncSync(fd);
       } finally { fs.closeSync(fd); }
       fs.renameSync(temp, this.file);
@@ -431,12 +502,33 @@ export class FileJournal {
     }
   }
   close() {
+    this.#key?.fill(0);
+    this.#key = null;
+    this.#keyFile = null;
     if (this.lockFd !== null) {
       fs.closeSync(this.lockFd);
       this.lockFd = null;
       fs.unlinkSync(this.lockFile);
     }
   }
+}
+
+/** Check key readability before a demo performs any testnet setup or funding. */
+export function validateConfiguredFileJournalKey() {
+  if (process.env.BOUNCER_FILE_JOURNAL_KEY_FILE !== undefined) {
+    const key = readFileJournalKeyFile(process.env.BOUNCER_FILE_JOURNAL_KEY_FILE);
+    key.fill(0);
+  }
+}
+
+/** All file-journal CLIs use the same explicit opt-in, including recovery. */
+export function openConfiguredFileJournal(file, contractId, ownerId) {
+  const configured = process.env.BOUNCER_FILE_JOURNAL_KEY_FILE;
+  let key;
+  try {
+    if (configured !== undefined) key = readFileJournalKeyFile(configured);
+    return new FileJournal(file, contractId, ownerId, { encryptionKey: key, keyFile: configured });
+  } finally { key?.fill(0); }
 }
 
 function parseArgs(args) {
@@ -478,7 +570,7 @@ async function main() {
   const plan = validatePlan(JSON.parse(fs.readFileSync(planPath, 'utf8')));
   const { provider, account, publicKey } = createRuntime({ plan, keyFile: options.key, rpc: options.rpc });
   const journalPath = path.resolve(expandHome(options.state || `${planPath}.bouncer-journal.json`));
-  const journal = options.execute ? new FileJournal(journalPath, plan.contract_id, plan.owner_account_id) : null;
+  const journal = options.execute ? openConfiguredFileJournal(journalPath, plan.contract_id, plan.owner_account_id) : null;
   try {
     console.log(`[procurement] ${options.execute ? 'LIVE TESTNET' : 'DRY RUN'} on ${plan.contract_id}; ${plan.requests.length} request(s)`);
     const totals = await runProcurement({ plan, provider, account, publicKey, journal, execute: options.execute, durablePayment: options.durable === true });

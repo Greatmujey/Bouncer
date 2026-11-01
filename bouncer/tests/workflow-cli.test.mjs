@@ -16,7 +16,8 @@ test('documented workflow example validates and CLI help clearly distinguishes r
   const workflow = validateWorkflow(JSON.parse(fs.readFileSync(example, 'utf8')));
   assert.deepEqual(workflow.steps.map(step => step.id), ['compute', 'storage', 'api']);
   const result = run('--help'); assert.equal(result.status, 0);
-  assert.match(result.stdout, /--recover-only/); assert.match(result.stdout, /without keys or new payments/);
+  assert.match(result.stdout, /--recover-only/); assert.match(result.stdout, /without NEAR signing keys or new payments/);
+  assert.match(result.stdout, /Encrypted file journals require their separate BOUNCER_FILE_JOURNAL_KEY_FILE/);
 });
 
 test('CLI recovery requires the original journal and refuses keys or execution', () => {
@@ -26,9 +27,9 @@ test('CLI recovery requires the original journal and refuses keys or execution',
     const absent = run('--workflow', example, '--journal', journal, '--recover-only');
     assert.equal(absent.status, 1); assert.match(absent.stderr, /original journal not found/); assert.equal(fs.existsSync(journal), false);
     const key = run('--workflow', example, '--journal', journal, '--recover-only', '--source-key', 'never-read.json');
-    assert.equal(key.status, 1); assert.match(key.stderr, /without keys/);
+    assert.equal(key.status, 1); assert.match(key.stderr, /without signing keys/);
     const execute = run('--workflow', example, '--journal', journal, '--recover-only', '--execute');
-    assert.equal(execute.status, 1); assert.match(execute.stderr, /without keys/);
+    assert.equal(execute.status, 1); assert.match(execute.stderr, /without signing keys/);
     fs.writeFileSync(journal, JSON.stringify({ version: 1, contract_id: 'bouncer.testnet', owner_account_id: 'owner.testnet', entries: [] }));
     const empty = run('--workflow', example, '--journal', journal, '--recover-only');
     assert.equal(empty.status, 0); assert.match(empty.stdout, /NOT_STARTED/); assert.match(empty.stdout, /recovery sent no payments/);

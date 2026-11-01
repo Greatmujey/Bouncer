@@ -13,7 +13,7 @@ import crypto from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { pathToFileURL } from 'node:url';
 import nearApi from 'near-api-js';
-import { FileJournal, runProcurement, validatePlan } from './procurement.mjs';
+import { openConfiguredFileJournal, runProcurement, validatePlan } from './procurement.mjs';
 import { MonotonicAccount, PaymentRpcProvider } from './near-account.mjs';
 import { reservePreview } from './preflight.mjs';
 import { runOutlayerGoal, recoverOutlayerGoal, validateOutlayerGoal } from './outlayer.mjs';
@@ -379,13 +379,14 @@ async function main() {
   const options = parseArgs(process.argv.slice(2));
   if (options.help) {
     console.log('Usage: node bouncer/agent/workflow.mjs --workflow FILE --journal FILE [--source-key KEY --ft-key KEY] [--rpc URL] [--local-provider CONFIG] [--execute | --recover-only [--redeem-source]]');
-    console.log('Dry run by default. --execute spends testnet funds; --recover-only uses the original journal without keys or new payments. No real funds.');
+    console.log('Dry run by default. --execute spends testnet funds; --recover-only uses the original journal without NEAR signing keys or new payments. No real funds.');
+    console.log('Encrypted file journals require their separate BOUNCER_FILE_JOURNAL_KEY_FILE on execution and recovery.');
     console.log('--redeem-source explicitly permits the first, previously unattempted paid x402 seller request; never retries an attempted request.');
     console.log('A source key is required only for a new source; an FT key is required to resume unpaid resource steps.'); return;
   }
   if (!options.workflow || !options.journal || (options.execute && options.recoverOnly) || (options.redeemSource && !options.recoverOnly) ||
       (options.recoverOnly && (options['source-key'] || options['ft-key'])) || (!options.recoverOnly && !options['ft-key'])) {
-    throw new Error('provide --workflow and --journal; supply --ft-key except with --recover-only without keys or --execute; see --help');
+    throw new Error('provide --workflow and --journal; supply --ft-key except with --recover-only without signing keys or --execute; see --help');
   }
   const workflow = validateWorkflow(JSON.parse(fs.readFileSync(home(options.workflow), 'utf8'))), goal = workflow.source.goal;
   const state = path.resolve(home(options.journal));
@@ -393,7 +394,7 @@ async function main() {
   const provider = new PaymentRpcProvider(options.rpc || process.env.NEAR_TESTNET_RPC || 'https://test.rpc.fastnear.com');
   let journal, local, source = {}, ft = {};
   try {
-    if (options.execute || options.recoverOnly || fs.existsSync(state)) journal = new FileJournal(state, goal.contract_id, goal.owner_account_id);
+    if (options.execute || options.recoverOnly || fs.existsSync(state)) journal = openConfiguredFileJournal(state, goal.contract_id, goal.owner_account_id);
     if (!options.recoverOnly) {
       if (!options['source-key'] && !journal?.get(goal.id)) throw new Error('a source key is required for an unpaid independent source');
       if (options['source-key']) source = accountFromFile(options['source-key'], goal.owner_account_id, provider);

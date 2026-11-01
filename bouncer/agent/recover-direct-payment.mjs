@@ -11,7 +11,7 @@ import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { pathToFileURL } from 'node:url';
 import { PaymentRpcProvider } from './near-account.mjs';
-import { FileJournal, normalizeProviderRoute, requestFingerprint, validatePlan } from './procurement.mjs';
+import { openConfiguredFileJournal, normalizeProviderRoute, requestFingerprint, validatePlan } from './procurement.mjs';
 import { assertJournalScope, writeJournal } from './journal-write.mjs';
 import { planFromQuotes, fulfillPaidResource } from './resource-agent.mjs';
 import { isTransactionHash, verifyDirectPayment } from '../shared/direct-payment-settlement.mjs';
@@ -94,7 +94,7 @@ async function main() {
   const options = parse(process.argv.slice(2));
   if (options.help) {
     console.log('Usage: node bouncer/agent/recover-direct-payment.mjs (--plan REVIEWED-PLAN.json | --goals ORIGINAL-GOALS-OR-MISSION.json) --id REQUEST_ID (--state ORIGINAL-JOURNAL.json | --shared-journal STABLE_ID) [--rpc URL]');
-    console.log('Reads one recorded --durable payment; no NEAR signing key, broadcast, delivery or automatic repayment. The shared journal requires its separate encryption key.');
+    console.log('Reads one recorded --durable payment; no NEAR signing key, broadcast, delivery or automatic repayment. Encrypted file/shared journals require their separate encryption key.');
     return;
   }
   if (Boolean(options.plan) === Boolean(options.goals) || Boolean(options.state) === Boolean(options['shared-journal']) || !options.id) {
@@ -114,7 +114,7 @@ async function main() {
     } else {
       const state = path.resolve(home(options.state));
       if (!fs.existsSync(state)) throw new Error('original journal not found; recovery cannot create one');
-      journal = new FileJournal(state, contractId, ownerId);
+      journal = openConfiguredFileJournal(state, contractId, ownerId);
     }
     const result = plan ? await recoverDirectPayment({ plan, requestId: options.id, provider, journal })
       : await recoverDirectResourcePayment({ config, requestId: options.id, provider, journal });

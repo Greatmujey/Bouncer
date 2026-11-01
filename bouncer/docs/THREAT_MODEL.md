@@ -139,7 +139,11 @@ not prove all possible callback, provider or token failure cases.
    file journal synchronizes its content and directory before returning, and
    blocks automatic retries of uncertain payments in one local file. Sync
    failures stop execution, but a different/deleted journal, multiple hosts or
-   unreliable storage can bypass the protection. The signer keeps its own
+   unreliable storage can bypass the protection. Local files are plaintext by
+   default; optional [AES-GCM file encryption](FILE_JOURNALS.md) protects a
+   journal at rest with a separate key, but cannot detect an older valid file,
+   coordinate other paths or revoke a leaked claim. A lost key prevents
+   recovery, and old plaintext copies remain exposed. The signer keeps its own
    process's nonces monotonic to mitigate stale RPC reads; it does not coordinate
    concurrent processes using the same key or
    retry a failed send. Use one writer per key. For OutLayer and opt-in

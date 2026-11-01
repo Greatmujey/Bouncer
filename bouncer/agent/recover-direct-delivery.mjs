@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { FileJournal } from './procurement.mjs';
+import { openConfiguredFileJournal } from './procurement.mjs';
 import { PaymentRpcProvider } from './near-account.mjs';
 import { recoverResourceDelivery } from './recover-direct-payment.mjs';
 import { routedResourceProvider } from './resource-agent.mjs';
@@ -14,8 +14,8 @@ const USAGE = `Usage: node bouncer/agent/recover-direct-delivery.mjs --goals ORI
 Verifies the original FINAL payment, then asks the pinned seller to replay and
 verify ONE previously paid delivery. No quote, NEAR signing key, transaction
 broadcast or automatic repayment. The seller must provide idempotent redemption.
-The shared journal needs its separate encryption key. An ambiguous seller-side
-external effect still requires manual reconciliation; never blindly retry it.
+Encrypted file/shared journals need their separate encryption key. An ambiguous
+seller-side external effect still requires manual reconciliation; never blindly retry it.
 `;
 function parse(args) {
   if (args.length === 1 && args[0] === '--help') return { help: true };
@@ -51,7 +51,7 @@ async function main() {
     } else {
       const state = path.resolve(home(opts['--state']));
       if (!fs.existsSync(state)) throw new Error('original journal not found; recovery cannot create one');
-      journal = new FileJournal(state, config.contract_id, config.owner_account_id);
+      journal = openConfiguredFileJournal(state, config.contract_id, config.owner_account_id);
     }
     const delivery = await recoverResourceDelivery({ goal: matches[0], contractId: config.contract_id, ownerAccountId: config.owner_account_id,
       providerUrl: config.provider_url, provider, journal, fulfill: client.fulfill, readStorage: client.readStorage });

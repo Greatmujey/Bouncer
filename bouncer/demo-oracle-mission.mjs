@@ -14,7 +14,7 @@ import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import nearApi from 'near-api-js';
 import { MonotonicAccount, PaymentRpcProvider } from './agent/near-account.mjs';
-import { FileJournal } from './agent/procurement.mjs';
+import { openConfiguredFileJournal, validateConfiguredFileJournalKey } from './agent/procurement.mjs';
 import { submitOwnerSetupOnce } from './agent/testnet-owner-setup.mjs';
 import { runOracleGoal, recoverOracleGoal, assertOracleFreshForUse, assertOracleProjectRegistry,
   ORACLE_TESTNET_PROJECT } from './agent/oracle-outlayer.mjs';
@@ -98,6 +98,7 @@ function notice(title, data) {
 }
 
 async function main() {
+  validateConfiguredFileJournalKey(); // Before any live setup, funding or network request.
   const args = process.argv.slice(2);
   if (args.length > 1 || (args.length === 1 && !['--dependent-workflow', '--seller-v2-workflow', '--seller-v3-workflow', '--seller-v3-fresh'].includes(args[0]))) {
     throw new Error('optional argument: --dependent-workflow, --seller-v2-workflow, --seller-v3-workflow or --seller-v3-fresh');
@@ -143,7 +144,7 @@ async function main() {
   await call(owner, WRAP, 'near_deposit', {}, OWNER_SETUP_INPUT, 50n * TGAS);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), sellerV3Fresh ? 'bouncer-seller-v3-fresh-' : sellerV3 ? 'bouncer-seller-v3-live-' :
     sellerV2 ? 'bouncer-seller-v2-live-' : dependent ? 'bouncer-dependent-live-' : 'bouncer-oracle-'));
-  const setupJournal = new FileJournal(path.join(dir, 'setup-journal.json'), contractId, ownerId);
+  const setupJournal = openConfiguredFileJournal(path.join(dir, 'setup-journal.json'), contractId, ownerId);
   let swap, funding;
   try {
     const before = BigInt(await view(TOKEN, 'ft_balance_of', { account_id: ownerId }));
@@ -194,7 +195,7 @@ async function main() {
 
   const state = path.join(dir, 'journal.json'), goalPath = path.join(dir, 'oracle-goal.json');
   fs.writeFileSync(goalPath, JSON.stringify(goal, null, 2) + '\n', { mode: 0o600 });
-  let journal = new FileJournal(state, contractId, ownerId), success = false, service;
+  let journal = openConfiguredFileJournal(state, contractId, ownerId), success = false, service;
   try {
     if (dependent) {
       // One manifest is frozen before the first workflow payment. Each data
@@ -245,7 +246,7 @@ async function main() {
               !cli.stdout.includes(hash)) throw new Error('key-free workflow CLI did not recover the recorded hash');
           console.log(cli.stdout.trim()); recovered = true;
         } finally {
-          journal = new FileJournal(state, contractId, ownerId);
+          journal = openConfiguredFileJournal(state, contractId, ownerId);
           if (recovered) await startService();
         }
         return { status: 'RECOVERED', next, new_payments: 0 };
@@ -316,7 +317,7 @@ async function main() {
     const cli = await util.promisify(execFile)(process.execPath, [path.join(ROOT, 'bouncer/agent/oracle-outlayer.mjs'),
       '--goal', goalPath, '--state', state, '--rpc', RPC, '--recover'], { timeout: 90_000, maxBuffer: 64 * 1024 });
     if (!cli.stdout.includes('REUSED') || !cli.stdout.includes(tx)) throw new Error('key-free oracle recovery did not reuse the transaction');
-    journal = new FileJournal(state, contractId, ownerId);
+    journal = openConfiguredFileJournal(state, contractId, ownerId);
     const recovered = await recoverOracleGoal({ goal, provider, journal });
     assertOracleFreshForUse(recovered.delivery);
     if (recovered.delivery.tx_hash !== tx || broadcasts !== 1 || journal.get(goal.id)?.status !== 'completed') throw new Error('oracle recovery mismatch');

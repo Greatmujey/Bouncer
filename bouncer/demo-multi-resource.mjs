@@ -10,7 +10,7 @@ import os from 'node:os';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import nearApi from 'near-api-js';
-import { FileJournal } from './agent/procurement.mjs';
+import { openConfiguredFileJournal, validateConfiguredFileJournalKey } from './agent/procurement.mjs';
 import { createResourceProvider, orderMemo } from './services/resource-provider.mjs';
 import { fetchPublicRepository } from './services/github-data.mjs';
 import { httpResourceProvider, routedResourceProvider, runResourceAgent } from './agent/resource-agent.mjs';
@@ -108,6 +108,7 @@ async function createToken(funder, ownerId, symbol, name) {
 }
 
 async function main() {
+  validateConfiguredFileJournalKey(); // Before any live setup, funding or network request.
   console.log('BOUNCER — REAL testnet multi-token payment check');
   console.log('wNEAR + two synthetic test tokens; fulfillment uses a self-hosted development provider, not commercial vendors.\n');
   const wasmPath = path.join(ROOT, 'bouncer.wasm');
@@ -357,7 +358,7 @@ async function main() {
   let journal, alternateProvider;
   let proof, comparisonProof, deliveryProof, gatedBatchProof, ownerProof, independentProof;
   try {
-    journal = new FileJournal(journalPath, bid, ownerId);
+    journal = openConfiguredFileJournal(journalPath, bid, ownerId);
     const runner = {
       // Receipts bind the stable, reviewed origin in the saved goals file;
       // this demo temporarily maps it to an ephemeral in-process server.

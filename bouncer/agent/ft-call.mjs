@@ -15,7 +15,7 @@ import crypto from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { pathToFileURL } from 'node:url';
 import nearApi from 'near-api-js';
-import { FileJournal } from './procurement.mjs';
+import { openConfiguredFileJournal } from './procurement.mjs';
 import { MonotonicAccount, PaymentRpcProvider } from './near-account.mjs';
 import { isTestnetAccount, isTestnetToken } from '../shared/account-id.mjs';
 import { signReviewedCall } from './reviewed-transaction.mjs';
@@ -226,7 +226,7 @@ async function main() {
   if (options.help) {
     console.log('Usage: node bouncer/agent/ft-call.mjs --goal GOAL.json --key AGENT_KEY.json [--state JOURNAL.json] [--rpc URL] [--execute]');
     console.log('       node bouncer/agent/ft-call.mjs --goal GOAL.json --state JOURNAL.json [--rpc URL] --recover');
-    console.log('Dry run by default; --recover reads the original transaction without a key. Settlement does not verify delivery.');
+    console.log('Dry run by default; --recover reads the original transaction without a NEAR signing key. Encrypted file journals still require their separate key. Settlement does not verify delivery.');
     return;
   }
   if (!options.goal || (!options.recover && !options.key)) throw new Error('provide --goal and --key, or --goal with --recover');
@@ -236,7 +236,7 @@ async function main() {
   const provider = new PaymentRpcProvider(options.rpc || process.env.NEAR_TESTNET_RPC || 'https://test.rpc.fastnear.com');
   const state = path.resolve(home(options.state || `${goalPath}.bouncer-journal.json`));
   if (options.recover && !fs.existsSync(state)) throw new Error('original journal not found; recovery cannot create one');
-  const journal = options.execute || options.recover ? new FileJournal(state, goal.contract_id, goal.owner_account_id) : null;
+  const journal = options.execute || options.recover ? openConfiguredFileJournal(state, goal.contract_id, goal.owner_account_id) : null;
   try {
     let outcome;
     if (options.recover) outcome = await recoverFtCallGoal({ goal, provider, journal });

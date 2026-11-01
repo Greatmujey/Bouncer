@@ -24,7 +24,7 @@ import { CIRCLE_TESTNET_USDC } from '../scripts/circle-testnet-setup.mjs';
 import { isTestnetAccount } from '../shared/account-id.mjs';
 import { readBoundedBytes } from '../shared/bounded-json.mjs';
 import { isTransactionHash, verifyDirectPayment } from '../shared/direct-payment-settlement.mjs';
-import { FileJournal, requestFingerprint, validatePlan } from './procurement.mjs';
+import { openConfiguredFileJournal, requestFingerprint, validatePlan } from './procurement.mjs';
 import { MonotonicAccount, PaymentRpcProvider } from './near-account.mjs';
 import { signReviewedCall } from './reviewed-transaction.mjs';
 
@@ -354,6 +354,7 @@ async function main() {
     console.log('Usage: node bouncer/agent/onchain-proof.mjs --goal GOAL.json --key AGENT.json [--state JOURNAL.json] [--rpc URL] [--execute]');
     console.log('       node bouncer/agent/onchain-proof.mjs --goal GOAL.json --state ORIGINAL.json --recover [--redeem] [--rpc URL]');
     console.log('Testnet only. Dry run by default. Recovery never repays; --redeem sends only a first, previously unattempted seller request.');
+    console.log('Recovery needs no NEAR signing key; encrypted file journals still require their separate key.');
     return;
   }
   if (!opts.goal || (opts.recover ? (!opts.state || opts.key || opts.execute) : (!opts.key || opts.redeem))) throw new Error('provide --goal and --key, or --goal --state --recover [--redeem]');
@@ -361,7 +362,7 @@ async function main() {
   const provider = new PaymentRpcProvider(opts.rpc || process.env.NEAR_TESTNET_RPC || 'https://test.rpc.fastnear.com');
   const statePath = path.resolve(home(opts.state || `${goalPath}.bouncer-proof-journal.json`));
   if (opts.recover && !fs.existsSync(statePath)) throw new Error('original journal not found; recovery cannot create one');
-  const journal = opts.execute || opts.recover ? new FileJournal(statePath, goal.contract_id, goal.owner_account_id) : null;
+  const journal = opts.execute || opts.recover ? openConfiguredFileJournal(statePath, goal.contract_id, goal.owner_account_id) : null;
   try {
     let result;
     if (opts.recover) result = opts.redeem ? await redeemOnchainProofOnce({ goal, provider, journal }) : await recoverOnchainProofGoal({ goal, provider, journal });

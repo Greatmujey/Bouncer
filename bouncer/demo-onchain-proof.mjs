@@ -12,7 +12,7 @@ import util from 'node:util';
 import { fileURLToPath } from 'node:url';
 import nearApi from 'near-api-js';
 import { MonotonicAccount, PaymentRpcProvider } from './agent/near-account.mjs';
-import { FileJournal } from './agent/procurement.mjs';
+import { openConfiguredFileJournal, validateConfiguredFileJournalKey } from './agent/procurement.mjs';
 import { submitOwnerSetupOnce } from './agent/testnet-owner-setup.mjs';
 import { runOnchainProofLiveProof } from './agent/onchain-proof-live-proof.mjs';
 import { loadPipRailTestSdk } from './scripts/piprail-test-adapter.mjs';
@@ -89,6 +89,7 @@ function notice(title, data) {
 }
 
 async function main() {
+  validateConfiguredFileJournalKey(); // Before any live setup, funding or network request.
   assert(process.argv.length === 2, 'no positional arguments are accepted');
   // Validate the independently published SDK before any setup or funding.
   const sdk = await loadPipRailTestSdk(process.env.BOUNCER_PIPRAIL_PACKAGE_ROOT);
@@ -118,7 +119,7 @@ async function main() {
   for (const [token, id] of [[WRAP, ownerId], [TOKEN, ownerId], [TOKEN, contractId], [TOKEN, vendorId]]) await register(owner, token, id);
   await call(owner, WRAP, 'near_deposit', {}, OWNER_SETUP_INPUT, 50n * TGAS);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bouncer-piprail-live-'));
-  const setup = new FileJournal(path.join(dir, 'setup-journal.json'), contractId, ownerId);
+  const setup = openConfiguredFileJournal(path.join(dir, 'setup-journal.json'), contractId, ownerId);
   let journal, server;
   try {
     const before = BigInt(await view(TOKEN, 'ft_balance_of', { account_id: ownerId }));
@@ -166,9 +167,9 @@ async function main() {
       max_quote_age_seconds: 120, accept_public_proof_risk: true, accept_unbound_resource_risk: true };
     writePublic(path.join(dir, 'goal.json'), goal);
     const state = path.join(dir, 'journal.json');
-    journal = new FileJournal(state, contractId, ownerId);
+    journal = openConfiguredFileJournal(state, contractId, ownerId);
     const proof = await runOnchainProofLiveProof({ goal, provider, account: agent, publicKey: agentKey.getPublicKey(),
-      getJournal: () => journal, reopenJournal: () => { journal.close(); journal = new FileJournal(state, contractId, ownerId); }, log: console.log });
+      getJournal: () => journal, reopenJournal: () => { journal.close(); journal = openConfiguredFileJournal(state, contractId, ownerId); }, log: console.log });
     assert(sellerCalls === 1 && JSON.stringify(JSON.parse(Buffer.from(proof.response.body_base64, 'base64').toString())) === JSON.stringify(payload),
       'SDK-backed seller response mismatch');
     assert(BigInt(await view(TOKEN, 'ft_balance_of', { account_id: vendorId })) === PRICE &&

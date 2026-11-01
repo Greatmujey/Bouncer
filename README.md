@@ -542,6 +542,14 @@ resource-agent CLI can also opt into fsync-backed checkpoints before broadcast
 and refuse a detected rollback on restart; this requires a separate protected
 directory and does not guarantee safety if both copies are lost or stale.
 
+Local file journals are **plaintext by default**. Operators can opt into
+[encrypted local journals](bouncer/docs/FILE_JOURNALS.md), with a separate key
+and an explicit in-place conversion that preserves pending hashes and claims.
+Synthetic tests cover wrong keys, tampering, crashes, sync failures and
+signing-key-free recovery. Encryption does not detect an older valid file,
+coordinate different journals or revoke leaked bearer claims. No live payment
+with an encrypted file journal has been made.
+
 ### Delivery checks and local receipts
 
 The experimental [seller verification SDK](bouncer/packages/provider-sdk/README.md)

@@ -6,6 +6,8 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import nearApi from 'near-api-js';
+import crypto from 'node:crypto';
+import { FileJournal } from '../agent/procurement.mjs';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const cli = 'bouncer/agent/resource-agent.mjs';
@@ -68,6 +70,27 @@ test('resource CLI records a bad delivery and recovers after restart without ano
     assert.equal(saved.delivery.receipt.tx_hash, first.tx_hash);
     assert.equal(saved.delivery.receipt.verification.scope, 'iterated-sha256');
   } finally { fs.rmSync(f.dir, { recursive: true, force: true }); }
+});
+
+test('resource CLI encrypts local state and recovers without a second payment across processes', () => {
+  const f = fixture(), keyBytes = crypto.randomBytes(32), keyFile = path.join(f.dir, 'file-journal.key');
+  fs.writeFileSync(keyFile, keyBytes, { mode: 0o600 });
+  try {
+    const env = { BOUNCER_FILE_JOURNAL_KEY_FILE: keyFile };
+    const failed = exec([...f.args, '--execute'], { ...env, MOCK_BAD_DELIVERY: '1' });
+    assert.equal(failed.status, 1); assert.match(failed.stdout, /PAID compute-1/);
+    const raw = fs.readFileSync(f.journal, 'utf8'); assert.equal(JSON.parse(raw).format, 'bouncer-encrypted-file-journal-v1');
+    assert.doesNotMatch(raw, /compute-1|hello|tx_hash/);
+    let journal = new FileJournal(f.journal, 'bouncer.testnet', 'bouncer.testnet', { encryptionKey: keyBytes });
+    const first = journal.get('compute-1'); assert.equal(first.delivery.status, 'unverified'); const hash = first.tx_hash; journal.close();
+    const missingKey = exec([...f.args, '--execute'], { BOUNCER_FILE_JOURNAL_KEY_FILE: undefined });
+    assert.equal(missingKey.status, 1); assert.match(missingKey.stderr, /requires its original key/); assert.doesNotMatch(missingKey.stdout, /PAID/);
+    const recovered = exec([...f.args, '--execute'], { ...env, MOCK_BAD_QUOTE: '1' });
+    assert.equal(recovered.status, 0, recovered.stderr); assert.match(recovered.stdout, /SKIP compute-1/);
+    assert.match(recovered.stdout, /FULFILLED compute-1/); assert.doesNotMatch(recovered.stdout, /PAID compute-1/);
+    journal = new FileJournal(f.journal, 'bouncer.testnet', 'bouncer.testnet', { encryptionKey: keyBytes });
+    assert.equal(journal.get('compute-1').tx_hash, hash); assert.equal(journal.get('compute-1').delivery.status, 'verified'); journal.close();
+  } finally { keyBytes.fill(0); fs.rmSync(f.dir, { recursive: true, force: true }); }
 });
 
 test('resource CLI rejects an untrusted quote before payment or fulfillment', () => {

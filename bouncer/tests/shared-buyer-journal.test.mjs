@@ -41,6 +41,26 @@ const owner = `buyer-${crypto.randomBytes(8).toString('hex')}.testnet`, contract
 const origin = 'https://synthetic-seller.example';
 const agent = nearApi.KeyPair.fromRandom('ed25519'), signer = new nearApi.KeyPairSigner(agent), publicKey = agent.getPublicKey();
 const makePool = () => new pg.Pool({ connectionString: databaseUrl, max: 12, connectionTimeoutMillis: 5000 });
+// pg-pool's end() can resolve after removing a client from its accounting but
+// before the client's socket has closed. Track its public connect/remove events
+// so test databases are not forcibly dropped while a connection is still ending.
+function waitForPoolConnections(pool) {
+  const open = new Set(), waiters = new Set();
+  pool.on('connect', client => open.add(client));
+  pool.on('remove', client => {
+    open.delete(client);
+    if (!open.size) for (const done of waiters) done();
+  });
+  return async () => {
+    await pool.end();
+    if (!open.size) return;
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => { waiters.delete(done); reject(new Error('test database clients did not close')); }, 5000);
+      const done = () => { clearTimeout(timer); waiters.delete(done); resolve(); };
+      waiters.add(done);
+    });
+  };
+}
 const id = () => `buyer-${crypto.randomBytes(8).toString('hex')}`;
 const challenge = () => crypto.randomBytes(16).toString('hex');
 const goal = { id: 'work', resource: 'compute', policy_id: 'resources', token, payee, max_amount: '1000',
@@ -424,19 +444,20 @@ dbtest('worker role can reserve without DDL, journal creation or DELETE permissi
 });
 
 dbtest('schema without critical challenge uniqueness is rejected before a worker starts', async () => {
-  const admin = makePool(), dbName = `bouncer_buyer_${crypto.randomBytes(6).toString('hex')}`; let created = false, isolated;
+  const admin = makePool(), dbName = `bouncer_buyer_${crypto.randomBytes(6).toString('hex')}`; let created = false, isolated, drain;
   try {
     await admin.query(`CREATE DATABASE ${dbName}`); created = true;
     const url = new URL(databaseUrl); url.pathname = `/${dbName}`;
-    isolated = new pg.Pool({ connectionString: url.toString(), max: 2 });
+    isolated = new pg.Pool({ connectionString: url.toString(), max: 2 }); drain = waitForPoolConnections(isolated);
     await initializePostgresBuyerSchema({ pool: isolated });
     await isolated.query('ALTER TABLE bouncer_buyer_v1.entries DROP CONSTRAINT entries_challenge_key');
     await assert.rejects(openPostgresBuyerJournal({ pool: isolated, contractId: contract, ownerAccountId: owner,
       journalId: id(), key: crypto.randomBytes(32), createNew: true }), error => error.code === 'UNSAFE_SCHEMA');
   } finally {
-    if (isolated) await isolated.end();
-    if (created) await admin.query(`DROP DATABASE ${dbName} WITH (FORCE)`);
-    await admin.end();
+    try {
+      if (drain) await drain();
+      if (created) await admin.query(`DROP DATABASE ${dbName}`);
+    } finally { await admin.end(); }
   }
 });
 
@@ -1683,11 +1704,11 @@ dbtest('strict activation CLI requires explicit confirmation and does not sign o
 
 dbtest('schema v1 upgrade preserves legacy pending ciphertext and rejects missing intent safety constraints', async () => {
   const admin = makePool(), dbName = `bouncer_intent_${crypto.randomBytes(6).toString('hex')}`;
-  let created = false, isolated, journal;
+  let created = false, isolated, journal, drain;
   try {
     await admin.query(`CREATE DATABASE ${dbName}`); created = true;
     const url = new URL(databaseUrl); url.pathname = `/${dbName}`;
-    isolated = new pg.Pool({ connectionString: url.toString(), max: 3 });
+    isolated = new pg.Pool({ connectionString: url.toString(), max: 3 }); drain = waitForPoolConnections(isolated);
     await initializePostgresBuyerSchema({ pool: isolated });
     const key = crypto.randomBytes(32), journalId = id(), entry = await pendingEntry();
     journal = await openPostgresBuyerJournal({ pool: isolated, contractId: contract, ownerAccountId: owner, journalId, key, createNew: true });
@@ -1715,10 +1736,11 @@ dbtest('schema v1 upgrade preserves legacy pending ciphertext and rejects missin
     await assert.rejects(openPostgresBuyerJournal({ pool: isolated, contractId: contract, ownerAccountId: owner, journalId, key }),
       error => error.code === 'UNSAFE_SCHEMA');
   } finally {
-    if (journal) await journal.close();
-    if (isolated) await isolated.end();
-    if (created) await admin.query(`DROP DATABASE ${dbName} WITH (FORCE)`);
-    await admin.end();
+    try {
+      if (journal) await journal.close();
+      if (drain) await drain();
+      if (created) await admin.query(`DROP DATABASE ${dbName}`);
+    } finally { await admin.end(); }
   }
 });
 

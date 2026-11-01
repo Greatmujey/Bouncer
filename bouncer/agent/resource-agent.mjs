@@ -8,7 +8,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createRuntime, FileJournal, normalizeProviderRoute, requestFingerprint, runProcurement, validatePlan } from './procurement.mjs';
+import { createRuntime, openConfiguredFileJournal, normalizeProviderRoute, requestFingerprint, runProcurement, validatePlan } from './procurement.mjs';
 import { assertJournalScope, writeJournal } from './journal-write.mjs';
 import { reservePreview } from './preflight.mjs';
 import { readBoundedBytes, readBoundedJson } from '../shared/bounded-json.mjs';
@@ -379,7 +379,8 @@ Default sends no payments; a seller-v2 quote may persist an order at the seller.
 --execute sends real testnet payments, checks bounded example deliveries and
 stores local receipts in the private journal. --durable records the signed
 transaction hash before broadcast; it is required for seller-v2 execution and
-seller-v3 execution.
+seller-v3 execution. File journals are plaintext by default; optional encryption
+uses BOUNCER_FILE_JOURNAL_KEY_FILE and the original journal on recovery.
 --shared-journal uses a separately initialized, encrypted PostgreSQL buyer
 journal for direct seller-v3 goals only. It requires --execute --durable and
 secure BOUNCER_BUYER_DATABASE_URL / BOUNCER_BUYER_JOURNAL_KEY_FILE settings.
@@ -467,7 +468,7 @@ async function main() {
         }
       } else {
         const journalPath = options.journal || config.journal_path || `${options.goals}.bouncer-journal.json`;
-        journal = new FileJournal(journalPath, config.contract_id, config.owner_account_id);
+        journal = openConfiguredFileJournal(journalPath, config.contract_id, config.owner_account_id);
         console.log(`[resource-agent] Journal: ${path.resolve(journalPath)}`);
       }
     }

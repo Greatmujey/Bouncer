@@ -89,9 +89,11 @@ claim; the legacy public GET route refuses v3 objects.
 This blocks a party who only observes the public on-chain memo/hash from
 claiming the result. It is **not complete identity or confidentiality**: the
 off-chain signature is itself a replayable bearer credential. Anyone who steals
-it may replay the same claim or read its stored result. Protect the journal,
-request bodies, logs, backups and transport; use HTTPS for a remote seller and
-properly authenticated sessions/access control where needed. The reference
+it may replay the same claim or read its stored result. Local journals are
+plaintext by default; [optional file encryption](FILE_JOURNALS.md) protects the
+stored file but not requests or a previously leaked signature. Protect the
+journal, request bodies, logs, backups and transport; use HTTPS for a remote
+seller and properly authenticated sessions/access control where needed. The reference
 file-backed server binds to loopback only and supplies no TLS, multi-user
 identity, expiry, revocation, secure hosting or distributed replay database. A
 separate experimental [PostgreSQL-backed v3 seller](SHARED_SELLER.md) coordinates

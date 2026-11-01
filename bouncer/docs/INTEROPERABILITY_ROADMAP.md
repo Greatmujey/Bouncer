@@ -17,7 +17,7 @@ that agent.
 | x402 source → three dependent resources | [Synthetic tests](DEPENDENT_WORKFLOWS.md#paid-x402-data-as-a-workflow-source-experimental) compose the published PipRail verifier with seller-v3 compute, storage, API and recovery. | No live combined workflow or independent FT seller; x402 content and public proof remain untrusted. |
 | Authenticated Bouncer seller-v3 | A [fresh testnet proof](SELLER_V3.md#separate-fresh-seller-v3-testnet-proof) ran native OutLayer → authenticated compute, storage and API with key-free FT recovery. | This is a custom testnet protocol with a self-hosted seller, not independent adoption. Claim signatures remain bearer credentials. |
 | Shared seller-v3 replay coordination | [Real PostgreSQL tests](SHARED_SELLER.md) exercise multiple worker processes, crashes and uncertain commits. | Synthetic payments only; one trusted, durable primary, with no automatic pending-work takeover. |
-| Shared direct-v3 buyer coordination | [Real PostgreSQL/process tests](SHARED_BUYER.md) reserve the signed hash and encrypted claim before a simulated send and recover the same hash. | Synthetic receipts only; one fenced primary, stable journal IDs and trusted workers. FT-call, x402, OutLayer and workflows are not covered. |
+| Shared direct-v3 buyer coordination | [Real PostgreSQL/process tests](SHARED_BUYER.md) reserve the signed hash and encrypted claim before a simulated send and recover the same hash; new owners can opt into stable intent IDs across journals. | Synthetic receipts only; one fenced primary, stable owner-assigned IDs and trusted workers. FT-call, x402, OutLayer and workflows are not covered. |
 | Owner-only Ref testnet setup | Owner acquired test tokens and separately funded the vault in the live runs. | This is **not** an agent-guarded swap. Plain outgoing Ref `ft_transfer` does not call Bouncer's deposit hook. |
 
 No independent FT-paid commercial compute, storage or API purchase is
@@ -111,6 +111,24 @@ consent, and no offers or payments were requested:
   agent bearer authentication and internal payment request flow. The inspected
   API does not establish acceptance of Bouncer's v3 claim or an independently
   available compute, storage or data service. No request or payment was sent.
+- [PatchBond at `a448538`](https://github.com/PatchBond/patchbond/blob/a4485389453818d495e48b7d46a299401833213b/contract/vault/src/deposit.rs)
+  documents testnet Circle USDC bonds for GitHub submissions, not a compute,
+  storage or API purchase. The source uses the FT `sender_id` as the bond payer;
+  a Bouncer transfer would identify the Bouncer contract, not its owner. Its
+  later [bond settlement](https://github.com/PatchBond/patchbond/blob/a4485389453818d495e48b7d46a299401833213b/contract/vault/src/settle.rs)
+  pays the payer through [plain `ft_transfer`](https://github.com/PatchBond/patchbond/blob/a4485389453818d495e48b7d46a299401833213b/contract/vault/src/payout.rs),
+  which does not call Bouncer's `ft_on_transfer` or credit its internal vault.
+  That later payout is distinct from the token resolver's immediate unused
+  amount in the original transfer-call. We did not establish deployment/source
+  correspondence, availability, terms or a safe Bouncer refund route; no bond
+  or request was made.
+- [Gliana's Saku at `87c9e51`](https://github.com/Gliana-Labs/gliana-near-x402/tree/87c9e518a05d6de9683300cb7a6acc46e23473e9)
+  describes using NEAR Chain Signatures to authorize EIP-3009 USDC payments
+  for a Base **mainnet** x402 API from a separate allowance contract. That is
+  not a NEAR testnet FT transfer through Bouncer's vault or its existing
+  spending policies. Bridging the two would require a separately designed and
+  audited authority, accounting and recovery model; it is not implemented here.
+  No API request, signature or payment was sent.
 
 The right next step is seller cooperation or a compatible deployed protocol,
 not weakening the owner guard or claiming a self-hosted adapter is independent.

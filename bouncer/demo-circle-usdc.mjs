@@ -10,7 +10,7 @@ import util from 'node:util';
 import { fileURLToPath } from 'node:url';
 import nearApi from 'near-api-js';
 import { MonotonicAccount, PaymentRpcProvider } from './agent/near-account.mjs';
-import { FileJournal } from './agent/procurement.mjs';
+import { openConfiguredFileJournal, validateConfiguredFileJournalKey } from './agent/procurement.mjs';
 import { runResourceAgent, httpResourceProvider } from './agent/resource-agent.mjs';
 import { recoverDirectPayment } from './agent/recover-direct-payment.mjs';
 import { createResourceProvider } from './services/resource-provider.mjs';
@@ -83,6 +83,7 @@ async function createFunded(id, key) {
 }
 
 async function main() {
+  validateConfiguredFileJournalKey(); // Before any live setup, funding or network request.
   if ((await provider.viewNodeStatus())?.chain_id !== 'testnet') throw new Error('RPC must report testnet');
   const metadata = await view(TOKEN, 'ft_metadata');
   if (metadata?.spec !== 'ft-1.0.0' || metadata?.symbol !== 'USDC' || metadata?.decimals !== 6) throw new Error('unexpected Circle testnet USDC metadata');
@@ -147,7 +148,7 @@ async function main() {
   fs.writeFileSync(path.join(dir, 'provider-config.json'), JSON.stringify({ contractId, ownerAccountId: ownerId, products }, null, 2) + '\n', { mode: 0o600 });
   const service = createResourceProvider({ rpcProvider: provider, contractId, ownerAccountId: ownerId, products, dataDir: path.join(dir, 'development-provider') });
   await new Promise((resolve, reject) => { service.server.once('error', reject); service.server.listen(0, '127.0.0.1', resolve); });
-  let journal = new FileJournal(state, contractId, ownerId), success = false;
+  let journal = openConfiguredFileJournal(state, contractId, ownerId), success = false;
   try {
     const client = httpResourceProvider(`http://127.0.0.1:${service.server.address().port}`);
     let reviewedPlan;
@@ -184,7 +185,7 @@ async function main() {
     if (broadcasts !== 1 || pending?.status !== 'pending' || pending.payment_version !== 'direct-signed-v1' || !firstHash ||
         journal.get(goals[1].id) || journal.get(goals[2].id) ||
         BigInt(await view(TOKEN, 'ft_balance_of', { account_id: vendorId })) !== PRICE) throw new Error('lost-response journal or payment mismatch');
-    journal.close(); journal = new FileJournal(state, contractId, ownerId);
+    journal.close(); journal = openConfiguredFileJournal(state, contractId, ownerId);
     const recovered = await recoverDirectPayment({ plan: reviewedPlan, requestId: goals[0].id, provider, journal });
     if (recovered.settlement.tx_hash !== firstHash || journal.get(goals[0].id)?.status !== 'completed') throw new Error('key-free payment recovery mismatch');
     let injected = false;
@@ -202,7 +203,7 @@ async function main() {
     const first = journal.get(goals[0].id);
     if (!injected || first?.tx_hash !== firstHash || first.delivery?.status !== 'unverified' || journal.get(goals[1].id) || journal.get(goals[2].id) ||
         BigInt(await view(TOKEN, 'ft_balance_of', { account_id: vendorId })) !== PRICE) throw new Error('verify-before-next-payment gate failed');
-    journal.close(); journal = new FileJournal(state, contractId, ownerId);
+    journal.close(); journal = openConfiguredFileJournal(state, contractId, ownerId);
     const result = await runResourceAgent({ ...common, journal, fulfill: client.fulfill });
     if (result.payments.skipped !== 1 || result.payments.paid !== 2 || result.deliveries.length !== 3 ||
         journal.get(goals[0].id)?.tx_hash !== firstHash || goals.some(goal => journal.get(goal.id)?.delivery?.status !== 'verified') ||

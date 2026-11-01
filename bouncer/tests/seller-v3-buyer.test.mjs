@@ -21,9 +21,10 @@ const goals = [
   { id: 'storage', resource: 'storage', input: { name: 'file', content: 'protected contents' } },
   { id: 'api', resource: 'api', input: { text: 'some useful data' } },
 ].map(item => ({ ...item, policy_id: 'resources', token, payee, max_amount: '1000', order_binding: 'seller-v3' }));
-function fixture() {
+function fixture({ encryptionKey, keyFile } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bouncer-v3-buyer-')), file = path.join(root, 'journal.json'), state = path.join(root, 'seller');
-  let journal = new FileJournal(file, contract, owner), nonce = 0n, sends = 0, sellerBalance = 0n, lost = true; const chains = new Map();
+  const journalOptions = encryptionKey ? { encryptionKey, ...(keyFile ? { keyFile } : {}) } : {};
+  let journal = new FileJournal(file, contract, owner, journalOptions), nonce = 0n, sends = 0, sellerBalance = 0n, lost = true; const chains = new Map();
   const account = { accountId: owner, signer, async createTransaction(receiver, actions, key) {
     return nearApi.transactions.createTransaction(owner, key, receiver, ++nonce, actions, Buffer.alloc(32, 4));
   } };
@@ -64,9 +65,9 @@ function fixture() {
       fetchImpl: (url, options) => fetch(url, { ...options, headers: { ...options.headers, connection: 'close' } }) });
     return actual;
   }
-  async function restart() { await server.close(); journal.close(); journal = new FileJournal(file, contract, owner); return startSeller(); }
-  const run = subset => runResourceAgent({ contractId: contract, ownerAccountId: owner, goals: subset, providerUrl: origin,
-    provider, account, publicKey, journal, ...client, execute: true, durablePayment: true, log: () => {} });
+  async function restart() { await server.close(); journal.close(); journal = new FileJournal(file, contract, owner, journalOptions); return startSeller(); }
+  const run = (subset, extra = {}) => runResourceAgent({ contractId: contract, ownerAccountId: owner, goals: subset, providerUrl: origin,
+    provider, account, publicKey, journal, ...client, execute: true, durablePayment: true, log: () => {}, ...extra });
   return { root, file, state, provider, account, startSeller, restart, run, get client() { return client; }, get journal() { return journal; },
     get sends() { return sends; }, async cleanup() { if (server) await server.close(); journal.close(); fs.rmSync(root, { recursive: true, force: true }); } };
 }
@@ -97,6 +98,61 @@ test('authenticated compute, storage and API recover original signed claim after
     assert.equal(quoteState.version, 4); assert.equal(Object.keys(quoteState.quotes).length, 3);
     assert.equal(Object.values(quoteState.redemptions).filter(e => e.status === 'completed').length, 3);
   } finally { await f.cleanup(); }
+});
+
+test('encrypted v3 file journal preserves the original claim across lost response and signing-key-free recovery', async () => {
+  const encryptionKey = crypto.randomBytes(32), f = fixture({ encryptionKey });
+  try {
+    await f.startSeller();
+    await assert.rejects(f.run([goals[0]]), /synthetic response loss/);
+    const pending = structuredClone(f.journal.get('compute'));
+    assert.equal(f.sends, 1); assert.equal(pending.status, 'pending');
+    const ciphertext = fs.readFileSync(f.file, 'utf8');
+    assert.ok(!ciphertext.includes(pending.resource_authorization.signature));
+    assert.ok(!ciphertext.includes(pending.tx_hash));
+    await f.restart();
+    const recovered = await recoverResourceDelivery({ goal: goals[0], contractId: contract, ownerAccountId: owner, providerUrl: origin,
+      provider: f.provider, journal: f.journal, ...f.client, log: () => {} });
+    assert.equal(recovered.receipt.tx_hash, pending.tx_hash); assert.equal(f.sends, 1);
+    const result = await f.run(goals.slice(1));
+    assert.equal(result.payments.paid, 2); assert.equal(f.sends, 3);
+    for (const goal of goals) assert.equal(f.journal.get(goal.id).delivery.status, 'verified');
+    assert.ok(!fs.readFileSync(f.file, 'utf8').includes(pending.resource_authorization.signature));
+  } finally { await f.cleanup(); encryptionKey.fill(0); }
+});
+
+test('a changed configured encryption key stops a v3 payment before reservation and broadcast', async () => {
+  const keyRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'bouncer-v3-key-')), keyFile = path.join(keyRoot, 'key');
+  const encryptionKey = crypto.randomBytes(32); fs.writeFileSync(keyFile, encryptionKey, { mode: 0o600 });
+  const f = fixture({ encryptionKey, keyFile });
+  try {
+    await f.startSeller();
+    await assert.rejects(f.run([goals[0]], { beforePayment: async () => fs.writeFileSync(keyFile, crypto.randomBytes(32)) }), /key changed or is unreadable/);
+    assert.equal(f.sends, 0); assert.equal(fs.existsSync(f.file), false);
+    assert.throws(() => f.journal.get('compute'), /failed write/);
+  } finally { await f.cleanup(); encryptionKey.fill(0); fs.rmSync(keyRoot, { recursive: true, force: true }); }
+});
+
+test('encrypted v3 journal directory-sync failure records a pending claim but blocks broadcast and repayment', async () => {
+  const encryptionKey = crypto.randomBytes(32), f = fixture({ encryptionKey }), sync = fs.fsyncSync;
+  try {
+    await f.startSeller(); const root = fs.statSync(f.root); let injected = false;
+    fs.fsyncSync = fd => {
+      const stat = fs.fstatSync(fd);
+      if (!injected && stat.isDirectory() && stat.dev === root.dev && stat.ino === root.ino) {
+        injected = true; throw new Error('synthetic encrypted journal directory sync failure');
+      }
+      return sync(fd);
+    };
+    await assert.rejects(f.run([goals[0]]), /synthetic encrypted journal directory sync failure/);
+    fs.fsyncSync = sync;
+    assert.equal(injected, true); assert.equal(f.sends, 0); assert.throws(() => f.journal.get('compute'), /failed write/);
+    const raw = fs.readFileSync(f.file, 'utf8'); assert.equal(JSON.parse(raw).format, 'bouncer-encrypted-file-journal-v1');
+    await f.restart();
+    const pending = f.journal.get('compute'); assert.equal(pending.status, 'pending');
+    assert.ok(!raw.includes(pending.resource_authorization.signature)); assert.ok(!raw.includes(pending.tx_hash));
+    await assert.rejects(f.run([goals[0]]), /unresolved pending/); assert.equal(f.sends, 0);
+  } finally { fs.fsyncSync = sync; await f.cleanup(); encryptionKey.fill(0); }
 });
 
 test('tampered journal claim blocks key-free recovery before RPC or seller contact', async () => {

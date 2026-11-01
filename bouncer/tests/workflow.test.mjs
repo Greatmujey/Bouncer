@@ -35,8 +35,11 @@ function makeWorkflow(origin) {
     step('api', 'api', { text: { from: 'storage' } }),
   ] };
 }
-async function fixture() {
+async function fixture({ encrypted = false } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bouncer-workflow-'));
+  const journalKey = encrypted ? crypto.randomBytes(32) : undefined, journalKeyFile = path.join(dir, 'journal.key');
+  if (journalKey) fs.writeFileSync(journalKeyFile, journalKey, { mode: 0o600 });
+  const journalOptions = journalKey ? { encryptionKey: journalKey } : {};
   let sends = 0, sourcePays = 0, receiptReads = 0, quoteCalls = [], sourcePreviews = 0, nonce = 0, spent = 0n, readsFail = false, ambiguous = false;
   let dailyCap = 1000n, balance = 1000n, beforeQuote, beforeFulfill;
   const events = [], transactions = new Map(), keypair = nearApi.KeyPair.fromRandom('ed25519');
@@ -102,20 +105,20 @@ async function fixture() {
     async recoverSource({ goal }) { events.push('source:recover'); assert.equal(goal.id, 'price'); return { status: 'REUSED', delivery: structuredClone(delivery) }; },
   };
   const journalPath = path.join(dir, 'journal.json');
-  let journal = new FileJournal(journalPath, contract, owner);
+  let journal = new FileJournal(journalPath, contract, owner, journalOptions);
   const workflow = makeWorkflow(origin);
   const invoke = (options = {}) => runWorkflow({ workflow, source: { account, publicKey }, resources, provider, journal, execute: true, runners, log: () => {}, ...options });
-  return { dir, workflow, resources, runners, provider, account, publicKey, delivery, events, transactions, journalPath, invoke,
+  return { dir, workflow, resources, runners, provider, account, publicKey, delivery, events, transactions, journalPath, journalKeyFile, invoke,
     get service() { return service; }, get journal() { return journal; }, get sends() { return sends; }, get sourcePays() { return sourcePays; }, get sourcePreviews() { return sourcePreviews; },
     get receiptReads() { return receiptReads; }, get quotes() { return quoteCalls; },
     setDailyCap(n) { dailyCap = BigInt(n); }, setBalance(n) { balance = BigInt(n); }, setReadFailure(v) { readsFail = v; },
     setAmbiguous() { ambiguous = true; }, setBeforeQuote(fn) { beforeQuote = fn; }, setBeforeFulfill(fn) { beforeFulfill = fn; },
-    reopen() { journal.close(); journal = new FileJournal(journalPath, contract, owner); },
+    reopen() { journal.close(); journal = new FileJournal(journalPath, contract, owner, journalOptions); },
     async restartSeller() { await service.close(); service = createResourceProvider(sellerOptions);
       await new Promise((resolve, reject) => { service.server.once('error', reject); service.server.listen(sellerPort, '127.0.0.1', resolve); }); },
-    async close() { journal?.close(); await service.close(); fs.rmSync(dir, { recursive: true, force: true }); } };
+    async close() { journal?.close(); journalKey?.fill(0); await service.close(); fs.rmSync(dir, { recursive: true, force: true }); } };
 }
-async function withFixture(fn) { const f = await fixture(); try { await fn(f); } finally { await f.close(); } }
+async function withFixture(fn, options) { const f = await fixture(options); try { await fn(f); } finally { await f.close(); } }
 
 test('verified independent data flows through real offline compute, storage and API orders, then key-free replay', () => withFixture(async f => {
   const result = await f.invoke();
@@ -567,8 +570,8 @@ test('dependent proof stops after recovery failure, leaving the first hash pendi
   assert.equal(oracle.sends, 1); assert.equal(f.sends, 1);
 }));
 
-for (const orderBinding of [undefined, 'seller-v2', 'seller-v3']) {
-  test(`dependent ${orderBinding ?? 'legacy'} proof recovers in the real key-free CLI with restarted seller and synthetic RPC`, () => withFixture(async f => {
+for (const { orderBinding, encrypted } of [{}, { orderBinding: 'seller-v2' }, { orderBinding: 'seller-v3' }, { orderBinding: 'seller-v3', encrypted: true }]) {
+  test(`dependent ${orderBinding ?? 'legacy'}${encrypted ? ' encrypted-journal' : ''} proof recovers in the real signing-key-free CLI with restarted seller and synthetic RPC`, () => withFixture(async f => {
     const workflow = makeOracleDependentWorkflow({ goal: f.workflow.source.goal, token, payee, policyId: 'resources',
       price: '100', providerUrl: 'http://127.0.0.1:0', orderBinding });
     const oracle = attachSyntheticOracle({ provider: f.provider, goal: workflow.source.goal, journal: f.journal,
@@ -599,11 +602,18 @@ for (const orderBinding of [undefined, 'seller-v2', 'seller-v3']) {
       const proof = await runDependentLiveProof({ workflow, provider: f.provider,
         source: { account: oracle.account, publicKey: oracle.publicKey }, resources: f.resources, getJournal: () => f.journal,
         recoverWithoutKeys: async ({ firstHash }) => {
+          if (encrypted) {
+            const pending = f.journal.get('dependent-compute');
+            assert.ok(pending.resource_authorization.signature);
+            const contents = fs.readFileSync(f.journalPath, 'utf8');
+            assert.ok(!contents.includes(pending.resource_authorization.signature)); assert.ok(!contents.includes(firstHash));
+          }
           await f.service.close(); f.journal.close();
           try {
             const cli = fileURLToPath(new URL('../agent/workflow.mjs', import.meta.url));
             const output = await promisify(execFile)(process.execPath, [cli, '--workflow', workflowPath, '--journal', f.journalPath,
-              '--rpc', rpc, '--local-provider', configPath, '--recover-only'], { timeout: 20_000, env: { ...process.env, NEAR_TESTNET_RPC: rpc } });
+              '--rpc', rpc, '--local-provider', configPath, '--recover-only'], { timeout: 20_000, env: { ...process.env, NEAR_TESTNET_RPC: rpc,
+                ...(encrypted ? { BOUNCER_FILE_JOURNAL_KEY_FILE: f.journalKeyFile } : {}) } });
             assert.match(output.stdout, /\[workflow\] RECOVERED/);
             assert.match(output.stdout, /Next unpaid step: dependent-storage/);
             assert.ok(output.stdout.includes(firstHash));
@@ -670,5 +680,5 @@ for (const orderBinding of [undefined, 'seller-v2', 'seller-v3']) {
       if (restarted) await restarted.close();
       await new Promise(resolve => rpcServer.close(resolve));
     }
-  }));
+  }, { encrypted }));
 }

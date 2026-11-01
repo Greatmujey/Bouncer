@@ -18,7 +18,7 @@ import crypto from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { pathToFileURL } from 'node:url';
 import nearApi from 'near-api-js';
-import { FileJournal } from './procurement.mjs';
+import { openConfiguredFileJournal } from './procurement.mjs';
 import { MonotonicAccount, PaymentRpcProvider } from './near-account.mjs';
 import { normalizeProgram, verifyOutlayerEvidence, OUTLAYER, NATIVE } from './outlayer.mjs';
 import { isTestnetAccount } from '../shared/account-id.mjs';
@@ -267,7 +267,7 @@ async function main() {
   if (options.help) {
     console.log('Usage: node bouncer/agent/oracle-outlayer.mjs --goal GOAL.json --key AGENT_KEY.json [--state JOURNAL.json] [--rpc URL] [--execute]');
     console.log('       node bouncer/agent/oracle-outlayer.mjs --goal GOAL.json --state JOURNAL.json [--rpc URL] --recover');
-    console.log('Dry run by default; --execute spends testnet NEAR once. --recover reads the original hash without a key.');
+    console.log('Dry run by default; --execute spends testnet NEAR once. --recover needs no NEAR signing key; encrypted file journals still require their separate key.');
     return;
   }
   if (!options.goal || (!options.recover && !options.key)) throw new Error('provide --goal and --key, or --goal with --recover; see --help');
@@ -277,7 +277,7 @@ async function main() {
   const provider = new PaymentRpcProvider(options.rpc || process.env.NEAR_TESTNET_RPC || 'https://test.rpc.fastnear.com');
   const state = path.resolve(expandHome(options.state || `${goalPath}.bouncer-journal.json`));
   if (options.recover && !fs.existsSync(state)) throw new Error('original journal not found; recovery cannot create one');
-  const journal = options.execute || options.recover ? new FileJournal(state, goal.contract_id, goal.owner_account_id) : null;
+  const journal = options.execute || options.recover ? openConfiguredFileJournal(state, goal.contract_id, goal.owner_account_id) : null;
   try {
     let outcome;
     if (options.recover) outcome = await recoverOracleGoal({ goal, provider, journal });

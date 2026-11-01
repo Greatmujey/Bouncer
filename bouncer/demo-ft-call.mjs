@@ -14,7 +14,7 @@ import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import nearApi from 'near-api-js';
 import { MonotonicAccount, PaymentRpcProvider } from './agent/near-account.mjs';
-import { FileJournal } from './agent/procurement.mjs';
+import { openConfiguredFileJournal, validateConfiguredFileJournalKey } from './agent/procurement.mjs';
 import { runFtCallGoal, recoverFtCallGoal } from './agent/ft-call.mjs';
 import { assertProjectRegistry, runProjectGoal, recoverProjectGoal } from './agent/outlayer-project.mjs';
 import { runPaidProjectMission } from './agent/paid-mission.mjs';
@@ -197,6 +197,7 @@ async function provePaidMission({ contract, contractId, owner, ownerId, fundingA
 }
 
 async function main() {
+  validateConfiguredFileJournalKey(); // Before any live setup, funding or network request.
   if ((await provider.viewNodeStatus())?.chain_id !== 'testnet') throw new Error('RPC must report testnet');
   await assertProviderTerms();
   const meta = await view(TOKEN, 'ft_metadata');
@@ -264,7 +265,7 @@ async function main() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bouncer-ftcall-'));
   const state = path.join(dir, 'journal.json'), goalPath = path.join(dir, 'goal.json');
   fs.writeFileSync(goalPath, JSON.stringify(goal, null, 2) + '\n', { mode: 0o600 });
-  let journal = new FileJournal(state, contractId, ownerId), sends = 0, inject = true, completed = false;
+  let journal = openConfiguredFileJournal(state, contractId, ownerId), sends = 0, inject = true, completed = false;
   const faulty = new Proxy(provider, { get(target, property) {
     if (property === 'sendTransactionUntil') return async (...args) => {
       const pending = journal.get(goal.id);
@@ -293,7 +294,7 @@ async function main() {
     const cli = await util.promisify(execFile)(process.execPath, [path.join(ROOT, 'bouncer/agent/ft-call.mjs'),
       '--goal', goalPath, '--state', state, '--rpc', RPC, '--recover'], { timeout: 90_000, maxBuffer: 64 * 1024 });
     if (!cli.stdout.includes('REUSED') || !cli.stdout.includes(tx)) throw new Error('separate key-free recovery did not reuse the transaction');
-    journal = new FileJournal(state, contractId, ownerId);
+    journal = openConfiguredFileJournal(state, contractId, ownerId);
     const recovered = await recoverFtCallGoal({ goal, provider, journal });
     if (recovered.settlement.used !== USD_AMOUNT.toString() || recovered.settlement.unused !== '0' || sends !== 1) throw new Error('unexpected FT settlement');
     const afterProvider = BigInt(await view(OUTLAYER, 'get_user_stablecoin_balance', { account_id: contractId }));
@@ -355,7 +356,7 @@ async function main() {
     const projectCli = await util.promisify(execFile)(process.execPath, [path.join(ROOT, 'bouncer/agent/outlayer-project.mjs'),
       '--goal', projectPath, '--state', state, '--rpc', RPC, '--recover'], { timeout: 90_000, maxBuffer: 64 * 1024 });
     if (!projectCli.stdout.includes('REUSED') || !projectCli.stdout.includes(projectTx)) throw new Error('paid project key-free recovery did not reuse the transaction');
-    journal = new FileJournal(state, contractId, ownerId);
+    journal = openConfiguredFileJournal(state, contractId, ownerId);
     const projectResult = await recoverProjectGoal({ goal: projectGoal, provider, journal });
     if (projectResult.delivery.prepaid_charged !== USD_AMOUNT.toString() || projectSends !== 1 ||
         BigInt(await view(contractId, 'outlayer_prepaid_balance', { token: TOKEN })) !== 0n ||

@@ -11,7 +11,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import nearApi from 'near-api-js';
-import { FileJournal } from './procurement.mjs';
+import { openConfiguredFileJournal } from './procurement.mjs';
 import { MonotonicAccount, PaymentRpcProvider } from './near-account.mjs';
 import { runOutlayerGoal, recoverOutlayerGoal, validateOutlayerGoal } from './outlayer.mjs';
 import { runOracleGoal, recoverOracleGoal, validateOracleGoal, assertOracleFreshForUse } from './oracle-outlayer.mjs';
@@ -165,7 +165,7 @@ async function main() {
       console.log(`[mission] Local development provider: ${local.url}`);
     }
     const client = routedResourceProvider({ providerUrl: resources.provider_url, goals: resources.goals, overrides });
-    if (options.execute || fs.existsSync(journalPath)) journal = new FileJournal(journalPath, goal.contract_id, goal.owner_account_id);
+    if (options.execute || fs.existsSync(journalPath)) journal = openConfiguredFileJournal(journalPath, goal.contract_id, goal.owner_account_id);
     const result = await runMixedMission({
       outlayer: { kind, goal, ...outlayer }, provider, journal, execute: options.execute,
       resources: { contractId: resources.contract_id, ownerAccountId: resources.owner_account_id, providerUrl: resources.provider_url,
