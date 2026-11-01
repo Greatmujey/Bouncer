@@ -61,10 +61,12 @@ provider must trust the deployed code, token and RPC. A 64-hex implicit token
 ID does not encode its network. Verify the network independently; a hostile
 RPC can lie. Never accept these values from the order itself as authority.
 
-The current runner follows no redirects. Quotes and redemption bodies are JSON
-and responses are bounded to 64 KiB; storage readback is bounded to 4096 bytes.
-Orders disclose their full inputs to the provider. The reference server is
-loopback-only and unauthenticated, without TLS or distributed durability. It
+The current runner follows no redirects. Quotes and redemption bodies are JSON;
+client response bodies are bounded to 64 KiB and storage readback to 4096 bytes.
+The reference server accepts request bodies of at most 32 KiB (allowing for JSON
+escaping of bounded input). Orders disclose their full inputs to the provider.
+The reference server is loopback-only and unauthenticated, without TLS or
+distributed durability. It
 is not a suitable public deployment.
 
 ## 1. Quote an exact order
@@ -101,12 +103,53 @@ and produces the following key orders:
 For the compute example, the normalized JSON is exactly
 `{"text":"Bouncer protocol test","rounds":3}` and its memo is the value above.
 The v1 memo is deterministic, so identical inputs have identical memos; it is
-not a seller-owned unique order challenge or buyer authentication. A real
-multi-customer provider needs a fresh seller-issued order binding and a
-compatible buyer flow; the current agent does not yet negotiate one. The quote
-is unsigned and has no expiry or delivery guarantee. The agent checks its
-fields against owner limits and may requote before paying; it does not
-implicitly trust a listing, model or quote as financial authority.
+not a seller-owned unique order challenge or buyer authentication. The quote is
+unsigned and has no expiry or delivery guarantee. The agent checks its fields
+against owner limits and may requote before paying; it does not implicitly trust
+a listing, model or quote as financial authority.
+
+### Optional seller-v2 binding
+
+An owner can explicitly require a seller-issued challenge by adding
+`"order_binding":"seller-v2"` to a resource goal or reviewed workflow step,
+or to the primary or an alternative in the AI planner's owner catalog. The
+buyer adds that field to `/quote` and rejects a v1 response; absent the opt-in,
+it requires the legacy v1 memo and rejects unsolicited v2. The seller must
+persist a fresh 128-bit challenge, its commitment to the normalized input and
+exact product terms before returning each v2 quote. The reference seller stores
+the commitment rather than the input; the buyer must retain its original input.
+For example:
+
+```json
+{"resource":"compute","input":{"text":"same work","rounds":2},"order_binding":"seller-v2"}
+```
+
+For the **fixed test challenge** `00112233445566778899aabbccddeeff`, the
+response's `quote.memo` is exactly:
+
+```text
+bouncer-order-v2:compute:00112233445566778899aabbccddeeff:88425334a4bb614fc54e3425a4d9cb3203fa9b4548ac732e006fd3d53d315fc5
+```
+
+See the SDK's [exact byte algorithm, fixed vector and seller responsibilities](../packages/provider-sdk/README.md#opt-in-seller-issued-orders-v2).
+The included reference seller uses a cryptographically random challenge and
+atomically stores the first verified transaction hash for each challenge before
+fulfillment. A different hash for the same challenge is rejected, even if it
+also paid; same-hash replay is idempotent or requires manual reconciliation.
+The challenge is public, not authentication or a secret. Without separate
+authentication an observer with the order and transaction hash can attempt to
+redeem first; this interface cannot protect private work. No automatic refund is
+provided for an incorrect or second payment.
+
+V2 live execution requires durable signed-hash journaling; retain the same goals,
+provider state and journal for recovery. A resource-agent quote dry run and an
+AI quote comparison can persist v2 quotes without making any payment. The
+reference state holds at most 1,024 v2 quotes per directory, with no automatic
+eviction: unpaid quotes cannot safely be expired merely because time elapsed,
+since a delayed valid payment may exist. At capacity it fails closed. The
+state migrates to version 3 upon first issuance; do not restore older snapshots
+or run older software against it. V2 has adversarial offline coverage, but no
+independent FT seller adoption or live v2 purchase has been demonstrated.
 
 ## 2. Confirm payment and redeem
 
@@ -116,8 +159,11 @@ After a finalized payment the client sends:
 {"tx_hash":"<payment transaction hash>","resource":"compute","input":{"text":"Bouncer protocol test","rounds":3}}
 ```
 
-The endpoint is `POST /redeem`. Before any paid side effect, a provider should
-fetch the transaction from its trusted NEAR testnet RPC with `FINAL` execution
+The example is v1; a v2 redemption also includes the **exact quoted `memo`**,
+which identifies the seller's persisted order. Its terms come from the seller's
+state, never from the redemption body. The endpoint is `POST /redeem`. Before
+any paid side effect, a provider should fetch the transaction from its trusted
+NEAR testnet RPC with `FINAL` execution
 and fail closed unless the expected receipts have completed successfully. The
 [provider SDK](../packages/provider-sdk/README.md) can be packed and installed
 locally by a seller (it is not published) and checks the transaction hash,

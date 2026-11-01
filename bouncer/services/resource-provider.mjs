@@ -10,7 +10,9 @@ import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import nearApi from 'near-api-js';
-import { fetchPublicRepository, normalizeRepository } from './github-data.mjs';
+import { fetchPublicRepository } from './github-data.mjs';
+import { normalizeOrder, orderMemo, orderMemoV2, challengeFromOrderMemo } from '../packages/provider-sdk/lib/resource-order.mjs';
+export { normalizeOrder, orderMemo, orderMemoV2, challengeFromOrderMemo };
 import { validateRpcEndpoint } from '../shared/rpc-endpoint.mjs';
 import { isTestnetAccount, isTestnetToken } from '../shared/account-id.mjs';
 import { isTransactionHash } from '../shared/direct-payment-settlement.mjs';
@@ -20,43 +22,35 @@ const digest = value => crypto.createHash('sha256').update(value).digest('hex');
 const plainObject = value => value && typeof value === 'object' && !Array.isArray(value);
 const bytes = value => Buffer.byteLength(value, 'utf8');
 const MAX_IN_FLIGHT_REDEMPTIONS = 8;
-
-/** Validate and normalize input so the on-chain memo binds the exact order. */
-export function normalizeOrder(resource, input) {
-  if (!plainObject(input)) throw new Error('resource input must be an object');
-  if (resource === 'compute') {
-    if (typeof input.text !== 'string' || bytes(input.text) > 1024 || !Number.isInteger(input.rounds) || input.rounds < 1 || input.rounds > 20_000 || Object.keys(input).length !== 2) {
-      throw new Error('compute needs text (max 1024 bytes) and rounds (1-20000)');
-    }
-    return { text: input.text, rounds: input.rounds };
-  }
-  if (resource === 'storage') {
-    if (typeof input.name !== 'string' || !/^[a-z0-9_-]{1,40}$/.test(input.name) || typeof input.content !== 'string' || bytes(input.content) > 4096 || Object.keys(input).length !== 2) {
-      throw new Error('storage needs a safe name and content (max 4096 bytes)');
-    }
-    return { name: input.name, content: input.content };
-  }
-  if (resource === 'api') {
-    if (Object.keys(input).length === 1 && Object.hasOwn(input, 'repo')) return { repo: normalizeRepository(input.repo) };
-    if (typeof input.text !== 'string' || bytes(input.text) > 4096 || Object.keys(input).length !== 1 || !Object.hasOwn(input, 'text')) {
-      throw new Error('api needs text (max 4096 bytes) or a public GitHub owner/repository');
-    }
-    return { text: input.text };
-  }
-  throw new Error('unsupported resource');
+// 4096 bytes of input can expand to 24,576 bytes when JSON-escaped (for
+// example NUL characters), plus order metadata. Keep HTTP bounded without
+// rejecting otherwise valid maximally escaped normalized inputs.
+const MAX_HTTP_ORDER_BYTES = 32 * 1024;
+// Never evict a quote automatically: an apparently unpaid quote may already
+// have an unresolved broadcast. The local prototype fails closed at capacity.
+export const MAX_SELLER_QUOTES = 1024;
+const RESOURCES = ['compute', 'storage', 'api'];
+const CHALLENGE = /^[a-f0-9]{32}$/;
+const exactKeys = (obj, keys) => plainObject(obj) && Object.keys(obj).length === keys.length && keys.every(key => Object.hasOwn(obj, key));
+function validProduct(p) {
+  return exactKeys(p, ['policy_id', 'token', 'payee', 'amount']) && typeof p.policy_id === 'string' && p.policy_id.trim() &&
+    bytes(p.policy_id) <= 128 && isTestnetToken(p.token) && isTestnetAccount(p.payee) && typeof p.amount === 'string' &&
+    /^[1-9][0-9]{0,38}$/.test(p.amount) && BigInt(p.amount) <= (1n << 128n) - 1n;
 }
-
-/** The memo commits to the resource and normalized payload, not just a label. */
-export function orderMemo(resource, input) {
-  const normalized = normalizeOrder(resource, input);
-  return `bouncer-order-v1:${resource}:${digest(JSON.stringify(normalized))}`;
+function savedMemoChallenge(resource, memo) {
+  if (!RESOURCES.includes(resource) || typeof memo !== 'string') throw new Error('invalid redemption memo');
+  if (new RegExp(`^bouncer-order-v1:${resource}:[a-f0-9]{64}$`).test(memo)) return null;
+  const match = /^bouncer-order-v2:(compute|storage|api):([a-f0-9]{32}):[a-f0-9]{64}$/.exec(memo);
+  if (!match || match[1] !== resource) throw new Error('invalid redemption memo');
+  return match[2];
 }
 
 /** Seller-pinned order evidence; trusted RPC, Bouncer and token, not a light-client proof. */
-function expectation({ txHash, contractId, ownerAccountId = contractId, product, resource, input }) {
+function expectation({ txHash, contractId, ownerAccountId = contractId, product, resource, input, memo }) {
   if (!plainObject(product)) throw new Error('invalid seller product');
+  if (memo !== undefined) challengeFromOrderMemo(resource, input, memo);
   return { tx_hash: txHash, contract_id: contractId, owner_account_id: ownerAccountId, policy_id: product.policy_id,
-    token: product.token, payee: product.payee, amount: product.amount, memo: orderMemo(resource, input) };
+    token: product.token, payee: product.payee, amount: product.amount, memo: memo ?? orderMemo(resource, input) };
 }
 export function verifyPayment(outcome, args) {
   return verifyProviderPayment(outcome, expectation(args));
@@ -171,14 +165,13 @@ export function createResourceProvider({ rpcProvider, contractId, ownerAccountId
       !isTestnetAccount(contractId) || !isTestnetAccount(ownerAccountId) || !plainObject(products) ||
       typeof dataDir !== 'string' || !dataDir || typeof adoptLegacyState !== 'boolean') throw new Error('provider configuration is invalid');
   const pinnedProducts = Object.create(null);
-  for (const name of ['compute', 'storage', 'api']) {
+  for (const name of RESOURCES) {
     const p = products[name];
-    if (!plainObject(p) || typeof p.policy_id !== 'string' || !p.policy_id.trim() || bytes(p.policy_id) > 128 ||
-        !isTestnetToken(p.token) || !isTestnetAccount(p.payee) || typeof p.amount !== 'string' ||
-        !/^[1-9][0-9]{0,38}$/.test(p.amount) || BigInt(p.amount) > (1n << 128n) - 1n) throw new Error(`invalid ${name} product`);
-    // Do not let later mutation of the caller's config change what this
-    // running seller quotes or treats as a valid payment.
-    pinnedProducts[name] = Object.freeze({ policy_id: p.policy_id, token: p.token, payee: p.payee, amount: p.amount });
+    if (!plainObject(p)) throw new Error(`invalid ${name} product`);
+    const product = { policy_id: p.policy_id, token: p.token, payee: p.payee, amount: p.amount };
+    if (!validProduct(product)) throw new Error(`invalid ${name} product`);
+    // Snapshot a running seller's prices rather than trusting a caller or quote.
+    pinnedProducts[name] = Object.freeze(product);
   }
   Object.freeze(pinnedProducts);
   const root = path.resolve(dataDir);
@@ -186,27 +179,52 @@ export function createResourceProvider({ rpcProvider, contractId, ownerAccountId
   ensureDirectory(root);
   const lock = acquireStoreLock(root);
   const statePath = path.join(root, 'redemptions.json');
-  let redemptions = Object.create(null);
+  let redemptions = Object.create(null), quotes = Object.create(null), stateVersion = 2;
   try {
     fs.mkdirSync(storageDir, { recursive: true, mode: 0o700 });
     // Make new object-directory entries durable before any redemption.
     syncDirectory(root);
     if (fs.existsSync(statePath)) {
       const saved = JSON.parse(fs.readFileSync(statePath, 'utf8'));
-      if (!plainObject(saved) || ![1, 2].includes(saved.version) || !plainObject(saved.redemptions)) throw new Error('invalid redemption state');
-      if (saved.version === 2 && (saved.contract_id !== contractId || saved.owner_account_id !== ownerAccountId || saved.network !== 'testnet')) {
+      if (!plainObject(saved) || ![1, 2, 3].includes(saved.version) || !plainObject(saved.redemptions) ||
+          (saved.version === 3 && (!plainObject(saved.quotes) || Object.keys(saved.quotes).length > MAX_SELLER_QUOTES)) ||
+          (saved.version !== 3 && Object.hasOwn(saved, 'quotes'))) throw new Error('invalid redemption state');
+      if (saved.version >= 2 && (saved.contract_id !== contractId || saved.owner_account_id !== ownerAccountId || saved.network !== 'testnet')) {
         throw new Error('redemption state belongs to a different contract, owner or network');
       }
       if (saved.version === 1 && Object.keys(saved.redemptions).length && !adoptLegacyState) {
         throw new Error('legacy redemption state is not bound to an owner/contract; stop all old writers, review it and explicitly adopt it');
       }
+      if (saved.version === 3) {
+        const claimed = new Set();
+        for (const [challenge, quote] of Object.entries(saved.quotes)) {
+          if (!CHALLENGE.test(challenge) || !exactKeys(quote, ['resource', 'memo', 'product', 'read_only', 'tx_hash']) ||
+              savedMemoChallenge(quote.resource, quote.memo) !== challenge || !validProduct(quote.product) ||
+              typeof quote.read_only !== 'boolean' || (quote.read_only && quote.resource !== 'api') ||
+              !(quote.tx_hash === null || isTransactionHash(quote.tx_hash))) throw new Error('invalid saved seller quote');
+          if (quote.tx_hash !== null) {
+            if (claimed.has(quote.tx_hash)) throw new Error('transaction claimed by multiple seller quotes');
+            claimed.add(quote.tx_hash);
+          }
+        }
+        quotes = Object.assign(Object.create(null), saved.quotes);
+        stateVersion = 3;
+      }
       for (const [hash, item] of Object.entries(saved.redemptions)) {
         if (!isTransactionHash(hash) || !plainObject(item) || !['pending', 'completed'].includes(item.status) ||
-            !['compute', 'storage', 'api'].includes(item.resource) || typeof item.memo !== 'string' ||
-            !new RegExp(`^bouncer-order-v1:${item.resource}:[a-f0-9]{64}$`).test(item.memo) ||
             (item.status === 'completed' && !plainObject(item.result))) throw new Error('invalid redemption entry');
+        const challenge = savedMemoChallenge(item.resource, item.memo);
+        if (challenge !== null && (saved.version !== 3 || !quotes[challenge] || quotes[challenge].tx_hash !== hash ||
+            quotes[challenge].resource !== item.resource || quotes[challenge].memo !== item.memo)) throw new Error('redemption does not match its seller quote');
       }
       redemptions = Object.assign(Object.create(null), saved.redemptions);
+      for (const quote of Object.values(quotes)) {
+        if (quote.tx_hash === null) continue;
+        const entry = redemptions[quote.tx_hash];
+        if ((!entry && !quote.read_only) || (entry && (entry.resource !== quote.resource || entry.memo !== quote.memo))) {
+          throw new Error('seller quote claim does not match redemption state');
+        }
+      }
       if (saved.version === 1) atomicJson(statePath, { version: 2, network: 'testnet', contract_id: contractId,
         owner_account_id: ownerAccountId, redemptions });
     }
@@ -224,11 +242,38 @@ export function createResourceProvider({ rpcProvider, contractId, ownerAccountId
   }
   function persist() {
     assertStore();
-    try { atomicJson(statePath, { version: 2, network: 'testnet', contract_id: contractId, owner_account_id: ownerAccountId, redemptions }); }
+    try { atomicJson(statePath, { version: stateVersion, network: 'testnet', contract_id: contractId, owner_account_id: ownerAccountId,
+      redemptions, ...(stateVersion === 3 ? { quotes } : {}) }); }
     catch (error) {
       stateFailed = true;
       throw new Error('provider state persistence failed; stop and reconcile manually', { cause: error });
     }
+  }
+  function quote(order) {
+    if (closing) throw new Error('provider is closing');
+    assertStore();
+    if (!plainObject(order) || !Object.hasOwn(pinnedProducts, order.resource)) throw new Error('unknown product');
+    const input = normalizeOrder(order.resource, order.input), product = pinnedProducts[order.resource];
+    if (!Object.hasOwn(order, 'order_binding')) return { resource: order.resource, ...product, memo: orderMemo(order.resource, input) };
+    if (order.order_binding !== 'seller-v2' || !exactKeys(order, ['resource', 'input', 'order_binding'])) {
+      throw new Error('unsupported or invalid order binding');
+    }
+    if (Object.keys(quotes).length >= MAX_SELLER_QUOTES) throw new Error('seller quote capacity reached; stop and reconcile existing orders');
+    let challenge;
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const candidate = crypto.randomBytes(16).toString('hex');
+      if (!Object.hasOwn(quotes, candidate)) { challenge = candidate; break; }
+    }
+    if (!challenge) throw new Error('could not allocate a unique seller challenge');
+    const memo = orderMemoV2(order.resource, input, challenge);
+    // Persist the seller-owned challenge and exact product BEFORE handing the
+    // quote to a buyer. No expiry/automatic deletion: an apparently unpaid
+    // order may already have a payment in an unavailable RPC.
+    quotes[challenge] = { resource: order.resource, memo, product: { ...product },
+      read_only: order.resource === 'api' && Object.hasOwn(input, 'repo'), tx_hash: null };
+    stateVersion = 3;
+    persist();
+    return { resource: order.resource, ...product, memo };
   }
   // Independent transactions can make progress concurrently, but a payment
   // hash has only one in-process redemption. A store lock excludes other
@@ -253,29 +298,44 @@ export function createResourceProvider({ rpcProvider, contractId, ownerAccountId
   async function redeem(order) {
     if (!plainObject(order) || !isTransactionHash(order.tx_hash)) throw new Error('invalid transaction hash');
     const { tx_hash: txHash, resource } = order;
-    const input = normalizeOrder(resource, order.input);
-    const memo = orderMemo(resource, input);
-    const product = pinnedProducts[resource];
+    const input = normalizeOrder(resource, order.input), readOnlyData = resource === 'api' && Object.hasOwn(input, 'repo');
+    const unique = Object.hasOwn(order, 'memo');
+    if (unique && !exactKeys(order, ['tx_hash', 'resource', 'input', 'memo'])) throw new Error('invalid seller-v2 redemption');
+    const memo = unique ? order.memo : orderMemo(resource, input);
+    const challenge = unique ? challengeFromOrderMemo(resource, input, memo) : null;
+    const savedQuote = challenge === null ? null : quotes[challenge];
+    if (unique && (!savedQuote || savedQuote.resource !== resource || savedQuote.memo !== memo || savedQuote.read_only !== readOnlyData)) {
+      throw new Error('seller quote is missing or does not match this order');
+    }
+    if (savedQuote?.tx_hash !== null && savedQuote?.tx_hash !== undefined && savedQuote.tx_hash !== txHash) {
+      throw new Error('seller quote already claimed by a different transaction');
+    }
+    const product = savedQuote?.product ?? pinnedProducts[resource];
     if (!product) throw new Error('unknown product');
     return singleFlight(txHash, resource, memo, async () => {
       assertStore();
       const prior = Object.hasOwn(redemptions, txHash) ? redemptions[txHash] : undefined;
       if (prior) {
-        if (prior.memo !== memo || prior.resource !== resource) throw new Error('transaction already belongs to a different order');
+        if (prior.memo !== memo || prior.resource !== resource || (savedQuote && savedQuote.tx_hash !== txHash)) {
+          throw new Error('transaction already belongs to a different order');
+        }
         if (prior.status !== 'completed') throw new Error('redemption pending: manual reconciliation required');
         return prior.result;
       }
       await readAndVerifyProviderPayment({ provider: rpcProvider,
-        expectation: expectation({ txHash, contractId, ownerAccountId, product, resource, input }) });
+        expectation: expectation({ txHash, contractId, ownerAccountId, product, resource, input, ...(unique ? { memo } : {}) }) });
       assertStore();
-      // A public GitHub GET is read-only and safe to repeat after an outage or
-      // crash; do not leave it irrecoverably pending before the GET succeeds.
-      // Compute and storage keep the stricter pending-before-side-effect rule.
-      const readOnlyData = resource === 'api' && Object.hasOwn(input, 'repo');
-      if (!readOnlyData) {
-        redemptions[txHash] = { status: 'pending', resource, memo };
-        persist();
+      // Different hashes may finish their RPC reads concurrently. Recheck and
+      // synchronously persist the quote claim with the pending redemption
+      // before either can run a non-repeatable side effect.
+      if (savedQuote) {
+        if (savedQuote.tx_hash !== null && savedQuote.tx_hash !== txHash) throw new Error('seller quote already claimed by a different transaction');
+        savedQuote.tx_hash = txHash;
       }
+      // Public GitHub GETs can be repeated, but their v2 quote claim must be
+      // durable even if the fetch fails before recording a completed result.
+      if (!readOnlyData) redemptions[txHash] = { status: 'pending', resource, memo };
+      if (!readOnlyData || savedQuote) persist();
       let result;
       try { result = await fulfill(resource, input, txHash, storageDir, dataFetch); }
       catch (error) {
@@ -307,15 +367,13 @@ export function createResourceProvider({ rpcProvider, contractId, ownerAccountId
       let size = 0;
       for await (const chunk of request) {
         size += chunk.length;
-        if (size > 12_000) throw new Error('request too large');
+        if (size > MAX_HTTP_ORDER_BYTES) throw new Error('request too large');
         chunks.push(chunk);
       }
       const order = JSON.parse(Buffer.concat(chunks).toString('utf8'));
       if (request.url === '/quote') {
-        if (!plainObject(order) || !Object.hasOwn(pinnedProducts, order.resource)) throw new Error('unknown product');
-        const memo = orderMemo(order.resource, order.input);
-        const quote = { resource: order.resource, ...pinnedProducts[order.resource], memo };
-        response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ ok: true, quote }));
+        const offered = quote(order);
+        response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ ok: true, quote: offered }));
         return;
       }
       const result = await redeem(order);
@@ -346,7 +404,7 @@ export function createResourceProvider({ rpcProvider, contractId, ownerAccountId
     }
     await finishClose();
   }
-  return { server, redeem, close };
+  return { server, quote, redeem, close };
 }
 
 

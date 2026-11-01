@@ -20,7 +20,7 @@ import { runOracleGoal, recoverOracleGoal, validateOracleGoal, assertOracleFresh
 import { runProjectGoal, recoverProjectGoal, validateProjectGoal, expectedBurnChecksum } from './outlayer-project.mjs';
 import { runResourceAgent, routedResourceProvider } from './resource-agent.mjs';
 import { recoverResourceDelivery } from './recover-direct-payment.mjs';
-import { normalizeOrder, startConfiguredProvider } from '../services/resource-provider.mjs';
+import { normalizeOrder, challengeFromOrderMemo, startConfiguredProvider } from '../services/resource-provider.mjs';
 import { validateProviderOrigin } from '../shared/provider-origin.mjs';
 import { isTestnetAccount, isTestnetToken } from '../shared/account-id.mjs';
 import { isTransactionHash } from '../shared/direct-payment-settlement.mjs';
@@ -91,7 +91,7 @@ export function validateWorkflow(raw) {
   if (!Array.isArray(raw.steps) || !raw.steps.length || raw.steps.length > 10) throw new Error('workflow requires 1 to 10 ordered resource steps');
   const earlier = new Set([sourceGoal.id]);
   const steps = raw.steps.map(step => {
-    if (!keys(step, ['id', 'resource', 'policy_id', 'token', 'payee', 'max_amount', 'input'], ['quote_amount', 'provider_id', 'provider_url'])) {
+    if (!keys(step, ['id', 'resource', 'policy_id', 'token', 'payee', 'max_amount', 'input'], ['quote_amount', 'provider_id', 'provider_url', 'order_binding'])) {
       throw new Error('workflow step must contain only reviewed resource and payment fields');
     }
     const stepId = id(step.id, 'step id');
@@ -103,10 +103,12 @@ export function validateWorkflow(raw) {
     if (exact !== undefined && BigInt(exact) > BigInt(amount)) throw new Error('selected quote exceeds the owner maximum');
     if (step.provider_id !== undefined && (typeof step.provider_id !== 'string' || !/^[A-Za-z0-9_-]{1,32}$/.test(step.provider_id))) throw new Error('invalid provider id');
     if (step.provider_url !== undefined) validateProviderOrigin(step.provider_url);
+    if (step.order_binding !== undefined && step.order_binding !== 'seller-v2') throw new Error('unsupported owner-reviewed order binding');
     const input = normalizeTemplate(step.resource, step.input, earlier);
     const result = { id: stepId, resource: step.resource, policy_id: step.policy_id, token: step.token, payee: step.payee,
       max_amount: amount, input, ...(exact === undefined ? {} : { quote_amount: exact }),
-      ...(step.provider_id === undefined ? {} : { provider_id: step.provider_id }), ...(step.provider_url === undefined ? {} : { provider_url: step.provider_url }) };
+      ...(step.provider_id === undefined ? {} : { provider_id: step.provider_id }), ...(step.provider_url === undefined ? {} : { provider_url: step.provider_url }),
+      ...(step.order_binding === undefined ? {} : { order_binding: step.order_binding }) };
     // Reuse the payment runner's account, amount, policy and memo validation.
     validatePlan({ contract_id: sourceGoal.contract_id, owner_account_id: sourceGoal.owner_account_id,
       requests: [{ id: stepId, resource: step.resource, policy_id: step.policy_id, token: step.token, payee: step.payee, amount: exact ?? amount }] });
@@ -266,12 +268,19 @@ export async function runWorkflow({ workflow: rawWorkflow, source = {}, resource
   }
   const sourceResult = projectedSource(kind, goal, independent.delivery);
   if (record?.status === 'completed' && record.tx_hash !== independent.delivery.tx_hash) throw new Error('completed workflow source hash differs from recovery evidence');
-  const artifacts = new Map([[goal.id, artifact(kind, goal.id, independent.delivery.tx_hash, sourceResult)]]), deliveries = [];
+  const artifacts = new Map([[goal.id, artifact(kind, goal.id, independent.delivery.tx_hash, sourceResult)]]), deliveries = [], challenges = new Set();
   const common = { contractId: goal.contract_id, ownerAccountId: goal.owner_account_id, providerUrl: workflow.provider_url,
     provider, journal, fulfill: resources.fulfill, readStorage: resources.readStorage, repositoryLookup: resources.repositoryLookup, log };
+  function checkChallenge(stage, request, remember = false) {
+    if (stage.order_binding !== 'seller-v2') return;
+    const challenge = challengeFromOrderMemo(stage.resource, stage.input, request?.memo);
+    if (challenges.has(challenge)) throw new Error(`${stage.id}: seller challenge was reused in this workflow`);
+    if (remember) challenges.add(challenge);
+  }
   // Existing paid stages are verified in order before ANY new resource payment.
   for (let i = 0; i < priorCount; i++) {
     const stage = materializeWorkflowStep(workflow.steps[i], artifacts);
+    checkChallenge(stage, journal.get(stage.id)?.request, true);
     const delivery = await recoverResource({ ...common, goal: stage });
     if (delivery?.id !== stage.id || !delivery.receipt || !isDeepStrictEqual(delivery.receipt.result, delivery.result)) throw new Error(`${stage.id}: recovered delivery is invalid`);
     artifacts.set(stage.id, artifact(stage.resource, stage.id, delivery.receipt.tx_hash, delivery.result));
@@ -291,6 +300,7 @@ export async function runWorkflow({ workflow: rawWorkflow, source = {}, resource
     const stage = materializeWorkflowStep(template, artifacts);
     const result = await runResource({ ...common, goals: [stage], getQuote: resources.getQuote, account: resources.account, publicKey: resources.publicKey,
       execute: true, durablePayment: true, beforePayment: async request => {
+        checkChallenge(stage, request);
         if (kind === 'oracle') assertOracleFreshForUse(independent.delivery);
         if (resources.beforePayment) await resources.beforePayment(request);
         if (kind === 'oracle') assertOracleFreshForUse(independent.delivery);
@@ -300,6 +310,7 @@ export async function runWorkflow({ workflow: rawWorkflow, source = {}, resource
     const delivery = result.deliveries[0], stored = journal.get(stage.id);
     if (result.payments.paid !== 1 || result.deliveries.length !== 1 || delivery?.id !== stage.id || stored?.status !== 'completed' || stored.delivery?.status !== 'verified' ||
         !isDeepStrictEqual(stored.delivery.receipt, delivery.receipt) || !isDeepStrictEqual(delivery.receipt?.result, delivery.result)) throw new Error(`${stage.id}: resource delivery was not durably verified`);
+    checkChallenge(stage, stored.request, true);
     artifacts.set(stage.id, artifact(stage.resource, stage.id, delivery.receipt.tx_hash, delivery.result));
     deliveries.push(delivery);
   }

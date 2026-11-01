@@ -8,6 +8,7 @@
 import nearApi from 'near-api-js';
 import { isTestnetAccount, isTestnetToken } from './lib/account-id.mjs';
 import { isTransactionHash, verifyDirectPayment } from './lib/direct-payment-settlement.mjs';
+export { normalizeOrder, orderMemo, orderMemoV2, challengeFromOrderMemo } from './lib/resource-order.mjs';
 
 const U128_MAX = (1n << 128n) - 1n;
 

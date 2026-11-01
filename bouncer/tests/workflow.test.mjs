@@ -17,7 +17,7 @@ import { ORACLE_TESTNET_PROJECT } from '../agent/oracle-outlayer.mjs';
 import { expectedBurnChecksum } from '../agent/outlayer-project.mjs';
 import { validateWorkflow, materializeWorkflowStep, runWorkflow } from '../agent/workflow.mjs';
 import { makeOracleDependentWorkflow, runDependentLiveProof } from '../agent/dependent-live-proof.mjs';
-import { createResourceProvider, orderMemo } from '../services/resource-provider.mjs';
+import { createResourceProvider, orderMemo, orderMemoV2, challengeFromOrderMemo } from '../services/resource-provider.mjs';
 import { computeResult } from './mock-delivery.mjs';
 import { mockHash, mockGuardedPayment } from './mock-guarded-payment.mjs';
 import { attachSyntheticOracle } from './mock-oracle-workflow.mjs';
@@ -73,9 +73,14 @@ async function fixture() {
     return nearApi.transactions.createTransaction(owner, providedKey, receiver, BigInt(++nonce), actions, Buffer.alloc(32, 7));
   } };
   const products = Object.fromEntries(['compute', 'storage', 'api'].map(resource => [resource, { policy_id: 'resources', token, payee, amount: '10' }]));
-  const service = createResourceProvider({ rpcProvider: provider, contractId: contract, ownerAccountId: owner, products, dataDir: path.join(dir, 'provider') });
+  const sellerOptions = { rpcProvider: provider, contractId: contract, ownerAccountId: owner, products, dataDir: path.join(dir, 'provider') };
+  let service = createResourceProvider(sellerOptions);
   await new Promise((resolve, reject) => { service.server.once('error', reject); service.server.listen(0, '127.0.0.1', resolve); });
-  const origin = `http://127.0.0.1:${service.server.address().port}`, client = httpResourceProvider(origin);
+  const sellerPort = service.server.address().port, origin = `http://127.0.0.1:${sellerPort}`;
+  // Disable HTTP keep-alive in this fixture so the same pinned origin can be
+  // restarted without a test-only race against an old pooled socket.
+  const client = httpResourceProvider(origin, (url, options) => fetch(url, { ...options,
+    headers: { ...options.headers, connection: 'close' } }));
   const resources = { account, publicKey,
     async getQuote(order, context) { quoteCalls.push({ order: structuredClone(order), id: context.goalId }); events.push(`quote:${context.goalId}`);
       if (beforeQuote) await beforeQuote(order, context); return client.getQuote(order); },
@@ -98,12 +103,14 @@ async function fixture() {
   let journal = new FileJournal(journalPath, contract, owner);
   const workflow = makeWorkflow(origin);
   const invoke = (options = {}) => runWorkflow({ workflow, source: { account, publicKey }, resources, provider, journal, execute: true, runners, log: () => {}, ...options });
-  return { dir, service, workflow, resources, runners, provider, account, publicKey, delivery, events, transactions, journalPath, invoke,
-    get journal() { return journal; }, get sends() { return sends; }, get sourcePays() { return sourcePays; }, get sourcePreviews() { return sourcePreviews; },
+  return { dir, workflow, resources, runners, provider, account, publicKey, delivery, events, transactions, journalPath, invoke,
+    get service() { return service; }, get journal() { return journal; }, get sends() { return sends; }, get sourcePays() { return sourcePays; }, get sourcePreviews() { return sourcePreviews; },
     get receiptReads() { return receiptReads; }, get quotes() { return quoteCalls; },
     setDailyCap(n) { dailyCap = BigInt(n); }, setBalance(n) { balance = BigInt(n); }, setReadFailure(v) { readsFail = v; },
     setAmbiguous() { ambiguous = true; }, setBeforeQuote(fn) { beforeQuote = fn; }, setBeforeFulfill(fn) { beforeFulfill = fn; },
     reopen() { journal.close(); journal = new FileJournal(journalPath, contract, owner); },
+    async restartSeller() { await service.close(); service = createResourceProvider(sellerOptions);
+      await new Promise((resolve, reject) => { service.server.once('error', reject); service.server.listen(sellerPort, '127.0.0.1', resolve); }); },
     async close() { journal?.close(); await service.close(); fs.rmSync(dir, { recursive: true, force: true }); } };
 }
 async function withFixture(fn) { const f = await fixture(); try { await fn(f); } finally { await f.close(); } }
@@ -135,6 +142,48 @@ test('verified independent data flows through real offline compute, storage and 
   assert.deepEqual(f.workflow.steps.map(s => f.journal.get(s.id).tx_hash), hashes);
   const again = await f.invoke(); assert.equal(again.status, 'FULFILLED');
   assert.equal(again.new_source_payments, 0); assert.equal(again.new_resource_payments, 0); assert.equal(f.sends, 3);
+}));
+
+test('seller-v2 dependent workflow resumes the original signed hash after buyer and seller restart', () => withFixture(async f => {
+  for (const stage of f.workflow.steps) stage.order_binding = 'seller-v2';
+  f.setAmbiguous();
+  await assert.rejects(f.invoke(), /payment could not be confirmed/);
+  const first = structuredClone(f.journal.get('compute'));
+  assert.equal(first.status, 'pending'); assert.equal(first.payment_version, 'direct-signed-v1');
+  assert.equal(f.sourcePays, 1); assert.equal(f.sends, 1); assert.equal(f.quotes.length, 1);
+  assert.equal(f.quotes[0].order.order_binding, 'seller-v2');
+  const challenge = challengeFromOrderMemo('compute', f.quotes[0].order.input, first.request.memo);
+  await f.restartSeller(); f.reopen();
+  const recovered = await f.invoke({ source: {}, resources: { fulfill: f.resources.fulfill, readStorage: f.resources.readStorage,
+    getQuote: async () => { throw new Error('recovery must not quote'); } }, execute: false, recoverOnly: true });
+  assert.equal(recovered.status, 'RECOVERED'); assert.equal(recovered.next, 'storage'); assert.equal(recovered.new_payments, 0);
+  assert.equal(f.journal.get('compute').tx_hash, first.tx_hash); assert.equal(f.journal.get('compute').request.memo, first.request.memo);
+  assert.equal(f.journal.get('compute').delivery.status, 'verified'); assert.equal(f.sends, 1); assert.equal(f.quotes.length, 1);
+  const resumed = await f.invoke({ source: {} });
+  assert.equal(resumed.status, 'FULFILLED'); assert.equal(resumed.new_resource_payments, 2); assert.equal(f.sends, 3); assert.equal(f.sourcePays, 1);
+  const challenges = f.workflow.steps.map((stage, i) => challengeFromOrderMemo(stage.resource, f.quotes[i].order.input, f.journal.get(stage.id).request.memo));
+  assert.equal(challenges[0], challenge); assert.equal(new Set(challenges).size, 3);
+  assert.ok(f.quotes.every(q => q.order.order_binding === 'seller-v2'));
+  const hashes = f.workflow.steps.map(stage => f.journal.get(stage.id).tx_hash); f.reopen(); await f.restartSeller();
+  const replay = await f.invoke({ source: {}, resources: { fulfill: f.resources.fulfill, readStorage: f.resources.readStorage },
+    execute: false, recoverOnly: true });
+  assert.equal(replay.status, 'RECOVERED'); assert.equal(replay.new_payments, 0); assert.equal(f.sends, 3);
+  assert.deepEqual(f.workflow.steps.map(stage => f.journal.get(stage.id).tx_hash), hashes);
+}));
+
+test('a seller reusing a challenge across dependent steps is blocked before the second payment', () => withFixture(async f => {
+  for (const stage of f.workflow.steps) stage.order_binding = 'seller-v2';
+  const original = f.resources.getQuote; let firstChallenge;
+  f.resources.getQuote = async (order, context) => {
+    if (context.goalId === 'storage') return { resource: 'storage', policy_id: 'resources', token, payee, amount: '10',
+      memo: orderMemoV2('storage', order.input, firstChallenge) };
+    const quote = await original(order, context);
+    if (context.goalId === 'compute') firstChallenge = challengeFromOrderMemo('compute', order.input, quote.memo);
+    return quote;
+  };
+  await assert.rejects(f.invoke(), /challenge was reused in this workflow/);
+  assert.equal(f.sends, 1); assert.equal(f.journal.get('compute').delivery.status, 'verified');
+  assert.equal(f.journal.get('storage'), undefined); assert.equal(f.journal.get('api'), undefined);
 }));
 
 test('conservative maximum-cost aggregate preview blocks before the independent purchase or quotes', () => withFixture(async f => {
@@ -219,6 +268,8 @@ test('manifest accepts only backward data bindings and disallows dynamic financi
     w => { w.steps[0].input.text = { from: 'price', format: 'raw' }; },
     w => { w.steps[1].payee = { from: 'price' }; },
     w => { w.steps[2].provider_url = { from: 'price' }; },
+    w => { w.steps[0].order_binding = { from: 'price' }; },
+    w => { w.steps[1].order_binding = 'unsupported'; },
     w => { w.steps[1].input.name = { from: 'price' }; },
     w => { w.steps[1].max_amount = '01'; },
     w => { w.steps[1].quote_amount = '101'; },

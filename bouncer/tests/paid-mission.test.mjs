@@ -52,6 +52,16 @@ test('durable direct-payment option reaches resource preview and execution', asy
   assert.deepEqual(seen, [[false, true], [true, true]]);
 });
 
+test('seller-v2 requires durable resources before funding or independent work, and snapshots the reviewed mode', async () => {
+  const f = fixture(); f.options.resources.goals[0].order_binding = 'seller-v2';
+  await assert.rejects(runPaidProjectMission({ ...f.options, execute: true }), /requires durable signed-hash/);
+  assert.deepEqual(f.calls, []); assert.equal(f.entries.size, 0);
+  const projectRunner = f.runners.project, ft = f.runners.resources;
+  f.runners.project = async opts => { f.options.resources.goals[0].order_binding = 'changed-after-start'; return projectRunner(opts); };
+  f.runners.resources = async opts => { assert.equal(opts.goals[0].order_binding, 'seller-v2'); return ft(opts); };
+  assert.equal((await runPaidProjectMission({ ...f.options, resources: { ...f.options.resources, durablePayment: true }, execute: true })).status, 'FULFILLED');
+});
+
 test('blocked future resource or changed provider/project preflight stops every payment', async () => {
   let f = fixture(); f.runners.resources = async () => { f.calls.push('resources-blocked'); return { payments: { blocked: 1 }, deliveries: [] }; };
   assert.equal((await runPaidProjectMission({ ...f.options, execute: true })).stage, 'resource-preflight');

@@ -45,6 +45,7 @@ test('prompt-injected or malformed output cannot change financial authority or a
     p => { p.tasks[0].token = 'fake.testnet'; },
     p => { p.tasks[0].policy_id = 'override'; },
     p => { p.tasks[0].max_amount = '999999999'; },
+    p => { p.tasks[0].order_binding = 'seller-v2'; },
     p => { p.tasks[0].command = 'withdraw'; },
     p => { p.tasks[0].input.url = 'http://evil.example'; },
     p => { p.tasks[0].input.__proto__ = { stolen: true }; },
@@ -64,6 +65,16 @@ test('prompt-injected or malformed output cannot change financial authority or a
   const jsonAttack = JSON.parse('{"tasks":[{"resource":"compute","input":{"text":"x","rounds":1,"__proto__":{"x":1}}}]}');
   const c = config(); c.required_resources = []; c.max_tasks = 1;
   assert.throws(() => goalsFromModel(jsonAttack, c), /input fields/);
+});
+
+test('only the owner catalog can require a seller-v2 order binding', async () => {
+  const c = config(); c.resources.compute.order_binding = 'seller-v2'; let modelInput;
+  const result = await planObjective({ objective: 'perform the work', config: c, modelClient: async input => { modelInput = input; return proposal(); } });
+  assert.equal(result.goals[0].order_binding, 'seller-v2');
+  assert.equal(result.goals[1].order_binding, undefined);
+  assert.equal(JSON.stringify(modelInput).includes('seller-v2'), false);
+  const injected = proposal(); injected.tasks[1].order_binding = 'seller-v2';
+  assert.throws(() => goalsFromModel(injected, c), /unauthorized/);
 });
 
 test('model can request only safe fixed-origin public repository data', () => {
@@ -101,6 +112,8 @@ test('invalid owner authority fails before the model is contacted', async () => 
     c => { c.resources.compute.payee = 'attacker.near'; },
     c => { c.resources.compute.token = 'bad..testnet'; },
     c => { c.resources.compute.policy_id = 'a/b'; },
+    c => { c.resources.compute.order_binding = 'v1'; },
+    c => { c.resources.compute.order_binding = { from: 'model' }; },
     c => { c.resources.compute.max_amount = '0'; },
     c => { c.resources.compute.max_amount = (1n << 128n).toString(); },
     c => { c.resources.compute.max_total_amount = '99'; },

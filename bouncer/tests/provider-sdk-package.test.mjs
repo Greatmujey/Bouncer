@@ -8,6 +8,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { verifyDirectPayment as sharedVerifier } from '../shared/direct-payment-settlement.mjs';
 import { verifyDirectPayment as sdkVerifier } from '../packages/provider-sdk/lib/direct-payment-settlement.mjs';
+import { orderMemoV2 as buyerOrderMemoV2 } from '../services/resource-provider.mjs';
 import { mockGuardedPayment, mockHash } from './mock-guarded-payment.mjs';
 
 const require = createRequire(import.meta.url);
@@ -21,9 +22,9 @@ test('the seller SDK packs all runtime code and verifies receipts outside the Bo
     assert.equal(packed.length, 1);
     const metadata = packed[0];
     assert.equal(metadata.name, 'bouncer-near-testnet-provider-sdk');
-    assert.equal(metadata.version, '0.1.0');
+    assert.equal(metadata.version, '0.2.0');
     assert.deepEqual(metadata.files.map(item => item.path).sort(),
-      ['LICENSE', 'README.md', 'index.mjs', 'lib/account-id.mjs', 'lib/direct-payment-settlement.mjs', 'lib/final-payment.mjs', 'package.json']);
+      ['LICENSE', 'README.md', 'index.mjs', 'lib/account-id.mjs', 'lib/direct-payment-settlement.mjs', 'lib/final-payment.mjs', 'lib/resource-order.mjs', 'package.json']);
     const archive = path.join(dir, metadata.filename), nodeModules = path.join(dir, 'node_modules');
     fs.mkdirSync(nodeModules);
     execFileSync('tar', ['-xzf', archive, '-C', nodeModules], { timeout: 10_000 });
@@ -37,9 +38,13 @@ test('the seller SDK packs all runtime code and verifies receipts outside the Bo
     assert.equal(installedMetadata.private, true);
     assert.equal(installedMetadata.dependencies['near-api-js'], '6.5.1');
     const consumer = path.join(dir, 'consumer.mjs');
-    fs.writeFileSync(consumer, `import { readAndVerifyProviderPayment } from '${metadata.name}';\nconsole.log(typeof readAndVerifyProviderPayment);\n`);
-    assert.equal(execFileSync(process.execPath, [consumer], { encoding: 'utf8', timeout: 10_000 }).trim(), 'function');
+    fs.writeFileSync(consumer, `import { readAndVerifyProviderPayment, orderMemoV2 } from '${metadata.name}';\nconsole.log(typeof readAndVerifyProviderPayment, typeof orderMemoV2);\n`);
+    assert.equal(execFileSync(process.execPath, [consumer], { encoding: 'utf8', timeout: 10_000 }).trim(), 'function function');
     const installed = await import(pathToFileURL(path.join(installedDir, 'index.mjs')).href);
+    const order = { text: 'seller order', rounds: 3 }, challenge = '1234567890abcdef1234567890abcdef';
+    const uniqueMemo = installed.orderMemoV2('compute', order, challenge);
+    assert.equal(uniqueMemo, buyerOrderMemoV2('compute', order, challenge));
+    assert.equal(installed.challengeFromOrderMemo('compute', order, uniqueMemo), challenge);
     const expectation = { tx_hash: mockHash('standalone-seller'), contract_id: 'bouncer.testnet', owner_account_id: 'buyer.testnet',
       policy_id: 'api', token: 'a'.repeat(64), payee: 'merchant.testnet', amount: '1000', memo: 'seller-order:challenge' };
     const args = { policy_id: expectation.policy_id, expected_token: expectation.token, payee: expectation.payee,
@@ -47,6 +52,11 @@ test('the seller SDK packs all runtime code and verifies receipts outside the Bo
     const evidence = mockGuardedPayment({ hash: expectation.tx_hash, owner: expectation.owner_account_id, contract: expectation.contract_id, args });
     assert.equal(installed.verifyProviderPayment(evidence, expectation).tx_hash, expectation.tx_hash);
     assert.throws(() => installed.verifyProviderPayment(evidence, { ...expectation, payee: 'attacker.testnet' }));
+    const uniqueExpectation = { ...expectation, memo: uniqueMemo };
+    const uniqueEvidence = mockGuardedPayment({ hash: expectation.tx_hash, owner: expectation.owner_account_id, contract: expectation.contract_id,
+      args: { ...args, memo: uniqueMemo } });
+    assert.equal(installed.verifyProviderPayment(uniqueEvidence, uniqueExpectation).tx_hash, expectation.tx_hash);
+    assert.throws(() => installed.verifyProviderPayment(uniqueEvidence, { ...uniqueExpectation, memo: expectation.memo }));
     let reads = 0;
     const provider = { async viewNodeStatus() { return { chain_id: 'testnet' }; }, async txStatusReceipts(hash, owner, wait) {
       reads++; assert.equal(hash, expectation.tx_hash); assert.equal(owner, expectation.owner_account_id); assert.equal(wait, 'FINAL'); return evidence;

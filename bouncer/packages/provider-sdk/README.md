@@ -13,7 +13,7 @@ install that local file in the seller's application:
 
 ```sh
 npm pack ./bouncer/packages/provider-sdk --pack-destination /path/to/output
-npm install /path/to/output/bouncer-near-testnet-provider-sdk-0.1.0.tgz near-api-js@6.5.1
+npm install /path/to/output/bouncer-near-testnet-provider-sdk-0.2.0.tgz near-api-js@6.5.1
 ```
 
 `npm pack` only creates the archive; it does not publish anything. The package
@@ -45,15 +45,11 @@ these exact string fields:
   checkout's `bouncer/docs/PROVIDER_PROTOCOL.md`, or a different agreed, unique
   order-binding memo.
 
-For a real multi-customer seller, create and persist a fresh seller-owned order
-ID or challenge for every order and bind it to the exact memo and price. Atomically
-reserve each transaction for only that order. The reference v1 resource memo
-is deterministic from the input and has **no per-order challenge**: identical
-inputs produce identical memos, and the current resource agent does not negotiate
-a separate challenge. A seller-specific challenge format therefore requires a
-compatible buyer integration; the SDK alone does not add that negotiation.
-Public memos are not authentication or secrets, and even a unique challenge
-cannot force delivery or refund an incorrect payment.
+The reference v1 memo is deterministic and has **no per-order challenge**.
+The resource buyer and reference seller now also support the opt-in v2 protocol
+below. The SDK's receipt verifier alone does not allocate orders, claim
+transactions, fulfill or refund them. Public challenges are not authentication
+or secrets, and cannot force delivery or refund an incorrect payment.
 
 The buyer must **not** be the authority for the seller's contract, RPC, price,
 token, payee or memo. Persist the seller's order and expected values before
@@ -105,6 +101,91 @@ complete RPC response. The SDK does not support Bouncer's
 `execute_ft_call`, OutLayer prepaid projects or arbitrary `execute` gas values.
 A buyer and seller must agree on the exact order/memo and handling of failures.
 
+## Opt-in seller-issued orders (v2)
+
+The SDK exports `normalizeOrder`, `orderMemo`, `orderMemoV2` and
+`challengeFromOrderMemo`. The last two implement an **optional**, explicitly
+owner-approved Bouncer buyer/seller protocol. V1 remains the default; never
+silently downgrade an owner-approved v2 order to v1. For a v2 quote, a seller:
+
+1. Normalizes the resource input as below and generates a fresh, unpredictable
+   16-byte challenge using a cryptographically secure random generator. Encode
+   it as exactly 32 lowercase hexadecimal characters. Persist the challenge,
+   resource, memo (which commits to the normalized input) and exact
+   policy/token/payee/amount **before** returning the quote. Persist the input
+   as well if your seller must reconstruct it independently; the reference
+   seller stores its commitment, not the input itself. Handle collisions by
+   generating a new challenge.
+2. Returns the pinned terms and the memo below. The buyer verifies the memo,
+   pins all financial terms separately, and includes this exact memo in Bouncer's
+   guarded `execute` call. The memo is also supplied to `/redeem`.
+3. Checks FINAL transaction and actual FT receipts against that original quote
+   using `readAndVerifyProviderPayment` (plus delivery-specific checks).
+   Atomically and durably claim at most one transaction hash for the challenge
+   **before** any side effect. Replays of that same hash must return the existing
+   result or reconcile pending work; a different hash must not repeat the work.
+   Coordinate the claim across every process/host sharing the seller account.
+
+Wire example (the challenge here is a fixed **test vector**, not randomness):
+
+```http
+POST /quote
+
+{"resource":"compute","input":{"text":"same work","rounds":2},"order_binding":"seller-v2"}
+```
+
+```json
+{"ok":true,"quote":{"resource":"compute","policy_id":"resource","token":"wrap.testnet","payee":"vendor.testnet","amount":"1000","memo":"bouncer-order-v2:compute:00112233445566778899aabbccddeeff:88425334a4bb614fc54e3425a4d9cb3203fa9b4548ac732e006fd3d53d315fc5"}}
+```
+
+The quote fields shown are illustrative; terms must match the actual owner
+approval and deployment. Redeem with `POST /redeem` containing `resource`, the
+same normalized `input`, the **exact** `memo`, and `tx_hash`. Terms are looked up
+from seller state, not accepted from the caller. Use the same quote and hash for
+recovery. Do not pay twice for one challenge: a later payment to an already
+claimed quote cannot be redeemed by the reference seller.
+
+### Exact memo algorithm
+
+Let `normalized` be `normalizeOrder(resource, input)`. Compute:
+
+```text
+body   = UTF8(ECMAScript JSON.stringify(normalized))
+digest = lowercase_hex(SHA256(UTF8("bouncer-order-v2") || 00 || UTF8(resource) || 00 || UTF8(challenge) || 00 || body))
+memo   = "bouncer-order-v2:" + resource + ":" + challenge + ":" + digest
+```
+
+Each `00` is a single zero byte; `||` concatenates bytes. The challenge is its
+32 ASCII hexadecimal characters, not the decoded 16 bytes. JSON serialization
+adds no whitespace or trailing newline (string contents are preserved). Normalized
+inputs have these exact key orders: compute
+`{text,rounds}` (both required); storage `{name,content}`; API `{text}` or
+`{repo}`. Repository IDs are validated and preserve case. Strings and
+serialization must match well-formed ECMAScript `JSON.stringify` followed by
+UTF-8, including JSON escaping and Unicode behavior. Sizes and allowed inputs
+are enforced by `normalizeOrder`. The SDK exports these helpers to avoid
+cross-language canonicalization differences; the fixed vector above is
+regression-tested. A second vector, including a newline and non-ASCII text:
+
+```text
+resource:  compute
+input:     {"text":"A\nπ😀","rounds":3}
+challenge: ffeeddccbbaa99887766554433221100
+memo:      bouncer-order-v2:compute:ffeeddccbbaa99887766554433221100:e014b592b4181aa13caeb34013188ae2dff73c4c7d75379de2ad0c1c1ccb5417
+```
+
+Here `\n` is a JSON escape for one newline. The v1 memo remains
+`bouncer-order-v1:<resource>:<sha256>` over JSON of the normalized input alone.
+
+The challenge is public in the quote and on chain: it is **not authentication,
+a secret or confidentiality**. A party with the order details and transaction
+hash may attempt redemption before the intended buyer; build a separate
+buyer-authentication and delivery-authorization scheme before selling private
+work. Unpaid quotes cannot safely expire solely because time has passed: a
+valid transfer could have been submitted or delayed. A different transaction
+paying an already-claimed challenge requires separate manual refund/dispute
+handling. RPC, contract, token and seller remain trust assumptions.
+
 ## Reference provider state and recovery
 
 `services/resource-provider.mjs` uses this verifier for its local demo products.
@@ -137,3 +218,20 @@ it belongs to the configured contract/owner; then explicitly set
 `adoptLegacyState: true` to `createResourceProvider`). The locked provider
 writes version 2 before starting; pending entries remain pending. Remove the
 flag afterward. Do not adopt a file of uncertain origin.
+
+The first v2 quote upgrades a version-2 state file to version 3. Version 3
+persists each quote and its claimed hash along with legacy redemptions; older
+provider binaries cannot read it. Do not roll back the software or restore an
+older snapshot over newer claims: doing so can lose replay protection. A v2
+quote is only returned after the state and containing directory have been synced.
+The reference provider keeps at most 1,024 v2 quotes per directory, including
+claimed and abandoned quotes, and fails closed at capacity. It does not
+silently evict or auto-expire unpaid quotes. Comparison and dry runs that request
+v2 quotes can fill that capacity without paying; operate a carefully reviewed
+manual reconciliation/archival process or use a properly designed shared seller
+database instead. Do not delete quotes or state just to regain capacity.
+
+These are reference-implementation properties, not guarantees supplied by the
+SDK's verifier. Offline tests cover v2 issuance, conflicting claims, crashes,
+restarts and buyer recovery; the cited live/historical testnet receipts above
+used v1, not a live v2 purchase.

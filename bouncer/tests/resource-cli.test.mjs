@@ -82,7 +82,10 @@ test('resource CLI rejects an untrusted quote before payment or fulfillment', ()
 });
 
 test('resource CLI help does not require files and unknown flags fail', () => {
-  assert.match(exec(['--help']).stdout, /Default is read-only/);
+  const help = exec(['--help']).stdout;
+  assert.match(help, /Default sends no payments/);
+  assert.match(help, /seller-v2 quote may persist an order/);
+  assert.match(help, /required for seller-v2 execution/);
   const result = exec(['--not-a-flag']);
   assert.equal(result.status, 1);
   assert.match(result.stderr, /unknown or incomplete/);

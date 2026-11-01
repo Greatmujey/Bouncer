@@ -7,7 +7,8 @@
 import { goalsFromModel, validatePlanningConfig } from './goal-planner.mjs';
 import { httpResourceProvider, planFromQuotes } from './resource-agent.mjs';
 
-const allowedGoalKeys = ['id', 'resource', 'input', 'policy_id', 'token', 'payee', 'max_amount'];
+const requiredGoalKeys = ['id', 'resource', 'input', 'policy_id', 'token', 'payee', 'max_amount'];
+const allowedGoalKeys = [...requiredGoalKeys, 'order_binding'];
 const MAX_QUOTES_IN_FLIGHT = 5;
 
 // Limit simultaneous external requests and retain owner order regardless of
@@ -41,15 +42,15 @@ export async function compareApprovedQuotes({ config: rawConfig, proposedGoals, 
     throw new Error('proposal must match the owner-controlled catalog');
   }
   for (const goal of proposedGoals.goals) {
-    if (!goal || typeof goal !== 'object' || Array.isArray(goal) ||
-        Object.keys(goal).length !== allowedGoalKeys.length || Object.keys(goal).some(key => !allowedGoalKeys.includes(key))) {
+    if (!goal || typeof goal !== 'object' || Array.isArray(goal) || requiredGoalKeys.some(key => !Object.hasOwn(goal, key)) ||
+        Object.keys(goal).some(key => !allowedGoalKeys.includes(key))) {
       throw new Error('proposal contains unauthorized goal fields');
     }
   }
   const baseline = goalsFromModel({ tasks: proposedGoals.goals.map(goal => ({ resource: goal.resource, input: goal.input })) }, config);
   for (let i = 0; i < baseline.goals.length; i++) {
     const expected = baseline.goals[i], actual = proposedGoals.goals[i];
-    if (['id', 'resource', 'policy_id', 'token', 'payee', 'max_amount'].some(key => actual[key] !== expected[key])) {
+    if (['id', 'resource', 'policy_id', 'token', 'payee', 'max_amount', 'order_binding'].some(key => actual[key] !== expected[key])) {
       throw new Error('proposal contains unauthorized financial authority');
     }
   }
@@ -59,11 +60,14 @@ export async function compareApprovedQuotes({ config: rawConfig, proposedGoals, 
   const groups = baseline.goals.map(goal => {
     const resource = config.resources[goal.resource];
     const offers = [{ id: 'primary', provider_url: config.provider_url, policy_id: resource.policy_id,
-      payee: resource.payee, max_amount: resource.max_amount }, ...(resource.alternatives || [])];
+      payee: resource.payee, max_amount: resource.max_amount,
+      ...(resource.order_binding === undefined ? {} : { order_binding: resource.order_binding }) }, ...(resource.alternatives || [])];
     return offers.map(offer => {
       const client = createClient(offer.provider_url);
       if (!client || typeof client.getQuote !== 'function') throw new Error('invalid approved quote client');
-      return { offer, goal: { ...goal, policy_id: offer.policy_id, payee: offer.payee, max_amount: offer.max_amount }, client };
+      const { order_binding: _primaryBinding, ...base } = goal;
+      return { offer, goal: { ...base, policy_id: offer.policy_id, payee: offer.payee, max_amount: offer.max_amount,
+        ...(offer.order_binding === undefined ? {} : { order_binding: offer.order_binding }) }, client };
     });
   });
 
@@ -91,9 +95,11 @@ export async function compareApprovedQuotes({ config: rawConfig, proposedGoals, 
     const goal = baseline.goals[index];
     comparisons.push({ goal_id: goal.id, token: goal.token,
       quotes: quotes.map(({ offer, amount }) => ({ provider_id: offer.id, amount })), selected_provider: selected.offer.id });
-    return { ...goal, policy_id: selected.offer.policy_id, payee: selected.offer.payee,
+    const { order_binding: _primaryBinding, ...base } = goal;
+    return { ...base, policy_id: selected.offer.policy_id, payee: selected.offer.payee,
       max_amount: selected.offer.max_amount, quote_amount: selected.amount,
-      provider_id: selected.offer.id, provider_url: selected.offer.provider_url };
+      provider_id: selected.offer.id, provider_url: selected.offer.provider_url,
+      ...(selected.offer.order_binding === undefined ? {} : { order_binding: selected.offer.order_binding }) };
   });
   return { ...baseline, goals: selectedGoals, quote_comparisons: comparisons };
 }

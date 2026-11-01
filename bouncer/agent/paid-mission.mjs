@@ -45,6 +45,12 @@ async function providerCredit(provider, contractId) {
 /** Reusable testnet path; injected runners exist only for offline tests. */
 export async function runPaidProjectMission({ funding, project, resources, provider, journal, execute = false, log = console.log, runners = {} }) {
   const { fund, paid, resourceIds } = validateMission(funding, project, resources);
+  resources = { ...resources, goals: structuredClone(resources.goals) };
+  // Fail before funding or paying the independent project, not later at the
+  // first resource payment, if seller-v2 cannot journal its signed hash.
+  if (execute && resources.goals.some(item => item?.order_binding === 'seller-v2') && resources.durablePayment !== true) {
+    throw new Error('seller-v2 mission execution requires durable signed-hash journaling');
+  }
   if (execute && (!journal || typeof journal.get !== 'function' || typeof journal.put !== 'function')) throw new Error('live mission requires the original shared journal');
   if (journal && (typeof journal.get !== 'function' || typeof journal.put !== 'function')) throw new Error('invalid mission journal');
   const runFunding = runners.funding ?? runFtCallGoal, recoverFunding = runners.recoverFunding ?? recoverFtCallGoal;

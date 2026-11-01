@@ -380,7 +380,7 @@ jobs:
 
   dependent-historical-verification:
     name: Verify dependent workflow with installed seller SDK (read only)
-    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[provider-inspect]')
+    if: github.event_name == 'push' && (contains(github.event.head_commit.message, '[provider-inspect]') || contains(github.event.head_commit.message, '[seller-sdk-check]'))
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -398,11 +398,22 @@ jobs:
         run: |
           set -euo pipefail
           archive=$(npm pack ./bouncer/packages/provider-sdk --pack-destination "$RUNNER_TEMP" --silent)
-          test "$archive" = 'bouncer-near-testnet-provider-sdk-0.1.0.tgz'
+          test "$archive" = 'bouncer-near-testnet-provider-sdk-0.2.0.tgz'
           mkdir -p "$RUNNER_TEMP/seller-client"
           printf '{"name":"seller-check","version":"1.0.0","private":true,"type":"module"}\n' > "$RUNNER_TEMP/seller-client/package.json"
           npm install --prefix "$RUNNER_TEMP/seller-client" --ignore-scripts --no-audit --no-fund "$RUNNER_TEMP/$archive"
           echo "BOUNCER_SELLER_SDK_MODULE=$RUNNER_TEMP/seller-client/node_modules/bouncer-near-testnet-provider-sdk/index.mjs" >> "$GITHUB_ENV"
+      - name: Check installed seller-v2 memo vector offline
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import { pathToFileURL } from 'node:url';
+          const sdk = await import(pathToFileURL(process.env.BOUNCER_SELLER_SDK_MODULE).href);
+          const input = { text: 'same work', rounds: 2 }, challenge = '00112233445566778899aabbccddeeff';
+          const expected = 'bouncer-order-v2:compute:00112233445566778899aabbccddeeff:88425334a4bb614fc54e3425a4d9cb3203fa9b4548ac732e006fd3d53d315fc5';
+          if (sdk.orderMemoV2('compute', input, challenge) !== expected || sdk.challengeFromOrderMemo('compute', input, expected) !== challenge) throw new Error('installed seller-v2 vector mismatch');
+          console.log('Installed SDK seller-v2 vector verified offline; no quote or payment.');
+          NODE
       - name: Verify the existing source and three seller receipts without paying
         run: node bouncer/scripts/verify-dependent-history.mjs
 

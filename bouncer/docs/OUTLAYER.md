@@ -227,7 +227,10 @@ previously paid but unverified, a **new** OutLayer payment is blocked until
 that earlier delivery is reconciled; if the OutLayer payment already exists,
 the runner recovers it by hash and resumes the FT recovery path. Neither
 preview reserves funds on chain. Policies, balances or quotes may change after
-preview, and a later failure cannot undo an earlier payment.
+preview, and a later failure cannot undo an earlier payment. If resource goals
+opt into `seller-v2`, their quote preview may persist unpaid orders at the
+seller; live mixed and paid-project missions require `--durable` before starting
+any independent payment. See the [seller protocol](PROVIDER_PROTOCOL.md#optional-seller-v2-binding).
 
 The regular planner can supply the FT goal inputs, including model-proposed
 inputs checked against the owner catalog. In the demo the independent random

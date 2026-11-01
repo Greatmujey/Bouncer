@@ -66,15 +66,29 @@ The owner supplies a JSON manifest such as
 That file is a **schema example**, not a deployable configuration: its owner,
 contract, seller and provider origin are placeholders, its policy revisions and
 limits must match an actual deployment, and its Circle USDC ID is for testnet.
-Never treat a token ID alone as proof of network or token trust.
+Never treat a token ID alone as proof of network or token trust. Its compute
+step illustrates the optional seller-v2 binding; its other steps default to v1.
 
 The manifest specifies one source and 1–10 sequential resource steps. Each step
 pins its ID, resource, policy, token, payee, maximum amount, input template,
-and optional exact quote amount, provider ID and provider origin. All amounts
-are raw integer strings in the token's units, not automatically converted USD.
+and optional exact quote amount, provider ID, provider origin and order binding.
+All amounts are raw integer strings in the token's units, not automatically
+converted USD.
 The source and every step share one owner/contract and use distinct goal IDs.
 The runner snapshots the normalized manifest before any asynchronous work; extra
 fields, duplicate IDs, forward references and dynamic financial fields fail.
+
+To require a seller-issued unique challenge for an individual resource step,
+add the owner-reviewed field `"order_binding":"seller-v2"` to that step. The
+seller must actually support v2; otherwise the quote is rejected rather than
+downgraded. Omitted means legacy v1 and rejects an unsolicited v2 memo. This
+choice is pinned in the journaled manifest; a seller or model cannot change it.
+The buyer rejects a repeated seller challenge across paid and newly quoted
+steps. The signed transaction hash and exact payment request are synced before
+broadcast; after a restart, recovery reuses that exact hash and memo instead of
+requesting a new quote or paying again. See the [wire protocol and limitations](PROVIDER_PROTOCOL.md#optional-seller-v2-binding).
+The previously linked live testnet run used v1; v2 has offline adversarial and
+restart coverage, not an independent FT seller or a live v2 purchase.
 
 A data binding such as `{"from":"price"}` is permitted **only** in compute
 `text`, storage `content`, or text-API `text`. It inserts a bounded JSON
@@ -154,8 +168,11 @@ node --test tests/workflow.test.mjs tests/workflow-cli.test.mjs tests/batch-pref
 ```
 
 The dry run checks the source and maximum-cost budgets, but cannot obtain an
-exact downstream quote until its verified input exists. Execution rechecks the
-real quote and on-chain policy for every new step. `--recover-only` reads chain
+exact downstream quote until its verified input exists; this workflow preview
+does not create seller-v2 quotes. By contrast, a standalone resource-agent dry
+run or AI quote comparison does request quotes and can persist v2 orders at a
+seller. Execution rechecks the real quote and on-chain policy for every new
+step. `--recover-only` reads chain
 receipts and may contact the approved seller to complete/recheck already-paid
 work, updating the journal. It **never signs, sends, requests a new quote or
 starts an unpaid step**. Seller redemption must be idempotent for the original

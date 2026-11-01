@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { orderMemo } from '../services/resource-provider.mjs';
+import { orderMemo, orderMemoV2 } from '../services/resource-provider.mjs';
 import { httpResourceProvider, planFromQuotes, runResourceAgent } from '../agent/resource-agent.mjs';
 import { computeResult } from './mock-delivery.mjs';
 
@@ -59,6 +59,32 @@ test('dry-run quotes and preflights but never pays or redeems', async () => {
   assert.equal(result.deliveries.length, 0);
   assert.equal(paid, 0); assert.equal(redeemed, 0);
   assert.equal(observedPlan.requests[0].memo, orderMemo(g.resource, g.input));
+});
+
+test('plan and runtime callbacks cannot mutate an owner-approved seller-v2 request', async () => {
+  const g = { ...goal(), order_binding: 'seller-v2' }, challenge = '0123456789abcdeffedcba9876543210';
+  const memo = orderMemoV2(g.resource, g.input, challenge), checkedPayees = [];
+  const provider = {
+    async viewNodeStatus() { return { chain_id: 'testnet' }; },
+    async viewAccessKey() { return { permission: { FunctionCall: { receiver_id: 'bouncer.testnet', method_names: ['execute'] } } }; },
+    async callFunction(_contract, method, args) {
+      if (method === 'contract_version') return 'bouncer-agent-v4';
+      if (method === 'get_policy') return { token: 'wrap.testnet', per_tx_cap: '1000', daily_cap: '1000' };
+      if (method === 'daily_spent') return '0';
+      if (method === 'vault_balance') return '1000';
+      if (method === 'is_agent_key_allowed') return true;
+      if (method === 'check') { checkedPayees.push(args.payee); return [true, 'ok']; }
+      throw new Error('unexpected view');
+    },
+  };
+  const result = await runResourceAgent({ contractId: 'bouncer.testnet', ownerAccountId: 'bouncer.testnet', goals: [g],
+    getQuote: async () => ({ ...quote(g), memo }),
+    onPlan: p => { p.requests[0].payee = 'attacker.testnet'; p.requests[0].memo = 'changed'; },
+    runtimeFactory: p => { p.requests[0].payee = 'attacker.testnet'; p.requests[0].memo = 'changed';
+      return { provider, account: { accountId: 'bouncer.testnet' }, publicKey: { toString: () => 'ed25519:abc' } }; },
+    execute: false, log: () => {} });
+  assert.equal(result.payments.ready, 1); assert.equal(result.plan.requests[0].payee, g.payee);
+  assert.equal(result.plan.requests[0].memo, memo); assert.deepEqual(checkedPayees, [g.payee]);
 });
 
 test('HTTP helper rejects insecure remote providers and validates responses', async () => {

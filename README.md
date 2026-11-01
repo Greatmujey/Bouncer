@@ -273,7 +273,9 @@ resource's owner-pinned token. It chooses the cheapest using exact integer
 amounts, saves the selected route and price, and rechecks that price before the
 normal on-chain policy preflight and payment. Up to five quotes are requested
 concurrently; an invalid or unavailable quote stops queued requests and the
-comparison fails without a partial selection. See [setup and recovery limits](bouncer/docs/AI_AGENT.md#compare-owner-approved-providers).
+comparison fails without a partial selection. The owner can opt each approved
+candidate into seller-v2 order challenges; choosing a legacy candidate is still
+possible if the owner included one. See [setup and recovery limits](bouncer/docs/AI_AGENT.md#compare-owner-approved-providers).
 
 In the [live comparison job](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40666249071/job/122742140751),
 two self-hosted development endpoints quoted 0.10 and 0.08 wNEAR for the same
@@ -460,6 +462,18 @@ passed against FINAL RPC receipts and rejected a substituted seller. These
 payments were to our own development provider. This is not distributed replay
 protection or proof that an independent FT seller has adopted the protocol.
 
+The buyer, AI owner catalog, dependent workflows and reference seller also
+support an **opt-in seller-v2** order: a fresh seller-issued challenge binds the
+normalized work, the seller durably claims one verified transaction per quote,
+and the buyer journals the signed hash before broadcasting. V1 remains the
+default; an owner-pinned v2 quote cannot silently fall back to v1. Offline
+adversarial tests cover concurrent claims and restart recovery; the linked live
+receipts used v1, and no independent FT seller or live v2 purchase is claimed.
+The challenge is public, not authentication. The reference seller stores at most
+1,024 v2 quotes without automatic eviction; even an unpaid quote dry run can
+consume capacity. A second payment for an already-claimed quote cannot be
+redeemed. See the [wire format and recovery limits](bouncer/docs/PROVIDER_PROTOCOL.md#optional-seller-v2-binding).
+
 The resource agent recomputes bounded SHA-256 and text-statistics results,
 checks a single storage readback against the ordered bytes, and checks GitHub
 repository identity against a separate fixed-origin read. Other GitHub fields
@@ -512,8 +526,10 @@ ID=$(cat "$HOME/.bouncer_id")
 node bouncer/agent/resource-agent.mjs --goals "$HOME/.bouncer/testnet/$ID.goals.json" --key "$HOME/.near-credentials/testnet/$ID.agent.json" --local-provider "$HOME/.bouncer/testnet/$ID.provider.json"
 ```
 
-The agent defaults to a dry run. Add `--execute` only after reviewing the
-quotes; completed orders in the configured journal are skipped and the
+The agent defaults to a dry run with no payment; requesting a seller-v2 quote
+can still persist an order at the provider. Add `--execute` only after reviewing
+the quotes; seller-v2 execution also requires `--durable`. Completed orders in
+the configured journal are skipped and the
 provider returns their existing results. Using a different or deleted journal
 can cause repeat payments. `--local-provider` starts the loopback-only development
 provider for this command and shuts it down afterwards. Both programs support

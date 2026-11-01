@@ -48,6 +48,16 @@ test('durable direct-payment option reaches both resource preview and execution'
   assert.deepEqual(seen, [[false, true], [true, true]]);
 });
 
+test('seller-v2 requires durable resources before independent work, and snapshots the reviewed mode', async () => {
+  const f = fixture(); f.options.resources.goals[0].order_binding = 'seller-v2';
+  await assert.rejects(runMixedMission({ ...f.options, execute: true }), /requires durable signed-hash/);
+  assert.deepEqual(f.calls, []); assert.equal(f.entries.size, 0);
+  const outlayer = f.runners.outlayer, ft = f.runners.resources;
+  f.runners.outlayer = async opts => { f.options.resources.goals[0].order_binding = 'changed-after-start'; return outlayer(opts); };
+  f.runners.resources = async opts => { assert.equal(opts.goals[0].order_binding, 'seller-v2'); return ft(opts); };
+  assert.equal((await runMixedMission({ ...f.options, resources: { ...f.options.resources, durablePayment: true }, execute: true })).status, 'FULFILLED');
+});
+
 test('either blocked preflight prevents both payment paths', async () => {
   let f = fixture();
   f.runners.outlayer = async () => { f.calls.push('external-blocked'); return { status: 'BLOCKED' }; };

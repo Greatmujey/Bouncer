@@ -12,7 +12,7 @@ import { createRuntime, FileJournal, normalizeProviderRoute, requestFingerprint,
 import { reservePreview } from './preflight.mjs';
 import { readBoundedBytes, readBoundedJson } from '../shared/bounded-json.mjs';
 import { validateProviderOrigin } from '../shared/provider-origin.mjs';
-import { normalizeOrder, orderMemo, startConfiguredProvider } from '../services/resource-provider.mjs';
+import { normalizeOrder, orderMemo, challengeFromOrderMemo, startConfiguredProvider } from '../services/resource-provider.mjs';
 import { checkDeliveryRecord, createDeliveryReceipt, deliveryResultHash, verifyDelivery } from './verify-delivery.mjs';
 
 function positiveAmount(value, label) {
@@ -27,16 +27,40 @@ function validText(value, label) {
 /** Fetch a quote for each goal and validate it against owner-pinned constraints. */
 export async function planFromQuotes({ contractId, ownerAccountId, goals, getQuote, journal }) {
   if (!Array.isArray(goals) || !goals.length || typeof getQuote !== 'function') throw new Error('goals and a quote source are required');
-  const requests = [];
-  for (const goal of goals) {
+  // Snapshot all reviewed goals before the first asynchronous quote, and never
+  // let an injected quote source mutate the input used to validate its memo.
+  const reviewed = structuredClone(goals), requests = [], challenges = new Set();
+  // Validate every reviewed input, payment field and ID before contacting any
+  // seller: issuing a v2 quote itself persists an order on the seller's side.
+  const prepared = reviewed.map(goal => {
     if (!goal || typeof goal !== 'object') throw new Error('invalid goal');
     const { id, resource, policy_id: policyId, token, payee } = goal;
     for (const [key, value] of Object.entries({ id, resource, policyId, token, payee })) validText(value, key);
     const max = positiveAmount(goal.max_amount, `${id} max_amount`);
     const selectedAmount = goal.quote_amount === undefined ? undefined : positiveAmount(goal.quote_amount, `${id} selected quote amount`);
     if (selectedAmount !== undefined && selectedAmount > max) throw new Error(`${id}: selected quote exceeds the owner-approved maximum`);
-    const input = normalizeOrder(resource, goal.input);
-    const memo = orderMemo(resource, input);
+    if (goal.order_binding !== undefined && goal.order_binding !== 'seller-v2') throw new Error(`${id}: unsupported owner-reviewed order binding`);
+    return { id, resource, policyId, token, payee, max, selectedAmount, unique: goal.order_binding === 'seller-v2',
+      input: Object.freeze(normalizeOrder(resource, goal.input)) };
+  });
+  validatePlan({ contract_id: contractId, owner_account_id: ownerAccountId, requests: prepared.map(item => ({ id: item.id,
+    resource: item.resource, policy_id: item.policyId, token: item.token, payee: item.payee, amount: item.max.toString() })) });
+  function checkMemo({ id, resource, input, unique }, memo, label) {
+    const mismatch = label === 'recorded payment' ? 'recorded payment does not match the reviewed goal' : `${label} is not bound to this exact order`;
+    if (!unique) {
+      if (memo !== orderMemo(resource, input)) throw new Error(`${id}: ${mismatch}`);
+    } else {
+      let challenge;
+      try { challenge = challengeFromOrderMemo(resource, input, memo); }
+      catch (error) { throw new Error(`${id}: ${mismatch}`, { cause: error }); }
+      if (challenges.has(challenge)) throw new Error(`${id}: seller challenge was reused in this batch`);
+      challenges.add(challenge);
+    }
+  }
+  // Inspect ALL prior payments before any quote; a later pending or tampered
+  // journal entry must not cause new seller-owned quotes for earlier goals.
+  for (const item of prepared) {
+    const { id, resource, policyId, token, payee, max, selectedAmount, unique } = item;
     const previous = journal?.get(id);
     if (previous && previous.status !== 'completed') throw new Error(`${id}: unresolved pending payment; inspect the chain and journal before retrying`);
     if (previous?.request !== undefined) {
@@ -46,24 +70,32 @@ export async function planFromQuotes({ contractId, ownerAccountId, goals, getQuo
           Object.keys(raw).some(key => !expectedKeys.includes(key))) throw new Error(`${id}: invalid recorded payment request`);
       const request = validatePlan({ contract_id: contractId, owner_account_id: ownerAccountId, requests: [raw] }).requests[0];
       if (request.id !== id || request.resource !== resource || request.policy_id !== policyId || request.token !== token ||
-          request.payee !== payee || request.memo !== memo || requestFingerprint(request) !== previous.fingerprint ||
+          request.payee !== payee || requestFingerprint(request) !== previous.fingerprint ||
           BigInt(request.amount) > max || (selectedAmount !== undefined && BigInt(request.amount) !== selectedAmount)) {
         throw new Error(`${id}: recorded payment does not match the reviewed goal`);
       }
-      requests.push(request);
-      continue;
+      checkMemo(item, request.memo, 'recorded payment');
+      item.replayedRequest = request;
+    } else if (unique && previous) {
+      // A fresh challenge cannot recover an old payment.
+      throw new Error(`${id}: seller-v2 recovery requires the original recorded request`);
     }
-    // Legacy journals without a recorded request still require the old exact
+  }
+  for (const item of prepared) {
+    const { id, resource, policyId, token, payee, max, selectedAmount, unique, input } = item;
+    if (item.replayedRequest) { requests.push(item.replayedRequest); continue; }
+    // Legacy v1 journals without a recorded request still require the old exact
     // quote/fingerprint check. Context never goes in the provider request body.
-    const quote = await getQuote({ resource, input }, { goalId: id });
+    const quoteOrder = Object.freeze({ resource, input, ...(unique ? { order_binding: 'seller-v2' } : {}) });
+    const quote = structuredClone(await getQuote(quoteOrder, { goalId: id }));
     if (!quote || quote.resource !== resource || quote.policy_id !== policyId || quote.token !== token || quote.payee !== payee) {
       throw new Error(`${id}: quote does not match the permitted resource, policy, token, or payee`);
     }
     const amount = positiveAmount(quote.amount, `${id} quote amount`);
     if (amount > max) throw new Error(`${id}: quote exceeds the owner-approved maximum`);
     if (selectedAmount !== undefined && amount !== selectedAmount) throw new Error(`${id}: selected quote changed; review and reselect before payment`);
-    if (quote.memo !== memo) throw new Error(`${id}: quote is not bound to this exact order`);
-    requests.push({ id, resource, policy_id: policyId, token, payee, amount: amount.toString(), memo });
+    checkMemo(item, quote.memo, 'quote');
+    requests.push({ id, resource, policy_id: policyId, token, payee, amount: amount.toString(), memo: quote.memo });
   }
   return validatePlan({ contract_id: contractId, owner_account_id: ownerAccountId, requests });
 }
@@ -88,12 +120,16 @@ export async function fulfillPaidResource({ goal, request, contractId, ownerAcco
     throw new Error(`${goal.id}: confirmed payment journal entry changed; stop and reconcile manually`);
   }
   if (typeof fulfill !== 'function') throw new Error('fulfillment source is required');
-  const input = normalizeOrder(goal.resource, goal.input), context = { goalId: goal.id };
+  const input = Object.freeze(normalizeOrder(goal.resource, goal.input)), context = { goalId: goal.id };
+  if (goal.order_binding !== undefined && goal.order_binding !== 'seller-v2') throw new Error(`${goal.id}: unsupported owner-reviewed order binding`);
+  const unique = goal.order_binding === 'seller-v2';
+  if (unique) challengeFromOrderMemo(goal.resource, input, request.memo);
+  else if (request.memo !== orderMemo(goal.resource, input)) throw new Error(`${goal.id}: recorded payment is not bound to this exact order`);
   checkDeliveryRecord({ delivery: entry.delivery, contractId, ownerAccountId, request, txHash: entry.tx_hash,
     providerId: goal.provider_id, providerOrigin: goal.provider_url ?? providerUrl, input });
   let stage = 'fulfillment', verified;
   try {
-    const result = await fulfill({ tx_hash: entry.tx_hash, resource: goal.resource, input }, context);
+    const result = await fulfill({ tx_hash: entry.tx_hash, resource: goal.resource, input, ...(unique ? { memo: request.memo } : {}) }, context);
     stage = 'verification';
     verified = await verifyDelivery({ resource: goal.resource, input, result, txHash: entry.tx_hash,
       readStorage: readStorage && (objectId => readStorage(objectId, context)), repositoryLookup });
@@ -126,6 +162,7 @@ export async function fulfillPaidResource({ goal, request, contractId, ownerAcco
  */
 export async function runResourceAgent({ contractId, ownerAccountId, goals, getQuote, fulfill, readStorage, repositoryLookup, providerUrl, onPlan = () => {},
   beforePayment = async () => {}, beforeBroadcast = () => {}, provider, account, publicKey, runtimeFactory, journal, execute = false, durablePayment = false, log = console.log }) {
+  if (Array.isArray(goals)) goals = structuredClone(goals);
   if (execute && (typeof fulfill !== 'function' || typeof journal?.get !== 'function' || typeof journal?.put !== 'function')) {
     throw new Error('live execution requires a readable/writable journal and fulfillment source');
   }
@@ -134,6 +171,9 @@ export async function runResourceAgent({ contractId, ownerAccountId, goals, getQ
   if (repositoryLookup !== undefined && typeof repositoryLookup !== 'function') throw new Error('invalid GitHub reference lookup');
   if (execute && Array.isArray(goals) && goals.some(goal => goal?.resource === 'storage') && typeof readStorage !== 'function') {
     throw new Error('live storage execution requires provider readback before payment');
+  }
+  if (execute && Array.isArray(goals) && goals.some(goal => goal?.order_binding === 'seller-v2') && !durablePayment) {
+    throw new Error('seller-v2 execution requires durable signed-hash journaling');
   }
   // Receipt routing metadata is owner-supplied, never provider- or model-chosen.
   // Validate it before quotes or payments; it is a local label, not attestation.
@@ -166,8 +206,10 @@ export async function runResourceAgent({ contractId, ownerAccountId, goals, getQ
     checkDeliveryRecord({ delivery: entry.delivery, contractId, ownerAccountId, request, txHash: entry.tx_hash,
       providerId: goal.provider_id, providerOrigin: goal.provider_url ?? providerUrl, input: goal.input });
   }
-  await onPlan(plan);
-  if (runtimeFactory) ({ provider, account, publicKey } = await runtimeFactory(plan));
+  // Observability/runtime hooks receive copies, not the validated payment plan.
+  // Even accidental callback mutation must not change the reviewed payee/memo.
+  await onPlan(structuredClone(plan));
+  if (runtimeFactory) ({ provider, account, publicKey } = await runtimeFactory(structuredClone(plan)));
   // Complete a read-only preflight for the ENTIRE batch before the first new
   // payment, including tentative shared-budget and shared-vault reservations.
   // The views are non-atomic: the contract still decides each real payment,
@@ -282,9 +324,10 @@ export function routedResourceProvider({ providerUrl, goals, overrides = new Map
 const USAGE = `Usage: node bouncer/agent/resource-agent.mjs --goals goals.json --key agent-key.json [--journal journal.json] [--local-provider provider.json] [--execute] [--durable]
 
 Quote configured providers and preflight owner-pinned resource goals.
-Default is read-only; --execute sends real testnet payments, checks bounded
-example deliveries and stores local receipts in the private journal. --durable
-records the signed transaction hash before broadcast for key-free recovery.
+Default sends no payments; a seller-v2 quote may persist an order at the seller.
+--execute sends real testnet payments, checks bounded example deliveries and
+stores local receipts in the private journal. --durable records the signed
+transaction hash before broadcast; it is required for seller-v2 execution.
 Checks happen after payment and do not guarantee delivery or refunds. Use a function-call
 key scoped only to Bouncer execute. Amounts are token smallest units, not USD.
 Never use real funds.

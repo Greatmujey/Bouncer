@@ -146,9 +146,10 @@ node bouncer/agent/autonomous.mjs --config "$HOME/.bouncer/testnet/$ID.owner.jso
 ```
 
 The file is created with private permissions and is never overwritten. Inspect
-it and the printed quote/preflight output. A dry run does not pay or deliver.
-Shared-vault and daily-budget reservations are tentative local calculations,
-not atomic on-chain reservations; balances and policies can change afterward.
+it and the printed quote/preflight output. A dry run does not pay or deliver,
+but a seller-v2 quote can create a persistent order at the seller. Shared-vault
+and daily-budget reservations are tentative local calculations, not atomic
+on-chain reservations; balances and policies can change afterward.
 After review, run the existing resource agent with **that exact goals file** and
 the same local provider, adding `--execute`:
 
@@ -179,8 +180,9 @@ manual chain reconciliation. Do not delete the journal or regenerate the goal to
 bypass uncertainty. As an alternative, adding `--execute` to the
 first command opts into **immediate, unreviewed** execution after the model plan;
 this can spend on a mistaken but permitted task and should not be used when the
-objective or model output is untrusted. Omitting `--key` produces the goal file
-only, without quotes, blockchain views, transactions or fulfillment.
+objective or model output is untrusted. Omitting `--key` and `--compare-providers`
+produces the goal file only, without quotes, blockchain views, transactions or
+fulfillment. Comparison contacts sellers even when no key is provided.
 
 ## Trusted owner configuration
 
@@ -215,6 +217,15 @@ The payee, token and policy must also be configured and allowed on the fresh
 v9 contract, and the quote provider must actually support that product. The model
 cannot make these changes. The example is a shape, not a deployed account.
 
+For a seller that explicitly supports Bouncer's optional v2 order protocol, the
+owner may add `"order_binding":"seller-v2"` to the corresponding resource entry.
+The model cannot set or change it. Generated goals then require a fresh
+seller-issued challenge and reject v1 quotes; omitted means legacy v1. Executing
+v2 goals requires `--durable`, and the exact signed hash, memo and original
+journal must be preserved for recovery. See [seller protocol and trust limits](PROVIDER_PROTOCOL.md#optional-seller-v2-binding).
+A challenge is public, not buyer authentication, and a second payment for an
+already-claimed quote is not redeemable. This remains testnet prototype software.
+
 ## Compare owner-approved providers
 
 Comparison is opt-in. Add an `alternatives` array to a resource entry in the
@@ -239,6 +250,13 @@ already be approved in the owner file and on chain: its policy must use the
 resource's token, allow the payee, grant the restricted agent key and have
 sufficient caps and vault balance. The payee must be registered with the FT.
 An alternative may specify a **lower** per-task maximum but not a higher one.
+Its optional `"order_binding":"seller-v2"` is pinned **per candidate**, not
+inherited from the primary; omitted means that candidate uses v1. If an owner
+approves both v1 and v2 candidates, the cheapest may be v1. To require v2 for
+every possible selection, pin it on the primary and every alternative. An
+owner-pinned v2 candidate cannot downgrade its own quote to v1. When executing
+with comparison, `--durable` is required if any candidate for the proposed work
+is v2, even if a legacy candidate might be cheaper.
 Do not put a `token` field in an alternative: all candidates for one resource
 inherit its single pinned FT. There is no exchange-rate lookup or cross-token
 price comparison. The full on-chain batch preflight runs *after* selection; if
@@ -261,8 +279,12 @@ unreviewed testnet spending. `--compare-providers` cannot be combined with
 Without the flag, the primary is used and alternatives are not contacted.
 
 Comparison can send each task's normalized **full input** to every approved
-candidate, which can retain it. No quote is sent to the model. At most five
-quotes are in flight concurrently; all candidates must return an authorized,
+candidate, which can retain it. V2 candidates persist each challenge even if
+they are not selected or the comparison fails; the subsequent preflight and
+execution can request another challenge. Reference sellers have a 1,024-quote
+capacity with no automatic eviction, so careless dry runs can exhaust it. No
+quote is sent to the model. At most five quotes are in flight concurrently;
+all candidates must return an authorized,
 order-bound quote. One unavailable, over-cap or invalid response stops queued
 requests, waits for in-flight requests and aborts with no selection or payment.
 Ties still follow owner order, not response timing. The selected origin, policy,

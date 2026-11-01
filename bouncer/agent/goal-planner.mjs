@@ -52,7 +52,8 @@ export function validatePlanningConfig(input) {
   const resources = Object.create(null);
   for (const name of names) {
     const item = input.resources[name];
-    if (!keysExactly(item, ['policy_id', 'token', 'payee', 'max_amount', 'max_tasks', 'max_total_amount'], ['alternatives'])) throw new Error(`invalid ${name} catalog entry`);
+    if (!keysExactly(item, ['policy_id', 'token', 'payee', 'max_amount', 'max_tasks', 'max_total_amount'], ['alternatives', 'order_binding'])) throw new Error(`invalid ${name} catalog entry`);
+    if (item.order_binding !== undefined && item.order_binding !== 'seller-v2') throw new Error(`invalid ${name} order binding`);
     if (typeof item.policy_id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(item.policy_id)) throw new Error(`invalid ${name} policy_id`);
     if (!isTestnetToken(item.token) || !testnetAccount(item.payee)) throw new Error(`${name} token and payee must be valid testnet accounts`);
     const maxAmount = positiveU128(item.max_amount, `${name} max_amount`);
@@ -64,7 +65,8 @@ export function validatePlanningConfig(input) {
     const approved = alternatives.map(offer => {
       // A candidate never declares a token: it inherits this resource's one
       // pinned FT. Reject even an apparently equivalent extra token field.
-      if (!keysExactly(offer, ['id', 'provider_url', 'policy_id', 'payee', 'max_amount']) ||
+      if (!keysExactly(offer, ['id', 'provider_url', 'policy_id', 'payee', 'max_amount'], ['order_binding']) ||
+          (offer.order_binding !== undefined && offer.order_binding !== 'seller-v2') ||
           typeof offer.id !== 'string' || !/^[A-Za-z0-9_-]{1,32}$/.test(offer.id) || ids.has(offer.id)) {
         throw new Error(`invalid or duplicate ${name} alternative`);
       }
@@ -77,11 +79,13 @@ export function validatePlanningConfig(input) {
       if (positiveU128(offer.max_amount, `${name} alternative max_amount`) > maxAmount) {
         throw new Error(`${name} alternative maximum exceeds the resource maximum`);
       }
-      return { id: offer.id, provider_url: offer.provider_url, policy_id: offer.policy_id, payee: offer.payee, max_amount: offer.max_amount };
+      return { id: offer.id, provider_url: offer.provider_url, policy_id: offer.policy_id, payee: offer.payee, max_amount: offer.max_amount,
+        ...(offer.order_binding === undefined ? {} : { order_binding: offer.order_binding }) };
     });
     resources[name] = {
       policy_id: item.policy_id, token: item.token, payee: item.payee,
       max_amount: item.max_amount, max_tasks: boundedCount(item.max_tasks, `${name} max_tasks`), max_total_amount: item.max_total_amount,
+      ...(item.order_binding === undefined ? {} : { order_binding: item.order_binding }),
       ...(item.alternatives !== undefined ? { alternatives: approved } : {}),
     };
   }
@@ -152,7 +156,8 @@ export function goalsFromModel(raw, ownerConfig) {
       throw new Error(`${resource} exceeds the owner aggregate maximum`);
     }
     return { id: `${resource}-${count}`, resource, input, policy_id: limits.policy_id,
-      token: limits.token, payee: limits.payee, max_amount: limits.max_amount };
+      token: limits.token, payee: limits.payee, max_amount: limits.max_amount,
+      ...(limits.order_binding === undefined ? {} : { order_binding: limits.order_binding }) };
   });
   if (config.required_resources.some(resource => !counts[resource])) throw new Error('model omitted an owner-required resource');
   return { contract_id: config.contract_id, owner_account_id: config.owner_account_id, provider_url: config.provider_url, goals };
