@@ -8,6 +8,8 @@ import { isDeepStrictEqual } from 'node:util';
 import nearApi from 'near-api-js';
 import { assertFinalPaymentReceipts } from '../packages/provider-sdk/lib/final-payment.mjs';
 import { isTransactionHash } from '../shared/direct-payment-settlement.mjs';
+import { isTestnetAccount } from '../shared/account-id.mjs';
+import { CIRCLE_TESTNET_USDC } from '../scripts/circle-testnet-setup.mjs';
 import { validateMultiAgencyGoal, validateMultiAgencyQuote } from './multiagency-research.mjs';
 
 const GAS = '200000000000000';
@@ -96,11 +98,41 @@ export function multiAgencyExactExecutionBlock(result, vault) {
   return init[0].block_hash;
 }
 
-/** Strict FINAL payment proof. Trusts the RPC and the owner-reviewed code hash;
- * does not prove the seller accepted the deposit or delivered useful work. */
-export function verifyMultiAgencyExactFtPayment({ goal, quote, publicKey, txHash, result, vaultState, intentState }) {
-  const prepared = prepareMultiAgencyExactFt({ goal, quote, agentPublicKey: publicKey, allowExpired: true });
-  const a = prepared.owner_call.args;
+/** Validate the internal shape of an adapter's deterministic review. This is
+ * NOT provider authentication: callers must reconstruct the review from the
+ * original owner-controlled goal and encrypted reservation before using it. */
+export function assertPreparedExactFt(prepared) {
+  const review = prepared?.review, goal = review?.goal, a = prepared?.owner_call?.args;
+  if (!record(review) || !record(goal) || !fields(a, ['intent_id', 'policy_id', 'expected_token', 'payee', 'amount', 'memo',
+        'review_hash', 'expires_at_ms', 'agent_public_key']) ||
+      !isTestnetAccount(goal.vault) || !isTestnetAccount(goal.owner) || goal.vault === goal.owner ||
+      !isTransactionHash(goal.vault_code_hash) || a.expected_token !== CIRCLE_TESTNET_USDC || !isTestnetAccount(a.payee) ||
+      typeof a.intent_id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(a.intent_id) ||
+      typeof a.policy_id !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(a.policy_id) ||
+      typeof a.amount !== 'string' || !/^[1-9][0-9]{0,38}$/.test(a.amount) || BigInt(a.amount) > (1n << 128n) - 1n ||
+      typeof a.memo !== 'string' || !/^[\x20-\x7e]{1,256}$/.test(a.memo) ||
+      a.memo === 'bouncer:withdraw' || a.memo === 'bouncer:guarded-ft-call' ||
+      typeof a.expires_at_ms !== 'string' || !/^[1-9][0-9]{0,19}$/.test(a.expires_at_ms) || BigInt(a.expires_at_ms) > (1n << 64n) - 1n ||
+      typeof review.agent_public_key !== 'string' || a.agent_public_key !== review.agent_public_key ||
+      prepared.review_hash !== crypto.createHash('sha256').update(JSON.stringify(review), 'utf8').digest('hex') ||
+      a.review_hash !== prepared.review_hash || a.intent_id !== prepared.intent_id ||
+      prepared.owner_call.receiver_id !== goal.vault || prepared.owner_call.method !== 'set_exact_ft_intent' ||
+      prepared.owner_call.attached_yocto !== '1' || prepared.agent_call?.receiver_id !== goal.vault ||
+      prepared.agent_call?.method !== 'execute_exact_ft' || prepared.agent_call?.attached_yocto !== '0' ||
+      !equals(prepared.agent_call?.args, { intent_id: prepared.intent_id }) ||
+      review.expires_at_ms !== a.expires_at_ms || goal.policy_id !== a.policy_id) {
+    throw new Error('prepared exact FT intent is internally inconsistent');
+  }
+  normalizeAgentKey(review.agent_public_key);
+  return prepared;
+}
+
+/** Strict FINAL proof for a reconstructed, owner-reviewed adapter preparation.
+ * Trusts the RPC and code hash. It does NOT authenticate the seller, prove a
+ * checkout belongs to the buyer, or establish fulfillment. */
+export function verifyPreparedExactFtPayment({ prepared, txHash, result, vaultState, intentState }) {
+  assertPreparedExactFt(prepared);
+  const a = prepared.owner_call.args, publicKey = prepared.review.agent_public_key;
   if (!isTransactionHash(txHash)) throw new Error('invalid original exact FT transaction hash');
   assertFinalPaymentReceipts(result, a.expected_token);
   const tx = result.transaction;
@@ -169,6 +201,14 @@ export function verifyMultiAgencyExactFtPayment({ goal, quote, publicKey, txHash
     throw new Error('exact FT transfer and callback are not bound to the initiation');
   }
   return { tx_hash: txHash, intent_id: a.intent_id, token: a.expected_token, payee: a.payee, amount: a.amount,
-    event: 'unique Circle transfer event and reviewed quote memo',
+    event: 'unique Circle transfer event and reviewed intent memo',
     scope: 'FINAL exact-FT payment only; seller attribution, opening and delivery not established' };
+}
+
+/** MultiAgency wrapper reconstructs its own adapter review, retaining the
+ * original external summary for existing callers and recovery journals. */
+export function verifyMultiAgencyExactFtPayment({ goal, quote, publicKey, txHash, result, vaultState, intentState }) {
+  const prepared = prepareMultiAgencyExactFt({ goal, quote, agentPublicKey: publicKey, allowExpired: true });
+  const proof = verifyPreparedExactFtPayment({ prepared, txHash, result, vaultState, intentState });
+  return { ...proof, event: 'unique Circle transfer event and reviewed quote memo' };
 }

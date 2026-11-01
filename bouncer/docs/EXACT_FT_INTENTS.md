@@ -83,8 +83,13 @@ automated owner setup/deployment in this path yet.
 `--pay-exact` requires explicit execution and provider-availability assertions
 and the restricted signing-key file. It rechecks the network, keyless reviewed
 vault/code hash, owner, exact-only key permission, token registration, policy,
-intent and budget at a FINAL block. It checks the seller quote twice, signs
-only the ID, and synchronously persists the signed transaction hash to the
+intent and budget at a FINAL block. The selected FINAL header must be no more
+than 120 seconds old or 30 seconds in the future relative to the local clock;
+its freshness is checked again during review and before broadcast. Raw
+contract views must report the requested block hash, including historical intent
+views during recovery. This trusts the RPC and clock and cannot prevent state
+changes or a dishonest RPC. It checks the seller quote twice, signs only the ID,
+and synchronously persists the signed transaction hash to the
 original encrypted journal before **one** bounded broadcast. A timeout,
 uncertain receipt or failed write stays unresolved. `--recover-exact` uses the
 original hash without signing or sending; it verifies the historical vault and

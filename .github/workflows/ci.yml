@@ -270,7 +270,13 @@ jobs:
         run: RUSTFLAGS="-C link-arg=-s" cargo build --target wasm32-unknown-unknown --release --features exact-ft-v11
       - name: Check experimental exact FT marker
         run: |
-          node -e 'const fs=require("fs"),c=require("crypto"),p="bouncer/contracts/bouncer/target/wasm32-unknown-unknown/release/bouncer.wasm",b=fs.readFileSync(p);if(!b.subarray(0,8).equals(Buffer.from([0,97,115,109,1,0,0,0]))||!b.includes(Buffer.from("bouncer-agent-v11-exact-ft-testnet")))throw Error("invalid experimental exact FT artifact");console.log("Experimental exact FT WASM SHA-256",c.createHash("sha256").update(b).digest("hex"))'
+          node -e 'const fs=require("fs"),c=require("crypto"),p="bouncer/contracts/bouncer/target/wasm32-unknown-unknown/release/bouncer.wasm",b=fs.readFileSync(p);if(!b.subarray(0,8).equals(Buffer.from([0,97,115,109,1,0,0,0]))||!b.includes(Buffer.from("bouncer-agent-v11-exact-ft-testnet")))throw Error("invalid experimental exact FT artifact");const hash=c.createHash("sha256").update(b).digest("hex");console.log("Experimental exact FT WASM SHA-256",hash);console.log(`::notice title=V11 testnet WASM identification (not an audit)::sha256=${hash}, bytes=${b.length}`)'
+      # Optional fallback when the standard artifact host is unreachable. The
+      # compressed WASM is visible to private-repository check/log readers; it
+      # must never contain secrets. A marker is not proof of human approval.
+      - name: Export V11 WASM in private review annotations
+        if: github.event_name == 'push' && github.event.repository.private == true && github.run_attempt == '1' && github.ref == 'refs/heads/arena/3ee8cb60-near-hub' && contains(github.event.head_commit.message, '[v11-wasm-review-export]')
+        run: node bouncer/scripts/v11-wasm-annotations.mjs emit bouncer/contracts/bouncer/target/wasm32-unknown-unknown/release/bouncer.wasm
       - name: Save the non-deployed exact FT variant for review
         uses: actions/upload-artifact@v4
         with:

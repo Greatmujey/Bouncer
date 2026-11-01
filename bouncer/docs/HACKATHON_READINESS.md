@@ -7,9 +7,17 @@ Status recorded on November 1, 2026. Re-read the [official live rules](https://n
 - The [README quickstart](../../README.md#reproduce-the-safety-checks-without-a-wallet) gives a fresh-install, offline test command and expected results. These checks use fixtures and a mock runtime; they are **not** a live independent purchase.
 - Earlier real testnet evidence includes the 0-yocto rejection linked in the README, native-NEAR-paid OutLayer work and Circle testnet USDC payments to self-hosted development services. Testnet USDC has no real-world value.
 - The default contract and separate V11 feature are built and unit-tested in CI. V11 is **not deployed, independently audited, or tested on chain**; a version marker is not proof of deployed code. Payment settlement alone is not delivery.
-- Bouncer has **not** verified useful independent FT-paid fulfillment. Svalin observations are a read-only lead: no real checkout, payment, activation or paid report has been performed. Its new encrypted session/reservation-recovery library has synthetic tests only and is not a complete buyer. MultiAgency's exact-FT path has synthetic tests but no completed live purchase or task.
+- Bouncer has **not** verified useful independent FT-paid fulfillment. Svalin observations are a read-only lead: no real checkout, payment, activation or paid report has been performed. Its buyer and recovery paths have synthetic tests and an optional test against pinned independent seller **source** with a simulated chain/indexer and sample data; seller attribution is unproven. An unsigned V11 setup planner (including a Circle registration batch), original-hash receipt verifier, encrypted setup-journal fence, read-only pre-creation assessment and strict pre-reservation check are locally tested but none has been used for a real deployment. MultiAgency's exact-FT path has synthetic tests but no completed live purchase or task.
 
 ## Track fit: evidence, not six claims of completion
+
+The official [FAQ](https://nearhackathon.com/) explicitly says a project may
+select **every track it fits**, with **one submission per project**. The
+[submission contract](https://nearhackathon.com/HACKATHON.md) likewise accepts
+one or more track IDs. Although the website's getting-started section says
+“choose a track,” the FAQ explicitly clarifies that multiple tracks may be
+selected. Recheck the live rules before submitting. No particular partner
+integration is mandatory (Q-011).
 
 The entrant must select the tracks. `security` (policy, scoped keys and owner guard) and `agents` (resource procurement) are the clearest current fits. `business` and `realworld` are early prototypes, not proven business operations or real-money rails. `defi` has historical testnet swap work but no finished guarded swap/output-accounting flow. `swarms` is an aspiration, not a demonstrated multi-agent economy. See the six-track table in the README and select additional tracks only if the completed work actually supports them.
 

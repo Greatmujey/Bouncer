@@ -1,0 +1,28 @@
+{
+  "observed_at_utc_approx": "2026-11-01T21:21:00Z",
+  "offer_url": "https://svalin-api.noobshole.workers.dev/v1/pro?observe=bouncer-20261101-2121",
+  "public_offer": {
+    "network": "near:testnet",
+    "environment": "testnet",
+    "payee": "svalin-agent.testnet",
+    "token": "3e2210e1184b45b64c8a434c0a7e7b23cc04ea7eb7a6c3c32520d03d4afcb8af",
+    "monthly_base_test_usdc": "5",
+    "monthly_days": 30,
+    "advertised_calls_per_day": 100
+  },
+  "stale_read_controls": {
+    "nearblocks_url": "https://api-testnet.nearblocks.io/v1/blocks?per_page=1&cachebust=20261101-2121",
+    "returned_latest_block_height": "270420307",
+    "returned_block_timestamp": "2026-09-27T03:13:30.893Z",
+    "web4_invalid_account_url": "https://rpc.web4.testnet.page/account/this-account-should-not-exist-202611012121.testnet/view/ping?cachebust=202611012121",
+    "web4_error_reported_block_height": "238527181",
+    "interpretation": "The NearBlocks response was over one month old at retrieval; Web4 reported a substantially older height. The retrieval path or endpoints may be cached or stale. Neither is used as a current testnet balance, registration or liquidity observation. No conclusion is drawn about current seller registration."
+  },
+  "current_wallet_balance_checked": false,
+  "reservation_created": false,
+  "seller_state_mutated": false,
+  "transactions_signed": false,
+  "transactions_sent": false,
+  "paid_requests": false,
+  "scope": "Anonymous public GET observations only; not current blockchain evidence, seller acceptance, payment or delivery."
+}

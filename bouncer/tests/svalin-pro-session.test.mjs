@@ -63,7 +63,7 @@ function fixture() {
 }
 const prepare = f => prepareSvalinProSession({ goal, journal: f.journal, now });
 const reserve = f => reserveSvalinProOnce(f.options());
-const recover = f => recoverSvalinProReservationOnce(f.options());
+const recover = f => recoverSvalinProReservationOnce({ ...f.options(), acknowledgeMutation: true });
 const intent = f => prepareSvalinProExactFt({ goal, journal: f.journal, agentPublicKey: f.pubkey, now });
 
 test('random bearer is encrypted before any network request and survives an original-journal reopen', async () => {
@@ -91,7 +91,8 @@ test('session and external POSTs fail closed without encrypted scope and explici
     await prepare(f);
     await assert.rejects(reserveSvalinProOnce({ ...f.options(), execute: false }), /acknowledgments/);
     await assert.rejects(reserveSvalinProOnce({ ...f.options(), acknowledgeBackup: false }), /acknowledgments/);
-    await assert.rejects(recoverSvalinProReservationOnce({ ...f.options(), execute: false }), /acknowledgments/);
+    await assert.rejects(recoverSvalinProReservationOnce({ ...f.options(), execute: false, acknowledgeMutation: true }), /acknowledgments/);
+    await assert.rejects(recoverSvalinProReservationOnce({ ...f.options(), acknowledgeMutation: false }), /seller-state mutation/);
     assert.equal(f.gets + f.posts + f.recoveries, 0);
   } finally { plain.close(); f.close(); }
 });

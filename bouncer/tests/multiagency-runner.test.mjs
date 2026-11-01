@@ -28,7 +28,7 @@ function fixture() {
   } };
   const provider = {
     async viewNodeStatus() { return { chain_id: 'testnet' }; },
-    async viewBlock() { return { header: { hash: finalBlock } }; },
+    async viewBlock() { return { header: { hash: finalBlock, timestamp_nanosec: (BigInt(nowMs) * 1_000_000n).toString() } }; },
     async viewAccount(id, options) { assert.equal(id, goal.vault); return { block_hash: options.blockId, code_hash: badCode ? mockHash('wrong') : goal.vault_code_hash }; },
     async viewAccessKeyList(id, options) { assert.equal(id, goal.vault); return { block_hash: options.blockId, keys: [] }; },
     async viewAccessKey() { return { permission: { FunctionCall: { receiver_id: goal.vault, method_names: ['execute'] } } }; },
@@ -139,12 +139,47 @@ test('parallel callers sharing one encrypted journal cannot create duplicate quo
   } finally { release(); f.close(); }
 });
 
+test('stale FINAL state blocks the legacy MultiAgency payment before quote recheck, signing or broadcast', async () => {
+  const f = fixture(); try {
+    await q(f); let signed = 0; const previousChecks = f.checks;
+    f.provider.viewBlock = async () => ({ header: { hash: mockHash('stale-final'),
+      timestamp_nanosec: (BigInt(nowMs - 120_001) * 1_000_000n).toString() } });
+    const create = f.account.createTransaction.bind(f.account);
+    f.account.createTransaction = async (...args) => { signed++; return create(...args); };
+    await assert.rejects(p(f), /FINAL block is stale/);
+    assert.equal(f.checks, previousChecks); assert.equal(signed, 0); assert.equal(f.sends, 0);
+    assert.equal(f.journal.get(goal.id), undefined);
+  } finally { f.close(); }
+});
+
+test('legacy MultiAgency rechecks FINAL freshness after quote lookup and after journaling', async () => {
+  const f = fixture(); try {
+    await q(f); let clock = nowMs;
+    const slowQuote = async (...args) => { const response = await f.fetchImpl(...args); clock += 120_001; return response; };
+    await assert.rejects(payMultiAgencyQuoteOnce({ ...f.opts(), now: () => clock, fetchImpl: slowQuote,
+      provider: f.provider, account: f.account, publicKey: f.publicKey, log: () => {} }), /FINAL block is stale/);
+    assert.equal(f.sends, 0); assert.equal(f.journal.get(goal.id), undefined);
+  } finally { f.close(); }
+  const g = fixture(); try {
+    await q(g); let clock = nowMs; const put = g.journal.put.bind(g.journal);
+    g.journal.put = (id, entry) => { const result = put(id, entry); if (id === goal.id && entry.status === 'pending') clock += 120_001; return result; };
+    await assert.rejects(payMultiAgencyQuoteOnce({ ...g.opts(), now: () => clock, provider: g.provider,
+      account: g.account, publicKey: g.publicKey, log: () => {} }), /pre-broadcast guard rejected.*FINAL block is stale/);
+    assert.equal(g.sends, 0); assert.equal(g.journal.get(goal.id).status, 'pending');
+    g.journal.put = put; await assert.rejects(p(g), /already recorded/); assert.equal(g.sends, 0);
+  } finally { g.close(); }
+});
+
 test('expiry after journal reservation stops before broadcast and keeps the original pending', async () => {
   const f = fixture(); try {
-    await q(f); let clocks = 0;
-    const expiry = Date.parse(quote.expires_at), advancing = () => ++clocks >= 4 ? expiry - 30_000 : nowMs;
+    await q(f); let clock = nowMs;
+    const originalPut = f.journal.put.bind(f.journal);
+    f.journal.put = (id, entry) => {
+      originalPut(id, entry);
+      if (id === goal.id && entry.status === 'pending') clock = Date.parse(quote.expires_at) - 30_000;
+    };
     await assert.rejects(payMultiAgencyQuoteOnce({ ...f.opts(), provider: f.provider, account: f.account, publicKey: f.publicKey,
-      now: advancing, log: () => {} }), /pre-broadcast guard rejected/);
+      now: () => clock, log: () => {} }), /pre-broadcast guard rejected/);
     assert.equal(f.sends, 0); assert.equal(f.journal.get(goal.id).status, 'pending');
     await assert.rejects(p(f), /already recorded/); assert.equal(f.sends, 0);
   } finally { f.close(); }

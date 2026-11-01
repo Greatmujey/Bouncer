@@ -168,8 +168,9 @@ export async function reserveSvalinProOnce({ goal: rawGoal, journal, fetchImpl =
  * automatically retried. Anything except one unpaid pending checkout is left
  * unresolved, including an active pass, missing or multiple reservations. */
 export async function recoverSvalinProReservationOnce({ goal: rawGoal, journal, fetchImpl = globalThis.fetch,
-  now = Date.now, execute = false, acknowledgeBackup = false }) {
+  now = Date.now, execute = false, acknowledgeBackup = false, acknowledgeMutation = false }) {
   const goal = validateSvalinProGoal(rawGoal); requireJournal(journal, goal); checkOptIn(execute, acknowledgeBackup);
+  if (acknowledgeMutation !== true) throw new Error('explicit seller-state mutation acknowledgment is required for reservation recovery');
   return withExclusiveJournalOperation(journal, async () => {
     const id = sessionKey(goal), entry = session(journal, goal);
     if (entry.svalin.phase === 'reserved') return summary(entry);
@@ -196,31 +197,39 @@ export async function recoverSvalinProReservationOnce({ goal: rawGoal, journal, 
   });
 }
 
+/** Internal read-only reconstruction for a caller already holding the
+ * journal-operation fence. Returns no bearer code. `allowExpired` is ONLY for
+ * reconciling an original signed hash; it never authorizes a new payment. */
+export function reconstructSvalinProExactFt({ goal: rawGoal, journal, agentPublicKey, now = Date.now, allowExpired = false }) {
+  const goal = validateSvalinProGoal(rawGoal); requireJournal(journal, goal);
+  if (typeof allowExpired !== 'boolean') throw new Error('invalid expiry mode');
+  const entry = session(journal, goal), nowMs = timestamp(now);
+  if (entry.svalin.phase !== 'reserved') throw new Error('original reviewed testnet reservation is missing or invalid');
+  const c = safeCheckout(entry.svalin.checkout);
+  const expires = Date.parse(c.expires_at), cutoff = expires - 5 * 60_000;
+  if (!Number.isSafeInteger(expires) || new Date(expires).toISOString() !== c.expires_at || cutoff <= 0 ||
+      (!allowExpired && (cutoff < nowMs + 60_000 || cutoff > nowMs + 73 * 60 * 60_000))) {
+    throw new Error('reservation is expired or too close to expiry for owner review');
+  }
+  const key = publicKey(agentPublicKey);
+  const review = { protocol: 'bouncer:svalin-pro-exact-ft:v1', goal, checkout: { network: c.network, token: c.token,
+    payee: c.payee, plan: c.plan, amount_atoms: c.amount_atoms, expires_at: c.expires_at },
+    code_commitment: digest(`bouncer:svalin-pro-code:v1:${entry.svalin.code}`), agent_public_key: key,
+    expires_at_ms: String(cutoff) };
+  const reviewHash = digest(JSON.stringify(review));
+  const intentId = `sv-${reviewHash.slice(0, 60)}`, memo = `bouncer-svalin:${reviewHash.slice(0, 32)}`;
+  const args = { intent_id: intentId, policy_id: goal.policy_id, expected_token: c.token,
+    payee: c.payee, amount: c.amount_atoms, memo, review_hash: reviewHash,
+    expires_at_ms: String(cutoff), agent_public_key: key };
+  return { review, review_hash: reviewHash, intent_id: intentId,
+    owner_call: { receiver_id: goal.vault, method: 'set_exact_ft_intent', attached_yocto: '1', args },
+    agent_call: { receiver_id: goal.vault, method: 'execute_exact_ft', attached_yocto: '0', args: { intent_id: intentId } },
+    scope: 'unsigned preparation only; no owner approval, signature, payment, seller attribution or delivery' };
+}
+
 /** Prepare public V11 owner/agent calldata only. The code is never included in
  * calldata or memo; a domain-separated SHA-256 commitment binds the locally
  * generated 256-bit secret without revealing it. No signature or send occurs. */
-export async function prepareSvalinProExactFt({ goal: rawGoal, journal, agentPublicKey, now = Date.now }) {
-  const goal = validateSvalinProGoal(rawGoal); requireJournal(journal, goal);
-  return withExclusiveJournalOperation(journal, async () => {
-    const entry = session(journal, goal), nowMs = timestamp(now);
-    if (entry.svalin.phase !== 'reserved') throw new Error('original reviewed testnet reservation is missing or invalid');
-    const c = safeCheckout(entry.svalin.checkout);
-    const expires = Date.parse(c.expires_at), cutoff = expires - 5 * 60_000;
-    if (!Number.isSafeInteger(expires) || new Date(expires).toISOString() !== c.expires_at || cutoff < nowMs + 60_000 ||
-        cutoff > nowMs + 73 * 60 * 60_000) throw new Error('reservation is expired or too close to expiry for owner review');
-    const key = publicKey(agentPublicKey);
-    const review = { protocol: 'bouncer:svalin-pro-exact-ft:v1', goal, checkout: { network: c.network, token: c.token,
-      payee: c.payee, plan: c.plan, amount_atoms: c.amount_atoms, expires_at: c.expires_at },
-      code_commitment: digest(`bouncer:svalin-pro-code:v1:${entry.svalin.code}`), agent_public_key: key,
-      expires_at_ms: String(cutoff) };
-    const reviewHash = digest(JSON.stringify(review));
-    const intentId = `sv-${reviewHash.slice(0, 60)}`, memo = `bouncer-svalin:${reviewHash.slice(0, 32)}`;
-    const args = { intent_id: intentId, policy_id: goal.policy_id, expected_token: c.token,
-      payee: c.payee, amount: c.amount_atoms, memo, review_hash: reviewHash,
-      expires_at_ms: String(cutoff), agent_public_key: key };
-    return { review, review_hash: reviewHash, intent_id: intentId,
-      owner_call: { receiver_id: goal.vault, method: 'set_exact_ft_intent', attached_yocto: '1', args },
-      agent_call: { receiver_id: goal.vault, method: 'execute_exact_ft', attached_yocto: '0', args: { intent_id: intentId } },
-      scope: 'unsigned preparation only; no owner approval, signature, payment, seller attribution or delivery' };
-  });
+export async function prepareSvalinProExactFt({ goal, journal, agentPublicKey, now = Date.now }) {
+  return withExclusiveJournalOperation(journal, () => reconstructSvalinProExactFt({ goal, journal, agentPublicKey, now }));
 }

@@ -31,7 +31,7 @@ function fixture() {
   } };
   const provider = {
     async viewNodeStatus() { return { chain_id: 'testnet' }; },
-    async viewBlock() { return { header: { hash: finalBlock } }; },
+    async viewBlock() { return { header: { hash: finalBlock, timestamp_nanosec: (BigInt(nowMs) * 1_000_000n).toString() } }; },
     async viewAccount(id, options) { assert.equal(id, goal.vault); return { block_hash: options.blockId, code_hash: badCode ? mockHash('wrong') : goal.vault_code_hash }; },
     async viewAccessKeyList(id, options) { assert.equal(id, goal.vault); return { block_hash: options.blockId, keys: [] }; },
     async viewAccessKey(id, pk, options) {
@@ -54,6 +54,10 @@ function fixture() {
         return view;
       }
       throw new Error(`unexpected view ${method}`);
+    },
+    async callFunctionRaw(contract, method, args, opts) {
+      const value = await this.callFunction(contract, method, args, opts);
+      return { block_hash: opts.blockId, result: [...Buffer.from(JSON.stringify(value))] };
     },
     async sendTransactionOnce(signed, wait) {
       sends++; assert.equal(wait, 'FINAL');
@@ -135,6 +139,28 @@ test('exact route signs only the pinned ID, fsyncs before one broadcast and reco
     await assert.rejects(payMultiAgencyQuoteOnce({ ...f.options(), provider: f.provider, account: f.account, publicKey: f.publicKey }), /already recorded/);
     assert.equal(f.sends, 1); assert.equal(f.posts, 1);
   } finally { f.close(); }
+});
+
+test('mixed-block views block the exact MultiAgency payment and leave recovery pending', async () => {
+  const f = fixture(); try {
+    await q(f); await f.pinSyntheticView(); const original = f.provider.callFunctionRaw.bind(f.provider); let signed = 0;
+    f.provider.callFunctionRaw = async (...args) => { const result = await original(...args);
+      return args[1] === 'get_policy' ? { ...result, block_hash: mockHash('wrong-block') } : result; };
+    const create = f.account.createTransaction.bind(f.account);
+    f.account.createTransaction = async (...args) => { signed++; return create(...args); };
+    await assert.rejects(p(f), /invalid view/); assert.equal(signed, 0); assert.equal(f.sends, 0);
+    assert.equal(f.journal.get(goal.id), undefined);
+  } finally { f.close(); }
+  const g = fixture(); try {
+    await q(g); await g.pinSyntheticView(); g.loseSend(); await assert.rejects(p(g), /unresolved/);
+    const hash = g.journal.get(goal.id).tx_hash, original = g.provider.callFunctionRaw.bind(g.provider);
+    g.provider.callFunctionRaw = async (...args) => { const result = await original(...args);
+      return args[1] === 'get_exact_ft_intent' ? { ...result, block_hash: mockHash('wrong-block') } : result; };
+    await assert.rejects(r(g), /invalid view/);
+    assert.equal(g.journal.get(goal.id).status, 'pending'); assert.equal(g.journal.get(goal.id).tx_hash, hash);
+    g.provider.callFunctionRaw = original; assert.equal((await r(g)).settlement.tx_hash, hash);
+    assert.equal(g.sends, 1);
+  } finally { g.close(); }
 });
 
 test('a lost send response remains pending and is recovered without a key or second send', async () => {
@@ -229,6 +255,41 @@ test('the exact payment never falls back to a retrying transport', async () => {
     await assert.rejects(p(f), /requires one-shot transport/);
     assert.equal(f.fallback, 0); assert.equal(f.sends, 0); assert.equal(f.journal.get(goal.id), undefined);
   } finally { f.close(); }
+});
+
+test('stale FINAL state blocks the exact MultiAgency payment before quote recheck, signing or broadcast', async () => {
+  const f = fixture(); try {
+    await q(f); await f.pinSyntheticView(); let signed = 0;
+    const previousChecks = f.checks;
+    f.provider.viewBlock = async () => ({ header: { hash: mockHash('stale-final'),
+      timestamp_nanosec: (BigInt(nowMs - 120_001) * 1_000_000n).toString() } });
+    const create = f.account.createTransaction.bind(f.account);
+    f.account.createTransaction = async (...args) => { signed++; return create(...args); };
+    await assert.rejects(p(f), /FINAL block is stale/);
+    assert.equal(f.checks, previousChecks); assert.equal(signed, 0); assert.equal(f.sends, 0);
+    assert.equal(f.journal.get(goal.id), undefined);
+  } finally { f.close(); }
+});
+
+test('exact MultiAgency snapshot freshness is rechecked through review and after journaling', async () => {
+  const f = fixture(); try {
+    await q(f); await f.pinSyntheticView(); let clock = nowMs, signed = 0;
+    const create = f.account.createTransaction.bind(f.account);
+    f.account.createTransaction = async (...args) => { signed++; return create(...args); };
+    const slowQuote = async (...args) => { const response = await f.fetchImpl(...args); clock += 120_001; return response; };
+    await assert.rejects(payMultiAgencyExactFtOnce({ ...f.options(), now: () => clock, fetchImpl: slowQuote,
+      provider: f.provider, account: f.account, publicKey: f.publicKey }), /FINAL block is stale/);
+    assert.equal(signed, 0); assert.equal(f.sends, 0); assert.equal(f.journal.get(goal.id), undefined);
+  } finally { f.close(); }
+  const g = fixture(); try {
+    await q(g); await g.pinSyntheticView(); let clock = nowMs;
+    const put = g.journal.put.bind(g.journal);
+    g.journal.put = (id, entry) => { const result = put(id, entry); if (id === goal.id && entry.status === 'pending') clock += 120_001; return result; };
+    await assert.rejects(payMultiAgencyExactFtOnce({ ...g.options(), now: () => clock, provider: g.provider,
+      account: g.account, publicKey: g.publicKey }), /unresolved.*never automatically resend/);
+    assert.equal(g.sends, 0); assert.equal(g.journal.get(goal.id).status, 'pending');
+    g.journal.put = put; await assert.rejects(p(g), /already recorded/); assert.equal(g.sends, 0);
+  } finally { g.close(); }
 });
 
 test('a quote changed after signing but before reservation stops with no broadcast', async () => {

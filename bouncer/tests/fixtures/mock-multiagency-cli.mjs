@@ -21,6 +21,10 @@ PaymentRpcProvider.prototype.callFunction = async (id, method, args, { blockId }
       args?.intent_id !== evidence.intentView?.intent_id) throw new Error('unexpected synthetic intent lookup');
   return structuredClone(evidence.intentView);
 };
+PaymentRpcProvider.prototype.callFunctionRaw = async function(id, method, args, opts) {
+  const value = await this.callFunction(id, method, args, opts);
+  return { block_hash: opts.blockId, result: [...Buffer.from(JSON.stringify(value))] };
+};
 PaymentRpcProvider.prototype.sendTransactionOnce = async () => { throw new Error('read-only CLI must not broadcast'); };
 PaymentRpcProvider.prototype.sendTransactionUntil = async () => { throw new Error('read-only CLI must not broadcast'); };
 globalThis.fetch = async (url, options) => {

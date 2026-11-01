@@ -17,10 +17,22 @@ delivery checks and a local journal gate later payments. See
 synthetic quote/payment/recovery tests and read-only historical compatibility
 checks. An isolated [exact-FT intent variant](bouncer/docs/EXACT_FT_INTENTS.md)
 pins a one-shot payment to owner-reviewed terms; it is not deployed. A separate
-[Svalin Pro testnet discovery and session library](bouncer/docs/SVALIN_PRO_READINESS.md)
-include synthetic-only encrypted reservation recovery; no real checkout or
-payment was made. There is **no verified independent FT-paid fulfillment by
-Bouncer**. The marketplace catalog search is read-only. No model or inference
+[Svalin Pro testnet buyer](bouncer/docs/SVALIN_PRO_READINESS.md) adds an
+encrypted reservation, one-shot exact-FT payment, original-hash recovery and
+separately approved activation/report path. A local interoperability suite
+runs it against pinned Svalin seller source with a **simulated** chain, indexer
+and sample data; no real checkout or payment was made, and seller-side
+transaction attribution remains unproven. Its new read-only pre-reservation
+check covers a narrowly capped testnet vault profile; a passing snapshot is
+not deployment, funding proof, consent or delivery. An offline setup planner
+prepares five unsigned batches for a fresh keyless V11 vault, including Circle
+registration; it does not sign, deploy, register or fund it. A separate
+read-only pre-creation check reports registration and balance blockers and
+storage estimates, not an authorization. An offline verifier and encrypted local
+journal fence can retain an existing signed setup transaction's original hash
+and check supplied receipts against that review. They do not sign, fetch,
+broadcast, retry or prove current state.
+There is **no verified independent FT-paid fulfillment by Bouncer**. The marketplace catalog search is read-only. No model or inference
 service is bundled. This is unaudited testnet software, not suitable
 for real funds.
 
@@ -30,16 +42,22 @@ From the repository root, with Node.js 22 and npm:
 
 ```sh
 npm ci --prefix bouncer --ignore-scripts --no-audit --no-fund
-node --test bouncer/tests/multiagency-exact-ft.test.mjs bouncer/tests/multiagency-exact-runner.test.mjs bouncer/tests/svalin-pro-readiness.test.mjs bouncer/tests/svalin-liquidity-readiness.test.mjs bouncer/tests/svalin-pro-session.test.mjs bouncer/tests/svalin-pro-session-concurrency.test.mjs bouncer/tests/youtick-grant-probe-evidence.test.mjs bouncer/tests/live-action-safety-gates.test.mjs
+node --test bouncer/tests/fresh-final-block.test.mjs bouncer/tests/multiagency-exact-ft.test.mjs bouncer/tests/multiagency-exact-runner.test.mjs bouncer/tests/svalin-pro-readiness.test.mjs bouncer/tests/svalin-pro-preflight.test.mjs bouncer/tests/svalin-setup-plan.test.mjs bouncer/tests/svalin-setup-evidence.test.mjs bouncer/tests/svalin-setup-journal.test.mjs bouncer/tests/svalin-setup-preflight.test.mjs bouncer/tests/v11-wasm-annotations.test.mjs bouncer/tests/svalin-liquidity-readiness.test.mjs bouncer/tests/svalin-pro-session.test.mjs bouncer/tests/svalin-pro-session-concurrency.test.mjs bouncer/tests/svalin-pro-runner.test.mjs bouncer/tests/svalin-pro-cli.test.mjs bouncer/tests/youtick-grant-probe-evidence.test.mjs bouncer/tests/live-action-safety-gates.test.mjs
 ```
 
-**See:** 40 passing offline tests (the count can increase as tests are added).
-They exercise synthetic exact-payment proofs, ambiguous-send recovery, Svalin
-readiness and encrypted-session validation, a mocked 1-yocto rejection proof,
-and CI safety gates.
+**See:** 118 passing offline tests (the count can increase as tests are added).
+They exercise synthetic exact-payment proofs, ambiguous-send recovery, stale or
+mixed FINAL-block rejection, unsigned V11 setup planning and pre-creation
+checks, compressed artifact transport, original-hash receipt checks and encrypted
+setup-journal crash recovery, Svalin pre-reservation checks and reservation/
+payment/activation/report handling, a mocked 1-yocto rejection
+proof, and CI safety gates.
 The install downloads npm dependencies. The tests use synthetic transactions
 and ephemeral test keys; they do not contact a provider, broadcast to a chain
-or spend tokens. They are not proof of independent delivery.
+or spend tokens. They are not proof of independent delivery. An optional
+[source-level Svalin interoperability suite](bouncer/docs/SVALIN_PRO_READINESS.md#optional-upstream-source-interoperability-test)
+uses a separately downloaded seller source tree; it still simulates the chain,
+indexer and portfolio and makes no live purchase.
 
 For the actual Rust contract unit tests, with a Rust toolchain installed:
 

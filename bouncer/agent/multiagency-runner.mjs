@@ -13,6 +13,9 @@ import { FileJournal, requestFingerprint, runProcurement } from './procurement.m
 import { recoverDirectPayment } from './recover-direct-payment.mjs';
 import { signReviewedCall } from './reviewed-transaction.mjs';
 import { isTransactionHash } from '../shared/direct-payment-settlement.mjs';
+import { assertFreshFinalBlock } from '../shared/fresh-final-block.mjs';
+import { preflightExactFt } from './exact-ft-runtime.mjs';
+import { readPinnedJsonView } from './read-only-near-rpc.mjs';
 import { prepareMultiAgencyExactFt, assertMultiAgencyExactFtView, multiAgencyExactExecutionBlock,
   verifyMultiAgencyExactFtPayment } from './multiagency-exact-ft.mjs';
 import { MULTIAGENCY_ORIGIN } from './multiagency-readiness.mjs';
@@ -123,7 +126,8 @@ export async function payMultiAgencyQuoteOnce({ goal: rawGoal, journal, provider
     // hash pins the owner's reviewed deployment; it is not a source audit.
     if ((await provider.viewNodeStatus())?.chain_id !== 'testnet') throw new Error('RPC must report testnet');
     const block = await provider.viewBlock({ finality: 'final' });
-    if (typeof block?.header?.hash !== 'string' || !block.header.hash) throw new Error('FINAL block is unavailable');
+    assertFreshFinalBlock(block, timestamp(now));
+    const snapshot = { header: { hash: block.header.hash, timestamp_nanosec: block.header.timestamp_nanosec } };
     const finality = { blockId: block.header.hash };
     const [vault, vaultKeys, owner, recipientStorage] = await Promise.all([
       provider.viewAccount(goal.vault, finality), provider.viewAccessKeyList(goal.vault, finality),
@@ -135,9 +139,16 @@ export async function payMultiAgencyQuoteOnce({ goal: rawGoal, journal, provider
         !recipientStorage || typeof recipientStorage.total !== 'string' || !/^[1-9][0-9]*$/.test(recipientStorage.total)) {
       throw new Error('reviewed keyless vault identity, owner or Circle recipient registration differs; no payment sent');
     }
+    assertFreshFinalBlock(snapshot, timestamp(now));
     const totals = await runProcurement({ plan, provider, account, publicKey, journal, durablePayment: true, execute: true, log,
-      beforePayment: async () => { assertUnusedMemo(journal, goal, quote); await stillAwaiting(goal, quote, fetchImpl, now); },
-      beforeBroadcast: () => { if (Date.parse(quote.expires_at) < timestamp(now) + 60_000) throw new Error('quote is too close to expiry'); },
+      beforePayment: async () => {
+        assertUnusedMemo(journal, goal, quote); await stillAwaiting(goal, quote, fetchImpl, now);
+        assertFreshFinalBlock(snapshot, timestamp(now));
+      },
+      beforeBroadcast: () => {
+        if (Date.parse(quote.expires_at) < timestamp(now) + 60_000) throw new Error('quote is too close to expiry');
+        assertFreshFinalBlock(snapshot, timestamp(now));
+      },
     });
     if (totals.paid !== 1) return { status: 'BLOCKED', totals, scope: 'no payment; provider delivery is not established' };
     const entry = journal.get(goal.id), chain = await provider.txStatusReceipts(entry.tx_hash, goal.owner, 'FINAL');
@@ -183,7 +194,7 @@ async function exactEvidence(provider, goal, quote, entry, chain) {
   const executionId = multiAgencyExactExecutionBlock(chain, goal.vault);
   const [vaultState, view] = await Promise.all([
     vaultAtTransaction(provider, goal, chain, executionId),
-    provider.callFunction(goal.vault, 'get_exact_ft_intent', { intent_id: entry.exact_ft.prepared.intent_id }, { blockId: executionId }),
+    readPinnedJsonView(provider, executionId, goal.vault, 'get_exact_ft_intent', { intent_id: entry.exact_ft.prepared.intent_id }),
   ]);
   const expected = { ...entry.exact_ft.pinned_view, consumed: true, active: false };
   if (!isDeepStrictEqual(view, expected)) throw new Error('historical consumed intent differs from the original pinned review');
@@ -220,43 +231,18 @@ export async function payMultiAgencyExactFtOnce({ goal: rawGoal, journal, provid
     const quote = issuedQuote(journal, goal, now), agentKey = String(publicKey);
     const prepared = prepareMultiAgencyExactFt({ goal, quote, agentPublicKey: agentKey, nowMs: timestamp(now) });
     assertUnusedMemo(journal, goal, quote);
-    if ((await provider.viewNodeStatus())?.chain_id !== 'testnet') throw new Error('RPC must report testnet');
-    const block = await provider.viewBlock({ finality: 'final' });
-    if (!isTransactionHash(block?.header?.hash)) throw new Error('FINAL block is unavailable');
-    const final = { blockId: block.header.hash }, a = prepared.owner_call.args;
-    const [vault, vaultKeys, owner, version, access, registration, locked, pairLocked, policy, granted, view, verdict] = await Promise.all([
-      provider.viewAccount(goal.vault, final), provider.viewAccessKeyList(goal.vault, final),
-      provider.callFunction(goal.vault, 'get_owner', {}, final), provider.callFunction(goal.vault, 'contract_version', {}, final),
-      provider.viewAccessKey(goal.owner, publicKey, final),
-      provider.callFunction(a.expected_token, 'storage_balance_of', { account_id: a.payee }, final),
-      provider.callFunction(goal.vault, 'is_exact_ft_policy_locked', { policy_id: goal.policy_id }, final),
-      provider.callFunction(goal.vault, 'is_exact_ft_payee_locked', { token: a.expected_token, payee: a.payee }, final),
-      provider.callFunction(goal.vault, 'get_policy', { policy_id: goal.policy_id }, final),
-      provider.callFunction(goal.vault, 'is_agent_key_allowed', { policy_id: goal.policy_id, public_key: agentKey }, final),
-      provider.callFunction(goal.vault, 'get_exact_ft_intent', { intent_id: prepared.intent_id }, final),
-      provider.callFunction(goal.vault, 'check', { policy_id: goal.policy_id, payee: a.payee, amount: a.amount }, final),
-    ]);
-    const permission = access?.permission?.FunctionCall;
-    if (vault?.block_hash !== block.header.hash || vault?.code_hash !== goal.vault_code_hash || vaultKeys?.block_hash !== block.header.hash ||
-        !Array.isArray(vaultKeys?.keys) || vaultKeys.keys.length !== 0 || access?.block_hash !== block.header.hash ||
-        owner !== goal.owner || version !== 'bouncer-agent-v11-exact-ft-testnet' ||
-        !permission || permission.receiver_id !== goal.vault || !isDeepStrictEqual(permission.method_names, ['execute_exact_ft']) ||
-        !registration || typeof registration.total !== 'string' || !/^[1-9][0-9]*$/.test(registration.total) ||
-        locked !== true || pairLocked !== true || policy?.token !== a.expected_token || granted !== true) {
-      throw new Error('reviewed keyless V11 vault, scoped agent, policy or recipient registration differs; no payment sent');
-    }
-    const pinned = assertMultiAgencyExactFtView(prepared, view);
-    if (!Array.isArray(verdict) || verdict.length !== 2 || typeof verdict[0] !== 'boolean' || typeof verdict[1] !== 'string') {
-      throw new Error('invalid on-chain policy verdict');
-    }
-    if (!verdict[0]) return { status: 'BLOCKED', reason: verdict[1].slice(0, 200), sends: 0 };
+    const preflight = await preflightExactFt({ prepared, publicKey, provider, now });
+    const snapshot = preflight.finalBlock, pinned = preflight.pinnedView, a = prepared.owner_call.args;
+    if (!preflight.allowed) return { status: 'BLOCKED', reason: preflight.reason, sends: 0 };
     await stillAwaiting(goal, quote, fetchImpl, now);
+    assertFreshFinalBlock(snapshot, timestamp(now));
     const signed = await signReviewedCall({ account, publicKey, ownerId: goal.owner, contractId: goal.vault,
       method: 'execute_exact_ft', args: { intent_id: prepared.intent_id }, gas: 200n * 10n ** 12n });
     if (!isTransactionHash(signed.txHash)) throw new Error('invalid signed exact FT transaction hash');
     await stillAwaiting(goal, quote, fetchImpl, now);
     if (timestamp(now) >= Number(a.expires_at_ms) - 60_000) throw new Error('exact FT execution cutoff is too close; no payment sent');
     assertUnusedMemo(journal, goal, quote);
+    assertFreshFinalBlock(snapshot, timestamp(now));
     const request = multiAgencyPaymentPlan(goal, quote, { nowMs: timestamp(now) }).requests[0];
     const pending = { status: 'pending', fingerprint: requestFingerprint(request), request, payment_version: 'exact-ft-signed-v11',
       tx_hash: signed.txHash, agent_public_key: agentKey, exact_ft: { version: 1, prepared, pinned_view: pinned },
@@ -264,6 +250,7 @@ export async function payMultiAgencyExactFtOnce({ goal: rawGoal, journal, provid
     journal.put(goal.id, pending); // durable original hash before the ONLY broadcast
     try {
       if (timestamp(now) >= Number(a.expires_at_ms) - 60_000) throw new Error('exact FT cutoff passed after reservation');
+      assertFreshFinalBlock(snapshot, timestamp(now));
       const sent = await provider.sendTransactionOnce(signed.signed, 'FINAL');
       if (sent?.transaction_outcome?.id !== signed.txHash) throw new Error('RPC returned a different or missing transaction hash');
       const chain = await provider.txStatusReceipts(signed.txHash, goal.owner, 'FINAL');

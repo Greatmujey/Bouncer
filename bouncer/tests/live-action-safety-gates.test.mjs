@@ -84,6 +84,34 @@ test('live testnet and reservation jobs require private repo, first attempt and 
   }
 });
 
+test('Svalin read-only opt-in cannot enable any historical transaction or seller POST job', () => {
+  const context = { github: { event_name: 'push', ref: 'refs/heads/arena/3ee8cb60-near-hub', run_attempt: '1',
+    event: { repository: { private: true }, before: 'a'.repeat(40), head_commit: { message: 'Prepare V11 setup [svalin-read]' } } },
+    inputs: { run_testnet_smoke: false } };
+  assert.equal(evaluate(condition('svalin-pro-readiness'), context), true);
+  for (const job of mutationJobs) assert.equal(evaluate(condition(job), context), false, `${job}: must not run on a read-only marker`);
+  const rerun = structuredClone(context); rerun.github.run_attempt = '2';
+  assert.equal(evaluate(condition('svalin-pro-readiness'), rerun), false, 'do not repeat the read on rerun');
+  const pr = structuredClone(context); pr.github.event_name = 'pull_request';
+  assert.equal(evaluate(condition('svalin-pro-readiness'), pr), false, 'only the explicit push runs the read');
+});
+
+test('private V11 artifact annotation export is opt-in and cannot enable historical live jobs', () => {
+  const found = /- name: Export V11 WASM in private review annotations\n\s+if: ([^\n]+)/.exec(workflow);
+  assert.ok(found, 'missing the guarded V11 annotation step');
+  const expr = found[1], ctx = { github: { event_name: 'push', ref: 'refs/heads/arena/3ee8cb60-near-hub', run_attempt: '1',
+    event: { repository: { private: true }, before: 'a'.repeat(40), head_commit: { message: 'Review V11 [v11-wasm-review-export]' } } },
+    inputs: { run_testnet_smoke: false } };
+  assert.equal(evaluate(expr, ctx), true);
+  for (const job of mutationJobs) assert.equal(evaluate(condition(job), ctx), false, `${job}: artifact export must not enable mutation`);
+  assert.equal(evaluate(condition('svalin-pro-readiness'), ctx), false, 'artifact export must not contact the seller');
+  for (const change of [
+    c => { c.github.event.repository.private = false; }, c => { c.github.run_attempt = '2'; },
+    c => { c.github.event_name = 'pull_request'; }, c => { c.github.ref = 'refs/heads/main'; },
+    c => { c.github.event.head_commit.message = 'ordinary commit'; },
+  ]) { const other = structuredClone(ctx); change(other); assert.equal(evaluate(expr, other), false); }
+});
+
 test('manual dispatch defaults to no live smoke and requires a separate explicit checkbox', () => {
   assert.match(workflow, /workflow_dispatch:\n\s+inputs:\n\s+run_testnet_smoke:\n[\s\S]*?default: false\n\s+type: boolean/);
   const expr = condition('testnet-smoke'), ctx = approvedPush(expr);

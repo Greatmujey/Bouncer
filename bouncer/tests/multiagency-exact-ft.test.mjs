@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import nearApi from 'near-api-js';
-import { prepareMultiAgencyExactFt, assertMultiAgencyExactFtView, verifyMultiAgencyExactFtPayment } from '../agent/multiagency-exact-ft.mjs';
+import { prepareMultiAgencyExactFt, assertPreparedExactFt, assertMultiAgencyExactFtView, verifyMultiAgencyExactFtPayment } from '../agent/multiagency-exact-ft.mjs';
 import { CIRCLE_TESTNET_USDC as TOKEN } from '../scripts/circle-testnet-setup.mjs';
 import { MULTIAGENCY_TREASURY as TREASURY } from '../agent/multiagency-readiness.mjs';
 import { mockGuardedPayment, mockHash } from './mock-guarded-payment.mjs';
@@ -65,6 +66,27 @@ test('invalid goal, unsigned-quote changes, key and a nearly expired quote fail 
   assert.throws(() => prepare({ agentPublicKey: 'ed25519:invalid' }), /public key/);
   assert.throws(() => prepare({ nowMs: Date.parse(quote.expires_at) - 5 * 60_000 }), /too close/);
   assert.doesNotThrow(() => prepare({ nowMs: Date.parse(quote.expires_at) + 1, allowExpired: true }));
+});
+
+test('shared verifier rejects malformed and non-Circle-testnet prepared intents even if their review hashes are recomputed', () => {
+  assert.doesNotThrow(() => assertPreparedExactFt(prepare()));
+  const changes = [
+    p => { p.owner_call.args.expected_token = 'other.testnet'; },
+    p => { p.owner_call.args.payee = 'seller.near'; },
+    p => { p.owner_call.args.amount = ((1n << 128n)).toString(); },
+    p => { p.owner_call.args.amount = '03'; },
+    p => { p.owner_call.args.intent_id = ''; p.intent_id = ''; p.agent_call.args.intent_id = ''; },
+    p => { p.owner_call.args.policy_id = 'bad policy'; p.review.goal.policy_id = 'bad policy'; },
+    p => { p.owner_call.args.memo = 'bouncer:withdraw'; },
+    p => { p.owner_call.args.memo = 'bad\nlog'; },
+    p => { p.owner_call.args.expires_at_ms = '18446744073709551616'; p.review.expires_at_ms = p.owner_call.args.expires_at_ms; },
+    p => { p.owner_call.args.agent_public_key = 'ed25519:invalid'; p.review.agent_public_key = 'ed25519:invalid'; },
+    p => { p.owner_call.args.extra = 'unexpected'; },
+  ];
+  for (const change of changes) {
+    const p = prepare(); change(p); p.review_hash = crypto.createHash('sha256').update(JSON.stringify(p.review)).digest('hex');
+    p.owner_call.args.review_hash = p.review_hash; assert.throws(() => assertPreparedExactFt(p));
+  }
 });
 
 test('the owner-pinned on-chain view must match every reviewed immutable field and authority revision', () => {
