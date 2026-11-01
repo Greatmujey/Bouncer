@@ -109,6 +109,7 @@ test('any substituted payment term, historical vault, event or receipt graph fai
     f => { f.result.receipts[1].receipt.Action.actions[0].FunctionCall.method_name = 'after_execute'; },
     f => { f.result.receipts_outcome[2].outcome.logs = []; },
     f => { f.result.receipts_outcome[0].outcome.receipt_ids = ['callback']; },
+    f => { f.result.receipts_outcome[0].outcome.status = { SuccessValue: '' }; },
     f => { f.result.transaction_outcome.outcome.receipt_ids = []; },
     f => { f.result.receipts_outcome.push(structuredClone(f.result.receipts_outcome[1])); },
   ];

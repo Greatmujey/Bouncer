@@ -165,7 +165,9 @@ export function verifyMultiAgencyExactFtPayment({ goal, quote, publicKey, txHash
     o.outcome.status.SuccessValue === result.status.SuccessValue && o.outcome.logs?.includes(SUCCESS_LOG));
   const children = init[0].outcome.receipt_ids;
   if (callbackOutcome.length !== 1 || !Array.isArray(children) || !children.includes(transfer[0].receipt.receipt_id) ||
-      !children.includes(callback[0].receipt.receipt_id)) throw new Error('exact FT transfer and callback are not bound to the initiation');
+      !children.includes(callback[0].receipt.receipt_id) || init[0].outcome.status?.SuccessReceiptId !== callback[0].receipt.receipt_id) {
+    throw new Error('exact FT transfer and callback are not bound to the initiation');
+  }
   return { tx_hash: txHash, intent_id: a.intent_id, token: a.expected_token, payee: a.payee, amount: a.amount,
     event: 'unique Circle transfer event and reviewed quote memo',
     scope: 'FINAL exact-FT payment only; seller attribution, opening and delivery not established' };
