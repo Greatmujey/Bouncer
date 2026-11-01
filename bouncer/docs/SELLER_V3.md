@@ -23,10 +23,12 @@ rerun the paid job or resend the recorded hash. A public explorer later showed
 that [source transaction `CCbbcM73XZc1r8WcmyPMYHaudaR7qfjKKYhihZpHcuZ8`](https://testnet.nearblocks.io/txns/CCbbcM73XZc1r8WcmyPMYHaudaR7qfjKKYhihZpHcuZ8/execution)
 completed and returned a single-source price of `4.4301`, with a reported
 charge of `1121700000000000000000` yoctoNEAR and owner refund of
-`98878300000000000000000` yoctoNEAR. Explorer inspection is not yet the
-journal's independent FINAL-receipt verification, and the stale observation is
-not valid for new purchases. No live-v3 delivery or independent FT-seller
-adoption is established.
+`98878300000000000000000` yoctoNEAR. A separate [read-only recovery job](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41269062945/job/124738207055)
+verified the original journal, FINAL transaction, provider receipts, refund and
+completion block against a trusted archival RPC, and confirmed no resource
+payment was recorded. It did not change the original journal or send anything.
+The observation is stale and not valid for new purchases. No live-v3 delivery
+or independent FT-seller adoption is established.
 
 ## What is protected—and what is not
 
@@ -179,5 +181,9 @@ Older binaries cannot read it. Do not roll back state, erase a quote, or delete
 a locked/pending journal to make a retry work. Preserve the original buyer
 journal; unlike older public-proof examples it contains bearer signatures and
 must **not** be published as a public artifact. The testnet CI job deliberately
-keeps recovery data in a repository-restricted artifact, not a public evidence
-bundle. This is still not a secure secret-storage solution for real systems.
+keeps recovery data in an artifact only while the repository is private, not a
+public evidence bundle. **Changing repository visibility may expose existing
+artifacts**; before making it public, first securely retain and reconcile any
+needed journal, then remove sensitive artifacts under an appropriate retention
+policy. Do not erase unresolved recovery state. Repository-restricted Actions
+artifacts are still not a secure secret-storage solution for real systems.

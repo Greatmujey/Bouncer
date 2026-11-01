@@ -302,7 +302,7 @@ jobs:
   seller-v3-workflow-live:
     name: Authenticated seller-v3 dependent workflow (testnet)
     # One explicit fresh testnet run; Actions reruns never repeat its payments.
-    if: github.event_name == 'push' && github.run_attempt == '1' && contains(github.event.head_commit.message, '[seller-v3-live]')
+    if: github.event_name == 'push' && github.event.repository.private == true && github.run_attempt == '1' && contains(github.event.head_commit.message, '[seller-v3-live]')
     needs: [js-tests, contract-tests, build-contract]
     runs-on: ubuntu-latest
     timeout-minutes: 25

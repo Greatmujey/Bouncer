@@ -10,7 +10,8 @@ test('authenticated testnet workflow is opt-in, first-attempt-only and preserves
   const workflow = fs.readFileSync(ci, 'utf8');
   const job = workflow.split('\n  seller-v3-workflow-live:\n')[1]?.split('\n  reconcile-seller-v3-oracle:\n')[0];
   assert.ok(job);
-  assert.match(job, /github\.event_name == 'push'/); assert.match(job, /github\.run_attempt == '1'/);
+  assert.match(job, /github\.event_name == 'push'/); assert.match(job, /github\.event\.repository\.private == true/);
+  assert.match(job, /github\.run_attempt == '1'/);
   assert.match(job, /contains\(github\.event\.head_commit\.message, '\[seller-v3-live\]'\)/);
   assert.match(job, /needs: \[js-tests, contract-tests, build-contract\]/);
   assert.match(job, /node bouncer\/demo-oracle-mission\.mjs --seller-v3-workflow/);
