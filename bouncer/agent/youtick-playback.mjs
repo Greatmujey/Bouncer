@@ -89,15 +89,26 @@ export function prepareYoutickPlayGrant({ journal, sessionId, goal, paymentResul
     warning: 'offline review only; no grant, playback token or retrieval is verified' };
 }
 
+/** Verify the immutable fields of a trusted grant, even after expiry. This
+ * checks binding only; it must not be used to claim that playback is active. */
+export function verifyYoutickPlayGrantBinding(prepared, grant) {
+  if (!prepared?.args || !grant || typeof grant !== 'object' || Array.isArray(grant) ||
+      grant.owner_id !== prepared.vault || grant.session_pk !== prepared.args.session_pk || grant.scope !== 'Play' ||
+      grant.resource_id !== prepared.args.job_id || grant.origin_hash !== YOUTICK_PLAY_ORIGIN_HASH ||
+      grant.device_hash !== prepared.args.device_hash || grant.revoked !== false ||
+      !Number.isSafeInteger(grant.expires_at_ms) || grant.expires_at_ms <= 0) {
+    throw new Error('access grant binding is missing, revoked or mismatched');
+  }
+  return { owner_id: prepared.vault, session_pk: grant.session_pk, job_id: grant.resource_id, expires_at_ms: grant.expires_at_ms };
+}
+
 /** Validate a trusted current FINAL grant and the access contract verification
  * view before preparing a token. Both snapshots must come from the pinned access
  * contract; the RPC and deployed contract remain trusted. */
 export function verifyYoutickPlayGrantView(prepared, grant, verification, nowMs = Date.now()) {
-  if (!Number.isSafeInteger(nowMs) || nowMs <= 0 || !prepared?.args || !grant || typeof grant !== 'object' ||
-      grant.owner_id !== prepared.vault || grant.session_pk !== prepared.args.session_pk || grant.scope !== 'Play' ||
-      grant.resource_id !== prepared.args.job_id || grant.origin_hash !== YOUTICK_PLAY_ORIGIN_HASH ||
-      grant.device_hash !== prepared.args.device_hash || grant.revoked !== false ||
-      !Number.isSafeInteger(grant.expires_at_ms) || grant.expires_at_ms <= nowMs || grant.expires_at_ms > nowMs + YOUTICK_PLAY_TTL_MS + 5_000 ||
+  try { verifyYoutickPlayGrantBinding(prepared, grant); }
+  catch { throw new Error('live access grant is missing, expired, revoked or mismatched'); }
+  if (!Number.isSafeInteger(nowMs) || nowMs <= 0 || grant.expires_at_ms <= nowMs || grant.expires_at_ms > nowMs + YOUTICK_PLAY_TTL_MS + 5_000 ||
       verification?.valid !== true || verification?.owner_id !== prepared.vault || verification?.reason !== null) {
     throw new Error('live access grant is missing, expired, revoked or mismatched');
   }
@@ -118,7 +129,7 @@ export function verifyYoutickPlayGrantTransaction({ prepared, result, txHash, ow
   const tx = result?.transaction;
   if (!prepared?.args || !isTransactionHash(txHash) || typeof ownerPublicKey !== 'string' ||
       result?.final_execution_status !== 'FINAL' || result?.transaction_outcome?.id !== txHash ||
-      result.status?.Failure !== undefined || typeof result.status?.SuccessValue !== 'string' ||
+      result.status?.Failure !== undefined || result.status?.SuccessReceiptId !== undefined || typeof result.status?.SuccessValue !== 'string' ||
       !tx || tx.hash !== txHash || tx.signer_id !== prepared.owner_id || tx.public_key !== ownerPublicKey ||
       tx.receiver_id !== prepared.vault || !Array.isArray(tx.actions) || tx.actions.length !== 1 ||
       !Array.isArray(result.receipts) || !Array.isArray(result.receipts_outcome)) {
@@ -152,8 +163,11 @@ export function verifyYoutickPlayGrantTransaction({ prepared, result, txHash, ow
     result.transaction_outcome?.outcome?.receipt_ids?.includes(r.id) &&
     r.outcome?.status?.SuccessReceiptId === request.receipt_id && r.outcome?.receipt_ids?.includes(request.receipt_id));
   const accessOutcome = result.receipts_outcome.filter(r => r.id === request.receipt_id && r.outcome?.executor_id === YOUTICK_ACCESS &&
-    r.outcome?.status?.Failure === undefined && typeof r.outcome?.status?.SuccessValue === 'string');
+    r.outcome?.status?.Failure === undefined && r.outcome?.status?.SuccessReceiptId === undefined && typeof r.outcome?.status?.SuccessValue === 'string');
   if (initiation.length !== 1 || accessOutcome.length !== 1 ||
+      result.transaction_outcome?.outcome?.status?.SuccessReceiptId !== initiation[0].id ||
+      result.transaction_outcome?.outcome?.status?.Failure !== undefined ||
+      result.transaction_outcome?.outcome?.status?.SuccessValue !== undefined ||
       accessOutcome[0].outcome.status.SuccessValue !== result.status.SuccessValue ||
       !isDeepStrictEqual(decodeJson(result.status.SuccessValue), grant)) {
     throw new Error('grant receipt graph is missing, failed, unlinked or differs from the current grant');
@@ -165,8 +179,11 @@ export function verifyYoutickPlayGrantTransaction({ prepared, result, txHash, ow
  * owner grant transaction and both current FINAL access views. The returned
  * signature/token request is sensitive and must not be logged. */
 export function prepareYoutickPlaybackTokenRequest({ journal, sessionId, goal, paymentResult, job, publication, sourceFile,
-  grant, verification, grantResult, grantTxHash, ownerPublicKey, nowMs = Date.now() }) {
+  grant, verification, grantResult, grantTxHash, ownerPublicKey, expectedPrepared, nowMs = Date.now() }) {
   const prepared = prepareYoutickPlayGrant({ journal, sessionId, goal, paymentResult, job, publication, sourceFile, nowMs });
+  if (expectedPrepared !== undefined && !isDeepStrictEqual(prepared, expectedPrepared)) {
+    throw new Error('current publication differs from the original owner grant review');
+  }
   verifyYoutickPlayGrantView(prepared, grant, verification, nowMs);
   verifyYoutickPlayGrantTransaction({ prepared, result: grantResult, txHash: grantTxHash, ownerPublicKey, grant });
   const { playback, key } = recordedPlayback(journal.get(sessionId)), playbackId = prepared.publication.playback_id;

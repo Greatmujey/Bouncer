@@ -238,7 +238,8 @@ async function runProcurementCore({ plan: rawPlan, provider, account, publicKey,
     if (durablePayment) {
       if (!account.signer || typeof account.createTransaction !== 'function' ||
           String(await account.signer.getPublicKey()) !== String(publicKey)) throw new Error('signer does not match the reviewed agent key');
-      if (typeof provider.sendTransactionUntil !== 'function' || typeof provider.txStatusReceipts !== 'function') throw new Error('durable payment requires signed broadcast and receipt-inclusive RPC');
+      if ((typeof provider.sendTransactionOnce !== 'function' && typeof provider.sendTransactionUntil !== 'function') ||
+          typeof provider.txStatusReceipts !== 'function') throw new Error('durable payment requires signed broadcast and receipt-inclusive RPC');
       const transaction = await account.createTransaction(plan.contract_id, [transactions.functionCall('execute', args, GAS, 0n)], publicKey);
       const action = transaction?.actions?.[0]?.functionCall, reviewedKey = utils.PublicKey.from(String(publicKey));
       if (transaction?.signerId !== plan.owner_account_id || transaction.receiverId !== plan.contract_id ||
@@ -313,8 +314,13 @@ async function runProcurementCore({ plan: rawPlan, provider, account, publicKey,
       throw new Error(`${request.id}: pre-broadcast guard rejected after journal write; no payment was sent, retain the pending entry and reconcile: ${error.message}`, { cause: error });
     }
     try {
+      // Prefer the provider's explicitly bounded one-shot transport. Do not
+      // fall back to a second send if that call fails: the original hash is
+      // already durable and must be reconciled. Injected legacy providers are
+      // responsible for enforcing equivalent no-retry semantics themselves.
       const result = durablePayment
-        ? await provider.sendTransactionUntil(signed, 'FINAL')
+        ? await (typeof provider.sendTransactionOnce === 'function'
+          ? provider.sendTransactionOnce(signed, 'FINAL') : provider.sendTransactionUntil(signed, 'FINAL'))
         : await account.callFunctionRaw({ contractId: plan.contract_id, methodName: 'execute', args, deposit: 0n, gas: GAS, waitUntil: 'FINAL' });
       const candidateHash = result?.transaction_outcome?.id;
       if (durablePayment && candidateHash !== txHash) throw new Error('RPC returned a different or missing transaction hash');

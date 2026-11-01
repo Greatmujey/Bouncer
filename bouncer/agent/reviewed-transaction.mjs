@@ -46,3 +46,33 @@ async function signCall({ account, publicKey, ownerId, contractId, method, args,
 // owner-signed testnet setup, never for the agent's execute methods.
 export function signReviewedCall(options) { return signCall(options, 0n); }
 export function signReviewedOneYoctoOwnerCall(options) { return signCall(options, 1n); }
+
+/** Pin setup transaction actions and verify the returned signature before use.
+ * No signed bytes are written to disk. The sender still must journal the hash. */
+export async function signReviewedProbeSetup({ account, signerId, publicKey, receiverId, actions }) {
+  if (!account || account.accountId !== signerId || !account.signer || typeof account.createTransaction !== 'function' ||
+      String(await account.signer.getPublicKey()) !== String(publicKey) || !Array.isArray(actions) || !actions.length) {
+    throw new Error('invalid reviewed diagnostic setup signer');
+  }
+  const key = utils.PublicKey.from(String(publicKey));
+  if (key.keyType !== 0) throw new Error('diagnostic setup needs an Ed25519 key');
+  // Snapshot action bytes before calling an untrusted builder. It may share and
+  // mutate action objects; comparing only the references afterward is unsafe.
+  const canonical = list => Buffer.from(transactions.encodeTransaction(transactions.createTransaction(signerId, key, receiverId, 1n, list, Buffer.alloc(32))));
+  const reviewedActions = canonical(actions);
+  const tx = await account.createTransaction(receiverId, actions, key);
+  if (!tx || typeof tx.nonce !== 'bigint' || tx.nonce < 1n || !(tx.blockHash instanceof Uint8Array) || tx.blockHash.length !== 32) {
+    throw new Error('invalid diagnostic setup nonce or block');
+  }
+  if (tx.signerId !== signerId || tx.receiverId !== receiverId || String(tx.publicKey) !== String(key) ||
+      !Array.isArray(tx.actions) || !canonical(tx.actions).equals(reviewedActions)) throw new Error('diagnostic setup transaction differs from review');
+  const bytes = Buffer.from(transactions.encodeTransaction(tx));
+  const digest = crypto.createHash('sha256').update(bytes).digest();
+  const [returned, signed] = await account.signer.signTransaction(tx);
+  if (!(returned instanceof Uint8Array) || !Buffer.from(returned).equals(digest) || !signed?.transaction ||
+      !Buffer.from(transactions.encodeTransaction(signed.transaction)).equals(bytes) || signed.signature?.enum !== 'ed25519Signature' ||
+      !(signed.signature.data instanceof Uint8Array) || !key.verify(digest, signed.signature.data)) {
+    throw new Error('signed diagnostic setup differs from review');
+  }
+  return { txHash: utils.serialize.base_encode(digest), signed };
+}

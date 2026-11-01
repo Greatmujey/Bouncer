@@ -1,0 +1,16 @@
+{
+  "id": "register-fake",
+  "signer_id": "owner-vrf2-3a0af45958.testnet",
+  "receiver_id": "usdc.fakes.testnet",
+  "public_key": "ed25519:52oq2ywGuL3QCPf8huZNxkXoxyWpLr1HN4JLQ3cLayMt",
+  "tx_hash": "HYx2mgFhnHicLbgGm9qLtLnk2ESKevfhEkPefcJTwwHd",
+  "review": {
+    "token": "usdc.fakes.testnet",
+    "accounts": [
+      "owner-vrf2-3a0af45958.testnet",
+      "bouncer-vrf2-3a0af45958.testnet"
+    ],
+    "deposit_each": "1250000000000000000000",
+    "storage_only": true
+  }
+}

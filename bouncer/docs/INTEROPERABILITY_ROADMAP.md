@@ -19,6 +19,7 @@ that agent.
 | Shared seller-v3 replay coordination | [Real PostgreSQL tests](SHARED_SELLER.md) exercise multiple worker processes, crashes and uncertain commits. | Synthetic payments only; one trusted, durable primary, with no automatic pending-work takeover. |
 | Shared direct-v3 buyer coordination | [Real PostgreSQL/process tests](SHARED_BUYER.md) reserve the signed hash and encrypted claim before a simulated send and recover the same hash; new owners can opt into stable intent IDs across journals. | Synthetic receipts only; one fenced primary, stable owner-assigned IDs and trusted workers. FT-call, x402, OutLayer and workflows are not covered. |
 | Owner-only Ref testnet setup | Owner acquired test tokens and separately funded the vault in the live runs. | This is **not** an agent-guarded swap. Plain outgoing Ref `ft_transfer` does not call Bouncer's deposit hook. |
+| Independent MultiAgency research candidate | [Read-only readiness, historical indexer control and report handoff](MULTIAGENCY_RESEARCH.md); experimental quote/payment/recovery verifier has synthetic tests. | No Bouncer quote, payment, job or independent fulfillment; current workers and refund terms remain unproven. |
 
 No independent FT-paid commercial compute, storage or API purchase is
 established. Testnet USDC has no real value. A FINAL receipt establishes the
@@ -168,9 +169,17 @@ consent, and no offers or payments were requested:
   hosts. Signed envelopes and TUS URLs are bearer capabilities and must not be
   logged or shared. A separate playback prototype and its remaining blockers
   are described in [YouTick playback](YOUTICK_PLAYBACK.md). The existing V9
-  vault cannot issue the legacy grant needed by this candidate path. Never
-  assume merchant consent, delivery or deployed/source equivalence from this
-  research.
+  vault cannot issue the legacy grant needed by this candidate path. A fresh V10
+  vault has now passed a [one-yocto grant diagnostic](YOUTICK_PLAYBACK.md#evidence-and-remaining-work)
+  against the independent access contract on a **hypothetical** job; a later
+  read-only check found no such job, publication or entitlement. A separate
+  token client journals one attempt and a bounded HLS byte probe protects bearer
+  credentials; both have synthetic/loopback coverage only and cannot establish
+  playable content or independent fulfillment. A [fresh read-only check](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41316051699/job/124876224211)
+  found the source-reviewed adaptive profile advertised on chain, but bridge
+  health still did not identify its provider. This is not an independent
+  FT-paid service or playback proof. Never assume merchant consent, delivery or
+  deployed/source equivalence from this research.
 - [PatchBond at `a448538`](https://github.com/PatchBond/patchbond/blob/a4485389453818d495e48b7d46a299401833213b/contract/vault/src/deposit.rs)
   documents testnet Circle USDC bonds for GitHub submissions, not a compute,
   storage or API purchase. The source uses the FT `sender_id` as the bond payer;

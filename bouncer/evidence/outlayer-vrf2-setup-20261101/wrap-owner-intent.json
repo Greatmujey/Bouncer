@@ -1,0 +1,12 @@
+{
+  "id": "wrap-owner",
+  "signer_id": "owner-vrf2-3a0af45958.testnet",
+  "receiver_id": "wrap.testnet",
+  "public_key": "ed25519:52oq2ywGuL3QCPf8huZNxkXoxyWpLr1HN4JLQ3cLayMt",
+  "tx_hash": "EmeBtEciR6KF6FMpuGVp7zqnDxntEuTtB4fGohXE4iPQ",
+  "review": {
+    "token": "wrap.testnet",
+    "method": "near_deposit",
+    "amount": "2000000000000000000000"
+  }
+}

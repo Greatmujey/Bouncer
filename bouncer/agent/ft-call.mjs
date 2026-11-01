@@ -20,6 +20,7 @@ import { MonotonicAccount, PaymentRpcProvider } from './near-account.mjs';
 import { isTestnetAccount, isTestnetToken } from '../shared/account-id.mjs';
 import { signReviewedCall } from './reviewed-transaction.mjs';
 import { isTransactionHash } from '../shared/direct-payment-settlement.mjs';
+import { withExclusiveJournalOperation } from './journal-operation.mjs';
 
 const { KeyPair, KeyPairSigner } = nearApi;
 const MAX = (1n << 128n) - 1n;
@@ -144,7 +145,7 @@ export function verifyFtCallSettlement(rawGoal, result, publicKey) {
     verification: 'NEP-141 settlement via trusted RPC, token and Bouncer; no provider delivery verified' };
 }
 
-export async function recoverFtCallGoal({ goal: rawGoal, provider, journal, publicKey, update = true, log = console.log }) {
+async function recoverFtCallGoalUnlocked({ goal: rawGoal, provider, journal, publicKey, update = true, log = console.log }) {
   if (journal?.sharedDirectV3 === true) throw new Error('shared buyer journal does not coordinate FT-call payments');
   const goal = validateFtCallGoal(rawGoal);
   if (!journal || typeof journal.get !== 'function' || typeof journal.put !== 'function') throw new Error('recovery requires the original journal');
@@ -164,7 +165,7 @@ export async function recoverFtCallGoal({ goal: rawGoal, provider, journal, publ
   return { status: 'REUSED', settlement };
 }
 
-export async function runFtCallGoal({ goal: rawGoal, provider, account, publicKey, journal, execute = false, log = console.log }) {
+async function runFtCallGoalUnlocked({ goal: rawGoal, provider, account, publicKey, journal, execute = false, log = console.log }) {
   if (journal?.sharedDirectV3 === true) throw new Error('shared buyer journal does not coordinate FT-call payments');
   const goal = validateFtCallGoal(rawGoal);
   if (!account || account.accountId !== goal.owner_account_id || !publicKey) throw new Error('agent key account does not match the owner');
@@ -180,7 +181,7 @@ export async function runFtCallGoal({ goal: rawGoal, provider, account, publicKe
   if (!permission || permission.receiver_id !== goal.contract_id || !equal(permission.method_names, ['execute_ft_call'])) throw new Error('agent key must be scoped ONLY to execute_ft_call on this contract');
   const previous = journal?.get(goal.id), hash = fingerprint(goal);
   if (previous && previous.fingerprint !== hash) throw new Error(`${goal.id}: journal does not match the reviewed goal`);
-  if (previous) return recoverFtCallGoal({ goal, provider, journal, publicKey, update: execute, log });
+  if (previous) return recoverFtCallGoalUnlocked({ goal, provider, journal, publicKey, update: execute, log });
   const [policy, route, granted, verdict] = await Promise.all([
     provider.callFunction(goal.contract_id, 'get_policy', { policy_id: goal.policy_id }, final),
     provider.callFunction(goal.contract_id, 'get_ft_call_route', { policy_id: goal.policy_id, payee: goal.payee }, final),
@@ -196,9 +197,15 @@ export async function runFtCallGoal({ goal: rawGoal, provider, account, publicKe
     method: 'execute_ft_call', args: expectedArgs(goal), gas: GAS });
   if (!validHash(txHash)) throw new Error('invalid transaction hash');
   const pending = { fingerprint: hash, status: 'pending', ft_call_goal: goal, agent_public_key: String(publicKey), tx_hash: txHash, started_at: new Date().toISOString() };
+  // Another protocol sharing this journal might have reserved the ID while
+  // the read-only checks and signing awaited. Never overwrite its evidence.
+  if (journal.get(goal.id)) throw new Error(`${goal.id}: journal entry appeared before broadcast; reconcile, do not overwrite`);
   journal.put(goal.id, pending);
   try {
-    const sent = await provider.sendTransactionUntil(signed, 'FINAL');
+    // The built-in provider bounds the request and disables redirects/retries.
+    // Injected providers without this method must provide equivalent behavior.
+    const sent = typeof provider.sendTransactionOnce === 'function'
+      ? await provider.sendTransactionOnce(signed, 'FINAL') : await provider.sendTransactionUntil(signed, 'FINAL');
     if (sent?.transaction_outcome?.id !== txHash) throw new Error('RPC returned a different or missing transaction hash');
     const chain = await provider.txStatusReceipts(txHash, goal.owner_account_id, 'FINAL');
     const settlement = verifyFtCallSettlement(goal, chain, publicKey);
@@ -210,6 +217,13 @@ export async function runFtCallGoal({ goal: rawGoal, provider, account, publicKe
     throw new Error(`${goal.id}: FT call unresolved (tx ${txHash}); do not resend automatically: ${error.message}`, { cause: error });
   }
 }
+export function recoverFtCallGoal(options) {
+  return withExclusiveJournalOperation(options?.journal, () => recoverFtCallGoalUnlocked(options));
+}
+export function runFtCallGoal(options) {
+  return withExclusiveJournalOperation(options?.journal, () => runFtCallGoalUnlocked(options));
+}
+
 function home(value) { return value.startsWith('~/') ? path.join(os.homedir(), value.slice(2)) : value; }
 function parseArgs(args) {
   const options = { execute: false };

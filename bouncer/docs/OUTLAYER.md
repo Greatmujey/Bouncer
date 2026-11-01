@@ -243,16 +243,98 @@ confirmed the first two original hashes FINAL and fake-token ledger/balance
 ledger and OutLayer prepaid balance both zero. These point-in-time balances
 are not proof that the missing hash never paid. The inspection made no sends
 or journal writes. Before
-creating an account, the harness seals its disposable owner, deployment,
-funding and project keys to a dedicated
-RSA recovery public key; the corresponding private key remains owner-only
-outside Git at `~/.near-credentials/testnet/bouncer-outlayer-vrf-recovery-private.pem`.
-Its owner setup transfers, OutLayer prepaid deposit and project payment each
-record an original hash before broadcast. An uncertain outcome stops and is not
-retried. The envelope is testnet-only, does not authenticate its creator, and
-does not replace checking recovered keys against FINAL chain state. A genuine
-signed diagnostic would still not establish an independent commercial seller,
-Circle-USDC acceptance, unbiased key selection or a TEE attestation.
+creating an account, the earlier harness sealed its disposable keys to a
+recovery public key. **Its matching private key has not been located in this
+workspace**; do not assume the old envelope can be opened. Its owner setup
+transfers, OutLayer prepaid deposit and project payment each record an original
+hash before broadcast. An uncertain outcome stops and is not retried. The
+envelope is testnet-only, does not authenticate its creator, and does not replace
+checking recovered keys against FINAL chain state. A genuine signed diagnostic
+would still not establish an independent commercial seller, Circle-USDC
+acceptance, unbiased key selection or a TEE attestation.
+
+### Fresh one-shot VRF2 attempt
+
+`paid-vrf2-once.mjs` is a separately fenced, **testnet-only** diagnostic: a
+fresh vault, owner, keys and random seed; a known local recovery private key;
+and no dependency on the earlier unrelated wNEAR refund test. Before creating
+accounts it checks the provider's exact current token, version, VRF key, price,
+bounded native estimate, storage prices and a bounded Ref quote. The same
+read-only checks are available separately in `probe-vrf2-ready.mjs`. A small
+**owner-setup** Ref swap acquires fake `usdc.fakes.testnet`,
+not Circle USDC. An owner funds and configures the fresh V9 vault using reviewed
+1-yocto policy calls and two restricted agent keys. The project is preflighted
+before moving any FT to OutLayer. The maximum provider deposit is 10,000 fake
+micro-units; the separate project cap is 10,000 fake micro-units plus at most
+0.1 testnet NEAR. Provider terms are rechecked, but these views are non-atomic
+and do not prevent later changes or prove worker code.
+
+Every signed setup/payment hash and public intent is persisted and annotated
+before its single bounded send; an unknown result is inspected by the original
+hash and never automatically repeated. Both payment stages deliberately discard
+one complete receipt response, then reopen the encrypted journal and recover by
+hash without using a NEAR signing key. The runner requires exact same-FINAL-block
+vault/provider balance and rolling-budget snapshots. `inspect-paid-vrf2.mjs`
+is a separate read-only reinspection of the original FINAL receipts, owner
+1-yocto configuration actions, scoped keys, pinned vault code, snapshots,
+provider settlement and the seed/identity-bound VRF signature. Its signature
+verification relies on an independently pinned key and trusted RPC; it does not
+prove key selection is unbiased or a TEE was used. Send counts are local
+instrumentation, not a chain-wide proof that nobody else submitted a payment.
+
+A [read-only readiness check](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41318158244/job/124882513959)
+on November 1 observed the reviewed terms and a bounded test-token quote; it
+created no accounts and sent nothing. The [first fenced VRF2 job](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41318427551/job/124883910483)
+stopped at the WASM hash gate **before key generation, account creation or any
+send**: the newly compiled CI artifact did not equal the reviewed committed V9
+binary. It produced no VRF2 recovery artifact. The corrected fence uses the
+exact committed binary and rechecks its full pinned SHA-256; this does not
+prove source-to-binary reproducibility. These observations are preserved under
+`evidence/outlayer-vrf2-preflight-20261101/` and do not establish delivery.
+
+The [fresh pinned attempt](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41318744634/job/124885009403)
+created and locked vault `bouncer-vrf2-3a0af45958.testnet`, acquired fake test
+USDC.e in an owner-setup swap, and stopped on the **original** owner-to-vault
+funding hash `uhtVNNJewFmpTSVzZ7fr8ReZnvmVenjWcm92XafQRHn`: its one-shot
+response and immediate hash lookup did not establish FINAL status. The runner
+never reached the OutLayer prepaid deposit or a VRF order. No provider payment
+or delivery is proven. Public original intents are in
+`evidence/outlayer-vrf2-setup-20261101/`; the sealed credentials and encrypted
+journal were retained in artifact `13088557059`. **Do not resend the original
+funding transaction**, even if a later view appears to show no balance. The
+read-only `inspect-vrf2-setup.mjs` examines only those original hashes on two
+RPC endpoints and a same-block vault/provider snapshot; an unavailable hash
+remains unresolved. A [subsequent read-only inspection](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41319333855/job/124886012566)
+verified the first five setup hashes FINAL on both FastNear and archival RPCs,
+but the original funding hash was still unavailable on both. At FINAL block
+`5skusbW8qh6FXDYGqJcya2QWRtqQza4XbBtQ553YCYDF` the owner held 227,853 fake
+micro-units, while the vault ledger/token balances and OutLayer prepaid balance
+were zero; the funding/project policies had not yet been created. Those views
+do **not** prove the unavailable transaction was never accepted. The inspection
+sent nothing and wrote no journal entries. The original encrypted journal was
+reconstructed and authenticated locally at that time; it recorded the hash
+pending. **Recovery-key incident:** after the sandbox restarted, the RSA private
+key and local decrypted/reconstructed files that had been stored outside the
+repository were no longer present. The private half is currently unavailable;
+the artifact still contains the sealed credentials and encrypted journal, but
+we cannot presently authenticate or decrypt them. A second encrypted artifact
+copy is `13089055574`; both expire 30 January 2027. The public intent and
+original hash remain in the repository. Do not treat the ciphertext as an
+accessible journal or silently create a replacement payment. The old paid VRF2
+script now refuses to run with that retired recovery key before any network
+activity.
+
+Only if an independently preserved copy of the original RSA private key is
+restored can `unseal-vrf2-journal-key.mjs` derive the original journal key to a
+new private file without writing NEAR signing keys. Future live attempts need
+an operator-controlled durable key backup verified before any side effects;
+an ephemeral sandbox path alone is insufficient. Neither the file lock nor in-process FT/project exclusion
+protects against discarded or rolled-back journals, other journal paths,
+bypassing callers or multiple independent databases. Injected RPC providers
+must independently provide bounded one-attempt sending. Do not rerun the
+one-shot CI job or issue a replacement payment if an original hash is unknown.
+A successful diagnostic would narrow the independent-FT gap, **not** prove an
+independent commercial Circle-USDC compute, storage or API purchase.
 
 Provider-held credit is distinct from Bouncer's FT vault. In this path a project
 refund can be credited to Bouncer's balance **at OutLayer**, not returned to

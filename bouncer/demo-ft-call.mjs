@@ -252,11 +252,11 @@ async function main() {
     const setupJournal = openConfiguredFileJournal(setupPath, contractId, ownerId, { requireExisting: fs.existsSync(setupPath) });
     try {
       const guarded = new Proxy(provider, { get(target, property) {
-        if (property === 'sendTransactionUntil') return async (...params) => {
+        if (property === 'sendTransactionUntil' || property === 'sendTransactionOnce') return async (...params) => {
           const pending = setupJournal.get(id);
           if (pending?.status !== 'pending' || typeof pending.tx_hash !== 'string') throw new Error('owner setup hash was not journaled before broadcast');
           console.log(`::notice title=One-shot VRF owner-setup hash journaled::contract=${contractId}; owner=${ownerId}; stage=${id}; tx=${pending.tx_hash}; do_not_resend=true`);
-          return target.sendTransactionUntil(...params);
+          return target[property](...params);
         };
         const value = Reflect.get(target, property, target); return typeof value === 'function' ? value.bind(target) : value;
       } });
@@ -317,11 +317,11 @@ async function main() {
   fs.writeFileSync(goalPath, JSON.stringify(goal, null, 2) + '\n', { mode: 0o600 });
   let journal = openConfiguredFileJournal(state, contractId, ownerId), sends = 0, inject = true, completed = false;
   const faulty = new Proxy(provider, { get(target, property) {
-    if (property === 'sendTransactionUntil') return async (...args) => {
+    if (property === 'sendTransactionUntil' || property === 'sendTransactionOnce') return async (...args) => {
       const pending = journal.get(goal.id);
       if (pending?.status !== 'pending' || typeof pending.tx_hash !== 'string') throw new Error('funding hash must be journaled before broadcast');
       console.log(`::notice title=One-shot funding hash journaled::contract=${contractId}; owner=${ownerId}; tx=${pending.tx_hash}; status=pending_before_broadcast; do_not_resend=true`);
-      sends++; return target.sendTransactionUntil(...args);
+      sends++; return target[property](...args);
     };
     if (property === 'txStatusReceipts') return async (...args) => { const result = await target.txStatusReceipts(...args);
       if (!inject) return result; inject = false; return { ...result, receipts: [] }; };
@@ -382,11 +382,11 @@ async function main() {
     fs.writeFileSync(projectPath, JSON.stringify(projectGoal, null, 2) + '\n', { mode: 0o600 });
     let projectSends = 0, projectInject = true;
     const projectFaulty = new Proxy(provider, { get(target, property) {
-      if (property === 'sendTransactionUntil') return async (...args) => {
+      if (property === 'sendTransactionUntil' || property === 'sendTransactionOnce') return async (...args) => {
         const pending = journal.get(projectGoal.id);
         if (pending?.status !== 'pending' || typeof pending.tx_hash !== 'string') throw new Error('project hash must be journaled before broadcast');
         console.log(`::notice title=One-shot project hash journaled::contract=${contractId}; owner=${ownerId}; tx=${pending.tx_hash}; status=pending_before_broadcast; do_not_resend=true`);
-        projectSends++; return target.sendTransactionUntil(...args);
+        projectSends++; return target[property](...args);
       };
       if (property === 'txStatusReceipts') return async (...args) => { const result = await target.txStatusReceipts(...args);
         if (!projectInject) return result; projectInject = false; return { ...result, receipts: [] }; };

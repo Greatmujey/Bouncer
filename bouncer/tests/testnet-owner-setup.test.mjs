@@ -133,3 +133,11 @@ test('read-only owner setup evidence binds the finalized action to its original 
   assert.throws(() => inspectOwnerSetupResult({ ...entry, fingerprint: '0'.repeat(64) }, result()), /invalid recorded/);
   assert.equal(f.sends, 1);
 }));
+
+test('owner setup prefers the bounded one-shot send path', () => withFixture(async f => {
+  const original = f.provider.sendTransactionUntil.bind(f.provider);
+  const provider = { ...f.provider, sendTransactionOnce: original,
+    async sendTransactionUntil() { throw new Error('unbounded send path must not run'); } };
+  await f.submit({ provider });
+  assert.equal(f.sends, 1);
+}));

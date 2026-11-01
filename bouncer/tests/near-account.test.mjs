@@ -96,3 +96,48 @@ test('receipt lookup is read-only and bounded, even when the RPC never answers',
     assert.equal(requests[0].params.wait_until, 'FINAL');
   } finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
 });
+
+test('bounded one-shot submission aborts a stalled RPC without retrying or leaking signed bytes to errors', async () => {
+  const requests = [], server = http.createServer(async req => {
+    const chunks = []; for await (const chunk of req) chunks.push(chunk);
+    requests.push(JSON.parse(Buffer.concat(chunks).toString()));
+    // Do not answer: the sender must abort without a second request.
+  });
+  server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  try {
+    const provider = new PaymentRpcProvider(`http://127.0.0.1:${server.address().port}`, { sendTimeoutMs: 100 });
+    const pair = nearApi.KeyPair.fromRandom('ed25519'), signer = new nearApi.KeyPairSigner(pair);
+    const tx = nearApi.transactions.createTransaction('owner.testnet', pair.getPublicKey(), 'bouncer.testnet', 1n,
+      [nearApi.transactions.functionCall('execute', {}, 1n, 0n)], Buffer.alloc(32, 2));
+    const [, signed] = await signer.signTransaction(tx);
+    await assert.rejects(provider.sendTransactionOnce(signed, 'FINAL'), /timed out|aborted/i);
+    assert.equal(requests.length, 1); assert.equal(requests[0].method, 'send_tx');
+    assert.equal(requests[0].params.wait_until, 'FINAL');
+    assert.equal(requests[0].params.signed_tx_base64, Buffer.from(nearApi.transactions.encodeTransaction(signed)).toString('base64'));
+    await assert.rejects(provider.sendTransactionOnce(signed, 'NONE'), /requires FINAL/);
+    assert.equal(requests.length, 1);
+  } finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
+});
+
+test('bounded one-shot submission accepts a single response but never retries RPC errors or redirects', async () => {
+  let count = 0, mode = 'ok';
+  const server = http.createServer(async (req, res) => {
+    for await (const _chunk of req) { /* drain */ }
+    count++;
+    if (mode === 'redirect') { res.writeHead(307, { location: `http://127.0.0.1:${server.address().port}/other` }); res.end(); return; }
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(mode === 'error' ? { jsonrpc: '2.0', id: 'x', error: { message: 'unavailable' } } :
+      { jsonrpc: '2.0', id: 'x', result: { final_execution_status: 'FINAL' } }));
+  });
+  server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  try {
+    const provider = new PaymentRpcProvider(`http://127.0.0.1:${server.address().port}`, { sendTimeoutMs: 1000 });
+    const pair = nearApi.KeyPair.fromRandom('ed25519');
+    const tx = nearApi.transactions.createTransaction('owner.testnet', pair.getPublicKey(), 'bouncer.testnet', 1n,
+      [nearApi.transactions.functionCall('execute', {}, 1n, 0n)], Buffer.alloc(32, 2));
+    const [, signed] = await new nearApi.KeyPairSigner(pair).signTransaction(tx);
+    assert.equal((await provider.sendTransactionOnce(signed)).final_execution_status, 'FINAL'); assert.equal(count, 1);
+    mode = 'error'; await assert.rejects(provider.sendTransactionOnce(signed), /remains unresolved/); assert.equal(count, 2);
+    mode = 'redirect'; await assert.rejects(provider.sendTransactionOnce(signed)); assert.equal(count, 3);
+  } finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
+});

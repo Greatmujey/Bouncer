@@ -4,9 +4,10 @@
  */
 import { createHash, createPublicKey, verify } from 'node:crypto';
 import { TESTNET_CIRCLE_USDC, YOUTICK_MARKET } from './youtick-capabilities.mjs';
+import { YOUTICK_ADAPTIVE_PROFILE } from './youtick-profiles.mjs';
+export { YOUTICK_ADAPTIVE_PROFILE } from './youtick-profiles.mjs';
 
 export const YOUTICK_V1_CODE_HASH = '9FvV8rRn1FQg15jHG4fNZPXjskdMTr6jZBVgNFZyb731';
-export const YOUTICK_ADAPTIVE_PROFILE = '28ba12452dd2cc55e64baf73a3dbf665784eeb8fd87892163818513165bbd3b2';
 const requestFields = ['creator_id', 'job_id', 'title', 'price_usdc', 'expected_source_bytes', 'profile_id',
   'profile_config_sha256', 'upload_public_key', 'upload_key_expires_at_ms'];
 const quoteFields = ['domain', 'version', 'network', 'contract_id', 'creator_id', 'job_id', 'request_sha256',

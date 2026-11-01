@@ -11,6 +11,7 @@
     "agent": "node agent/procurement.mjs",
     "recover-direct": "node agent/recover-direct-payment.mjs",
     "recover-direct-delivery": "node agent/recover-direct-delivery.mjs",
+    "recover-youtick-grant": "node agent/recover-youtick-grant.mjs",
     "encrypt-file-journal": "node scripts/encrypt-file-journal.mjs",
     "init-file-journal-key": "node scripts/init-file-journal-key.mjs",
     "init-shared-buyer-db": "node scripts/init-shared-buyer-db.mjs",

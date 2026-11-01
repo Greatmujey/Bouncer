@@ -108,6 +108,22 @@ jobs:
       - name: Read public key and registry, without execution or payment
         run: node bouncer/scripts/probe-outlayer-vrf.mjs
 
+  outlayer-vrf2-read:
+    name: Check VRF2 provider and test-token readiness (read only)
+    if: github.event_name == 'push' && github.ref == 'refs/heads/arena/d00d7f93-near-hub' && github.run_attempt == '1' && contains(github.event.head_commit.message, '[vrf2-capability-read]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      - name: Read provider terms, storage prices and Ref quotes without account creation or payment
+        run: node bouncer/scripts/probe-vrf2-ready.mjs
+
   ref-graph-read:
     name: Inspect existing public Ref and vault receipt graphs (read only)
     if: github.event_name == 'push' && github.run_attempt == '1' && contains(github.event.head_commit.message, '[ref-graph-read]')
@@ -219,6 +235,9 @@ jobs:
       - name: Build separate experimental testnet playback WASM
         working-directory: bouncer/contracts/bouncer
         run: RUSTFLAGS="-C link-arg=-s" cargo build --target wasm32-unknown-unknown --release --features youtick-playback-v10
+      # Keep the separately tested V10 artifact unoptimized. The V9 wasm-opt
+      # command fails on V10's bulk-memory instructions without extra feature
+      # flags; the one-shot diagnostic checks testnet protocol compatibility.
       - name: Check experimental playback marker
         run: |
           node -e 'const fs=require("fs"),c=require("crypto"),p="bouncer/contracts/bouncer/target/wasm32-unknown-unknown/release/bouncer.wasm",b=fs.readFileSync(p);if(!b.subarray(0,8).equals(Buffer.from([0,97,115,109,1,0,0,0]))||!b.includes(Buffer.from("bouncer-agent-v10-youtick-testnet")))throw Error("invalid experimental playback artifact");console.log("Experimental playback WASM SHA-256",c.createHash("sha256").update(b).digest("hex"))'
@@ -398,10 +417,83 @@ jobs:
       - name: Reinspect retained setup hashes and balances without signing or sending
         run: node bouncer/scripts/inspect-vrf-setup.mjs original-vrf-evidence
 
+  youtick-owner-grant-probe:
+    name: One-shot hypothetical YouTick owner grant (testnet; no purchase)
+    # The branch, exact parent, marker and first attempt deliberately fence this
+    # disposable one-shot. Never rerun an ambiguous transaction. The job ID is
+    # hypothetical and cannot satisfy the production paid-publication runner.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/arena/d00d7f93-near-hub' && github.event.before == 'dd161c79f06c20338ce93b62fada59704bd99e88' && github.event.repository.private == true && github.run_attempt == '1' && contains(github.event.head_commit.message, '[youtick-grant-probe-once-20261101]')
+    needs: [js-tests, contract-tests, build-contract]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: bouncer-youtick-playback-v10-wasm
+          path: youtick-v10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      - name: Verify the 1-yocto guard and grant on a made-up job, with no FT payment
+        shell: bash
+        env:
+          BOUNCER_YOUTICK_GRANT_PROBE_ACK: testnet-hypothetical-no-payment-once
+          BOUNCER_YOUTICK_GRANT_PROBE_DIR: ${{ runner.temp }}/bouncer-youtick-grant-proof
+          BOUNCER_YOUTICK_V10_WASM: ${{ github.workspace }}/youtick-v10/bouncer.wasm
+        run: |
+          set +e
+          node bouncer/scripts/probe-youtick-owner-grant.mjs 2>&1 | tee "$RUNNER_TEMP/youtick-grant-probe.log"
+          result=${PIPESTATUS[0]}
+          if [ "$result" -ne 0 ]; then
+            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-4000).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=Hypothetical YouTick grant probe stopped::"+s)' "$RUNNER_TEMP/youtick-grant-probe.log"
+          fi
+          exit "$result"
+      # Public probe/transaction hashes, chain receipts, encrypted journal and
+      # RSA-sealed disposable keys only. No plaintext private keys or raw
+      # signed transaction bytes; RPC receipts may include signatures/nonces.
+      # Always retain original hashes on failure or timeout.
+      - name: Preserve original testnet diagnostic and encrypted recovery evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: youtick-hypothetical-grant-testnet-evidence
+          path: ${{ runner.temp }}/bouncer-youtick-grant-proof/**
+          if-no-files-found: ignore
+          retention-days: 90
+
+  youtick-grant-reinspection:
+    name: Reinspect original YouTick grant hashes (read only)
+    if: github.event_name == 'push' && github.ref == 'refs/heads/arena/d00d7f93-near-hub' && github.run_attempt == '1' && contains(github.event.head_commit.message, '[youtick-grant-reinspect-20261101]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      - name: Inspect original FINAL hashes and prove the hypothetical job is absent
+        shell: bash
+        run: |
+          set +e
+          node bouncer/scripts/inspect-youtick-grant-probe.mjs bouncer/evidence/youtick-hypothetical-grant-20261101 >"$RUNNER_TEMP/youtick-reinspection.log" 2>&1
+          result=$?
+          node -e 'const fs=require("fs");const ok=process.argv[2]==="0",s=fs.readFileSync(process.argv[1],"utf8").slice(-3500).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log(`::${ok?"notice":"error"} title=Original YouTick grant reinspection (read only)::`+s)' "$RUNNER_TEMP/youtick-reinspection.log" "$result"
+          exit "$result"
+
   youtick-playback-read:
     name: Inspect independent testnet playback readiness (read only)
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/arena/') && contains(github.event.head_commit.message, '[youtick-playback-read]')
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -508,6 +600,114 @@ jobs:
       - run: npm ci --prefix bouncer --no-audit --no-fund
       - name: Inspect original FINAL receipt and balances without a key or send
         run: node bouncer/scripts/inspect-original-ref-swap.mjs original-ref-evidence
+
+  multiagency-readiness:
+    name: Inspect independent Circle testnet research-provider readiness (read only)
+    if: github.event_name == 'push' && github.ref == 'refs/heads/arena/d00d7f93-near-hub' && github.run_attempt == '1' && contains(github.event.head_commit.message, '[multiagency-read]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      - name: Public GETs and historical FastNear read-only index queries only
+        run: node bouncer/scripts/probe-multiagency.mjs
+      - name: Verify historical independent public research handoff (not our purchase)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node bouncer/scripts/probe-multiagency-publication.mjs
+
+  vrf2-setup-inspection:
+    name: Reinspect original VRF2 setup and preserve encrypted journal (read only)
+    if: github.event_name == 'push' && github.ref == 'refs/heads/arena/d00d7f93-near-hub' && github.run_attempt == '1' && contains(github.event.head_commit.message, '[vrf2-setup-read]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: paid-vrf2-testnet-recovery
+          path: ${{ runner.temp }}/original-vrf2-evidence
+          github-token: ${{ github.token }}
+          run-id: 41318744634
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      - name: Emit only the original encrypted journal as bounded chunks
+        shell: bash
+        run: |
+          mapfile -t identities < <(find "$RUNNER_TEMP/original-vrf2-evidence" -type f -name identity.json)
+          test "${#identities[@]}" -eq 1
+          node bouncer/scripts/emit-vrf2-recovery.mjs "$(dirname "${identities[0]}")"
+      - name: Inspect only original setup hashes and FINAL balances, no keys or sends
+        shell: bash
+        run: |
+          mapfile -t identities < <(find "$RUNNER_TEMP/original-vrf2-evidence" -type f -name identity.json)
+          test "${#identities[@]}" -eq 1
+          node bouncer/scripts/inspect-vrf2-setup.mjs "$(dirname "${identities[0]}")"
+      - name: Preserve the same encrypted original evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: original-vrf2-setup-reinspection
+          path: ${{ runner.temp }}/original-vrf2-evidence/**
+          if-no-files-found: ignore
+          retention-days: 90
+
+  paid-vrf2-one-shot:
+    name: Fresh independent FT-paid VRF2 diagnostic (testnet)
+    # One explicitly reviewed push only. A rerun, another parent, branch or
+    # marker cannot create accounts, acquire test tokens or submit payments.
+    # Prior unresolved burn/VRF setup hashes are never touched.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/arena/d00d7f93-near-hub' && github.event.before == 'f45cf3ea7b5f724c464093db9dd481fd6855b10f' && github.event.repository.private == true && github.run_attempt == '1' && contains(github.event.head_commit.message, '[paid-vrf2-proof-20261101]')
+    needs: [js-tests, contract-tests, build-contract]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      # Use the exact reviewed, committed V9 binary, not a newly compiled
+      # artifact: runner/toolchain drift changed that artifact's hash. The
+      # one-shot script checks its full SHA-256 before any account creation.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      - name: Recheck pinned independent testnet VRF terms without payment
+        run: node bouncer/scripts/probe-outlayer-vrf.mjs
+      - name: Create a distinct bounded testnet diagnostic and recover original hashes
+        shell: bash
+        env:
+          BOUNCER_VRF2_ACK: fresh-testnet-fake-token-vrf-one-shot
+          BOUNCER_VRF2_DIR: ${{ runner.temp }}/bouncer-vrf2-proof
+          BOUNCER_VRF2_WASM: ${{ github.workspace }}/bouncer.wasm
+        run: |
+          set +e
+          node bouncer/scripts/paid-vrf2-once.mjs 2>&1 | tee "$RUNNER_TEMP/paid-vrf2.log"
+          result=${PIPESTATUS[0]}
+          if [ "$result" -ne 0 ]; then
+            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-4000).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=One-shot VRF2 stopped; inspect original hashes::"+s)' "$RUNNER_TEMP/paid-vrf2.log"
+          fi
+          exit "$result"
+      - name: Independently re-read original FINAL receipts and pinned block views
+        run: node bouncer/scripts/inspect-paid-vrf2.mjs "$RUNNER_TEMP/bouncer-vrf2-proof"
+      - name: Preserve encrypted recovery journal and public original-hash evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: paid-vrf2-testnet-recovery
+          path: ${{ runner.temp }}/bouncer-vrf2-proof/**
+          if-no-files-found: ignore
+          retention-days: 90
 
   paid-vrf-one-shot:
     name: Independent FT-paid VRF diagnostic (testnet)

@@ -7,7 +7,7 @@ import { reserveYoutickUploadSession, prepareYoutickUploadControl } from '../age
 import { YOUTICK_ACCESS, YOUTICK_PLAY_ORIGIN_HASH, YOUTICK_PLAY_TTL_MS, reserveYoutickPlaybackSession,
   prepareYoutickPlayGrant, verifyYoutickPlayGrantView, verifyYoutickPlayGrantTransaction,
   prepareYoutickPlaybackTokenRequest } from '../agent/youtick-playback.mjs';
-import { makeYoutickPlayGrantArgs } from '../agent/youtick-play-proof.mjs';
+import { makeYoutickPlayGrantArgs, verifyYoutickPlayGrantArgs } from '../agent/youtick-play-proof.mjs';
 import { fixture, input, open, settledVideo, now, vault, owner } from './helpers/youtick-fixture.mjs';
 
 const enc = value => Buffer.from(JSON.stringify(value)).toString('base64');
@@ -37,7 +37,7 @@ function grantFixture(ctx) {
   const accessArgs = { target_owner_id: vault, session_pk: prepared.args.session_pk, scope: 'Play', resource_id: prepared.args.job_id,
     ttl_ms: YOUTICK_PLAY_TTL_MS, origin_hash: YOUTICK_PLAY_ORIGIN_HASH, device_hash: prepared.args.device_hash, session_pok: prepared.args.session_pok };
   const result = { final_execution_status: 'FINAL', status: { SuccessValue: enc(grant) },
-    transaction_outcome: { id: txHash, outcome: { receipt_ids: [initId] } },
+    transaction_outcome: { id: txHash, outcome: { status: { SuccessReceiptId: initId }, receipt_ids: [initId] } },
     transaction: { hash: txHash, signer_id: owner, receiver_id: vault, public_key: ownerPublicKey,
       actions: [{ FunctionCall: { method_name: prepared.method, deposit: '1', gas: prepared.gas, args: enc(prepared.args) } }] },
     receipts: [{ receipt_id: accessId, predecessor_id: vault, receiver_id: YOUTICK_ACCESS,
@@ -50,7 +50,13 @@ function grantFixture(ctx) {
 test('play proof refuses non-testnet vaults, malformed resources and device bindings', () => {
   const key = nearApi.KeyPair.fromRandom('ed25519');
   const valid = { vault, jobId: 'clip:1', deviceHash: 'a'.repeat(64), key };
-  assert.equal(makeYoutickPlayGrantArgs(valid).job_id, 'clip:1');
+  const args = makeYoutickPlayGrantArgs(valid);
+  assert.equal(args.job_id, 'clip:1'); assert.equal(verifyYoutickPlayGrantArgs({ vault, args }), true);
+  for (const bad of [{ ...args, job_id: 'other' }, { ...args, device_hash: 'b'.repeat(64) },
+    { ...args, session_pok: '0'.repeat(128) }, { ...args, extra: true }]) {
+    assert.throws(() => verifyYoutickPlayGrantArgs({ vault, args: bad }), /invalid/);
+  }
+  assert.throws(() => verifyYoutickPlayGrantArgs({ vault: 'other.testnet', args }), /invalid/);
   for (const bad of [{ ...valid, vault: 'vault.near' }, { ...valid, jobId: '../bad?' },
     { ...valid, deviceHash: 'x'.repeat(64) }, { ...valid, key: null }]) {
     assert.throws(() => makeYoutickPlayGrantArgs(bad), /invalid/);

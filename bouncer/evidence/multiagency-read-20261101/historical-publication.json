@@ -1,0 +1,12 @@
+{
+  "status": "PUBLISHED",
+  "job": 32,
+  "task": 40,
+  "url": "https://github.com/MultiAgency/kanban-sandbox/issues/40#issuecomment-5923484271",
+  "sha256": "a0dbfa98cbc664632fdc591e0cf3e46a849aa6e4a3a7d4aaf21c2dade63ddf64",
+  "scope": "historical provider-authored research handoff only; not our payment, current capacity, content correctness or independent Bouncer fulfillment",
+  "bytes": 8919,
+  "observed_at": "2026-11-01T15:19:52.086Z",
+  "buyer": "agency.testnet",
+  "is_bouncer_purchase": false
+}

@@ -1,0 +1,16 @@
+{
+  "id": "deployment",
+  "signer_id": "bouncer-vrf2-3a0af45958.testnet",
+  "receiver_id": "bouncer-vrf2-3a0af45958.testnet",
+  "public_key": "ed25519:97ajBHdm3CKq69r5e5Hh92m31MZv8dgf9Mnn4x1CnMoF",
+  "tx_hash": "HVjXdBKJuf7xAyM3ngW6pwmDQagzJKCj73ZPtTFznTBD",
+  "review": {
+    "actions": [
+      "deploy reviewed V9",
+      "initialize exact owner",
+      "delete deployment key"
+    ],
+    "code_hash": "9qpU6d6MHZZXC2ivtQt3k3scGkiHLkkMnaTAiZWbaL6y",
+    "owner": "owner-vrf2-3a0af45958.testnet"
+  }
+}
