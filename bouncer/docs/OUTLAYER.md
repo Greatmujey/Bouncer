@@ -292,6 +292,21 @@ exact committed binary and rechecks its full pinned SHA-256; this does not
 prove source-to-binary reproducibility. These observations are preserved under
 `evidence/outlayer-vrf2-preflight-20261101/` and do not establish delivery.
 
+The [fresh pinned attempt](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41318744634/job/124885009403)
+created and locked vault `bouncer-vrf2-3a0af45958.testnet`, acquired fake test
+USDC.e in an owner-setup swap, and stopped on the **original** owner-to-vault
+funding hash `uhtVNNJewFmpTSVzZ7fr8ReZnvmVenjWcm92XafQRHn`: its one-shot
+response and immediate hash lookup did not establish FINAL status. The runner
+never reached the OutLayer prepaid deposit or a VRF order. No provider payment
+or delivery is proven. Public original intents are in
+`evidence/outlayer-vrf2-setup-20261101/`; the sealed credentials and encrypted
+journal were retained in artifact `13088557059`. **Do not resend the original
+funding transaction**, even if a later view appears to show no balance. The
+read-only `inspect-vrf2-setup.mjs` examines only those original hashes on two
+RPC endpoints and a same-block vault/provider snapshot; an unavailable hash
+remains unresolved. Any later continuation must first verify the original
+funding and use its journal, not silently create a replacement payment.
+
 The encrypted credential envelope and journal are retained separately. The
 local `unseal-vrf2-journal-key.mjs` can derive the journal key to a new private
 file without writing any NEAR signing keys; losing the RSA private key prevents

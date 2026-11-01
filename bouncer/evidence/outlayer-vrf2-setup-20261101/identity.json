@@ -1,0 +1,13 @@
+{
+  "vault": "bouncer-vrf2-3a0af45958.testnet",
+  "owner": "owner-vrf2-3a0af45958.testnet",
+  "vault_public_key": "ed25519:97ajBHdm3CKq69r5e5Hh92m31MZv8dgf9Mnn4x1CnMoF",
+  "owner_public_key": "ed25519:52oq2ywGuL3QCPf8huZNxkXoxyWpLr1HN4JLQ3cLayMt",
+  "funding_public_key": "ed25519:ENXPTRFh1PSBK3wucpDhpnhSxytF7i93LfpLzfRjnnPL",
+  "project_public_key": "ed25519:6DpE7RJsx7q4Cu4vSjG36C1p16AGBau9g1cAXoRsCwt5",
+  "seed": "bouncer_vrf2_a268326b8e2c59f1d9446b3cffc0bfa5",
+  "vault_code_hash": "9qpU6d6MHZZXC2ivtQt3k3scGkiHLkkMnaTAiZWbaL6y",
+  "vault_wasm_sha256": "835f0baa51d08ddf3af6812df0caefb93283480735a63e3d382073e04fbaf8ee",
+  "recovery_key_id": "77f3170a5df339b2ef4affeb39e8fa549d3b4ca9ac5579d0a21f9936e927508b",
+  "purpose": "fresh-testnet-fake-token-independent-vrf-diagnostic"
+}

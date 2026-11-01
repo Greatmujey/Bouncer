@@ -601,6 +601,47 @@ jobs:
       - name: Inspect original FINAL receipt and balances without a key or send
         run: node bouncer/scripts/inspect-original-ref-swap.mjs original-ref-evidence
 
+  vrf2-setup-inspection:
+    name: Reinspect original VRF2 setup and preserve encrypted journal (read only)
+    if: github.event_name == 'push' && github.ref == 'refs/heads/arena/d00d7f93-near-hub' && github.run_attempt == '1' && contains(github.event.head_commit.message, '[vrf2-setup-read]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: paid-vrf2-testnet-recovery
+          path: ${{ runner.temp }}/original-vrf2-evidence
+          github-token: ${{ github.token }}
+          run-id: 41318744634
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      - name: Emit only the original encrypted journal as bounded chunks
+        shell: bash
+        run: |
+          mapfile -t identities < <(find "$RUNNER_TEMP/original-vrf2-evidence" -type f -name identity.json)
+          test "${#identities[@]}" -eq 1
+          node bouncer/scripts/emit-vrf2-recovery.mjs "$(dirname "${identities[0]}")"
+      - name: Inspect only original setup hashes and FINAL balances, no keys or sends
+        shell: bash
+        run: |
+          mapfile -t identities < <(find "$RUNNER_TEMP/original-vrf2-evidence" -type f -name identity.json)
+          test "${#identities[@]}" -eq 1
+          node bouncer/scripts/inspect-vrf2-setup.mjs "$(dirname "${identities[0]}")"
+      - name: Preserve the same encrypted original evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: original-vrf2-setup-reinspection
+          path: ${{ runner.temp }}/original-vrf2-evidence/**
+          if-no-files-found: ignore
+          retention-days: 90
+
   paid-vrf2-one-shot:
     name: Fresh independent FT-paid VRF2 diagnostic (testnet)
     # One explicitly reviewed push only. A rerun, another parent, branch or

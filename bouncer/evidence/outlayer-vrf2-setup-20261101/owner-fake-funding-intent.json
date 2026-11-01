@@ -1,0 +1,17 @@
+{
+  "id": "owner-fake-funding",
+  "signer_id": "owner-vrf2-3a0af45958.testnet",
+  "receiver_id": "usdc.fakes.testnet",
+  "public_key": "ed25519:52oq2ywGuL3QCPf8huZNxkXoxyWpLr1HN4JLQ3cLayMt",
+  "tx_hash": "uhtVNNJewFmpTSVzZ7fr8ReZnvmVenjWcm92XafQRHn",
+  "review": {
+    "token": "usdc.fakes.testnet",
+    "method": "ft_transfer_call",
+    "args": {
+      "receiver_id": "bouncer-vrf2-3a0af45958.testnet",
+      "amount": "10000",
+      "msg": "fund"
+    },
+    "owner_setup_not_agent_payment": true
+  }
+}

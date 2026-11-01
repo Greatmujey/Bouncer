@@ -1,0 +1,15 @@
+{
+  "id": "register-wrap",
+  "signer_id": "owner-vrf2-3a0af45958.testnet",
+  "receiver_id": "wrap.testnet",
+  "public_key": "ed25519:52oq2ywGuL3QCPf8huZNxkXoxyWpLr1HN4JLQ3cLayMt",
+  "tx_hash": "HDZwmZoLe8idGHJbUY6C6xjWtBHchVWASoe5Ds1DURns",
+  "review": {
+    "token": "wrap.testnet",
+    "accounts": [
+      "owner-vrf2-3a0af45958.testnet"
+    ],
+    "deposit_each": "1250000000000000000000",
+    "storage_only": true
+  }
+}

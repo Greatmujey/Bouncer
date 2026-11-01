@@ -1,0 +1,18 @@
+{
+  "id": "owner-ref-acquisition",
+  "signer_id": "owner-vrf2-3a0af45958.testnet",
+  "receiver_id": "wrap.testnet",
+  "public_key": "ed25519:52oq2ywGuL3QCPf8huZNxkXoxyWpLr1HN4JLQ3cLayMt",
+  "tx_hash": "7e98XZEL8XNEZbNGpfDEPu2A2QAXxeKScR6C1jipCzqW",
+  "review": {
+    "token": "wrap.testnet",
+    "method": "ft_transfer_call",
+    "args": {
+      "receiver_id": "ref-finance-101.testnet",
+      "amount": "1000000000000000",
+      "msg": "{\"force\":0,\"actions\":[{\"pool_id\":54,\"token_in\":\"wrap.testnet\",\"token_out\":\"usdc.fakes.testnet\",\"amount_in\":\"1000000000000000\",\"min_amount_out\":\"216460\"}]}"
+    },
+    "quote": "227853",
+    "owner_setup_not_guarded": true
+  }
+}
