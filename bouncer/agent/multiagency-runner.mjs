@@ -12,7 +12,8 @@ import { withExclusiveJournalOperation } from './journal-operation.mjs';
 import { FileJournal, runProcurement } from './procurement.mjs';
 import { recoverDirectPayment } from './recover-direct-payment.mjs';
 import { MULTIAGENCY_ORIGIN } from './multiagency-readiness.mjs';
-import { multiAgencyExecutionBlock, multiAgencyPaymentPlan, validateMultiAgencyGoal, validateMultiAgencyQuote, verifyMultiAgencyPayment } from './multiagency-research.mjs';
+import { multiAgencyExecutionBlock, multiAgencyPaymentPlan, validateMultiAgencyGoal, validateMultiAgencyQuote,
+  verifyMultiAgencyPayment, verifyMultiAgencyResearchDelivery } from './multiagency-research.mjs';
 
 const hash = value => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const quoteId = goal => `${goal.id}-ma-quote`;
@@ -42,11 +43,11 @@ function issuedQuote(journal, goal, now, allowExpired = false) {
   return quote;
 }
 async function requestJson(url, options, fetchImpl) {
-  const { expectedStatus, ...request } = options;
+  const { expectedStatus, maxBytes = 32 * 1024, ...request } = options;
   const response = await fetchImpl(url, { ...request, redirect: 'error', cache: 'no-store', signal: AbortSignal.timeout(20_000) });
   try {
     if (response.status !== expectedStatus) throw new Error('unexpected provider HTTP status');
-    return await readBoundedJson(response, { maxBytes: 32 * 1024, label: 'research provider' });
+    return await readBoundedJson(response, { maxBytes, label: 'research evidence' });
   } finally { await response.body?.cancel().catch(() => {}); }
 }
 
@@ -159,5 +160,39 @@ export async function recoverMultiAgencyPayment({ goal: rawGoal, journal, provid
       completed_at: new Date(timestamp(now)).toISOString() });
     return { status: 'RECOVERED_PAYMENT_ONLY', settlement, quote_posts: 0, sends: 0,
       scope: 'original FINAL payment only; seller attribution and delivery not established' };
+  });
+}
+
+/** Read-only inspection of ONE published task under the original paid job.
+ * All URLs are pinned; no quote POST, key, signing, send or journal write.
+ * The output is untrusted provider text, not proof the full brief is satisfied. */
+export async function inspectMultiAgencyResearchTask({ goal: rawGoal, journal, provider, task, githubToken,
+  fetchImpl = globalThis.fetch, now = Date.now }) {
+  const goal = validateMultiAgencyGoal(rawGoal); requireJournal(journal, goal);
+  if (!Number.isSafeInteger(task) || task < 1 ||
+      (githubToken !== undefined && (typeof githubToken !== 'string' || !githubToken || githubToken.length > 4096 || /[\r\n]/.test(githubToken)))) {
+    throw new Error('valid public task number and optional GitHub read token required');
+  }
+  return withExclusiveJournalOperation(journal, async () => {
+    const quote = issuedQuote(journal, goal, now, true), plan = multiAgencyPaymentPlan(goal, quote, { nowMs: timestamp(now), allowExpired: true });
+    const entry = journal.get(goal.id);
+    if (!entry || journal.list().filter(e => e.request?.memo === quote.code && e.request?.payee === quote.payment.receiver &&
+        e.request?.token === quote.payment.token).length !== 1) throw new Error('original payment/memo reservation is missing or ambiguous');
+    await recoverDirectPayment({ plan, requestId: goal.id, provider, journal, update: false, log: () => {} });
+    const chain = await provider.txStatusReceipts(entry.tx_hash, goal.owner, 'FINAL');
+    const vaultState = await vaultAtTransaction(provider, goal, chain);
+    const sellerQuote = await requestJson(`${MULTIAGENCY_ORIGIN}/api/quotes/${quote.code}`,
+      { method: 'GET', expectedStatus: 200 }, fetchImpl);
+    if (!Number.isSafeInteger(sellerQuote?.issue) || sellerQuote.issue < 1) throw new Error('seller has not published a valid job number');
+    const api = 'https://api.github.com/repos/MultiAgency/kanban-sandbox/issues';
+    const headers = { accept: 'application/vnd.github+json', 'user-agent': 'bouncer-research-recovery' };
+    if (githubToken !== undefined) headers.authorization = `Bearer ${githubToken}`;
+    const read = suffix => requestJson(`${api}${suffix}`, { method: 'GET', expectedStatus: 200, maxBytes: 1_000_000, headers }, fetchImpl);
+    const [epic, taskIssue, comments] = await Promise.all([
+      read(`/${sellerQuote.issue}`), read(`/${task}`), read(`/${task}/comments?per_page=100`),
+    ]);
+    const proof = verifyMultiAgencyResearchDelivery({ goal, quote, result: chain, publicKey: entry.agent_public_key,
+      txHash: entry.tx_hash, vaultState, sellerQuote, epic, task: taskIssue, comments });
+    return { ...proof, quote_posts: 0, sends: 0, journal_writes: 0 };
   });
 }

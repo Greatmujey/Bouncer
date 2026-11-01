@@ -8,10 +8,10 @@ events and confirms FINAL receipts. It is not standard x402 `exact`. The
 source is not an attestation of the currently deployed service. Testnet USDC
 has **no financial value**.
 
-On 1 November, our [read-only probe](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41330160414/job/124918366939)
+On 1 November, our [corrected read-only probe](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41330260928/job/124918667542)
 observed a 3,000,000-micro-USDC default deposit, Circle's NEAR testnet token,
 and treasury `multiagency.sputnikv2.testnet`. It reported a coordinator cycle
-completed 19 seconds before the observation. The original `coordinator_recent`
+completed 25 seconds before the observation. An earlier `coordinator_recent`
 flag incorrectly required a cycle to be running at that exact moment; that
 flag was fixed because idle time between cycles is normal. The endpoint may be
 stale or cached. One ready task was listed, and the latest listed paid job was
@@ -68,6 +68,14 @@ Public summaries are in `evidence/multiagency-read-20261101/`.
   does not fall back to another send after an ambiguous error. Injected legacy
   providers must enforce equivalent no-retry behavior themselves.
 
+- `agent/multiagency.mjs` exposes explicit `--quote`, `--pay`, `--recover`, and
+  `--inspect --task` actions. Read-only task inspection uses only the original
+  journal/hash, the pinned provider and GitHub public APIs; it neither writes
+  the journal nor signs or sends. Quote/payment require `--execute` and an
+  `--ack-provider-availability` operator assertion; a new journal also needs
+  `--new-journal --ack-key-backup`. These assertions do **not** establish that
+  the provider is available or that a backup actually exists.
+
 The adapter is **experimental and synthetic-tested only**: no MultiAgency quote,
 payment, job, Bouncer report or refund has been observed. The public readiness
 and historical controls do not change that. It is not wired into the website,
@@ -76,6 +84,32 @@ independently establish current worker/operator availability and acceptance,
 liquidity, precise service terms and the owner's explicit policy/brief approval.
 Do not create test quotes merely to probe readiness: each may cause repeated
 scans for up to 72 hours in the published source.
+
+## Operator interface
+
+`npm run multiagency -- --help` describes the actions. The owner-reviewed goal
+is a JSON object with exactly these fields:
+
+| Field | Meaning |
+| --- | --- |
+| `version`, `id` | `1` and a unique 1–48-character alphanumeric/underscore/hyphen ID |
+| `vault`, `owner`, `vault_code_hash`, `policy_id` | Testnet account IDs, owner-pinned keyless vault code hash, and existing FT policy |
+| `title`, `brief` | Meaningful public task (no secrets); brief at least 20 characters, at most 8000 UTF-8 bytes, without reserved provider fences |
+| `amount` | Exactly `"3000000"` micro Circle testnet USDC for this reviewed profile |
+| `accept_public_brief`, `accept_stalled_deposit_risk`, `accept_unsigned_quote_and_memo_risk` | Each must be `true` after the owner understands these risks |
+
+Prepare the original encryption key outside the repository with
+`scripts/init-file-journal-key.mjs`, securely back it up under the operator's
+control, and set `BOUNCER_FILE_JOURNAL_KEY_FILE` to that private file. Keep the
+journal itself on durable private storage and back it up **after each write**;
+a stale backup cannot prove no intervening payment. The first quote may use
+`--new-journal --ack-key-backup`; all subsequent actions require that exact
+existing journal, goal and key. Payment requires an owner-only, non-symlink
+restricted agent-key file; `--recover` and `--inspect` need no signing key.
+`--inspect` returns one task's public text and digest, not an owner acceptance
+of the entire brief. `GH_TOKEN` or `GITHUB_TOKEN` is optional for GitHub API
+reads and is sent only to the pinned GitHub API. The old ephemeral-sandbox VRF
+and YouTick key loss demonstrates why a single local key copy is inadequate.
 
 ## Security boundaries
 
