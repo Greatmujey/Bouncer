@@ -77,6 +77,33 @@ lost journal, a different process, an untrusted RPC, an untrusted seller, or
 an injected retrying transport can defeat assumptions. Do not use valuable
 funds. See [the detailed onchain-proof risks](ONCHAIN_PROOF.md).
 
+### Additional independent candidates checked (1 November 2026)
+
+These are source inspections, not tests of deployed services or merchant
+consent, and no offers or payments were requested:
+
+- [Kampouse/near-escrow at `cb125de`](https://github.com/Kampouse/near-escrow/blob/cb125dee372e883cd428db035a8dd4c674daa278/src/lib.rs)
+  implements FT-funded task escrow in source, but `create_escrow` identifies
+  the agent by the **transaction signer**, whereas `ft_on_transfer` requires the
+  **token sender** to equal that agent. In a normal Bouncer payment those are
+  the owner and the Bouncer contract respectively, so the escrow rejects it.
+  The source also requires an attached native storage deposit; FT refunds use
+  plain transfers. We did not establish a current independent testnet
+  deployment, worker availability or terms. Do not pay it assuming compatibility.
+- [open-crosspost/connectors at `3a5dace`](https://github.com/open-crosspost/connectors/blob/3a5dacee6af5c5b98306e6f95d11925c380e61d2/docs/TESTNET_RUNBOOK.md)
+  documents an OutLayer X connector with an HTTPS payment key and OAuth/user
+  credentials; its checked-in testnet runbook lists publication checks as
+  unfinished. A funded external payment key would bypass Bouncer's on-chain
+  limits, and a real X account would require separate consent. This is not a
+  verified FT-paid seller path.
+- [sealwork at `c248d35`](https://github.com/NSEVEjk0/sealwork/blob/c248d359114f2175b1e3f2e61c5a3c1094448048/contracts/market/src/index.ts)
+  documents a testnet escrow and agent builds, but its job budget and compute
+  deposits are native NEAR, not an FT payment. The existence of deployment
+  metadata does not establish current service availability or fulfillment.
+
+The right next step is seller cooperation or a compatible deployed protocol,
+not weakening the owner guard or claiming a self-hosted adapter is independent.
+
 ## Authenticated, order-bound fulfillment
 
 An experimental implementation of the core claim and local seller flow now
@@ -131,8 +158,9 @@ following checklist separates what the prototype does from what remains:
   claims on one PostgreSQL primary, not a complete HA or multi-agent solution.
   Failover/fencing, stale-backup recovery, key and allowance lifecycle,
   monitoring, bounded clients, reconciliation and quota controls remain.
-  Buyer journals and the original reference-provider directory are local, not a
-  distributed transaction system.
+  The default buyer journal and original provider directory are local; the
+  opt-in shared direct-v3 buyer serializes one owner's workers but is not a
+  distributed nonce allocator or a complete transaction system.
 - **Safety and product:** independent audit, model/prompt defenses and real
   wallet testing are needed. Tour and expanded MCP work remain downstream of
   completing the core multi-resource path; the current preview/MCP are not a

@@ -19,6 +19,7 @@ import { FileJournal } from './procurement.mjs';
 import { MonotonicAccount, PaymentRpcProvider } from './near-account.mjs';
 import { isTestnetAccount, isTestnetToken } from '../shared/account-id.mjs';
 import { signReviewedCall } from './reviewed-transaction.mjs';
+import { isTransactionHash } from '../shared/direct-payment-settlement.mjs';
 
 const { KeyPair, KeyPairSigner } = nearApi;
 const MAX = (1n << 128n) - 1n;
@@ -27,7 +28,7 @@ const FIELDS = ['id', 'contract_id', 'owner_account_id', 'policy_id', 'payee', '
 const equal = isDeepStrictEqual;
 const owns = (obj, keys) => obj && typeof obj === 'object' && !Array.isArray(obj) &&
   Object.keys(obj).length === keys.length && keys.every(k => Object.hasOwn(obj, k));
-const validHash = value => typeof value === 'string' && /^[1-9A-HJ-NP-Za-km-z]{32,60}$/.test(value);
+const validHash = isTransactionHash;
 function amount(value, label) {
   if (typeof value !== 'string' || !/^(?:0|[1-9][0-9]{0,38})$/.test(value) || BigInt(value) > MAX) throw new Error(`invalid ${label}`);
   return BigInt(value);
@@ -77,19 +78,29 @@ function actionReceipt(receipt, predecessor, receiver, name) {
 export function verifyFtCallSettlement(rawGoal, result, publicKey) {
   const goal = validateFtCallGoal(rawGoal);
   const tx = result?.transaction, hash = result?.transaction_outcome?.id;
-  if (result?.final_execution_status !== 'FINAL' || typeof result.status?.SuccessValue !== 'string' || !validHash(hash)) throw new Error('transaction is not a successful FINAL result');
+  if (result?.final_execution_status !== 'FINAL' || typeof result.status?.SuccessValue !== 'string' ||
+      result.status?.Failure !== undefined || result.status?.SuccessReceiptId !== undefined || !validHash(hash)) {
+    throw new Error('transaction is not a successful FINAL result');
+  }
   if (!tx || tx.hash !== hash || tx.signer_id !== goal.owner_account_id || tx.receiver_id !== goal.contract_id ||
       (publicKey !== undefined && tx.public_key !== String(publicKey)) || !Array.isArray(tx.actions) || tx.actions.length !== 1) throw new Error('transaction owner, contract or key mismatch');
   const signed = tx.actions[0]?.FunctionCall;
-  if (!signed || signed.method_name !== 'execute_ft_call' || String(signed.deposit) !== '0' ||
+  if (!signed || signed.method_name !== 'execute_ft_call' || String(signed.deposit) !== '0' || String(signed.gas) !== String(GAS) ||
       !equal(decode(signed.args, 'signed arguments'), expectedArgs(goal))) throw new Error('signed FT call does not match the reviewed goal');
   const used = amount(decode(result.status.SuccessValue, 'settlement result'), 'used amount');
   if (used > BigInt(goal.amount)) throw new Error('used amount exceeds the payment');
   const unused = BigInt(goal.amount) - used;
   if (!Array.isArray(result.receipts) || !Array.isArray(result.receipts_outcome) || !result.receipts.length || !result.receipts_outcome.length) throw new Error('missing raw receipts');
+  const receiptIds = result.receipts.map(r => r?.receipt_id), outcomeIds = result.receipts_outcome.map(r => r?.id);
+  if (receiptIds.some(id => typeof id !== 'string' || !id) || new Set(receiptIds).size !== receiptIds.length ||
+      outcomeIds.some(id => typeof id !== 'string' || !id) || new Set(outcomeIds).size !== outcomeIds.length) {
+    throw new Error('missing or duplicate FT-call receipt IDs');
+  }
   const initiations = result.receipts_outcome.filter(r => r?.outcome?.executor_id === goal.contract_id && successful(r.outcome.status) &&
     r.outcome.logs?.includes('BOUNCER guarded ft_transfer_call initiated; full amount reserved'));
   if (initiations.length !== 1) throw new Error('missing unique guarded initiation');
+  const txChildren = result.transaction_outcome?.outcome?.receipt_ids;
+  if (!Array.isArray(txChildren) || !txChildren.includes(initiations[0].id)) throw new Error('FT-call initiation is not bound to the transaction');
   const requests = result.receipts.flatMap(receipt => {
     const call = actionReceipt(receipt, goal.contract_id, goal.token, 'ft_transfer_call');
     return call ? [{ receipt, call }] : [];
@@ -118,14 +129,15 @@ export function verifyFtCallSettlement(rawGoal, result, publicKey) {
       callbackArgs.token !== goal.token || callbackArgs.amount !== goal.amount || callbackArgs.policy_revision !== goal.policy_revision ||
       !Number.isSafeInteger(callbackArgs.bucket) || callbackArgs.bucket < 0) throw new Error('settlement callback does not match the payment');
   const callbackOutcome = result.receipts_outcome.filter(r => r.id === callbacks[0].receipt.receipt_id &&
-    r.outcome?.executor_id === goal.contract_id && r.outcome?.status?.SuccessValue === result.status.SuccessValue &&
-    r.outcome.logs?.includes(expectedLog));
+    r.outcome?.executor_id === goal.contract_id && successful(r.outcome?.status) &&
+    r.outcome?.status?.SuccessValue === result.status.SuccessValue && r.outcome.logs?.includes(expectedLog));
   if (callbackOutcome.length !== 1) throw new Error('missing matching successful settlement outcome');
   // The request and callback were scheduled by the unique initiation. This
   // prevents borrowing otherwise plausible receipts from another execution.
   const children = initiations[0].outcome.receipt_ids;
-  if (!Array.isArray(children) || !children.includes(requests[0].receipt.receipt_id) || !children.includes(callbacks[0].receipt.receipt_id)) {
-    throw new Error('FT request or callback is not bound to the initiating receipt');
+  if (!Array.isArray(children) || !children.includes(requests[0].receipt.receipt_id) || !children.includes(callbacks[0].receipt.receipt_id) ||
+      initiations[0].outcome.status?.SuccessReceiptId !== callbacks[0].receipt.receipt_id) {
+    throw new Error('FT request or returned callback is not bound to the initiating receipt');
   }
   return { tx_hash: hash, token: goal.token, receiver: goal.payee, requested: goal.amount,
     used: used.toString(), unused: unused.toString(),

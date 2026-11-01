@@ -87,7 +87,18 @@ export function requestFingerprint(request) {
  * get(id) and put(id, entry); every live payment is marked pending BEFORE it
  * is sent. An unresolved pending entry is never retried automatically.
  */
-export async function runProcurement({ plan: rawPlan, provider, account, publicKey, journal, journalRoutes, claimOrigins, execute = false,
+export async function runProcurement(options) {
+  // The shared journal's owner fence must cover nonce preparation and signing,
+  // not just the later database insert. It stays held until this batch returns;
+  // any unresolved hash blocks other participating journals for the owner.
+  if (options?.execute && options?.journal?.sharedDirectV3 === true) {
+    if (typeof options.journal.withOwnerFence !== 'function') throw new Error('shared buyer owner payment fence is required');
+    return options.journal.withOwnerFence(() => runProcurementCore(options));
+  }
+  return runProcurementCore(options);
+}
+
+async function runProcurementCore({ plan: rawPlan, provider, account, publicKey, journal, journalRoutes, claimOrigins, execute = false,
   durablePayment = false, log = console.log, onCheck = () => {}, beforePayment = async () => {}, beforeBroadcast = () => {}, onPaid = async () => {}, stopOnBlocked = false }) {
   const plan = validatePlan(rawPlan);
   if (typeof beforePayment !== 'function' || typeof beforeBroadcast !== 'function' || typeof onPaid !== 'function' || typeof stopOnBlocked !== 'boolean' || typeof durablePayment !== 'boolean') throw new Error('invalid procurement execution hooks');
@@ -188,7 +199,10 @@ export async function runProcurement({ plan: rawPlan, provider, account, publicK
       totals.ready++;
       continue;
     }
-    const before = BigInt(await provider.callFunction(request.token, 'ft_balance_of', { account_id: request.payee }, { finality: 'final' }));
+    // A mutable vendor balance is not a transaction receipt: other buyers can
+    // pay or the vendor can spend between views. The durable path verifies the
+    // exact FINAL receipt graph instead; the legacy path retains its old check.
+    const before = durablePayment ? null : BigInt(await provider.callFunction(request.token, 'ft_balance_of', { account_id: request.payee }, { finality: 'final' }));
     // Persist the exact normalized request before sending. The opt-in signed
     // path additionally fsyncs the signed transaction hash BEFORE its one
     // broadcast. It never stores the key or signed transaction bytes.
@@ -277,8 +291,10 @@ export async function runProcurement({ plan: rawPlan, provider, account, publicK
           request, publicKey: String(publicKey), txHash });
       } else assertFinalPaymentReceipts(result, request.token);
       if (typeof txHash !== 'string' || !/^[A-Za-z0-9_-]{1,100}$/.test(txHash)) throw new Error('invalid transaction hash');
-      const after = BigInt(await provider.callFunction(request.token, 'ft_balance_of', { account_id: request.payee }, { finality: 'final' }));
-      if (after !== before + BigInt(request.amount)) throw new Error('vendor balance delta did not match the payment');
+      if (!durablePayment) {
+        const after = BigInt(await provider.callFunction(request.token, 'ft_balance_of', { account_id: request.payee }, { finality: 'final' }));
+        if (after !== before + BigInt(request.amount)) throw new Error('vendor balance delta did not match the payment');
+      }
       await writeJournal(journal, request.id, { ...pending, status: 'completed', tx_hash: txHash, ...(settlement ? { settlement } : {}), completed_at: new Date().toISOString() });
       log(`[procurement] PAID ${request.id} (${request.resource}): ${request.amount} ${request.token} → ${request.payee} ${EXPLORER(txHash)}`);
       totals.paid++;

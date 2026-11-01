@@ -150,10 +150,15 @@ not prove all possible callback, provider or token failure cases.
    An opt-in [shared buyer journal](SHARED_BUYER.md) now coordinates **direct
    seller-v3 only** through one trusted PostgreSQL primary, with encrypted
    bearer claims and atomic goal/challenge/hash reservations before broadcast.
-   It requires a stable mission ID, original encryption key, correct fencing and
-   no stale restore; a different ID with a fresh challenge, a file journal or
-   another database can still duplicate an economic operation. It has synthetic
-   tests, not a live shared-database payment or production exactly-once proof.
+   Its owner-wide fence serializes upgraded shared workers and blocks new shared
+   payments while any owner hash is pending, including across different journals
+   and keys. It is not a distributed nonce allocator and does not coordinate
+   other protocols or older/bypassing workers. Stop all old workers before
+   upgrading. It requires a stable mission ID, original encryption key, correct
+   fencing and no stale restore; a different ID with a fresh challenge after a
+   completed payment, a file journal or another database can still duplicate an
+   economic operation. It has synthetic tests, not a live shared-database
+   payment or production exactly-once proof.
    FT-call, OutLayer, x402 and mixed/dependent workflows are not covered.
    These checks do not protect against a compromised host or owner key. Recovery
    requires trusted FINAL RPC receipts, Bouncer code and token code; it verifies

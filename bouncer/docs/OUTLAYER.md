@@ -161,7 +161,11 @@ policies. The FT route fixes the token, receiver and exact message, with policy
 and route revisions; the project route fixes its version, input, fee and
 resource limits. Separate restricted keys and policy grants are required. FT
 settlement proves only how much the trusted token reports as used, not that a
-provider delivered anything.
+provider delivered anything. The verifier binds the exact signed call and its
+gas, unique receipt IDs, initiation, transfer and returned callback to the same
+FINAL transaction. Incomplete or altered graphs remain unresolved; never
+resend them automatically. It assumes the RPC, token and Bouncer code are
+trustworthy and does not make raw Ref output a vault deposit.
 
 The [live paid-provider test](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40699116807/job/122854642930)
 funded OutLayer with fake testnet USDC.e, then paid for a version-pinned

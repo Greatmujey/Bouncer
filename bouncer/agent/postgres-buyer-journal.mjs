@@ -3,12 +3,15 @@
  *
  * One authoritative PostgreSQL primary stores the original signed hash and an
  * encrypted claim BEFORE broadcast. Unique constraints arbitrate across worker
- * processes; an advisory session lock also prevents concurrent use of the same
- * logical journal. No lease takeover, deletion, automatic retry or resend.
+ * processes; advisory session locks protect each journal and serialize all
+ * participating direct payments for an owner account. Pending rows quarantine
+ * that owner until the original hash is reconciled. No lease takeover,
+ * deletion, automatic retry or resend.
  *
- * This protects only callers using this journal and the supported direct v3
- * runner. It cannot protect a second database, a restored stale backup, a file
- * journal, a different mission ID for a newly issued quote, or a stale primary.
+ * This protects only upgraded callers using this database and the supported
+ * direct v3 runner. It cannot protect a second database, a restored stale
+ * backup, a file journal, a different mission ID for a newly issued quote, a
+ * bypassing worker or a stale primary.
  */
 import crypto from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
@@ -41,10 +44,14 @@ function scopeValues(scope) { return [scope.contractId, scope.ownerAccountId, sc
 function keyCheck(key, scope) {
   return crypto.createHmac('sha256', key).update(JSON.stringify(['bouncer-buyer-key-v1', ...scopeValues(scope)])).digest();
 }
-function lockWords(scope) {
-  const hash = crypto.createHash('sha256').update(JSON.stringify(['bouncer-buyer-lock-v1', ...scopeValues(scope)])).digest();
+function lockWordsFor(parts) {
+  const hash = crypto.createHash('sha256').update(JSON.stringify(parts)).digest();
   return { signed: [hash.readInt32BE(0), hash.readInt32BE(4)], unsigned: [hash.readUInt32BE(0), hash.readUInt32BE(4)] };
 }
+function lockWords(scope) { return lockWordsFor(['bouncer-buyer-lock-v1', ...scopeValues(scope)]); }
+// NEAR access-key nonces belong to the signer account, not the target Bouncer
+// contract or journal. Conservatively serialize *all* its participating keys.
+function ownerLockWords(owner) { return lockWordsFor(['bouncer-buyer-owner-fence-v1', 'near:testnet', owner]); }
 function aad(scope, metadata) {
   return Buffer.from(JSON.stringify(['bouncer-buyer-record-v1', ...scopeValues(scope), metadata.id,
     metadata.fingerprint, metadata.status, metadata.tx_hash, metadata.seller_origin, metadata.challenge, metadata.revision]), 'utf8');
@@ -168,6 +175,14 @@ async function verifySchema(client) {
   const required = ['meta:singleton', 'journals:contract_id,owner_account_id,journal_id',
     'entries:contract_id,owner_account_id,journal_id,entry_id', 'entries:challenge', 'entries:tx_hash'];
   if (required.some(index => !indexes.has(index))) throw new BuyerJournalError('UNSAFE_SCHEMA', 'shared buyer schema is missing critical replay constraints');
+  // A role-filtered view of pending rows would make the owner fence unsafe.
+  // Worker roles need SELECT on the whole table and RLS must remain disabled.
+  const visibility = await client.query(`SELECT t.relrowsecurity, t.relforcerowsecurity FROM pg_catalog.pg_class t
+    JOIN pg_catalog.pg_namespace n ON n.oid=t.relnamespace
+    WHERE n.nspname='bouncer_buyer_v1' AND t.relname='entries' AND t.relkind='r'`);
+  if (visibility.rowCount !== 1 || visibility.rows[0].relrowsecurity || visibility.rows[0].relforcerowsecurity) {
+    throw new BuyerJournalError('UNSAFE_SCHEMA', 'shared buyer entries must not use row-level security');
+  }
 }
 
 /** Privileged, explicit schema setup. Does not contact a seller or NEAR. */
@@ -201,6 +216,10 @@ export async function initializePostgresBuyerSchema({ pool }) {
         FOREIGN KEY (contract_id, owner_account_id, journal_id)
           REFERENCES ${SCHEMA}.journals (contract_id, owner_account_id, journal_id)
       )`);
+      // Optional performance index: safety does not depend on it being present
+      // in an older schema. Pending lookup otherwise remains a full-table scan.
+      await c.query(`CREATE INDEX IF NOT EXISTS entries_owner_pending_idx
+        ON ${SCHEMA}.entries (owner_account_id) WHERE status = 'pending'`);
       await verifySchema(c);
     });
   } catch (error) { destroy = true; throw error; }
@@ -213,9 +232,13 @@ export async function openPostgresBuyerJournal({ pool, contractId, ownerAccountI
     throw new Error('shared buyer requires a PostgreSQL pool and a random 32-byte encryption key');
   }
   const scope = validateScope({ contractId, ownerAccountId, journalId }), secret = Buffer.from(key), words = lockWords(scope);
+  const ownerWords = ownerLockWords(scope.ownerAccountId);
   let client;
   try { client = await pool.connect(); } catch { secret.fill(0); throw new BuyerJournalError('DATABASE', 'cannot connect to the shared buyer database'); }
   let failed = false, closing = false, closed = false, locked = false, pid;
+  // Session advisory locks are reentrant. A local guard is also necessary so
+  // two asynchronous calls on this *same* journal cannot share one owner lock.
+  let ownerBusy = false, ownerLocked = false;
   const onError = () => { failed = true; };
   client.on?.('error', onError);
   const entries = new Map(), revisions = new Map();
@@ -228,9 +251,20 @@ export async function openPostgresBuyerJournal({ pool, contractId, ownerAccountI
     const found = await client.query(`SELECT pg_catalog.pg_backend_pid() AS pid,
       EXISTS (SELECT 1 FROM pg_catalog.pg_locks WHERE pid = pg_catalog.pg_backend_pid()
         AND locktype = 'advisory' AND classid::bigint = $1 AND objid::bigint = $2 AND objsubid = 2
-        AND mode = 'ExclusiveLock' AND granted) AS locked`, words.unsigned);
-    if (found.rows[0]?.pid !== pid || found.rows[0]?.locked !== true) {
+        AND mode = 'ExclusiveLock' AND granted) AS locked,
+      EXISTS (SELECT 1 FROM pg_catalog.pg_locks WHERE pid = pg_catalog.pg_backend_pid()
+        AND locktype = 'advisory' AND classid::bigint = $3 AND objid::bigint = $4 AND objsubid = 2
+        AND mode = 'ExclusiveLock' AND granted) AS owner_locked`, [...words.unsigned, ...ownerWords.unsigned]);
+    if (found.rows[0]?.pid !== pid || found.rows[0]?.locked !== true ||
+        (ownerLocked && found.rows[0]?.owner_locked !== true)) {
       throw new BuyerJournalError('SESSION_LOST', 'shared buyer database session lock was lost; reconcile before continuing');
+    }
+  }
+  async function assertNoOwnerPending(c) {
+    const result = await c.query(`SELECT EXISTS (SELECT 1 FROM ${SCHEMA}.entries
+      WHERE owner_account_id=$1 AND status='pending') AS pending`, [scope.ownerAccountId]);
+    if (result.rows[0]?.pending !== false) {
+      throw new BuyerJournalError('OWNER_UNRESOLVED', 'owner has an unresolved shared buyer payment; recover its original hash before any new payment');
     }
   }
   function enqueue(fn) {
@@ -288,13 +322,68 @@ export async function openPostgresBuyerJournal({ pool, contractId, ownerAccountI
     },
     get(id) { assertAvailable(); return entries.has(id) ? clone(entries.get(id)) : undefined; },
     list() { assertAvailable(); return [...entries.values()].map(clone); },
+    /**
+     * Hold one database-wide owner fence around transaction preparation,
+     * reservation, its only broadcast and durable completion. On a crash the
+     * advisory lock vanishes but the committed pending row quarantines the owner.
+     * This is serialization, not a distributed nonce allocator.
+     */
+    async withOwnerFence(run) {
+      assertAvailable();
+      if (typeof run !== 'function') throw new Error('owner fence requires a payment operation');
+      if (ownerBusy) throw new BuyerJournalError('OWNER_BUSY', 'another shared buyer payment is using this owner account');
+      ownerBusy = true;
+      let operationError;
+      try {
+        await enqueue(async () => {
+          try {
+            await transaction(client, async c => {
+              await verifySchema(c);
+              const result = await c.query('SELECT pg_catalog.pg_try_advisory_lock($1::integer, $2::integer) AS locked, pg_catalog.pg_backend_pid() AS pid', ownerWords.signed);
+              if (result.rows[0]?.pid !== pid || typeof result.rows[0]?.locked !== 'boolean') {
+                throw new BuyerJournalError('SESSION_LOST', 'shared buyer database session lock was lost; reconcile before continuing');
+              }
+              if (!result.rows[0].locked) throw new BuyerJournalError('OWNER_BUSY', 'another shared buyer payment is using this owner account');
+              ownerLocked = true;
+              await verifySession();
+              await assertNoOwnerPending(c);
+            }, verifySession);
+          } catch (error) {
+            if (error instanceof BuyerJournalError && ['OWNER_BUSY', 'OWNER_UNRESOLVED'].includes(error.code)) throw error;
+            failed = true;
+            if (error instanceof BuyerJournalError) throw error;
+            throw new BuyerJournalError('DATABASE', 'shared buyer owner fence failed; no new payment may be sent');
+          }
+        });
+        return await run();
+      } catch (error) { operationError = error; throw error; }
+      finally {
+        // Closing or a poisoned connection destroys the entire session, which
+        // releases both locks. A durable pending row remains the crash fence.
+        try {
+          if (ownerLocked && !closed && !closing && !failed) {
+            await enqueue(async () => {
+              await verifySession();
+              const result = await client.query('SELECT pg_catalog.pg_advisory_unlock($1::integer, $2::integer) AS unlocked', ownerWords.signed);
+              if (result.rows[0]?.unlocked !== true) throw new BuyerJournalError('SESSION_LOST', 'shared buyer owner fence was lost; reconcile before continuing');
+              ownerLocked = false;
+            });
+          }
+        } catch {
+          failed = true;
+          if (!operationError) throw new BuyerJournalError('SESSION_LOST', 'shared buyer owner fence could not be released; reconcile before continuing');
+        } finally { ownerBusy = false; }
+      }
+    },
     // Unsupported runners call put() without awaiting it. Throw synchronously,
     // before they can send a payment; only explicitly adapted direct paths work.
     put() { throw new Error('shared buyer journal cannot be used by this payment runner'); },
     reservePending(id, value) {
       if (!plain(value) || (own(value, 'id') && value.id !== id)) throw new Error('shared buyer entry ID does not match its key');
+      if (!ownerBusy || !ownerLocked) throw new BuyerJournalError('OWNER_FENCE_REQUIRED', 'shared buyer reservation requires the owner payment fence');
       const entry = clone({ ...value, id });
       return enqueue(async () => {
+        if (!ownerBusy || !ownerLocked) throw new BuyerJournalError('OWNER_FENCE_REQUIRED', 'shared buyer reservation requires the owner payment fence');
         if (entries.has(id)) throw conflict();
         if (entries.size >= MAX_ENTRIES) throw new Error('shared buyer journal capacity reached; stop and reconcile');
         const meta = entryMetadata(scope, id, entry, 1);
@@ -302,6 +391,9 @@ export async function openPostgresBuyerJournal({ pool, contractId, ownerAccountI
         const encrypted = encrypt(secret, scope, meta, entry);
         try {
           await transaction(client, async c => {
+            // Also enforce the quarantine for manual API callers and a batch:
+            // a later reservation must wait for the prior FINAL completion.
+            await assertNoOwnerPending(c);
             const result = await c.query(`INSERT INTO ${SCHEMA}.entries
               (contract_id, owner_account_id, journal_id, entry_id, fingerprint, status, tx_hash, seller_origin, challenge, revision, nonce, tag, ciphertext)
               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) ON CONFLICT DO NOTHING RETURNING entry_id`,
@@ -344,8 +436,11 @@ export async function openPostgresBuyerJournal({ pool, contractId, ownerAccountI
       if (closed || closing) return;
       closing = true;
       await tail;
-      let destroy = failed;
-      if (locked && !failed) {
+      // Never return a pooled session carrying an in-flight owner lock. Even
+      // if a caller closes while an RPC is outstanding, a committed pending
+      // row quarantines later workers; before commit, no broadcast is allowed.
+      let destroy = failed || ownerBusy || ownerLocked;
+      if (locked && !destroy) {
         try {
           const result = await client.query('SELECT pg_catalog.pg_advisory_unlock($1::integer, $2::integer) AS unlocked', words.signed);
           if (result.rows[0]?.unlocked !== true) destroy = true;

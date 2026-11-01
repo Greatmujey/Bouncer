@@ -32,7 +32,39 @@ export async function inspectSharedBuyer({ pool, contractId, ownerAccountId, jou
   } finally { client.release(destroy); }
 }
 
+/** Locate unresolved rows across all journals for one owner, without decrypting them. */
+export async function inspectSharedBuyerOwner({ pool, ownerAccountId, limit = 100, offset = 0 }) {
+  if (!pool || typeof pool.connect !== 'function' || !isTestnetAccount(ownerAccountId) ||
+      !Number.isInteger(limit) || limit < 1 || limit > 1000 || !Number.isSafeInteger(offset) || offset < 0 || offset > 1_000_000) {
+    throw new Error('invalid shared buyer owner inspection options');
+  }
+  const client = await pool.connect(); let begun = false, destroy = false;
+  try {
+    await client.query('BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY'); begun = true;
+    await client.query("SET LOCAL statement_timeout = '10s'");
+    const health = await client.query('SELECT pg_catalog.pg_is_in_recovery() AS replica');
+    if (health.rows[0]?.replica !== false) throw new Error('inspection requires the current primary, not a replica');
+    const visibility = await client.query(`SELECT t.relrowsecurity, t.relforcerowsecurity FROM pg_catalog.pg_class t
+      JOIN pg_catalog.pg_namespace n ON n.oid=t.relnamespace
+      WHERE n.nspname='bouncer_buyer_v1' AND t.relname='entries' AND t.relkind='r'`);
+    if (visibility.rowCount !== 1 || visibility.rows[0].relrowsecurity || visibility.rows[0].relforcerowsecurity) {
+      throw new Error('owner inspection requires entries without row-level filtering');
+    }
+    const found = await client.query(`SELECT contract_id, journal_id, entry_id, tx_hash, seller_origin, challenge, created_at, updated_at
+      FROM bouncer_buyer_v1.entries WHERE owner_account_id=$1 AND status='pending'
+      ORDER BY created_at DESC, contract_id DESC, journal_id DESC, entry_id DESC LIMIT $2 OFFSET $3`,
+    [ownerAccountId, limit + 1, offset]);
+    await client.query('COMMIT'); begun = false;
+    return { owner_account_id: ownerAccountId, offset, entries: found.rows.slice(0, limit), has_more: found.rows.length > limit,
+      warning: 'Read-only metadata from one database, not proof of payment or delivery. Pages may change; preserve original pending hashes and never resend.' };
+  } catch (error) {
+    if (begun) { try { await client.query('ROLLBACK'); } catch { destroy = true; } }
+    throw error;
+  } finally { client.release(destroy); }
+}
+
 const USAGE = `Usage: node bouncer/scripts/inspect-shared-buyer.mjs --contract ACCOUNT.testnet --owner ACCOUNT.testnet --journal STABLE_ID [--limit N]
+   or: node bouncer/scripts/inspect-shared-buyer.mjs --owner ACCOUNT.testnet --pending-owner [--limit N] [--offset N]
 
 Read-only metadata from the original primary using BOUNCER_BUYER_DATABASE_URL.
 No journal encryption key, signer, seller, NEAR call, reset or payment is used.
@@ -44,24 +76,33 @@ function parse(args) {
   const out = { limit: 100 };
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
-    if (['--contract', '--owner', '--journal', '--limit'].includes(arg) && args[i + 1] && !args[i + 1].startsWith('--') && !out[arg]) {
+    if (arg === '--pending-owner' && !out.pendingOwner) { out.pendingOwner = true; continue; }
+    if (['--contract', '--owner', '--journal', '--limit', '--offset'].includes(arg) && args[i + 1] && !args[i + 1].startsWith('--') && !out[arg]) {
       out[arg] = args[++i]; continue;
     }
     throw new Error('invalid buyer inspection arguments');
   }
-  if (!out['--contract'] || !out['--owner'] || !out['--journal']) throw new Error('contract, owner and original journal ID are required');
   if (out['--limit']) {
     if (!/^\d+$/.test(out['--limit'])) throw new Error('invalid inspection limit');
     out.limit = Number(out['--limit']);
   }
+  if (out.pendingOwner) {
+    if (!out['--owner'] || out['--contract'] || out['--journal']) throw new Error('owner inspection requires only --owner and --pending-owner');
+    if (out['--offset'] && !/^\d+$/.test(out['--offset'])) throw new Error('invalid inspection offset');
+    return { pendingOwner: true, ownerAccountId: out['--owner'], limit: out.limit, offset: Number(out['--offset'] ?? 0) };
+  }
+  if (!out['--contract'] || !out['--owner'] || !out['--journal'] || out['--offset']) throw new Error('contract, owner and original journal ID are required');
   return { contractId: out['--contract'], ownerAccountId: out['--owner'], journalId: out['--journal'], limit: out.limit };
 }
 async function main() {
   const opts = parse(process.argv.slice(2));
   if (opts.help) { console.log(USAGE); return; }
   const pool = buyerPoolFromEnvironment();
-  try { console.log(JSON.stringify(await inspectSharedBuyer({ pool, ...opts }), null, 2)); }
-  catch { throw new Error('inspection failed; check the read-only database connection and original journal ID'); }
+  try {
+    const result = opts.pendingOwner ? await inspectSharedBuyerOwner({ pool, ...opts }) : await inspectSharedBuyer({ pool, ...opts });
+    console.log(JSON.stringify(result, null, 2));
+  }
+  catch { throw new Error('inspection failed; check the read-only database connection, primary and requested scope'); }
   finally { await pool.end(); }
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

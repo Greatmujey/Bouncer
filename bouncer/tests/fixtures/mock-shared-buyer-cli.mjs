@@ -6,7 +6,7 @@ import nearApi from 'near-api-js';
 import { MonotonicAccount, PaymentRpcProvider } from '../../agent/near-account.mjs';
 import { mockGuardedPayment } from '../mock-guarded-payment.mjs';
 
-const owner = 'owner.testnet', contract = 'bouncer.testnet', token = 'token.testnet';
+const owner = process.env.BOUNCER_TEST_OWNER || 'owner.testnet', contract = 'bouncer.testnet', token = 'token.testnet';
 const stateFile = process.env.BOUNCER_TEST_BUYER_CLI_STATE;
 function read() { return fs.existsSync(stateFile) ? JSON.parse(fs.readFileSync(stateFile, 'utf8')) : { sends: 0, balance: '0', transactions: {} }; }
 function write(state) { fs.writeFileSync(stateFile, JSON.stringify(state)); }

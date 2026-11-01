@@ -16,7 +16,7 @@ import { readBuyerKeyFile, validateBuyerDatabaseUrl } from '../agent/shared-buye
 import { requestFingerprint, runProcurement, validatePlan } from '../agent/procurement.mjs';
 import { runResourceAgent, routedResourceProvider } from '../agent/resource-agent.mjs';
 import { recoverDirectResourcePayment, recoverResourceDelivery } from '../agent/recover-direct-payment.mjs';
-import { inspectSharedBuyer } from '../scripts/inspect-shared-buyer.mjs';
+import { inspectSharedBuyer, inspectSharedBuyerOwner } from '../scripts/inspect-shared-buyer.mjs';
 import { createResourceProvider } from '../services/resource-provider.mjs';
 import { orderMemoV3 } from '../packages/provider-sdk/lib/resource-order.mjs';
 import { signClaimAuthorization, verifyClaimAuthorization } from '../packages/provider-sdk/lib/resource-claim.mjs';
@@ -34,7 +34,8 @@ import { runProjectGoal, recoverProjectGoal } from '../agent/outlayer-project.mj
 const databaseUrl = process.env.BOUNCER_TEST_POSTGRES_URL;
 if (process.env.BOUNCER_REQUIRE_POSTGRES_TESTS === '1' && !databaseUrl) throw new Error('PostgreSQL integration test URL is required');
 const dbtest = databaseUrl ? test : test.skip;
-const owner = 'owner.testnet', contract = 'bouncer.testnet', token = 'token.testnet', payee = 'seller.testnet';
+// Distinct test runs never share an owner fence, even when using the same DB.
+const owner = `buyer-${crypto.randomBytes(8).toString('hex')}.testnet`, contract = 'bouncer.testnet', token = 'token.testnet', payee = 'seller.testnet';
 const origin = 'https://synthetic-seller.example';
 const agent = nearApi.KeyPair.fromRandom('ed25519'), signer = new nearApi.KeyPairSigner(agent), publicKey = agent.getPublicKey();
 const makePool = () => new pg.Pool({ connectionString: databaseUrl, max: 12, connectionTimeoutMillis: 5000 });
@@ -50,16 +51,23 @@ if (databaseUrl) test.before(async () => {
   try { await initializePostgresBuyerSchema({ pool }); } finally { await pool.end(); }
 });
 async function fixture() {
-  const pool = makePool(), key = crypto.randomBytes(32), journalId = id(), journals = new Set();
+  const pool = makePool(), key = crypto.randomBytes(32), journalId = id(), journals = new Set(), created = new Set();
   async function open(overrides = {}) {
     const journal = await openPostgresBuyerJournal({ pool, contractId: contract, ownerAccountId: owner, journalId, key, ...overrides });
+    if (overrides.createNew) created.add(overrides.journalId ?? journalId);
     journals.add(journal); return journal;
   }
   const journal = await open({ createNew: true });
   return { pool, key, journalId, journal, open, async cleanup() {
-    await Promise.allSettled([...journals].map(item => item.close())); await pool.end();
+    await Promise.allSettled([...journals].map(item => item.close()));
+    // Test-only cleanup in a disposable superuser database. Operational
+    // journals must never be deleted to escape an unresolved payment.
+    await pool.query('DELETE FROM bouncer_buyer_v1.entries WHERE journal_id=ANY($1::text[])', [[...created]]);
+    await pool.query('DELETE FROM bouncer_buyer_v1.journals WHERE journal_id=ANY($1::text[])', [[...created]]);
+    await pool.end();
   } };
 }
+const reserveSynthetic = (journal, entryId, entry) => journal.withOwnerFence(() => journal.reservePending(entryId, entry));
 async function pendingEntry({ requestId = 'work', c = challenge(), hash = mockHash(id()), sellerOrigin = origin, order = goal } = {}) {
   const memo = orderMemoV3(order.resource, order.input, c);
   const request = validatePlan({ contract_id: contract, owner_account_id: owner, requests: [{ id: requestId,
@@ -203,6 +211,21 @@ dbtest('lost reservation COMMIT acknowledgement never broadcasts and leaves the 
   } finally { await f.cleanup(); }
 });
 
+dbtest('lost owner-fence COMMIT acknowledgment stops before signing or broadcasting', async () => {
+  const f = await fixture(); let journal;
+  try {
+    await f.journal.close();
+    const broken = faultPool(f.pool, 'pg_try_advisory_lock');
+    journal = await openPostgresBuyerJournal({ pool: broken, contractId: contract, ownerAccountId: owner, journalId: f.journalId, key: f.key });
+    const runtime = syntheticRuntime(journal); broken.enable();
+    let signs = 0; const prepare = runtime.account.createTransaction;
+    runtime.account.createTransaction = async (...args) => { signs++; return prepare(...args); };
+    await assert.rejects(runtime.run(), error => /owner fence failed/.test(error.message) && !error.message.includes('secret-value'));
+    assert.equal(broken.fired, true); assert.equal(signs, 0); assert.equal(runtime.sends, 0);
+    await journal.close(); const reopened = await f.open(); assert.deepEqual(reopened.list(), []);
+  } finally { if (journal) await journal.close(); await f.cleanup(); }
+});
+
 dbtest('lost completion acknowledgment retains one payment; reopening uses original hash without signing', async () => {
   const f = await fixture();
   try {
@@ -257,10 +280,13 @@ dbtest('forged requests, signatures, non-v3 and immutable-payment mutations fail
       { ...original, request: { ...original.request, amount: '2000' } },
       { ...original, request: { ...original.request, memo: 'bouncer-order-v2:compute:' + '0'.repeat(32) + ':' + '0'.repeat(64) } },
     ];
-    for (const item of changes) await assert.rejects(f.journal.reservePending('work', item));
-    assert.deepEqual(f.journal.list(), []);
-    assert.throws(() => f.journal.reservePending('other', { ...original, id: 'work' }), /entry ID/);
-    await f.journal.reservePending('work', original);
+    assert.throws(() => f.journal.reservePending('work', original), error => error.code === 'OWNER_FENCE_REQUIRED');
+    await f.journal.withOwnerFence(async () => {
+      for (const item of changes) await assert.rejects(f.journal.reservePending('work', item));
+      assert.deepEqual(f.journal.list(), []);
+      assert.throws(() => f.journal.reservePending('other', { ...original, id: 'work' }), /entry ID/);
+      await f.journal.reservePending('work', original);
+    });
     await assert.rejects(f.journal.writeDurable('work', { ...original, tx_hash: mockHash(id()), status: 'completed' }), /immutable/);
     await assert.rejects(f.journal.writeDurable('work', original), /cannot be replaced or reset/);
     let quotes = 0;
@@ -274,7 +300,7 @@ dbtest('ciphertext, metadata and wrong-key tampering fail closed on reopen', asy
   for (const field of ['ciphertext', 'seller_origin', 'tx_hash', 'status', 'revision']) {
     const f = await fixture();
     try {
-      await f.journal.reservePending('work', await pendingEntry()); await f.journal.close();
+      await reserveSynthetic(f.journal, 'work', await pendingEntry()); await f.journal.close();
       if (field === 'ciphertext') await f.pool.query(`UPDATE bouncer_buyer_v1.entries SET ciphertext=set_byte(ciphertext, 0, get_byte(ciphertext,0) # 1) WHERE journal_id=$1`, [f.journalId]);
       if (field === 'seller_origin') await f.pool.query(`UPDATE bouncer_buyer_v1.entries SET seller_origin='https://attacker.example' WHERE journal_id=$1`, [f.journalId]);
       if (field === 'tx_hash') await f.pool.query('UPDATE bouncer_buyer_v1.entries SET tx_hash=$2 WHERE journal_id=$1', [f.journalId, mockHash(id())]);
@@ -289,7 +315,7 @@ dbtest('read-only inspector returns metadata only and works without the encrypti
   const f = await fixture(), client = await f.pool.connect(), role = `bouncer_buyer_read_${crypto.randomBytes(5).toString('hex')}`;
   let created = false;
   try {
-    const entry = await pendingEntry(); await f.journal.reservePending('work', entry);
+    const entry = await pendingEntry(); await reserveSynthetic(f.journal, 'work', entry);
     await client.query(`CREATE ROLE ${role} NOLOGIN`); created = true;
     await client.query(`GRANT USAGE ON SCHEMA bouncer_buyer_v1 TO ${role}`);
     await client.query(`GRANT SELECT (contract_id, owner_account_id, journal_id) ON bouncer_buyer_v1.journals TO ${role}`);
@@ -308,6 +334,48 @@ dbtest('read-only inspector returns metadata only and works without the encrypti
   }
 });
 
+dbtest('owner-wide pending inspection locates the original hash and recovery unblocks a different contract', async () => {
+  const f = await fixture(), runtime = syntheticRuntime(f.journal), client = await f.pool.connect();
+  const role = `bouncer_buyer_owner_read_${crypto.randomBytes(5).toString('hex')}`; let createdRole = false;
+  try {
+    const second = id(), secondContract = 'other-bouncer.testnet';
+    const other = await f.open({ contractId: secondContract, journalId: second, createNew: true });
+    await assert.rejects(runtime.run(), /synthetic lost response/);
+    const pending = f.journal.get('work'); let entered = false;
+    await assert.rejects(other.withOwnerFence(async () => { entered = true; }), error => error.code === 'OWNER_UNRESOLVED');
+    assert.equal(entered, false); assert.equal(runtime.sends, 1);
+
+    await client.query(`CREATE ROLE ${role} NOLOGIN`); createdRole = true;
+    await client.query(`GRANT USAGE ON SCHEMA bouncer_buyer_v1 TO ${role}`);
+    await client.query(`GRANT SELECT (contract_id, owner_account_id, journal_id, entry_id, status, tx_hash, seller_origin, challenge, created_at, updated_at) ON bouncer_buyer_v1.entries TO ${role}`);
+    await client.query(`SET ROLE ${role}`);
+    const readOnlyPool = { async connect() { return { query: client.query.bind(client), release() {} }; } };
+    const snapshot = await inspectSharedBuyerOwner({ pool: readOnlyPool, ownerAccountId: owner, limit: 1 });
+    assert.equal(snapshot.entries.length, 1); assert.equal(snapshot.entries[0].journal_id, f.journalId);
+    assert.equal(snapshot.entries[0].contract_id, contract); assert.equal(snapshot.entries[0].tx_hash, pending.tx_hash);
+    assert.equal(snapshot.has_more, false); assert.ok(!JSON.stringify(snapshot).includes(pending.resource_authorization.signature));
+    assert.deepEqual((await inspectSharedBuyerOwner({ pool: readOnlyPool, ownerAccountId: owner, limit: 1, offset: 1 })).entries, []);
+    await assert.rejects(client.query('SELECT ciphertext FROM bouncer_buyer_v1.entries'), /permission denied/);
+    await assert.rejects(client.query('DELETE FROM bouncer_buyer_v1.entries'), /permission denied/);
+    await client.query('RESET ROLE');
+
+    const cli = await runCli('scripts/inspect-shared-buyer.mjs', ['--owner', owner, '--pending-owner', '--limit', '1'],
+      { BOUNCER_BUYER_DATABASE_URL: databaseUrl, BOUNCER_BUYER_JOURNAL_KEY_FILE: '' });
+    assert.equal(cli.code, 0, cli.stderr); assert.equal(JSON.parse(cli.stdout).entries[0].tx_hash, pending.tx_hash);
+    assert.ok(!cli.stdout.includes(pending.resource_authorization.signature));
+    await recoverDirectResourcePayment({ config: { contract_id: contract, owner_account_id: owner, provider_url: origin, goals: [goal] },
+      requestId: 'work', provider: runtime.provider, journal: f.journal, log: () => {} });
+    assert.equal(f.journal.get('work').status, 'completed');
+    assert.equal((await inspectSharedBuyerOwner({ pool: f.pool, ownerAccountId: owner })).entries.length, 0);
+    assert.equal(await other.withOwnerFence(async () => 'available'), 'available');
+    assert.equal(runtime.sends, 1); // recovery used no new signature or broadcast
+  } finally {
+    await client.query('RESET ROLE');
+    if (createdRole) { await client.query(`DROP OWNED BY ${role}`); await client.query(`DROP ROLE ${role}`); }
+    client.release(); await f.cleanup();
+  }
+});
+
 dbtest('worker role can reserve without DDL, journal creation or DELETE permissions', async () => {
   const f = await fixture(), client = await f.pool.connect(), role = `bouncer_buyer_worker_${crypto.randomBytes(5).toString('hex')}`;
   let created = false;
@@ -322,7 +390,7 @@ dbtest('worker role can reserve without DDL, journal creation or DELETE permissi
     const restrictedPool = { async connect() { return { query: client.query.bind(client), on: client.on.bind(client),
       removeListener: client.removeListener.bind(client), release() {} }; } };
     const journal = await openPostgresBuyerJournal({ pool: restrictedPool, contractId: contract, ownerAccountId: owner, journalId: f.journalId, key: f.key });
-    await journal.reservePending('work', await pendingEntry());
+    await reserveSynthetic(journal, 'work', await pendingEntry());
     const pending = journal.get('work'); assert.equal(pending.status, 'pending');
     await journal.writeDurable('work', { ...pending, status: 'completed', completed_at: new Date().toISOString(), settlement: {
       tx_hash: pending.tx_hash, token, payee, amount: '1000', verification: 'FINAL trusted-RPC Bouncer and token receipts; provider delivery not established' } });
@@ -356,6 +424,38 @@ dbtest('schema without critical challenge uniqueness is rejected before a worker
   }
 });
 
+dbtest('adding the optional owner index preserves old v1 pending entries without a data migration', async () => {
+  const f = await fixture();
+  try {
+    const entry = await pendingEntry(); await reserveSynthetic(f.journal, 'work', entry); await f.journal.close();
+    await f.pool.query('DROP INDEX bouncer_buyer_v1.entries_owner_pending_idx');
+    const before = await f.open();
+    await assert.rejects(before.withOwnerFence(async () => {}), error => error.code === 'OWNER_UNRESOLVED');
+    assert.equal(before.get('work').tx_hash, entry.tx_hash); await before.close();
+    await initializePostgresBuyerSchema({ pool: f.pool });
+    const reopened = await f.open(); assert.equal(reopened.get('work').tx_hash, entry.tx_hash);
+    await assert.rejects(reopened.withOwnerFence(async () => {}), error => error.code === 'OWNER_UNRESOLVED');
+    assert.equal((await f.pool.query("SELECT 1 FROM pg_catalog.pg_indexes WHERE schemaname='bouncer_buyer_v1' AND indexname='entries_owner_pending_idx'")).rowCount, 1);
+  } finally {
+    // Test-only schema setup restores the optional index even on an assertion failure.
+    await initializePostgresBuyerSchema({ pool: f.pool }); await f.cleanup();
+  }
+});
+
+dbtest('row-level security cannot hide another journal from the owner fence or inspector', async () => {
+  const f = await fixture(), runtime = syntheticRuntime(f.journal);
+  try {
+    await f.pool.query('ALTER TABLE bouncer_buyer_v1.entries ENABLE ROW LEVEL SECURITY');
+    await assert.rejects(runtime.run(), error => error.code === 'UNSAFE_SCHEMA' && /row-level security/.test(error.message));
+    assert.equal(runtime.sends, 0);
+    await assert.rejects(inspectSharedBuyerOwner({ pool: f.pool, ownerAccountId: owner }), /row-level filtering/);
+    assert.throws(() => f.journal.list(), /journal failed/);
+  } finally {
+    await f.pool.query('ALTER TABLE bouncer_buyer_v1.entries DISABLE ROW LEVEL SECURITY');
+    await f.cleanup();
+  }
+});
+
 dbtest('a lost database session lock stops reservation before any simulated broadcast', async () => {
   const f = await fixture();
   try {
@@ -374,6 +474,92 @@ dbtest('a lost database session lock stops reservation before any simulated broa
     assert.equal(runtime.sends, 0); await journal.close();
     const reopened = await f.open(); assert.deepEqual(reopened.list(), []);
   } finally { await f.cleanup(); }
+});
+
+dbtest('losing only the owner fence before reservation prevents a broadcast', async () => {
+  const f = await fixture(); let journal;
+  try {
+    await f.journal.close(); let sabotage = false;
+    const digest = crypto.createHash('sha256').update(JSON.stringify(['bouncer-buyer-owner-fence-v1', 'near:testnet', owner])).digest();
+    const signed = [digest.readInt32BE(0), digest.readInt32BE(4)];
+    const broken = { async connect() {
+      const client = await f.pool.connect();
+      return { on: client.on.bind(client), removeListener: client.removeListener.bind(client), release: client.release.bind(client),
+        async query(sql, args) {
+          if (sabotage && typeof sql === 'string' && sql.includes('FROM pg_catalog.pg_locks')) {
+            sabotage = false;
+            const released = await client.query('SELECT pg_catalog.pg_advisory_unlock($1::integer,$2::integer) AS unlocked', signed);
+            assert.equal(released.rows[0].unlocked, true);
+          }
+          return client.query(sql, args);
+        } };
+    } };
+    journal = await openPostgresBuyerJournal({ pool: broken, contractId: contract, ownerAccountId: owner, journalId: f.journalId, key: f.key });
+    const runtime = syntheticRuntime(journal);
+    await assert.rejects(runtime.run({ beforePayment: async () => { sabotage = true; } }), error => error.code === 'SESSION_LOST');
+    assert.equal(runtime.sends, 0); await journal.close();
+    const reopened = await f.open(); assert.deepEqual(reopened.list(), []);
+  } finally { if (journal) await journal.close(); await f.cleanup(); }
+});
+
+dbtest('a committed pending row still quarantines the owner if its advisory lock is lost before broadcast', async () => {
+  const f = await fixture(); let journal, release;
+  try {
+    await f.journal.close();
+    const second = await f.open({ journalId: id(), createNew: true });
+    const digest = crypto.createHash('sha256').update(JSON.stringify(['bouncer-buyer-owner-fence-v1', 'near:testnet', owner])).digest();
+    const signed = [digest.readInt32BE(0), digest.readInt32BE(4)];
+    const broken = { async connect() {
+      const client = await f.pool.connect(); let inserted = false;
+      return { on: client.on.bind(client), removeListener: client.removeListener.bind(client), release: client.release.bind(client),
+        async query(sql, args) {
+          if (typeof sql === 'string' && sql.includes('INSERT INTO bouncer_buyer_v1.entries')) inserted = true;
+          if (inserted && sql === 'COMMIT') {
+            inserted = false; const result = await client.query(sql, args);
+            const released = await client.query('SELECT pg_catalog.pg_advisory_unlock($1::integer,$2::integer) AS unlocked', signed);
+            assert.equal(released.rows[0].unlocked, true);
+            return result;
+          }
+          return client.query(sql, args);
+        } };
+    } };
+    journal = await openPostgresBuyerJournal({ pool: broken, contractId: contract, ownerAccountId: owner, journalId: f.journalId, key: f.key });
+    const runtime = syntheticRuntime(journal), send = runtime.provider.sendTransactionUntil; let reached;
+    const entered = new Promise(resolve => { reached = resolve; }), gate = new Promise(resolve => { release = resolve; });
+    runtime.provider.sendTransactionUntil = async signedTx => { reached(); await gate; return send(signedTx); };
+    const operation = runtime.run(); await entered;
+    let called = false;
+    await assert.rejects(second.withOwnerFence(async () => { called = true; }), error => error.code === 'OWNER_UNRESOLVED');
+    assert.equal(called, false); assert.equal(journal.get('work').status, 'pending');
+    release(); await assert.rejects(operation, /synthetic lost response/);
+    assert.equal(runtime.sends, 1); await journal.close();
+    await assert.rejects(second.withOwnerFence(async () => {}), error => error.code === 'OWNER_UNRESOLVED');
+  } finally { release?.(); if (journal) await journal.close(); await f.cleanup(); }
+});
+
+dbtest('closing an in-flight fenced journal destroys its session without releasing a pending owner', async () => {
+  const f = await fixture(); let release;
+  try {
+    const other = await f.open({ journalId: id(), createNew: true });
+    let ready; const entered = new Promise(resolve => { ready = resolve; }), gate = new Promise(resolve => { release = resolve; });
+    const operation = f.journal.withOwnerFence(async () => {
+      await f.journal.reservePending('work', await pendingEntry()); ready(); await gate;
+    });
+    await entered; const original = f.journal.get('work');
+    await f.journal.close();
+    // Wait for the destroyed backend to release the advisory session lock.
+    const digest = crypto.createHash('sha256').update(JSON.stringify(['bouncer-buyer-owner-fence-v1', 'near:testnet', owner])).digest();
+    const lock = [digest.readInt32BE(0), digest.readInt32BE(4)], client = await f.pool.connect();
+    try {
+      await client.query("SET lock_timeout = '5s'");
+      await client.query('SELECT pg_catalog.pg_advisory_lock($1::integer,$2::integer)', lock);
+      await client.query('SELECT pg_catalog.pg_advisory_unlock($1::integer,$2::integer)', lock);
+    } finally { client.release(); }
+    await assert.rejects(other.withOwnerFence(async () => {}), error => error.code === 'OWNER_UNRESOLVED');
+    release(); await operation;
+    const reopened = await f.open(); assert.equal(reopened.get('work').tx_hash, original.tx_hash);
+    assert.equal(reopened.get('work').status, 'pending');
+  } finally { release?.(); await f.cleanup(); }
 });
 
 dbtest('direct seller-v3 compute, storage and API recover with a real local seller and synthetic receipts', async () => {
@@ -412,10 +598,10 @@ dbtest('direct seller-v3 compute, storage and API recover with a real local sell
   } finally { if (seller) await seller.close(); await f.cleanup(); fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-function worker({ journalId, key, c, nonce, barrier = false, hold = false }) {
+function worker({ journalId, key, c, nonce, barrier = false, hold = false, workerOwner = owner, workerAgent = agent }) {
   const child = fork(fileURLToPath(new URL('./fixtures/shared-buyer-worker.mjs', import.meta.url)), [], {
-    env: { ...process.env, BOUNCER_TEST_POSTGRES_URL: databaseUrl, BOUNCER_TEST_JOURNAL: journalId,
-      BOUNCER_TEST_JOURNAL_KEY: key.toString('hex'), BOUNCER_TEST_AGENT_KEY: agent.toString(),
+    env: { ...process.env, BOUNCER_TEST_POSTGRES_URL: databaseUrl, BOUNCER_TEST_JOURNAL: journalId, BOUNCER_TEST_OWNER: workerOwner,
+      BOUNCER_TEST_JOURNAL_KEY: key.toString('hex'), BOUNCER_TEST_AGENT_KEY: workerAgent.toString(),
       BOUNCER_TEST_CHALLENGE: c, BOUNCER_TEST_NONCE: String(nonce), BOUNCER_TEST_BARRIER: barrier ? '1' : '0', BOUNCER_TEST_HOLD: hold ? '1' : '0' },
     stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
   });
@@ -441,14 +627,15 @@ function worker({ journalId, key, c, nonce, barrier = false, hold = false }) {
   return { child, messages, wait, waitExit, stop };
 }
 
-dbtest('different worker processes racing different journal IDs cannot pay the same seller challenge', async () => {
+dbtest('different owner accounts may run concurrently but cannot pay the same seller challenge', async () => {
   const f = await fixture(); let a, b;
   try {
     await f.journal.close();
-    const second = id(), created = await f.open({ journalId: second, createNew: true }); await created.close();
+    const second = id(), otherOwner = `other-${crypto.randomBytes(6).toString('hex')}.testnet`;
+    const created = await f.open({ journalId: second, ownerAccountId: otherOwner, createNew: true }); await created.close();
     const c = challenge();
     a = worker({ journalId: f.journalId, key: f.key, c, nonce: 1, barrier: true });
-    b = worker({ journalId: second, key: f.key, c, nonce: 2, barrier: true });
+    b = worker({ journalId: second, key: f.key, c, nonce: 2, barrier: true, workerOwner: otherOwner });
     await Promise.all([a.wait('prepared'), b.wait('prepared')]);
     const signed = await Promise.all([a.wait('signed'), b.wait('signed')]);
     assert.notEqual(signed[0].hash, signed[1].hash); // duplicate quote, distinct signed transactions
@@ -460,6 +647,28 @@ dbtest('different worker processes racing different journal IDs cannot pay the s
     const rows = await f.pool.query('SELECT tx_hash, status FROM bouncer_buyer_v1.entries WHERE challenge=$1', [c]);
     assert.equal(rows.rowCount, 1); assert.equal(rows.rows[0].status, 'pending'); assert.equal(rows.rows[0].tx_hash, broadcasts[0].hash);
   } finally { if (a) await a.stop(); if (b) await b.stop(); await f.cleanup(); }
+});
+
+dbtest('different journals for the same owner cannot prepare or sign concurrently, even with different keys', async () => {
+  const f = await fixture(); let a, b, c;
+  try {
+    await f.journal.close();
+    const second = id(), created = await f.open({ journalId: second, createNew: true }); await created.close();
+    a = worker({ journalId: f.journalId, key: f.key, c: challenge(), nonce: 1, barrier: true });
+    await a.wait('prepared'); // the first worker is inside the owner fence
+    b = worker({ journalId: second, key: f.key, c: challenge(), nonce: 2 });
+    assert.equal((await b.wait('result')).code, 'OWNER_BUSY');
+    assert.equal(b.messages.filter(item => item.type === 'signed' || item.type === 'broadcast').length, 0);
+    await b.waitExit();
+    c = worker({ journalId: second, key: f.key, c: challenge(), nonce: 3, workerAgent: nearApi.KeyPair.fromRandom('ed25519') });
+    assert.equal((await c.wait('result')).code, 'OWNER_BUSY');
+    assert.equal(c.messages.filter(item => item.type === 'signed' || item.type === 'broadcast').length, 0);
+    a.child.send({ type: 'go' });
+    const sent = await a.wait('broadcast');
+    assert.ok(sent.hash); assert.match((await a.wait('result')).message, /synthetic ambiguous send/);
+    const rows = await f.pool.query("SELECT status, tx_hash FROM bouncer_buyer_v1.entries WHERE owner_account_id=$1", [owner]);
+    assert.equal(rows.rowCount, 1); assert.equal(rows.rows[0].status, 'pending'); assert.equal(rows.rows[0].tx_hash, sent.hash);
+  } finally { if (a) await a.stop(); if (b) await b.stop(); if (c) await c.stop(); await f.cleanup(); }
 });
 
 dbtest('worker SIGKILL after reservation blocks another worker from requoting or resending the goal', async () => {
@@ -489,6 +698,43 @@ dbtest('worker SIGKILL after reservation blocks another worker from requoting or
   } finally { if (a) await a.stop(); if (b) await b.stop(); if (c) await c.stop(); await f.cleanup(); }
 });
 
+dbtest('SIGKILL leaves a cross-journal owner quarantine until the original hash is recovered', async () => {
+  const f = await fixture(); let a, b, c;
+  try {
+    await f.journal.close();
+    const second = id(), created = await f.open({ journalId: second, createNew: true }); await created.close();
+    a = worker({ journalId: f.journalId, key: f.key, c: challenge(), nonce: 31, hold: true });
+    const original = await a.wait('broadcast'); await a.stop();
+    // OS process death precedes PostgreSQL noticing the closed session. Wait
+    // for the owner lock itself instead of racing a fixed sleep.
+    const digest = crypto.createHash('sha256').update(JSON.stringify(['bouncer-buyer-owner-fence-v1', 'near:testnet', owner])).digest();
+    const lock = [digest.readInt32BE(0), digest.readInt32BE(4)], client = await f.pool.connect();
+    try {
+      await client.query("SET lock_timeout = '5s'");
+      await client.query('SELECT pg_catalog.pg_advisory_lock($1::integer,$2::integer)', lock);
+      await client.query('SELECT pg_catalog.pg_advisory_unlock($1::integer,$2::integer)', lock);
+    } finally { client.release(); }
+    b = worker({ journalId: second, key: f.key, c: challenge(), nonce: 32 });
+    assert.equal((await b.wait('result')).code, 'OWNER_UNRESOLVED');
+    assert.equal(b.messages.filter(item => item.type === 'signed' || item.type === 'broadcast').length, 0);
+    await b.waitExit();
+
+    const reopened = await f.open(), pending = reopened.get('work');
+    assert.equal(pending.tx_hash, original.hash);
+    const args = { policy_id: pending.request.policy_id, payee: pending.request.payee, amount: pending.request.amount,
+      memo: pending.request.memo, expected_token: pending.request.token };
+    const provider = { async viewNodeStatus() { return { chain_id: 'testnet' }; },
+      async txStatusReceipts(hash) { assert.equal(hash, original.hash); return mockGuardedPayment({ hash, owner, contract, publicKey: String(publicKey), args }); } };
+    const processGoal = { ...goal, input: { text: 'process race', rounds: 2 } };
+    await recoverDirectResourcePayment({ config: { contract_id: contract, owner_account_id: owner, provider_url: origin, goals: [processGoal] },
+      requestId: 'work', provider, journal: reopened, log: () => {} });
+    assert.equal(reopened.get('work').status, 'completed');
+    c = worker({ journalId: second, key: f.key, c: challenge(), nonce: 33 });
+    assert.notEqual((await c.wait('broadcast')).hash, original.hash);
+    assert.match((await c.wait('result')).message, /synthetic ambiguous send/);
+  } finally { if (a) await a.stop(); if (b) await b.stop(); if (c) await c.stop(); await f.cleanup(); }
+});
+
 test('unsupported mission and payment protocols reject the shared direct journal before external work', async () => {
   const journal = { sharedDirectV3: true };
   for (const run of [runMixedMission, runPaidProjectMission, runWorkflow, runFtCallGoal, recoverFtCallGoal, runOnchainProofGoal,
@@ -503,13 +749,14 @@ dbtest('two concurrent calls sharing one async journal reserve one request befor
     const c = challenge(), request = (await pendingEntry({ c })).request;
     const plan = { contract_id: contract, owner_account_id: owner, requests: [request] };
     const journalRoutes = new Map([['work', { provider_id: null, provider_origin: origin }]]), claimOrigins = new Map([['work', origin]]);
-    let prepared = 0, release;
-    const barrier = new Promise(resolve => { release = resolve; });
+    let release, ready;
+    const barrier = new Promise(resolve => { release = resolve; }), prepared = new Promise(resolve => { ready = resolve; });
     const run = () => runProcurement({ plan, provider: runtime.provider, account: runtime.account, publicKey, journal: f.journal,
       journalRoutes, claimOrigins, execute: true, durablePayment: true, log: () => {},
-      beforePayment: async () => { if (++prepared === 2) release(); await barrier; } });
-    const attempts = await Promise.allSettled([run(), run()]);
-    assert.equal(attempts.filter(result => result.status === 'rejected').length, 2);
+      beforePayment: async () => { ready(); await barrier; } });
+    const first = run(); await prepared;
+    await assert.rejects(run(), error => error.code === 'OWNER_BUSY');
+    release(); await assert.rejects(first, /synthetic lost response/);
     assert.equal(runtime.sends, 1); assert.equal(f.journal.get('work').status, 'pending');
   } finally { await f.cleanup(); }
 });
@@ -587,7 +834,7 @@ dbtest('actual shared-buyer CLIs inspect and recover a single original hash and 
     entry = await pendingEntry({ sellerOrigin });
     const args = { policy_id: entry.request.policy_id, payee, amount: '1000', memo: entry.request.memo, expected_token: token };
     chain = mockGuardedPayment({ hash: entry.tx_hash, owner, contract, publicKey: String(publicKey), args });
-    await f.journal.reservePending('work', entry); await f.journal.close();
+    await reserveSynthetic(f.journal, 'work', entry); await f.journal.close();
     const goalsPath = path.join(root, 'goals.json'), keyPath = path.join(root, 'journal.key');
     fs.writeFileSync(goalsPath, JSON.stringify({ contract_id: contract, owner_account_id: owner, provider_url: sellerOrigin, goals: [goal] }));
     fs.writeFileSync(keyPath, f.key, { mode: 0o600 });
@@ -662,7 +909,7 @@ dbtest('resource-agent CLI uses the shared journal for one synthetic payment and
     fs.writeFileSync(agentPath, JSON.stringify({ account_id: owner, private_key: agent.toString() }), { mode: 0o600 });
     const preload = fileURLToPath(new URL('./fixtures/mock-shared-buyer-cli.mjs', import.meta.url));
     const env = { BOUNCER_BUYER_DATABASE_URL: databaseUrl, BOUNCER_BUYER_JOURNAL_KEY_FILE: journalKeyPath,
-      BOUNCER_TEST_BUYER_CLI_STATE: stateFile, NODE_OPTIONS: `--import=${preload}` };
+      BOUNCER_TEST_OWNER: owner, BOUNCER_TEST_BUYER_CLI_STATE: stateFile, NODE_OPTIONS: `--import=${preload}` };
     const args = ['--goals', goalsPath, '--key', agentPath, '--shared-journal', f.journalId, '--durable', '--execute'];
     const first = await runCli('agent/resource-agent.mjs', args, env);
     assert.equal(first.code, 0, first.stderr); assert.match(first.stdout, /PAID work/); assert.match(first.stdout, /FULFILLED work/);

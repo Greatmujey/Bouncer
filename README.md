@@ -521,10 +521,13 @@ independent adoption. The live proof above used the older file-backed seller.
 A separate opt-in [shared buyer journal](bouncer/docs/SHARED_BUYER.md) reserves
 direct seller-v3 request IDs, seller challenges and signed transaction hashes
 before broadcast, encrypts bearer claims at rest, and supports same-hash recovery
-without the NEAR signing key. PostgreSQL/process tests use **synthetic** receipts;
+without the NEAR signing key. Upgraded workers also serialize shared direct
+payments per owner and quarantine that owner's new shared payments while any
+original hash remains pending. PostgreSQL/process tests use **synthetic** receipts;
 no live shared-database payment has been made. It requires one properly fenced,
 durable primary and stable mission IDs; file journals, different fresh missions,
-FT-call, x402, OutLayer and mixed/dependent workflows are not covered.
+FT-call, x402, OutLayer and mixed/dependent workflows are not covered. The fence
+is conservative serialization, not a distributed nonce allocator.
 
 ### Delivery checks and local receipts
 

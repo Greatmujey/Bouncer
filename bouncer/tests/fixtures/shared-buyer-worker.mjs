@@ -6,7 +6,7 @@ import { openPostgresBuyerJournal } from '../../agent/postgres-buyer-journal.mjs
 import { runResourceAgent } from '../../agent/resource-agent.mjs';
 import { orderMemoV3 } from '../../packages/provider-sdk/lib/resource-order.mjs';
 
-const owner = 'owner.testnet', contract = 'bouncer.testnet', token = 'token.testnet', payee = 'seller.testnet';
+const owner = process.env.BOUNCER_TEST_OWNER || 'owner.testnet', contract = 'bouncer.testnet', token = 'token.testnet', payee = 'seller.testnet';
 const origin = 'https://synthetic-seller.example';
 const goal = { id: 'work', resource: 'compute', policy_id: 'resources', token, payee,
   max_amount: '1000', order_binding: 'seller-v3', input: { text: 'process race', rounds: 2 } };

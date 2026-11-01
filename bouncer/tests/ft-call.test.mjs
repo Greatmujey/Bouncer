@@ -19,9 +19,9 @@ function receipt(id, predecessor_id, receiver_id, name, args, deposit) {
 }
 function finalResult(used = '60') {
   const value = encode(used), unused = (100n - BigInt(used)).toString();
-  return { final_execution_status: 'FINAL', status: { SuccessValue: value }, transaction_outcome: { id: hash },
+  return { final_execution_status: 'FINAL', status: { SuccessValue: value }, transaction_outcome: { id: hash, outcome: { receipt_ids: [initReceipt] } },
     transaction: { hash, signer_id: goal.owner_account_id, receiver_id: goal.contract_id, public_key: key,
-      actions: [{ FunctionCall: { method_name: 'execute_ft_call', deposit: '0', args: encode(signedArgs()) } }] },
+      actions: [{ FunctionCall: { method_name: 'execute_ft_call', deposit: '0', gas: '300000000000000', args: encode(signedArgs()) } }] },
     receipts_outcome: [
       outcome(initReceipt, goal.contract_id, { SuccessReceiptId: callbackReceipt }, ['BOUNCER guarded ft_transfer_call initiated; full amount reserved'], [tokenReceipt, callbackReceipt]),
       outcome(tokenReceipt, goal.token, { SuccessReceiptId: '9'.repeat(44) }),
@@ -89,17 +89,23 @@ test('new callback binds prepaid accounting to the reviewed payee and message, w
 test('mismatched, malformed or unbound transaction and callback evidence fail closed', () => {
   const mutations = [
     r => { r.final_execution_status = 'EXECUTED'; }, r => { r.status.SuccessValue = encode(null); },
-    r => { r.status.SuccessValue = encode('101'); }, r => { r.transaction.signer_id = 'attacker.testnet'; },
+    r => { r.status.SuccessValue = encode('101'); }, r => { r.status.Failure = {}; },
+    r => { r.transaction.signer_id = 'attacker.testnet'; }, r => { r.transaction_outcome.id = '1'.repeat(50); },
     r => { r.transaction.public_key = 'ed25519:other'; }, r => { r.transaction.actions.push(r.transaction.actions[0]); },
-    r => { r.transaction.actions[0].FunctionCall.deposit = '1'; },
+    r => { r.transaction.actions[0].FunctionCall.deposit = '1'; }, r => { r.transaction.actions[0].FunctionCall.gas = '1'; },
+    r => { r.transaction_outcome.outcome.receipt_ids = ['other']; },
     r => { const a = signedArgs(); a.expected_msg = 'stolen'; r.transaction.actions[0].FunctionCall.args = encode(a); },
     r => { r.receipts_outcome[0].outcome.logs = []; }, r => { r.receipts_outcome[0].outcome.receipt_ids = [tokenReceipt]; },
+    r => { r.receipts_outcome[0].outcome.status = { SuccessReceiptId: tokenReceipt }; },
+    r => { r.receipts_outcome.push(structuredClone(r.receipts_outcome[1])); },
+    r => { r.receipts.push(structuredClone(r.receipts[0])); },
     r => { r.receipts_outcome[1].outcome.status = { Failure: {} }; },
     r => { r.receipts[0].receipt.Action.actions[0].FunctionCall.deposit = '0'; },
     r => { const a = transferArgs(); a.receiver_id = 'attacker.testnet'; r.receipts[0].receipt.Action.actions[0].FunctionCall.args = encode(a); },
     r => { const a = transferArgs(); a.msg = 'stolen'; r.receipts[0].receipt.Action.actions[0].FunctionCall.args = encode(a); },
     r => { const a = callbackArgs(); a.policy_revision++; r.receipts[1].receipt.Action.actions[0].FunctionCall.args = encode(a); },
     r => { r.receipts_outcome[2].outcome.logs = []; }, r => { r.receipts_outcome[2].outcome.status = { Failure: {} }; },
+    r => { r.receipts_outcome[2].outcome.status.Failure = {}; },
     r => { delete r.receipts; },
   ];
   for (const mutate of mutations) { const result = finalResult(); mutate(result); assert.throws(() => verifyFtCallSettlement(goal, result, key)); }

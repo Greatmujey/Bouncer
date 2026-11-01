@@ -589,6 +589,24 @@ jobs:
       - name: Verify historical Circle testnet receipts and seller substitution
         run: node bouncer/scripts/verify-provider-history.mjs
 
+  ft-call-historical-verification:
+    name: Verify existing guarded FT-call receipts (read only)
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[ft-call-inspect]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      # This hard-coded *completed* funding receipt is independent of the
+      # unresolved later project transaction. No signer, broadcast or payment.
+      - name: Check historical receipt graph and substitution refusals
+        run: node bouncer/scripts/verify-ft-call-history.mjs
+
   dependent-historical-verification:
     name: Verify dependent workflow with installed seller SDK (read only)
     if: github.event_name == 'push' && (contains(github.event.head_commit.message, '[provider-inspect]') || contains(github.event.head_commit.message, '[seller-sdk-check]'))
