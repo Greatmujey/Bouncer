@@ -16,7 +16,7 @@ import { runRefSwap, recoverRefSwap } from './agent/ref-swap.mjs';
 import { REF_SWAP_INPUT_MESSAGE } from './agent/ref-swap-evidence.mjs';
 import { sealTestnetCredentials, testnetRecoveryKeyId } from './agent/testnet-credential-envelope.mjs';
 import { selectOwnerSetupQuote, WRAP_TESTNET as WRAP, CIRCLE_TESTNET_USDC as TOKEN, REF_TESTNET as REF } from './scripts/circle-testnet-setup.mjs';
-import { waitForNewTestnetKey } from './shared/testnet-ready.mjs';
+import { waitForNewTestnetKey, waitForFinalTestnetAccount } from './shared/testnet-ready.mjs';
 
 const { KeyPair, KeyPairSigner, transactions, utils } = nearApi;
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -137,7 +137,9 @@ async function main() {
     actions: [transactions.createAccount(), transactions.transfer(ownerFunding), transactions.addKey(ownerKey.getPublicKey(), transactions.fullAccessKey())] }));
   receiptsOk(created, 'create disposable owner');
   const router = await createFunded(routerId, routerKey);
-  const routerAccount = await provider.query({ request_type: 'view_account', account_id: routerId, finality: 'final' });
+  // The helper can expose the new key optimistically before a FINAL account
+  // view sees it. Retry only those missing FINAL reads; never a broadcast.
+  const routerAccount = await waitForFinalTestnetAccount(provider, routerId, routerKey.getPublicKey());
   if (typeof routerAccount?.amount !== 'string' || BigInt(routerAccount.amount) < routerRequired) {
     throw new Error('testnet helper grant cannot cover the router code storage and reserve');
   }

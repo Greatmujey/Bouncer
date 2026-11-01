@@ -107,10 +107,13 @@ stopped during account creation because the initial helper grant could not
 cover storage and the proposed subaccount funding. It failed before vault
 funding, the swap input or any sweep. Its owner-key envelope was retained, but
 that first envelope did not contain the Bouncer deploy key; the disposable
-account may therefore be unrecoverable. The revised harness seals both deploy
-keys too, uses a second helper-funded router account, and checks the available
-storage stake before allocating funds. These corrections are not yet a live
-proof.
+account may therefore be unrecoverable. A second attempt used a separate
+helper-funded router and sealed both deployment keys, but its router became
+visible optimistically before the FINAL account view caught up; it stopped
+before initializing or funding the vault, input or sweep. Its encrypted
+credentials were retained. The harness now waits through bounded **read-only**
+FINAL account/key checks before proceeding. No payment is retried. These
+corrections are not yet a live swap proof.
 
 The harness creates fresh, disposable testnet accounts, obtains a fresh bounded
 quote, deploys the exact router and removes its deploy key, funds only the capped
