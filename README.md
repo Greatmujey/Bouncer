@@ -16,12 +16,13 @@ delivery checks and a local journal gate later payments. See
 catalog search is read-only. No model or inference service is bundled. This is
 unaudited testnet software, not suitable for real funds.
 
-## Website preview (read-only)
+## Public website (read-only)
 
-**[Open Bouncer](https://www.madethis.website/s/njatdkbb/)** — a public,
-temporary preview hosted by madethis.website, expiring **6 November 2026 at
-14:45 UTC**. Anyone with the link can view it. It is a snapshot, not a
-production deployment, and the private repository remains private.
+**[Open Bouncer](https://bouncer-testnet.vercel.app/)** — the public Vercel
+website. It is a testnet snapshot, not a running agent, and the source
+repository remains private. The initial deployment used website assets from
+working-branch commit `a05fc8d`; a durable hosting URL does not imply production
+readiness or live independent FT-paid fulfillment.
 
 `bouncer/web/` explains the prototype's request → quote → guarded payment →
 fulfillment flow and links to an earlier oracle-led Circle testnet mission and
@@ -32,7 +33,7 @@ two credit tokens in the earlier example are synthetic and fulfillment was
 self-hosted. The site
 is not a live agent dashboard or commercial marketplace. It includes an
 optional, identity-only testnet wallet connection on an isolated top-level
-origin; **wallet connection is disabled on the shared-origin guest preview**.
+origin; **wallet connection is disabled on the public Vercel site and shared-origin previews**.
 The connector has been exercised with a mock and a real Meteor UI opened and
 cancelled, but not with a real wallet sign-in. Connecting does not create a
 vault, grant spending access, or sign transactions. The site can try an
@@ -45,12 +46,11 @@ To view it locally from the repository root (Node is not required):
 python3 -m http.server 4173 --bind 0.0.0.0 --directory bouncer/web
 ```
 
-GitHub Pages is not configured for this private repository. The explicitly
-opt-in `[publish-web-preview]` workflow publishes **only the seven whitelisted
-static web files** to a public third-party guest host for a time-limited preview;
-it does not publish the repository, credentials or journals. The host controls
-availability and expiry. It is not a durable production deployment, and normal
-pushes do not trigger it. See [website and wallet notes](bouncer/docs/WEB.md).
+The Vercel build publishes **only the seven whitelisted static website files**,
+not the checkout, credentials or journals. GitHub Pages is not yet configured
+for this private repository; the prepared Pages workflow requires a supported
+plan and separate enablement. The opt-in `[publish-web-preview]` workflow still
+provides a temporary guest preview. See [website and wallet notes](bouncer/docs/WEB.md).
 
 ## AI assistant access (MCP)
 

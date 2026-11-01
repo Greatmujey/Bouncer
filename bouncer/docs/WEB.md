@@ -51,8 +51,9 @@ wallet connection stays disabled on that shared-origin preview.
 
 ## Durable public hosting
 
-A durable public URL can host this same read-only site while the source
-repository stays private. The site is a historical walkthrough, **not** a live
+The public site is available at `https://bouncer-testnet.vercel.app/` while the
+source repository stays private. The initial Vercel deployment used working-
+branch commit `a05fc8d`. The site is a historical walkthrough, **not** a live
 agent dashboard: only its optional balance-refresh button performs read-only
 NEAR testnet RPC calls. Links to GitHub Actions evidence in a private repository
 will not be accessible to visitors without repository access. A durable URL is
