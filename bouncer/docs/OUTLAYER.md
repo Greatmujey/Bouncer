@@ -204,8 +204,13 @@ could not retrieve FINAL receipts: one RPC timed out and the other returned HTTP
 408. The explorer did not show the hash, but absence there is **not** proof of
 non-execution. The [public recovery evidence artifact](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41212677218)
 contains the original journal and goal and expires 29 January 2027. Preserve them
-and never automatically resend this transaction. It uses neither Circle USDC nor
-a TEE attestation.
+and never automatically resend this transaction. The reconciliation script makes
+only bounded status reads: it first asks for the current status, then requests
+`FINAL` if needed; neither `NONE`, an unknown hash, nor a timeout establishes
+non-payment. It labels endpoints by number and omits RPC error payloads and
+failure details rather than logging potentially credential-bearing RPC paths.
+The RPC is still trusted for its response. This diagnostic uses neither Circle
+USDC nor a TEE attestation.
 
 Provider-held credit is distinct from Bouncer's FT vault. In this path a project
 refund can be credited to Bouncer's balance **at OutLayer**, not returned to

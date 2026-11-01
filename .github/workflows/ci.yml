@@ -752,10 +752,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
-          name: ft-call-unresolved-journals
+          # The original public journal/goal were copied without alteration by
+          # the earlier read-only run; this copy outlives the original artifact.
+          name: reconciled-project-public-evidence
           path: ${{ runner.temp }}/paid-project-evidence
           github-token: ${{ github.token }}
-          run-id: 41106347709
+          run-id: 41212677218
       - uses: actions/setup-node@v4
         with:
           node-version: '22'

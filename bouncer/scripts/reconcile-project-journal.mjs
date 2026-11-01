@@ -29,11 +29,18 @@ export function selectJournalProject(rawGoal, journal) {
   return { goal, entry };
 }
 async function rpc(endpoint, method, params) {
-  const response = await fetch(endpoint, { method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ jsonrpc: '2.0', id: 'project-reconcile', method, params }), signal: AbortSignal.timeout(15_000) });
+  let response;
+  try {
+    response = await fetch(endpoint, { method: 'POST', redirect: 'error', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 'project-reconcile', method, params }), signal: AbortSignal.timeout(15_000) });
+  } catch { throw new Error(`${method}: RPC request failed or timed out`); }
   if (!response.ok) throw new Error(`${method}: RPC HTTP ${response.status}`);
-  const body = await readBoundedJson(response, { maxBytes: 4_000_000, label: method });
-  if (body?.error || !body || !Object.hasOwn(body, 'result')) throw new Error(`${method}: RPC error ${JSON.stringify(body?.error ?? 'missing result').slice(0, 400)}`);
+  let body;
+  try { body = await readBoundedJson(response, { maxBytes: 4_000_000, label: method }); }
+  catch { throw new Error(`${method}: invalid or oversized RPC response`); }
+  // RPC URLs may contain an API key in the path, and error payloads are
+  // untrusted. Never echo either into logs, reports, or CI annotations.
+  if (body?.error || !body || !Object.hasOwn(body, 'result')) throw new Error(`${method}: RPC error or missing result`);
   return body.result;
 }
 function confirmTransaction(goal, entry, result) {
@@ -49,19 +56,25 @@ function confirmTransaction(goal, entry, result) {
 }
 export async function reconcileProject({ goal, entry, endpoints }) {
   const failures = [];
-  for (const rawEndpoint of endpoints) {
-    const endpoint = validateRpcEndpoint(rawEndpoint);
+  for (const [index, rawEndpoint] of endpoints.entries()) {
+    const endpoint = validateRpcEndpoint(rawEndpoint), label = `RPC ${index + 1}`;
     try {
       if ((await rpc(endpoint, 'status', []))?.chain_id !== 'testnet') throw new Error('RPC must report testnet');
-      const chain = await rpc(endpoint, 'EXPERIMENTAL_tx_status', { tx_hash: entry.tx_hash, sender_account_id: goal.owner_account_id, wait_until: 'FINAL' });
+      const params = { tx_hash: entry.tx_hash, sender_account_id: goal.owner_account_id };
+      // Reading the current status first can avoid a server-side wait for an
+      // old transaction. NONE/unknown is never evidence of non-payment.
+      let chain = await rpc(endpoint, 'EXPERIMENTAL_tx_status', { ...params, wait_until: 'NONE' });
+      if (chain?.final_execution_status !== 'FINAL') {
+        chain = await rpc(endpoint, 'EXPERIMENTAL_tx_status', { ...params, wait_until: 'FINAL' });
+      }
       confirmTransaction(goal, entry, chain);
-      if (chain.status?.Failure) return { status: 'FINAL_FAILED', endpoint, tx_hash: entry.tx_hash,
-        failure: JSON.stringify(chain.status.Failure).slice(0, 1000), warning: 'failure alone does not prove that no downstream payment occurred' };
+      if (chain.status?.Failure) return { status: 'FINAL_FAILED', endpoint: label, tx_hash: entry.tx_hash,
+        failure: 'root transaction returned Failure; details omitted', warning: 'failure alone does not prove that no downstream payment occurred' };
       const delivery = verifyProjectResult(goal, chain, entry.agent_public_key);
       if (delivery.tx_hash !== entry.tx_hash) throw new Error('verified delivery hash differs from journal');
       if (entry.status === 'completed' && !isDeepStrictEqual(entry.delivery, delivery)) throw new Error('recorded delivery differs from chain');
-      return { status: 'VERIFIED', endpoint, delivery };
-    } catch (error) { failures.push(`${endpoint}: ${error.message}`); }
+      return { status: 'VERIFIED', endpoint: label, delivery };
+    } catch (error) { failures.push(`${label}: ${error.message}`); }
   }
   throw new Error(`transaction remains unresolved; never resend automatically: ${failures.join('; ')}`);
 }

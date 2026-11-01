@@ -50,7 +50,7 @@ test('unknown transaction remains unresolved after bounded read-only RPC calls',
   await withServer(body => body.method === 'status' ? { result: { chain_id: 'testnet' } } : { error: { message: 'UNKNOWN_TRANSACTION' } }, async (endpoint, requests) => {
     await assert.rejects(reconcileProject({ goal, entry, endpoints: [endpoint] }), /remains unresolved; never resend/);
     assert.deepEqual(requests.map(r => r.method), ['status', 'EXPERIMENTAL_tx_status']);
-    assert.equal(requests[1].params.tx_hash, hash); assert.equal(requests[1].params.wait_until, 'FINAL');
+    assert.equal(requests[1].params.tx_hash, hash); assert.equal(requests[1].params.wait_until, 'NONE');
   });
 });
 
@@ -76,9 +76,50 @@ test('a different chain, transaction or unfinalized response is never treated as
 });
 
 test('a matching FINAL failure is reported without claiming that downstream payment was absent', async () => {
-  await withServer(body => ({ result: body.method === 'status' ? { chain_id: 'testnet' } : chain() }), async (endpoint, requests) => {
-    const report = await reconcileProject({ goal, entry, endpoints: [endpoint] });
+  await withServer(body => {
+    const result = chain(); result.status.Failure.secret = 'rpc-token-should-not-appear';
+    return { result: body.method === 'status' ? { chain_id: 'testnet' } : result };
+  }, async (endpoint, requests) => {
+    const report = await reconcileProject({ goal, entry, endpoints: [`${endpoint}/rpc-token-should-not-appear`] });
     assert.equal(report.status, 'FINAL_FAILED'); assert.equal(report.tx_hash, hash); assert.match(report.warning, /does not prove/);
+    assert.equal(report.endpoint, 'RPC 1'); assert.doesNotMatch(JSON.stringify(report), /rpc-token-should-not-appear/);
     assert.deepEqual(requests.map(r => r.method), ['status', 'EXPERIMENTAL_tx_status']);
   });
+});
+
+test('a non-final immediate response is followed by one bounded FINAL status read', async () => {
+  await withServer(body => ({ result: body.method === 'status' ? { chain_id: 'testnet' } :
+    body.params.wait_until === 'NONE' ? { final_execution_status: 'EXECUTED' } : chain() }), async (endpoint, requests) => {
+    const report = await reconcileProject({ goal, entry, endpoints: [endpoint] });
+    assert.equal(report.status, 'FINAL_FAILED');
+    assert.deepEqual(requests.map(r => r.method), ['status', 'EXPERIMENTAL_tx_status', 'EXPERIMENTAL_tx_status']);
+    assert.deepEqual(requests.slice(1).map(r => r.params.wait_until), ['NONE', 'FINAL']);
+    assert.ok(requests.slice(1).every(r => r.params.tx_hash === hash));
+  });
+});
+
+test('RPC URL paths and untrusted error payloads never appear in reconciliation errors', async () => {
+  const secret = 'rpc-token-should-not-appear';
+  await withServer(body => body.method === 'status' ? { result: { chain_id: 'testnet' } } : { error: { message: secret } }, async endpoint => {
+    await assert.rejects(reconcileProject({ goal, entry, endpoints: [`${endpoint}/${secret}`] }), error => {
+      assert.match(error.message, /remains unresolved; never resend/);
+      assert.doesNotMatch(error.message, new RegExp(secret));
+      return true;
+    });
+  });
+});
+
+test('RPC redirects are not followed', async () => {
+  let requests = 0;
+  const server = http.createServer((req, res) => {
+    requests++;
+    res.writeHead(302, { location: `http://127.0.0.1:${server.address().port}/other` }); res.end();
+  });
+  server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  try {
+    await assert.rejects(reconcileProject({ goal, entry, endpoints: [`http://127.0.0.1:${server.address().port}/rpc-secret`] }), error => {
+      assert.doesNotMatch(error.message, /rpc-secret/); return true;
+    });
+    assert.equal(requests, 1);
+  } finally { await new Promise(resolve => server.close(resolve)); }
 });
