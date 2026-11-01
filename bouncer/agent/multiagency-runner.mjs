@@ -9,11 +9,16 @@ import crypto from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { readBoundedJson } from '../shared/bounded-json.mjs';
 import { withExclusiveJournalOperation } from './journal-operation.mjs';
-import { FileJournal, runProcurement } from './procurement.mjs';
+import { FileJournal, requestFingerprint, runProcurement } from './procurement.mjs';
 import { recoverDirectPayment } from './recover-direct-payment.mjs';
+import { signReviewedCall } from './reviewed-transaction.mjs';
+import { isTransactionHash } from '../shared/direct-payment-settlement.mjs';
+import { prepareMultiAgencyExactFt, assertMultiAgencyExactFtView, multiAgencyExactExecutionBlock,
+  verifyMultiAgencyExactFtPayment } from './multiagency-exact-ft.mjs';
 import { MULTIAGENCY_ORIGIN } from './multiagency-readiness.mjs';
 import { multiAgencyExecutionBlock, multiAgencyPaymentPlan, validateMultiAgencyGoal, validateMultiAgencyQuote,
-  verifyMultiAgencyPayment, verifyMultiAgencyResearchDelivery } from './multiagency-research.mjs';
+  verifyMultiAgencyJobClaim, verifyMultiAgencyPayment, verifyMultiAgencyPublishedHandoff,
+  verifyMultiAgencyResearchDelivery } from './multiagency-research.mjs';
 
 const hash = value => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const quoteId = goal => `${goal.id}-ma-quote`;
@@ -90,8 +95,8 @@ function assertUnusedMemo(journal, goal, quote) {
     throw new Error('this payment or quote memo is already recorded; reconcile the original and never repay automatically');
   }
 }
-async function vaultAtTransaction(provider, goal, chain) {
-  const blockId = chain?.transaction_outcome?.block_hash, executionId = multiAgencyExecutionBlock(chain, goal.vault);
+async function vaultAtTransaction(provider, goal, chain, executionId = multiAgencyExecutionBlock(chain, goal.vault)) {
+  const blockId = chain?.transaction_outcome?.block_hash;
   if (typeof blockId !== 'string' || !blockId) throw new Error('original transaction block is unavailable');
   async function at(id) {
     const [account, keys] = await Promise.all([
@@ -163,6 +168,132 @@ export async function recoverMultiAgencyPayment({ goal: rawGoal, journal, provid
   });
 }
 
+/** Prepare owner-review calldata for the *original* issued quote. This only
+ * reads the encrypted journal; it neither signs nor changes state. */
+export async function prepareMultiAgencyExactIntent({ goal: rawGoal, journal, agentPublicKey, now = Date.now }) {
+  const goal = validateMultiAgencyGoal(rawGoal); requireJournal(journal, goal);
+  return withExclusiveJournalOperation(journal, async () => {
+    const quote = issuedQuote(journal, goal, now);
+    assertUnusedMemo(journal, goal, quote);
+    return prepareMultiAgencyExactFt({ goal, quote, agentPublicKey, nowMs: timestamp(now) });
+  });
+}
+
+async function exactEvidence(provider, goal, quote, entry, chain) {
+  const executionId = multiAgencyExactExecutionBlock(chain, goal.vault);
+  const [vaultState, view] = await Promise.all([
+    vaultAtTransaction(provider, goal, chain, executionId),
+    provider.callFunction(goal.vault, 'get_exact_ft_intent', { intent_id: entry.exact_ft.prepared.intent_id }, { blockId: executionId }),
+  ]);
+  const expected = { ...entry.exact_ft.pinned_view, consumed: true, active: false };
+  if (!isDeepStrictEqual(view, expected)) throw new Error('historical consumed intent differs from the original pinned review');
+  return verifyMultiAgencyExactFtPayment({ goal, quote, result: chain, publicKey: entry.agent_public_key, txHash: entry.tx_hash,
+    vaultState, intentState: { block_hash: executionId, view } });
+}
+
+function originalExactEntry(journal, goal, quote, now) {
+  const entry = journal.get(goal.id);
+  if (!entry || entry.payment_version !== 'exact-ft-signed-v11' || !['pending', 'completed'].includes(entry.status) ||
+      !isTransactionHash(entry.tx_hash) || typeof entry.agent_public_key !== 'string' || entry.exact_ft?.version !== 1 ||
+      !entry.exact_ft?.pinned_view || journal.list().filter(e => e.request?.memo === quote.code &&
+        e.request?.payee === quote.payment.receiver && e.request?.token === quote.payment.token).length !== 1) {
+    throw new Error('original exact FT payment reservation is missing or ambiguous; never resend automatically');
+  }
+  const prepared = prepareMultiAgencyExactFt({ goal, quote, agentPublicKey: entry.agent_public_key, nowMs: timestamp(now), allowExpired: true });
+  const request = multiAgencyPaymentPlan(goal, quote, { nowMs: timestamp(now), allowExpired: true }).requests[0];
+  if (!isDeepStrictEqual(entry.exact_ft.prepared, prepared) || entry.fingerprint !== requestFingerprint(request) ||
+      !isDeepStrictEqual(entry.request, request)) throw new Error('original exact FT review differs from the journal');
+  assertMultiAgencyExactFtView(prepared, entry.exact_ft.pinned_view);
+  return entry;
+}
+
+/** Spend only an already owner-pinned V11 intent. The quote remains unsigned
+ * and front-runnable; this tightens Bouncer's authority, not the seller. */
+export async function payMultiAgencyExactFtOnce({ goal: rawGoal, journal, provider, account, publicKey,
+  fetchImpl = globalThis.fetch, now = Date.now, execute = false }) {
+  const goal = validateMultiAgencyGoal(rawGoal); requireJournal(journal, goal);
+  if (execute !== true) throw new Error('explicit exact FT payment execution is required; no payment was sent');
+  if (typeof provider?.sendTransactionOnce !== 'function' || typeof provider?.txStatusReceipts !== 'function') {
+    throw new Error('exact FT payment requires one-shot transport and receipt-inclusive RPC');
+  }
+  return withExclusiveJournalOperation(journal, async () => {
+    const quote = issuedQuote(journal, goal, now), agentKey = String(publicKey);
+    const prepared = prepareMultiAgencyExactFt({ goal, quote, agentPublicKey: agentKey, nowMs: timestamp(now) });
+    assertUnusedMemo(journal, goal, quote);
+    if ((await provider.viewNodeStatus())?.chain_id !== 'testnet') throw new Error('RPC must report testnet');
+    const block = await provider.viewBlock({ finality: 'final' });
+    if (!isTransactionHash(block?.header?.hash)) throw new Error('FINAL block is unavailable');
+    const final = { blockId: block.header.hash }, a = prepared.owner_call.args;
+    const [vault, vaultKeys, owner, version, access, registration, locked, pairLocked, policy, granted, view, verdict] = await Promise.all([
+      provider.viewAccount(goal.vault, final), provider.viewAccessKeyList(goal.vault, final),
+      provider.callFunction(goal.vault, 'get_owner', {}, final), provider.callFunction(goal.vault, 'contract_version', {}, final),
+      provider.viewAccessKey(goal.owner, publicKey, final),
+      provider.callFunction(a.expected_token, 'storage_balance_of', { account_id: a.payee }, final),
+      provider.callFunction(goal.vault, 'is_exact_ft_policy_locked', { policy_id: goal.policy_id }, final),
+      provider.callFunction(goal.vault, 'is_exact_ft_payee_locked', { token: a.expected_token, payee: a.payee }, final),
+      provider.callFunction(goal.vault, 'get_policy', { policy_id: goal.policy_id }, final),
+      provider.callFunction(goal.vault, 'is_agent_key_allowed', { policy_id: goal.policy_id, public_key: agentKey }, final),
+      provider.callFunction(goal.vault, 'get_exact_ft_intent', { intent_id: prepared.intent_id }, final),
+      provider.callFunction(goal.vault, 'check', { policy_id: goal.policy_id, payee: a.payee, amount: a.amount }, final),
+    ]);
+    const permission = access?.permission?.FunctionCall;
+    if (vault?.block_hash !== block.header.hash || vault?.code_hash !== goal.vault_code_hash || vaultKeys?.block_hash !== block.header.hash ||
+        !Array.isArray(vaultKeys?.keys) || vaultKeys.keys.length !== 0 || access?.block_hash !== block.header.hash ||
+        owner !== goal.owner || version !== 'bouncer-agent-v11-exact-ft-testnet' ||
+        !permission || permission.receiver_id !== goal.vault || !isDeepStrictEqual(permission.method_names, ['execute_exact_ft']) ||
+        !registration || typeof registration.total !== 'string' || !/^[1-9][0-9]*$/.test(registration.total) ||
+        locked !== true || pairLocked !== true || policy?.token !== a.expected_token || granted !== true) {
+      throw new Error('reviewed keyless V11 vault, scoped agent, policy or recipient registration differs; no payment sent');
+    }
+    const pinned = assertMultiAgencyExactFtView(prepared, view);
+    if (!Array.isArray(verdict) || verdict.length !== 2 || typeof verdict[0] !== 'boolean' || typeof verdict[1] !== 'string') {
+      throw new Error('invalid on-chain policy verdict');
+    }
+    if (!verdict[0]) return { status: 'BLOCKED', reason: verdict[1].slice(0, 200), sends: 0 };
+    await stillAwaiting(goal, quote, fetchImpl, now);
+    const signed = await signReviewedCall({ account, publicKey, ownerId: goal.owner, contractId: goal.vault,
+      method: 'execute_exact_ft', args: { intent_id: prepared.intent_id }, gas: 200n * 10n ** 12n });
+    if (!isTransactionHash(signed.txHash)) throw new Error('invalid signed exact FT transaction hash');
+    await stillAwaiting(goal, quote, fetchImpl, now);
+    if (timestamp(now) >= Number(a.expires_at_ms) - 60_000) throw new Error('exact FT execution cutoff is too close; no payment sent');
+    assertUnusedMemo(journal, goal, quote);
+    const request = multiAgencyPaymentPlan(goal, quote, { nowMs: timestamp(now) }).requests[0];
+    const pending = { status: 'pending', fingerprint: requestFingerprint(request), request, payment_version: 'exact-ft-signed-v11',
+      tx_hash: signed.txHash, agent_public_key: agentKey, exact_ft: { version: 1, prepared, pinned_view: pinned },
+      started_at: new Date(timestamp(now)).toISOString() };
+    journal.put(goal.id, pending); // durable original hash before the ONLY broadcast
+    try {
+      if (timestamp(now) >= Number(a.expires_at_ms) - 60_000) throw new Error('exact FT cutoff passed after reservation');
+      const sent = await provider.sendTransactionOnce(signed.signed, 'FINAL');
+      if (sent?.transaction_outcome?.id !== signed.txHash) throw new Error('RPC returned a different or missing transaction hash');
+      const chain = await provider.txStatusReceipts(signed.txHash, goal.owner, 'FINAL');
+      const settlement = await exactEvidence(provider, goal, quote, pending, chain);
+      journal.put(goal.id, { ...pending, status: 'completed', settlement, completed_at: new Date(timestamp(now)).toISOString() });
+      return { status: 'PAID_NOT_YET_DELIVERED', settlement, sends: 1,
+        scope: 'FINAL exact-FT testnet payment only; seller attribution and delivery still require verification' };
+    } catch {
+      throw new Error(`${goal.id}: exact FT payment is unresolved (tx ${signed.txHash}); preserve the journal and never automatically resend`);
+    }
+  });
+}
+
+/** Read the original exact-FT hash only. Missing, failed or ambiguous receipts
+ * never cause a new signature, quote POST or payment. */
+export async function recoverMultiAgencyExactFtPayment({ goal: rawGoal, journal, provider, now = Date.now, update = true }) {
+  const goal = validateMultiAgencyGoal(rawGoal); requireJournal(journal, goal);
+  return withExclusiveJournalOperation(journal, async () => {
+    const quote = issuedQuote(journal, goal, now, true), entry = originalExactEntry(journal, goal, quote, now);
+    if ((await provider.viewNodeStatus())?.chain_id !== 'testnet') throw new Error('RPC must report testnet');
+    const chain = await provider.txStatusReceipts(entry.tx_hash, goal.owner, 'FINAL');
+    const settlement = await exactEvidence(provider, goal, quote, entry, chain);
+    if (entry.status === 'completed' && !isDeepStrictEqual(entry.settlement, settlement)) throw new Error('recorded exact FT settlement differs from chain');
+    if (update && entry.status === 'pending') journal.put(goal.id, { ...entry, status: 'completed', settlement,
+      completed_at: new Date(timestamp(now)).toISOString() });
+    return { status: 'RECOVERED_PAYMENT_ONLY', settlement, quote_posts: 0, sends: 0,
+      scope: 'original FINAL exact-FT payment only; seller attribution and delivery not established' };
+  });
+}
+
 /** Read-only inspection of ONE published task under the original paid job.
  * All URLs are pinned; no quote POST, key, signing, send or journal write.
  * The output is untrusted provider text, not proof the full brief is satisfied. */
@@ -194,5 +325,41 @@ export async function inspectMultiAgencyResearchTask({ goal: rawGoal, journal, p
     const proof = verifyMultiAgencyResearchDelivery({ goal, quote, result: chain, publicKey: entry.agent_public_key,
       txHash: entry.tx_hash, vaultState, sellerQuote, epic, task: taskIssue, comments });
     return { ...proof, quote_posts: 0, sends: 0, journal_writes: 0 };
+  });
+}
+
+/** Inspect one public task only after independently rechecking the original
+ * V11 payment, the seller's job claim and the bot/assignee handoff. Read-only;
+ * the text is untrusted and one task may not satisfy the full brief. */
+export async function inspectMultiAgencyExactResearchTask({ goal: rawGoal, journal, provider, task, githubToken,
+  fetchImpl = globalThis.fetch, now = Date.now }) {
+  const goal = validateMultiAgencyGoal(rawGoal); requireJournal(journal, goal);
+  if (!Number.isSafeInteger(task) || task < 1 ||
+      (githubToken !== undefined && (typeof githubToken !== 'string' || !githubToken || githubToken.length > 4096 || /[\r\n]/.test(githubToken)))) {
+    throw new Error('valid public task number and optional GitHub read token required');
+  }
+  return withExclusiveJournalOperation(journal, async () => {
+    const quote = issuedQuote(journal, goal, now, true), entry = originalExactEntry(journal, goal, quote, now);
+    if ((await provider.viewNodeStatus())?.chain_id !== 'testnet') throw new Error('RPC must report testnet');
+    const chain = await provider.txStatusReceipts(entry.tx_hash, goal.owner, 'FINAL');
+    const payment = await exactEvidence(provider, goal, quote, entry, chain);
+    if (entry.status === 'completed' && !isDeepStrictEqual(entry.settlement, payment)) throw new Error('recorded exact FT settlement differs from chain');
+    const sellerQuote = await requestJson(`${MULTIAGENCY_ORIGIN}/api/quotes/${quote.code}`,
+      { method: 'GET', expectedStatus: 200 }, fetchImpl);
+    if (!Number.isSafeInteger(sellerQuote?.issue) || sellerQuote.issue < 1) throw new Error('seller has not published a valid job number');
+    const api = 'https://api.github.com/repos/MultiAgency/kanban-sandbox/issues';
+    const headers = { accept: 'application/vnd.github+json', 'user-agent': 'bouncer-exact-research-recovery' };
+    if (githubToken !== undefined) headers.authorization = `Bearer ${githubToken}`;
+    const read = suffix => requestJson(`${api}${suffix}`, { method: 'GET', expectedStatus: 200, maxBytes: 1_000_000, headers }, fetchImpl);
+    const [epic, taskIssue, comments] = await Promise.all([
+      read(`/${sellerQuote.issue}`), read(`/${task}`), read(`/${task}/comments?per_page=100`),
+    ]);
+    const claim = verifyMultiAgencyJobClaim({ goal, quote, txHash: payment.tx_hash, sellerQuote, epic });
+    const handoff = verifyMultiAgencyPublishedHandoff({ epic, task: taskIssue, comments });
+    if (handoff.job !== claim.job) throw new Error('handoff belongs to a different job');
+    return { status: 'PUBLISHED_TASK_AFTER_FINAL_PAYMENT', tx_hash: payment.tx_hash, job_url: claim.job_url,
+      task: handoff.task, deliverable_url: handoff.url, sha256: handoff.sha256, text: handoff.text,
+      quote_posts: 0, sends: 0, journal_writes: 0,
+      scope: 'one task under a paid job, not necessarily fulfillment of the complete brief; source quality, deployed watcher and future availability not established' };
   });
 }

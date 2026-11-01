@@ -16,6 +16,11 @@ PaymentRpcProvider.prototype.viewAccessKeyList = async (id, { blockId }) => {
   if (id !== evidence.vault || ![evidence.txBlock, evidence.executionBlock].includes(blockId)) throw new Error('unexpected synthetic key lookup');
   return { block_hash: blockId, keys: [] };
 };
+PaymentRpcProvider.prototype.callFunction = async (id, method, args, { blockId }) => {
+  if (id !== evidence.vault || method !== 'get_exact_ft_intent' || blockId !== evidence.executionBlock ||
+      args?.intent_id !== evidence.intentView?.intent_id) throw new Error('unexpected synthetic intent lookup');
+  return structuredClone(evidence.intentView);
+};
 PaymentRpcProvider.prototype.sendTransactionOnce = async () => { throw new Error('read-only CLI must not broadcast'); };
 PaymentRpcProvider.prototype.sendTransactionUntil = async () => { throw new Error('read-only CLI must not broadcast'); };
 globalThis.fetch = async (url, options) => {

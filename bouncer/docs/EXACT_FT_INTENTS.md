@@ -60,6 +60,40 @@ transaction hash. A duplicate/missing journal, lost encryption key, stale
 backup, changed vault or different RPC/provider can still undermine recovery.
 Do not automatically repeat a quote, signed call or ambiguous broadcast.
 
+## MultiAgency operator path
+
+The same experimental `npm run multiagency -- --help` interface now includes
+`--prepare-exact`, `--pay-exact`, `--recover-exact` and `--inspect-exact`. The
+separate legacy `--pay` route uses V9's broader `execute`; it is not upgraded
+or made one-shot by V11. Do not substitute it for an exact intent.
+
+After explicit approval of a meaningful public brief and the provider risks,
+the existing quote action reserves one encrypted journal entry before its
+single POST. With that *original* quote and journal, `--prepare-exact` accepts
+only the public agent key and produces the owner calldata and full review
+preimage **offline**. It does not sign, contact the seller or write the
+journal. The SHA-256 commitment is the UTF-8 `JSON.stringify` of the ordered
+`review` object in its output: protocol tag, validated goal, normalized quote,
+canonical Ed25519 public key and execution cutoff. The cutoff is five minutes
+before the quote expires; the intent ID contains the first 60 hex digits of
+the full commitment. Owners must review the output and separately sign the
+1-yocto policy lock and intent on a fresh, reviewed V11 vault. There is no
+automated owner setup/deployment in this path yet.
+
+`--pay-exact` requires explicit execution and provider-availability assertions
+and the restricted signing-key file. It rechecks the network, keyless reviewed
+vault/code hash, owner, exact-only key permission, token registration, policy,
+intent and budget at a FINAL block. It checks the seller quote twice, signs
+only the ID, and synchronously persists the signed transaction hash to the
+original encrypted journal before **one** bounded broadcast. A timeout,
+uncertain receipt or failed write stays unresolved. `--recover-exact` uses the
+original hash without signing or sending; it verifies the historical vault and
+consumed intent, exact transfer, Circle event and successful callback. A
+successful receipt proves settlement only. `--inspect-exact` adds seller job
+attribution and one public task's handoff, without signing, sending or writing;
+the report remains untrusted and may not fulfill the whole brief. All these
+paths currently have synthetic tests only.
+
 ## What it does not solve
 
 The seller's quote is unsigned and its memo is public. A different sender can

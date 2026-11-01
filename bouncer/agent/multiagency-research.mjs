@@ -122,11 +122,12 @@ function verifyEpic({ goal, quote, txHash, epic, jobNumber }) {
   return block;
 }
 
-/** Bind a recorded FINAL payment to the seller's own status and its bot-
- * authored public job. This still proves no completion or content quality. */
-export function verifyMultiAgencyOpening({ goal: rawGoal, quote, result, publicKey, txHash, vaultState, sellerQuote, epic }) {
+/** Check the seller's own claim and bot-authored job against an original
+ * hash. This alone is NOT proof that the transaction exists or paid. */
+export function verifyMultiAgencyJobClaim({ goal: rawGoal, quote: rawQuote, txHash, sellerQuote, epic }) {
   const goal = validateMultiAgencyGoal(rawGoal);
-  const payment = verifyMultiAgencyPayment({ goal, quote, result, publicKey, txHash, vaultState });
+  const quote = validateMultiAgencyQuote(goal, rawQuote, { allowExpired: true });
+  if (!isTransactionHash(txHash)) throw new Error('invalid claimed deposit transaction hash');
   if (!record(sellerQuote) || sellerQuote.code !== quote.code || sellerQuote.title !== quote.title ||
       sellerQuote.status !== 'open' || sellerQuote.channel !== 'wallet' || sellerQuote.expires_at !== quote.expires_at ||
       !isDeepStrictEqual(sellerQuote.payment, quote.payment) || !issueNumber(sellerQuote.issue) ||
@@ -136,7 +137,17 @@ export function verifyMultiAgencyOpening({ goal: rawGoal, quote, result, publicK
     throw new Error('seller status does not attribute the original deposit to this vault and quote');
   }
   verifyEpic({ goal, quote, txHash, epic, jobNumber: sellerQuote.issue });
-  return { status: 'OPENED', job: sellerQuote.issue, job_url: issueUrl(sellerQuote.issue), tx_hash: payment.tx_hash,
+  return { status: 'SELLER_CLAIMS_OPENED', job: sellerQuote.issue, job_url: issueUrl(sellerQuote.issue), tx_hash: txHash,
+    scope: 'provider and GitHub claim only; no chain settlement or delivery established' };
+}
+
+/** Bind a recorded FINAL payment to the seller's own status and its bot-
+ * authored public job. This still proves no completion or content quality. */
+export function verifyMultiAgencyOpening({ goal: rawGoal, quote, result, publicKey, txHash, vaultState, sellerQuote, epic }) {
+  const goal = validateMultiAgencyGoal(rawGoal);
+  const payment = verifyMultiAgencyPayment({ goal, quote, result, publicKey, txHash, vaultState });
+  const claim = verifyMultiAgencyJobClaim({ goal, quote, txHash: payment.tx_hash, sellerQuote, epic });
+  return { status: 'OPENED', job: claim.job, job_url: claim.job_url, tx_hash: payment.tx_hash,
     scope: 'verified payment and seller job attribution via trusted RPC, provider and GitHub; not delivery' };
 }
 

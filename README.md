@@ -15,7 +15,9 @@ delivery checks and a local journal gate later payments. See
 [guarded independent compute](bouncer/docs/OUTLAYER.md). The experimental
 [MultiAgency research adapter](bouncer/docs/MULTIAGENCY_RESEARCH.md) has
 synthetic quote/payment/recovery tests and read-only historical compatibility
-checks, but **no Bouncer purchase or independent FT-paid fulfillment**. A separate
+checks. An isolated [exact-FT intent variant](bouncer/docs/EXACT_FT_INTENTS.md)
+pins a one-shot payment to owner-reviewed terms; it is not deployed. There is
+**no Bouncer purchase or independent FT-paid fulfillment**. A separate
 marketplace catalog search is read-only. No model or inference service is
 bundled. This is unaudited testnet software, not suitable for real funds.
 

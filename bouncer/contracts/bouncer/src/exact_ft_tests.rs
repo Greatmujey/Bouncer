@@ -49,6 +49,10 @@ fn pinned_intent_dispatches_only_reviewed_terms_once_and_reserves_budget() {
     let before = c.get_exact_ft_intent(INTENT.into()).unwrap();
     assert!(before.active && !before.consumed && !before.cancelled);
     assert_eq!(before.review_hash, "a".repeat(64));
+    let json = near_sdk::serde_json::to_value(&before).unwrap();
+    assert_eq!(json["amount"], "100");
+    assert_eq!(json["expires_at_ms"], expiry().0.to_string());
+    assert_eq!(json["agent_public_key"], String::from(&key(2)));
     testing_env!(agent());
     execute(&mut c);
     let after = c.get_exact_ft_intent(INTENT.into()).unwrap();
@@ -271,4 +275,50 @@ fn multiple_pinned_intents_still_share_the_existing_rolling_budget() {
     let mut c = fixture(); pin(&mut c, "two", "code-two"); pin(&mut c, "three", "code-three"); pin(&mut c, "four", "code-four");
     testing_env!(agent());
     execute(&mut c); drop(c.execute_exact_ft("two".into())); drop(c.execute_exact_ft("three".into())); drop(c.execute_exact_ft("four".into()));
+}
+
+#[test]
+#[should_panic(expected = "token, payee and memo already reserved")]
+fn another_exact_policy_cannot_reserve_the_same_token_payee_and_memo() {
+    let mut c = fixture();
+    c.set_policy("other-policy".into(), id("token.testnet"), U128(200), Some(U128(300)));
+    c.allow_payee("other-policy".into(), id("vendor.testnet"));
+    c.grant_agent_key("other-policy".into(), key(2));
+    c.lock_ft_policy_to_intents("other-policy".into());
+    c.set_exact_ft_intent("other-id".into(), "other-policy".into(), id("token.testnet"), id("vendor.testnet"),
+        U128(100), MEMO.into(), "b".repeat(64), expiry(), key(2));
+}
+
+#[test]
+fn locking_one_token_payee_pair_does_not_block_an_unrelated_pair() {
+    let mut c = fixture();
+    c.set_policy("other-policy".into(), id("other-token.testnet"), U128(200), Some(U128(300)));
+    c.allow_payee("other-policy".into(), id("vendor.testnet"));
+    c.grant_agent_key("other-policy".into(), key(2));
+    c.balances.insert(id("other-token.testnet"), 1_000);
+    testing_env!(agent());
+    drop(c.execute("other-policy".into(), id("vendor.testnet"), U128(100), Some("other".into()), id("other-token.testnet")));
+    assert_eq!(c.vault_balance(id("other-token.testnet")).0, 900);
+    assert!(!c.get_exact_ft_intent(INTENT.into()).unwrap().consumed);
+}
+
+#[test]
+#[should_panic(expected = "BLOCKED: policy requires exact FT intents")]
+fn a_locked_ft_policy_cannot_be_used_for_an_outlayer_prepaid_project() {
+    let mut c = fixture();
+    c.set_policy("native-project".into(), id(NATIVE_ASSET), U128(200), Some(U128(300)));
+    c.allow_payee("native-project".into(), id(OUTLAYER_TESTNET));
+    c.grant_agent_key("native-project".into(), key(2));
+    c.allow_payee("research".into(), id(OUTLAYER_TESTNET));
+    c.native_balance = 500;
+    c.outlayer_prepaid.insert(id("token.testnet"), 100);
+    let project = OutlayerProject { project_id: "connectors.outlayer.testnet/connector-probe".into(), version_key: "a".repeat(64),
+        usd_policy_id: "research".into(), token: id("token.testnet"), attached_usd: U128(30),
+        input_data: r#"{"operation":"fetch"}"#.into(), max_instructions: 100_000_000,
+        max_memory_mb: 256, max_execution_seconds: 60 };
+    c.set_outlayer_project("native-project".into(), project);
+    let route = c.get_outlayer_project("native-project".into()).unwrap();
+    assert!(route.active);
+    testing_env!(agent());
+    drop(c.execute_outlayer_project("native-project".into(), U128(100), route));
 }
