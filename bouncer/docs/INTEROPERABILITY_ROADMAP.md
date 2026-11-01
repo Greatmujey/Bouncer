@@ -171,10 +171,12 @@ consent, and no offers or payments were requested:
   vault cannot issue the legacy grant needed by this candidate path. A fresh V10
   vault has now passed a [one-yocto grant diagnostic](YOUTICK_PLAYBACK.md#evidence-and-remaining-work)
   against the independent access contract on a **hypothetical** job; a later
-  read-only check found no such job, publication or entitlement. This is not an
-  independent FT-paid service or playback proof. Never
-  assume merchant consent, delivery or deployed/source equivalence from this
-  research.
+  read-only check found no such job, publication or entitlement. A separate
+  token client journals one attempt and a bounded HLS byte probe protects bearer
+  credentials; both have synthetic/loopback coverage only and cannot establish
+  playable content or independent fulfillment. This is not an independent
+  FT-paid service or playback proof. Never assume merchant consent, delivery or
+  deployed/source equivalence from this research.
 - [PatchBond at `a448538`](https://github.com/PatchBond/patchbond/blob/a4485389453818d495e48b7d46a299401833213b/contract/vault/src/deposit.rs)
   documents testnet Circle USDC bonds for GitHub submissions, not a compute,
   storage or API purchase. The source uses the FT `sender_id` as the bond payer;

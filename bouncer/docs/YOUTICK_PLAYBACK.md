@@ -55,9 +55,13 @@ On November 1, a [read-only testnet probe](https://github.com/abdullahimujeeb050
 observed bridge `playbackReady: true`, an unpaused access contract with issuance
 on and a 600,000 ms Play policy. The health response did not identify the media
 provider; the reviewed legacy path rejects Stream-backed publications, so the
-probe remained **BLOCKED_OR_UNPROVEN**. It also cannot prove the bridge is
-configured to use the pinned access account or that the inspected source equals
-deployed code. No grant or playback token was requested.
+probe remained **BLOCKED_OR_UNPROVEN**. The chosen adaptive profile hash is in
+the [inspected Studio catalog](https://github.com/4rmus/youtick/blob/410dd180f42d25f77c2317b9659923f6a4149245/protocol/paid-media-livepeer-v1/profiles.json),
+and that source [selects the adapter by profile](https://github.com/4rmus/youtick/blob/410dd180f42d25f77c2317b9659923f6a4149245/workers/livepeer-bridge/src/index.ts#L7131-L7159).
+This is useful source-level evidence, **not** a live Studio-provider or bridge
+configuration attestation. The probe cannot prove the bridge uses the pinned
+access account or that the inspected source equals deployed code. No grant or
+playback token was requested in that probe.
 
 Experimental single-host code reserves a distinct playback key before an order
 in the encrypted journal; checks the original payment, publication and local
@@ -74,9 +78,10 @@ original encrypted journal and its encryption key but **no owner signing key or
 source file**; it rechecks the original payment, linked FINAL grant receipt and
 current access views by the same hash. An unknown result remains pending, and a
 second attempt or silent renewal for the same playback session is refused. A
-verified expired grant is reported expired, not active. These runner checks
-have **synthetic tests only**; there is still no token HTTP client or HLS
-retrieval flow.
+verified expired grant is reported expired, not active. The paid-session grant
+runner has **synthetic tests only**. An experimental token client and bounded
+HLS byte probe now exist as described below; neither has been exercised against
+an actual paid YouTick publication.
 
 The separate opt-in `scripts/probe-youtick-owner-grant.mjs` is a **diagnostic**:
 it uses freshly funded disposable testnet accounts and a hypothetical job ID,
@@ -111,6 +116,59 @@ absent and the vault had no entitlement. The grant was active at that point and
 expires at `2026-11-01T13:46:36.933Z`. This is **authorization evidence only**:
 no quote, FT provider payment, upload, publication, playback token or retrieval
 was performed.
+
+## Experimental token and bounded HLS byte probe
+
+`agent/youtick-retrieval.mjs` provides a narrowly scoped next step after a real
+paid, published session and its original owner grant have been reconciled:
+
+- `requestYoutickPlaybackToken` defaults to a **read-only review**. With
+  `execute: true` it rechecks the original FINAL payment and grant receipts,
+  pinned testnet/vault/market/access identity, matching job and publication,
+  entitlement and unpaused/current scoped grant. It also re-fingerprints the
+  original local source before constructing the signed request. No NEAR
+  transaction or FT payment is made by this module.
+- It records an attempt in the encrypted, exclusive session journal **before**
+  one fixed-host POST. A timeout, redirect, bad response, or crash leaves that
+  attempt pending; subsequent calls do not resend it, even if no POST actually
+  arrived. There is no supported automatic token reconciliation or renewal.
+  A valid short-lived token is stored only inside the original encrypted
+  journal, not returned in the result or written to logs.
+- It checks the returned URL, playback ID, TTL, JWT claims and ES256 signature
+  using the public key embedded in the JWT. **An embedded key is not an
+  authenticated identity.** An independently reviewed SHA-256 fingerprint of
+  the public key's DER SubjectPublicKeyInfo can optionally be supplied as
+  `expectedJwtKeySha256` before the POST and is then enforced and recorded.
+  Without that pin, the bridge's claimed signer remains trusted; no independent
+  signer fingerprint has been established for the live service.
+- `probeYoutickHls` rechecks the original chain evidence and recorded token,
+  then fetches at most an initial playlist, one media playlist and one segment.
+  It returns and records only byte lengths and SHA-256 digests, not the token,
+  URLs or media. Digests can still identify known content; review summaries
+  before sharing them. A successful byte probe **does not prove playable media,
+  source equality, provider honesty, or durable availability**.
+- Requests have a 20-second maximum total HTTP deadline, bounded streaming
+  bodies, no automatic retries and manually validated redirects. By default the
+  JWT is sent only to `https://playback.livepeer.studio`. The caller may
+  explicitly approve exact additional CDN origins from a small source-derived
+  allowlist; that decision trusts those hosts with a bearer token, including
+  their tenant isolation. Wildcard hosts, query strings, encrypted HLS,
+  byte-range and fragmented-MP4 playlists are deliberately unsupported, so
+  normal provider delivery may fail closed and require further protocol work.
+
+The token client has synthetic adversarial tests and a real **loopback** HTTP
+exercise, not a live provider test. An injected transport must not retry and
+must be trusted: a deadline cannot stop a malicious implementation from
+sending later. The local clock, DNS/TLS, RPC, bridge, approved CDN, filesystem
+and process remain trust assumptions; a malicious RPC can falsify all views.
+The file journal is not distributed or rollback-proof. Protect its key and
+backups, and never log the signed envelope or token. While the grant remains
+active, an expired token is reported expired and is not renewed; after grant
+expiry, the current-view check fails closed. These limits make the code useful
+groundwork, not a complete player or a reason to make an otherwise unverified,
+potentially nonrefundable purchase.
+
+## Programmatic grant use
 
 For programmatic use, open the **original** encrypted `FileJournal` for the
 owner/vault, use a non-retrying `PaymentRpcProvider`, and call

@@ -5,6 +5,7 @@
  * for their responses; no quote, reservation, payment or upload is made.
  */
 import { isTransactionHash } from '../shared/direct-payment-settlement.mjs';
+import { YOUTICK_ADAPTIVE_PROFILE } from './youtick-profiles.mjs';
 
 export const YOUTICK_MARKET = 'video-market-v1-260907.youtick-dev-v3.testnet';
 export const YOUTICK_ACCESS = 'video-access-v1-260907.youtick-dev-v3.testnet';
@@ -14,14 +15,25 @@ export const TESTNET_CIRCLE_USDC = '3e2210e1184b45b64c8a434c0a7e7b23cc04ea7eb7a6
 /** A necessary-only, point-in-time legacy playback probe. Health does not
  * reveal which access contract the bridge actually uses, and these views do
  * not establish deployment/source equivalence, caller eligibility or delivery. */
-export function assessYoutickPlaybackReadiness({ chain, marketCodeHash, accessCodeHash, health, state, playPolicy }) {
+export function assessYoutickPlaybackReadiness({ chain, blockHash, marketCodeHash, accessCodeHash, health, state, playPolicy, uploadPolicy }) {
   const reasons = [];
+  const policyValid = uploadPolicy?.version === 1 && uploadPolicy.environment === 'public-testnet' &&
+    uploadPolicy.network === 'testnet' && uploadPolicy.market_contract_id === YOUTICK_MARKET &&
+    uploadPolicy.signed_quote_required === true && Array.isArray(uploadPolicy.profiles) && uploadPolicy.profiles.length <= 10 &&
+    uploadPolicy.profiles.every(profile => profile && typeof profile === 'object' && !Array.isArray(profile) &&
+      typeof profile.profile_id === 'string' && typeof profile.profile_config_sha256 === 'string' && /^[a-f0-9]{64}$/.test(profile.profile_config_sha256));
+  const adaptiveOffered = policyValid ? uploadPolicy.profiles.some(profile => profile.profile_id === 'paid-media-livepeer-v1' &&
+    profile.profile_config_sha256 === YOUTICK_ADAPTIVE_PROFILE) : null;
   if (chain !== 'testnet') reasons.push('RPC did not establish the testnet chain');
+  if (!isTransactionHash(blockHash)) reasons.push('shared FINAL block hash unavailable');
   if (!isTransactionHash(marketCodeHash) || !isTransactionHash(accessCodeHash)) reasons.push('FINAL contract code hashes unavailable');
   if (health?.status !== 'ok' || health?.service !== 'livepeer-bridge' || health?.compactUpload?.network !== 'testnet' ||
       health?.compactUpload?.market !== YOUTICK_MARKET || health?.playbackReady !== true) {
     reasons.push('bridge health does not report legacy playback readiness');
   }
+  // The inspected source maps the adaptive profile to Studio, but health does
+  // not attest which code is deployed or which adapter a future job will use.
+  if (!adaptiveOffered) reasons.push('FINAL public upload policy does not establish the source-reviewed adaptive profile');
   // The inspected legacy /v1 token path rejects Stream-backed publications.
   // A missing kind is unknown, not evidence of Studio compatibility.
   if (health?.mediaProvider?.kind !== 'studio') reasons.push('Studio-backed legacy playback is not established by bridge health');
@@ -34,9 +46,11 @@ export function assessYoutickPlaybackReadiness({ chain, marketCodeHash, accessCo
   }
   return { status: reasons.length ? 'BLOCKED_OR_UNPROVEN' : 'NECESSARY_CHECKS_PASSED', reasons,
     chain: chain === 'testnet' ? chain : null, market: YOUTICK_MARKET, access: YOUTICK_ACCESS,
+    observed_final_block_hash: isTransactionHash(blockHash) ? blockHash : null,
     observed_market_code_hash: isTransactionHash(marketCodeHash) ? marketCodeHash : null,
     observed_access_code_hash: isTransactionHash(accessCodeHash) ? accessCodeHash : null,
     bridge_playback_ready: health?.playbackReady === true, media_provider: ['studio', 'stream'].includes(health?.mediaProvider?.kind) ? health.mediaProvider.kind : null,
+    adaptive_profile_advertised: adaptiveOffered, source_reviewed_adaptive_family: 'studio',
     access_paused: typeof state?.paused === 'boolean' ? state.paused : null,
     grant_issuance_enabled: typeof state?.grant_issuance_enabled === 'boolean' ? state.grant_issuance_enabled : null,
     play_max_ttl_ms: Number.isSafeInteger(playPolicy?.max_ttl_ms) ? playPolicy.max_ttl_ms : null,

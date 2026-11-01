@@ -437,8 +437,9 @@ jobs:
           fi
           exit "$result"
       # Public probe/transaction hashes, chain receipts, encrypted journal and
-      # RSA-sealed disposable keys only. No plaintext private keys or signed
-      # transactions. Always retain original hashes on failure or timeout.
+      # RSA-sealed disposable keys only. No plaintext private keys or raw
+      # signed transaction bytes; RPC receipts may include signatures/nonces.
+      # Always retain original hashes on failure or timeout.
       - name: Preserve original testnet diagnostic and encrypted recovery evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -474,6 +475,9 @@ jobs:
     name: Inspect independent testnet playback readiness (read only)
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/arena/') && contains(github.event.head_commit.message, '[youtick-playback-read]')
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

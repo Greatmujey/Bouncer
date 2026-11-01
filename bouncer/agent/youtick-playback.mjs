@@ -179,8 +179,11 @@ export function verifyYoutickPlayGrantTransaction({ prepared, result, txHash, ow
  * owner grant transaction and both current FINAL access views. The returned
  * signature/token request is sensitive and must not be logged. */
 export function prepareYoutickPlaybackTokenRequest({ journal, sessionId, goal, paymentResult, job, publication, sourceFile,
-  grant, verification, grantResult, grantTxHash, ownerPublicKey, nowMs = Date.now() }) {
+  grant, verification, grantResult, grantTxHash, ownerPublicKey, expectedPrepared, nowMs = Date.now() }) {
   const prepared = prepareYoutickPlayGrant({ journal, sessionId, goal, paymentResult, job, publication, sourceFile, nowMs });
+  if (expectedPrepared !== undefined && !isDeepStrictEqual(prepared, expectedPrepared)) {
+    throw new Error('current publication differs from the original owner grant review');
+  }
   verifyYoutickPlayGrantView(prepared, grant, verification, nowMs);
   verifyYoutickPlayGrantTransaction({ prepared, result: grantResult, txHash: grantTxHash, ownerPublicKey, grant });
   const { playback, key } = recordedPlayback(journal.get(sessionId)), playbackId = prepared.publication.playback_id;

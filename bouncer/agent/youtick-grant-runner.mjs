@@ -12,13 +12,15 @@ import { isDeepStrictEqual } from 'node:util';
 import nearApi from 'near-api-js';
 import { FileJournal } from './procurement.mjs';
 import { validateFtCallGoal, verifyFtCallSettlement } from './ft-call.mjs';
+import { matchYoutickJob } from './youtick-ft-plan.mjs';
 import { signReviewedOneYoctoOwnerCall } from './reviewed-transaction.mjs';
 import { isTransactionHash } from '../shared/direct-payment-settlement.mjs';
 import { YOUTICK_MARKET, YOUTICK_ACCESS } from './youtick-capabilities.mjs';
 import { YOUTICK_V1_CODE_HASH } from './youtick-quote.mjs';
 import { verifyYoutickPlayGrantArgs, YOUTICK_PLAY_ORIGIN_HASH } from './youtick-play-proof.mjs';
 import { prepareYoutickPlayGrant, verifyYoutickPlayGrantBinding, verifyYoutickPlayGrantView,
-  verifyYoutickPlayGrantTransaction, YOUTICK_PLAY_GRANT_GAS } from './youtick-playback.mjs';
+  verifyYoutickPlayGrantTransaction, prepareYoutickPlaybackTokenRequest, matchYoutickPublication,
+  YOUTICK_PLAY_GRANT_GAS } from './youtick-playback.mjs';
 
 // These are observations of deployed hashes, not proof that the deployed
 // bytes correspond to inspected source. An upgrade requires a fresh review.
@@ -184,6 +186,54 @@ async function recoverUnlocked({ journal, grantId, provider, clock }) {
 export async function recoverYoutickPlayGrant({ journal, grantId, provider, clock = Date.now }) {
   if (typeof clock !== 'function') throw new Error('invalid local clock');
   return exclusive(journal, () => recoverUnlocked({ journal, grantId, provider, clock }));
+}
+
+/** Recheck an already recorded grant, its original payment, current publication,
+ * entitlement and access views at a single pinned FINAL block. No transaction
+ * or HTTP request is sent. When includeTokenRequest is true the result contains
+ * a short-lived bearer signature: use it only in memory, never log or persist it.
+ * Without that flag no source file or signing key is needed for reinspection. */
+export async function inspectRecordedYoutickPlayback({ journal, grantId, provider, sourceFile,
+  includeTokenRequest = false, clock = Date.now }) {
+  if (typeof includeTokenRequest !== 'boolean' || typeof clock !== 'function') throw new Error('invalid playback inspection options');
+  return exclusive(journal, async () => {
+    const { entry, binding, goal, prepared } = recordedGrant(journal, grantId);
+    if (entry.status !== 'completed' || !entry.proof) throw new Error('original grant must be reconciled before playback');
+    const { session } = playbackFor(journal, binding.session_id, goal);
+    const block = await pinnedIdentity(provider, goal, binding.vault_code_hash);
+    const { result: paymentResult } = await paymentEvidence(provider, journal, goal);
+    const jobId = prepared.args.job_id;
+    const [job, publication, entitlement, state, grant, verification, grantResult] = await Promise.all([
+      provider.callFunction(YOUTICK_MARKET, 'get_media_job', { job_id: jobId }, block),
+      provider.callFunction(YOUTICK_MARKET, 'get_publication', { publication_id: jobId }, block),
+      provider.callFunction(YOUTICK_MARKET, 'has_entitlement', { account_id: goal.contract_id, publication_id: jobId }, block),
+      provider.callFunction(YOUTICK_ACCESS, 'get_contract_state', {}, block),
+      provider.callFunction(YOUTICK_ACCESS, 'get_session_grant', { session_pk: prepared.args.session_pk }, block),
+      provider.callFunction(YOUTICK_ACCESS, 'verify_session_grant', { session_pk: prepared.args.session_pk, scope: 'Play',
+        resource_id: jobId, origin_hash: YOUTICK_PLAY_ORIGIN_HASH, device_hash: prepared.args.device_hash }, block),
+      provider.txStatusReceipts(entry.tx_hash, goal.owner_account_id, 'FINAL'),
+    ]);
+    if (state?.market_contract_id !== YOUTICK_MARKET || state.paused !== false || entitlement !== true) {
+      throw new Error('current pinned access state or vault entitlement does not permit playback');
+    }
+    if (matchYoutickJob(goal, job).status !== 'MATCHING_PUBLISHED_JOB') {
+      throw new Error('original paid job is not currently published');
+    }
+    const request = JSON.parse(goal.msg);
+    const matched = matchYoutickPublication({ goal, input: session.input, request }, job, publication);
+    if (!isDeepStrictEqual(matched, prepared.publication)) throw new Error('current publication differs from the original owner grant review');
+    const proof = verifyYoutickPlayGrantTransaction({ prepared, result: grantResult, txHash: entry.tx_hash,
+      ownerPublicKey: binding.owner_public_key, grant });
+    if (!isDeepStrictEqual(proof, entry.proof)) throw new Error('original grant receipt differs from its reconciled record');
+    const now = time(clock), bound = verifyYoutickPlayGrantView(prepared, grant, verification, now);
+    const signed = includeTokenRequest ? prepareYoutickPlaybackTokenRequest({ journal, sessionId: binding.session_id, goal,
+      paymentResult, job, publication, sourceFile, grant, verification, grantResult, grantTxHash: entry.tx_hash,
+      ownerPublicKey: binding.owner_public_key, expectedPrepared: prepared, nowMs: now }) : undefined;
+    return { grant_id: grantId, session_id: binding.session_id, vault: goal.contract_id, job_id: jobId,
+      playback_id: matched.playback_id, session_pk: bound.session_pk, grant_expires_at_ms: bound.expires_at_ms,
+      grant_tx_hash: entry.tx_hash, payment_tx_hash: binding.payment_tx_hash, final_block_hash: block.blockId,
+      ...(signed ? { signed } : {}) };
+  });
 }
 
 /** Review or issue one owner-authorized grant for the original paid publication.

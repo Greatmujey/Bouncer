@@ -19,13 +19,15 @@ async function main() {
   // Pin all chain views to one already-finalized block. No provider secrets or
   // playback request are submitted; inability to observe a view is not success.
   const block = typeof access?.block_hash === 'string' ? { blockId: access.block_hash } : null;
-  const [market, state, playPolicy] = block ? await Promise.all([
+  const [market, state, playPolicy, uploadPolicy] = block ? await Promise.all([
     safe(() => provider.query({ request_type: 'view_account', account_id: YOUTICK_MARKET, ...block })),
     safe(() => provider.callFunction(YOUTICK_ACCESS, 'get_contract_state', {}, block)),
     safe(() => provider.callFunction(YOUTICK_ACCESS, 'get_scope_policy', { scope: 'Play' }, block)),
-  ]) : [null, null, null];
-  const result = assessYoutickPlaybackReadiness({ chain: status?.chain_id, marketCodeHash: market?.code_hash,
-    accessCodeHash: access?.code_hash, health, state, playPolicy });
+    safe(() => provider.callFunction(YOUTICK_MARKET, 'get_public_upload_policy', {}, block)),
+  ]) : [null, null, null, null];
+  const result = assessYoutickPlaybackReadiness({ chain: status?.chain_id, blockHash: access?.block_hash,
+    marketCodeHash: market?.block_hash === access?.block_hash ? market?.code_hash : null,
+    accessCodeHash: access?.code_hash, health, state, playPolicy, uploadPolicy });
   console.log(`::notice title=YouTick legacy playback readiness (read only)::${JSON.stringify(result)}`);
 }
 main().catch(error => {
