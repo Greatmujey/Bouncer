@@ -63,6 +63,11 @@ test('credential recovery CLI writes owner-only testnet files without printing o
     child = run(); assert.notEqual(child.status, 0); assert(!child.stderr.includes(payload.owner_secret));
     assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'owner.json'))).private_key, payload.owner_secret);
     fs.chmodSync(privateFile, 0o644); child = run(); assert.notEqual(child.status, 0); assert.match(child.stderr, /owner-only/);
+    fs.chmodSync(privateFile, 0o600);
+    const link = path.join(root, 'private-link.pem'); fs.symlinkSync(privateFile, link);
+    child = spawnSync(process.execPath, [script, envelope, link, 'ref-second'], { env: { ...process.env, HOME: root }, encoding: 'utf8' });
+    assert.notEqual(child.status, 0); assert(!child.stderr.includes(payload.owner_secret));
+    assert.equal(fs.existsSync(path.join(root, '.near-credentials/testnet/ref-second')), false);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
