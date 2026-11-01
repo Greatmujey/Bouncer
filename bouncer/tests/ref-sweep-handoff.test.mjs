@@ -96,7 +96,7 @@ test('operator authenticates the run-bound Actions check before encrypting its s
       steps: [{ name: 'Recover original receipts and perform one scoped sweep', status: 'in_progress' }] },
     check: { id: 111222, name: 'Scoped Ref sweep handoff 123456', head_sha: head, status: 'completed', conclusion: 'success',
       app: { id: 15368, slug: 'github-actions' }, external_id: 'bouncer-ref-sweep-123456',
-      details_url: 'https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/123456', started_at: '2026-11-01T10:00:01Z',
+      details_url: 'https://github.com/abdullahimujeeb0505-stack/Bouncer/runs/111222', started_at: '2026-11-01T10:00:01Z',
       output: { title: 'Scoped Ref sweep handoff request', summary: encodeSweepHandoffRequest(operatorRequest) } } };
     fs.writeFileSync(path.join(bin, 'gh'), `#!/usr/bin/env node
 const fs = require('node:fs'); const data = JSON.parse(fs.readFileSync(process.env.MOCK_DATA, 'utf8'));

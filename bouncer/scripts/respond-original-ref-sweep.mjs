@@ -53,7 +53,7 @@ function main() {
   }
   if (check?.id?.toString() !== checkId || check.name !== `Scoped Ref sweep handoff ${runId}` || check.head_sha !== localHead ||
       check.status !== 'completed' || check.conclusion !== 'success' || check.app?.id !== 15368 || check.app?.slug !== 'github-actions' ||
-      check.external_id !== `bouncer-ref-sweep-${runId}` || check.details_url !== `https://github.com/${REPO}/actions/runs/${runId}` ||
+      check.external_id !== `bouncer-ref-sweep-${runId}` || check.details_url !== `https://github.com/${REPO}/runs/${checkId}` ||
       check.output?.title !== REQUEST_TITLE || typeof check.started_at !== 'string' || typeof job.started_at !== 'string' ||
       !Number.isFinite(Date.parse(check.started_at)) || !Number.isFinite(Date.parse(job.started_at)) ||
       Date.parse(check.started_at) < Date.parse(job.started_at)) {
