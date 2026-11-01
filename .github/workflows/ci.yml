@@ -224,8 +224,9 @@ jobs:
     timeout-minutes: 6
     permissions:
       actions: read
-      contents: read
+      contents: write
       issues: read
+      checks: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -260,7 +261,14 @@ jobs:
           const base = 'https://api.github.com/repos/abdullahimujeeb0505-stack/Bouncer';
           const comments = await fetch(`${base}/issues/6/comments?per_page=1`, opts);
           const contents = await fetch(`${base}/contents/bouncer/README.md?ref=${process.env.GITHUB_SHA}`, { ...opts, signal: AbortSignal.timeout(15_000) });
-          console.log(`::notice title=Scoped channel access::comments_http=${comments.status}; contents_http=${contents.status}`);
+          const contentsWrite = await fetch(`${base}/contents/bouncer/README.md`, { method: 'PUT', headers: { ...headers, 'content-type': 'application/json' },
+            body: JSON.stringify({ message: 'Non-mutating permission probe', content: 'cHJvYmU=', sha: '0'.repeat(40), branch: 'arena/88d70c7c-near-hub' }),
+            signal: AbortSignal.timeout(15_000), redirect: 'error' });
+          const check = await fetch(`${base}/check-runs`, { method: 'POST', headers: { ...headers, 'content-type': 'application/json' },
+            body: JSON.stringify({ name: `Scoped channel diagnostic ${process.env.GITHUB_RUN_ID}`, head_sha: process.env.GITHUB_SHA,
+              status: 'completed', conclusion: 'success', output: { title: 'Read-only test', summary: 'No key or transaction was used.' } }),
+            signal: AbortSignal.timeout(15_000), redirect: 'error' });
+          console.log(`::notice title=Scoped channel access::comments_http=${comments.status}; contents_http=${contents.status}; contents_write_mismatch_http=${contentsWrite.status}; checks_create_http=${check.status}`);
           if (!contents.ok) { console.log(`::error title=Scoped channel unavailable::Repository contents HTTP ${contents.status}`); process.exit(1); }
           console.log('::notice title=Scoped Ref sweep channel probe::Private repository contents are readable; this is not a sweep request.');
           NODE
