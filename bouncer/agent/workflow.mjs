@@ -227,6 +227,7 @@ export async function previewWorkflowBudget({ workflow, remaining, provider, acc
  */
 export async function runWorkflow({ workflow: rawWorkflow, source = {}, resources = {}, provider, journal, execute = false,
   recoverOnly = false, redeemSource = false, log = console.log, runners = {} }) {
+  if (journal?.sharedDirectV3 === true) throw new Error('shared buyer journal does not coordinate dependent or x402 workflows');
   const workflow = validateWorkflow(rawWorkflow), goal = workflow.source.goal, kind = workflow.source.kind;
   if (execute && recoverOnly) throw new Error('execute and recoverOnly cannot be combined');
   if (typeof redeemSource !== 'boolean' || (redeemSource && (!recoverOnly || kind !== 'onchain-proof'))) {

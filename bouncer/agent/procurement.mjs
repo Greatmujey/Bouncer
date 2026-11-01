@@ -14,6 +14,7 @@ import { assertFinalPaymentReceipts } from '../shared/final-payment.mjs';
 import { isTransactionHash, verifyDirectPayment } from '../shared/direct-payment-settlement.mjs';
 import { MonotonicAccount, PaymentRpcProvider } from './near-account.mjs';
 import { canonicalClaimOrigin, signClaimAuthorization } from '../packages/provider-sdk/lib/resource-claim.mjs';
+import { assertJournalScope, reserveJournal, writeJournal } from './journal-write.mjs';
 
 const { KeyPair, KeyPairSigner, transactions, utils } = nearApi;
 const DEFAULT_RPC = 'https://test.rpc.fastnear.com';
@@ -118,6 +119,12 @@ export async function runProcurement({ plan: rawPlan, provider, account, publicK
     if (request.memo.startsWith('bouncer-order-v3:') && !claims.has(request.id)) {
       throw new Error(`${request.id}: seller-v3 memo requires its reviewed authenticated claim origin`);
     }
+  }
+  assertJournalScope(journal, plan.contract_id, plan.owner_account_id);
+  if (journal?.sharedDirectV3 === true) {
+    if (execute && !durablePayment) throw new Error('shared buyer execution requires durable signed-hash payments');
+    if (claims.size !== plan.requests.length) throw new Error('shared buyer supports only authenticated seller-v3 direct payments');
+    if (plan.requests.some(request => !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(request.id))) throw new Error('invalid shared buyer request ID');
   }
   if (!account || account.accountId !== plan.owner_account_id) throw new Error('agent key account does not match the plan owner');
   if (execute && !journal) throw new Error('a journal is required for live execution');
@@ -229,9 +236,10 @@ export async function runProcurement({ plan: rawPlan, provider, account, publicK
     // once at batch preview. A rejection here leaves no pending entry; no
     // signed bytes have been broadcast or persisted.
     await beforePayment(Object.freeze({ ...request }));
-    // Multiple calls can share one open journal in the same process. All
-    // asynchronous preparation is complete: recheck and write synchronously,
-    // so concurrent callers cannot both reserve this ID before broadcasting.
+    // Recheck after asynchronous signing. A file journal reserves synchronously;
+    // the shared journal additionally performs an atomic, awaited DB insert.
+    // Its unique request/challenge/hash constraints are the authority if two
+    // workers (or two calls on the same journal) race.
     if (journal.get(request.id)) throw new Error(`${request.id}: journal entry appeared during payment preparation; recover it instead of paying`);
     if (claims.has(request.id)) {
       const challenge = /^bouncer-order-v3:(?:compute|storage|api):([a-f0-9]{32}):[a-f0-9]{64}$/.exec(request.memo)?.[1];
@@ -241,7 +249,7 @@ export async function runProcurement({ plan: rawPlan, provider, account, publicK
         return prior?.[1] === challenge;
       })) throw new Error(`${request.id}: seller challenge is already recorded in this journal; never pay again`);
     }
-    journal.put(request.id, pending);
+    await reserveJournal(journal, request.id, pending);
     // A synchronous final guard can enforce a time-sensitive condition after
     // fsync but immediately before submission. If it rejects, nothing was sent;
     // retain the pending hash conservatively rather than inventing a retry.
@@ -261,7 +269,7 @@ export async function runProcurement({ plan: rawPlan, provider, account, publicK
       const candidateHash = result?.transaction_outcome?.id;
       if (durablePayment && candidateHash !== txHash) throw new Error('RPC returned a different or missing transaction hash');
       if (!durablePayment && typeof candidateHash === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(candidateHash)) txHash = candidateHash;
-      if (!durablePayment && txHash) journal.put(request.id, { ...pending, tx_hash: txHash });
+      if (!durablePayment && txHash) await writeJournal(journal, request.id, { ...pending, tx_hash: txHash });
       let settlement;
       if (durablePayment) {
         const chain = await provider.txStatusReceipts(txHash, plan.owner_account_id, 'FINAL');
@@ -271,7 +279,7 @@ export async function runProcurement({ plan: rawPlan, provider, account, publicK
       if (typeof txHash !== 'string' || !/^[A-Za-z0-9_-]{1,100}$/.test(txHash)) throw new Error('invalid transaction hash');
       const after = BigInt(await provider.callFunction(request.token, 'ft_balance_of', { account_id: request.payee }, { finality: 'final' }));
       if (after !== before + BigInt(request.amount)) throw new Error('vendor balance delta did not match the payment');
-      journal.put(request.id, { ...pending, status: 'completed', tx_hash: txHash, ...(settlement ? { settlement } : {}), completed_at: new Date().toISOString() });
+      await writeJournal(journal, request.id, { ...pending, status: 'completed', tx_hash: txHash, ...(settlement ? { settlement } : {}), completed_at: new Date().toISOString() });
       log(`[procurement] PAID ${request.id} (${request.resource}): ${request.amount} ${request.token} → ${request.payee} ${EXPLORER(txHash)}`);
       totals.paid++;
     } catch (error) {
@@ -280,7 +288,7 @@ export async function runProcurement({ plan: rawPlan, provider, account, publicK
       const errorHash = error?.transaction_outcome?.id;
       if (!txHash && typeof errorHash === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(errorHash)) {
         txHash = errorHash;
-        journal.put(request.id, { ...pending, tx_hash: txHash });
+        await writeJournal(journal, request.id, { ...pending, tx_hash: txHash });
       }
       const reference = txHash ? ` (tx ${txHash})` : '';
       throw new Error(`${request.id}: payment could not be confirmed${reference}; journal may be pending or uncertain, do not retry automatically: ${error.message}`, { cause: error });

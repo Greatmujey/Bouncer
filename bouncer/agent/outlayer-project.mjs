@@ -247,6 +247,7 @@ export function verifyProjectResult(rawGoal, result, publicKey) {
 }
 
 export async function recoverProjectGoal({ goal: rawGoal, provider, journal, publicKey, update = true, log = console.log }) {
+  if (journal?.sharedDirectV3 === true) throw new Error('shared buyer journal does not coordinate project payments');
   const goal = validateProjectGoal(rawGoal);
   if (!journal || typeof journal.get !== 'function' || typeof journal.put !== 'function') throw new Error('recovery requires the original journal');
   if ((await provider.viewNodeStatus())?.chain_id !== 'testnet') throw new Error('RPC must report testnet');
@@ -265,6 +266,7 @@ export async function recoverProjectGoal({ goal: rawGoal, provider, journal, pub
 }
 
 export async function runProjectGoal({ goal: rawGoal, provider, account, publicKey, journal, execute = false, log = console.log }) {
+  if (journal?.sharedDirectV3 === true) throw new Error('shared buyer journal does not coordinate project payments');
   const goal = validateProjectGoal(rawGoal), p = goal.route.project;
   if (!account || account.accountId !== goal.owner_account_id || !publicKey) throw new Error('agent key account does not match owner');
   if (execute && (!journal || typeof journal.get !== 'function' || typeof journal.put !== 'function')) throw new Error('live execution requires a journal');

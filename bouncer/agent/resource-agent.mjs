@@ -9,6 +9,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRuntime, FileJournal, normalizeProviderRoute, requestFingerprint, runProcurement, validatePlan } from './procurement.mjs';
+import { assertJournalScope, writeJournal } from './journal-write.mjs';
 import { reservePreview } from './preflight.mjs';
 import { readBoundedBytes, readBoundedJson } from '../shared/bounded-json.mjs';
 import { validateProviderOrigin } from '../shared/provider-origin.mjs';
@@ -164,7 +165,7 @@ export async function fulfillPaidResource({ goal, request, contractId, ownerAcco
   } catch (error) {
     // Preserve a successful receipt if a later replay fails. Otherwise mark
     // only delivery unverified: the confirmed payment must never be repeated.
-    if (entry.delivery?.status !== 'verified') journal.put(goal.id, { ...entry,
+    if (entry.delivery?.status !== 'verified') await writeJournal(journal, goal.id, { ...entry,
       delivery: { status: 'unverified', stage, attempted_at: new Date().toISOString() } });
     const message = String(error?.message || 'delivery failed').replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 200);
     throw new Error(`${goal.id}: ${stage} failed after confirmed payment ${entry.tx_hash}; no automatic repayment: ${message}`, { cause: error });
@@ -177,7 +178,7 @@ export async function fulfillPaidResource({ goal, request, contractId, ownerAcco
   } else {
     receipt = createDeliveryReceipt({ contractId, ownerAccountId, request, txHash: entry.tx_hash,
       providerId: goal.provider_id, providerOrigin: goal.provider_url ?? providerUrl, result: verified.result, verification: verified.verification });
-    journal.put(goal.id, { ...entry, delivery: { status: 'verified', receipt } });
+    await writeJournal(journal, goal.id, { ...entry, delivery: { status: 'verified', receipt } });
   }
   log(`[resource-agent] FULFILLED ${goal.id} (${goal.resource}); checked ${verified.verification.scope}; receipt in journal`);
   return { id: goal.id, result: verified.result, receipt };
@@ -195,6 +196,12 @@ export async function runResourceAgent({ contractId, ownerAccountId, goals, getQ
     throw new Error('live execution requires a readable/writable journal and fulfillment source');
   }
   if (journal !== undefined && journal !== null && typeof journal.get !== 'function') throw new Error('invalid journal');
+  assertJournalScope(journal, contractId, ownerAccountId);
+  if (journal?.sharedDirectV3 === true) {
+    if (!Array.isArray(goals) || goals.some(goal => goal?.order_binding !== 'seller-v3')) throw new Error('shared buyer supports only seller-v3 resource goals');
+    if (goals.some(goal => typeof goal?.id !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(goal.id))) throw new Error('invalid shared buyer request ID');
+    if (execute && !durablePayment) throw new Error('shared buyer execution requires durable signed-hash payments');
+  }
   if (typeof beforePayment !== 'function' || typeof beforeBroadcast !== 'function') throw new Error('invalid pre-payment guard');
   if (repositoryLookup !== undefined && typeof repositoryLookup !== 'function') throw new Error('invalid GitHub reference lookup');
   if (execute && Array.isArray(goals) && goals.some(goal => goal?.resource === 'storage') && typeof readStorage !== 'function') {
@@ -354,13 +361,17 @@ export function routedResourceProvider({ providerUrl, goals, overrides = new Map
   };
 }
 
-const USAGE = `Usage: node bouncer/agent/resource-agent.mjs --goals goals.json --key agent-key.json [--journal journal.json] [--local-provider provider.json] [--execute] [--durable]
+const USAGE = `Usage: node bouncer/agent/resource-agent.mjs --goals goals.json --key agent-key.json [--journal journal.json | --shared-journal STABLE_ID] [--local-provider provider.json] [--execute] [--durable]
 
 Quote configured providers and preflight owner-pinned resource goals.
 Default sends no payments; a seller-v2 quote may persist an order at the seller.
 --execute sends real testnet payments, checks bounded example deliveries and
 stores local receipts in the private journal. --durable records the signed
-transaction hash before broadcast; it is required for seller-v2 execution.
+transaction hash before broadcast; it is required for seller-v2 execution and
+seller-v3 execution.
+--shared-journal uses a separately initialized, encrypted PostgreSQL buyer
+journal for direct seller-v3 goals only. It requires --execute --durable and
+secure BOUNCER_BUYER_DATABASE_URL / BOUNCER_BUYER_JOURNAL_KEY_FILE settings.
 Checks happen after payment and do not guarantee delivery or refunds. Use a function-call
 key scoped only to Bouncer execute. Amounts are token smallest units, not USD.
 Never use real funds.
@@ -372,13 +383,16 @@ function parseCli(args) {
     if (arg === '--help') return { help: true };
     if (arg === '--execute') { options.execute = true; continue; }
     if (arg === '--durable') { options.durable = true; continue; }
-    if (['--goals', '--key', '--journal', '--local-provider'].includes(arg) && args[i + 1] && !args[i + 1].startsWith('--')) {
+    if (['--goals', '--key', '--journal', '--shared-journal', '--local-provider'].includes(arg) && args[i + 1] && !args[i + 1].startsWith('--')) {
       const key = arg.slice(2);
       if (options[key]) throw new Error(`duplicate ${arg}`);
       options[key] = args[++i];
     } else throw new Error(`unknown or incomplete argument: ${arg}`);
   }
   if (!options.goals || !options.key) throw new Error('--goals and --key are required');
+  if (options['shared-journal'] && (options.journal || !options.execute || !options.durable)) {
+    throw new Error('--shared-journal requires --execute --durable and cannot be combined with --journal');
+  }
   return options;
 }
 async function main() {
@@ -386,12 +400,18 @@ async function main() {
   if (options.help) { console.log(USAGE); return; }
   const config = JSON.parse(fs.readFileSync(options.goals, 'utf8'));
   if (!config || typeof config !== 'object' || Array.isArray(config)) throw new Error('invalid goals file');
+  if (options['shared-journal'] && (config.journal_path || fs.existsSync(`${options.goals}.bouncer-journal.json`))) {
+    throw new Error('an existing or configured file journal must be reconciled separately; shared and file journals must not be mixed');
+  }
+  if (options['shared-journal'] && (!Array.isArray(config.goals) || config.goals.some(goal => goal?.order_binding !== 'seller-v3'))) {
+    throw new Error('shared buyer supports only seller-v3 resource goals');
+  }
   if (options.durable) console.log('[resource-agent] Durable direct payments enabled: signed hashes are recorded before broadcast.');
   // Validate the configured origin before starting any provider or spending.
   httpResourceProvider(config.provider_url);
   // Check every selected route before starting a development provider.
   routedResourceProvider({ providerUrl: config.provider_url, goals: config.goals });
-  let journal, local;
+  let journal, journalPool, local;
   try {
     let providerUrl = config.provider_url;
     const overrides = new Map();
@@ -409,9 +429,16 @@ async function main() {
     }
     const client = routedResourceProvider({ providerUrl: config.provider_url, goals: config.goals, overrides });
     if (options.execute) {
-      const journalPath = options.journal || config.journal_path || `${options.goals}.bouncer-journal.json`;
-      journal = new FileJournal(journalPath, config.contract_id, config.owner_account_id);
-      console.log(`[resource-agent] Journal: ${path.resolve(journalPath)}`);
+      if (options['shared-journal']) {
+        const { openConfiguredBuyerJournal } = await import('./shared-buyer-config.mjs');
+        ({ journal, pool: journalPool } = await openConfiguredBuyerJournal({ contractId: config.contract_id,
+          ownerAccountId: config.owner_account_id, journalId: options['shared-journal'] }));
+        console.log(`[resource-agent] Using the original shared buyer journal: ${options['shared-journal']}`);
+      } else {
+        const journalPath = options.journal || config.journal_path || `${options.goals}.bouncer-journal.json`;
+        journal = new FileJournal(journalPath, config.contract_id, config.owner_account_id);
+        console.log(`[resource-agent] Journal: ${path.resolve(journalPath)}`);
+      }
     }
     const result = await runResourceAgent({
       contractId: config.contract_id, ownerAccountId: config.owner_account_id, providerUrl: config.provider_url, goals: config.goals,
@@ -422,7 +449,8 @@ async function main() {
     console.log(`[resource-agent] ${options.execute ? 'Finished' : 'Dry run only'}: ${JSON.stringify(result.payments)}; deliveries=${result.deliveries.length}`);
     if (result.payments.blocked) process.exitCode = 2;
   } finally {
-    journal?.close();
+    if (journal) await journal.close();
+    if (journalPool) await journalPool.end();
     if (local) await local.close();
   }
 }

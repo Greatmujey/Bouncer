@@ -44,6 +44,7 @@ async function providerCredit(provider, contractId) {
 
 /** Reusable testnet path; injected runners exist only for offline tests. */
 export async function runPaidProjectMission({ funding, project, resources, provider, journal, execute = false, log = console.log, runners = {} }) {
+  if (journal?.sharedDirectV3 === true) throw new Error('shared buyer journal does not coordinate FT-call or project missions');
   const { fund, paid, resourceIds } = validateMission(funding, project, resources);
   resources = { ...resources, goals: structuredClone(resources.goals) };
   // Fail before funding or paying the independent project, not later at the

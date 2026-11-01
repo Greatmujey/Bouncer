@@ -147,6 +147,14 @@ not prove all possible callback, provider or token failure cases.
    one HTTP send attempt and bounds receipt reads; injected RPC providers can
    have different retry behavior and must be reviewed separately. A timed-out
    read remains unresolved, never evidence that a transaction did not execute.
+   An opt-in [shared buyer journal](SHARED_BUYER.md) now coordinates **direct
+   seller-v3 only** through one trusted PostgreSQL primary, with encrypted
+   bearer claims and atomic goal/challenge/hash reservations before broadcast.
+   It requires a stable mission ID, original encryption key, correct fencing and
+   no stale restore; a different ID with a fresh challenge, a file journal or
+   another database can still duplicate an economic operation. It has synthetic
+   tests, not a live shared-database payment or production exactly-once proof.
+   FT-call, OutLayer, x402 and mixed/dependent workflows are not covered.
    These checks do not protect against a compromised host or owner key. Recovery
    requires trusted FINAL RPC receipts, Bouncer code and token code; it verifies
    payment, not delivery. An unknown or expired hash stays unresolved and is
@@ -178,8 +186,9 @@ not prove all possible callback, provider or token failure cases.
    [shared seller](SHARED_SELLER.md) coordinates v3 claims through one PostgreSQL
    primary, but relies on durable WAL, correct fencing/replication, trusted
    workers and no stale restores; pending work is never automatically retried.
-   Its payments are synthetic in tests, the buyer journal is still local, and
-   it adds no TLS, authenticated users, revocation or independent adoption. The
+   Its payments are synthetic in tests; the default buyer journal is still local,
+   and the separate shared buyer has its own narrow scope and assumptions. The
+   seller adds no TLS, authenticated users, revocation or independent adoption. The
    configured provider checks that its RPC reports testnet, but the RPC can
    lie; an implicit 64-hex token ID does not itself identify a network.
    Orders are sent to the provider; their hashes are on chain.

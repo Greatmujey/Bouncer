@@ -28,6 +28,7 @@ import { startConfiguredProvider } from '../services/resource-provider.mjs';
  * authorization boundary; callers must use the real trusted implementations.
  */
 export async function runMixedMission({ outlayer, resources, provider, journal, execute = false, log = console.log, runners = {} }) {
+  if (journal?.sharedDirectV3 === true) throw new Error('shared buyer journal does not coordinate mixed missions or OutLayer payments');
   const kind = outlayer?.kind ?? 'random';
   if (!['random', 'oracle'].includes(kind)) throw new Error('unsupported independent mission kind');
   const goal = kind === 'oracle' ? validateOracleGoal(outlayer?.goal) : validateOutlayerGoal(outlayer?.goal);

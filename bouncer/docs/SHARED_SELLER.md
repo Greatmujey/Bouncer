@@ -43,10 +43,14 @@ Bouncer deployment and FT contract. No secret buyer key is sent to the seller.
   cause duplicate work. Use properly configured synchronous replication, primary
   fencing, durable WAL/backups and a reviewed disaster-recovery procedure.
 - This coordinates **seller-side claims**, not the buyer's on-chain broadcasts.
-  The buyer's journal is still local, and two buyers/journals can independently
-  pay the same quote. A database cannot reverse an FT transfer, guarantee a
-  refund or establish exactly-once effects at an arbitrary external provider.
-  Keep the original buyer journal and never resend an uncertain payment.
+  The default buyer journal is still local. A separate opt-in
+  [shared buyer journal](SHARED_BUYER.md) coordinates direct seller-v3 payments
+  only when all participating workers use the same authoritative database and
+  stable IDs. It has synthetic tests, not a live shared-database proof; other
+  buyer paths and bypassing workers remain outside its protection. A database
+  cannot reverse an FT transfer, guarantee a refund or establish exactly-once
+  effects at an arbitrary external provider. Preserve original state and never
+  resend an uncertain payment.
 - All workers must be trusted, use identical pinned configuration and the same
   authoritative database. An attacker with a worker's database credentials can
   modify seller state. Do not mix this seller with file-backed instances, a

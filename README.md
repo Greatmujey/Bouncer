@@ -515,8 +515,16 @@ workers. Real-database tests cover separate-process races, crashes, lost commit
 acknowledgments, authenticated storage and buyer recovery; the payments in those
 tests are **synthetic**. Pending work is never automatically taken over, and
 split brain, stale backups, compromised workers or separate databases can defeat
-coordination. It does not protect multiple buyer journals or prove independent
-seller adoption. The live proof above used the older file-backed seller.
+coordination. The seller alone does not coordinate buyer broadcasts or prove
+independent adoption. The live proof above used the older file-backed seller.
+
+A separate opt-in [shared buyer journal](bouncer/docs/SHARED_BUYER.md) reserves
+direct seller-v3 request IDs, seller challenges and signed transaction hashes
+before broadcast, encrypts bearer claims at rest, and supports same-hash recovery
+without the NEAR signing key. PostgreSQL/process tests use **synthetic** receipts;
+no live shared-database payment has been made. It requires one properly fenced,
+durable primary and stable mission IDs; file journals, different fresh missions,
+FT-call, x402, OutLayer and mixed/dependent workflows are not covered.
 
 ### Delivery checks and local receipts
 
@@ -629,7 +637,9 @@ node bouncer/agent/procurement.mjs --plan /path/to/plan.json --key /path/to/agen
 node bouncer/agent/procurement.mjs --plan /path/to/plan.json --key /path/to/agent-key.json --execute
 ```
 
-The journal is local, not a distributed exactly-once mechanism. Before sending,
+The default journal is local, not a distributed exactly-once mechanism. The
+separate [shared buyer](bouncer/docs/SHARED_BUYER.md) covers only opt-in direct
+seller-v3 payments and has not been tested with live payments. Before sending,
 requests are marked pending; if confirmation is uncertain the runner refuses to
 retry automatically. Direct procurement, the resource and autonomous agents,
 and the mixed/paid mission CLIs offer an opt-in `--durable` path for direct FT
@@ -649,7 +659,8 @@ hosts do not share replay protection. V1/v2 have no claim authentication; v3
 uses replayable signed bearer claims. The server supplies no TLS or general
 privacy and must not be exposed publicly or used with real money. The separate
 [shared seller](bouncer/docs/SHARED_SELLER.md) requires one durable, fenced
-PostgreSQL primary and a trusted TLS proxy; it does not change the buyer journal.
+PostgreSQL primary and a trusted TLS proxy; it does not itself change the buyer
+journal. The optional shared buyer is a separate, narrowly scoped component.
 Order data is sent to the provider, and its hash is public in the payment memo.
 
 ## Local tests

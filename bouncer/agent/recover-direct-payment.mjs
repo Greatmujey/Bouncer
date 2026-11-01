@@ -12,6 +12,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { pathToFileURL } from 'node:url';
 import { PaymentRpcProvider } from './near-account.mjs';
 import { FileJournal, normalizeProviderRoute, requestFingerprint, validatePlan } from './procurement.mjs';
+import { assertJournalScope, writeJournal } from './journal-write.mjs';
 import { planFromQuotes, fulfillPaidResource } from './resource-agent.mjs';
 import { isTransactionHash, verifyDirectPayment } from '../shared/direct-payment-settlement.mjs';
 
@@ -20,6 +21,7 @@ export async function recoverDirectPayment({ plan: rawPlan, requestId, provider,
   const request = plan.requests.find(item => item.id === requestId);
   if (!request) throw new Error('request ID is not in the reviewed plan');
   if (!journal || typeof journal.get !== 'function' || typeof journal.put !== 'function') throw new Error('recovery requires the original journal');
+  assertJournalScope(journal, plan.contract_id, plan.owner_account_id);
   const previous = journal.get(requestId);
   if (!previous || previous.fingerprint !== requestFingerprint(request) || !isDeepStrictEqual(previous.request, request)) {
     throw new Error(`${requestId}: journal does not match the reviewed payment`);
@@ -34,7 +36,7 @@ export async function recoverDirectPayment({ plan: rawPlan, requestId, provider,
   const settlement = verifyDirectPayment({ result: chain, contractId: plan.contract_id, ownerAccountId: plan.owner_account_id,
     request, publicKey: previous.agent_public_key, txHash: previous.tx_hash });
   if (previous.status === 'completed' && !isDeepStrictEqual(previous.settlement, settlement)) throw new Error(`${requestId}: recorded settlement differs from chain`);
-  if (update && previous.status === 'pending') journal.put(requestId, { ...previous, status: 'completed', settlement, completed_at: new Date().toISOString() });
+  if (update && previous.status === 'pending') await writeJournal(journal, requestId, { ...previous, status: 'completed', settlement, completed_at: new Date().toISOString() });
   log(`[direct-recovery] REUSED ${requestId}: ${settlement.tx_hash}; no new payment; delivery is not established`);
   return { status: 'REUSED', settlement };
 }
@@ -80,7 +82,7 @@ function parse(args) {
   const out = {};
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--help') out.help = true;
-    else if (['--plan', '--goals', '--id', '--state', '--rpc'].includes(args[i]) && args[i + 1] && !args[i + 1].startsWith('--')) {
+    else if (['--plan', '--goals', '--id', '--state', '--shared-journal', '--rpc'].includes(args[i]) && args[i + 1] && !args[i + 1].startsWith('--')) {
       const key = args[i].slice(2);
       if (out[key]) throw new Error(`duplicate --${key}`);
       out[key] = args[++i];
@@ -91,25 +93,33 @@ function parse(args) {
 async function main() {
   const options = parse(process.argv.slice(2));
   if (options.help) {
-    console.log('Usage: node bouncer/agent/recover-direct-payment.mjs (--plan REVIEWED-PLAN.json | --goals ORIGINAL-GOALS-OR-MISSION.json) --id REQUEST_ID --state ORIGINAL-JOURNAL.json [--rpc URL]');
-    console.log('Reads one recorded --durable payment; no key, signing, broadcast, delivery or automatic repayment.');
+    console.log('Usage: node bouncer/agent/recover-direct-payment.mjs (--plan REVIEWED-PLAN.json | --goals ORIGINAL-GOALS-OR-MISSION.json) --id REQUEST_ID (--state ORIGINAL-JOURNAL.json | --shared-journal STABLE_ID) [--rpc URL]');
+    console.log('Reads one recorded --durable payment; no NEAR signing key, broadcast, delivery or automatic repayment. The shared journal requires its separate encryption key.');
     return;
   }
-  if (Boolean(options.plan) === Boolean(options.goals) || !options.id || !options.state) throw new Error('provide exactly one of --plan or --goals, plus --id and the original --state');
+  if (Boolean(options.plan) === Boolean(options.goals) || Boolean(options.state) === Boolean(options['shared-journal']) || !options.id) {
+    throw new Error('provide exactly one of --plan or --goals, --id, and exactly one original --state or --shared-journal');
+  }
   const input = JSON.parse(fs.readFileSync(path.resolve(home(options.plan || options.goals)), 'utf8'));
   const plan = options.plan ? validatePlan(input) : null;
   const config = options.goals ? (input?.resources ?? input) : null;
   const contractId = plan?.contract_id ?? config?.contract_id, ownerId = plan?.owner_account_id ?? config?.owner_account_id;
   if (typeof contractId !== 'string' || typeof ownerId !== 'string') throw new Error('invalid owner or contract in reviewed input');
-  const state = path.resolve(home(options.state));
-  if (!fs.existsSync(state)) throw new Error('original journal not found; recovery cannot create one');
   const provider = new PaymentRpcProvider(options.rpc || process.env.NEAR_TESTNET_RPC || 'https://test.rpc.fastnear.com');
-  const journal = new FileJournal(state, contractId, ownerId);
+  let journal, pool;
   try {
+    if (options['shared-journal']) {
+      const { openConfiguredBuyerJournal } = await import('./shared-buyer-config.mjs');
+      ({ journal, pool } = await openConfiguredBuyerJournal({ contractId, ownerAccountId: ownerId, journalId: options['shared-journal'] }));
+    } else {
+      const state = path.resolve(home(options.state));
+      if (!fs.existsSync(state)) throw new Error('original journal not found; recovery cannot create one');
+      journal = new FileJournal(state, contractId, ownerId);
+    }
     const result = plan ? await recoverDirectPayment({ plan, requestId: options.id, provider, journal })
       : await recoverDirectResourcePayment({ config, requestId: options.id, provider, journal });
     console.log(JSON.stringify(result.settlement, null, 2));
-  } finally { journal.close(); }
+  } finally { if (journal) await journal.close(); if (pool) await pool.end(); }
 }
 if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url) {
   main().catch(error => { console.error(`[direct-recovery] ERROR: ${error.message}`); process.exitCode = 1; });

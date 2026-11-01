@@ -203,6 +203,7 @@ export function verifyOutlayerResult(rawGoal, result, publicKey) {
 
 /** Re-check an existing payment by hash. This path has no signer and cannot send. */
 export async function recoverOutlayerGoal({ goal: rawGoal, provider, journal, publicKey, update = true, log = console.log }) {
+  if (journal?.sharedDirectV3 === true) throw new Error('shared buyer journal does not coordinate OutLayer payments');
   const goal = validateOutlayerGoal(rawGoal);
   if (!journal || typeof journal.get !== 'function' || typeof journal.put !== 'function') throw new Error('recovery requires the original journal');
   if ((await provider.viewNodeStatus())?.chain_id !== 'testnet') throw new Error('RPC must report testnet');
@@ -226,6 +227,7 @@ export async function recoverOutlayerGoal({ goal: rawGoal, provider, journal, pu
 
 /** Preflight, one guarded send, and chain-based recovery without resending. */
 export async function runOutlayerGoal({ goal: rawGoal, provider, account, publicKey, journal, execute = false, log = console.log }) {
+  if (journal?.sharedDirectV3 === true) throw new Error('shared buyer journal does not coordinate OutLayer payments');
   const goal = validateOutlayerGoal(rawGoal);
   if (!account || account.accountId !== goal.owner_account_id || !publicKey) throw new Error('agent key account does not match the owner');
   if (execute && (!journal || typeof journal.get !== 'function' || typeof journal.put !== 'function')) throw new Error('live execution requires a journal');

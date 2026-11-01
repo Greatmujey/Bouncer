@@ -161,6 +161,7 @@ export function assertOracleFreshForUse(delivery, nowSeconds = Math.floor(Date.n
 
 /** Key-free recovery by the original signed transaction hash, never a send. */
 export async function recoverOracleGoal({ goal: rawGoal, provider, journal, publicKey, update = true, log = console.log }) {
+  if (journal?.sharedDirectV3 === true) throw new Error('shared buyer journal does not coordinate oracle payments');
   const goal = validateOracleGoal(rawGoal);
   if (!journal || typeof journal.get !== 'function' || typeof journal.put !== 'function') throw new Error('recovery requires the original journal');
   if ((await provider.viewNodeStatus())?.chain_id !== 'testnet') throw new Error('RPC must report testnet');
@@ -198,6 +199,7 @@ export async function assertOracleProjectRegistry(provider) {
 
 /** Dry-run or sign one exact-input request after on-chain policy preflight. */
 export async function runOracleGoal({ goal: rawGoal, provider, account, publicKey, journal, execute = false, log = console.log }) {
+  if (journal?.sharedDirectV3 === true) throw new Error('shared buyer journal does not coordinate oracle payments');
   const goal = validateOracleGoal(rawGoal);
   if (!account || account.accountId !== goal.owner_account_id || !publicKey) throw new Error('agent key account does not match the owner');
   if (execute && (!journal || typeof journal.get !== 'function' || typeof journal.put !== 'function')) throw new Error('live execution requires a journal');

@@ -65,8 +65,11 @@ unwanted but catalog-authorized task. Review generated inputs and quote output;
 for higher assurance, plan first and execute separately. Owner config files,
 model/provider endpoints, RPC, the host and deployed contract code must be trusted.
 A contract version string is not code attestation. Non-atomic previews can go
-stale. There is no distributed idempotency; deleting/changing a journal or using
-another host can cause duplicate payments. See [THREAT_MODEL.md](THREAT_MODEL.md).
+stale. The AI/mission paths use a local journal, not distributed idempotency;
+deleting/changing it or using another host can cause duplicate payments. A
+separate opt-in [shared buyer](SHARED_BUYER.md) covers only direct seller-v3
+resource payments, not AI or mixed/dependent missions, and has synthetic tests
+only. See [THREAT_MODEL.md](THREAT_MODEL.md).
 
 The planner can accept an owner-pinned 64-hex implicit token ID in addition to a
 `.testnet` token ID. Such an ID does not identify a network by itself: the

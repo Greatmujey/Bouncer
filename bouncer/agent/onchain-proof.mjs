@@ -130,6 +130,7 @@ function paymentRequest(goal, offer) {
 }
 function plan(goal, request) { return { contract_id: goal.contract_id, owner_account_id: goal.owner_account_id, requests: [request] }; }
 function requireJournal(journal) {
+  if (journal?.sharedDirectV3 === true) throw new Error('shared buyer journal does not coordinate x402 onchain-proof payments');
   if (!journal || typeof journal.get !== 'function' || typeof journal.put !== 'function' || typeof journal.list !== 'function') {
     throw new Error('the original exclusive durable journal is required');
   }
@@ -235,6 +236,7 @@ async function readQuote(goal, fetchImpl, timeoutMs) {
 /** Read-only by default. An execution writes before one send and one redemption. */
 export async function runOnchainProofGoal({ goal: rawGoal, provider, account, publicKey, journal, execute = false,
   fetchImpl = globalThis.fetch, timeoutMs = 20_000, log = console.log }) {
+  if (journal?.sharedDirectV3 === true) throw new Error('shared buyer journal does not coordinate x402 onchain-proof payments');
   const goal = validateOnchainProofGoal(rawGoal);
   if (typeof fetchImpl !== 'function' || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 120_000) throw new Error('invalid HTTP client');
   if (execute) {

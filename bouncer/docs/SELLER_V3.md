@@ -96,8 +96,9 @@ file-backed server binds to loopback only and supplies no TLS, multi-user
 identity, expiry, revocation, secure hosting or distributed replay database. A
 separate experimental [PostgreSQL-backed v3 seller](SHARED_SELLER.md) coordinates
 claims across workers sharing one primary; it has synthetic-payment tests only
-and does not provide TLS, user identity, buyer-side coordination or automatic
-pending-work recovery. The local test
+and does not provide TLS, user identity or automatic pending-work recovery. A
+separate [shared buyer journal](SHARED_BUYER.md) is opt-in for direct v3 payments
+and likewise has only synthetic-payment tests. The local test
 seller origin `http://127.0.0.1:0` is a **development-only reviewed alias** for
 a dynamically assigned loopback port, not a pattern for a remote merchant.
 
