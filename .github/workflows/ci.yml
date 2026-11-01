@@ -10,6 +10,19 @@ jobs:
   js-tests:
     name: JavaScript tests
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        # Ephemeral test database; no testnet credentials or paid calls.
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: bouncer
+          POSTGRES_PASSWORD: bouncer-ci-only
+          POSTGRES_DB: bouncer_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U bouncer -d bouncer_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
     defaults:
       run:
         working-directory: bouncer
@@ -25,6 +38,8 @@ jobs:
       - run: npm test
         env:
           BOUNCER_PIPRAIL_PACKAGE_ROOT: ${{ github.workspace }}/bouncer/interop/piprail/node_modules/@piprail/sdk
+          BOUNCER_TEST_POSTGRES_URL: postgresql://bouncer:bouncer-ci-only@127.0.0.1:5432/bouncer_test
+          BOUNCER_REQUIRE_POSTGRES_TESTS: '1'
       - name: Check the committed wallet bundle matches its source
         run: npm run build:web && git diff --exit-code -- web/wallet.bundle.js
       - name: Test onboarding, mobile layout and testnet wallet UI

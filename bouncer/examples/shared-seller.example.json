@@ -1,0 +1,13 @@
+{
+  "seller_id": "example-shared-v3",
+  "contract_id": "bouncer.testnet",
+  "owner_account_id": "owner.testnet",
+  "seller_origin": "https://seller.example",
+  "port": 8788,
+  "max_quotes": 10000,
+  "products": {
+    "compute": { "policy_id": "compute", "token": "token.testnet", "payee": "seller.testnet", "amount": "1000" },
+    "storage": { "policy_id": "storage", "token": "token.testnet", "payee": "seller.testnet", "amount": "1000" },
+    "api": { "policy_id": "api", "token": "token.testnet", "payee": "seller.testnet", "amount": "1000" }
+  }
+}

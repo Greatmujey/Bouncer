@@ -12,6 +12,9 @@
     "recover-direct": "node agent/recover-direct-payment.mjs",
     "onchain-proof": "node agent/onchain-proof.mjs",
     "inspect-x402": "node agent/inspect-x402.mjs",
+    "shared-provider": "node services/shared-resource-provider.mjs",
+    "init-shared-seller-db": "node scripts/init-shared-seller-db.mjs",
+    "inspect-shared-seller": "node scripts/inspect-shared-seller.mjs",
     "outlayer": "node agent/outlayer.mjs",
     "oracle": "node agent/oracle-outlayer.mjs",
     "ft-call": "node agent/ft-call.mjs",
@@ -38,6 +41,7 @@
     "@modelcontextprotocol/sdk": "1.32.2",
     "express": "5.2.1",
     "near-api-js": "6.5.1",
+    "pg": "8.23.1",
     "zod": "4.6.7"
   },
   "devDependencies": {

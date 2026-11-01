@@ -103,8 +103,10 @@ The newer [seller-v3 protocol](SELLER_V3.md) adds an owner-reviewed seller
 origin and a NEP-413 claim signed by the actual payment transaction key. The
 reference buyer, seller, SDK and storage readback implement it behind explicit
 opt-in. Do not mix its bearer credentials with public v1/v2 recovery artifacts.
-It has offline tests but is not an adopted merchant standard or a production
-identity/security system.
+The file-backed reference seller also has a separately gated live testnet proof
+with self-hosted delivery; it is not an adopted merchant standard or a production
+identity/security system. A separate [shared PostgreSQL seller](SHARED_SELLER.md)
+has synthetic-payment integration tests only and has not been exercised live.
 
 ## 1. Quote an exact order
 

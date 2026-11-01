@@ -92,8 +92,12 @@ off-chain signature is itself a replayable bearer credential. Anyone who steals
 it may replay the same claim or read its stored result. Protect the journal,
 request bodies, logs, backups and transport; use HTTPS for a remote seller and
 properly authenticated sessions/access control where needed. The reference
-server binds to loopback only and supplies no TLS, multi-user identity, expiry,
-revocation, secure hosting or distributed replay database. The local test
+file-backed server binds to loopback only and supplies no TLS, multi-user
+identity, expiry, revocation, secure hosting or distributed replay database. A
+separate experimental [PostgreSQL-backed v3 seller](SHARED_SELLER.md) coordinates
+claims across workers sharing one primary; it has synthetic-payment tests only
+and does not provide TLS, user identity, buyer-side coordination or automatic
+pending-work recovery. The local test
 seller origin `http://127.0.0.1:0` is a **development-only reviewed alias** for
 a dynamically assigned loopback port, not a pattern for a remote merchant.
 

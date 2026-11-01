@@ -146,8 +146,11 @@ Offline mocks are not proof of on-chain behavior.
   is not guaranteed. The provider is not commercial. It can handle up to eight
   unrelated redemptions concurrently within one process and deduplicates the same
   in-flight transaction, but has no multi-host coordination, general user
-  authentication, TLS or production durability. Optional v3 claim signatures
-  are replayable bearer credentials. An optional selector compares quotes from owner-approved endpoints only, within one token per
+  authentication, TLS or production durability. A separate experimental
+  [PostgreSQL-backed v3 seller](bouncer/docs/SHARED_SELLER.md) coordinates claims
+  across workers sharing one primary, but has only synthetic-payment tests and
+  requires careful database/HA operations. V3 claim signatures are replayable
+  bearer credentials. An optional selector compares quotes from owner-approved endpoints only, within one token per
   resource; every quote must match the approved constraints. The model proposes
   tasks but cannot choose financial authority. It requires a separately supplied
   model. Delivery checks cover only the bounded example protocols: storage is
@@ -506,6 +509,15 @@ both recovery artifacts private. This remains a custom, unaudited testnet
 protocol—not an independent FT merchant integration, x402 `exact`, or a
 guarantee of confidential hosting.
 
+A separate [shared seller-v3 prototype](bouncer/docs/SHARED_SELLER.md) now uses
+one PostgreSQL primary to atomically reserve quotes and payment hashes across
+workers. Real-database tests cover separate-process races, crashes, lost commit
+acknowledgments, authenticated storage and buyer recovery; the payments in those
+tests are **synthetic**. Pending work is never automatically taken over, and
+split brain, stale backups, compromised workers or separate databases can defeat
+coordination. It does not protect multiple buyer journals or prove independent
+seller adoption. The live proof above used the older file-backed seller.
+
 ### Delivery checks and local receipts
 
 The experimental [seller verification SDK](bouncer/packages/provider-sdk/README.md)
@@ -635,7 +647,9 @@ FT contracts; it is not a trustless payment proof. A local exclusive lock
 allows one provider process per data directory, but separate directories or
 hosts do not share replay protection. V1/v2 have no claim authentication; v3
 uses replayable signed bearer claims. The server supplies no TLS or general
-privacy and must not be exposed publicly or used with real money.
+privacy and must not be exposed publicly or used with real money. The separate
+[shared seller](bouncer/docs/SHARED_SELLER.md) requires one durable, fenced
+PostgreSQL primary and a trusted TLS proxy; it does not change the buyer journal.
 Order data is sent to the provider, and its hash is public in the payment memo.
 
 ## Local tests
@@ -645,6 +659,9 @@ npm install --prefix bouncer
 npm test --prefix bouncer
 ```
 
+The shared-seller integration tests require a disposable PostgreSQL database and
+are skipped locally without `BOUNCER_TEST_POSTGRES_URL`; CI supplies one and
+requires them. See [shared seller tests](bouncer/docs/SHARED_SELLER.md#tests).
 The JavaScript policy simulation uses exact rolling windows and is not identical
 to the contract's conservative hourly buckets. Offline demo tests use a mocked
 NEAR transport; neither proves live blockchain behavior. CI also runs native Rust
@@ -668,7 +685,9 @@ real testnet transactions. To build locally with Rust and the wasm target, run
 - `bouncer/agent/market-discovery.mjs` — isolated, read-only public catalog search.
 - `bouncer/agent/goal-planner.mjs`, `autonomous.mjs` — model proposals constrained by the owner catalog.
 - `bouncer/agent/quote-comparison.mjs` — opt-in, same-token selection among owner-approved providers.
-- `bouncer/services/resource-provider.mjs` — self-hosted test-only resource provider.
+- `bouncer/services/resource-provider.mjs` — file-backed test-only resource provider.
+- `bouncer/services/shared-resource-provider.mjs` — experimental PostgreSQL-backed seller-v3 workers.
+- `bouncer/scripts/inspect-shared-seller.mjs` — key-free, read-only shared seller status.
 - `bouncer/demo/index.html` — clearly labelled offline simulation only; it sends
   no transactions and does not exactly match contract behavior.
 - `bouncer/tests/` — offline regression tests for the demo script.

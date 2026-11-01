@@ -16,6 +16,7 @@ that agent.
 | Circle testnet USDC to a PipRail SDK gate | A [fresh testnet run](ONCHAIN_PROOF.md#evidence-and-limitations) obtained a quote, sent one guarded payment, recovered it, and obtained a response verified by the published SDK. | The gate was local and self-hosted; testnet support used our wrapper. It is custom `onchain-proof`, not x402 `exact`. |
 | x402 source → three dependent resources | [Synthetic tests](DEPENDENT_WORKFLOWS.md#paid-x402-data-as-a-workflow-source-experimental) compose the published PipRail verifier with seller-v3 compute, storage, API and recovery. | No live combined workflow or independent FT seller; x402 content and public proof remain untrusted. |
 | Authenticated Bouncer seller-v3 | A [fresh testnet proof](SELLER_V3.md#separate-fresh-seller-v3-testnet-proof) ran native OutLayer → authenticated compute, storage and API with key-free FT recovery. | This is a custom testnet protocol with a self-hosted seller, not independent adoption. Claim signatures remain bearer credentials. |
+| Shared seller-v3 replay coordination | [Real PostgreSQL tests](SHARED_SELLER.md) exercise multiple worker processes, crashes and uncertain commits. | Synthetic payments only; one trusted, durable primary, with no automatic pending-work takeover or buyer-side distributed journal. |
 | Owner-only Ref testnet setup | Owner acquired test tokens and separately funded the vault in the live runs. | This is **not** an agent-guarded swap. Plain outgoing Ref `ft_transfer` does not call Bouncer's deposit hook. |
 
 No independent FT-paid commercial compute, storage or API purchase is
@@ -55,6 +56,20 @@ with that SDK/configuration, not adoption by someone else.
    request is reconciled. A buyer cannot fix a seller's replay store or prove a
    seller has delivered quality merely by checking an HTTP 200.
 
+### Additional gateway candidate checked on 1 November 2026
+
+[Agent Commerce Gateway](https://github.com/devlab-group/agent-commerce/tree/aced1e629497104ce85e339ad939b97f840c485f)
+reports partial NEAR support and its operator [requested testnet facilitator access](https://github.com/fastnear/x402-facilitator/issues/181).
+Its [NEAR example](https://github.com/devlab-group/agent-commerce/blob/aced1e629497104ce85e339ad939b97f840c485f/examples/near-testnet/README.md)
+uses canonical x402 `exact`, an SDK facilitator and a buyer full-access key;
+its [payload inspector](https://github.com/devlab-group/agent-commerce/blob/aced1e629497104ce85e339ad939b97f840c485f/src/payments/x402/near.ts)
+requires a signed delegate calling the token's `ft_transfer` with one yoctoNEAR.
+That is not Bouncer's zero-deposit `execute` and nested transfer, so it cannot
+be used without a reviewed extension and merchant cooperation. The issue is an
+access request, not evidence that a public independent merchant is accepting
+Bouncer orders. This was source/documentation research only: no quote, proof or
+payment was sent.
+
 The opt-in onchain-proof buyer makes at most one payment broadcast and one paid
 HTTP request per preserved journal; after an ambiguous result it stops. A different or
 lost journal, a different process, an untrusted RPC, an untrusted seller, or
@@ -81,9 +96,11 @@ following checklist separates what the prototype does from what remains:
 - The seller independently checks FINAL transaction and receipts, binds the
   authorization to the *actual transaction signing public key*, checks the
   challenge was issued for those exact terms, and atomically claims both the
-  quote and canonical transaction hash before fulfillment. Concurrent workers
-  need a shared transactional store; a process-local cache or filesystem lock
-  on one host is insufficient for a distributed merchant.
+  quote and canonical transaction hash before fulfillment. A separate
+  [PostgreSQL-backed prototype](SHARED_SELLER.md) now tests shared atomic claims
+  across workers with synthetic receipts; it needs operational hardening and
+  live/independent validation. A process-local cache or filesystem lock on one
+  host remains insufficient for a distributed merchant.
 - A copied on-chain memo/hash alone should not authorize a claim. Nevertheless,
   the off-chain signature or response can itself be copied if leaked: use TLS,
   protect logs, authorize access to returned data, and define principal/session
@@ -109,10 +126,11 @@ following checklist separates what the prototype does from what remains:
 - **Service integrity:** independently verifiable invoices/receipts, durable
   storage and retrieval commitments, source provenance and freshness, and
   well-defined refunds are separate from payment authorization.
-- **Operations and scale:** resilient shared state with atomic claims, key and
-  allowance lifecycle, monitoring, bounded RPC/HTTP clients, incident
-  reconciliation, quota controls and multi-agent coordination are still needed.
-  Local journals and a single reference-provider directory are not a
+- **Operations and scale:** the experimental shared seller provides atomic v3
+  claims on one PostgreSQL primary, not a complete HA or multi-agent solution.
+  Failover/fencing, stale-backup recovery, key and allowance lifecycle,
+  monitoring, bounded clients, reconciliation and quota controls remain.
+  Buyer journals and the original reference-provider directory are local, not a
   distributed transaction system.
 - **Safety and product:** independent audit, model/prompt defenses and real
   wallet testing are needed. Tour and expanded MCP work remain downstream of

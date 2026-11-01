@@ -174,8 +174,12 @@ not prove all possible callback, provider or token failure cases.
    reconciliation. Different directories/hosts have no shared replay protection.
    Storage is plaintext. V1/v2 storage is publicly retrievable. Opt-in
    [seller-v3](SELLER_V3.md) requires a transaction-key-signed bearer claim for
-   redemption and readback, but leaked claims are replayable; it does not add
-   TLS, authenticated users, revocation or distributed coordination. The
+   redemption and readback, but leaked claims are replayable. A separate
+   [shared seller](SHARED_SELLER.md) coordinates v3 claims through one PostgreSQL
+   primary, but relies on durable WAL, correct fencing/replication, trusted
+   workers and no stale restores; pending work is never automatically retried.
+   Its payments are synthetic in tests, the buyer journal is still local, and
+   it adds no TLS, authenticated users, revocation or independent adoption. The
    configured provider checks that its RPC reports testnet, but the RPC can
    lie; an implicit 64-hex token ID does not itself identify a network.
    Orders are sent to the provider; their hashes are on chain.
