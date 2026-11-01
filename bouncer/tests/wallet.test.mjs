@@ -43,6 +43,10 @@ function connectorClass(config = {}) {
 test('wallet origin policy blocks shared origins, unapproved sites, HTTP and iframes', () => {
   assert.equal(walletOriginAllowed(location('https://www.madethis.website/s/abc/'), true), false);
   assert.equal(walletOriginAllowed(location('https://www.madethis.website/s/abc/'), true, 'https://www.madethis.website'), false);
+  // Different GitHub Pages repository paths share the account's origin.
+  assert.equal(walletOriginAllowed(location('https://owner.github.io/Bouncer/'), true), false);
+  assert.equal(walletOriginAllowed(location('https://owner.github.io/Bouncer/'), true, 'https://owner.github.io'), false);
+  assert.equal(walletOriginAllowed(location('https://bouncer-testnet.vercel.app/'), true), false);
   assert.equal(walletOriginAllowed(location('https://other.example/'), true), false);
   assert.equal(walletOriginAllowed(location('http://other.example/'), true, 'http://other.example'), false);
   assert.equal(walletOriginAllowed(location('https://other.example/'), true, 'https://other.example'), true);
@@ -61,9 +65,15 @@ test('wallet manifests are curated testnet, no-add-key choices with immutable ex
   }
 });
 
-test('shared guest and embedded preview never instantiate the wallet connector', async () => {
-  for (const [url, top] of [['https://www.madethis.website/s/abc/', true], ['https://4173-example.e2b.app/', false]]) {
-    const browser = fakeBrowser(url, { top });
+test('shared guest, GitHub Pages and embedded preview never instantiate the wallet connector', async () => {
+  const cases = [
+    ['https://www.madethis.website/s/abc/', true, ''],
+    ['https://owner.github.io/Bouncer/', true, 'https://owner.github.io'],
+    ['https://bouncer-testnet.vercel.app/', true, ''],
+    ['https://4173-example.e2b.app/', false, ''],
+  ];
+  for (const [url, top, approved] of cases) {
+    const browser = fakeBrowser(url, { top, approved });
     await initWallet({ window: browser.win, document: browser.doc, NearConnector: class { constructor() { throw new Error('must not initialize'); } } });
     assert.equal(browser.nodes['wallet-connect'].disabled, true);
     assert.match(browser.nodes['wallet-status'].textContent, /disabled/);

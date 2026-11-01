@@ -48,3 +48,40 @@ the real bundled NEAR Connect sandbox bridge. It also opens and cancels the
 pinned real Meteor wallet UI with its backend blocked. It does not claim a real
 wallet login. The guest-publication workflow uploads only the explicit static files;
 wallet connection stays disabled on that shared-origin preview.
+
+## Durable public hosting
+
+A durable public URL can host this same read-only site while the source
+repository stays private. The site is a historical walkthrough, **not** a live
+agent dashboard: only its optional balance-refresh button performs read-only
+NEAR testnet RPC calls. Links to GitHub Actions evidence in a private repository
+will not be accessible to visitors without repository access. A durable URL is
+not a security audit, real wallet sign-in, or proof of independent FT-paid
+fulfillment.
+
+`.github/workflows/github-pages.yml` is prepared to publish on changes to the
+website on `main`, or by manual dispatch, **after** it is merged and GitHub
+Pages is enabled with GitHub Actions as the publishing source. It does not turn
+on Pages or change the repository's visibility. GitHub Pages is available for
+private repositories only on supported paid plans; the current plan and Pages
+permissions must be checked separately. The conventional project URL would be
+`https://abdullahimujeeb0505-stack.github.io/Bouncer/`, but it must not be
+advertised as live until deployment and public access have been verified.
+
+The Pages workflow, the temporary preview uploader, and a production hosting
+build can all use `scripts/stage-public-web.mjs`'s common allowlist. Staging
+creates a new directory containing exactly seven reviewed website assets; it
+refuses symlinked assets, an existing output directory, and any nonempty or
+duplicate wallet-origin override. It does not copy the checkout, secrets,
+credential envelopes, journal files, or evidence artifacts. Vercel is an
+alternative host: its Git integration can read the private repository to build,
+but the public output should be only the seven staged files. Verify the final
+public files and access before sharing any deployment.
+
+GitHub Pages project sites under the same account share the `owner.github.io`
+origin, even when their repository paths differ. The wallet connector blocks
+`github.io` hosts even if an origin is explicitly approved. Other public hosts,
+including Vercel, remain unapproved by default, and public staging currently
+requires the wallet origin to be empty. A future wallet-enabled deployment needs
+an isolated custom origin, a separate security review and real end-to-end
+sign-in testing; do not enable it merely because a URL is stable.
