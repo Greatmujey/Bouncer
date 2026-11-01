@@ -24,7 +24,7 @@ function writeExclusive(dir, name, data) {
 }
 function main() {
   if (process.argv.length !== 5 || !/^[A-Za-z0-9_-]{1,64}$/.test(process.argv[4])) {
-    throw new Error('usage: node open-ref-demo-credentials.mjs ENVELOPE.json PRIVATE_KEY.pem OUTPUT_NAME');
+    throw new Error('usage: node open-testnet-demo-credentials.mjs ENVELOPE.json PRIVATE_KEY.pem OUTPUT_NAME');
   }
   const file = fs.statSync(process.argv[2]);
   if (!file.isFile() || file.size > 16_384) throw new Error('invalid recovery envelope file');
@@ -37,13 +37,19 @@ function main() {
         (typeof process.getuid === 'function' && stat.uid !== process.getuid())) throw new Error('testnet credential directories must be owner-only and not symlinks');
   }
   const dir = path.join(root, process.argv[4]); fs.mkdirSync(dir, { mode: 0o700 }); // never overwrite a previous recovery
-  const keys = [['owner', payload.owner_account_id, payload.owner_secret], ['input', payload.owner_account_id, payload.input_secret],
+  const keys = payload.version === 3 ? [
+    ['owner', payload.owner_account_id, payload.owner_secret], ['contract', payload.contract_id, payload.contract_secret],
+    ['funding', payload.owner_account_id, payload.funding_secret], ['project', payload.owner_account_id, payload.project_secret],
+  ] : [
+    ['owner', payload.owner_account_id, payload.owner_secret], ['input', payload.owner_account_id, payload.input_secret],
     ['sweep', payload.owner_account_id, payload.sweep_secret], ...(payload.version === 2 ? [
       ['contract', payload.contract_id, payload.contract_secret], ['router', payload.router_id, payload.router_secret],
-    ] : [])];
+    ] : []),
+  ];
   for (const [name, account_id, secret] of keys) writeExclusive(dir, `${name}.json`, { account_id, private_key: secret });
   writeExclusive(dir, 'identity.json', { version: payload.version, owner_account_id: payload.owner_account_id, contract_id: payload.contract_id,
-    router_id: payload.router_id, public_keys: Object.fromEntries(keys.map(([name, , secret]) => [name, nearApi.KeyPair.fromString(secret).getPublicKey().toString()])) });
+    ...(payload.version === 3 ? { purpose: payload.purpose } : { router_id: payload.router_id }),
+    public_keys: Object.fromEntries(keys.map(([name, , secret]) => [name, nearApi.KeyPair.fromString(secret).getPublicKey().toString()])) });
   const dfd = fs.openSync(dir, 'r'), pfd = fs.openSync(root, 'r');
   try { fs.fsyncSync(dfd); fs.fsyncSync(pfd); } finally { fs.closeSync(dfd); fs.closeSync(pfd); }
   console.log(`Restored disposable testnet keys into ${dir}. Verify each public key and route against FINAL chain state before use; never resend an uncertain transaction.`);

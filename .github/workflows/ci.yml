@@ -217,6 +217,76 @@ jobs:
       - name: Inspect finalized accounts, storage and quote without signing
         run: node bouncer/scripts/probe-ref-demo-setup.mjs bouncer-ref-5b2d78f8.testnet owner.bouncer-ref-5b2d78f8.testnet
 
+  inspect-original-guarded-ref:
+    name: Inspect the original guarded Ref input (read only)
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[inspect-original-ref-20261101]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: guarded-ref-testnet-recovery
+          run-id: 41299191712
+          github-token: ${{ github.token }}
+          path: original-ref-evidence
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      - name: Inspect original FINAL receipt and balances without a key or send
+        run: node bouncer/scripts/inspect-original-ref-swap.mjs original-ref-evidence
+
+  paid-vrf-one-shot:
+    name: Independent FT-paid VRF diagnostic (testnet)
+    # Fresh testnet account and seed, never the separate unresolved burn hash.
+    # The exact parent + marker + first attempt prevent an incidental rerun.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/arena/88d70c7c-near-hub' && github.event.before == '08ae0b14410b9409ee7bf93d64a3bff33750cf60' && github.event.repository.private == true && github.run_attempt == '1' && contains(github.event.head_commit.message, '[paid-vrf-proof-20261101]')
+    needs: [js-tests, contract-tests, build-contract]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: bouncer-wasm
+          path: .
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      - name: Recheck the pinned independent testnet VRF terms (read only)
+        run: node bouncer/scripts/probe-outlayer-vrf.mjs
+      - name: Run one guarded independent testnet diagnostic and recover original hashes
+        shell: bash
+        env:
+          BOUNCER_PAID_PROBE: vrf
+          BOUNCER_VRF_DEMO_ACK: testnet-only-one-shot
+          BOUNCER_VRF_DEMO_DIR: ${{ runner.temp }}/bouncer-vrf-proof
+        run: |
+          set +e
+          node bouncer/demo-ft-call.mjs 2>&1 | tee "$RUNNER_TEMP/paid-vrf-demo.log"
+          result=${PIPESTATUS[0]}
+          if [ "$result" -ne 0 ]; then
+            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-4000).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=Paid testnet VRF diagnostic failed::"+s)' "$RUNNER_TEMP/paid-vrf-demo.log"
+          fi
+          exit "$result"
+      # Public identities/journals/results plus encrypted testnet credentials;
+      # no plaintext secrets or signed transactions. Retain even on failure.
+      - name: Preserve original VRF testnet recovery evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: paid-vrf-testnet-recovery
+          path: ${{ runner.temp }}/bouncer-vrf-proof/**
+          if-no-files-found: ignore
+          retention-days: 90
+
   guarded-ref-one-shot:
     name: One-shot guarded Ref swap and vault credit (testnet)
     # The explicit parent and marker prohibit reruns or incidental paid runs.

@@ -229,6 +229,19 @@ endpoint](https://testnet-api.outlayer.ai/vrf/pubkey) and current registry views
 must be rechecked before any new, explicitly approved order. Do not use this as
 a substitute for resolving or replaying the separate ambiguous burn transaction.
 
+An opt-in one-shot harness for this VRF diagnostic is prepared but has not yet
+shown a live result. It uses a fresh testnet contract, account and fixed new
+seed—not the unresolved burn account or hash. Before creating an account it
+seals its disposable owner, deployment, funding and project keys to a dedicated
+RSA recovery public key; the corresponding private key remains owner-only
+outside Git at `~/.near-credentials/testnet/bouncer-outlayer-vrf-recovery-private.pem`.
+Its owner setup transfers, OutLayer prepaid deposit and project payment each
+record an original hash before broadcast. An uncertain outcome stops and is not
+retried. The envelope is testnet-only, does not authenticate its creator, and
+does not replace checking recovered keys against FINAL chain state. A genuine
+signed diagnostic would still not establish an independent commercial seller,
+Circle-USDC acceptance, unbiased key selection or a TEE attestation.
+
 Provider-held credit is distinct from Bouncer's FT vault. In this path a project
 refund can be credited to Bouncer's balance **at OutLayer**, not returned to
 Bouncer's vault. The conservative local ledger can understate returned credit

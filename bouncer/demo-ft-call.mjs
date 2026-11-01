@@ -1,7 +1,7 @@
 // LIVE TESTNET ONLY. Acquire a tiny amount of test USDC.e from an independent
 // Ref pool as owner setup; then use a restricted key to move a capped amount
 // from Bouncer to OutLayer's prepaid balance via an owner-pinned NEP-141 call,
-// then buy one pinned independent fetch or diagnostic burn execution under
+// then buy one pinned independent fetch, diagnostic burn or VRF execution under
 // separate native and prepaid policies. Circle USDC is a different token and
 // is not used here. This is a test connector, not a commercial service. Never
 // retry an ambiguous payment.
@@ -22,6 +22,9 @@ import { createResourceProvider } from './services/resource-provider.mjs';
 import { httpResourceProvider } from './agent/resource-agent.mjs';
 import { validateRpcEndpoint } from './shared/rpc-endpoint.mjs';
 import { waitForNewTestnetKey } from './shared/testnet-ready.mjs';
+import { readBoundedJson } from './shared/bounded-json.mjs';
+import { sealTestnetCredentials, testnetRecoveryKeyId } from './agent/testnet-credential-envelope.mjs';
+import { submitOwnerSetupOnce } from './agent/testnet-owner-setup.mjs';
 
 const { KeyPair, KeyPairSigner, transactions } = nearApi;
 const RPC = validateRpcEndpoint(process.env.NEAR_TESTNET_RPC || 'https://test.rpc.fastnear.com');
@@ -30,10 +33,14 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const ONE = 10n ** 24n, TGAS = 10n ** 12n;
 const TOKEN = 'usdc.fakes.testnet', WRAP = 'wrap.testnet', REF = 'ref-finance-101.testnet', OUTLAYER = 'outlayer.testnet';
 const PROBE = process.env.BOUNCER_PAID_PROBE || 'fetch';
-if (!['fetch', 'burn'].includes(PROBE)) throw new Error('BOUNCER_PAID_PROBE must be fetch or burn');
-const PROBE_INPUT = PROBE === 'burn' ? '{"operation":"burn","rounds":50}' : '{"operation":"fetch"}';
-const PROBE_SHARE_BP = PROBE === 'burn' ? 3333 : 10_000;
-const MSG = '{"action":"deposit_balance"}', USD_AMOUNT = PROBE === 'burn' ? 10_000n : 15_000n, REFUND_AMOUNT = 10n ** 20n;
+if (!['fetch', 'burn', 'vrf'].includes(PROBE)) throw new Error('BOUNCER_PAID_PROBE must be fetch, burn or vrf');
+const VRF_PIN = 'c0c5aeae1688c2f7cc2350aae1ee3ce96eddc0de84d678db873de48268f8cfa8';
+const VRF_RECOVERY_KEY_ID = 'bf02736cddec49ea0c015b4a8da99e1904956f8d6254d228a794b83c0bd07b04';
+const VRF_SEED = 'bouncer_vrf_live_20261101';
+const PROBE_INPUT = PROBE === 'burn' ? '{"operation":"burn","rounds":50}' :
+  PROBE === 'vrf' ? JSON.stringify({ operation: 'vrf', seed: VRF_SEED }) : '{"operation":"fetch"}';
+const PROBE_SHARE_BP = PROBE === 'burn' ? 3333 : PROBE === 'vrf' ? 0 : 10_000;
+const MSG = '{"action":"deposit_balance"}', USD_AMOUNT = PROBE === 'fetch' ? 15_000n : 10_000n, REFUND_AMOUNT = 10n ** 20n;
 const PROJECT = 'connectors.outlayer.testnet/connector-probe';
 // Published version and author reviewed via the live read-only catalog; never
 // silently follow the mutable active version or reprice after approval.
@@ -59,10 +66,17 @@ async function assertProviderTerms() {
   assertProjectRegistry({ project: { project_id: PROJECT, version_key: PROJECT_VERSION, token: TOKEN,
     attached_usd: USD_AMOUNT.toString(), input_data: PROBE_INPUT }, expectedAuthor: PROJECT_AUTHOR,
     configuredToken: token, pricing, versionInfo: version, registry: project, estimate, maximumNative: PROJECT_NATIVE_MAX.toString() });
+  if (PROBE === 'vrf') {
+    const response = await fetch('https://testnet-api.outlayer.ai/vrf/pubkey', { redirect: 'error', signal: AbortSignal.timeout(15_000) });
+    if (!response.ok) throw new Error(`testnet VRF key endpoint returned HTTP ${response.status}`);
+    const body = await readBoundedJson(response, { maxBytes: 4096, label: 'testnet VRF key' });
+    if (body?.vrf_public_key_hex !== VRF_PIN) throw new Error('independently observed testnet VRF key changed; no new payment');
+  }
 }
 function probeSummary(result) {
   if (result?.operation === 'burn') return `operation=burn; rounds=${result.rounds_done}; hashes=${result.hashes}; checksum_u64=${result.checksum}`;
   if (result?.operation === 'fetch') return `operation=fetch; http_status=${result.http_status}`;
+  if (result?.operation === 'vrf') return `operation=vrf; request_id=${result.request_id}; output=${result.output_hex}; pinned_key=${result.public_key_hex}`;
   throw new Error('unexpected verified probe result');
 }
 
@@ -197,6 +211,7 @@ async function provePaidMission({ contract, contractId, owner, ownerId, fundingA
 }
 
 async function main() {
+  if (PROBE === 'vrf' && process.env.BOUNCER_VRF_DEMO_ACK !== 'testnet-only-one-shot') throw new Error('explicit testnet-only VRF acknowledgement is required');
   validateConfiguredFileJournalKey(); // Before any live setup, funding or network request.
   if ((await provider.viewNodeStatus())?.chain_id !== 'testnet') throw new Error('RPC must report testnet');
   await assertProviderTerms();
@@ -205,6 +220,23 @@ async function main() {
   const contractKey = KeyPair.fromRandom('ed25519'), ownerKey = KeyPair.fromRandom('ed25519');
   const agentKey = KeyPair.fromRandom('ed25519'), attackKey = KeyPair.fromRandom('ed25519'), projectKey = KeyPair.fromRandom('ed25519');
   const suffix = crypto.randomBytes(4).toString('hex'), contractId = `bouncer-ft-${suffix}.testnet`, ownerId = `owner.${contractId}`;
+  let dir;
+  if (PROBE === 'vrf') {
+    // Escrow every key needed to operate this disposable setup BEFORE the
+    // helper creates an account or any test token can be acquired/spent.
+    dir = process.env.BOUNCER_VRF_DEMO_DIR || fs.mkdtempSync(path.join(os.tmpdir(), 'bouncer-vrf-proof-'));
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const pem = fs.readFileSync(path.join(ROOT, 'bouncer/config/testnet-outlayer-vrf-recovery-public.pem'), 'utf8');
+    if (testnetRecoveryKeyId(pem) !== VRF_RECOVERY_KEY_ID) throw new Error('unexpected VRF testnet recovery public key');
+    const envelope = sealTestnetCredentials({ version: 3, purpose: 'outlayer-vrf-testnet', owner_account_id: ownerId,
+      contract_id: contractId, owner_secret: ownerKey.toString(), contract_secret: contractKey.toString(),
+      funding_secret: agentKey.toString(), project_secret: projectKey.toString() }, pem);
+    fs.writeFileSync(path.join(dir, 'sealed-testnet-credentials.json'), JSON.stringify(envelope, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
+    fs.writeFileSync(path.join(dir, 'identity.json'), JSON.stringify({ contract: contractId, owner: ownerId,
+      contract_key: contractKey.getPublicKey().toString(), owner_key: ownerKey.getPublicKey().toString(),
+      funding_key: agentKey.getPublicKey().toString(), project_key: projectKey.getPublicKey().toString() }, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
+    console.log(`::notice title=Encrypted disposable VRF testnet credentials::${JSON.stringify(envelope)}`);
+  }
   console.log(`Guarded NEP-141 integration: testnet contract=${contractId}; distinct owner=${ownerId}; fake test asset=${TOKEN}`);
   const contract = await createFunded(contractId, contractKey);
   const deploy = await setupAttempt('deploy', () => contract.signAndSendTransaction({ receiverId: contractId,
@@ -214,6 +246,24 @@ async function main() {
     actions: [transactions.createAccount(), transactions.transfer(3n * ONE), transactions.addKey(ownerKey.getPublicKey(), transactions.fullAccessKey())] }));
   receiptsOk(created, 'create owner');
   const owner = accountFor(ownerId, ownerKey), agent = accountFor(ownerId, agentKey), attacker = accountFor(ownerId, attackKey);
+  const ownerSetup = async (id, token, args, gas) => {
+    if (PROBE !== 'vrf') return call(owner, token, 'ft_transfer_call', args, 1n, gas, id !== 'owner-ref-acquisition');
+    const setupPath = path.join(dir, 'setup-journal.json');
+    const setupJournal = openConfiguredFileJournal(setupPath, contractId, ownerId, { requireExisting: fs.existsSync(setupPath) });
+    try {
+      const guarded = new Proxy(provider, { get(target, property) {
+        if (property === 'sendTransactionUntil') return async (...params) => {
+          const pending = setupJournal.get(id);
+          if (pending?.status !== 'pending' || typeof pending.tx_hash !== 'string') throw new Error('owner setup hash was not journaled before broadcast');
+          console.log(`::notice title=One-shot VRF owner-setup hash journaled::contract=${contractId}; owner=${ownerId}; stage=${id}; tx=${pending.tx_hash}; do_not_resend=true`);
+          return target.sendTransactionUntil(...params);
+        };
+        const value = Reflect.get(target, property, target); return typeof value === 'function' ? value.bind(target) : value;
+      } });
+      const result = await submitOwnerSetupOnce({ id, account: owner, publicKey: ownerKey.getPublicKey(), token, args, gas, provider: guarded, journal: setupJournal });
+      console.log(`    owner setup ${id}: ${txUrl(result.transaction_outcome.id)}`); return result;
+    } finally { setupJournal.close(); }
+  };
   await call(contract, contractId, 'new', { owner: ownerId });
   if (await view(contractId, 'contract_version') !== 'bouncer-agent-v9' || await view(contractId, 'get_owner') !== ownerId) throw new Error('stale contract or unexpected owner');
 
@@ -233,13 +283,13 @@ async function main() {
   const beforeFake = BigInt(await view(TOKEN, 'ft_balance_of', { account_id: ownerId }));
   const swapMsg = JSON.stringify({ force: 0, actions: [{ pool_id: selected.pool_id, token_in: WRAP, token_out: TOKEN,
     amount_in: input.toString(), min_amount_out: (selected.quote * 95n / 100n).toString() }] });
-  const swap = await call(owner, WRAP, 'ft_transfer_call', { receiver_id: REF, amount: input.toString(), msg: swapMsg }, 1n, 300n * TGAS, false);
+  const swap = await ownerSetup('owner-ref-acquisition', WRAP, { receiver_id: REF, amount: input.toString(), msg: swapMsg }, 300n * TGAS);
   const afterFake = BigInt(await view(TOKEN, 'ft_balance_of', { account_id: ownerId }));
   if (afterFake - beforeFake < USD_AMOUNT || afterFake - beforeFake > 1_100_000n) throw new Error('test-token swap output did not meet the owner setup bounds');
   console.log(`    Owner setup obtained ${(afterFake - beforeFake).toString()} micro-units of fake USDC.e; this was not a guarded agent swap.`);
 
-  await call(owner, TOKEN, 'ft_transfer_call', { receiver_id: contractId, amount: USD_AMOUNT.toString(), msg: 'fund' }, 1n, 200n * TGAS);
-  await call(owner, WRAP, 'ft_transfer_call', { receiver_id: contractId, amount: REFUND_AMOUNT.toString(), msg: 'fund' }, 1n, 200n * TGAS);
+  await ownerSetup('owner-fake-token-funding', TOKEN, { receiver_id: contractId, amount: USD_AMOUNT.toString(), msg: 'fund' }, 200n * TGAS);
+  await ownerSetup('owner-wrap-refund-funding', WRAP, { receiver_id: contractId, amount: REFUND_AMOUNT.toString(), msg: 'fund' }, 200n * TGAS);
   if (BigInt(await view(contractId, 'vault_balance', { token: TOKEN })) !== USD_AMOUNT ||
       BigInt(await view(contractId, 'vault_balance', { token: WRAP })) !== REFUND_AMOUNT) throw new Error('vault funding was not accounted');
 
@@ -262,7 +312,7 @@ async function main() {
   await expectRejection('FT per-transaction cap', /amount exceeds per-tx cap/, () => agent.callFunctionRaw({
     contractId, methodName: 'execute_ft_call', args: { ...expected(goal), amount: (USD_AMOUNT + 1n).toString() }, deposit: 0n, gas: 300n * TGAS, waitUntil: 'FINAL' }));
   const beforeProvider = BigInt(await view(OUTLAYER, 'get_user_stablecoin_balance', { account_id: contractId }));
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bouncer-ftcall-'));
+  dir ||= fs.mkdtempSync(path.join(os.tmpdir(), 'bouncer-ftcall-'));
   const state = path.join(dir, 'journal.json'), goalPath = path.join(dir, 'goal.json');
   fs.writeFileSync(goalPath, JSON.stringify(goal, null, 2) + '\n', { mode: 0o600 });
   let journal = openConfiguredFileJournal(state, contractId, ownerId), sends = 0, inject = true, completed = false;
@@ -321,8 +371,9 @@ async function main() {
     await call(owner, contractId, 'set_outlayer_project', { native_policy_id: 'project-native', project: config }, 1n);
     await addKey(owner, contractId, projectKey, ['execute_outlayer_project']);
     const projectAgent = accountFor(ownerId, projectKey), projectRoute = await view(contractId, 'get_outlayer_project', { native_policy_id: 'project-native' });
-    const projectGoal = { id: PROBE === 'burn' ? 'paid-diagnostic-compute' : 'paid-connectivity-probe', contract_id: contractId, owner_account_id: ownerId,
-      native_policy_id: 'project-native', amount: PROJECT_NATIVE_MAX.toString(), route: projectRoute, expected_author: PROJECT_AUTHOR };
+    const projectGoal = { id: PROBE === 'burn' ? 'paid-diagnostic-compute' : PROBE === 'vrf' ? 'paid-vrf-diagnostic' : 'paid-connectivity-probe',
+      contract_id: contractId, owner_account_id: ownerId, native_policy_id: 'project-native', amount: PROJECT_NATIVE_MAX.toString(),
+      route: projectRoute, expected_author: PROJECT_AUTHOR, ...(PROBE === 'vrf' ? { expected_vrf_pubkey: VRF_PIN } : {}) };
     const badRoute = structuredClone(projectRoute); badRoute.project.input_data = '{"operation":"other"}';
     await expectRejection('agent-supplied project/input substitution', /OutLayer project route changed since review/, () => projectAgent.callFunctionRaw({
       contractId, methodName: 'execute_outlayer_project', args: { native_policy_id: 'project-native', amount: PROJECT_NATIVE_MAX.toString(), expected_route: badRoute },
@@ -378,15 +429,17 @@ async function main() {
         BigInt(await view(contractId, 'daily_spent', { policy_id: 'refund-test' })) !== 0n) throw new Error('rejected token was not fully restored');
     console.log(`::notice title=Guarded FT receiver rejection and refund::contract=${contractId}; tx=${refunded.settlement.tx_hash}; token=${WRAP}; used=0; unused=${REFUND_AMOUNT}; budget_restored=true`);
     await call(owner, contractId, 'withdraw', { token: WRAP, amount: REFUND_AMOUNT.toString() }, 1n);
-    await provePaidMission({ contract, contractId, owner, ownerId, fundingAgent: agent, fundingKey: agentKey,
+    if (PROBE !== 'vrf') await provePaidMission({ contract, contractId, owner, ownerId, fundingAgent: agent, fundingKey: agentKey,
       projectAgent, projectKey, fundingGoal: goal, projectGoal, journal, dir });
     await call(owner, contractId, 'withdraw_native', { amount: (PROJECT_NATIVE_FUNDING - PROJECT_NATIVE_MAX).toString() }, 1n);
     completed = true;
   } finally {
     journal.close();
-    if (completed) fs.rmSync(dir, { recursive: true, force: true });
-    else console.error(`Unresolved public testnet evidence preserved: ${dir}. Reconcile journal hashes; never resend automatically.`);
+    if (completed && PROBE !== 'vrf') fs.rmSync(dir, { recursive: true, force: true });
+    else console.error(`Public testnet evidence preserved: ${dir}. Reconcile journal hashes; never resend automatically.`);
   }
-  console.log('Evidence scope: an independent OutLayer test connector delivered a diagnostic using fake test USDC.e and native NEAR. Later wNEAR resources are self-hosted development services. This is not a commercial compute/API/storage purchase, Circle USDC, or a TEE proof.');
+  console.log(PROBE === 'vrf'
+    ? 'Evidence scope: an independent OutLayer test connector delivered a signature-verified VRF diagnostic using fake test USDC.e and native NEAR. This is not commercial compute/API/storage, Circle USDC, unbiased-key selection, or a TEE proof.'
+    : 'Evidence scope: an independent OutLayer test connector delivered a diagnostic using fake test USDC.e and native NEAR. Later wNEAR resources are self-hosted development services. This is not a commercial compute/API/storage purchase, Circle USDC, or a TEE proof.');
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

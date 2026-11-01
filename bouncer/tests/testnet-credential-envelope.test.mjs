@@ -28,6 +28,17 @@ test('version 2 preserves deploy keys for failures before contracts are locked',
   assert.throws(() => sealTestnetCredentials({ ...payload, version: 1 }, rsa.publicKey), /invalid/);
 });
 
+test('version 3 binds distinct testnet OutLayer owner, deploy and scoped payment keys', () => {
+  const v3 = { version: 3, purpose: 'outlayer-vrf-testnet', owner_account_id: 'owner.testnet', contract_id: 'vault.testnet',
+    owner_secret: nearApi.KeyPair.fromRandom('ed25519').toString(), contract_secret: nearApi.KeyPair.fromRandom('ed25519').toString(),
+    funding_secret: nearApi.KeyPair.fromRandom('ed25519').toString(), project_secret: nearApi.KeyPair.fromRandom('ed25519').toString() };
+  assert.deepEqual(openTestnetCredentials(sealTestnetCredentials(v3, rsa.publicKey), rsa.privateKey), v3);
+  for (const bad of [{ ...v3, purpose: 'other' }, { ...v3, owner_account_id: 'owner.near' },
+    { ...v3, contract_id: v3.owner_account_id }, { ...v3, project_secret: v3.funding_secret }, { ...v3, extra: true }]) {
+    assert.throws(() => sealTestnetCredentials(bad, rsa.publicKey));
+  }
+});
+
 test('tampering, wrong keys and malformed envelopes fail authentication', () => {
   const sealed = sealTestnetCredentials(credentials(), rsa.publicKey);
   for (const field of ['wrapped_key', 'iv', 'ciphertext', 'tag']) {
@@ -82,6 +93,19 @@ test('credential recovery CLI writes owner-only testnet files without printing o
       const file = path.join(dir2, `${name}.json`), data = JSON.parse(fs.readFileSync(file));
       assert.equal(fs.statSync(file).mode & 0o777, 0o600); assert.equal(data.account_id, account); assert.equal(data.private_key, secret);
     }
+    const v3 = { version: 3, purpose: 'outlayer-vrf-testnet', owner_account_id: 'owner.testnet', contract_id: 'vault.testnet',
+      owner_secret: nearApi.KeyPair.fromRandom('ed25519').toString(), contract_secret: nearApi.KeyPair.fromRandom('ed25519').toString(),
+      funding_secret: nearApi.KeyPair.fromRandom('ed25519').toString(), project_secret: nearApi.KeyPair.fromRandom('ed25519').toString() };
+    fs.writeFileSync(envelope, JSON.stringify(sealTestnetCredentials(v3, rsa.publicKey)));
+    child = spawnSync(process.execPath, [path.resolve('scripts/open-testnet-demo-credentials.mjs'), envelope, privateFile, 'vrf-v3'],
+      { env: { ...process.env, HOME: root }, encoding: 'utf8' });
+    assert.equal(child.status, 0, child.stderr);
+    const dir3 = path.join(root, '.near-credentials/testnet/vrf-v3');
+    for (const [name, account, secret] of [['contract', v3.contract_id, v3.contract_secret], ['funding', v3.owner_account_id, v3.funding_secret],
+      ['project', v3.owner_account_id, v3.project_secret]]) {
+      const file = path.join(dir3, `${name}.json`), data = JSON.parse(fs.readFileSync(file));
+      assert.equal(fs.statSync(file).mode & 0o777, 0o600); assert.equal(data.account_id, account); assert.equal(data.private_key, secret);
+    }
     fs.chmodSync(privateFile, 0o644); child = run(); assert.notEqual(child.status, 0); assert.match(child.stderr, /owner-only/);
     fs.chmodSync(privateFile, 0o600);
     const link = path.join(root, 'private-link.pem'); fs.symlinkSync(privateFile, link);
@@ -98,8 +122,17 @@ test('live Ref demo refuses to begin without an explicit testnet-only acknowledg
   assert.notEqual(child.status, 0); assert.match(child.stderr, /testnet-only one-shot acknowledgement is required/);
 });
 
+test('independent VRF demo refuses to begin without its own testnet-only acknowledgement', async () => {
+  const path = await import('node:path'), { spawnSync } = await import('node:child_process');
+  const env = { ...process.env, BOUNCER_PAID_PROBE: 'vrf' }; delete env.BOUNCER_VRF_DEMO_ACK;
+  const child = spawnSync(process.execPath, [path.resolve('demo-ft-call.mjs')], { env, encoding: 'utf8', timeout: 10_000 });
+  assert.notEqual(child.status, 0); assert.match(child.stderr, /testnet-only VRF acknowledgement is required/);
+});
+
 test('checked-in testnet recovery public key matches the single-use demo pin', async () => {
   const fs = await import('node:fs');
   const pem = fs.readFileSync('config/testnet-ref-demo-recovery-public.pem', 'utf8');
   assert.equal(testnetRecoveryKeyId(pem), '4dea968ec5691e26569b92b85fef218b2b1d08a43e32011b1f22d9c6ac2222ec');
+  const vrf = fs.readFileSync('config/testnet-outlayer-vrf-recovery-public.pem', 'utf8');
+  assert.equal(testnetRecoveryKeyId(vrf), 'bf02736cddec49ea0c015b4a8da99e1904956f8d6254d228a794b83c0bd07b04');
 });

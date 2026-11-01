@@ -13,6 +13,7 @@ const ALG = 'RSA-OAEP-SHA256+A256GCM', MAX_PLAINTEXT = 4096;
 const envelopeFields = ['version', 'algorithm', 'key_id', 'wrapped_key', 'iv', 'ciphertext', 'tag'];
 const payloadFieldsV1 = ['version', 'owner_account_id', 'contract_id', 'router_id', 'owner_secret', 'input_secret', 'sweep_secret'];
 const payloadFieldsV2 = [...payloadFieldsV1, 'contract_secret', 'router_secret'];
+const payloadFieldsV3 = ['version', 'purpose', 'owner_account_id', 'contract_id', 'owner_secret', 'contract_secret', 'funding_secret', 'project_secret'];
 const owns = (obj, fields) => !!obj && typeof obj === 'object' && !Array.isArray(obj) &&
   Object.keys(obj).length === fields.length && fields.every(k => Object.hasOwn(obj, k));
 function keyInfo(raw, privateRequired = false) {
@@ -26,11 +27,14 @@ function keyInfo(raw, privateRequired = false) {
   return { key, id: crypto.createHash('sha256').update(der).digest('hex'), bytes: Math.ceil(key.asymmetricKeyDetails.modulusLength / 8) };
 }
 function payloadCheck(payload) {
-  const fields = payload?.version === 1 ? payloadFieldsV1 : payload?.version === 2 ? payloadFieldsV2 : null;
-  if (!fields || !owns(payload, fields) ||
-      ![payload.owner_account_id, payload.contract_id, payload.router_id].every(isTestnetAccount) ||
-      new Set([payload.owner_account_id, payload.contract_id, payload.router_id]).size !== 3) throw new Error('invalid disposable testnet recovery payload');
-  const secrets = ['owner_secret', 'input_secret', 'sweep_secret', ...(payload.version === 2 ? ['contract_secret', 'router_secret'] : [])];
+  const fields = payload?.version === 1 ? payloadFieldsV1 : payload?.version === 2 ? payloadFieldsV2 :
+    payload?.version === 3 ? payloadFieldsV3 : null;
+  const accounts = payload?.version === 3 ? [payload.owner_account_id, payload.contract_id] :
+    [payload?.owner_account_id, payload?.contract_id, payload?.router_id];
+  if (!fields || !owns(payload, fields) || !accounts.every(isTestnetAccount) || new Set(accounts).size !== accounts.length ||
+      (payload.version === 3 && payload.purpose !== 'outlayer-vrf-testnet')) throw new Error('invalid disposable testnet recovery payload');
+  const secrets = payload.version === 3 ? ['owner_secret', 'contract_secret', 'funding_secret', 'project_secret'] :
+    ['owner_secret', 'input_secret', 'sweep_secret', ...(payload.version === 2 ? ['contract_secret', 'router_secret'] : [])];
   if (new Set(secrets.map(field => payload[field])).size !== secrets.length) throw new Error('testnet recovery keys must be distinct');
   for (const field of secrets) {
     if (typeof payload[field] !== 'string' || !/^ed25519:[1-9A-HJ-NP-Za-km-z]{80,100}$/.test(payload[field])) throw new Error('invalid disposable testnet secret key');
