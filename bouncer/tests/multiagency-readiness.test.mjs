@@ -46,6 +46,10 @@ test('readiness never treats healthy coordinator or historical jobs as current w
   assert.equal(result.independent_worker_capacity, 'UNPROVEN'); assert.equal(result.quote_posts, 0);
   assert.equal(result.last_listed_paid_job_created_at, '2026-10-03T19:19:50Z');
   assert.equal(result.observed_default_deposit_micro_usdc, '3000000');
+  const idleCycle = readiness(); idleCycle.health.coordinator.running = false;
+  assert.equal(summarizeMultiAgencyReadiness(idleCycle).coordinator_recent, true);
+  const unhealthy = readiness(); unhealthy.health.ok = false;
+  assert.equal(summarizeMultiAgencyReadiness(unhealthy).coordinator_recent, false);
   const stale = readiness(); stale.health.coordinator.last_completed_at = '2026-10-31T00:00:00Z';
   assert.equal(summarizeMultiAgencyReadiness(stale).coordinator_recent, false);
   for (const mutate of [

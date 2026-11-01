@@ -71,7 +71,10 @@ export function summarizeMultiAgencyReadiness({ config, health, engagements, tas
     throw new Error('independent provider config or bounded public readiness data differs from reviewed testnet profile');
   }
   const completed = Date.parse(health.coordinator?.last_completed_at);
-  const coordinatorRecent = health.ok === true && health.coordinator?.running === true && Number.isFinite(completed) &&
+  // `running` means a cycle is executing *right now*, not that the
+  // coordinator is enabled. An idle interval after a recent completion is
+  // expected and must not be labeled stale/offline.
+  const coordinatorRecent = health.ok === true && Number.isFinite(completed) &&
     completed <= nowMs + 30_000 && nowMs - completed <= 120_000;
   const paid = engagements.filter(e => record(e) && typeof e.deposit === 'string' && /^[1-9][0-9]*$/.test(e.deposit) &&
     typeof e.created_at === 'string' && Number.isFinite(Date.parse(e.created_at)) && Date.parse(e.created_at) <= nowMs);

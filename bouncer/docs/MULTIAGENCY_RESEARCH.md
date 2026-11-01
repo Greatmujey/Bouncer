@@ -8,13 +8,15 @@ events and confirms FINAL receipts. It is not standard x402 `exact`. The
 source is not an attestation of the currently deployed service. Testnet USDC
 has **no financial value**.
 
-On 1 November, our [read-only probe](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41320037668/job/124888065822)
+On 1 November, our [read-only probe](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41330160414/job/124918366939)
 observed a 3,000,000-micro-USDC default deposit, Circle's NEAR testnet token,
-and treasury `multiagency.sputnikv2.testnet`. Its coordinator was not observed
-as recently completed by the probe's two-minute rule; the endpoint may be
+and treasury `multiagency.sputnikv2.testnet`. It reported a coordinator cycle
+completed 19 seconds before the observation. The original `coordinator_recent`
+flag incorrectly required a cycle to be running at that exact moment; that
+flag was fixed because idle time between cycles is normal. The endpoint may be
 stale or cached. One ready task was listed, and the latest listed paid job was
-created 3 October. The endpoint does not prove a live research worker or an
-operator willing to assemble and approve a new job. It reported neither a
+created 3 October. A recent coordinator cycle does not prove a live research
+worker or an operator willing to assemble and approve a new job. It reported neither a
 service-level commitment nor a general refund for stalled work. **No quote was
 created and no funds were sent to MultiAgency.**
 
