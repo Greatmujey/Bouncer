@@ -14,7 +14,9 @@ FT seller or a real-value purchase. Transaction links and scope are in the
 
 The opt-in `node bouncer/demo-oracle-mission.mjs --dependent-workflow` script
 sets up a **new** testnet account and v9 contract, then exercises the workflow
-runner rather than the older static mission. It uses an independent OutLayer
+runner rather than the older static mission. `--seller-v2-workflow` selects the
+same flow with v2 order binding required for all three resource steps; without
+it, the original workflow uses legacy v1 memos. It uses an independent OutLayer
 oracle paid in native testnet NEAR; the following compute, storage and API
 orders are paid in Circle **testnet** USDC to Bouncer's self-hosted development
 provider. Neither token has real value. The full-access owner performs the
@@ -31,8 +33,22 @@ delivery are verified can the FT agent resume the other steps. It checks the
 actual data dependencies, one source broadcast, three FT broadcasts, final
 vault balances and rolling spend. The GitHub Actions job runs only on an explicit
 `[dependent-live]` push after JS, Rust and WASM checks pass; regular pushes are
-unpaid. Its public journal, workflow, orders, provider state and optional
-success evidence are uploaded for 90 days. They contain no private keys but
+unpaid. The separate explicit `[seller-v2-live]` push selects
+`--seller-v2-workflow` and requires a different, seller-issued challenge for
+all three resources. The Actions job runs only on the first run attempt; a
+GitHub rerun is skipped rather than repeating payments. A new marker push would
+still create a new paid testnet run, so never use one to retry an ambiguous
+payment. In synthetic tests, both variants restart the seller and recover in a
+real key-free CLI process; a local v2 seller-state check matches the three
+persisted claims to the buyer's verified journal. Local state is not independent
+proof that a seller behaved honestly or adopted the protocol.
+
+The owner's Ref swap and Circle vault-funding transaction hashes are now
+recorded in a separate public setup journal before their single submissions.
+Those setup operations are **not** guarded agent swaps, and this journal does
+not cover all other testnet setup transactions. The artifacts include the
+public setup journal, workflow journal, workflow, orders, provider state and
+optional success evidence for 90 days. They contain no private keys but
 may disclose task data; do not use this public-artifact configuration for
 private workloads. The ephemeral demo keys are not retained, so unpaid steps
 cannot be resumed after the live process exits. Key-free recovery of already

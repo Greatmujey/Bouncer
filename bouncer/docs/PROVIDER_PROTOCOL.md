@@ -44,6 +44,22 @@ it. T402's documented `usdc.fakes.testnet` example is not Circle's canonical
 NEAR testnet USDC; exact token and network IDs must be owner-pinned. No T402
 seller was paid or contacted by this research.
 
+### Independent-provider research: x402 `exact-agent` draft
+
+An independent [payment-agent project](https://github.com/mikedotexe/near-payment-agent/tree/666d5efefeec9fb311af231c67dd90b593301933)
+reports direct and relayed Circle testnet USDC transfers with a scoped key and
+proposes a draft [x402 `exact-agent` scheme](https://github.com/mikedotexe/near-payment-agent/blob/666d5efefeec9fb311af231c67dd90b593301933/docs/x402-exact-agent-scheme.md).
+This is a promising shared security idea, not a ready Bouncer integration. Its
+draft expects a relayed NEP-366 self-call to `pay(recipient, amount, payment_id)`
+on a specifically trusted payment-agent contract. Bouncer's current restricted
+key signs a direct `execute` call with policy and memo arguments; the two
+transaction envelopes, contract APIs and replay mechanisms are different. The
+project describes facilitator/client packaging as future work; its testnet
+token-transfer evidence is not evidence of a functioning independent paid
+service or a Bouncer-compatible facilitator. No seller was contacted or paid.
+Any bridge would need an explicitly reviewed scheme and merchant/facilitator
+support without bypassing Bouncer's caps or the 1-yocto owner boundary.
+
 ## Trust and setup
 
 An owner must independently vet a provider and explicitly pin its HTTPS origin,

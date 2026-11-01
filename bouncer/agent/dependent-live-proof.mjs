@@ -3,9 +3,11 @@
 // one response *after* a real broadcast to exercise hash-only recovery.
 import { isDeepStrictEqual } from 'node:util';
 import { runWorkflow, validateWorkflow } from './workflow.mjs';
+import { challengeFromOrderMemo, orderMemo } from '../packages/provider-sdk/index.mjs';
 
-export function makeOracleDependentWorkflow({ goal, token, payee, policyId, price, providerUrl }) {
-  const route = { policy_id: policyId, token, payee, max_amount: String(price) };
+export function makeOracleDependentWorkflow({ goal, token, payee, policyId, price, providerUrl, orderBinding }) {
+  const route = { policy_id: policyId, token, payee, max_amount: String(price),
+    ...(orderBinding === undefined ? {} : { order_binding: orderBinding }) };
   return validateWorkflow({
     version: 1, id: 'live-dependent-oracle', source: { kind: 'oracle', goal }, provider_url: providerUrl,
     steps: [
@@ -48,8 +50,11 @@ export async function runDependentLiveProof({ workflow: raw, provider, source, r
   }
   const quoted = [];
   const trackedResources = { ...resources, getQuote: async (order, context) => {
-    quoted.push({ order: structuredClone(order), context: structuredClone(context) });
-    return resources.getQuote(order, context);
+    const observed = { order: structuredClone(order), context: structuredClone(context) };
+    quoted.push(observed);
+    const quote = await resources.getQuote(order, context);
+    observed.quote = structuredClone(quote);
+    return quote;
   } };
   let sourceBroadcasts = 0, resourceBroadcasts = 0, injected = false;
   const trackedProvider = new Proxy(provider, { get(target, property) {
@@ -111,6 +116,24 @@ export async function runDependentLiveProof({ workflow: raw, provider, source, r
   // artifact (including the original transaction hash and bounded result).
   const [computeOrder, storageOrder, apiOrder] = quoted.map(item => item.order);
   assert(computeOrder.resource === 'compute' && storageOrder.resource === 'storage' && apiOrder.resource === 'api', 'quote order changed');
+  // The transaction journal must carry the exact memo actually quoted for
+  // each dependent input. V2 challenges must be distinct, while legacy runs
+  // must continue to use the original deterministic format.
+  const quoteMemos = {}, challenges = [];
+  for (let i = 0; i < workflow.steps.length; i++) {
+    const step = workflow.steps[i], observed = quoted[i], memo = journal().get(step.id)?.request?.memo;
+    assert(observed.context?.goalId === step.id && observed.quote?.memo === memo, `${step.id} quoted memo changed before payment`);
+    if (step.order_binding === 'seller-v2') {
+      assert(observed.order.order_binding === 'seller-v2', `${step.id} did not request seller-v2`);
+      const challenge = challengeFromOrderMemo(step.resource, observed.order.input, memo);
+      assert(!challenges.includes(challenge), `${step.id} reused a seller challenge`);
+      challenges.push(challenge);
+    } else {
+      assert(observed.order.order_binding === undefined && memo === orderMemo(step.resource, observed.order.input),
+        `${step.id} did not preserve the legacy order memo`);
+    }
+    quoteMemos[step.resource] = memo;
+  }
   const sourceArtifact = parseArtifact(computeOrder.input.text, 'compute');
   const computeArtifact = parseArtifact(storageOrder.input.content, 'storage');
   const storageArtifact = parseArtifact(apiOrder.input.text, 'api');
@@ -123,5 +146,39 @@ export async function runDependentLiveProof({ workflow: raw, provider, source, r
   assert(storageArtifact.goal_id === workflow.steps[1].id && storageArtifact.kind === 'storage' &&
     storageArtifact.tx_hash === journal().get(workflow.steps[1].id).tx_hash &&
     isDeepStrictEqual(storageArtifact.result, result.deliveries[1].result), 'API input was not the verified storage result');
-  return { result, quoted: quoted.map(item => item.order), sourceHash, firstHash, sourceBroadcasts, resourceBroadcasts };
+  return { result, quoted: quoted.map(item => item.order), quoteMemos, challenges,
+    sourceHash, firstHash, sourceBroadcasts, resourceBroadcasts };
+}
+
+/**
+ * Verify the fresh reference seller's persisted claims after a v2 proof. This
+ * checks consistency of local state and the already-verified buyer journal; it
+ * is not an independent proof of seller behavior or a substitute for RPC proof.
+ */
+export function verifySellerV2ProofState({ workflow: raw, proof, journal, state }) {
+  const workflow = validateWorkflow(raw), steps = workflow.steps;
+  assert(steps.length === 3 && steps.every(step => step.order_binding === 'seller-v2'), 'seller-v2 proof needs three v2 steps');
+  assert(journal && typeof journal.get === 'function' && Array.isArray(proof?.quoted) && proof.quoted.length === 3 &&
+    Array.isArray(proof.challenges) && proof.challenges.length === 3, 'seller-v2 proof data is incomplete');
+  assert(state?.version === 3 && state.network === 'testnet' && state.contract_id === workflow.source.goal.contract_id &&
+    state.owner_account_id === workflow.source.goal.owner_account_id && state.quotes && state.redemptions &&
+    Object.keys(state.quotes).length === 3 && Object.keys(state.redemptions).length === 3, 'seller-v2 state is not the fresh three-quote store');
+  const hashes = new Set(), challenges = new Set();
+  for (let i = 0; i < steps.length; i++) {
+    const step = steps[i], order = proof.quoted[i], entry = journal.get(step.id), request = entry?.request;
+    assert(order?.resource === step.resource && order.order_binding === 'seller-v2' && entry?.status === 'completed' &&
+      entry.payment_version === 'direct-signed-v1' && entry.settlement?.tx_hash === entry.tx_hash &&
+      entry.delivery?.status === 'verified' && entry.delivery.receipt?.tx_hash === entry.tx_hash &&
+      proof.quoteMemos?.[step.resource] === request?.memo, `${step.id} buyer evidence is incomplete`);
+    const challenge = challengeFromOrderMemo(step.resource, order.input, request.memo);
+    assert(proof.challenges[i] === challenge && !challenges.has(challenge) && !hashes.has(entry.tx_hash), `${step.id} challenge or hash was reused`);
+    challenges.add(challenge); hashes.add(entry.tx_hash);
+    const quote = state.quotes[challenge], redeemed = state.redemptions[entry.tx_hash];
+    assert(quote?.resource === step.resource && quote.memo === request.memo && quote.tx_hash === entry.tx_hash && quote.read_only === false &&
+      isDeepStrictEqual(quote.product, { policy_id: request.policy_id, token: request.token, payee: request.payee, amount: request.amount }) &&
+      redeemed?.status === 'completed' && redeemed.resource === step.resource && redeemed.memo === request.memo,
+    `${step.id} persisted seller claim does not match the verified payment`);
+  }
+  assert(proof.firstHash === journal.get(steps[0].id)?.tx_hash, 'first recovered hash changed');
+  return { quote_count: challenges.size, claimed_transaction_count: hashes.size, first_hash: proof.firstHash };
 }

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import nearApi from 'near-api-js';
-import { signReviewedCall } from '../agent/reviewed-transaction.mjs';
+import { signReviewedCall, signReviewedOneYoctoOwnerCall } from '../agent/reviewed-transaction.mjs';
 
 for (const type of ['ed25519', 'secp256k1']) {
   test(`reviewed signer derives the hash and validates the ${type} signature`, async () => {
@@ -16,6 +16,12 @@ for (const type of ['ed25519', 'secp256k1']) {
     assert.equal(output.txHash, nearApi.utils.serialize.base_encode(digest));
     assert.equal(publicKey.verify(digest, output.signed.signature.data), true);
     assert.equal(output.signed.transaction.actions[0].functionCall.deposit, 0n);
+    const agentCannotEscalate = await signReviewedCall({ account, publicKey, ownerId: account.accountId,
+      contractId: 'bouncer.testnet', method: 'execute', args, gas, deposit: 1n });
+    assert.equal(agentCannotEscalate.signed.transaction.actions[0].functionCall.deposit, 0n);
+    const ownerSetup = await signReviewedOneYoctoOwnerCall({ account, publicKey, ownerId: account.accountId,
+      contractId: 'token.testnet', method: 'ft_transfer_call', args, gas });
+    assert.equal(ownerSetup.signed.transaction.actions[0].functionCall.deposit, 1n);
   });
 }
 

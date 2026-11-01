@@ -16,7 +16,7 @@ import { httpResourceProvider } from '../agent/resource-agent.mjs';
 import { ORACLE_TESTNET_PROJECT } from '../agent/oracle-outlayer.mjs';
 import { expectedBurnChecksum } from '../agent/outlayer-project.mjs';
 import { validateWorkflow, materializeWorkflowStep, runWorkflow } from '../agent/workflow.mjs';
-import { makeOracleDependentWorkflow, runDependentLiveProof } from '../agent/dependent-live-proof.mjs';
+import { makeOracleDependentWorkflow, runDependentLiveProof, verifySellerV2ProofState } from '../agent/dependent-live-proof.mjs';
 import { createResourceProvider, orderMemo, orderMemoV2, challengeFromOrderMemo } from '../services/resource-provider.mjs';
 import { computeResult } from './mock-delivery.mjs';
 import { mockHash, mockGuardedPayment } from './mock-guarded-payment.mjs';
@@ -529,55 +529,77 @@ test('dependent proof stops after recovery failure, leaving the first hash pendi
   assert.equal(oracle.sends, 1); assert.equal(f.sends, 1);
 }));
 
-test('dependent proof recovers in the real key-free CLI with a restarted local provider and synthetic RPC', () => withFixture(async f => {
-  const workflow = makeOracleDependentWorkflow({ goal: f.workflow.source.goal, token, payee, policyId: 'resources',
-    price: '100', providerUrl: 'http://127.0.0.1:0' });
-  const oracle = attachSyntheticOracle({ provider: f.provider, goal: workflow.source.goal, journal: f.journal,
-    events: f.events, workflowId: workflow.id });
-  const products = Object.fromEntries(['compute', 'storage', 'api'].map(resource => [resource,
-    { policy_id: 'resources', token, payee, amount: '10' }]));
-  const config = { contract_id: contract, owner_account_id: owner, products, data_dir: path.join(f.dir, 'provider'), port: 0 };
-  const configPath = path.join(f.dir, 'config.json'), workflowPath = path.join(f.dir, 'workflow.json');
-  fs.writeFileSync(configPath, JSON.stringify(config)); fs.writeFileSync(workflowPath, JSON.stringify(workflow));
-  const rpcCalls = [], rpcServer = http.createServer(async (req, res) => {
+for (const orderBinding of [undefined, 'seller-v2']) {
+  test(`dependent ${orderBinding ?? 'legacy'} proof recovers in the real key-free CLI with restarted seller and synthetic RPC`, () => withFixture(async f => {
+    const workflow = makeOracleDependentWorkflow({ goal: f.workflow.source.goal, token, payee, policyId: 'resources',
+      price: '100', providerUrl: 'http://127.0.0.1:0', orderBinding });
+    const oracle = attachSyntheticOracle({ provider: f.provider, goal: workflow.source.goal, journal: f.journal,
+      events: f.events, workflowId: workflow.id });
+    const products = Object.fromEntries(['compute', 'storage', 'api'].map(resource => [resource,
+      { policy_id: 'resources', token, payee, amount: '10' }]));
+    const config = { contract_id: contract, owner_account_id: owner, products, data_dir: path.join(f.dir, 'provider'), port: 0 };
+    const configPath = path.join(f.dir, 'config.json'), workflowPath = path.join(f.dir, 'workflow.json');
+    fs.writeFileSync(configPath, JSON.stringify(config)); fs.writeFileSync(workflowPath, JSON.stringify(workflow));
+    const rpcCalls = [], rpcServer = http.createServer(async (req, res) => {
+      try {
+        const chunks = []; for await (const chunk of req) chunks.push(chunk);
+        const body = JSON.parse(Buffer.concat(chunks).toString()); rpcCalls.push(body.method);
+        let result;
+        if (body.method === 'status') result = { chain_id: 'testnet' };
+        else if (body.method === 'EXPERIMENTAL_tx_status') result = await f.provider.txStatusReceipts(body.params.tx_hash, body.params.sender_account_id, 'FINAL');
+        else if (body.method === 'block') result = await f.provider.block(body.params);
+        else throw new Error(`unexpected RPC ${body.method}`);
+        res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ jsonrpc: '2.0', id: body.id, result }));
+      } catch (error) { res.writeHead(500).end(error.message); }
+    });
+    await new Promise(resolve => rpcServer.listen(0, '127.0.0.1', resolve));
+    let restarted;
     try {
-      const chunks = []; for await (const chunk of req) chunks.push(chunk);
-      const body = JSON.parse(Buffer.concat(chunks).toString()); rpcCalls.push(body.method);
-      let result;
-      if (body.method === 'status') result = { chain_id: 'testnet' };
-      else if (body.method === 'EXPERIMENTAL_tx_status') result = await f.provider.txStatusReceipts(body.params.tx_hash, body.params.sender_account_id, 'FINAL');
-      else if (body.method === 'block') result = await f.provider.block(body.params);
-      else throw new Error(`unexpected RPC ${body.method}`);
-      res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ jsonrpc: '2.0', id: body.id, result }));
-    } catch (error) { res.writeHead(500).end(error.message); }
-  });
-  await new Promise(resolve => rpcServer.listen(0, '127.0.0.1', resolve));
-  let restarted;
-  try {
-    const rpc = `http://127.0.0.1:${rpcServer.address().port}`;
-    const previousPort = Number(new URL(f.workflow.provider_url).port);
-    const proof = await runDependentLiveProof({ workflow, provider: f.provider,
-      source: { account: oracle.account, publicKey: oracle.publicKey }, resources: f.resources, getJournal: () => f.journal,
-      recoverWithoutKeys: async ({ firstHash }) => {
-        await f.service.close(); f.journal.close();
-        try {
-          const cli = fileURLToPath(new URL('../agent/workflow.mjs', import.meta.url));
-          const output = await promisify(execFile)(process.execPath, [cli, '--workflow', workflowPath, '--journal', f.journalPath,
-            '--rpc', rpc, '--local-provider', configPath, '--recover-only'], { timeout: 20_000, env: { ...process.env, NEAR_TESTNET_RPC: rpc } });
-          assert.match(output.stdout, /\[workflow\] RECOVERED/);
-          assert.match(output.stdout, /Next unpaid step: dependent-storage/);
-          assert.ok(output.stdout.includes(firstHash));
-        } finally { f.reopen(); }
-        restarted = createResourceProvider({ rpcProvider: f.provider, contractId: contract, ownerAccountId: owner,
-          products, dataDir: config.data_dir });
-        await new Promise((resolve, reject) => { restarted.server.once('error', reject); restarted.server.listen(previousPort, '127.0.0.1', resolve); });
-        return { status: 'RECOVERED', next: 'dependent-storage', new_payments: 0 };
-      } });
-    assert.equal(proof.result.status, 'FULFILLED'); assert.equal(oracle.sends, 1); assert.equal(f.sends, 3);
-    assert.ok(rpcCalls.includes('EXPERIMENTAL_tx_status')); assert.ok(rpcCalls.includes('block'));
-    assert.ok(rpcCalls.every(method => ['status', 'EXPERIMENTAL_tx_status', 'block'].includes(method)), 'key-free CLI cannot send transactions');
-  } finally {
-    if (restarted) await restarted.close();
-    await new Promise(resolve => rpcServer.close(resolve));
-  }
-}));
+      const rpc = `http://127.0.0.1:${rpcServer.address().port}`;
+      const previousPort = Number(new URL(f.workflow.provider_url).port);
+      const proof = await runDependentLiveProof({ workflow, provider: f.provider,
+        source: { account: oracle.account, publicKey: oracle.publicKey }, resources: f.resources, getJournal: () => f.journal,
+        recoverWithoutKeys: async ({ firstHash }) => {
+          await f.service.close(); f.journal.close();
+          try {
+            const cli = fileURLToPath(new URL('../agent/workflow.mjs', import.meta.url));
+            const output = await promisify(execFile)(process.execPath, [cli, '--workflow', workflowPath, '--journal', f.journalPath,
+              '--rpc', rpc, '--local-provider', configPath, '--recover-only'], { timeout: 20_000, env: { ...process.env, NEAR_TESTNET_RPC: rpc } });
+            assert.match(output.stdout, /\[workflow\] RECOVERED/);
+            assert.match(output.stdout, /Next unpaid step: dependent-storage/);
+            assert.ok(output.stdout.includes(firstHash));
+          } finally { f.reopen(); }
+          restarted = createResourceProvider({ rpcProvider: f.provider, contractId: contract, ownerAccountId: owner,
+            products, dataDir: config.data_dir });
+          await new Promise((resolve, reject) => { restarted.server.once('error', reject); restarted.server.listen(previousPort, '127.0.0.1', resolve); });
+          return { status: 'RECOVERED', next: 'dependent-storage', new_payments: 0 };
+        } });
+      assert.equal(proof.result.status, 'FULFILLED'); assert.equal(oracle.sends, 1); assert.equal(f.sends, 3);
+      assert.ok(rpcCalls.includes('EXPERIMENTAL_tx_status')); assert.ok(rpcCalls.includes('block'));
+      assert.ok(rpcCalls.every(method => ['status', 'EXPERIMENTAL_tx_status', 'block'].includes(method)), 'key-free CLI cannot send transactions');
+      if (orderBinding === 'seller-v2') {
+        const state = JSON.parse(fs.readFileSync(path.join(config.data_dir, 'redemptions.json'), 'utf8'));
+        assert.deepEqual(verifySellerV2ProofState({ workflow, proof, journal: f.journal, state }),
+          { quote_count: 3, claimed_transaction_count: 3, first_hash: proof.firstHash });
+        assert.equal(new Set(proof.challenges).size, 3);
+        for (const mutate of [
+          s => { s.quotes[proof.challenges[0]].tx_hash = mockHash('different-payment'); },
+          s => { s.quotes[proof.challenges[1]].product.payee = 'attacker.testnet'; },
+          s => { s.redemptions[proof.firstHash].status = 'pending'; },
+          s => { s.quotes.extra = {}; },
+          s => { s.owner_account_id = 'other.testnet'; },
+        ]) {
+          const bad = structuredClone(state); mutate(bad);
+          assert.throws(() => verifySellerV2ProofState({ workflow, proof, journal: f.journal, state: bad }), /seller-v2|seller claim/);
+        }
+        assert.equal(f.sends, 3, 'state verification is read-only');
+      } else {
+        assert.deepEqual(proof.challenges, []);
+        assert.throws(() => verifySellerV2ProofState({ workflow, proof, journal: f.journal, state: {} }), /needs three v2 steps/);
+      }
+    } finally {
+      if (restarted) await restarted.close();
+      await new Promise(resolve => rpcServer.close(resolve));
+    }
+  }));
+}

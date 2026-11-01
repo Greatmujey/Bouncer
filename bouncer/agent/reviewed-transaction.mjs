@@ -9,18 +9,18 @@ import nearApi from 'near-api-js';
 
 const { transactions, utils } = nearApi;
 
-export async function signReviewedCall({ account, publicKey, ownerId, contractId, method, args, gas }) {
+async function signCall({ account, publicKey, ownerId, contractId, method, args, gas }, deposit) {
   if (!account || account.accountId !== ownerId || !account.signer || typeof account.createTransaction !== 'function' ||
       typeof account.signer.getPublicKey !== 'function' || typeof account.signer.signTransaction !== 'function' ||
       String(await account.signer.getPublicKey()) !== String(publicKey)) throw new Error('signer does not match the reviewed agent key');
   const reviewedKey = utils.PublicKey.from(String(publicKey));
   const expectedArgs = Buffer.from(JSON.stringify(args));
-  const action = transactions.functionCall(method, args, gas, 0n);
+  const action = transactions.functionCall(method, args, gas, deposit);
   const transaction = await account.createTransaction(contractId, [action], publicKey);
   const call = transaction?.actions?.[0]?.functionCall;
   if (transaction?.signerId !== ownerId || transaction?.receiverId !== contractId || String(transaction?.publicKey) !== String(publicKey) ||
       !Array.isArray(transaction.actions) || transaction.actions.length !== 1 || transaction.actions[0]?.enum !== 'functionCall' ||
-      call?.methodName !== method || call.gas !== gas || call.deposit !== 0n || !Buffer.from(call.args || []).equals(expectedArgs)) {
+      call?.methodName !== method || call.gas !== gas || call.deposit !== deposit || !Buffer.from(call.args || []).equals(expectedArgs)) {
     throw new Error('prepared transaction does not match the reviewed call');
   }
   // Encode before invoking the signer: it cannot silently mutate the prepared
@@ -40,3 +40,9 @@ export async function signReviewedCall({ account, publicKey, ownerId, contractId
   }
   return { txHash: utils.serialize.base_encode(digest), signed };
 }
+
+// Restricted agent calls always attach zero; an option passed by a caller
+// cannot widen that authority. The separate one-yocto helper is for explicitly
+// owner-signed testnet setup, never for the agent's execute methods.
+export function signReviewedCall(options) { return signCall(options, 0n); }
+export function signReviewedOneYoctoOwnerCall(options) { return signCall(options, 1n); }

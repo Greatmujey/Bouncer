@@ -233,12 +233,64 @@ jobs:
           name: dependent-workflow-public-evidence
           path: |
             /tmp/bouncer-dependent-live-*/journal.json
+            /tmp/bouncer-dependent-live-*/setup-journal.json
             /tmp/bouncer-dependent-live-*/oracle-goal.json
             /tmp/bouncer-dependent-live-*/workflow.json
             /tmp/bouncer-dependent-live-*/derived-orders.json
             /tmp/bouncer-dependent-live-*/evidence.json
             /tmp/bouncer-dependent-live-*/provider-config.json
             /tmp/bouncer-dependent-live-*/development-provider/**
+          if-no-files-found: ignore
+          retention-days: 90
+
+  seller-v2-workflow-live:
+    name: Seller-v2 dependent workflow and recovery (testnet)
+    # One fresh, explicit testnet run. Re-running a GitHub Actions run must not
+    # silently repeat its payments; investigate an ambiguous hash instead.
+    if: github.event_name == 'push' && github.run_attempt == '1' && contains(github.event.head_commit.message, '[seller-v2-live]')
+    needs: [js-tests, contract-tests, build-contract]
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: bouncer-wasm
+          path: .
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      # One native OutLayer oracle execution, then three Circle testnet USDC
+      # payments to the self-hosted reference seller, not an independent seller.
+      # No ambiguous payment is retried; the exact signed hash is journaled.
+      - name: Run and recover seller-v2 orders
+        shell: bash
+        run: |
+          set +e
+          node bouncer/demo-oracle-mission.mjs --seller-v2-workflow 2>&1 | tee "$RUNNER_TEMP/seller-v2-live.log"
+          result=${PIPESTATUS[0]}
+          if [ "$result" -ne 0 ]; then
+            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-4500).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=Seller-v2 testnet check failed::"+s)' "$RUNNER_TEMP/seller-v2-live.log"
+          fi
+          exit "$result"
+      # Public testnet inputs, memos, hashes and local state, never private keys.
+      - name: Preserve seller-v2 testnet evidence, never keys
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: seller-v2-workflow-public-evidence
+          path: |
+            /tmp/bouncer-seller-v2-live-*/journal.json
+            /tmp/bouncer-seller-v2-live-*/setup-journal.json
+            /tmp/bouncer-seller-v2-live-*/oracle-goal.json
+            /tmp/bouncer-seller-v2-live-*/workflow.json
+            /tmp/bouncer-seller-v2-live-*/derived-orders.json
+            /tmp/bouncer-seller-v2-live-*/evidence.json
+            /tmp/bouncer-seller-v2-live-*/provider-config.json
+            /tmp/bouncer-seller-v2-live-*/development-provider/**
           if-no-files-found: ignore
           retention-days: 90
 
