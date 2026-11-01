@@ -131,8 +131,10 @@ export function verifyRefSwapOutput(rawGoal, result, publicKey) {
   const hookOutcome = outcomeFor(g, hook.receipt.receipt_id, goal.router_id, 'router input');
   const inner = childCall(g, hookOutcome, goal.router_id, REF_SWAP_INPUT, 'ft_transfer_call', 'Ref input');
   const callback = childCall(g, hookOutcome, goal.router_id, goal.router_id, 'after_ref_input', 'router input callback');
+  // near-sdk emits zero bytes for a private callback with no arguments. Do not
+  // JSON-decode them as `{}`: real FINAL testnet receipts contain base64 ''.
   if (hookOutcome.status.SuccessReceiptId !== callback.receipt.receipt_id || String(callback.call.deposit) !== '0' ||
-      !isDeepStrictEqual(decode(callback.call.args, 'router callback arguments'), {})) throw new Error('router callback is not bound to this input');
+      callback.call.args !== '') throw new Error('router callback is not bound to this input');
   const callbackOutcome = outcomeFor(g, callback.receipt.receipt_id, goal.router_id, 'router input callback');
   terminal(callbackOutcome.status, '0', 'router unused input');
   if (!callbackOutcome.logs?.includes(`BOUNCER ref-router inner input settled; used=${goal.input_amount}; output unverified`)) {

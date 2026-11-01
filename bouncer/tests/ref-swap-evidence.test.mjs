@@ -31,6 +31,8 @@ test('Ref input success, an unrelated donation, or a failed output never proves 
     r => { r.transaction.actions[0].FunctionCall.gas = '1'; },
     r => { call(r, 'ft_on_transfer').args = enc({ sender_id: 'attacker.testnet', amount: '100', msg: REF_SWAP_INPUT_MESSAGE }); },
     r => { call(r, 'after_ref_input').args = enc({ forged: true }); },
+    r => { call(r, 'after_ref_input').args = enc({}); },
+    r => { call(r, 'after_ref_input').args = ' '; },
     r => { out(r, goal.router_id).status.SuccessReceiptId = id(201); },
     r => { r.receipts_outcome.find(x => x.id === id(15)).outcome.logs = []; },
     r => { r.receipts_outcome.find(x => x.id === id(15)).outcome.status.SuccessValue = enc('1'); },

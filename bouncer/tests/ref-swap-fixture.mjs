@@ -18,7 +18,7 @@ const key = signing.key, inputHash = signing.hash, sweepHash = id(99);
 function outcome(rid, executor, status, logs = [], children = []) { return { id: rid, outcome: { executor_id: executor, status, logs, receipt_ids: children } }; }
 function receipt(rid, predecessor, receiver, method, callArgs, deposit = '0') {
   return { receipt_id: rid, predecessor_id: predecessor, receiver_id: receiver, receipt: { Action: { actions: [{ FunctionCall: {
-    method_name: method, args: enc(callArgs), deposit } }] } } };
+    method_name: method, args: callArgs === undefined ? '' : enc(callArgs), deposit } }] } } };
 }
 const swapMessage = JSON.stringify({ force: 0, actions: [{ pool_id: goal.pool_id, token_in: REF_SWAP_INPUT, token_out: REF_SWAP_OUTPUT,
   amount_in: goal.input_amount, min_amount_out: goal.min_output }] });
@@ -36,7 +36,7 @@ function swapResult() {
         amount: '100', bucket: 24, policy_revision: 1 }),
       receipt(hook, REF_SWAP_INPUT, goal.router_id, 'ft_on_transfer', { sender_id: goal.contract_id, amount: '100', msg: REF_SWAP_INPUT_MESSAGE }),
       receipt(inner, goal.router_id, REF_SWAP_INPUT, 'ft_transfer_call', refArgs, '1'),
-      receipt(routerCallback, goal.router_id, goal.router_id, 'after_ref_input', {}),
+      receipt(routerCallback, goal.router_id, goal.router_id, 'after_ref_input', undefined),
       receipt(refHook, REF_SWAP_INPUT, REF_SWAP_EXCHANGE, 'ft_on_transfer', { sender_id: goal.router_id, amount: '100', msg: swapMessage }),
       receipt(output, REF_SWAP_EXCHANGE, REF_SWAP_OUTPUT, 'ft_transfer', { receiver_id: goal.router_id, amount: '70', memo: null }, '1'),
     ],
