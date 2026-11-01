@@ -51,10 +51,11 @@ wallet connection stays disabled on that shared-origin preview.
 
 ## Durable public hosting
 
-The public site address is `https://bouncer-near.vercel.app/` while the source
-repository stays private. The original `bouncer-testnet` Vercel project and its
-old URL were removed; the replacement `bouncer` project is linked to the
-private repository and has the new domain attached. The site is a historical
+The public site is available at `https://bouncer-near.vercel.app/` while the
+source repository stays private. The original `bouncer-testnet` Vercel project
+and its old URL were removed. The replacement `bouncer` project is linked to the
+private repository, has the new domain attached, and initially deployed the
+reviewed website from working-branch commit `d4b818e`. The site is a historical
 walkthrough, **not** a live agent dashboard: only its optional balance-refresh
 button performs read-only NEAR testnet RPC calls. Links to GitHub Actions
 evidence in a private repository will not be accessible to visitors without
