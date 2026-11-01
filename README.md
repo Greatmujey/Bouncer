@@ -378,6 +378,22 @@ the source and three FINAL payment receipts, and rejected substituted sellers.
 It sent no new transactions. The [public testnet evidence artifact](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41258992192/artifacts/13064860428)
 is retained until 30 January 2027; it contains no keys but includes task data.
 
+A separate [seller-v2 live run](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41263055741/job/124720514951)
+used three distinct seller-issued challenges on a fresh contract. Its
+[independent native-NEAR oracle](https://testnet.nearblocks.io/txns/EGKJHuRGtjk2SUUNeqLerGBn9q5sBatb74QuWuS5fRsn)
+fed [compute](https://testnet.nearblocks.io/txns/HwQB5RTFgascGDjPUmkCkiexF2WEHShHX69d6yGw7JMc),
+then [storage](https://testnet.nearblocks.io/txns/DpAJymo4MNEipNKEhEiwjBRHt6AqnHaVAXZu9QUUHb9u),
+then an [API request](https://testnet.nearblocks.io/txns/EofVKtasXZMf9TbTv4FtivigFwb8VrzYZZXToRYNq15L).
+The three payments were 0.001 Circle **testnet** USDC each to our self-hosted
+seller. After an injected lost response, a separate key-free CLI restarted the
+seller and recovered the original compute hash before continuing; the run
+checked one source broadcast, three resource-payment broadcasts and three
+persisted local claims. Owner setup transactions were separate. An [offline
+regression](bouncer/tests/seller-v2-history.test.mjs) reconstructs the chained
+inputs and observed v2 memos; it is not a raw RPC proof. The [public
+artifact](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41263055741/artifacts/13066031406)
+expires 30 January 2027; it contains task data, not keys.
+
 The Circle seller is **not independent**, the independently operated oracle
 was **not paid in Circle USDC**, and testnet tokens have no real value. This
 run does not resolve or resend the separate pending project transaction below,
@@ -467,9 +483,9 @@ support an **opt-in seller-v2** order: a fresh seller-issued challenge binds the
 normalized work, the seller durably claims one verified transaction per quote,
 and the buyer journals the signed hash before broadcasting. V1 remains the
 default; an owner-pinned v2 quote cannot silently fall back to v1. Offline
-adversarial tests cover concurrent claims and restart recovery; the linked live
-receipts used v1, and no independent FT seller or live v2 purchase is claimed.
-The challenge is public, not authentication. The reference seller stores at most
+adversarial tests cover concurrent claims and restart recovery. The linked v2
+live run paid only our own development seller; no independent FT seller adoption
+is claimed. The challenge is public, not authentication. The reference seller stores at most
 1,024 v2 quotes without automatic eviction; even an unpaid quote dry run can
 consume capacity. A second payment for an already-claimed quote cannot be
 redeemed. See the [wire format and recovery limits](bouncer/docs/PROVIDER_PROTOCOL.md#optional-seller-v2-binding).

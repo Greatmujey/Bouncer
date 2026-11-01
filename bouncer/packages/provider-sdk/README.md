@@ -233,5 +233,8 @@ database instead. Do not delete quotes or state just to regain capacity.
 
 These are reference-implementation properties, not guarantees supplied by the
 SDK's verifier. Offline tests cover v2 issuance, conflicting claims, crashes,
-restarts and buyer recovery; the cited live/historical testnet receipts above
-used v1, not a live v2 purchase.
+restarts and buyer recovery. A [separate live testnet run](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41263055741/job/124720514951)
+paid three v2 orders to our self-hosted reference seller and recovered the
+original compute hash after a seller restart. The previous installed-SDK
+historical receipt check used v1. Neither run proves independent seller adoption
+or real-value payment.

@@ -28,32 +28,35 @@ export const historicalOracleGoal = () => ({ id: 'independent-near-price', contr
 
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
 const artifact = (kind, goal_id, tx_hash, result) => JSON.stringify({ version: 1, kind, goal_id, tx_hash, result });
-const template = (id, resource, input) => ({ id, resource, policy_id: 'circle-resources',
-  token: HISTORICAL.token, payee: HISTORICAL.vendor, max_amount: '1000', input });
+const template = (historical, id, resource, input) => ({ id, resource, policy_id: 'circle-resources',
+  token: historical.token, payee: historical.vendor, max_amount: '1000', input });
 
-export function reconstructHistoricalOrders(observation) {
+// Optional parameters support reconstructing a different public run. They do
+// not constitute authenticated RPC receipts or independently vetted terms.
+export function reconstructHistoricalOrders(observation, { historical = HISTORICAL, memoFor = orderMemo } = {}) {
   if (!observation || observation.success !== true || observation.token_id !== 'near' || observation.source !== 'custom' ||
       typeof observation.price_usd !== 'number' || !Number.isFinite(observation.price_usd) || observation.price_usd <= 0 ||
       !Number.isSafeInteger(observation.timestamp) || observation.timestamp <= 0) throw new Error('invalid historical source observation');
-  const data = new Map([['independent-near-price', artifact('oracle', 'independent-near-price', HISTORICAL.source_tx,
+  if (!historical || typeof memoFor !== 'function') throw new Error('invalid public historical parameters');
+  const data = new Map([['independent-near-price', artifact('oracle', 'independent-near-price', historical.source_tx,
     { token_id: observation.token_id, source: observation.source, price_usd: observation.price_usd, timestamp: observation.timestamp })]]);
-  const compute = materializeWorkflowStep(template('dependent-compute', 'compute',
+  const compute = materializeWorkflowStep(template(historical, 'dependent-compute', 'compute',
     { text: { from: 'independent-near-price' }, rounds: 25 }), data);
   let digest = Buffer.from(compute.input.text, 'utf8');
   for (let i = 0; i < compute.input.rounds; i++) digest = crypto.createHash('sha256').update(digest).digest();
-  const computed = canonicalDelivery({ resource: 'compute', input: compute.input, txHash: HISTORICAL.compute_tx,
+  const computed = canonicalDelivery({ resource: 'compute', input: compute.input, txHash: historical.compute_tx,
     result: { type: 'compute', algorithm: 'sha256-iterated', rounds: compute.input.rounds, result: digest.toString('hex') } });
-  data.set('dependent-compute', artifact('compute', 'dependent-compute', HISTORICAL.compute_tx, computed));
-  const storage = materializeWorkflowStep(template('dependent-storage', 'storage',
+  data.set('dependent-compute', artifact('compute', 'dependent-compute', historical.compute_tx, computed));
+  const storage = materializeWorkflowStep(template(historical, 'dependent-storage', 'storage',
     { name: 'dependent-oracle-report', content: { from: 'dependent-compute' } }), data);
-  const stored = canonicalDelivery({ resource: 'storage', input: storage.input, txHash: HISTORICAL.storage_tx,
-    result: { type: 'storage', object_id: hash(`${HISTORICAL.storage_tx}:${storage.input.name}`),
+  const stored = canonicalDelivery({ resource: 'storage', input: storage.input, txHash: historical.storage_tx,
+    result: { type: 'storage', object_id: hash(`${historical.storage_tx}:${storage.input.name}`),
       sha256: hash(storage.input.content), bytes: Buffer.byteLength(storage.input.content) } });
-  data.set('dependent-storage', artifact('storage', 'dependent-storage', HISTORICAL.storage_tx, stored));
-  const api = materializeWorkflowStep(template('dependent-api', 'api', { text: { from: 'dependent-storage' } }), data);
+  data.set('dependent-storage', artifact('storage', 'dependent-storage', historical.storage_tx, stored));
+  const api = materializeWorkflowStep(template(historical, 'dependent-api', 'api', { text: { from: 'dependent-storage' } }), data);
   return { computed, stored, cases: [
-    { resource: 'compute', tx_hash: HISTORICAL.compute_tx, input: compute.input, memo: orderMemo('compute', compute.input) },
-    { resource: 'storage', tx_hash: HISTORICAL.storage_tx, input: storage.input, memo: orderMemo('storage', storage.input) },
-    { resource: 'api', tx_hash: HISTORICAL.api_tx, input: api.input, memo: orderMemo('api', api.input) },
+    { resource: 'compute', tx_hash: historical.compute_tx, input: compute.input, memo: memoFor('compute', compute.input) },
+    { resource: 'storage', tx_hash: historical.storage_tx, input: storage.input, memo: memoFor('storage', storage.input) },
+    { resource: 'api', tx_hash: historical.api_tx, input: api.input, memo: memoFor('api', api.input) },
   ] };
 }

@@ -7,7 +7,12 @@ chain receipts. A [1 November 2026 live testnet run](https://github.com/abdullah
 verified the full chain and key-free payment recovery; its OutLayer lookup used
 native testnet NEAR, while the three Circle testnet USDC resource payments went
 to a self-hosted development provider. It is not evidence of an independent
-FT seller or a real-value purchase. Transaction links and scope are in the
+FT seller or a real-value purchase. A [separate v2 live run](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41263055741/job/124720514951)
+used distinct seller-issued challenges for all three development-provider orders
+and recovered the original compute hash in a restarted, key-free process. It
+checked one source broadcast, three resource broadcasts and the locally
+persisted seller claims. The [public evidence artifact](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41263055741/artifacts/13066031406)
+contains task data, not keys. Transaction links and limitations are in the
 [README](../../README.md).
 
 ## Optional isolated testnet check
@@ -72,8 +77,13 @@ and reject seller substitution. It has no key and sends no transactions. The
 `[provider-inspect]` CI marker packs and installs the private SDK in an isolated
 seller directory for this read-only verification. A [1 November check](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41259817473/job/124710584367)
 verified the source and all three FINAL payment receipts using that installed
-archive, rejecting substituted sellers; it sent no transactions. Historical RPC
-availability is not guaranteed.
+archive, rejecting substituted sellers; it sent no transactions. For the v2
+run, `tests/seller-v2-history.test.mjs` reconstructs its source-dependent inputs
+and three observed v2 memos offline; `scripts/verify-seller-v2-history.mjs`
+optionally re-reads the source and each FINAL payment through a testnet RPC,
+checking substituted sellers and challenges without signing or paying. The
+`[seller-sdk-check]` job runs it with a separately installed SDK. These vectors
+are not raw RPC receipts; historical RPC availability is not guaranteed.
 
 ## What is reviewed
 
@@ -103,8 +113,9 @@ The buyer rejects a repeated seller challenge across paid and newly quoted
 steps. The signed transaction hash and exact payment request are synced before
 broadcast; after a restart, recovery reuses that exact hash and memo instead of
 requesting a new quote or paying again. See the [wire protocol and limitations](PROVIDER_PROTOCOL.md#optional-seller-v2-binding).
-The previously linked live testnet run used v1; v2 has offline adversarial and
-restart coverage, not an independent FT seller or a live v2 purchase.
+The earlier linked testnet run used v1; the later v2 run used a self-hosted
+seller, not an independent FT provider. Offline adversarial tests also exercise
+v2 challenge reuse, state tampering and recovery.
 
 A data binding such as `{"from":"price"}` is permitted **only** in compute
 `text`, storage `content`, or text-API `text`. It inserts a bounded JSON

@@ -164,8 +164,11 @@ reference state holds at most 1,024 v2 quotes per directory, with no automatic
 eviction: unpaid quotes cannot safely be expired merely because time elapsed,
 since a delayed valid payment may exist. At capacity it fails closed. The
 state migrates to version 3 upon first issuance; do not restore older snapshots
-or run older software against it. V2 has adversarial offline coverage, but no
-independent FT seller adoption or live v2 purchase has been demonstrated.
+or run older software against it. V2 has adversarial offline coverage and a
+[live testnet run](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41263055741/job/124720514951)
+with three distinct challenges, a seller restart and original-hash recovery.
+That run used our own development seller; it does not demonstrate independent
+FT seller adoption or real-value transactions.
 
 ## 2. Confirm payment and redeem
 

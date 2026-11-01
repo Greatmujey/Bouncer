@@ -466,7 +466,9 @@ jobs:
           if (sdk.orderMemoV2('compute', input, challenge) !== expected || sdk.challengeFromOrderMemo('compute', input, expected) !== challenge) throw new Error('installed seller-v2 vector mismatch');
           console.log('Installed SDK seller-v2 vector verified offline; no quote or payment.');
           NODE
-      - name: Verify the existing source and three seller receipts without paying
+      - name: Verify seller-v2 source, receipts and substitutions without paying
+        run: node bouncer/scripts/verify-seller-v2-history.mjs
+      - name: Verify the existing legacy source and seller receipts without paying
         run: node bouncer/scripts/verify-dependent-history.mjs
 
   oracle-transaction-inspection:
