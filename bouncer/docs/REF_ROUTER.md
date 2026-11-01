@@ -99,6 +99,30 @@ failed Ref transfer, unregistered token account, bad gas estimate or partial
 refund may leave funds in the router or at Ref. Only use the owner's recovery
 methods after checking the original finalized receipts and provider balances.
 
+### One-shot testnet proof harness
+
+`demo-ref-swap.mjs` is gated by an explicit testnet acknowledgement and a
+separate CI marker; it has not yet established a live swap. It creates fresh,
+disposable testnet accounts, obtains a fresh bounded quote, deploys the exact
+router and removes its deploy key, funds only the capped input, and deliberately
+loses each response to exercise original-hash recovery. Do not rerun an
+uncertain transaction. Ordinary CI does **not** run this funded test.
+
+To make an unsuccessful **testnet-only** run recoverable without publishing its
+signing keys, the harness encrypts its disposable owner, input and sweep keys to
+`config/testnet-ref-demo-recovery-public.pem` using RSA-OAEP-SHA256 and
+AES-256-GCM. Only ciphertext, public identities and journal/receipt evidence are
+retained in the repository-restricted Action artifact/annotation. The matching
+private recovery key is separate and owner-only outside Git, at
+`~/.near-credentials/testnet/bouncer-ref-demo-recovery-private.pem` in the
+operator workspace. If that private key is lost, the sealed credentials cannot
+be recovered. The envelope does not authenticate its creator: after opening it
+with `scripts/open-ref-demo-credentials.mjs`, compare every recovered public key,
+account, route and code hash against FINAL chain state before use. This one-off
+key is not a general key-management service, distributed recovery mechanism or
+production credential solution; rotate it for new experiments and never put
+mainnet keys into the envelope.
+
 The route, tokens and gas bounds are intentionally narrow and testnet-only.
 The owner must review pool liquidity and minimum output before deployment and
 provide the router and vault with required storage registrations and a native

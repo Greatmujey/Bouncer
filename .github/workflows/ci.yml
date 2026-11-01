@@ -196,6 +196,55 @@ jobs:
             git push
           fi
 
+  guarded-ref-one-shot:
+    name: One-shot guarded Ref swap and vault credit (testnet)
+    # The explicit parent and marker prohibit reruns or incidental paid runs.
+    # This never touches the separate unresolved OutLayer project transaction.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/arena/88d70c7c-near-hub' && github.event.before == 'c8a19291f7248f7da24dc073a4a024ec02d6c4dc' && github.event.repository.private == true && github.run_attempt == '1' && contains(github.event.head_commit.message, '[guarded-ref-demo-20261101]')
+    needs: [js-tests, contract-tests, build-contract, ref-router-contract]
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: bouncer-wasm
+          path: .
+      - uses: actions/download-artifact@v4
+        with:
+          name: ref-router-wasm
+          path: ref-router-wasm
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      - name: Execute bounded testnet route and recover both original hashes
+        shell: bash
+        env:
+          BOUNCER_REF_DEMO_ACK: testnet-only-one-shot
+          BOUNCER_REF_DEMO_DIR: ${{ runner.temp }}/bouncer-ref-proof
+        run: |
+          set +e
+          node bouncer/demo-ref-swap.mjs 2>&1 | tee "$RUNNER_TEMP/guarded-ref-demo.log"
+          result=${PIPESTATUS[0]}
+          if [ "$result" -ne 0 ]; then
+            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-4000).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=Guarded Ref testnet proof failed::"+s)' "$RUNNER_TEMP/guarded-ref-demo.log"
+          fi
+          exit "$result"
+      # No plaintext keys or signed payloads: public goal/journal/receipts and
+      # RSA-OAEP + AES-GCM ciphertext only. The decryption key is kept outside
+      # Git on the operator sandbox. Preserve even on a failed/uncertain run.
+      - name: Preserve original testnet recovery evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: guarded-ref-testnet-recovery
+          path: ${{ runner.temp }}/bouncer-ref-proof/**
+          if-no-files-found: ignore
+          retention-days: 90
+
   circle-usdc-live:
     name: Circle testnet USDC guarded multi-resource mission
     if: github.event_name == 'push' && contains(github.event.head_commit.message, '[circle-usdc-live]')
