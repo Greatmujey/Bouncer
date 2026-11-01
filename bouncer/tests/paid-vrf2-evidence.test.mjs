@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import nearApi from 'near-api-js';
-import { assertReviewedVrf2Wasm, assertVrf2Snapshot, readVrf2Snapshot, writeFreshEvidence } from '../scripts/paid-vrf2-once.mjs';
+import { assertReviewedVrf2Wasm, assertVrf2Snapshot, readVrf2Snapshot, readVrf2SetupReadiness, writeFreshEvidence } from '../scripts/paid-vrf2-once.mjs';
 import { assertVrf2Review, assertOwnerPolicyCalls } from '../scripts/inspect-paid-vrf2.mjs';
 
 const WASM = '835f0baa51d08ddf3af6812df0caefb93283480735a63e3d382073e04fbaf8ee';
@@ -101,4 +101,18 @@ test('public evidence is write-once and refuses unsafe filenames', () => {
     assert.throws(() => writeFreshEvidence(dir, 'first-intent.json', {}));
     assert.throws(() => writeFreshEvidence(dir, '../unsafe.json', {}), /filename/);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+
+test('read-only setup readiness rejects unsafe storage and unbounded Ref quotes before account creation', async () => {
+  const make = ({ storage = '10000000000000000000', min = '1250000000000000000000', quote = '30000' } = {}) => ({
+    async experimental_protocolConfig() { return { chain_id: 'testnet', runtime_config: { storage_amount_per_byte: storage } }; },
+    async callFunction(_account, method) { if (method === 'storage_balance_bounds') return { min }; if (method === 'get_return') return quote; throw new Error('unexpected'); },
+  });
+  assert.equal((await readVrf2SetupReadiness(make())).quote, '30000');
+  await assert.rejects(readVrf2SetupReadiness(make({ storage: '1' })), /storage protocol/);
+  await assert.rejects(readVrf2SetupReadiness(make({ min: '100000000000000000000001' })), /registration minimum/);
+  for (const quote of ['19999', '1000001', 'invalid']) {
+    await assert.rejects(readVrf2SetupReadiness(make({ quote })), /no bounded Ref pool quote/);
+  }
 });

@@ -257,9 +257,11 @@ acceptance, unbiased key selection or a TEE attestation.
 
 `paid-vrf2-once.mjs` is a separately fenced, **testnet-only** diagnostic: a
 fresh vault, owner, keys and random seed; a known local recovery private key;
-and no dependency on the earlier unrelated wNEAR refund test. It first checks
-the provider's exact current token, version, VRF key, price and bounded native
-estimate. A small **owner-setup** Ref swap acquires fake `usdc.fakes.testnet`,
+and no dependency on the earlier unrelated wNEAR refund test. Before creating
+accounts it checks the provider's exact current token, version, VRF key, price,
+bounded native estimate, storage prices and a bounded Ref quote. The same
+read-only checks are available separately in `probe-vrf2-ready.mjs`. A small
+**owner-setup** Ref swap acquires fake `usdc.fakes.testnet`,
 not Circle USDC. An owner funds and configures the fresh V9 vault using reviewed
 1-yocto policy calls and two restricted agent keys. The project is preflighted
 before moving any FT to OutLayer. The maximum provider deposit is 10,000 fake

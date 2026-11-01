@@ -52,7 +52,7 @@ export function assertReviewedVrf2Wasm(wasm) {
       !wasm.includes(Buffer.from('bouncer-agent-v9'))) throw new Error('reviewed V9 WASM hash or marker changed; no testnet action');
 }
 
-async function assertProviderTerms(provider, input) {
+export async function assertProviderTerms(provider, input) {
   if ((await provider.viewNodeStatus())?.chain_id !== 'testnet') throw new Error('VRF diagnostic requires testnet');
   const view = (method, args = {}) => provider.callFunction(OUTLAYER, method, args, { finality: 'final' });
   const [token, registry, versionInfo, pricing, estimate, metadata, keyResponse] = await Promise.all([
@@ -71,6 +71,31 @@ async function assertProviderTerms(provider, input) {
   return { provider: OUTLAYER, token: TOKEN, project: PROJECT, version: VERSION, price: AMOUNT.toString(),
     author: AUTHOR, native_estimate: String(estimate), native_maximum: MAX_NATIVE.toString(), vrf_public_key: VRF_PIN,
     scope: 'read-only, non-atomic provider terms; no deployed-worker attestation or commercial claim' };
+}
+
+/** Read-only Ref quote and registration bounds. Repeat the quote immediately
+ * before the owner's setup swap; a quote is never an on-chain reservation. */
+export async function readVrf2SetupReadiness(provider) {
+  const final = { finality: 'final' }, view = (account, method, args = {}) => provider.callFunction(account, method, args, final);
+  const [protocol, wrapBounds, tokenBounds] = await Promise.all([
+    provider.experimental_protocolConfig(final), view(WRAP, 'storage_balance_bounds'), view(TOKEN, 'storage_balance_bounds'),
+  ]);
+  if (protocol?.chain_id !== 'testnet' || protocol?.runtime_config?.storage_amount_per_byte !== '10000000000000000000') {
+    throw new Error('testnet storage protocol differs from reviewed account funding');
+  }
+  for (const bounds of [wrapBounds, tokenBounds]) {
+    if (typeof bounds?.min !== 'string' || !/^[0-9]+$/.test(bounds.min) || BigInt(bounds.min) <= 0n || BigInt(bounds.min) > ONE / 10n) {
+      throw new Error('testnet FT registration minimum outside owner-approved bounds');
+    }
+  }
+  for (const pool_id of [54, 477, 596, 624]) {
+    try {
+      const quote = BigInt(await view(REF, 'get_return', { pool_id, token_in: WRAP, amount_in: INPUT_NEAR.toString(), token_out: TOKEN }));
+      if (quote >= AMOUNT * 2n && quote <= 1_000_000n) return { pool_id, quote: quote.toString(),
+        wrap_storage_min: wrapBounds.min, fake_storage_min: tokenBounds.min, storage_price: protocol.runtime_config.storage_amount_per_byte };
+    } catch { /* read-only unavailable or changed pool */ }
+  }
+  throw new Error('no bounded Ref pool quote for acquiring fake test USDC.e');
 }
 
 async function createFundedOnce(provider, dir, label, id, key) {
@@ -127,7 +152,7 @@ async function main() {
   const seed = `bouncer_vrf2_${crypto.randomBytes(16).toString('hex')}`;
   const input = JSON.stringify({ operation: 'vrf', seed });
   // No account creation or test-token acquisition unless all terms are live.
-  const initialTerms = await assertProviderTerms(provider, input);
+  const [initialTerms, initialSetup] = await Promise.all([assertProviderTerms(provider, input), readVrf2SetupReadiness(provider)]);
   fs.mkdirSync(dir, { mode: 0o700 }); // fail closed if any evidence directory already exists
   const envelope = sealTestnetCredentials({ version: 3, purpose: 'outlayer-vrf-testnet', owner_account_id: owner, contract_id: vault,
     owner_secret: ownerKey.toString(), contract_secret: vaultKey.toString(), funding_secret: fundingKey.toString(), project_secret: projectKey.toString() }, pub);
@@ -141,6 +166,7 @@ async function main() {
   try {
     writeFreshEvidence(dir, 'sealed-testnet-credentials.json', envelope);
     writeFreshEvidence(dir, 'identity.json', identity); writeFreshEvidence(dir, 'initial-terms.json', initialTerms);
+    writeFreshEvidence(dir, 'initial-setup-readiness.json', initialSetup);
     notice('Encrypted disposable VRF2 recovery credentials', envelope);
     notice('Fresh VRF2 diagnostic public identity', identity);
     const journalPath = path.join(dir, 'journal.enc.json');
@@ -187,14 +213,8 @@ async function main() {
     }
     await setup('wrap-owner', ownerAccount, ownerKey, WRAP, [fc('near_deposit', {}, 50n * TGAS, WRAP_FUND)],
       { token: WRAP, method: 'near_deposit', amount: WRAP_FUND.toString() });
-    const pools = [54, 477, 596, 624]; let selected;
-    for (const pool_id of pools) {
-      try {
-        const quote = BigInt(await view(REF, 'get_return', { pool_id, token_in: WRAP, amount_in: INPUT_NEAR.toString(), token_out: TOKEN }));
-        if (quote >= AMOUNT * 2n && quote <= 1_000_000n) { selected = { pool_id, quote }; break; }
-      } catch { /* read-only unavailable/changed pools are skipped */ }
-    }
-    if (!selected) throw new Error('no bounded Ref pool quote for acquiring fake test USDC.e');
+    const currentSetup = await readVrf2SetupReadiness(provider);
+    const selected = { pool_id: currentSetup.pool_id, quote: BigInt(currentSetup.quote) };
     const beforeFake = BigInt(await view(TOKEN, 'ft_balance_of', { account_id: owner }));
     if (beforeFake !== 0n) throw new Error('fresh owner unexpectedly has fake test tokens');
     const swapMsg = JSON.stringify({ force: 0, actions: [{ pool_id: selected.pool_id, token_in: WRAP, token_out: TOKEN,
