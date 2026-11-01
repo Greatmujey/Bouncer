@@ -234,7 +234,8 @@ export async function runYoutickPlayGrant({ journal, grantId, sessionId, goal: r
     if (!execute) return { status: 'READY_FOR_OWNER_APPROVAL', grant_id: grantId, prepared,
       vault_code_hash: vaultCodeHash, access_code_hash: YOUTICK_ACCESS_CODE_HASH, market_code_hash: YOUTICK_V1_CODE_HASH,
       payment_tx_hash: payment.tx_hash, scope: 'read-only review; no grant, token, playback or delivery proven' };
-    if (typeof provider.sendTransactionUntil !== 'function' || typeof provider.viewAccessKey !== 'function') throw new Error('single-send provider and owner access-key view are required');
+    const sendOnce = typeof provider.sendTransactionOnce === 'function' ? provider.sendTransactionOnce : provider.sendTransactionUntil;
+    if (typeof sendOnce !== 'function' || typeof provider.viewAccessKey !== 'function') throw new Error('single-send provider and owner access-key view are required');
     const key = nearApi.utils.PublicKey.fromString(String(publicKey));
     if (key.keyType !== 0 || (await provider.viewAccessKey(goal.owner_account_id, key, block))?.permission !== 'FullAccess') {
       throw new Error('owner approval requires the reviewed full-access owner key');
@@ -247,7 +248,7 @@ export async function runYoutickPlayGrant({ journal, grantId, sessionId, goal: r
     // Persist only the hash and review, not replayable signed bytes. An error
     // or crash after this point never permits an automatic replacement send.
     journal.put(grantId, { kind: KIND, status: 'pending', fingerprint: digest(binding), binding, tx_hash: signed.txHash });
-    try { await provider.sendTransactionUntil(signed.signed, 'FINAL'); }
+    try { await sendOnce.call(provider, signed.signed, 'FINAL'); }
     catch { throw new Error(`owner grant ${grantId} has unresolved hash ${signed.txHash}; recover it without resending`); }
     try { return await recoverUnlocked({ journal, grantId, provider, clock }); }
     catch { throw new Error(`owner grant ${grantId} has hash ${signed.txHash} but FINAL proof or current views are unavailable; recover without resending`); }

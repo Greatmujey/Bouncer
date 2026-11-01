@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import nearApi from 'near-api-js';
-import { signReviewedProbeSetup } from '../scripts/probe-youtick-owner-grant.mjs';
+import { signReviewedProbeSetup, assertProbeRuntime } from '../scripts/probe-youtick-owner-grant.mjs';
 
 function setup() {
   const key = nearApi.KeyPair.fromRandom('ed25519'), signer = new nearApi.KeyPairSigner(key), signerId = 'vault.testnet';
@@ -23,5 +23,14 @@ test('reviewed diagnostic setup signs only exact deployment, initialization and 
       const [hash, signed] = await old(tx); hash[0] ^= 1; return [hash, signed]; }; },
   ]) {
     const s = setup(); alter(s); await assert.rejects(signReviewedProbeSetup(s), /differs from review/);
+  }
+});
+
+test('diagnostic rejects mainnet, unknown/old protocol and unexpected storage before creating accounts', () => {
+  const valid = { chain_id: 'testnet', protocol_version: 84, runtime_config: { storage_amount_per_byte: '10000000000000000000' } };
+  assert.doesNotThrow(() => assertProbeRuntime(valid));
+  for (const bad of [{ ...valid, chain_id: 'mainnet' }, { ...valid, protocol_version: 83 },
+    { ...valid, protocol_version: '84' }, { ...valid, runtime_config: {} }, null]) {
+    assert.throws(() => assertProbeRuntime(bad), /not compatible/);
   }
 });

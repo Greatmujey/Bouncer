@@ -100,6 +100,15 @@ async function upstreamReady(provider, sessionPk, jobId, deviceHash) {
   }
 }
 
+/** A protocol version check is necessary for this artifact's bulk-memory
+ * instructions, but does not prove deployment, runtime safety or source identity. */
+export function assertProbeRuntime(protocol) {
+  if (protocol?.chain_id !== 'testnet' || !Number.isSafeInteger(protocol.protocol_version) || protocol.protocol_version < 84 ||
+      protocol?.runtime_config?.storage_amount_per_byte !== '10000000000000000000') {
+    throw new Error('testnet protocol/storage configuration is not compatible with the reviewed V10 artifact');
+  }
+}
+
 async function main() {
   if (process.env.BOUNCER_YOUTICK_GRANT_PROBE_ACK !== 'testnet-hypothetical-no-payment-once' ||
       !process.env.BOUNCER_YOUTICK_GRANT_PROBE_DIR || !process.env.BOUNCER_YOUTICK_V10_WASM) {
@@ -121,8 +130,12 @@ async function main() {
     vault_code_hash: vaultCodeHash, market_code_hash: YOUTICK_V1_CODE_HASH, access_code_hash: YOUTICK_ACCESS_CODE_HASH,
     owner_public_key: ownerKey.getPublicKey().toString(), prepared: { owner_id: owner, vault, method: 'issue_youtick_play_grant',
       deposit: '1', gas: YOUTICK_PLAY_GRANT_GAS, args } });
-  // Read-only upstream checks happen before the helper can create accounts.
+  // Read-only upstream and runtime checks happen before the helper can create
+  // accounts. This V10 build contains bulk-memory instructions; NEAR enabled
+  // those at protocol 84. Do not assume an older testnet can run the artifact.
   await upstreamReady(provider, args.session_pk, jobId, deviceHash);
+  const protocol = await provider.experimental_protocolConfig({ finality: 'final' });
+  assertProbeRuntime(protocol);
   fs.mkdirSync(dir, { mode: 0o700 }); // refuse a prior directory: never reuse a failed run
   const envelope = sealTestnetCredentials({ version: 5, purpose: 'youtick-play-grant-testnet', owner_account_id: owner, contract_id: vault,
     owner_secret: ownerKey.toString(), contract_secret: vaultKey.toString(), agent_secret: unusedAgentKey.toString(), session_secret: sessionKey.toString() }, pub);
@@ -139,8 +152,6 @@ async function main() {
     journal = new FileJournal(path.join(dir, 'journal.enc.json'), vault, owner, { encryptionKey: journalKey });
     const vaultState = await createFunded(provider, vault, vaultKey); writeExclusive(dir, 'vault-created.json', { account_id: vault });
     const ownerState = await createFunded(provider, owner, ownerKey); writeExclusive(dir, 'owner-created.json', { account_id: owner });
-    const protocol = await provider.experimental_protocolConfig({ finality: 'final' });
-    if (protocol?.runtime_config?.storage_amount_per_byte !== '10000000000000000000') throw new Error('unexpected testnet storage price');
     const storagePrice = 10n ** 19n, codeReserve = BigInt(wasm.length + 50_000) * storagePrice + ONE / 4n;
     if (BigInt(vaultState.amount) - BigInt(vaultState.storage_usage) * storagePrice < codeReserve ||
         BigInt(ownerState.amount) - BigInt(ownerState.storage_usage) * storagePrice < ONE / 2n) {
@@ -154,7 +165,7 @@ async function main() {
       journal.put(id, record);
       writeExclusive(dir, `${id}-intent.json`, { id, signer_id: signerId, tx_hash: signed.txHash, review });
       console.log(`Recorded ${id} hash ${signed.txHash} before its only broadcast.`);
-      try { await provider.sendTransactionUntil(signed.signed, 'FINAL'); }
+      try { await provider.sendTransactionOnce(signed.signed, 'FINAL'); }
       catch { console.log(`${id}: response failed or was lost; inspecting the original hash only.`); }
       let result;
       try { result = await provider.txStatusReceipts(signed.txHash, signerId, 'FINAL'); }

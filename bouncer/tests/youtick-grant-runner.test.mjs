@@ -168,6 +168,17 @@ test('an unknown hash, failed FINAL lookup or missing current view never trigger
   } finally { s.close(); }
 });
 
+test('the grant runner prefers an available bounded one-shot sender over the generic transport', async () => {
+  const s = setup();
+  try {
+    const underlying = s.provider.sendTransactionUntil.bind(s.provider); let bounded = 0;
+    s.provider.sendTransactionOnce = async (...args) => { bounded++; return underlying(...args); };
+    s.provider.sendTransactionUntil = async () => { throw new Error('generic sender should not be used'); };
+    const granted = await runYoutickPlayGrant({ ...s.opts, execute: true });
+    assert.equal(granted.status, 'GRANTED'); assert.equal(bounded, 1); assert.equal(s.settings.sent, 1);
+  } finally { s.close(); }
+});
+
 test('a successful send with temporarily unavailable FINAL evidence stays pending and is later reconciled', async () => {
   const s = setup();
   try {

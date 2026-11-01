@@ -67,7 +67,9 @@ views itself, pins testnet, the reviewed vault hash, owner, market/access hashes
 original paid session and scoped proof, and defaults to **read-only review**.
 Execution requires an explicit full-access owner signer and exactly 1 yoctoNEAR.
 It records the signed transaction **hash before one broadcast** in the original
-encrypted file journal, but not replayable signed bytes. Recovery needs the
+encrypted file journal, but not replayable signed bytes. The built-in provider's
+one-shot send has a bounded timeout, refuses redirects and never retries.
+Recovery needs the
 original encrypted journal and its encryption key but **no owner signing key or
 source file**; it rechecks the original payment, linked FINAL grant receipt and
 current access views by the same hash. An unknown result remains pending, and a
@@ -80,8 +82,12 @@ The separate opt-in `scripts/probe-youtick-owner-grant.mjs` is a **diagnostic**:
 it uses freshly funded disposable testnet accounts and a hypothetical job ID,
 not a paid publication. It is fenced by an explicit one-shot workflow, and
 journals deployment, zero-yocto rejection and positive grant hashes before their
-individual broadcasts. Its RSA-sealed recovery envelope and encrypted journal
-are preserved even on failure. `scripts/inspect-youtick-grant-probe.mjs` is a
+individual broadcasts. CI's V10 optimizer reported `memory.copy`/`memory.fill`
+bulk-memory instructions; the probe requires the RPC to report testnet protocol
+84 or later, where [nearcore enabled bulk memory](https://github.com/near/nearcore/releases/tag/2.12.0),
+before creating accounts. That version check is not a full WASM validation.
+Its RSA-sealed recovery envelope and encrypted journal are preserved even on
+failure. `scripts/inspect-youtick-grant-probe.mjs` is a
 key-free, read-only reinspection of retained hashes. It is not a way to bypass
 the paid-publication requirement in the grant runner. No diagnostic result
 implies an upload, token, playback, delivery or commercial purchase.
@@ -92,7 +98,9 @@ owner/vault, use a non-retrying `PaymentRpcProvider`, and call
 vaultCodeHash, provider })` to review. Only after reviewing the returned exact
 call should the owner supply `account`, `publicKey`, and `execute: true`.
 `recoverYoutickPlayGrant({ journal, grantId, provider })` only inspects the
-original recorded hash. Do not delete, replace or restore an older journal to
+original recorded hash. The `npm run recover-youtick-grant -- --help` CLI
+provides the same key-free operation using an existing journal and its original
+`BOUNCER_FILE_JOURNAL_KEY_FILE`. Do not delete, replace or restore an older journal to
 escape a pending transaction: the single-host lock cannot detect rollback,
 another journal, another process bypassing it, a malicious RPC or another
 owner acting directly. Injected providers must guarantee one broadcast rather

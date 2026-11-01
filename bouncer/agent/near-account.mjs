@@ -16,10 +16,29 @@ import { readBoundedJson } from '../shared/bounded-json.mjs';
  * Injected third-party providers must implement equivalent behavior themselves.
  */
 export class PaymentRpcProvider extends nearApi.providers.JsonRpcProvider {
-  constructor(url, { receiptTimeoutMs = 20_000 } = {}) {
+  constructor(url, { receiptTimeoutMs = 20_000, sendTimeoutMs = 60_000 } = {}) {
     super({ url: validateRpcEndpoint(url) }, { retries: 1 });
-    if (!Number.isSafeInteger(receiptTimeoutMs) || receiptTimeoutMs < 1 || receiptTimeoutMs > 120_000) throw new Error('invalid receipt timeout');
+    if (!Number.isSafeInteger(receiptTimeoutMs) || receiptTimeoutMs < 1 || receiptTimeoutMs > 120_000 ||
+        !Number.isSafeInteger(sendTimeoutMs) || sendTimeoutMs < 1 || sendTimeoutMs > 120_000) throw new Error('invalid payment RPC timeout');
     this.receiptTimeoutMs = receiptTimeoutMs;
+    this.sendTimeoutMs = sendTimeoutMs;
+  }
+
+  /** Exactly one bounded HTTP submission, for runners that have already
+   * durably recorded the hash. A timeout, redirect, bad response or RPC error
+   * is ambiguous and must be reconciled by the original hash, never retried. */
+  async sendTransactionOnce(signedTransaction, waitUntil = 'FINAL') {
+    if (waitUntil !== 'FINAL') throw new Error('bounded one-shot send requires FINAL');
+    const bytes = Buffer.from(nearApi.transactions.encodeTransaction(signedTransaction));
+    if (!bytes.length || bytes.length > 2_000_000) throw new Error('signed transaction exceeds one-shot send limit');
+    const response = await fetch(this.connection.url, { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 'bouncer-one-shot-send', method: 'send_tx',
+        params: { signed_tx_base64: bytes.toString('base64'), wait_until: 'FINAL' } }),
+      redirect: 'error', signal: AbortSignal.timeout(this.sendTimeoutMs) });
+    if (!response.ok) throw new Error(`one-shot transaction RPC HTTP ${response.status}; transaction remains unresolved`);
+    const body = await readBoundedJson(response, { maxBytes: 4_000_000, label: 'transaction RPC' });
+    if (!body || body.error || body.result?.error || !Object.hasOwn(body, 'result')) throw new Error('one-shot transaction RPC error or missing result; transaction remains unresolved');
+    return body.result;
   }
 
   async txStatusReceipts(hash, accountId, waitUntil = 'EXECUTED_OPTIMISTIC') {
