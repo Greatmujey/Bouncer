@@ -72,6 +72,24 @@ jobs:
           fi
           exit "$result"
 
+  ref-graph-read:
+    name: Inspect existing public Ref and vault receipt graphs (read only)
+    if: github.event_name == 'push' && github.run_attempt == '1' && contains(github.event.head_commit.message, '[ref-graph-read]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      - name: Inspect two pinned historical transactions, without keys or sends
+        run: node bouncer/scripts/inspect-ref-receipts.mjs
+        env:
+          NEAR_TESTNET_RPC: https://archival-rpc.testnet.near.org
+
   ref-router-contract:
     name: Test and build one-shot Ref testnet router
     runs-on: ubuntu-latest

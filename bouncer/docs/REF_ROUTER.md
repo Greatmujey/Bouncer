@@ -1,8 +1,9 @@
 # Experimental one-shot Ref testnet adapter
 
-This is an unaudited testnet prototype. It is not yet a complete swap client,
-not production-ready and has not yet been demonstrated against a live Ref
-pool. Do not use real funds or assume a successful input transfer is an output.
+This is an unaudited testnet prototype. The router builds and its contract and
+client have synthetic tests, but the combined path has **not** yet been
+proven against a live Ref pool. It is not production-ready. Do not use real
+funds or assume a successful input transfer is an output.
 
 ## Why an adapter
 
@@ -42,6 +43,54 @@ uses Bouncer's zero-deposit execution and its caps and allowlist.
    output withdrawal, and native surplus reclaim require the owner and
    **exactly 1 yoctoNEAR**. They cannot select an arbitrary FT destination.
    They are operator recovery tools, not automatic failover.
+
+## Experimental client and recovery
+
+`agent/ref-swap.mjs` defaults to dry-run and accepts an explicit reviewed goal:
+
+```json
+{
+  "version": 1,
+  "id": "unique-trade-id",
+  "contract_id": "vault.example.testnet",
+  "owner_account_id": "owner.example.testnet",
+  "router_id": "router.example.testnet",
+  "router_code_hash": "BASE58_SHA256_OF_THE_REVIEWED_ROUTER_WASM",
+  "policy_id": "swap-policy",
+  "policy_revision": 1,
+  "route_revision": 1,
+  "pool_id": 1845,
+  "input_amount": "10000000000000000000000",
+  "min_output": "3000"
+}
+```
+
+Replace the code-hash placeholder with the base58-encoded SHA-256 hash of the
+exact reviewed WASM. The client checks that against the router account at
+finality, requires **zero remaining router access keys**, checks the immutable
+configuration and FT registrations, and requires two separate function-call
+keys on the owner's account: one scoped only to Bouncer `execute_ft_call`,
+other scoped only to this router's `sweep_output`. It also requires the
+router to have at least 0.1 testnet NEAR for storage and gas. The sample output
+minimum is illustrative, not a current quote.
+
+A live invocation requires the original exclusive file journal and an explicit
+`--execute`; recovery uses `--recover` with that same journal and **no signing
+keys**. `BOUNCER_FILE_JOURNAL_KEY_FILE` enables the existing opt-in encryption;
+see [FILE_JOURNALS.md](FILE_JOURNALS.md). Do not create a replacement journal
+or restore an old snapshot after a crash. Journaling is local/cooperative; it
+is not distributed fencing or protection against rollback.
+
+The input and output sweep have separate hashes, each written before its one
+broadcast. The client checks the FINAL receipt graph from the exact Bouncer
+input through the router and Ref to a successful Circle transfer to that
+router. It then signs the exact actual output amount for a second transfer-call
+and verifies the Bouncer deposit hook plus full token settlement. This is not a
+light-client proof: RPC, token, Ref and pinned Bouncer/router code are trusted.
+An unresolved receipt graph, output failure, missing hook, malformed result or
+failed/uncertain broadcast stops; it is never silently resent. In particular,
+`OUTPUT_RECEIVED` means the router received output, not that the vault was
+credited. The only success status, `COMPLETED`, requires both proofs.
 
 The prototype remains **one shot** after failures; a fresh account is not a
 license to repeat an ambiguous trade. Preserve the original transaction hash

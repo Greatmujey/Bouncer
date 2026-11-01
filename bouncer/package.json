@@ -27,6 +27,7 @@
     "outlayer": "node agent/outlayer.mjs",
     "oracle": "node agent/oracle-outlayer.mjs",
     "ft-call": "node agent/ft-call.mjs",
+    "ref-swap": "node agent/ref-swap.mjs",
     "outlayer-project": "node agent/outlayer-project.mjs",
     "mission": "node agent/mixed-mission.mjs",
     "paid-mission": "node agent/paid-mission.mjs",

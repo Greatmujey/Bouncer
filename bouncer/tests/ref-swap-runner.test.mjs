@@ -1,0 +1,190 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
+import nearApi from 'near-api-js';
+import { runRefSwap, recoverRefSwap, checkRefRouter } from '../agent/ref-swap.mjs';
+import { REF_SWAP_INPUT, REF_SWAP_OUTPUT, REF_SWAP_EXCHANGE, REF_SWAP_INPUT_MESSAGE, REF_SWEEP_GAS } from '../agent/ref-swap-evidence.mjs';
+import { goal, ftGoal, signing, key, inputHash, swapResult, sweepResult, id } from './ref-swap-fixture.mjs';
+
+function sweepSigner() {
+  const pair = nearApi.KeyPair.fromRandom('ed25519'), publicKey = pair.getPublicKey(), signer = new nearApi.KeyPairSigner(pair);
+  const create = (receiver, actions) => nearApi.transactions.createTransaction(goal.owner_account_id, publicKey, receiver, 1n, actions, Buffer.alloc(32, 3));
+  const expected = create(goal.router_id, [nearApi.transactions.functionCall('sweep_output', { amount: '70' }, REF_SWEEP_GAS, 0n)]);
+  const hash = nearApi.utils.serialize.base_encode(crypto.createHash('sha256').update(nearApi.transactions.encodeTransaction(expected)).digest());
+  return { publicKey: publicKey.toString(), hash, account: { accountId: goal.owner_account_id, signer,
+    async createTransaction(receiver, actions, keyArg) {
+      assert.equal(receiver, goal.router_id); assert.equal(String(keyArg), publicKey.toString()); assert.equal(actions.length, 1);
+      const call = actions[0].functionCall; assert.equal(call.methodName, 'sweep_output'); assert.equal(call.gas, REF_SWEEP_GAS);
+      assert.equal(call.deposit, 0n); assert.deepEqual(JSON.parse(Buffer.from(call.args).toString()), { amount: '70' });
+      return create(receiver, actions);
+    } } };
+}
+function fixture() {
+  const entries = new Map(), sweep = sweepSigner(), sends = [];
+  let failWrite = '', failSend = '', failLookup = '', mutateSwap = x => x, mutateSweep = x => x;
+  let started = false, codeHash = goal.router_code_hash, accessKeys = [], routeOverrides = {}, storage = { total: '1250000000000000000000', available: '0' },
+    sweepPermission = { FunctionCall: { receiver_id: goal.router_id, method_names: ['sweep_output'] } }, chain = 'testnet';
+  const journal = { get(id) { return entries.get(id); }, put(id, entry) {
+    if (failWrite === id) throw new Error('simulated durable write failure');
+    entries.set(id, structuredClone({ ...entry, id }));
+  } };
+  const provider = {
+    async viewNodeStatus() { return { chain_id: chain }; },
+    async query(q) {
+      if (q.request_type === 'view_account') return { code_hash: codeHash, amount: '200000000000000000000000' };
+      if (q.request_type === 'view_access_key_list') return { keys: accessKeys };
+      throw new Error('unexpected query');
+    },
+    async viewAccessKey(_owner, publicKey) {
+      if (String(publicKey) === key) return { permission: { FunctionCall: { receiver_id: goal.contract_id, method_names: ['execute_ft_call'] } } };
+      if (String(publicKey) === sweep.publicKey) return { permission: sweepPermission };
+      throw new Error('unexpected key');
+    },
+    async callFunction(_receiver, method) {
+      if (method === 'get_route') return { version: 'bouncer-ref-router-v1', owner: goal.owner_account_id, vault: goal.contract_id,
+        exchange: REF_SWAP_EXCHANGE, token_in: REF_SWAP_INPUT, token_out: REF_SWAP_OUTPUT, pool_id: goal.pool_id,
+        amount_in: goal.input_amount, min_amount_out: goal.min_output, input_message: REF_SWAP_INPUT_MESSAGE,
+        started, input_state: started ? 'inner_settled' : 'ready', inner_used: started ? goal.input_amount : null, ...routeOverrides };
+      if (method === 'storage_balance_of') return storage;
+      if (method === 'contract_version') return 'bouncer-agent-v9';
+      if (method === 'get_owner') return goal.owner_account_id;
+      if (method === 'get_policy') return { token: REF_SWAP_INPUT };
+      if (method === 'get_ft_call_route') return { token: REF_SWAP_INPUT, msg: REF_SWAP_INPUT_MESSAGE,
+        policy_revision: goal.policy_revision, route_revision: goal.route_revision, active: true };
+      if (method === 'is_agent_key_allowed') return true;
+      if (method === 'check') return [true, 'ok'];
+      throw new Error(`unexpected view ${method}`);
+    },
+    async sendTransactionUntil(signed, wait) {
+      assert.equal(wait, 'FINAL');
+      const hash = nearApi.utils.serialize.base_encode(crypto.createHash('sha256').update(nearApi.transactions.encodeTransaction(signed.transaction)).digest());
+      if (hash === inputHash) {
+        assert.equal(journal.get(`${goal.id}-route`).status, 'pending');
+        assert.equal(journal.get(ftGoal.id).tx_hash, hash); assert.equal(journal.get(ftGoal.id).status, 'pending');
+        started = true; sends.push(hash);
+        if (failSend === 'input') throw new Error('input response lost');
+      } else if (hash === sweep.hash) {
+        assert.equal(journal.get(`${goal.id}-sweep`).tx_hash, hash); assert.equal(journal.get(`${goal.id}-sweep`).status, 'pending');
+        sends.push(hash);
+        if (failSend === 'sweep') throw new Error('sweep response lost');
+      } else throw new Error('unreviewed transaction');
+      return { transaction_outcome: { id: hash } };
+    },
+    async txStatusReceipts(hash, owner, wait) {
+      assert.equal(owner, goal.owner_account_id); assert.equal(wait, 'FINAL');
+      if ((failLookup === 'input' && hash === inputHash) || (failLookup === 'sweep' && hash === sweep.hash)) throw new Error('temporarily missing');
+      if (hash === inputHash && sends.includes(hash)) return mutateSwap(swapResult());
+      if (hash === sweep.hash && sends.includes(hash)) return mutateSweep(sweepResult({ hash, publicKey: sweep.publicKey }));
+      throw new Error('transaction not found');
+    },
+  };
+  const opts = { goal, provider, account: signing.newAccount(), publicKey: key, sweepAccount: sweep.account,
+    sweepPublicKey: sweep.publicKey, journal, execute: true, log: () => {} };
+  return { opts, provider, journal, entries, sends, sweep,
+    failWrite(v) { failWrite = v; }, failSend(v) { failSend = v; }, failLookup(v) { failLookup = v; },
+    mutateSwap(fn) { mutateSwap = fn; }, mutateSweep(fn) { mutateSweep = fn; }, setCode(v) { codeHash = v; }, setKeys(v) { accessKeys = v; },
+    setRoute(v) { routeOverrides = v; }, setStorage(v) { storage = v; }, setSweepPermission(v) { sweepPermission = v; }, setChain(v) { chain = v; } };
+}
+
+test('dry run verifies immutable router, storage and both key scopes without writes or broadcasts', async () => {
+  const f = fixture(), result = await runRefSwap({ ...f.opts, execute: false });
+  assert.equal(result.status, 'READY'); assert.equal(f.entries.size, 0); assert.deepEqual(f.sends, []);
+});
+
+test('each reviewed hash is durable before its only broadcast; a completed route is reverified without sending', async () => {
+  const f = fixture(), result = await runRefSwap(f.opts);
+  assert.equal(result.status, 'COMPLETED'); assert.equal(result.swap.output_amount, '70'); assert.equal(result.vault_credit.credited, '70');
+  assert.deepEqual(f.sends, [inputHash, f.sweep.hash]);
+  assert.equal(f.journal.get(ftGoal.id).status, 'completed'); assert.equal(f.journal.get(`${goal.id}-sweep`).status, 'completed');
+  assert.equal(f.journal.get(`${goal.id}-route`).status, 'completed');
+  assert.equal((await runRefSwap(f.opts)).status, 'COMPLETED');
+  assert.equal((await recoverRefSwap({ goal, provider: f.provider, journal: f.journal, log: () => {} })).status, 'COMPLETED');
+  assert.deepEqual(f.sends, [inputHash, f.sweep.hash]);
+});
+
+test('lost input response recovers the same hash before a single independent sweep', async () => {
+  const f = fixture(); f.failSend('input');
+  await assert.rejects(runRefSwap(f.opts), /FT call unresolved/);
+  assert.deepEqual(f.sends, [inputHash]); assert.equal(f.journal.get(ftGoal.id).status, 'pending');
+  f.failSend('');
+  const readOnly = await recoverRefSwap({ goal, provider: f.provider, journal: f.journal, log: () => {} });
+  assert.equal(readOnly.status, 'OUTPUT_RECEIVED'); assert.deepEqual(f.sends, [inputHash]);
+  assert.equal((await runRefSwap(f.opts)).status, 'COMPLETED'); assert.deepEqual(f.sends, [inputHash, f.sweep.hash]);
+});
+
+test('lost sweep response and unavailable lookup never trigger another transfer', async () => {
+  const f = fixture(); f.failSend('sweep');
+  await assert.rejects(runRefSwap(f.opts), /sweep unresolved/);
+  assert.deepEqual(f.sends, [inputHash, f.sweep.hash]); assert.equal(f.journal.get(`${goal.id}-sweep`).status, 'pending');
+  f.failSend(''); f.failLookup('sweep');
+  await assert.rejects(runRefSwap(f.opts), /temporarily missing/);
+  await assert.rejects(recoverRefSwap({ goal, provider: f.provider, journal: f.journal, log: () => {} }), /temporarily missing/);
+  assert.deepEqual(f.sends, [inputHash, f.sweep.hash]);
+  f.failLookup('');
+  assert.equal((await recoverRefSwap({ goal, provider: f.provider, journal: f.journal, log: () => {} })).status, 'COMPLETED');
+  assert.deepEqual(f.sends, [inputHash, f.sweep.hash]);
+});
+
+test('input settlement without linked Ref delivery never starts a sweep or claims vault credit', async () => {
+  const f = fixture(); f.mutateSwap(result => { result.receipts_outcome.find(x => x.outcome.executor_id === REF_SWAP_EXCHANGE).outcome.receipt_ids = []; return result; });
+  await assert.rejects(runRefSwap(f.opts), /Ref output/); assert.deepEqual(f.sends, [inputHash]);
+  await assert.rejects(runRefSwap(f.opts), /Ref output/); assert.deepEqual(f.sends, [inputHash]);
+  assert.equal(f.journal.get(`${goal.id}-sweep`), undefined);
+});
+
+test('a missing or failed vault hook leaves the original sweep pending and is never retried', async () => {
+  const f = fixture(); f.mutateSweep(result => { result.receipts_outcome.find(x => x.outcome.executor_id === goal.contract_id).outcome.logs = []; return result; });
+  await assert.rejects(runRefSwap(f.opts), /sweep unresolved/);
+  assert.deepEqual(f.sends, [inputHash, f.sweep.hash]); assert.equal(f.journal.get(`${goal.id}-sweep`).status, 'pending');
+  await assert.rejects(runRefSwap(f.opts), /deposit accounting log/); assert.deepEqual(f.sends, [inputHash, f.sweep.hash]);
+});
+
+test('unreviewed code, deploy keys, mutable routes, storage or broad sweep keys stop before any send', async () => {
+  for (const mutate of [
+    f => f.setChain('mainnet'), f => f.setCode(id(88)), f => f.setKeys([{ public_key: 'ed25519:unsafe' }]),
+    f => f.setRoute({ pool_id: 2206 }), f => f.setRoute({ started: true, input_state: 'inner_pending' }),
+    f => f.setStorage(null), f => f.setSweepPermission('FullAccess'),
+    f => f.setSweepPermission({ FunctionCall: { receiver_id: goal.router_id, method_names: [] } }),
+  ]) {
+    const f = fixture(); mutate(f); await assert.rejects(runRefSwap(f.opts)); assert.deepEqual(f.sends, []); assert.equal(f.entries.size, 0);
+  }
+});
+
+test('durable write failures stop before the relevant broadcast', async () => {
+  const f = fixture(); f.failWrite(`${goal.id}-route`);
+  await assert.rejects(runRefSwap(f.opts), /write failure/); assert.deepEqual(f.sends, []);
+  f.failWrite(`${goal.id}-sweep`);
+  await assert.rejects(runRefSwap(f.opts), /write failure/); assert.deepEqual(f.sends, [inputHash]);
+  assert.equal(f.journal.get(`${goal.id}-sweep`), undefined);
+  f.failWrite(''); assert.equal((await runRefSwap(f.opts)).status, 'COMPLETED'); assert.deepEqual(f.sends, [inputHash, f.sweep.hash]);
+});
+
+test('changed route manifest, missing parent entry and unsupported shared journals fail closed', async () => {
+  const f = fixture(); f.failSend('input'); await assert.rejects(runRefSwap(f.opts)); f.failSend('');
+  await assert.rejects(runRefSwap({ ...f.opts, goal: { ...goal, min_output: '43' } }), /manifest differs/);
+  const entry = f.journal.get(`${goal.id}-route`); f.entries.delete(`${goal.id}-route`);
+  await assert.rejects(runRefSwap(f.opts), /without their route manifest/);
+  f.entries.set(`${goal.id}-route`, entry);
+  await assert.rejects(runRefSwap({ ...f.opts, journal: { ...f.journal, sharedDirectV3: true } }), /does not coordinate/);
+  assert.deepEqual(f.sends, [inputHash]);
+});
+
+test('key-free recovery requires the original manifest and never signs a new input or sweep', async () => {
+  const f = fixture();
+  await assert.rejects(recoverRefSwap({ goal, provider: f.provider, journal: f.journal, log: () => {} }), /route is missing/);
+  assert.deepEqual(f.sends, []);
+  await assert.rejects(checkRefRouter({ ...goal, pool_id: 4 }, f.provider));
+});
+
+test('missing original entries from a completed route never permit a new input or sweep', async () => {
+  const f = fixture(); await runRefSwap(f.opts);
+  const sweepEntry = f.journal.get(`${goal.id}-sweep`), inputEntry = f.journal.get(ftGoal.id);
+  f.entries.delete(`${goal.id}-sweep`);
+  await assert.rejects(runRefSwap(f.opts), /missing its original sweep/);
+  await assert.rejects(recoverRefSwap({ goal, provider: f.provider, journal: f.journal, log: () => {} }), /missing its original sweep/);
+  f.entries.set(`${goal.id}-sweep`, sweepEntry); f.entries.delete(ftGoal.id);
+  await assert.rejects(runRefSwap(f.opts), /missing its original input/);
+  await assert.rejects(recoverRefSwap({ goal, provider: f.provider, journal: f.journal, log: () => {} }), /history is incomplete/);
+  f.entries.set(ftGoal.id, inputEntry);
+  assert.deepEqual(f.sends, [inputHash, f.sweep.hash]);
+});

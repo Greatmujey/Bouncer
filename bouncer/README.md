@@ -15,6 +15,8 @@ The optional [natural-language agent](docs/AI_AGENT.md) needs a separately
 configured model and operates under an owner-controlled testnet resource catalog.
 Local journals are plaintext by default; [optional encrypted file journals](docs/FILE_JOURNALS.md)
 require a separate key and careful preservation of original payment state.
+The [experimental one-shot Ref testnet adapter](docs/REF_ROUTER.md) is designed
+to verify an actual vault output deposit, but has not yet proven a live swap.
 
 From the repository root, once CI has attached the matching wasm:
 
