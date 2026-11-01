@@ -128,8 +128,9 @@ not prove all possible callback, provider or token failure cases.
    URL or authenticate the buyer. Its default replay set is not durable across
    gate restarts. The adapter requires explicit risk acceptance and stops after
    an ambiguous seller request; it cannot enforce seller-side replay protection
-   or guarantee delivery. Its independent-SDK test uses a synthetic testnet
-   wrapper, not an independent live merchant.
+   or guarantee delivery. The real third-party SDK's NEAR testnet support is
+   supplied by our test-only wrapper; the live payment used a local SDK gate,
+   not an independent merchant.
 8. **Local journal and nonce tracker are not distributed coordination.** The
    file journal synchronizes its content and directory before returning, and
    blocks automatic retries of uncertain payments in one local file. Sync

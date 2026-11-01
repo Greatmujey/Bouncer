@@ -67,12 +67,13 @@ tools—it does not itself provide a model or access to the new planning/executi
 
 Bouncer is a resource-buying agent; the on-chain firewall is its spending
 kernel, not the whole product. These are connections to the tracks, not claims
-that all six are complete.
+that all six are complete. See the [interoperability roadmap](bouncer/docs/INTEROPERABILITY_ROADMAP.md)
+for the independent-seller gap, proposed authentication and swap-accounting work.
 
 | Track | Evidence today | Still needed |
 | --- | --- | --- |
 | AI Security & Defense | 1-yocto guard, scoped keys, caps, pinned project/input and delivery gating. | Independent audit and stronger prompt defenses. |
-| Agent Economy | Native-paid independent price execution feeds three FT-paid development resources; an experimental x402 onchain-proof adapter has third-party-SDK fixture tests. | Independent FT-paid commercial API/storage providers, order-bound authentication and signed receipts. |
+| Agent Economy | Native-paid independent price execution feeds three FT-paid development resources; an experimental x402 onchain-proof adapter passed a live testnet check against a self-hosted third-party SDK gate. | Independent FT-paid commercial API/storage providers, order-bound authentication and signed receipts. |
 | Autonomous Business | AI planning in a separate run; multi-resource payments, delivery checks and recovery. | Real customers, invoicing and production operations. |
 | Real-World Money | Circle testnet USDC paid for three self-hosted resources; fake USDC.e funded a separate probe. | Independent providers and real-money rails; testnet USDC has no real value. |
 | Unstoppable DeFi | Owner-setup Ref testnet swaps acquired test tokens, including Circle testnet USDC. | Agent-guarded swaps with safe output accounting and cross-chain settlement. |
@@ -471,9 +472,14 @@ validate, hire or transact with their providers.
 
 An explicitly opt-in [onchain-proof buyer](bouncer/docs/ONCHAIN_PROOF.md) can
 translate a compatible Circle **testnet** USDC offer into the existing guarded
-`execute` path and prove the nested transfer to a receipt-aware verifier. Its
-synthetic integration test uses the independently published PipRail SDK with
-an explicit test-only NEAR testnet wrapper. This is **not** standard x402
+`execute` path and prove the nested transfer to a receipt-aware verifier. A
+[one-shot live testnet check](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41265514067/job/124727867996)
+used the independently published PipRail SDK with an explicit test-only NEAR
+testnet wrapper and a **self-hosted local gate**: a fresh SDK quote preceded
+[one guarded payment](https://testnet.nearblocks.io/txns/HX1p43ydbz2eJZCAXjUM3W5ajMFFFfqVjUB4gBpbeGiQ/execution),
+key-free recovery of its deliberately lost response, and one SDK-verified
+fixture response. Both layers of the 1-yocto escalation guard were rechecked.
+The owner-only Ref setup was not a guarded swap. This is **not** standard x402
 `exact`, a live independent seller purchase, or proof of merchant adoption.
 The proof and nonce are public and not bound to a URL or authenticated buyer;
 the SDK's default replay memory is not durable across restarts. The owner must
@@ -634,6 +640,8 @@ real testnet transactions. To build locally with Rust and the wasm target, run
 - `bouncer/demo-circle-usdc.mjs` — Circle testnet USDC multi-resource and failure-recovery check.
 - `bouncer/agent/procurement.mjs` — plan-driven, testnet-only procurement runner.
 - `bouncer/agent/recover-direct-payment.mjs` — key-free receipt-based recovery for opt-in signed direct payments.
+- `bouncer/agent/onchain-proof.mjs` — experimental guarded x402 onchain-proof testnet buyer and recovery.
+- `bouncer/demo-onchain-proof.mjs` — explicitly gated one-shot testnet check against a local third-party SDK gate.
 - `bouncer/agent/resource-agent.mjs` — quote, guarded payment, fulfillment orchestration.
 - `bouncer/agent/workflow.mjs` — owner-reviewed dependent source → resource workflows and key-free recovery.
 - `bouncer/agent/verify-delivery.mjs` — bounded result checks and local receipt validation.

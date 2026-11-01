@@ -101,9 +101,11 @@ the supplied clients.
 - The tests install independently published [`@piprail/sdk@3.3.0`](https://www.npmjs.com/package/@piprail/sdk/v/3.3.0)
   in an isolated, lockfile-pinned application. The SDK's published NEAR driver
   supports **mainnet** as its built-in preset. Our test-only wrapper changes its
-  network label to `near:testnet` and points it to a loopback test RPC; it does
-  not modify the SDK's token-event verifier. This wrapper is not an upstream
-  testnet release or an independent merchant.
+  network label to `near:testnet` and directs its existing verifier to the
+  configured testnet RPC (a loopback RPC in fixture/history checks, the real
+  testnet RPC in the live check). It does not modify the SDK's token-event
+  verifier. This wrapper is not an upstream testnet release or an independent
+  merchant.
 - The synthetic end-to-end test feeds a mocked signed Bouncer transaction and
   receipt to that real SDK verifier and exercises quote → guarded call → paid
   GET, negative substitutions, same-instance replay and replay after a fresh
@@ -120,6 +122,22 @@ the supplied clients.
   recency. It sends no payment or merchant request. The original payment was
   to our own development seller; using its receipt here does not create a new
   purchase or establish an independent seller's acceptance.
+- A separate [one-shot live testnet check](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41265514067/job/124727867996)
+  obtained a fresh SDK-generated quote from a **self-hosted local gate**, then
+  paid [0.001 Circle testnet USDC](https://testnet.nearblocks.io/txns/HX1p43ydbz2eJZCAXjUM3W5ajMFFFfqVjUB4gBpbeGiQ/execution)
+  via a restricted `execute` key. The real SDK verified the fresh payment against
+  the configured testnet RPC and returned a fixture response. The harness
+  deliberately discarded the successful broadcast response, recovered the
+  original FINAL transaction without a signing key, made one seller request,
+  and reused the saved response after reopening the journal. It counted one
+  quote, one payment broadcast and one paid request; it also checked both layers
+  of the 1-yocto escalation guard. The owner-only
+  [Ref swap](https://testnet.nearblocks.io/txns/4cqwobHpkJP9ehTQJ5U1CWUWtaN7XhCRVoASyAR3SGWt/execution)
+  and [vault funding](https://testnet.nearblocks.io/txns/EUHDQev6y98H4AFGKBGh6onBUUEGurE22Dyj1qh49o6m/execution)
+  were setup operations, not agent-guarded swaps. [Public evidence](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41265514067/artifacts/13067073513)
+  is retained until 30 January 2027 and contains public transaction details and
+  the fixture response, not keys. The job is explicitly gated and skips Actions
+  reruns. This test proves neither an independent merchant nor a valuable purchase.
 
 The source inspection is pinned to [PipRail's NEAR verifier](https://github.com/piprail/piprail/blob/a8d7c35995f4c0b8b844c2a76110b38eb2228e37/sdk/src/drivers/near/verify.ts)
 and [gate implementation](https://github.com/piprail/piprail/blob/a8d7c35995f4c0b8b844c2a76110b38eb2228e37/sdk/src/server.ts).
