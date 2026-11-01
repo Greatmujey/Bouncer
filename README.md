@@ -126,7 +126,7 @@ The updated check is designed to use a real restricted key to pay wNEAR, deny
 other callers and policies, revoke a payee and a key, and test both layers of
 the 1-yocto guard with a separate deliberately limited probe key. A zero-deposit
 policy mutation fails in the contract; a one-yocto attempt fails at the NEAR
-protocol layer. Both were verified in the [v4 live testnet run](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40558301848).
+protocol layer. Both were verified in the [v4 live testnet run](https://github.com/Greatmujey/Bouncer/actions/runs/40558301848).
 Offline mocks are not proof of on-chain behavior.
 
 ### Important prototype limitations
@@ -239,7 +239,7 @@ This requires the NEAR testnet token factory and creates real testnet
 transactions. It stores a reusable plan, journal, provider redemption state and
 local objects under `~/.bouncer/testnet/`; private keys are stored separately
 under `~/.near-credentials/testnet/`. The testnet credits have no monetary value.
-The [v4 live testnet run](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40558301848)
+The [v4 live testnet run](https://github.com/Greatmujey/Bouncer/actions/runs/40558301848)
 passed both the restricted-key security/refund check and the full quote →
 payment → local delivery check. The three payment transactions are
 [compute/wNEAR](https://testnet.nearblocks.io/txns/6VELBm5bCbTF2jv88q2R4omrSJkvj8Ytr4aqa1FCtdTv),
@@ -257,14 +257,14 @@ resource tasks through the same guarded runner. The model cannot set payment
 addresses, policy, token or budget. AI output can still be wrong; review it
 before spending. A local model server or another explicitly configured
 OpenAI-compatible endpoint is required. An optional Linux x86_64 bootstrap
-script downloads and verifies a pinned local model; it is not bundled. In the [AI-planned testnet run](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40579499294),
+script downloads and verifies a pinned local model; it is not bundled. In the [AI-planned testnet run](https://github.com/Greatmujey/Bouncer/actions/runs/40579499294),
 a local Qwen2.5 1.5B model generated the three synthetic tasks; Bouncer checked
 them, paid three testnet FTs and verified the local deliveries. The model's
 inputs were checked against the requested literals before any accounts were
-created. A [later AI job](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40581368718/job/122462232919)
+created. A [later AI job](https://github.com/Greatmujey/Bouncer/actions/runs/40581368718/job/122462232919)
 also paid synthetic API credits for live public GitHub repository data and
 checked the result against a second GitHub read. That workflow's separate
-security job failed on an RPC nonce error. A [subsequent run](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40582306741)
+security job failed on an RPC nonce error. A [subsequent run](https://github.com/Greatmujey/Bouncer/actions/runs/40582306741)
 passed both the four-payment AI flow and its separate restricted-key security
 and refund job after a process-local nonce mitigation. That mitigation does not
 coordinate multiple writers or retry ambiguous sends. The original v4 run linked
@@ -282,12 +282,12 @@ comparison fails without a partial selection. The owner can opt each approved
 candidate into seller-v2 order challenges; choosing a legacy candidate is still
 possible if the owner included one. See [setup and recovery limits](bouncer/docs/AI_AGENT.md#compare-owner-approved-providers).
 
-In the [live comparison job](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40666249071/job/122742140751),
+In the [live comparison job](https://github.com/Greatmujey/Bouncer/actions/runs/40666249071/job/122742140751),
 two self-hosted development endpoints quoted 0.10 and 0.08 wNEAR for the same
 explicitly supplied compute task. Bouncer selected the approved cheaper payee,
 [paid it on testnet](https://testnet.nearblocks.io/txns/3ztdLNn4M91nDtqQNUSZZqgwEg3Fh9CaU3XP7BnD8T3S),
 verified the local result and replayed without a second payment. The comparison
-task was deterministic. A [later combined AI run](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40667233621/job/122745427128)
+task was deterministic. A [later combined AI run](https://github.com/Greatmujey/Bouncer/actions/runs/40667233621/job/122745427128)
 used the local model to propose the comparison task, selected the same cheaper
 quote and [paid on testnet](https://testnet.nearblocks.io/txns/HbibFp8eUpNgdQUV4azi1jG9PVekEY9teupjHgHrDhki).
 That run also completed the three-resource and public-data purchases and replay
@@ -296,7 +296,7 @@ providers, and do not guarantee future delivery.
 
 ### Guarded independent compute on testnet
 
-A separate-owner [live check](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40682550107/job/122797278579)
+A separate-owner [live check](https://github.com/Greatmujey/Bouncer/actions/runs/40682550107/job/122797278579)
 used an `execute_outlayer`-only key to call the independently operated
 `outlayer.testnet` through a fresh Bouncer v5 deployment. In
 [transaction `HPYW…99rQ`](https://testnet.nearblocks.io/txns/HPYWoHrEozKWirbZdgiJkRDp9hShJBmzXSShJd2d99rQ),
@@ -314,7 +314,7 @@ This is one bounded random-number program, paid in testnet native NEAR; it is
 not a general independent cloud marketplace or a USDC purchase. A mixed-mission
 runner can combine that owner-selected task with FT-backed resource goals; its
 previews are non-atomic and earlier payments cannot be rolled back if later
-work fails. In the [full mixed test](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40682550107/job/122797278689),
+work fails. In the [full mixed test](https://github.com/Greatmujey/Bouncer/actions/runs/40682550107/job/122797278689),
 the same separate-owner deployment paid [OutLayer](https://testnet.nearblocks.io/txns/5ShjrS8JiJ5yyQPKDvFGnwtobpL2vQUbXTFchPuGD53r)
 and then fulfilled AI-planned compute, storage, API and public-data goals using
 three FTs and self-hosted development providers. The model did not select the
@@ -323,7 +323,7 @@ transaction was recovered. See [setup, recovery and trust boundaries](bouncer/do
 
 ### Oracle-led Circle testnet mission
 
-In the [v9 live test](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41073097919/job/124122803916),
+In the [v9 live test](https://github.com/Greatmujey/Bouncer/actions/runs/41073097919/job/124122803916),
 Bouncer paid [OutLayer](https://testnet.nearblocks.io/txns/4MCH1jvtrz43trdnjvxQfkVuLXN4a9nhtyzPt8kM95yZ)
 for an owner-pinned project version and exact request to Coinbase's public
 NEAR/USD endpoint. The project returned **4.27625 USD** as a single-source
@@ -361,7 +361,7 @@ preflight aggregates shared budgets, and every signed FT payment is journaled
 before broadcast. Recovery rechecks the original source and paid steps without
 keys or repayment before any new purchase.
 
-A [1 November 2026 live testnet run](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41258992192/job/124708664361)
+A [1 November 2026 live testnet run](https://github.com/Greatmujey/Bouncer/actions/runs/41258992192/job/124708664361)
 exercised this runner on a fresh v9 contract. A single-source price from
 [independent OutLayer](https://testnet.nearblocks.io/txns/CMFUYVjguSqsnv65tFVnPA2uiTdvJGx4pssDTNBtFY7L),
 paid in native testnet NEAR, became the input to
@@ -377,13 +377,13 @@ its delivery before the remaining two payments. The test checked one source
 broadcast, three FT broadcasts, the on-chain budgets and the exact chained
 inputs. An [offline regression](bouncer/tests/dependent-history.test.mjs)
 reconstructs those orders and their three observed on-chain memos; it is not a
-raw RPC receipt proof. A subsequent [read-only check](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41259817473/job/124710584367)
+raw RPC receipt proof. A subsequent [read-only check](https://github.com/Greatmujey/Bouncer/actions/runs/41259817473/job/124710584367)
 installed the seller SDK from a local tarball in a separate application, fetched
 the source and three FINAL payment receipts, and rejected substituted sellers.
-It sent no new transactions. The [public testnet evidence artifact](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41258992192/artifacts/13064860428)
+It sent no new transactions. The [public testnet evidence artifact](https://github.com/Greatmujey/Bouncer/actions/runs/41258992192/artifacts/13064860428)
 is retained until 30 January 2027; it contains no keys but includes task data.
 
-A separate [seller-v2 live run](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41263055741/job/124720514951)
+A separate [seller-v2 live run](https://github.com/Greatmujey/Bouncer/actions/runs/41263055741/job/124720514951)
 used three distinct seller-issued challenges on a fresh contract. Its
 [independent native-NEAR oracle](https://testnet.nearblocks.io/txns/EGKJHuRGtjk2SUUNeqLerGBn9q5sBatb74QuWuS5fRsn)
 fed [compute](https://testnet.nearblocks.io/txns/HwQB5RTFgascGDjPUmkCkiexF2WEHShHX69d6yGw7JMc),
@@ -396,10 +396,10 @@ checked one source broadcast, three resource-payment broadcasts and three
 persisted local claims. Owner setup transactions were separate. An [offline
 regression](bouncer/tests/seller-v2-history.test.mjs) reconstructs the chained
 inputs and observed v2 memos; it is not a raw RPC proof. A separate [read-only
-SDK check](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41263695312/job/124721960599)
+SDK check](https://github.com/Greatmujey/Bouncer/actions/runs/41263695312/job/124721960599)
 installed the SDK in another application, fetched the existing source and three
 FINAL receipts, and rejected altered sellers and challenges; it paid nothing.
-The [public artifact](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41263055741/artifacts/13066031406)
+The [public artifact](https://github.com/Greatmujey/Bouncer/actions/runs/41263055741/artifacts/13066031406)
 expires 30 January 2027; it contains task data, not keys.
 
 The Circle seller is **not independent**, the independently operated oracle
@@ -411,7 +411,7 @@ through OutLayer; its worker timestamp is not authenticated market freshness.
 
 ### Paid-provider mission and recovery
 
-In the [28 October 2026 test](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40699116807/job/122854642930),
+In the [28 October 2026 test](https://github.com/Greatmujey/Bouncer/actions/runs/40699116807/job/122854642930),
 Bouncer used separately scoped keys to [deposit 15,000 micro-units of fake
 USDC.e](https://testnet.nearblocks.io/txns/JA8TEBybh8Gj6JkfghyeopMrAvWNKYMv2nSU2NAnJ75d)
 and [pay for the pinned OutLayer test probe](https://testnet.nearblocks.io/txns/3WSS8Cma8SBqtnk9Krb6g7cNhSgpX2m7wpbKBdtiEuny)
@@ -432,7 +432,7 @@ preceding Ref swap was owner setup, not agent-guarded DeFi.
 
 ### Circle testnet USDC resource mission
 
-The [Circle testnet mission](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40697938370/job/122850532589)
+The [Circle testnet mission](https://github.com/Greatmujey/Bouncer/actions/runs/40697938370/job/122850532589)
 used Circle's [canonical NEAR testnet USDC contract](https://testnet.nearblocks.io/address/3e2210e1184b45b64c8a434c0a7e7b23cc04ea7eb7a6c3c32520d03d4afcb8af)
 with six decimals. A full-access owner first acquired the token with a small,
 bounded [Ref swap](https://testnet.nearblocks.io/txns/8tAYE8uubKqwv8rAU9T5dcgPkXQ3AweuvwyC7Py3gNHP)
@@ -468,7 +468,7 @@ the current testnet interface and its trust requirements.
 The advertised [x402 hiring flow](https://docs.market.near.ai/a2a/hire-agent-using-x402)
 uses direct delegated FT transfers, which would bypass the current Bouncer
 restricted-key policy. Bouncer deliberately does not perform that flow. The
-[read-only live check](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40675524400/job/122772818985)
+[read-only live check](https://github.com/Greatmujey/Bouncer/actions/runs/40675524400/job/122772818985)
 returned three public listings without credentials or payments; it did not
 validate, hire or transact with their providers.
 
@@ -477,7 +477,7 @@ validate, hire or transact with their providers.
 An explicitly opt-in [onchain-proof buyer](bouncer/docs/ONCHAIN_PROOF.md) can
 translate a compatible Circle **testnet** USDC offer into the existing guarded
 `execute` path and prove the nested transfer to a receipt-aware verifier. A
-[one-shot live testnet check](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41265514067/job/124727867996)
+[one-shot live testnet check](https://github.com/Greatmujey/Bouncer/actions/runs/41265514067/job/124727867996)
 used the independently published PipRail SDK with an explicit test-only NEAR
 testnet wrapper and a **self-hosted local gate**: a fresh SDK quote preceded
 [one guarded payment](https://testnet.nearblocks.io/txns/HX1p43ydbz2eJZCAXjUM3W5ajMFFFfqVjUB4gBpbeGiQ/execution),
@@ -559,7 +559,7 @@ self-contained local npm package and installed by a seller; it is not published.
 The local development provider uses the same verifier and protects one data
 directory with an exclusive lock and
 fsync-backed state/object writes. A [read-only check of three existing Circle
-testnet payments](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41101505909/job/124219376411)
+testnet payments](https://github.com/Greatmujey/Bouncer/actions/runs/41101505909/job/124219376411)
 passed against FINAL RPC receipts and rejected a substituted seller. These
 payments were to our own development provider. This is not distributed replay
 protection or proof that an independent FT seller has adopted the protocol.
@@ -587,26 +587,26 @@ quote or sending another payment; the recorded provider route must still match.
 After whole-batch preflight, each newly confirmed payment is fulfilled, checked
 and journaled **before** the next payment. An unverified delivery, receipt write
 failure or execution-time policy block stops later payments; previous payments
-cannot be rolled back. In the [AI-planned live test](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40675524400/job/122773588238),
+cannot be rolled back. In the [AI-planned live test](https://github.com/Greatmujey/Bouncer/actions/runs/40675524400/job/122773588238),
 a locally corrupted first reply halted the batch with both later vendor balances
 at zero; recovery reused the [first payment](https://testnet.nearblocks.io/txns/SVdv3Fc4dMwSxChpCfvijiVUDx3A4478U5gcwHAWjJV)
 and then verified the remaining deliveries. The fault was injected locally, not
 provider misconduct. That run's separate security smoke job failed on a testnet
-transaction expiry during account setup. The [next full run](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40676850305)
+transaction expiry during account setup. The [next full run](https://github.com/Greatmujey/Bouncer/actions/runs/40676850305)
 passed the AI and deterministic flows with a separate policy owner, as well as
 the restricted-key security and [refund check](https://testnet.nearblocks.io/txns/APWAXeExseG1TMgNvVgo7xPKiHyne9VPWot2VWYQozTM).
 Both used self-hosted providers. These are local, editable records—not signed
 invoices, generic compute proofs or guarantees of future storage. See the
 [verification and recovery details](bouncer/docs/AI_AGENT.md#delivery-checks-and-local-receipts).
 
-In the [live testnet verification job](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40671752050/job/122760598105),
+In the [live testnet verification job](https://github.com/Greatmujey/Bouncer/actions/runs/40671752050/job/122760598105),
 Bouncer paid the selected self-hosted compute provider, deliberately corrupted
 the reply locally, rejected it and recovered using the [same payment](https://testnet.nearblocks.io/txns/GewpbPFkGtbBnNzWbuFrwcmWqb6hCHFkqoaBBmN3u7eh)
 without requoting. The fault was injected by the demo, not evidence of provider
 misconduct. The job also checked storage readback, text statistics and receipts.
-A [separate security/refund job](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40671752050/job/122760598164)
+A [separate security/refund job](https://github.com/Greatmujey/Bouncer/actions/runs/40671752050/job/122760598164)
 passed; the AI job in that run failed during setup on a testnet expiry error.
-A [subsequent combined AI job](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40673056154/job/122765249942)
+A [subsequent combined AI job](https://github.com/Greatmujey/Bouncer/actions/runs/40673056154/job/122765249942)
 passed with the synced journal: the local model planned the tasks, all five
 payments completed, and the injected bad reply was rejected and recovered
 using the [same transaction](https://testnet.nearblocks.io/txns/5JnhhrRpWSfuSBVvfw25BSVrtQPQWRoyTnff2dKAayvf).

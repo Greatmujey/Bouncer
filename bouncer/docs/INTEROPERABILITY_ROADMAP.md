@@ -133,10 +133,10 @@ consent, and no offers or payments were requested:
   same-block state layout, extracts the market's quote key, and checks the
   signature, vault/job/request binding, token, fee ceiling and expiry. The
   layout and RPC remain trusted; source/code equivalence is not established.
-  On November 1, [a quote-only test](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41303152030/job/124838094936)
+  On November 1, [a quote-only test](https://github.com/Greatmujey/Bouncer/actions/runs/41303152030/job/124838094936)
   verified one signed 600,000-micro-USDC offer for the Bouncer vault and a
   hypothetical 100,000-byte clip. The temporary upload key was discarded;
-  there was no payment or upload. A separate [read-only funding estimate](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41303749865/job/124839834431)
+  there was no payment or upload. A separate [read-only funding estimate](https://github.com/Greatmujey/Bouncer/actions/runs/41303749865/job/124839834431)
   observed pool 1845 quoting 647,955 micro testnet USDC for 1 testnet NEAR,
   with a 5% minimum of 615,557, and approximately 1.37 spendable testnet NEAR
   in the existing owner account. The current proven V1 router is capped at
@@ -175,7 +175,7 @@ consent, and no offers or payments were requested:
   read-only check found no such job, publication or entitlement. A separate
   token client journals one attempt and a bounded HLS byte probe protects bearer
   credentials; both have synthetic/loopback coverage only and cannot establish
-  playable content or independent fulfillment. A [fresh read-only check](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41316051699/job/124876224211)
+  playable content or independent fulfillment. A [fresh read-only check](https://github.com/Greatmujey/Bouncer/actions/runs/41316051699/job/124876224211)
   found the source-reviewed adaptive profile advertised on chain, but bridge
   health still did not identify its provider. This is not an independent
   FT-paid service or playback proof. Never assume merchant consent, delivery or

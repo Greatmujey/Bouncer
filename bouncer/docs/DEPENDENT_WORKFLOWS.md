@@ -4,15 +4,15 @@
 runner connects a verified independent OutLayer result, or an explicitly
 approved x402 seller response, to later, ordered compute, storage and API
 requests. The x402 source is **not** authenticated or proven truthful by its
-payment. Offline adversarial tests use synthetic chain receipts. A [1 November 2026 live testnet run](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41258992192/job/124708664361)
+payment. Offline adversarial tests use synthetic chain receipts. A [1 November 2026 live testnet run](https://github.com/Greatmujey/Bouncer/actions/runs/41258992192/job/124708664361)
 verified the full chain and key-free payment recovery; its OutLayer lookup used
 native testnet NEAR, while the three Circle testnet USDC resource payments went
 to a self-hosted development provider. It is not evidence of an independent
-FT seller or a real-value purchase. A [separate v2 live run](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41263055741/job/124720514951)
+FT seller or a real-value purchase. A [separate v2 live run](https://github.com/Greatmujey/Bouncer/actions/runs/41263055741/job/124720514951)
 used distinct seller-issued challenges for all three development-provider orders
 and recovered the original compute hash in a restarted, key-free process. It
 checked one source broadcast, three resource broadcasts and the locally
-persisted seller claims. The [public evidence artifact](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41263055741/artifacts/13066031406)
+persisted seller claims. The [public evidence artifact](https://github.com/Greatmujey/Bouncer/actions/runs/41263055741/artifacts/13066031406)
 contains task data, not keys. A [separate fresh seller-v3 testnet proof](SELLER_V3.md#separate-fresh-seller-v3-testnet-proof)
 used authenticated v3 claims for all three self-hosted resource orders, with
 key-free recovery of the original compute hash. Its restricted artifact contains
@@ -142,14 +142,14 @@ these vectors are not raw RPC responses. The optional
 and payment receipts from a testnet RPC, verify the source and seller proofs,
 and reject seller substitution. It has no key and sends no transactions. The
 `[provider-inspect]` CI marker packs and installs the private SDK in an isolated
-seller directory for this read-only verification. A [1 November check](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41259817473/job/124710584367)
+seller directory for this read-only verification. A [1 November check](https://github.com/Greatmujey/Bouncer/actions/runs/41259817473/job/124710584367)
 verified the source and all three FINAL payment receipts using that installed
 archive, rejecting substituted sellers; it sent no transactions. For the v2
 run, `tests/seller-v2-history.test.mjs` reconstructs its source-dependent inputs
 and three observed v2 memos offline; `scripts/verify-seller-v2-history.mjs`
 optionally re-reads the source and each FINAL payment through a testnet RPC,
 checking substituted sellers and challenges without signing or paying. A
-[read-only job](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41263695312/job/124721960599)
+[read-only job](https://github.com/Greatmujey/Bouncer/actions/runs/41263695312/job/124721960599)
 ran that check with a separately installed SDK and accepted the existing source
 and three FINAL receipts while rejecting substitutions. These vectors are not
 raw RPC receipts; historical RPC availability is not guaranteed.

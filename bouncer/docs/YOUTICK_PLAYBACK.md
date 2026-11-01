@@ -51,7 +51,7 @@ external policies, availability, authorization and revocation can change.
 
 ## Evidence and remaining work
 
-On November 1, a [read-only testnet probe](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41307304120/job/124850215824)
+On November 1, a [read-only testnet probe](https://github.com/Greatmujey/Bouncer/actions/runs/41307304120/job/124850215824)
 observed bridge `playbackReady: true`, an unpaused access contract with issuance
 on and a 600,000 ms Play policy. The health response did not identify the media
 provider; the reviewed legacy path rejects Stream-backed publications, so the
@@ -59,7 +59,7 @@ probe remained **BLOCKED_OR_UNPROVEN**. The chosen adaptive profile hash is in
 the [inspected Studio catalog](https://github.com/4rmus/youtick/blob/410dd180f42d25f77c2317b9659923f6a4149245/protocol/paid-media-livepeer-v1/profiles.json),
 and that source [selects the adapter by profile](https://github.com/4rmus/youtick/blob/410dd180f42d25f77c2317b9659923f6a4149245/workers/livepeer-bridge/src/index.ts#L7131-L7159).
 This is useful source-level evidence, **not** a live Studio-provider or bridge
-configuration attestation. A [later read-only check](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41316051699/job/124876224211)
+configuration attestation. A [later read-only check](https://github.com/Greatmujey/Bouncer/actions/runs/41316051699/job/124876224211)
 confirmed the adaptive hash was advertised at FINAL block
 `HGqa8DVjhipD4mG8EXcdepezQQEPkkFbFwzxEU1EhhJc`, but still received no live
 provider kind and remained **BLOCKED_OR_UNPROVEN**. Its bounded public summary
@@ -102,7 +102,7 @@ key-free, read-only reinspection of retained hashes. It is not a way to bypass
 the paid-publication requirement in the grant runner. No diagnostic result
 implies an upload, token, playback, delivery or commercial purchase.
 
-On November 1, the [one-shot testnet diagnostic](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41311832349/job/124864256616)
+On November 1, the [one-shot testnet diagnostic](https://github.com/Greatmujey/Bouncer/actions/runs/41311832349/job/124864256616)
 deployed and locked a fresh V10 vault, then verified that a zero-yocto owner
 call was rejected by the guard ([transaction](https://testnet.nearblocks.io/txns/5x9iGNBgrPaEbncnNhRHwRA5Eu3zz4QRTKASBGPK81n7)).
 A separate one-yocto owner call produced a matching FINAL access grant for the
@@ -121,7 +121,7 @@ verified before side effects.
 The original artifact also contains full public RPC receipts, which can include
 transaction signatures and nonces; do not resend them. Later diagnostic runs
 redact those fields from stored receipt copies. No plaintext private keys were put
-in the artifact. A separate [read-only reinspection](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41312275565/job/124864955447)
+in the artifact. A separate [read-only reinspection](https://github.com/Greatmujey/Bouncer/actions/runs/41312275565/job/124864955447)
 rechecked both original FINAL hashes and the current views without signing or
 sending; at that finalized block the hypothetical job and publication were
 absent and the vault had no entitlement. The grant was active at that point and

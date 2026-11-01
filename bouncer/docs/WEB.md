@@ -66,7 +66,7 @@ Pages is enabled with GitHub Actions as the publishing source. It does not turn
 on Pages or change the repository's visibility. GitHub Pages is available for
 private repositories only on supported paid plans; the current plan and Pages
 permissions must be checked separately. The conventional project URL would be
-`https://abdullahimujeeb0505-stack.github.io/Bouncer/`, but it must not be
+`https://greatmujey.github.io/Bouncer/`, but it must not be
 advertised as live until deployment and public access have been verified.
 
 The Pages workflow, the temporary preview uploader, and a production hosting
@@ -86,3 +86,17 @@ including Vercel, remain unapproved by default, and public staging currently
 requires the wallet origin to be empty. A future wallet-enabled deployment needs
 an isolated custom origin, a separate security review and real end-to-end
 sign-in testing; do not enable it merely because a URL is stable.
+
+## GitHub account rename
+
+The current repository is `https://github.com/Greatmujey/Bouncer`. Website,
+package and documentation links use the new owner directly instead of relying
+on the old username's redirect. The repository remains private, so its GitHub
+Actions evidence links still require access. GitHub's old redirects are not a
+permanent identity guarantee and can stop working if the former name is reused.
+
+An archived evidence JSON and the original, already-completed one-shot Ref
+sweep scripts deliberately retain their historical repository identifiers. Do
+not rewrite their safety fences to the new owner or run them again: the
+original sweep has already happened. For historical job links, use the same run
+and job identifiers under the new repository URL instead of modifying evidence.

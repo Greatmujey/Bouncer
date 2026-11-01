@@ -8,7 +8,7 @@ events and confirms FINAL receipts. It is not standard x402 `exact`. The
 source is not an attestation of the currently deployed service. Testnet USDC
 has **no financial value**.
 
-On 1 November, our [read-only probe](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41330160414/job/124918366939)
+On 1 November, our [read-only probe](https://github.com/Greatmujey/Bouncer/actions/runs/41330160414/job/124918366939)
 observed a 3,000,000-micro-USDC default deposit, Circle's NEAR testnet token,
 and treasury `multiagency.sputnikv2.testnet`. It reported a coordinator cycle
 completed 19 seconds before the observation. The original `coordinator_recent`

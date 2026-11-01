@@ -45,7 +45,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/abdullahimujeeb0505-stack/Bouncer"
+    "url": "https://github.com/Greatmujey/Bouncer"
   },
   "dependencies": {
     "@hot-labs/near-connect": "0.12.0",

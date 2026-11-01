@@ -6,8 +6,8 @@ export const LATEST_MISSION = Object.freeze({
   account: 'bouncer-oracle-6a42bf32.testnet',
   owner: 'owner.bouncer-oracle-6a42bf32.testnet',
   vendor: 'vendor.bouncer-oracle-6a42bf32.testnet',
-  actionUrl: 'https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41073097919/job/124122803916',
-  aiActionUrl: 'https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40689705483/job/122821855839',
+  actionUrl: 'https://github.com/Greatmujey/Bouncer/actions/runs/41073097919/job/124122803916',
+  aiActionUrl: 'https://github.com/Greatmujey/Bouncer/actions/runs/40689705483/job/122821855839',
   setupSwapTx: 'CqXgcgZ5RuN4n5hTgkgZFx51EH5t1WeVU7SsiNyNeVwt',
   fundingTx: 'BaScmpZxC7tqAdQC515A3xoj8ev9exFxsN7T4KjHFppw',
   oracleTx: '4MCH1jvtrz43trdnjvxQfkVuLXN4a9nhtyzPt8kM95yZ',
@@ -20,13 +20,13 @@ export const LATEST_MISSION = Object.freeze({
 });
 
 // Source of the earlier three-token walkthrough:
-// https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40558301848
+// https://github.com/Greatmujey/Bouncer/actions/runs/40558301848
 export const RUN = Object.freeze({
   verifiedAt: '2026-10-27T18:20:37Z',
   account: 'bouncer-42dcdfb7.testnet',
   securityAccount: 'bouncer-f646cc.testnet',
   securityRefundTx: 'GkQL6ZNHC7gGmRmCHc9uFv7fSsNdeJkTZaHtNPcxfhtw',
-  actionUrl: 'https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40558301848',
+  actionUrl: 'https://github.com/Greatmujey/Bouncer/actions/runs/40558301848',
   resources: [
     {
       id: 'compute', title: 'Compute', service: 'SHA-256 compute job',

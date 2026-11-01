@@ -86,6 +86,31 @@ test('current balance read fails closed on HTTP, RPC, and malformed values', asy
   }
 });
 
+test('active website, package and documentation links use the renamed GitHub repository', () => {
+  const sources = [
+    new URL('../../README.md', import.meta.url),
+    new URL('../package.json', import.meta.url),
+    new URL('../packages/provider-sdk/README.md', import.meta.url),
+    new URL('../web/index.html', import.meta.url),
+    new URL('../web/evidence.mjs', import.meta.url),
+    ...fs.readdirSync(new URL('../docs/', import.meta.url))
+      .filter(name => name.endsWith('.md')).map(name => new URL(`../docs/${name}`, import.meta.url)),
+  ];
+  let count = 0;
+  for (const source of sources) {
+    const text = fs.readFileSync(source, 'utf8');
+    const links = text.matchAll(/https:\/\/github\.com\/([^/\s"')<>`]+)\/Bouncer(?=\/|[\s"')<>`]|$)/gi);
+    for (const link of links) {
+      assert.equal(link[1], 'Greatmujey', `stale Bouncer link in ${source}`);
+      count++;
+    }
+  }
+  assert.ok(count >= 50, 'expected the existing website and evidence links to be checked');
+  const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+  assert.equal(pkg.repository.url, 'https://github.com/Greatmujey/Bouncer');
+  assert.match(fs.readFileSync(new URL('../docs/WEB.md', import.meta.url), 'utf8'), /https:\/\/greatmujey\.github\.io\/Bouncer\//);
+});
+
 test('latest oracle-led mission links to the verified testnet data and three resource payments', () => {
   assert.equal(LATEST_MISSION.account, 'bouncer-oracle-6a42bf32.testnet');
   assert.equal(LATEST_MISSION.owner, 'owner.bouncer-oracle-6a42bf32.testnet');
