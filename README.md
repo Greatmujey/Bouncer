@@ -16,10 +16,12 @@ delivery checks and a local journal gate later payments. See
 [MultiAgency research adapter](bouncer/docs/MULTIAGENCY_RESEARCH.md) has
 synthetic quote/payment/recovery tests and read-only historical compatibility
 checks. An isolated [exact-FT intent variant](bouncer/docs/EXACT_FT_INTENTS.md)
-pins a one-shot payment to owner-reviewed terms; it is not deployed. There is
-**no Bouncer purchase or independent FT-paid fulfillment**. A separate
-marketplace catalog search is read-only. No model or inference service is
-bundled. This is unaudited testnet software, not suitable for real funds.
+pins a one-shot payment to owner-reviewed terms; it is not deployed. A separate
+[Svalin Pro testnet discovery](bouncer/docs/SVALIN_PRO_READINESS.md) is read-only;
+no checkout or payment was made. There is **no verified independent FT-paid
+fulfillment by Bouncer**. The marketplace catalog search is read-only. No model
+or inference service is bundled. This is unaudited testnet software, not suitable
+for real funds.
 
 ## Public website (read-only)
 

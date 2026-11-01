@@ -638,6 +638,22 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: node bouncer/scripts/probe-multiagency-publication.mjs
 
+  svalin-pro-readiness:
+    name: Inspect Svalin testnet offer and liquidity (read only)
+    if: github.event_name == 'push' && github.ref == 'refs/heads/arena/3ee8cb60-near-hub' && github.run_attempt == '1' && contains(github.event.head_commit.message, '[svalin-read]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      - name: Anonymous offer GET and bounded testnet RPC views only
+        run: node bouncer/scripts/probe-svalin-pro.mjs
+
   vrf2-setup-inspection:
     name: Reinspect original VRF2 setup and preserve encrypted journal (read only)
     if: github.event_name == 'push' && github.ref == 'refs/heads/arena/d00d7f93-near-hub' && github.run_attempt == '1' && contains(github.event.head_commit.message, '[vrf2-setup-read]')
