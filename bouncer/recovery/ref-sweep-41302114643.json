@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "purpose": "ref-sweep-once-testnet",
+  "run_id": "41302114643",
+  "challenge": "7349ad4486d1481e913f0a64f7ebaac57ab94e7f4477e1ebb081697d6e638489",
+  "envelope": {
+    "version": 1,
+    "algorithm": "RSA-OAEP-SHA256+A256GCM",
+    "key_id": "c971beb87c3fb05da188648db57a4ca11ad0acc86874c8e92e04d10ef9c6c3b8",
+    "wrapped_key": "JqcseXMgRu3mPALvNsM9CdRW1h7RhVP6lqNF0AVvdlZ4BEyZUYea3//EkWkpiULbdgViplEGoB7TcEckl96CdVkjrFHEFIWKIOwxk/oQy83PLYtTeeLfvSYwKnj19bg0aL/oF48kCSnUwFqMC5a3h0jM6pReYJiaKV1+x6bBMIlIdjmsDBZYVgCeIU+fnpdWQ9wFnUJwf24shOzEZTnIs4I1e8rh5Ibh/BPnKU1aW7H/Xg+IVTSEMcxEk3CNG+MF9+RB+IMQD8+g94iSJ1yj8UzLNru7SlYfWc6GspOJ77DX7Ow4FmaQLldC27uDz6SQ4O0jnLzmAtz8r16yD+EGo0A2dFycGvxJKIuVEt49bR6r9fyd6/0TCUChkNAGG+ax0lqj2yWneaLCJ9BIwuU546q4XkqRJNNTkNJzPuBKYsFDIdxETIiR5ookKLbvL8nCqwnScVi9F5nzy+1IRchMmACifJsy2hy7TXitqF69P9SOvjEtpHaGNdh1jyD5UN60",
+    "iv": "Gytka2JWYw8AUn4G",
+    "ciphertext": "1rVWRen8LhSFn8yN0Dzu3ygpIxDAW6yUrYDo99tllmr+aQy4jcWAadIfIVogYJPTK1GdmU78u0DCOD0M5az6ZWoszwR9XDj+vTyuZ4wtW3kdhpMtUqUZMWGJu1xrthSKGuy7fZBiAZXKMw+3dPXXHI24NSAHf5DLEELaNChEzApR9LIkCw21Sf1FGf0WMnFTig65Qnh9vMVfjIbAsCnZNArQgnEhKh/Jtsb1clIkKbM8684puVmkn/dDT5XocoardDPUoXR9yLLmetnLbdGv5CdpaXYMskSlsx8pU+hQVZn90vwHIR+Qe3zHcwG12V9PoexTxWYul29O7Jd5zCapusUAxUSySraWf2cB0ESyjc7riDL3xAsLo9qWGB62W7KrhqF6X/KSpB+fhk4JmwhNw80G0nNRDXwW7yNMVJLC8RNnk7Z0w3O+bZZ7ygyoOc1vY3mKwf6vuoBXpe34tBBW3NK47vk4IMCaLX5SwmZl+i7Bvrx2JfVRjcEM2Nn/IhbUWRInKMSJqLF2fm7Y7qzVsy6WkuPysNogRKSBmnnMQz+7GxcuSO13LRaxcnhXJ2LvspyMOW59zhrcqLoANqvZSU+97osupwz9cFAFU8dSipUDR/0WcF8=",
+    "tag": "hvubXsgA91NVYG5f3nQl6A=="
+  }
+}
