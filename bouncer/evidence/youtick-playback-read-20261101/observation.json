@@ -1,0 +1,27 @@
+{
+  "schema": "bouncer.youtick-playback-read.v1",
+  "workflow_job": "https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41316051699/job/124876224211",
+  "head_sha": "7e505075f1d8df98ae5186e6b26cf7afac3c1f0d",
+  "job_started_at": "2026-11-01T14:24:44Z",
+  "job_completed_at": "2026-11-01T14:24:56Z",
+  "observation": {
+    "status": "BLOCKED_OR_UNPROVEN",
+    "reasons": [
+      "Studio-backed legacy playback is not established by bridge health"
+    ],
+    "chain": "testnet",
+    "market": "video-market-v1-260907.youtick-dev-v3.testnet",
+    "access": "video-access-v1-260907.youtick-dev-v3.testnet",
+    "observed_final_block_hash": "HGqa8DVjhipD4mG8EXcdepezQQEPkkFbFwzxEU1EhhJc",
+    "observed_market_code_hash": "9FvV8rRn1FQg15jHG4fNZPXjskdMTr6jZBVgNFZyb731",
+    "observed_access_code_hash": "G8RyYN3nxGPc1jDoyy2u9uph7MzMs6jMJ1pTwe1U1CCq",
+    "bridge_playback_ready": true,
+    "media_provider": null,
+    "adaptive_profile_advertised": true,
+    "source_reviewed_adaptive_family": "studio",
+    "access_paused": false,
+    "grant_issuance_enabled": true,
+    "play_max_ttl_ms": 600000,
+    "scope": "read-only necessary checks only; no proof of bridge/access binding, deployed code, grant, playback, payment or delivery"
+  }
+}

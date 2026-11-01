@@ -59,9 +59,14 @@ probe remained **BLOCKED_OR_UNPROVEN**. The chosen adaptive profile hash is in
 the [inspected Studio catalog](https://github.com/4rmus/youtick/blob/410dd180f42d25f77c2317b9659923f6a4149245/protocol/paid-media-livepeer-v1/profiles.json),
 and that source [selects the adapter by profile](https://github.com/4rmus/youtick/blob/410dd180f42d25f77c2317b9659923f6a4149245/workers/livepeer-bridge/src/index.ts#L7131-L7159).
 This is useful source-level evidence, **not** a live Studio-provider or bridge
-configuration attestation. The probe cannot prove the bridge uses the pinned
-access account or that the inspected source equals deployed code. No grant or
-playback token was requested in that probe.
+configuration attestation. A [later read-only check](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41316051699/job/124876224211)
+confirmed the adaptive hash was advertised at FINAL block
+`HGqa8DVjhipD4mG8EXcdepezQQEPkkFbFwzxEU1EhhJc`, but still received no live
+provider kind and remained **BLOCKED_OR_UNPROVEN**. Its bounded public summary
+is retained under `evidence/youtick-playback-read-20261101/`. Neither probe can
+prove that the bridge uses the pinned access account or that the inspected
+source equals deployed code. No grant or playback token was requested in those
+read-only probes.
 
 Experimental single-host code reserves a distinct playback key before an order
 in the encrypted journal; checks the original payment, publication and local

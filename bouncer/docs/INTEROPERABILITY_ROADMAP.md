@@ -174,7 +174,9 @@ consent, and no offers or payments were requested:
   read-only check found no such job, publication or entitlement. A separate
   token client journals one attempt and a bounded HLS byte probe protects bearer
   credentials; both have synthetic/loopback coverage only and cannot establish
-  playable content or independent fulfillment. This is not an independent
+  playable content or independent fulfillment. A [fresh read-only check](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41316051699/job/124876224211)
+  found the source-reviewed adaptive profile advertised on chain, but bridge
+  health still did not identify its provider. This is not an independent
   FT-paid service or playback proof. Never assume merchant consent, delivery or
   deployed/source equivalence from this research.
 - [PatchBond at `a448538`](https://github.com/PatchBond/patchbond/blob/a4485389453818d495e48b7d46a299401833213b/contract/vault/src/deposit.rs)
