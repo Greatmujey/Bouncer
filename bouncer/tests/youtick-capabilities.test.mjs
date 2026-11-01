@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import nearApi from 'near-api-js';
-import { assessYoutickCapabilities, YOUTICK_MARKET, TESTNET_CIRCLE_USDC } from '../agent/youtick-capabilities.mjs';
+import { assessYoutickCapabilities, assessYoutickPlaybackReadiness, YOUTICK_MARKET, TESTNET_CIRCLE_USDC } from '../agent/youtick-capabilities.mjs';
 
 const input = () => ({ chain: 'testnet', codeHash: nearApi.utils.serialize.base_encode(Buffer.alloc(32, 7)),
   token: TESTNET_CIRCLE_USDC, quoteKeyVersion: 3,
@@ -30,6 +30,26 @@ test('unavailable, mismatched, paused or mainnet inputs remain blocked or unprov
   for (const value of variants) {
     const result = assessYoutickCapabilities(value);
     assert.equal(result.status, 'BLOCKED_OR_UNPROVEN'); assert(result.reasons.length > 0);
+  }
+});
+
+test('legacy playback discovery requires all necessary views without claiming actual readiness or delivery', () => {
+  const codeHash = nearApi.utils.serialize.base_encode(Buffer.alloc(32, 8));
+  const value = { chain: 'testnet', marketCodeHash: codeHash, accessCodeHash: codeHash,
+    health: { status: 'ok', service: 'livepeer-bridge', compactUpload: { network: 'testnet', market: YOUTICK_MARKET }, playbackReady: true },
+    state: { market_contract_id: YOUTICK_MARKET, paused: false, grant_issuance_enabled: true },
+    playPolicy: { max_ttl_ms: 600_000, require_origin: true, require_device: true } };
+  assert.equal(assessYoutickPlaybackReadiness(value).status, 'NECESSARY_CHECKS_PASSED');
+  assert.match(assessYoutickPlaybackReadiness(value).scope, /no proof of bridge\/access binding/);
+  const variants = [ { ...value, chain: 'mainnet' }, { ...value, accessCodeHash: 'invalid' }, { ...value, health: null },
+    { ...value, health: { ...value.health, playbackReady: false } }, { ...value, state: null },
+    { ...value, state: { ...value.state, paused: true } }, { ...value, state: { ...value.state, grant_issuance_enabled: false } },
+    { ...value, state: { ...value.state, market_contract_id: 'attacker.testnet' } },
+    { ...value, playPolicy: { ...value.playPolicy, max_ttl_ms: 599_999 } },
+    { ...value, playPolicy: { ...value.playPolicy, require_device: false } } ];
+  for (const variant of variants) {
+    const result = assessYoutickPlaybackReadiness(variant);
+    assert.equal(result.status, 'BLOCKED_OR_UNPROVEN'); assert.ok(result.reasons.length);
   }
 });
 

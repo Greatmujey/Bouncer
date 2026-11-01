@@ -398,6 +398,23 @@ jobs:
       - name: Reinspect retained setup hashes and balances without signing or sending
         run: node bouncer/scripts/inspect-vrf-setup.mjs original-vrf-evidence
 
+  youtick-playback-read:
+    name: Inspect independent testnet playback readiness (read only)
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/arena/') && contains(github.event.head_commit.message, '[youtick-playback-read]')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: bouncer/package-lock.json
+      - run: npm ci
+        working-directory: bouncer
+      - name: Read same-block market and access views plus bridge health
+        working-directory: bouncer
+        run: node scripts/probe-youtick-playback.mjs
+
   youtick-funding-read:
     name: Estimate independent provider funding (read only)
     if: github.event_name == 'push' && github.event.repository.private == true && github.run_attempt == '1' && contains(github.event.head_commit.message, '[inspect-youtick-funding-20261101]')

@@ -7,8 +7,37 @@
 import { isTransactionHash } from '../shared/direct-payment-settlement.mjs';
 
 export const YOUTICK_MARKET = 'video-market-v1-260907.youtick-dev-v3.testnet';
+export const YOUTICK_ACCESS = 'video-access-v1-260907.youtick-dev-v3.testnet';
 export const YOUTICK_HEALTH = 'https://bridge-public-testnet.youtick.net/__health';
 export const TESTNET_CIRCLE_USDC = '3e2210e1184b45b64c8a434c0a7e7b23cc04ea7eb7a6c3c32520d03d4afcb8af';
+
+/** A necessary-only, point-in-time legacy playback probe. Health does not
+ * reveal which access contract the bridge actually uses, and these views do
+ * not establish deployment/source equivalence, caller eligibility or delivery. */
+export function assessYoutickPlaybackReadiness({ chain, marketCodeHash, accessCodeHash, health, state, playPolicy }) {
+  const reasons = [];
+  if (chain !== 'testnet') reasons.push('RPC did not establish the testnet chain');
+  if (!isTransactionHash(marketCodeHash) || !isTransactionHash(accessCodeHash)) reasons.push('FINAL contract code hashes unavailable');
+  if (health?.status !== 'ok' || health?.service !== 'livepeer-bridge' || health?.compactUpload?.network !== 'testnet' ||
+      health?.compactUpload?.market !== YOUTICK_MARKET || health?.playbackReady !== true) {
+    reasons.push('bridge health does not report legacy playback readiness');
+  }
+  if (!state || state.market_contract_id !== YOUTICK_MARKET || state.paused !== false || state.grant_issuance_enabled !== true) {
+    reasons.push('pinned access state is unavailable, paused, issuance-disabled or references another market');
+  }
+  if (!playPolicy || !Number.isSafeInteger(playPolicy.max_ttl_ms) || playPolicy.max_ttl_ms < 600_000 ||
+      playPolicy.require_origin !== true || playPolicy.require_device !== true) {
+    reasons.push('pinned Play policy does not establish the reviewed origin/device-bound 10-minute grant');
+  }
+  return { status: reasons.length ? 'BLOCKED_OR_UNPROVEN' : 'NECESSARY_CHECKS_PASSED', reasons,
+    chain: chain === 'testnet' ? chain : null, market: YOUTICK_MARKET, access: YOUTICK_ACCESS,
+    observed_market_code_hash: isTransactionHash(marketCodeHash) ? marketCodeHash : null,
+    observed_access_code_hash: isTransactionHash(accessCodeHash) ? accessCodeHash : null,
+    bridge_playback_ready: health?.playbackReady === true, access_paused: typeof state?.paused === 'boolean' ? state.paused : null,
+    grant_issuance_enabled: typeof state?.grant_issuance_enabled === 'boolean' ? state.grant_issuance_enabled : null,
+    play_max_ttl_ms: Number.isSafeInteger(playPolicy?.max_ttl_ms) ? playPolicy.max_ttl_ms : null,
+    scope: 'read-only necessary checks only; no proof of bridge/access binding, deployed code, grant, playback, payment or delivery' };
+}
 
 /** Deliberately returns a candidate, never a claim that a service was bought. */
 export function assessYoutickCapabilities({ chain, codeHash, token, policy, governance, quoteKeyVersion, health }) {
