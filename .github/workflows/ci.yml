@@ -263,8 +263,9 @@ jobs:
           console.log(`::notice title=Scoped channel access::comments_http=${comments.status}; contents_http=${contents.status}`);
           if (!contents.ok) { console.log(`::error title=Scoped channel unavailable::Repository contents HTTP ${contents.status}`); process.exit(1); }
           console.log('::notice title=Scoped Ref sweep channel probe::Private repository contents are readable; this is not a sweep request.');
-          await new Promise(resolve => setTimeout(resolve, 45_000));
           NODE
+      - name: Hold the probe open for annotation visibility
+        run: sleep 60
 
   resume-original-ref-sweep:
     name: Resume original Ref output sweep (testnet)
