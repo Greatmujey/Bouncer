@@ -111,6 +111,21 @@ test('active website, package and documentation links use the renamed GitHub rep
   assert.match(fs.readFileSync(new URL('../docs/WEB.md', import.meta.url), 'utf8'), /https:\/\/greatmujey\.github\.io\/Bouncer\//);
 });
 
+test('the public site documentation and smoke tests agree on the restored address', () => {
+  const current = 'https://bouncer-near.vercel.app/';
+  for (const source of [
+    new URL('../../README.md', import.meta.url),
+    new URL('../docs/WEB.md', import.meta.url),
+    new URL('../scripts/check-public-web-assets.mjs', import.meta.url),
+    new URL('../scripts/test-public-web-preview.mjs', import.meta.url),
+    new URL('../../.github/workflows/web-preview.yml', import.meta.url),
+  ]) {
+    const text = fs.readFileSync(source, 'utf8');
+    assert.ok(text.includes(current), `missing restored site URL in ${source}`);
+    assert.ok(!text.includes('https://bouncer-testnet.vercel.app/'), `stale site URL in ${source}`);
+  }
+});
+
 test('latest oracle-led mission links to the verified testnet data and three resource payments', () => {
   assert.equal(LATEST_MISSION.account, 'bouncer-oracle-6a42bf32.testnet');
   assert.equal(LATEST_MISSION.owner, 'owner.bouncer-oracle-6a42bf32.testnet');

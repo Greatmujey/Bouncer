@@ -18,11 +18,11 @@ unaudited testnet software, not suitable for real funds.
 
 ## Public website (read-only)
 
-**[Open Bouncer](https://bouncer-testnet.vercel.app/)** — the public Vercel
+**[Open Bouncer](https://bouncer-near.vercel.app/)** — the public Vercel
 website. It is a testnet snapshot, not a running agent, and the source
-repository remains private. The initial deployment used website assets from
-working-branch commit `a05fc8d`; a durable hosting URL does not imply production
-readiness or live independent FT-paid fulfillment.
+repository remains private. The replacement project's initial deployment used
+website assets from working-branch commit `d4b818e`; a durable hosting URL does
+not imply production readiness or live independent FT-paid fulfillment.
 
 `bouncer/web/` explains the prototype's request → quote → guarded payment →
 fulfillment flow and links to an earlier oracle-led Circle testnet mission and
