@@ -14,8 +14,8 @@ const MAX_FILES = 256;
 const filePattern = /^([0-9]{6})-([1-9A-HJ-NP-Za-km-z]{32,64})\.json$/;
 const unusable = () => new BuyerJournalError('CHECKPOINT_DIRECTORY', 'buyer checkpoint directory is unsafe, incomplete or unreadable; stop and reconcile');
 function ownerOnly(stat, kind) {
-  return stat && (kind === 'directory' ? stat.isDirectory() : stat.isFile()) && (stat.mode & 0o077) === 0 &&
-    (typeof process.getuid !== 'function' || stat.uid === process.getuid());
+  return stat && (kind === 'directory' ? stat.isDirectory() && (stat.mode & 0o700) === 0o700 : stat.isFile()) &&
+    (stat.mode & 0o077) === 0 && (typeof process.getuid !== 'function' || stat.uid === process.getuid());
 }
 function readSnapshot(file) {
   let fd;
@@ -63,6 +63,8 @@ export async function openBuyerCheckpointDirectory({ directory, journal, current
         if (names.length >= MAX_FILES || !item.isFile()) throw unusable();
         const match = filePattern.exec(item.name), count = match && Number(match[1]);
         if (!match || count < 1 || count > MAX_FILES || !isTransactionHash(match[2])) throw unusable();
+        const stat = fs.lstatSync(path.join(root, item.name));
+        if (!ownerOnly(stat, 'file') || stat.nlink !== 1 || stat.size <= 0 || stat.size > MAX_BUYER_SNAPSHOT_BYTES) throw unusable();
         names.push({ name: item.name, count, hash: match[2] });
       }
     } finally { scan?.closeSync(); }

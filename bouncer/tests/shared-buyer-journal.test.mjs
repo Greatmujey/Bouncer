@@ -1413,6 +1413,9 @@ dbtest('checkpoint directory persists every synthetic broadcast and reopens acro
     assert.match(files[0], /^000001-/); assert.match(files[1], /^000002-/);
     assert.equal(verifyEncryptedBuyerSnapshot(fs.readFileSync(path.join(dir, files[1]), 'utf8'), f.key).count, 2);
     checkpoints.close(); checkpoints = null;
+    fs.chmodSync(path.join(dir, files[0]), 0o644);
+    await assert.rejects(openBuyerCheckpointDirectory({ directory: dir, journal: f.journal, currentKey: f.key }), error => error.code === 'CHECKPOINT_DIRECTORY');
+    fs.chmodSync(path.join(dir, files[0]), 0o600);
     await f.journal.rotateEncryptionKey(next); await f.journal.close();
     const reopened = await f.open({ key: next });
     await assert.rejects(openBuyerCheckpointDirectory({ directory: dir, journal: reopened, currentKey: next }), error => error.code === 'SNAPSHOT_INVALID');
@@ -1430,6 +1433,8 @@ dbtest('checkpoint directory rejects symlinks, unsafe permissions, unexpected fi
     capacity.assertCapacity(256); assert.throws(() => capacity.assertCapacity(257), error => error.code === 'CHECKPOINT_LIMIT'); capacity.close();
     await assert.rejects(openBuyerCheckpointDirectory({ directory: link, journal: f.journal, currentKey: f.key }), error => error.code === 'CHECKPOINT_DIRECTORY');
     fs.chmodSync(dir, 0o755);
+    await assert.rejects(openBuyerCheckpointDirectory({ directory: dir, journal: f.journal, currentKey: f.key }), error => error.code === 'CHECKPOINT_DIRECTORY');
+    fs.chmodSync(dir, 0o500);
     await assert.rejects(openBuyerCheckpointDirectory({ directory: dir, journal: f.journal, currentKey: f.key }), error => error.code === 'CHECKPOINT_DIRECTORY');
     fs.chmodSync(dir, 0o700); fs.writeFileSync(path.join(dir, 'unrelated'), 'x', { mode: 0o600 });
     await assert.rejects(openBuyerCheckpointDirectory({ directory: dir, journal: f.journal, currentKey: f.key }), error => error.code === 'CHECKPOINT_DIRECTORY');
