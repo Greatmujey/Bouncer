@@ -4,8 +4,9 @@
 // NOT Circle USDC; a prepaid deposit does not establish service delivery.
 import { pathToFileURL } from 'node:url';
 import path from 'node:path';
-import { PaymentRpcProvider } from '../agent/near-account.mjs';
 import { verifyFtCallSettlement } from '../agent/ft-call.mjs';
+import { validateRpcEndpoint } from '../shared/rpc-endpoint.mjs';
+import { readBoundedJson } from '../shared/bounded-json.mjs';
 
 export const HISTORICAL_FT_CALL = Object.freeze({
   tx_hash: '3uMBAaenMBQzJyxPxEdH8tBg5M3rvAuoQy5oRpNx56MY',
@@ -50,11 +51,41 @@ export async function verifyHistoricalFtCall({ provider }) {
     trust: 'configured RPC, deployed Bouncer and token; no light-client proof' };
 }
 
+// Historical receipts may have aged out of the free non-archival node. Try a
+// bounded archival read first, then a bounded fallback; neither can broadcast.
+function readOnlyProvider(rawEndpoint) {
+  const endpoint = validateRpcEndpoint(rawEndpoint);
+  const rpc = async (method, params) => {
+    const response = await fetch(endpoint, { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 'ft-call-history', method, params }), signal: AbortSignal.timeout(15_000) });
+    if (!response.ok) throw new Error(`${method}: RPC HTTP ${response.status}`);
+    const body = await readBoundedJson(response, { maxBytes: 4_000_000, label: method });
+    if (!body || body.error || !Object.hasOwn(body, 'result')) throw new Error(`${method}: RPC error ${JSON.stringify(body?.error ?? 'missing result').slice(0, 400)}`);
+    return body.result;
+  };
+  return { viewNodeStatus: () => rpc('status', []),
+    txStatusReceipts: (tx_hash, sender_account_id, wait_until) => rpc('EXPERIMENTAL_tx_status', { tx_hash, sender_account_id, wait_until }) };
+}
+const escapeAnnotation = value => String(value).replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A');
 async function main() {
-  const provider = new PaymentRpcProvider(process.env.NEAR_TESTNET_RPC || 'https://test.rpc.fastnear.com');
-  const summary = await verifyHistoricalFtCall({ provider });
-  console.log(`::notice title=Historical guarded FT-call receipt graph::${JSON.stringify(summary)}`);
+  // Never print the operator-selected URL, which may contain a secret path.
+  const endpoints = process.env.NEAR_TESTNET_RPC ? [{ name: 'configured RPC', url: process.env.NEAR_TESTNET_RPC }] :
+    [{ name: 'testnet archival RPC', url: 'https://archival-rpc.testnet.near.org' },
+      { name: 'testnet fallback RPC', url: 'https://test.rpc.fastnear.com' }];
+  const errors = [];
+  for (const endpoint of endpoints) {
+    try {
+      const summary = await verifyHistoricalFtCall({ provider: readOnlyProvider(endpoint.url) });
+      console.log(`::notice title=Historical guarded FT-call receipt graph::${escapeAnnotation(JSON.stringify({ ...summary, endpoint: endpoint.name }))}`);
+      return;
+    } catch (error) { errors.push(`${endpoint.name}: ${error.message}`); }
+  }
+  throw new Error(`read-only historical inspection failed: ${errors.join('; ')}`);
 }
 if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url) {
-  main().catch(error => { console.error(`[ft-call-history] ${error.message}`); process.exitCode = 1; });
+  main().catch(error => {
+    console.error(`[ft-call-history] ${error.message}`);
+    console.log(`::error title=Historical FT-call inspection failed::${escapeAnnotation(error.message)}`);
+    process.exitCode = 1;
+  });
 }
