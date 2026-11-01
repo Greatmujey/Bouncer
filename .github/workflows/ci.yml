@@ -356,7 +356,7 @@ jobs:
     name: Independent FT-paid VRF diagnostic (testnet)
     # Fresh testnet account and seed, never the separate unresolved burn hash.
     # The exact parent + marker + first attempt prevent an incidental rerun.
-    if: github.event_name == 'push' && github.ref == 'refs/heads/arena/88d70c7c-near-hub' && github.event.before == '08ae0b14410b9409ee7bf93d64a3bff33750cf60' && github.event.repository.private == true && github.run_attempt == '1' && contains(github.event.head_commit.message, '[paid-vrf-proof-20261101]')
+    if: github.event_name == 'push' && github.ref == 'refs/heads/arena/88d70c7c-near-hub' && github.event.before == '6985b594938f13b98726cd3597973f1148668821' && github.event.repository.private == true && github.run_attempt == '1' && contains(github.event.head_commit.message, '[paid-vrf-proof-20261101]')
     needs: [js-tests, contract-tests, build-contract]
     runs-on: ubuntu-latest
     timeout-minutes: 20
