@@ -10,15 +10,15 @@ import util from 'node:util';
 import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import nearApi from 'near-api-js';
-import { MonotonicAccount } from './agent/near-account.mjs';
-import { FileJournal } from './agent/procurement.mjs';
+import { MonotonicAccount, PaymentRpcProvider } from './agent/near-account.mjs';
+import { openConfiguredFileJournal, validateConfiguredFileJournalKey } from './agent/procurement.mjs';
 import { runOutlayerGoal, recoverOutlayerGoal, RANDOM_TESTNET_PROGRAM } from './agent/outlayer.mjs';
 import { validateRpcEndpoint } from './shared/rpc-endpoint.mjs';
 import { waitForNewTestnetKey } from './shared/testnet-ready.mjs';
 
-const { KeyPair, KeyPairSigner, providers, transactions } = nearApi;
+const { KeyPair, KeyPairSigner, transactions } = nearApi;
 const RPC = validateRpcEndpoint(process.env.NEAR_TESTNET_RPC || 'https://test.rpc.fastnear.com');
-const provider = new providers.JsonRpcProvider({ url: RPC });
+const provider = new PaymentRpcProvider(RPC);
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const ONE = 10n ** 24n, TGAS = 10n ** 12n;
 const amount = ONE / 10n, funding = 3n * amount;
@@ -88,6 +88,7 @@ export function finishDemoEvidence({ journal, directory, journalPath, goalPath, 
 }
 
 async function main() {
+  validateConfiguredFileJournalKey(); // Before any live setup, funding or network request.
   if ((await provider.viewNodeStatus())?.chain_id !== 'testnet') throw new Error('RPC must report testnet');
   const wasm = fs.readFileSync(path.join(ROOT, 'bouncer.wasm'));
   const suffix = crypto.randomBytes(4).toString('hex');
@@ -128,7 +129,7 @@ async function main() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bouncer-outlayer-'));
   const journalPath = path.join(dir, 'journal.json'), goalPath = path.join(dir, 'goal.json');
   fs.writeFileSync(goalPath, JSON.stringify(goal, null, 2) + '\n', { mode: 0o600 });
-  let journal = new FileJournal(journalPath, contractId, ownerId);
+  let journal = openConfiguredFileJournal(journalPath, contractId, ownerId);
   let sends = 0, inject = true, completed = false;
   const faultProvider = new Proxy(provider, { get(target, property) {
     if (property === 'sendTransactionUntil') return async (...args) => { sends++; return target.sendTransactionUntil(...args); };
@@ -163,7 +164,7 @@ async function main() {
     const cli = await util.promisify(execFile)(process.execPath, [path.join(ROOT, 'bouncer/agent/outlayer.mjs'),
       '--goal', goalPath, '--state', journalPath, '--rpc', RPC, '--recover'], { timeout: 90_000, maxBuffer: 64 * 1024 });
     if (!cli.stdout.includes('REUSED') || !cli.stdout.includes(paidHash)) throw new Error('key-free recovery CLI did not reuse the recorded transaction');
-    journal = new FileJournal(journalPath, contractId, ownerId);
+    journal = openConfiguredFileJournal(journalPath, contractId, ownerId, { requireExisting: true });
     if (journal.get(goal.id)?.status !== 'completed' || journal.get(goal.id)?.tx_hash !== paidHash) throw new Error('key-free CLI did not persist verified recovery');
     console.log('    ✅ A separate key-free recovery CLI verified and persisted the same transaction.');
     const recovered = await recoverOutlayerGoal({ goal, provider, journal });

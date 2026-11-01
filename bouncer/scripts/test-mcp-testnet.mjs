@@ -36,6 +36,14 @@ try {
     policy_id: r.policy, token: r.token, payee: r.vendor, amount: r.amount,
   }]));
   devProvider = await startConfiguredProvider({ contract_id: RUN.account, data_dir: temp, port: 0, products });
+  const localPort = Number(new URL(devProvider.url).port);
+  // Products are pinned for the lifetime of a seller process. Reconfigure
+  // deliberately by draining/restarting it at the same local origin.
+  async function restartWithComputePrice(amount) {
+    await devProvider.close();
+    products.compute.amount = amount;
+    devProvider = await startConfiguredProvider({ contract_id: RUN.account, data_dir: temp, port: localPort, products });
+  }
   const transport = new StdioClientTransport({
     command: process.execPath, args: [fileURLToPath(new URL('../mcp/server.mjs', import.meta.url))],
     env: { NEAR_TESTNET_RPC: rpcUrl, BOUNCER_MCP_PROVIDER_URL: devProvider.url },
@@ -68,7 +76,7 @@ try {
 
   // Two individually affordable quotes would overuse the recorded shared
   // wNEAR vault or rolling budget together, so the second must be reserved out.
-  products.compute.amount = RUN.resources[0].perTx;
+  await restartWithComputePrice(RUN.resources[0].perTx);
   const combined = await client.callTool({ name: 'bouncer_preview_goals', arguments: {
     ...args, goals: [
       { ...goals[0], id: 'combined-one', max_amount: products.compute.amount },
@@ -83,7 +91,7 @@ try {
   // Quote one unit above the actual per-transaction cap; the same on-chain
   // check must block the preview instead of marking it ready.
   const overCap = (BigInt(RUN.resources[0].perTx) + 1n).toString();
-  products.compute.amount = overCap;
+  await restartWithComputePrice(overCap);
   const blocked = await client.callTool({ name: 'bouncer_preview_goals', arguments: {
     ...args, goals: [{ ...goals[0], id: 'over-cap', max_amount: overCap }],
   } });
@@ -96,6 +104,6 @@ try {
   console.log('::notice title=Bouncer live MCP check::Testnet policy, three-resource quote/preflight, shared-limit and over-cap rejection passed; no transaction or private key was used.');
 } finally {
   if (client) await client.close();
-  if (devProvider) await new Promise((resolve, reject) => devProvider.server.close(error => error ? reject(error) : resolve()));
+  if (devProvider) await devProvider.close();
   fs.rmSync(temp, { recursive: true, force: true });
 }

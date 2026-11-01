@@ -10,11 +10,16 @@ import { pathToFileURL } from 'node:url';
 import nearApi from 'near-api-js';
 import { validateRpcEndpoint } from '../shared/rpc-endpoint.mjs';
 import { validateProviderOrigin } from '../shared/provider-origin.mjs';
+import { validBuyerIntentId } from '../shared/buyer-intent.mjs';
 import { assertFinalPaymentReceipts } from '../shared/final-payment.mjs';
 import { isTransactionHash, verifyDirectPayment } from '../shared/direct-payment-settlement.mjs';
-import { MonotonicAccount } from './near-account.mjs';
+import { MonotonicAccount, PaymentRpcProvider } from './near-account.mjs';
+import { canonicalClaimOrigin, signClaimAuthorization } from '../packages/provider-sdk/lib/resource-claim.mjs';
+import { assertJournalScope, reserveJournal, writeJournal } from './journal-write.mjs';
+import { decryptFileJournal, encryptFileJournal, isEncryptedFileJournal, MAX_ENCRYPTED_JOURNAL_FILE,
+  readFileJournalKeyFile } from './file-journal-crypto.mjs';
 
-const { KeyPair, KeyPairSigner, providers, transactions, utils } = nearApi;
+const { KeyPair, KeyPairSigner, transactions, utils } = nearApi;
 const DEFAULT_RPC = 'https://test.rpc.fastnear.com';
 const CONTRACT_VERSIONS = new Set(['bouncer-agent-v4', 'bouncer-agent-v5', 'bouncer-agent-v6', 'bouncer-agent-v7', 'bouncer-agent-v8', 'bouncer-agent-v9']);
 const U128_MAX = (1n << 128n) - 1n;
@@ -85,10 +90,25 @@ export function requestFingerprint(request) {
  * get(id) and put(id, entry); every live payment is marked pending BEFORE it
  * is sent. An unresolved pending entry is never retried automatically.
  */
-export async function runProcurement({ plan: rawPlan, provider, account, publicKey, journal, journalRoutes, execute = false,
-  durablePayment = false, log = console.log, onCheck = () => {}, beforePayment = async () => {}, onPaid = async () => {}, stopOnBlocked = false }) {
+export async function runProcurement(options) {
+  // The shared journal's owner fence must cover nonce preparation and signing,
+  // not just the later database insert. It stays held until this batch returns;
+  // any unresolved hash blocks other participating journals for the owner.
+  if (options?.execute && options?.journal?.sharedDirectV3 === true) {
+    if (typeof options.journal.withOwnerFence !== 'function') throw new Error('shared buyer owner payment fence is required');
+    return options.journal.withOwnerFence(() => runProcurementCore(options));
+  }
+  return runProcurementCore(options);
+}
+
+async function runProcurementCore({ plan: rawPlan, provider, account, publicKey, journal, journalRoutes, claimOrigins, intentIds, execute = false,
+  durablePayment = false, log = console.log, onCheck = () => {}, beforePayment = async () => {}, beforeBroadcast = () => {}, beforeBroadcastCheckpoint,
+  onPaid = async () => {}, stopOnBlocked = false }) {
   const plan = validatePlan(rawPlan);
-  if (typeof beforePayment !== 'function' || typeof onPaid !== 'function' || typeof stopOnBlocked !== 'boolean' || typeof durablePayment !== 'boolean') throw new Error('invalid procurement execution hooks');
+  if (typeof beforePayment !== 'function' || typeof beforeBroadcast !== 'function' || typeof onPaid !== 'function' || typeof stopOnBlocked !== 'boolean' || typeof durablePayment !== 'boolean' ||
+      (beforeBroadcastCheckpoint !== undefined && (typeof beforeBroadcastCheckpoint !== 'function' || !execute || !durablePayment || journal?.sharedDirectV3 !== true))) {
+    throw new Error('invalid procurement execution hooks');
+  }
   let routes;
   if (journalRoutes !== undefined) {
     if (!(journalRoutes instanceof Map) || journalRoutes.size !== plan.requests.length) throw new Error('invalid payment journal routes');
@@ -96,6 +116,46 @@ export async function runProcurement({ plan: rawPlan, provider, account, publicK
     for (const request of plan.requests) {
       if (!journalRoutes.has(request.id)) throw new Error('missing payment journal route');
       routes.set(request.id, normalizeProviderRoute(journalRoutes.get(request.id)));
+    }
+  }
+  const claims = new Map();
+  if (claimOrigins !== undefined) {
+    if (!(claimOrigins instanceof Map) || !routes) throw new Error('authenticated claims require reviewed provider routes');
+    for (const [id, origin] of claimOrigins) {
+      const request = plan.requests.find(item => item.id === id), route = routes.get(id);
+      if (!request || !['compute', 'storage', 'api'].includes(request.resource) || !route?.provider_origin || canonicalClaimOrigin(origin) !== origin ||
+          validateProviderOrigin(route.provider_origin).origin !== origin ||
+          !new RegExp(`^bouncer-order-v3:${request.resource}:[a-f0-9]{32}:[a-f0-9]{64}$`).test(request.memo)) {
+        throw new Error('authenticated claim does not match the reviewed request and origin');
+      }
+      claims.set(id, origin);
+    }
+    if (execute && claims.size && !durablePayment) throw new Error('authenticated claims require durable signed-hash journaling');
+    if (execute && claims.size && typeof journal?.list !== 'function') throw new Error('authenticated claims require the original listable exclusive journal');
+  }
+  for (const request of plan.requests) {
+    if (request.memo.startsWith('bouncer-order-v3:') && !claims.has(request.id)) {
+      throw new Error(`${request.id}: seller-v3 memo requires its reviewed authenticated claim origin`);
+    }
+  }
+  assertJournalScope(journal, plan.contract_id, plan.owner_account_id);
+  if (intentIds !== undefined) {
+    if (journal?.sharedDirectV3 !== true || !(intentIds instanceof Map) || intentIds.size !== plan.requests.length ||
+        plan.requests.some(request => !intentIds.has(request.id) || !validBuyerIntentId(intentIds.get(request.id))) ||
+        new Set(intentIds.values()).size !== intentIds.size) throw new Error('invalid shared buyer intent IDs');
+    intentIds = new Map(intentIds);
+  }
+  if (journal?.sharedDirectV3 === true) {
+    if (execute && !durablePayment) throw new Error('shared buyer execution requires durable signed-hash payments');
+    if (claims.size !== plan.requests.length) throw new Error('shared buyer supports only authenticated seller-v3 direct payments');
+    if (plan.requests.some(request => !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(request.id))) throw new Error('invalid shared buyer request ID');
+    if (execute) {
+      if (typeof journal.checkOwnerIntents !== 'function') throw new Error('shared buyer intent mode check is required');
+      // Recheck under the owner fence: two workers may both have quoted before
+      // either reserved an intent. This check is still followed by an atomic
+      // unique insert before the only broadcast.
+      await journal.checkOwnerIntents(plan.requests.map(request => ({ id: request.id,
+        ...(intentIds ? { intent_id: intentIds.get(request.id) } : {}) })));
     }
   }
   if (!account || account.accountId !== plan.owner_account_id) throw new Error('agent key account does not match the plan owner');
@@ -118,7 +178,9 @@ export async function runProcurement({ plan: rawPlan, provider, account, publicK
   for (const request of plan.requests) {
     const hash = requestFingerprint(request);
     const previous = journal?.get(request.id);
-    if (previous && previous.fingerprint !== hash) throw new Error(`${request.id}: journal entry does not match the request`);
+    if (previous && (previous.fingerprint !== hash || previous.intent_id !== intentIds?.get(request.id))) {
+      throw new Error(`${request.id}: journal entry does not match the request or stable intent`);
+    }
     if (previous?.status === 'completed') {
       onCheck({ id: request.id, status: 'SKIPPED' });
       log(`[procurement] SKIP ${request.id}: already paid (${previous.tx_hash})`);
@@ -160,14 +222,18 @@ export async function runProcurement({ plan: rawPlan, provider, account, publicK
       totals.ready++;
       continue;
     }
-    const before = BigInt(await provider.callFunction(request.token, 'ft_balance_of', { account_id: request.payee }, { finality: 'final' }));
+    // A mutable vendor balance is not a transaction receipt: other buyers can
+    // pay or the vendor can spend between views. The durable path verifies the
+    // exact FINAL receipt graph instead; the legacy path retains its old check.
+    const before = durablePayment ? null : BigInt(await provider.callFunction(request.token, 'ft_balance_of', { account_id: request.payee }, { finality: 'final' }));
     // Persist the exact normalized request before sending. The opt-in signed
     // path additionally fsyncs the signed transaction hash BEFORE its one
     // broadcast. It never stores the key or signed transaction bytes.
     const args = { policy_id: request.policy_id, payee: request.payee, amount: request.amount,
       memo: request.memo, expected_token: request.token };
     let pending = { fingerprint: hash, status: 'pending', request,
-      ...(routes ? { provider_route: routes.get(request.id) } : {}), started_at: new Date().toISOString() };
+      ...(routes ? { provider_route: routes.get(request.id) } : {}),
+      ...(intentIds ? { intent_id: intentIds.get(request.id) } : {}), started_at: new Date().toISOString() };
     let txHash, signed;
     if (durablePayment) {
       if (!account.signer || typeof account.createTransaction !== 'function' ||
@@ -191,13 +257,61 @@ export async function runProcurement({ plan: rawPlan, provider, account, publicK
       if (!isTransactionHash(txHash)) throw new Error('invalid signed transaction hash');
       signed = signedTransaction;
       pending = { ...pending, payment_version: 'direct-signed-v1', agent_public_key: String(publicKey), tx_hash: txHash };
+      if (claims.has(request.id)) {
+        // An off-chain NEP-413 signature by the same restricted key binds the
+        // claim to this reviewed transaction and seller. Persist it BEFORE the
+        // only broadcast so recovery needs no signing key. Treat the journal
+        // as private: the signature is a replayable bearer credential.
+        const terms = { network: 'near:testnet', contract_id: plan.contract_id, owner_account_id: plan.owner_account_id,
+          seller_origin: claims.get(request.id), resource: request.resource, policy_id: request.policy_id, token: request.token,
+          payee: request.payee, amount: request.amount, memo: request.memo, tx_hash: txHash };
+        const authorization = await signClaimAuthorization({ terms, signer: account.signer, publicKey });
+        pending = { ...pending, resource_authorization: authorization };
+      }
     }
     // A mission may impose an additional time-sensitive condition. Check it
     // immediately before journaling/broadcasting each *new* payment, not just
     // once at batch preview. A rejection here leaves no pending entry; no
     // signed bytes have been broadcast or persisted.
     await beforePayment(Object.freeze({ ...request }));
-    journal.put(request.id, pending);
+    // Recheck after asynchronous signing. A file journal reserves synchronously;
+    // the shared journal additionally performs an atomic, awaited DB insert.
+    // Its unique request/challenge/hash constraints are the authority if two
+    // workers (or two calls on the same journal) race.
+    if (journal.get(request.id)) throw new Error(`${request.id}: journal entry appeared during payment preparation; recover it instead of paying`);
+    if (claims.has(request.id)) {
+      const challenge = /^bouncer-order-v3:(?:compute|storage|api):([a-f0-9]{32}):[a-f0-9]{64}$/.exec(request.memo)?.[1];
+      if (!challenge || journal.list().some(entry => {
+        if (entry?.id === request.id || typeof entry?.request?.memo !== 'string') return false;
+        const prior = /^bouncer-order-v[23]:(?:compute|storage|api):([a-f0-9]{32}):[a-f0-9]{64}$/.exec(entry.request.memo);
+        return prior?.[1] === challenge;
+      })) throw new Error(`${request.id}: seller challenge is already recorded in this journal; never pay again`);
+    }
+    await reserveJournal(journal, request.id, pending);
+    // Optional shared-buyer checkpointing must finish before the final
+    // synchronous guard and the only broadcast. Failure leaves the original
+    // pending hash quarantined; it never authorizes a replacement payment.
+    if (beforeBroadcastCheckpoint) {
+      try { await beforeBroadcastCheckpoint(Object.freeze({ id: request.id, tx_hash: txHash })); }
+      catch { throw new Error(`${request.id}: encrypted checkpoint failed before broadcast; no payment was sent; preserve the pending journal and reconcile`); }
+    }
+    if (journal?.sharedDirectV3 === true) {
+      if (typeof journal.assertPendingForBroadcast !== 'function') throw new Error(`${request.id}: shared journal pre-broadcast fence is required; no payment was sent`);
+      try { await journal.assertPendingForBroadcast(request.id, txHash); }
+      catch { throw new Error(`${request.id}: shared journal pre-broadcast check failed; no payment was sent; preserve the pending hash and reconcile`); }
+    }
+    // A synchronous final guard can enforce a time-sensitive condition after
+    // fsync but immediately before submission. If it rejects, nothing was sent;
+    // retain the pending hash conservatively rather than inventing a retry.
+    try {
+      const verdict = beforeBroadcast(Object.freeze({ ...request }));
+      if (verdict && typeof verdict.then === 'function') {
+        Promise.resolve(verdict).catch(() => {}); // do not leak a rejected async hook
+        throw new Error('pre-broadcast guard must be synchronous');
+      }
+    } catch (error) {
+      throw new Error(`${request.id}: pre-broadcast guard rejected after journal write; no payment was sent, retain the pending entry and reconcile: ${error.message}`, { cause: error });
+    }
     try {
       const result = durablePayment
         ? await provider.sendTransactionUntil(signed, 'FINAL')
@@ -205,7 +319,7 @@ export async function runProcurement({ plan: rawPlan, provider, account, publicK
       const candidateHash = result?.transaction_outcome?.id;
       if (durablePayment && candidateHash !== txHash) throw new Error('RPC returned a different or missing transaction hash');
       if (!durablePayment && typeof candidateHash === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(candidateHash)) txHash = candidateHash;
-      if (!durablePayment && txHash) journal.put(request.id, { ...pending, tx_hash: txHash });
+      if (!durablePayment && txHash) await writeJournal(journal, request.id, { ...pending, tx_hash: txHash });
       let settlement;
       if (durablePayment) {
         const chain = await provider.txStatusReceipts(txHash, plan.owner_account_id, 'FINAL');
@@ -213,9 +327,11 @@ export async function runProcurement({ plan: rawPlan, provider, account, publicK
           request, publicKey: String(publicKey), txHash });
       } else assertFinalPaymentReceipts(result, request.token);
       if (typeof txHash !== 'string' || !/^[A-Za-z0-9_-]{1,100}$/.test(txHash)) throw new Error('invalid transaction hash');
-      const after = BigInt(await provider.callFunction(request.token, 'ft_balance_of', { account_id: request.payee }, { finality: 'final' }));
-      if (after !== before + BigInt(request.amount)) throw new Error('vendor balance delta did not match the payment');
-      journal.put(request.id, { ...pending, status: 'completed', tx_hash: txHash, ...(settlement ? { settlement } : {}), completed_at: new Date().toISOString() });
+      if (!durablePayment) {
+        const after = BigInt(await provider.callFunction(request.token, 'ft_balance_of', { account_id: request.payee }, { finality: 'final' }));
+        if (after !== before + BigInt(request.amount)) throw new Error('vendor balance delta did not match the payment');
+      }
+      await writeJournal(journal, request.id, { ...pending, status: 'completed', tx_hash: txHash, ...(settlement ? { settlement } : {}), completed_at: new Date().toISOString() });
       log(`[procurement] PAID ${request.id} (${request.resource}): ${request.amount} ${request.token} → ${request.payee} ${EXPLORER(txHash)}`);
       totals.paid++;
     } catch (error) {
@@ -224,7 +340,7 @@ export async function runProcurement({ plan: rawPlan, provider, account, publicK
       const errorHash = error?.transaction_outcome?.id;
       if (!txHash && typeof errorHash === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(errorHash)) {
         txHash = errorHash;
-        journal.put(request.id, { ...pending, tx_hash: txHash });
+        await writeJournal(journal, request.id, { ...pending, tx_hash: txHash });
       }
       const reference = txHash ? ` (tx ${txHash})` : '';
       throw new Error(`${request.id}: payment could not be confirmed${reference}; journal may be pending or uncertain, do not retry automatically: ${error.message}`, { cause: error });
@@ -239,17 +355,72 @@ export async function runProcurement({ plan: rawPlan, provider, account, publicK
 
 /** Atomic local journal and exclusive lock; not a distributed idempotency system. */
 export class FileJournal {
-  constructor(file, contractId, ownerId) {
+  #key;
+  #keyFile;
+  #contractId;
+  #ownerId;
+  constructor(file, contractId, ownerId, { encryptionKey, keyFile, migratePlaintext = false, requireExisting = false } = {}) {
+    if ((encryptionKey !== undefined && (!Buffer.isBuffer(encryptionKey) || encryptionKey.length !== 32)) ||
+        (keyFile !== undefined && (!encryptionKey || typeof keyFile !== 'string' || !keyFile)) ||
+        typeof migratePlaintext !== 'boolean' || typeof requireExisting !== 'boolean' ||
+        (migratePlaintext && (!encryptionKey || !requireExisting))) {
+      throw new Error('invalid file journal encryption options');
+    }
     this.file = path.resolve(file);
     this.lockFile = `${this.file}.lock`;
-    fs.mkdirSync(path.dirname(this.file), { recursive: true, mode: 0o700 });
-    this.lockFd = fs.openSync(this.lockFile, 'wx', 0o600);
+    if (!requireExisting) fs.mkdirSync(path.dirname(this.file), { recursive: true, mode: 0o700 });
+    try { this.lockFd = fs.openSync(this.lockFile, 'wx', 0o600); }
+    catch (error) {
+      if (requireExisting && error.code === 'ENOENT') throw new Error('original journal not found; refusing to create an empty journal', { cause: error });
+      throw error;
+    }
+    this.#key = encryptionKey ? Buffer.from(encryptionKey) : null;
+    this.#keyFile = keyFile === undefined ? null : path.resolve(keyFile);
+    this.#contractId = contractId;
+    this.#ownerId = ownerId;
     this.failed = false;
+    this.encrypted = Boolean(this.#key);
+    this.migratedPlaintext = false;
     try {
-      this.data = fs.existsSync(this.file)
-        ? JSON.parse(fs.readFileSync(this.file, 'utf8'))
-        : { version: 1, contract_id: contractId, owner_account_id: ownerId, entries: [] };
-      if (this.data.version !== 1 || this.data.contract_id !== contractId ||
+      let exists;
+      try { fs.lstatSync(this.file); exists = true; }
+      catch (error) { if (error.code !== 'ENOENT') throw error; exists = false; }
+      if (!exists && requireExisting) throw new Error('original journal not found; refusing to create an empty journal');
+      let stored;
+      if (exists && this.#key) {
+        // In encryption/migration mode never follow a symlink, read an unsafe
+        // plaintext source, or allocate an unbounded envelope. Exclusive lock
+        // and a trusted local filesystem are still required.
+        let fd;
+        try {
+          fd = fs.openSync(this.file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+          const stat = fs.fstatSync(fd);
+          if (!stat.isFile() || stat.nlink !== 1 || stat.size <= 0 || stat.size > MAX_ENCRYPTED_JOURNAL_FILE ||
+              (stat.mode & 0o077) !== 0 || (typeof process.getuid === 'function' && stat.uid !== process.getuid())) {
+            throw new Error('encrypted file journal must be an owner-only regular file within the size limit');
+          }
+          const bytes = fs.readFileSync(fd);
+          try {
+            if (bytes.length !== stat.size) throw new Error('file journal changed while reading; stop and reconcile');
+            try { stored = JSON.parse(bytes.toString('utf8')); }
+            catch { throw new Error('file journal has invalid JSON; stop and reconcile'); }
+          } finally { bytes.fill(0); }
+        } finally { if (fd !== undefined) fs.closeSync(fd); }
+      } else if (exists) {
+        try { stored = JSON.parse(fs.readFileSync(this.file, 'utf8')); }
+        catch { throw new Error('file journal is unreadable or has invalid JSON; stop and reconcile'); }
+      }
+      if (exists && isEncryptedFileJournal(stored)) {
+        if (!this.#key) throw new Error('encrypted file journal requires its original key; stop and reconcile');
+        this.data = decryptFileJournal(stored, this.#key, contractId, ownerId);
+      } else if (exists) {
+        if (this.#key && !migratePlaintext) throw new Error('existing plaintext journal needs explicit in-place encryption; do not create a replacement journal');
+        this.data = stored;
+        this.migratedPlaintext = Boolean(this.#key);
+      } else {
+        this.data = { version: 1, contract_id: contractId, owner_account_id: ownerId, entries: [] };
+      }
+      if (!this.data || this.data.version !== 1 || this.data.contract_id !== contractId ||
           this.data.owner_account_id !== ownerId || !Array.isArray(this.data.entries)) {
         throw new Error('journal belongs to a different contract/account or has an invalid format');
       }
@@ -271,29 +442,55 @@ export class FileJournal {
         }
         ids.add(entry.id);
       }
+      // Preserve all original entries, including pending hashes and bearer
+      // claims. Only ciphertext is written to the temporary file; a failed
+      // rename/fsync leaves the original or the encrypted copy to reconcile.
+      if (this.migratedPlaintext) this.#persist(this.data);
     } catch (error) {
       this.close();
       throw error;
     }
   }
+  // Report the private encryption state, not the mutable compatibility flag.
+  // Protocols holding credentials can require this before their first write.
+  get encryptionEnabled() { return this.#key !== null; }
   assertAvailable() {
     if (this.lockFd === null) throw new Error('journal is closed');
     if (this.failed) throw new Error('journal has a failed write; close, reopen and reconcile it before continuing');
   }
   get(id) { this.assertAvailable(); return this.data.entries.find(entry => entry.id === id); }
+  // A snapshot lets protocols reject reused seller challenges across this
+  // journal without handing callers a mutable reference to its entries.
+  list() { this.assertAvailable(); return structuredClone(this.data.entries); }
   put(id, entry) {
     this.assertAvailable();
+    if (typeof id !== 'string' || !id || !entry || typeof entry !== 'object' || Array.isArray(entry) ||
+        (Object.hasOwn(entry, 'id') && entry.id !== id)) throw new Error('journal entry ID does not match its key');
     const index = this.data.entries.findIndex(item => item.id === id);
     const entries = this.data.entries.slice();
-    const next = { id, ...entry };
+    const next = { ...entry, id };
     if (index === -1) entries.push(next); else entries[index] = next;
-    const data = { ...this.data, entries };
+    this.#persist({ ...this.data, entries });
+  }
+  #persist(data) {
     const temp = `${this.file}.${crypto.randomBytes(6).toString('hex')}.tmp`;
     try {
+      // Configured CLIs recheck the original key file before every durable
+      // write. This detects many accidental replacements/deletions before a
+      // reservation, but is not an atomic guarantee against later key loss.
+      if (this.#keyFile) {
+        let current;
+        try {
+          current = readFileJournalKeyFile(this.#keyFile);
+          if (!crypto.timingSafeEqual(current, this.#key)) throw new Error();
+        } catch { throw new Error('file journal key changed or is unreadable; stop and reconcile'); }
+        finally { current?.fill(0); }
+      }
+      const serialized = this.#key ? encryptFileJournal(data, this.#key, this.#contractId, this.#ownerId) : JSON.stringify(data, null, 2) + '\n';
       const fd = fs.openSync(temp, 'wx', 0o600);
       try {
         fs.fchmodSync(fd, 0o600);
-        fs.writeFileSync(fd, JSON.stringify(data, null, 2) + '\n');
+        fs.writeFileSync(fd, serialized);
         fs.fsyncSync(fd);
       } finally { fs.closeSync(fd); }
       fs.renameSync(temp, this.file);
@@ -312,12 +509,33 @@ export class FileJournal {
     }
   }
   close() {
+    this.#key?.fill(0);
+    this.#key = null;
+    this.#keyFile = null;
     if (this.lockFd !== null) {
       fs.closeSync(this.lockFd);
       this.lockFd = null;
       fs.unlinkSync(this.lockFile);
     }
   }
+}
+
+/** Check key readability before a demo performs any testnet setup or funding. */
+export function validateConfiguredFileJournalKey() {
+  if (process.env.BOUNCER_FILE_JOURNAL_KEY_FILE !== undefined) {
+    const key = readFileJournalKeyFile(process.env.BOUNCER_FILE_JOURNAL_KEY_FILE);
+    key.fill(0);
+  }
+}
+
+/** All file-journal CLIs use the same explicit opt-in, including recovery. */
+export function openConfiguredFileJournal(file, contractId, ownerId, { requireExisting = false } = {}) {
+  const configured = process.env.BOUNCER_FILE_JOURNAL_KEY_FILE;
+  let key;
+  try {
+    if (configured !== undefined) key = readFileJournalKeyFile(configured);
+    return new FileJournal(file, contractId, ownerId, { encryptionKey: key, keyFile: configured, requireExisting });
+  } finally { key?.fill(0); }
 }
 
 function parseArgs(args) {
@@ -342,7 +560,7 @@ export function createRuntime({ plan: rawPlan, keyFile, rpc }) {
     throw new Error('agent key file does not match owner_account_id');
   }
   const key = KeyPair.fromString(credentials.private_key);
-  const provider = new providers.JsonRpcProvider({ url: rpcUrl });
+  const provider = new PaymentRpcProvider(rpcUrl);
   const account = new MonotonicAccount(plan.owner_account_id, provider, new KeyPairSigner(key));
   return { provider, account, publicKey: key.getPublicKey() };
 }
@@ -359,7 +577,7 @@ async function main() {
   const plan = validatePlan(JSON.parse(fs.readFileSync(planPath, 'utf8')));
   const { provider, account, publicKey } = createRuntime({ plan, keyFile: options.key, rpc: options.rpc });
   const journalPath = path.resolve(expandHome(options.state || `${planPath}.bouncer-journal.json`));
-  const journal = options.execute ? new FileJournal(journalPath, plan.contract_id, plan.owner_account_id) : null;
+  const journal = options.execute ? openConfiguredFileJournal(journalPath, plan.contract_id, plan.owner_account_id) : null;
   try {
     console.log(`[procurement] ${options.execute ? 'LIVE TESTNET' : 'DRY RUN'} on ${plan.contract_id}; ${plan.requests.length} request(s)`);
     const totals = await runProcurement({ plan, provider, account, publicKey, journal, execute: options.execute, durablePayment: options.durable === true });

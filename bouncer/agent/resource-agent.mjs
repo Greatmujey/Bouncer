@@ -8,11 +8,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createRuntime, FileJournal, normalizeProviderRoute, requestFingerprint, runProcurement, validatePlan } from './procurement.mjs';
+import { createRuntime, openConfiguredFileJournal, normalizeProviderRoute, requestFingerprint, runProcurement, validatePlan } from './procurement.mjs';
+import { assertJournalScope, writeJournal } from './journal-write.mjs';
 import { reservePreview } from './preflight.mjs';
 import { readBoundedBytes, readBoundedJson } from '../shared/bounded-json.mjs';
 import { validateProviderOrigin } from '../shared/provider-origin.mjs';
-import { normalizeOrder, orderMemo, startConfiguredProvider } from '../services/resource-provider.mjs';
+import { normalizeOrder, orderMemo, challengeFromOrderMemo, challengeFromOrderMemoV3, startConfiguredProvider } from '../services/resource-provider.mjs';
+import { CLAIM_SCHEME, canonicalClaimOrigin, verifyClaimAuthorization } from '../packages/provider-sdk/lib/resource-claim.mjs';
 import { checkDeliveryRecord, createDeliveryReceipt, deliveryResultHash, verifyDelivery } from './verify-delivery.mjs';
 
 function positiveAmount(value, label) {
@@ -23,21 +25,64 @@ function validText(value, label) {
   if (typeof value !== 'string' || !value.trim()) throw new Error(`${label} is required`);
   return value;
 }
+function reviewedClaimOrigin(goal, providerUrl) {
+  const route = goal.provider_url ?? providerUrl;
+  if (typeof route !== 'string') throw new Error(`${goal.id}: authenticated order requires an owner-pinned seller origin`);
+  return canonicalClaimOrigin(validateProviderOrigin(route).origin);
+}
+function reviewedClaimTerms({ contractId, ownerAccountId, request, txHash, origin }) {
+  return { network: 'near:testnet', contract_id: contractId, owner_account_id: ownerAccountId, seller_origin: origin,
+    resource: request.resource, policy_id: request.policy_id, token: request.token, payee: request.payee,
+    amount: request.amount, memo: request.memo, tx_hash: txHash };
+}
+function requireRecordedClaim({ goal, request, entry, contractId, ownerAccountId, providerUrl }) {
+  const terms = reviewedClaimTerms({ contractId, ownerAccountId, request, txHash: entry.tx_hash, origin: reviewedClaimOrigin(goal, providerUrl) });
+  if (entry.payment_version !== 'direct-signed-v1' || typeof entry.agent_public_key !== 'string') throw new Error(`${goal.id}: authenticated claim requires the original signed payment`);
+  verifyClaimAuthorization(terms, entry.resource_authorization, entry.agent_public_key);
+  return structuredClone(entry.resource_authorization);
+}
 
 /** Fetch a quote for each goal and validate it against owner-pinned constraints. */
-export async function planFromQuotes({ contractId, ownerAccountId, goals, getQuote, journal }) {
+export async function planFromQuotes({ contractId, ownerAccountId, goals, getQuote, journal, providerUrl }) {
   if (!Array.isArray(goals) || !goals.length || typeof getQuote !== 'function') throw new Error('goals and a quote source are required');
-  const requests = [];
-  for (const goal of goals) {
+  // Snapshot all reviewed goals before the first asynchronous quote, and never
+  // let an injected quote source mutate the input used to validate its memo.
+  const reviewed = structuredClone(goals), requests = [], challenges = new Set();
+  // Validate every reviewed input, payment field and ID before contacting any
+  // seller: issuing a v2 quote itself persists an order on the seller's side.
+  const prepared = reviewed.map(goal => {
     if (!goal || typeof goal !== 'object') throw new Error('invalid goal');
     const { id, resource, policy_id: policyId, token, payee } = goal;
     for (const [key, value] of Object.entries({ id, resource, policyId, token, payee })) validText(value, key);
     const max = positiveAmount(goal.max_amount, `${id} max_amount`);
     const selectedAmount = goal.quote_amount === undefined ? undefined : positiveAmount(goal.quote_amount, `${id} selected quote amount`);
     if (selectedAmount !== undefined && selectedAmount > max) throw new Error(`${id}: selected quote exceeds the owner-approved maximum`);
-    const input = normalizeOrder(resource, goal.input);
-    const memo = orderMemo(resource, input);
+    if (goal.order_binding !== undefined && !['seller-v2', 'seller-v3'].includes(goal.order_binding)) throw new Error(`${id}: unsupported owner-reviewed order binding`);
+    const binding = goal.order_binding ?? 'legacy';
+    return { id, resource, policyId, token, payee, max, selectedAmount, binding, unique: binding !== 'legacy',
+      origin: binding === 'seller-v3' ? reviewedClaimOrigin(goal, providerUrl) : null,
+      goal, input: Object.freeze(normalizeOrder(resource, goal.input)) };
+  });
+  validatePlan({ contract_id: contractId, owner_account_id: ownerAccountId, requests: prepared.map(item => ({ id: item.id,
+    resource: item.resource, policy_id: item.policyId, token: item.token, payee: item.payee, amount: item.max.toString() })) });
+  function checkMemo({ id, resource, input, unique, binding }, memo, label) {
+    const mismatch = label === 'recorded payment' ? 'recorded payment does not match the reviewed goal' : `${label} is not bound to this exact order`;
+    if (!unique) {
+      if (memo !== orderMemo(resource, input)) throw new Error(`${id}: ${mismatch}`);
+    } else {
+      let challenge;
+      try { challenge = binding === 'seller-v3' ? challengeFromOrderMemoV3(resource, input, memo) : challengeFromOrderMemo(resource, input, memo); }
+      catch (error) { throw new Error(`${id}: ${mismatch}`, { cause: error }); }
+      if (challenges.has(challenge)) throw new Error(`${id}: seller challenge was reused in this batch`);
+      challenges.add(challenge);
+    }
+  }
+  // Inspect ALL prior payments before any quote; a later pending or tampered
+  // journal entry must not cause new seller-owned quotes for earlier goals.
+  for (const item of prepared) {
+    const { id, resource, policyId, token, payee, max, selectedAmount, unique } = item;
     const previous = journal?.get(id);
+    if (previous && previous.intent_id !== item.goal.intent_id) throw new Error(`${id}: recorded payment has a different stable intent ID`);
     if (previous && previous.status !== 'completed') throw new Error(`${id}: unresolved pending payment; inspect the chain and journal before retrying`);
     if (previous?.request !== undefined) {
       const raw = previous.request;
@@ -46,26 +91,98 @@ export async function planFromQuotes({ contractId, ownerAccountId, goals, getQuo
           Object.keys(raw).some(key => !expectedKeys.includes(key))) throw new Error(`${id}: invalid recorded payment request`);
       const request = validatePlan({ contract_id: contractId, owner_account_id: ownerAccountId, requests: [raw] }).requests[0];
       if (request.id !== id || request.resource !== resource || request.policy_id !== policyId || request.token !== token ||
-          request.payee !== payee || request.memo !== memo || requestFingerprint(request) !== previous.fingerprint ||
+          request.payee !== payee || requestFingerprint(request) !== previous.fingerprint ||
           BigInt(request.amount) > max || (selectedAmount !== undefined && BigInt(request.amount) !== selectedAmount)) {
         throw new Error(`${id}: recorded payment does not match the reviewed goal`);
       }
-      requests.push(request);
-      continue;
+      checkMemo(item, request.memo, 'recorded payment');
+      if (item.binding === 'seller-v3') requireRecordedClaim({ goal: item.goal, request, entry: previous, contractId, ownerAccountId, providerUrl });
+      item.replayedRequest = request;
+    } else if (unique && previous) {
+      // A fresh challenge cannot recover an old payment.
+      throw new Error(`${id}: seller-bound recovery requires the original recorded request`);
     }
-    // Legacy journals without a recorded request still require the old exact
+  }
+  for (const item of prepared) {
+    const { id, resource, policyId, token, payee, max, selectedAmount, unique, binding, origin, input } = item;
+    if (item.replayedRequest) { requests.push(item.replayedRequest); continue; }
+    // Legacy v1 journals without a recorded request still require the old exact
     // quote/fingerprint check. Context never goes in the provider request body.
-    const quote = await getQuote({ resource, input }, { goalId: id });
+    const quoteOrder = Object.freeze({ resource, input, ...(unique ? { order_binding: binding } : {}) });
+    const quote = structuredClone(await getQuote(quoteOrder, { goalId: id }));
     if (!quote || quote.resource !== resource || quote.policy_id !== policyId || quote.token !== token || quote.payee !== payee) {
       throw new Error(`${id}: quote does not match the permitted resource, policy, token, or payee`);
+    }
+    if (binding === 'seller-v3' && (quote.auth_scheme !== CLAIM_SCHEME || quote.seller_origin !== origin)) {
+      throw new Error(`${id}: quote does not match the reviewed authenticated seller origin and scheme`);
     }
     const amount = positiveAmount(quote.amount, `${id} quote amount`);
     if (amount > max) throw new Error(`${id}: quote exceeds the owner-approved maximum`);
     if (selectedAmount !== undefined && amount !== selectedAmount) throw new Error(`${id}: selected quote changed; review and reselect before payment`);
-    if (quote.memo !== memo) throw new Error(`${id}: quote is not bound to this exact order`);
-    requests.push({ id, resource, policy_id: policyId, token, payee, amount: amount.toString(), memo });
+    checkMemo(item, quote.memo, 'quote');
+    requests.push({ id, resource, policy_id: policyId, token, payee, amount: amount.toString(), memo: quote.memo });
   }
   return validatePlan({ contract_id: contractId, owner_account_id: ownerAccountId, requests });
+}
+
+/**
+ * Revalidate and fulfill an already-confirmed resource order. This function
+ * never signs or sends a payment. Its caller must first independently bind
+ * `request` to the reviewed goal (planFromQuotes or durable recovery does so).
+ * A provider must make redemption of the same transaction/order idempotent.
+ */
+export async function fulfillPaidResource({ goal, request, contractId, ownerAccountId, providerUrl, journal, fulfill, readStorage,
+  repositoryLookup, required = false, expectedTx = null, log = console.log }) {
+  if (!goal || !request) throw new Error('missing goal for confirmed payment');
+  const entry = journal?.get(goal.id);
+  if (!entry || entry.status !== 'completed' || !entry.tx_hash) {
+    if (required) throw new Error(`${goal.id}: confirmed payment is missing from the journal; stop and reconcile manually`);
+    return null;
+  }
+  const route = normalizeProviderRoute({ provider_id: goal.provider_id ?? null, provider_origin: goal.provider_url ?? providerUrl ?? null });
+  if (entry.fingerprint !== requestFingerprint(request) || (expectedTx && entry.tx_hash !== expectedTx) ||
+      (entry.provider_route !== undefined && JSON.stringify(normalizeProviderRoute(entry.provider_route)) !== JSON.stringify(route))) {
+    throw new Error(`${goal.id}: confirmed payment journal entry changed; stop and reconcile manually`);
+  }
+  if (typeof fulfill !== 'function') throw new Error('fulfillment source is required');
+  const input = Object.freeze(normalizeOrder(goal.resource, goal.input));
+  if (goal.order_binding !== undefined && !['seller-v2', 'seller-v3'].includes(goal.order_binding)) throw new Error(`${goal.id}: unsupported owner-reviewed order binding`);
+  const unique = goal.order_binding === 'seller-v2' || goal.order_binding === 'seller-v3';
+  const authenticated = goal.order_binding === 'seller-v3';
+  if (authenticated) challengeFromOrderMemoV3(goal.resource, input, request.memo);
+  else if (unique) challengeFromOrderMemo(goal.resource, input, request.memo);
+  else if (request.memo !== orderMemo(goal.resource, input)) throw new Error(`${goal.id}: recorded payment is not bound to this exact order`);
+  const authorization = authenticated ? Object.freeze(requireRecordedClaim({ goal, request, entry, contractId, ownerAccountId, providerUrl })) : null;
+  const context = Object.freeze({ goalId: goal.id, ...(authenticated ? { txHash: entry.tx_hash, authorization } : {}) });
+  checkDeliveryRecord({ delivery: entry.delivery, contractId, ownerAccountId, request, txHash: entry.tx_hash,
+    providerId: goal.provider_id, providerOrigin: goal.provider_url ?? providerUrl, input });
+  let stage = 'fulfillment', verified;
+  try {
+    const result = await fulfill({ tx_hash: entry.tx_hash, resource: goal.resource, input, ...(unique ? { memo: request.memo } : {}),
+      ...(authenticated ? { authorization } : {}) }, context);
+    stage = 'verification';
+    verified = await verifyDelivery({ resource: goal.resource, input, result, txHash: entry.tx_hash,
+      readStorage: readStorage && (objectId => readStorage(objectId, context)), repositoryLookup });
+  } catch (error) {
+    // Preserve a successful receipt if a later replay fails. Otherwise mark
+    // only delivery unverified: the confirmed payment must never be repeated.
+    if (entry.delivery?.status !== 'verified') await writeJournal(journal, goal.id, { ...entry,
+      delivery: { status: 'unverified', stage, attempted_at: new Date().toISOString() } });
+    const message = String(error?.message || 'delivery failed').replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 200);
+    throw new Error(`${goal.id}: ${stage} failed after confirmed payment ${entry.tx_hash}; no automatic repayment: ${message}`, { cause: error });
+  }
+  let receipt = entry.delivery?.receipt;
+  if (receipt) {
+    if (receipt.result_sha256 !== deliveryResultHash(verified.result)) {
+      throw new Error(`${goal.id}: replayed delivery differs from the existing receipt; reconcile manually`);
+    }
+  } else {
+    receipt = createDeliveryReceipt({ contractId, ownerAccountId, request, txHash: entry.tx_hash,
+      providerId: goal.provider_id, providerOrigin: goal.provider_url ?? providerUrl, result: verified.result, verification: verified.verification });
+    await writeJournal(journal, goal.id, { ...entry, delivery: { status: 'verified', receipt } });
+  }
+  log(`[resource-agent] FULFILLED ${goal.id} (${goal.resource}); checked ${verified.verification.scope}; receipt in journal`);
+  return { id: goal.id, result: verified.result, receipt };
 }
 
 /**
@@ -74,15 +191,31 @@ export async function planFromQuotes({ contractId, ownerAccountId, goals, getQuo
  * same order again. The provider must implement its own replay protection.
  */
 export async function runResourceAgent({ contractId, ownerAccountId, goals, getQuote, fulfill, readStorage, repositoryLookup, providerUrl, onPlan = () => {},
-  beforePayment = async () => {}, provider, account, publicKey, runtimeFactory, journal, execute = false, durablePayment = false, log = console.log }) {
+  beforePayment = async () => {}, beforeBroadcast = () => {}, beforeBroadcastCheckpoint, provider, account, publicKey, runtimeFactory, journal, execute = false, durablePayment = false, log = console.log }) {
+  if (Array.isArray(goals)) goals = structuredClone(goals);
   if (execute && (typeof fulfill !== 'function' || typeof journal?.get !== 'function' || typeof journal?.put !== 'function')) {
     throw new Error('live execution requires a readable/writable journal and fulfillment source');
   }
   if (journal !== undefined && journal !== null && typeof journal.get !== 'function') throw new Error('invalid journal');
-  if (typeof beforePayment !== 'function') throw new Error('invalid pre-payment guard');
+  assertJournalScope(journal, contractId, ownerAccountId);
+  if (journal?.sharedDirectV3 === true) {
+    if (!Array.isArray(goals) || goals.some(goal => goal?.order_binding !== 'seller-v3')) throw new Error('shared buyer supports only seller-v3 resource goals');
+    if (goals.some(goal => typeof goal?.id !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(goal.id))) throw new Error('invalid shared buyer request ID');
+    if (execute && !durablePayment) throw new Error('shared buyer execution requires durable signed-hash payments');
+  } else if (Array.isArray(goals) && goals.some(goal => goal && Object.hasOwn(goal, 'intent_id'))) {
+    throw new Error('intent_id requires the shared buyer and strict owner intent mode');
+  }
+  if (typeof beforePayment !== 'function' || typeof beforeBroadcast !== 'function' ||
+      (beforeBroadcastCheckpoint !== undefined && (typeof beforeBroadcastCheckpoint !== 'function' || !execute || !durablePayment || journal?.sharedDirectV3 !== true))) {
+    throw new Error('invalid pre-payment guard');
+  }
   if (repositoryLookup !== undefined && typeof repositoryLookup !== 'function') throw new Error('invalid GitHub reference lookup');
   if (execute && Array.isArray(goals) && goals.some(goal => goal?.resource === 'storage') && typeof readStorage !== 'function') {
     throw new Error('live storage execution requires provider readback before payment');
+  }
+  if (execute && Array.isArray(goals) && !durablePayment) {
+    if (goals.some(goal => goal?.order_binding === 'seller-v2')) throw new Error('seller-v2 execution requires durable signed-hash journaling');
+    if (goals.some(goal => goal?.order_binding === 'seller-v3')) throw new Error('seller-v3 execution requires durable signed-hash journaling');
   }
   // Receipt routing metadata is owner-supplied, never provider- or model-chosen.
   // Validate it before quotes or payments; it is a local label, not attestation.
@@ -90,7 +223,7 @@ export async function runResourceAgent({ contractId, ownerAccountId, goals, getQ
     if (typeof providerUrl !== 'string') throw new Error('invalid default provider origin');
     httpResourceProvider(providerUrl);
   }
-  const journalRoutes = new Map();
+  const journalRoutes = new Map(), claimOrigins = new Map();
   for (const goal of Array.isArray(goals) ? goals : []) {
     if (goal?.provider_url !== undefined) {
       if (typeof goal.provider_url !== 'string') throw new Error('invalid goal provider origin');
@@ -101,12 +234,18 @@ export async function runResourceAgent({ contractId, ownerAccountId, goals, getQ
     }
     const route = normalizeProviderRoute({ provider_id: goal?.provider_id ?? null, provider_origin: goal?.provider_url ?? providerUrl ?? null });
     journalRoutes.set(goal?.id, route);
+    if (goal?.order_binding === 'seller-v3') claimOrigins.set(goal.id, reviewedClaimOrigin(goal, providerUrl));
     const previous = journal?.get(goal?.id);
     if (previous?.provider_route !== undefined && JSON.stringify(normalizeProviderRoute(previous.provider_route)) !== JSON.stringify(route)) {
       throw new Error(`${goal.id}: recorded provider route does not match the reviewed goal`);
     }
   }
-  const plan = await planFromQuotes({ contractId, ownerAccountId, goals, getQuote, journal });
+  let intentIds;
+  if (journal?.sharedDirectV3 === true) {
+    if (typeof journal.checkOwnerIntents !== 'function') throw new Error('shared buyer intent mode check is required');
+    if (await journal.checkOwnerIntents(goals)) intentIds = new Map(goals.map(goal => [goal.id, goal.intent_id]));
+  }
+  const plan = await planFromQuotes({ contractId, ownerAccountId, goals, getQuote, journal, providerUrl });
   // Reject corrupted or mismatched prior receipts before paying another goal.
   for (let i = 0; i < plan.requests.length; i++) {
     const request = plan.requests[i], goal = goals[i], entry = journal?.get(request.id);
@@ -115,14 +254,16 @@ export async function runResourceAgent({ contractId, ownerAccountId, goals, getQ
     checkDeliveryRecord({ delivery: entry.delivery, contractId, ownerAccountId, request, txHash: entry.tx_hash,
       providerId: goal.provider_id, providerOrigin: goal.provider_url ?? providerUrl, input: goal.input });
   }
-  await onPlan(plan);
-  if (runtimeFactory) ({ provider, account, publicKey } = await runtimeFactory(plan));
+  // Observability/runtime hooks receive copies, not the validated payment plan.
+  // Even accidental callback mutation must not change the reviewed payee/memo.
+  await onPlan(structuredClone(plan));
+  if (runtimeFactory) ({ provider, account, publicKey } = await runtimeFactory(structuredClone(plan)));
   // Complete a read-only preflight for the ENTIRE batch before the first new
   // payment, including tentative shared-budget and shared-vault reservations.
   // The views are non-atomic: the contract still decides each real payment,
   // and another actor can change state after this preview.
   const checks = [], blockedReasons = new Map();
-  const preview = await runProcurement({ plan, provider, account, publicKey, journal, journalRoutes, execute: false, log: () => {}, onCheck: check => {
+  const preview = await runProcurement({ plan, provider, account, publicKey, journal, journalRoutes, claimOrigins, intentIds, execute: false, log: () => {}, onCheck: check => {
     checks.push({ id: check.id, status: check.status });
     if (check.status === 'BLOCKED') blockedReasons.set(check.id, typeof check.reason === 'string' ? check.reason.replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 200) : 'Policy rejected the request.');
   } });
@@ -130,45 +271,9 @@ export async function runResourceAgent({ contractId, ownerAccountId, goals, getQ
   const delivered = new Map();
   async function deliverPaid(i, required = false, expectedTx = null) {
     const goal = goals[i], request = plan.requests[i];
-    if (!goal || !request) throw new Error('missing goal for confirmed payment');
-    const entry = journal.get(goal.id);
-    if (!entry || entry.status !== 'completed' || !entry.tx_hash) {
-      if (required) throw new Error(`${goal.id}: confirmed payment is missing from the journal; stop and reconcile manually`);
-      return;
-    }
-    if (entry.fingerprint !== requestFingerprint(request) || (expectedTx && entry.tx_hash !== expectedTx) ||
-        (entry.provider_route !== undefined && JSON.stringify(normalizeProviderRoute(entry.provider_route)) !== JSON.stringify(journalRoutes.get(goal.id)))) {
-      throw new Error(`${goal.id}: confirmed payment journal entry changed; stop and reconcile manually`);
-    }
-    const input = normalizeOrder(goal.resource, goal.input), context = { goalId: goal.id };
-    let stage = 'fulfillment', verified;
-    try {
-      const result = await fulfill({ tx_hash: entry.tx_hash, resource: goal.resource, input }, context);
-      stage = 'verification';
-      verified = await verifyDelivery({ resource: goal.resource, input, result, txHash: entry.tx_hash,
-        readStorage: readStorage && (objectId => readStorage(objectId, context)), repositoryLookup });
-    } catch (error) {
-      // Preserve a successful receipt if a later replay fails. Otherwise mark
-      // only the delivery unverified: the completed payment remains final and
-      // is never sent again by this journal. Do not persist untrusted errors.
-      if (entry.delivery?.status !== 'verified') journal.put(goal.id, { ...entry,
-        delivery: { status: 'unverified', stage, attempted_at: new Date().toISOString() } });
-      const message = String(error?.message || 'delivery failed').replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 200);
-      throw new Error(`${goal.id}: ${stage} failed after confirmed payment ${entry.tx_hash}; no automatic repayment: ${message}`, { cause: error });
-    }
-    const providerId = goal.provider_id, providerOrigin = goal.provider_url ?? providerUrl;
-    let receipt = entry.delivery?.receipt;
-    if (receipt) {
-      if (receipt.result_sha256 !== deliveryResultHash(verified.result)) {
-        throw new Error(`${goal.id}: replayed delivery differs from the existing receipt; reconcile manually`);
-      }
-    } else {
-      receipt = createDeliveryReceipt({ contractId, ownerAccountId, request, txHash: entry.tx_hash,
-        providerId, providerOrigin, result: verified.result, verification: verified.verification });
-      journal.put(goal.id, { ...entry, delivery: { status: 'verified', receipt } });
-    }
-    log(`[resource-agent] FULFILLED ${goal.id} (${goal.resource}); checked ${verified.verification.scope}; receipt in journal`);
-    delivered.set(goal.id, { id: goal.id, result: verified.result, receipt });
+    const delivery = await fulfillPaidResource({ goal, request, contractId, ownerAccountId, providerUrl, journal, fulfill, readStorage,
+      repositoryLookup, required, expectedTx, log });
+    if (delivery) delivered.set(goal.id, delivery);
   }
   // Recheck/recover already-paid deliveries before spending on any new goal.
   // A bad or unavailable earlier delivery aborts this run without new payments.
@@ -179,8 +284,8 @@ export async function runResourceAgent({ contractId, ownerAccountId, goals, getQ
   if (execute && !summary.blocked) {
     log('[resource-agent] Batch preflight passed; these non-atomic views are not a guarantee.');
     const indexById = new Map(plan.requests.map((request, index) => [request.id, index]));
-    payments = await runProcurement({ plan, provider, account, publicKey, journal, journalRoutes, execute: true, durablePayment, log, stopOnBlocked: true,
-      beforePayment,
+    payments = await runProcurement({ plan, provider, account, publicKey, journal, journalRoutes, claimOrigins, intentIds, execute: true, durablePayment, log, stopOnBlocked: true,
+      beforePayment, beforeBroadcast, beforeBroadcastCheckpoint,
       onCheck: check => {
         if (check.status === 'BLOCKED' || check.status === 'DEFERRED') {
           const index = indexById.get(check.id);
@@ -224,11 +329,14 @@ export function httpResourceProvider(baseUrl, fetchImpl = globalThis.fetch) {
   return {
     async getQuote(order) { return (await post('/quote', order)).quote; },
     async fulfill(order) { return (await post('/redeem', order)).result; },
-    async readStorage(objectId) {
+    async readStorage(objectId, context) {
       if (typeof objectId !== 'string' || !/^[a-f0-9]{64}$/.test(objectId)) throw new Error('invalid storage object id');
-      const response = await fetchImpl(new URL(`/storage/${objectId}`, url), {
-        method: 'GET', redirect: 'error', signal: AbortSignal.timeout(30_000),
-      });
+      const authenticated = context?.authorization !== undefined;
+      const response = authenticated
+        ? await fetchImpl(new URL('/storage-read', url), { method: 'POST', redirect: 'error',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ tx_hash: context.txHash, object_id: objectId, authorization: context.authorization }), signal: AbortSignal.timeout(30_000) })
+        : await fetchImpl(new URL(`/storage/${objectId}`, url), { method: 'GET', redirect: 'error', signal: AbortSignal.timeout(30_000) });
       if (!response.ok) throw new Error(`provider storage readback failed (HTTP ${response.status})`);
       return readBoundedBytes(response, { maxBytes: 4096, label: 'provider storage' });
     },
@@ -260,16 +368,27 @@ export function routedResourceProvider({ providerUrl, goals, overrides = new Map
   return {
     getQuote: (order, context) => route(context).getQuote(order),
     fulfill: (order, context) => route(context).fulfill(order),
-    readStorage: (objectId, context) => route(context).readStorage(objectId),
+    readStorage: (objectId, context) => route(context).readStorage(objectId, context),
   };
 }
 
-const USAGE = `Usage: node bouncer/agent/resource-agent.mjs --goals goals.json --key agent-key.json [--journal journal.json] [--local-provider provider.json] [--execute] [--durable]
+const USAGE = `Usage: node bouncer/agent/resource-agent.mjs --goals goals.json --key agent-key.json [--journal journal.json | --shared-journal STABLE_ID] [--checkpoint-dir DIR] [--local-provider provider.json] [--execute] [--durable]
 
 Quote configured providers and preflight owner-pinned resource goals.
-Default is read-only; --execute sends real testnet payments, checks bounded
-example deliveries and stores local receipts in the private journal. --durable
-records the signed transaction hash before broadcast for key-free recovery.
+Default sends no payments; a seller-v2 quote may persist an order at the seller.
+--execute sends real testnet payments, checks bounded example deliveries and
+stores local receipts in the private journal. --durable records the signed
+transaction hash before broadcast; it is required for seller-v2 execution and
+seller-v3 execution. File journals are plaintext by default; optional encryption
+uses BOUNCER_FILE_JOURNAL_KEY_FILE and the original journal on recovery.
+--shared-journal uses a separately initialized, encrypted PostgreSQL buyer
+journal for direct seller-v3 goals only. It requires --execute --durable and
+secure BOUNCER_BUYER_DATABASE_URL / BOUNCER_BUYER_JOURNAL_KEY_FILE settings.
+An owner explicitly opted into strict intent mode must assign each goal an
+owner-stable intent_id; keep the same ID across journals for the same payment.
+--checkpoint-dir opts a fresh shared journal into encrypted, fsync-backed local
+pre-broadcast checkpoints in an existing, dedicated owner-only directory. A
+checkpoint is not a full backup or proof that this directory is the latest.
 Checks happen after payment and do not guarantee delivery or refunds. Use a function-call
 key scoped only to Bouncer execute. Amounts are token smallest units, not USD.
 Never use real funds.
@@ -281,13 +400,17 @@ function parseCli(args) {
     if (arg === '--help') return { help: true };
     if (arg === '--execute') { options.execute = true; continue; }
     if (arg === '--durable') { options.durable = true; continue; }
-    if (['--goals', '--key', '--journal', '--local-provider'].includes(arg) && args[i + 1] && !args[i + 1].startsWith('--')) {
+    if (['--goals', '--key', '--journal', '--shared-journal', '--checkpoint-dir', '--local-provider'].includes(arg) && args[i + 1] && !args[i + 1].startsWith('--')) {
       const key = arg.slice(2);
       if (options[key]) throw new Error(`duplicate ${arg}`);
       options[key] = args[++i];
     } else throw new Error(`unknown or incomplete argument: ${arg}`);
   }
   if (!options.goals || !options.key) throw new Error('--goals and --key are required');
+  if (options['shared-journal'] && (options.journal || !options.execute || !options.durable)) {
+    throw new Error('--shared-journal requires --execute --durable and cannot be combined with --journal');
+  }
+  if (options['checkpoint-dir'] && !options['shared-journal']) throw new Error('--checkpoint-dir requires --shared-journal');
   return options;
 }
 async function main() {
@@ -295,12 +418,18 @@ async function main() {
   if (options.help) { console.log(USAGE); return; }
   const config = JSON.parse(fs.readFileSync(options.goals, 'utf8'));
   if (!config || typeof config !== 'object' || Array.isArray(config)) throw new Error('invalid goals file');
+  if (options['shared-journal'] && (config.journal_path || fs.existsSync(`${options.goals}.bouncer-journal.json`))) {
+    throw new Error('an existing or configured file journal must be reconciled separately; shared and file journals must not be mixed');
+  }
+  if (options['shared-journal'] && (!Array.isArray(config.goals) || config.goals.some(goal => goal?.order_binding !== 'seller-v3'))) {
+    throw new Error('shared buyer supports only seller-v3 resource goals');
+  }
   if (options.durable) console.log('[resource-agent] Durable direct payments enabled: signed hashes are recorded before broadcast.');
   // Validate the configured origin before starting any provider or spending.
   httpResourceProvider(config.provider_url);
   // Check every selected route before starting a development provider.
   routedResourceProvider({ providerUrl: config.provider_url, goals: config.goals });
-  let journal, local;
+  let journal, journalPool, local, checkpointDirectory;
   try {
     let providerUrl = config.provider_url;
     const overrides = new Map();
@@ -318,21 +447,46 @@ async function main() {
     }
     const client = routedResourceProvider({ providerUrl: config.provider_url, goals: config.goals, overrides });
     if (options.execute) {
-      const journalPath = options.journal || config.journal_path || `${options.goals}.bouncer-journal.json`;
-      journal = new FileJournal(journalPath, config.contract_id, config.owner_account_id);
-      console.log(`[resource-agent] Journal: ${path.resolve(journalPath)}`);
+      if (options['shared-journal']) {
+        const { openConfiguredBuyerJournal } = await import('./shared-buyer-config.mjs');
+        ({ journal, pool: journalPool } = await openConfiguredBuyerJournal({ contractId: config.contract_id,
+          ownerAccountId: config.owner_account_id, journalId: options['shared-journal'] }));
+        console.log(`[resource-agent] Using the original shared buyer journal: ${options['shared-journal']}`);
+        if (options['checkpoint-dir']) {
+          const { readBuyerKeyFile } = await import('./shared-buyer-config.mjs');
+          const { openBuyerCheckpointDirectory } = await import('./buyer-checkpoint-directory.mjs');
+          let current, previous;
+          try {
+            current = readBuyerKeyFile(process.env.BOUNCER_BUYER_JOURNAL_KEY_FILE);
+            if (process.env.BOUNCER_BUYER_SNAPSHOT_KEY_FILE) previous = readBuyerKeyFile(process.env.BOUNCER_BUYER_SNAPSHOT_KEY_FILE);
+            checkpointDirectory = await openBuyerCheckpointDirectory({ directory: options['checkpoint-dir'], journal, currentKey: current, previousKey: previous });
+          } finally { current?.fill(0); previous?.fill(0); }
+          // Reject an oversized batch before quotes or payments, rather than
+          // discovering the 256-checkpoint limit after an earlier batch item.
+          checkpointDirectory.assertCapacity(config.goals.filter(goal => !journal.get(goal.id)).length);
+          console.log('[resource-agent] Encrypted pre-broadcast checkpoints enabled; directory freshness remains an operator responsibility.');
+        }
+      } else {
+        const journalPath = options.journal || config.journal_path || `${options.goals}.bouncer-journal.json`;
+        journal = openConfiguredFileJournal(journalPath, config.contract_id, config.owner_account_id);
+        console.log(`[resource-agent] Journal: ${path.resolve(journalPath)}`);
+      }
     }
     const result = await runResourceAgent({
       contractId: config.contract_id, ownerAccountId: config.owner_account_id, providerUrl: config.provider_url, goals: config.goals,
       getQuote: client.getQuote, fulfill: client.fulfill, readStorage: client.readStorage, journal, execute: options.execute, durablePayment: options.durable === true,
+      ...(checkpointDirectory ? { beforePayment: async () => checkpointDirectory.assertCapacity(),
+        beforeBroadcastCheckpoint: record => checkpointDirectory.checkpoint(record) } : {}),
       onPlan: plan => console.log(`[resource-agent] Validated quote plan:\n${JSON.stringify(plan, null, 2)}`),
       runtimeFactory: plan => createRuntime({ plan, keyFile: options.key }),
     });
     console.log(`[resource-agent] ${options.execute ? 'Finished' : 'Dry run only'}: ${JSON.stringify(result.payments)}; deliveries=${result.deliveries.length}`);
     if (result.payments.blocked) process.exitCode = 2;
   } finally {
-    journal?.close();
-    if (local) await new Promise(resolve => local.server.close(resolve));
+    if (checkpointDirectory) checkpointDirectory.close();
+    if (journal) await journal.close();
+    if (journalPool) await journalPool.end();
+    if (local) await local.close();
   }
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

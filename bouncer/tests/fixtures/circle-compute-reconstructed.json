@@ -1,0 +1,24 @@
+{
+  "final_execution_status": "FINAL",
+  "status": { "SuccessValue": "" },
+  "transaction": {
+    "hash": "7XxeU466RVYvVN3wBrWqXHu2zeHHyFPcs4WhNuFX2GbJ",
+    "signer_id": "owner.bouncer-oracle-6a42bf32.testnet",
+    "receiver_id": "bouncer-oracle-6a42bf32.testnet",
+    "public_key": "ed25519:6zqAKk3x4UsFeHTCzsgbL8ThpNwp7BVsZte7XehyXynG",
+    "actions": [{ "FunctionCall": { "method_name": "execute", "deposit": "0", "gas": 200000000000000, "args": "eyJwb2xpY3lfaWQiOiJjaXJjbGUtcmVzb3VyY2VzIiwicGF5ZWUiOiJ2ZW5kb3IuYm91bmNlci1vcmFjbGUtNmE0MmJmMzIudGVzdG5ldCIsImFtb3VudCI6IjEwMDAiLCJtZW1vIjoiYm91bmNlci1vcmRlci12MTpjb21wdXRlOjZhZjdkYjUyOWViZWE4MDRkNmFjYmI1Zjk5MzJhN2E1MzhiNDE4MjI2ZGMyYzVjMDI1MzAyMTk3MDg3ODhmYjIiLCJleHBlY3RlZF90b2tlbiI6IjNlMjIxMGUxMTg0YjQ1YjY0YzhhNDM0YzBhN2U3YjIzY2MwNGVhN2ViN2E2YzNjMzI1MjBkMDNkNGFmY2I4YWYifQ==" } }]
+  },
+  "transaction_outcome": {
+    "id": "7XxeU466RVYvVN3wBrWqXHu2zeHHyFPcs4WhNuFX2GbJ",
+    "outcome": { "executor_id": "owner.bouncer-oracle-6a42bf32.testnet", "receipt_ids": ["J85aCFBo9qmz1kgu8V3XjVrVo55HCABQ5WfJjft7jFZV"], "status": { "SuccessReceiptId": "J85aCFBo9qmz1kgu8V3XjVrVo55HCABQ5WfJjft7jFZV" } }
+  },
+  "receipts_outcome": [
+    { "id": "J85aCFBo9qmz1kgu8V3XjVrVo55HCABQ5WfJjft7jFZV", "outcome": { "executor_id": "bouncer-oracle-6a42bf32.testnet", "logs": ["BOUNCER payment initiated"], "receipt_ids": ["D9mR6P7N2UmN9w1yGj1VvPBFWpXwWtRhFWivtCgjRnjA", "HAvmGZmvwEZa1YncwySk1HwVAqn2q2PfH5PeMA3FpNuX", "3s69zM1mU6A4aMuUkedUSkf2KZgHUgPb9f8fo2YYqPE1"], "status": { "SuccessReceiptId": "HAvmGZmvwEZa1YncwySk1HwVAqn2q2PfH5PeMA3FpNuX" } } },
+    { "id": "D9mR6P7N2UmN9w1yGj1VvPBFWpXwWtRhFWivtCgjRnjA", "outcome": { "executor_id": "3e2210e1184b45b64c8a434c0a7e7b23cc04ea7eb7a6c3c32520d03d4afcb8af", "status": { "SuccessValue": "" } } },
+    { "id": "HAvmGZmvwEZa1YncwySk1HwVAqn2q2PfH5PeMA3FpNuX", "outcome": { "executor_id": "bouncer-oracle-6a42bf32.testnet", "status": { "SuccessValue": "" } } }
+  ],
+  "receipts": [
+    { "receipt_id": "D9mR6P7N2UmN9w1yGj1VvPBFWpXwWtRhFWivtCgjRnjA", "predecessor_id": "bouncer-oracle-6a42bf32.testnet", "receiver_id": "3e2210e1184b45b64c8a434c0a7e7b23cc04ea7eb7a6c3c32520d03d4afcb8af", "receipt": { "Action": { "actions": [{ "FunctionCall": { "method_name": "ft_transfer", "deposit": "1", "gas": 97136177593241, "args": "eyJyZWNlaXZlcl9pZCI6InZlbmRvci5ib3VuY2VyLW9yYWNsZS02YTQyYmYzMi50ZXN0bmV0IiwiYW1vdW50IjoiMTAwMCIsIm1lbW8iOiJib3VuY2VyLW9yZGVyLXYxOmNvbXB1dGU6NmFmN2RiNTI5ZWJlYTgwNGQ2YWNiYjVmOTkzMmE3YTUzOGI0MTgyMjZkYzJjNWMwMjUzMDIxOTcwODc4OGZiMiJ9" } }] } } },
+    { "receipt_id": "HAvmGZmvwEZa1YncwySk1HwVAqn2q2PfH5PeMA3FpNuX", "predecessor_id": "bouncer-oracle-6a42bf32.testnet", "receiver_id": "bouncer-oracle-6a42bf32.testnet", "receipt": { "Action": { "actions": [{ "FunctionCall": { "method_name": "after_execute", "deposit": "0", "gas": 97136177593242, "args": "eyJwb2xpY3lfaWQiOiJjaXJjbGUtcmVzb3VyY2VzIiwidG9rZW4iOiIzZTIyMTBlMTE4NGI0NWI2NGM4YTQzNGMwYTdlN2IyM2NjMDRlYTdlYjdhNmMzYzMyNTIwZDAzZDRhZmNiOGFmIiwiYW1vdW50IjoiMTAwMCIsImJ1Y2tldCI6NDk4MTU4fQ==" } }] } } }
+  ]
+}

@@ -242,3 +242,25 @@ test('file journal persists atomically and blocks a concurrent runner', () => {
     assert.equal(fs.existsSync(`${file}.lock`), false);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('file journal refuses entries whose embedded ID differs from the requested key', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bouncer-journal-id-'));
+  const journal = new FileJournal(path.join(dir, 'state.json'), 'bouncer.testnet', 'owner.testnet');
+  try {
+    journal.put('first', { status: 'pending', fingerprint: 'one' });
+    const existing = journal.get('first');
+    assert.throws(() => journal.put('second', { ...existing, fingerprint: 'two' }), /ID does not match/);
+    assert.equal(journal.get('second'), undefined); assert.equal(journal.get('first').fingerprint, 'one');
+    journal.put('first', { ...existing, fingerprint: 'updated' });
+    assert.equal(journal.get('first').fingerprint, 'updated');
+  } finally { journal.close(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('post-journal pre-broadcast guard is synchronous and never sends on rejection', async () => {
+  for (const guard of [() => { throw new Error('expired during fsync'); }, async () => { throw new Error('async is forbidden'); }]) {
+    const f = fixture();
+    await assert.rejects(run(f, { beforeBroadcast: guard }), /pre-broadcast guard rejected.*no payment was sent/);
+    assert.equal(f.calls.length, 0); assert.equal(f.journal.get('compute-1').status, 'pending');
+    await assert.rejects(run(f), /unresolved pending payment/); assert.equal(f.calls.length, 0);
+  }
+});

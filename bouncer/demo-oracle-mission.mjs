@@ -13,11 +13,14 @@ import util from 'node:util';
 import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import nearApi from 'near-api-js';
-import { MonotonicAccount } from './agent/near-account.mjs';
-import { FileJournal } from './agent/procurement.mjs';
+import { MonotonicAccount, PaymentRpcProvider } from './agent/near-account.mjs';
+import { openConfiguredFileJournal, validateConfiguredFileJournalKey } from './agent/procurement.mjs';
+import { submitOwnerSetupOnce } from './agent/testnet-owner-setup.mjs';
 import { runOracleGoal, recoverOracleGoal, assertOracleFreshForUse, assertOracleProjectRegistry,
   ORACLE_TESTNET_PROJECT } from './agent/oracle-outlayer.mjs';
 import { runMixedMission } from './agent/mixed-mission.mjs';
+import { makeOracleDependentWorkflow, runDependentLiveProof, verifySellerV2ProofState, verifySellerV3ProofState,
+  verifySellerV3AccessControls } from './agent/dependent-live-proof.mjs';
 import { httpResourceProvider } from './agent/resource-agent.mjs';
 import { createResourceProvider } from './services/resource-provider.mjs';
 import { validateRpcEndpoint } from './shared/rpc-endpoint.mjs';
@@ -25,9 +28,9 @@ import { waitForNewTestnetKey } from './shared/testnet-ready.mjs';
 import { CIRCLE_TESTNET_USDC as TOKEN, WRAP_TESTNET as WRAP, REF_TESTNET as REF, OWNER_SETUP_INPUT,
   OWNER_SETUP_MAX_OUTPUT, DEMO_RESOURCE_PRICE as PRICE, selectOwnerSetupQuote } from './scripts/circle-testnet-setup.mjs';
 
-const { KeyPair, KeyPairSigner, providers, transactions } = nearApi;
+const { KeyPair, KeyPairSigner, transactions } = nearApi;
 const RPC = validateRpcEndpoint(process.env.NEAR_TESTNET_RPC || 'https://test.rpc.fastnear.com');
-const provider = new providers.JsonRpcProvider({ url: RPC });
+const provider = new PaymentRpcProvider(RPC);
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const ONE = 10n ** 24n, TGAS = 10n ** 12n, MAX_NATIVE = ONE / 10n;
 const OUTLAYER = 'outlayer.testnet', NATIVE_POLICY = 'independent-price', FT_POLICY = 'circle-resources';
@@ -95,6 +98,15 @@ function notice(title, data) {
 }
 
 async function main() {
+  validateConfiguredFileJournalKey(); // Before any live setup, funding or network request.
+  const args = process.argv.slice(2);
+  if (args.length > 1 || (args.length === 1 && !['--dependent-workflow', '--seller-v2-workflow', '--seller-v3-workflow', '--seller-v3-fresh'].includes(args[0]))) {
+    throw new Error('optional argument: --dependent-workflow, --seller-v2-workflow, --seller-v3-workflow or --seller-v3-fresh');
+  }
+  const sellerV2 = args[0] === '--seller-v2-workflow';
+  const sellerV3Fresh = args[0] === '--seller-v3-fresh';
+  const sellerV3 = args[0] === '--seller-v3-workflow' || sellerV3Fresh;
+  const dependent = sellerV2 || sellerV3 || args[0] === '--dependent-workflow';
   if ((await provider.viewNodeStatus())?.chain_id !== 'testnet') throw new Error('RPC must report testnet');
   const meta = await view(TOKEN, 'ft_metadata');
   if (meta?.spec !== 'ft-1.0.0' || meta?.symbol !== 'USDC' || meta?.decimals !== 6) throw new Error('unexpected Circle testnet USDC metadata');
@@ -111,7 +123,7 @@ async function main() {
   const oracleKey = KeyPair.fromRandom('ed25519'), resourceKey = KeyPair.fromRandom('ed25519'), attackKey = KeyPair.fromRandom('ed25519');
   const suffix = crypto.randomBytes(4).toString('hex'), contractId = `bouncer-oracle-${suffix}.testnet`;
   const ownerId = `owner.${contractId}`, vendorId = `vendor.${contractId}`;
-  console.log(`Independent oracle + Circle TESTNET resource mission: contract=${contractId}; no real value; FT provider=self-hosted development`);
+  console.log(`Independent oracle + Circle TESTNET ${sellerV3 ? 'seller-v3 authenticated workflow' : sellerV2 ? 'seller-v2 dependent workflow' : dependent ? 'dependent workflow' : 'resource mission'}: contract=${contractId}; no real value; FT provider=self-hosted development`);
   const contract = await createFunded(contractId, contractKey);
   const deployed = await setupAttempt('deploy', () => contract.signAndSendTransaction({ receiverId: contractId,
     actions: [transactions.deployContract(wasm)], waitUntil: 'FINAL' }));
@@ -130,14 +142,29 @@ async function main() {
   // purchase. The swap and vault funding are each sent once, never retried.
   for (const [token, id] of [[WRAP, ownerId], [TOKEN, ownerId], [TOKEN, contractId], [TOKEN, vendorId]]) await register(owner, token, id);
   await call(owner, WRAP, 'near_deposit', {}, OWNER_SETUP_INPUT, 50n * TGAS);
-  const before = BigInt(await view(TOKEN, 'ft_balance_of', { account_id: ownerId }));
-  const swap = await call(owner, WRAP, 'ft_transfer_call', { receiver_id: REF, amount: quote.input_amount, msg: quote.msg }, 1n, 300n * TGAS, false);
-  const acquired = BigInt(await view(TOKEN, 'ft_balance_of', { account_id: ownerId })) - before;
-  if (acquired < BigInt(quote.min_output) || acquired > OWNER_SETUP_MAX_OUTPUT) throw new Error('owner setup swap did not meet output bounds');
-  const funding = await call(owner, TOKEN, 'ft_transfer_call', { receiver_id: contractId, amount: (3n * PRICE).toString(), msg: 'fund' }, 1n, 200n * TGAS, false);
-  if (BigInt(await view(contractId, 'vault_balance', { token: TOKEN })) !== 3n * PRICE ||
-      BigInt(await view(TOKEN, 'ft_balance_of', { account_id: contractId })) !== 3n * PRICE ||
-      BigInt(await view(TOKEN, 'ft_balance_of', { account_id: vendorId })) !== 0n) throw new Error('Circle vault setup mismatch');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), sellerV3Fresh ? 'bouncer-seller-v3-fresh-' : sellerV3 ? 'bouncer-seller-v3-live-' :
+    sellerV2 ? 'bouncer-seller-v2-live-' : dependent ? 'bouncer-dependent-live-' : 'bouncer-oracle-'));
+  const setupJournal = openConfiguredFileJournal(path.join(dir, 'setup-journal.json'), contractId, ownerId);
+  let swap, funding;
+  try {
+    const before = BigInt(await view(TOKEN, 'ft_balance_of', { account_id: ownerId }));
+    // These owner-only setup transfers are not guarded agent swaps. Persist
+    // each exact signed hash before a single send, including on timeout.
+    swap = await submitOwnerSetupOnce({ id: 'owner-ref-swap', account: owner, publicKey: ownerKey.getPublicKey(), token: WRAP,
+      args: { receiver_id: REF, amount: quote.input_amount, msg: quote.msg }, gas: 300n * TGAS, provider, journal: setupJournal });
+    console.log(`    owner Ref swap: ${url(swap.transaction_outcome.id)}`);
+    const acquired = BigInt(await view(TOKEN, 'ft_balance_of', { account_id: ownerId })) - before;
+    if (acquired < BigInt(quote.min_output) || acquired > OWNER_SETUP_MAX_OUTPUT) throw new Error('owner setup swap did not meet output bounds');
+    funding = await submitOwnerSetupOnce({ id: 'owner-vault-funding', account: owner, publicKey: ownerKey.getPublicKey(), token: TOKEN,
+      args: { receiver_id: contractId, amount: (3n * PRICE).toString(), msg: 'fund' }, gas: 200n * TGAS, provider, journal: setupJournal });
+    console.log(`    owner vault funding: ${url(funding.transaction_outcome.id)}`);
+    if (BigInt(await view(contractId, 'vault_balance', { token: TOKEN })) !== 3n * PRICE ||
+        BigInt(await view(TOKEN, 'ft_balance_of', { account_id: contractId })) !== 3n * PRICE ||
+        BigInt(await view(TOKEN, 'ft_balance_of', { account_id: vendorId })) !== 0n) throw new Error('Circle vault setup mismatch');
+  } catch (error) {
+    console.error(`Public testnet setup evidence retained in ${dir}; reconcile any recorded hash, never resend automatically.`);
+    throw error;
+  } finally { setupJournal.close(); }
   await call(owner, contractId, 'set_policy', { policy_id: FT_POLICY, token: TOKEN, per_tx_cap: PRICE.toString(), daily_cap: (3n * PRICE).toString() }, 1n);
   await call(owner, contractId, 'allow_payee', { policy_id: FT_POLICY, payee: vendorId }, 1n);
   await call(owner, contractId, 'grant_agent_key', { policy_id: FT_POLICY, public_key: resourceKey.getPublicKey().toString() }, 1n);
@@ -166,11 +193,102 @@ async function main() {
     contractId, methodName: 'execute_outlayer_native_project', args: { policy_id: NATIVE_POLICY, amount: (MAX_NATIVE + 1n).toString(), expected_route: route },
     deposit: 0n, gas: 300n * TGAS, waitUntil: 'FINAL' }));
 
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bouncer-oracle-'));
   const state = path.join(dir, 'journal.json'), goalPath = path.join(dir, 'oracle-goal.json');
   fs.writeFileSync(goalPath, JSON.stringify(goal, null, 2) + '\n', { mode: 0o600 });
-  let journal = new FileJournal(state, contractId, ownerId), success = false, service;
+  let journal = openConfiguredFileJournal(state, contractId, ownerId), success = false, service;
   try {
+    if (dependent) {
+      // One manifest is frozen before the first workflow payment. Each data
+      // binding refers only to the previous verified output; financial routes
+      // remain owner-pinned. The provider is local development code, not an
+      // independent FT merchant.
+      const products = Object.fromEntries(['compute', 'storage', 'api'].map(resource => [resource,
+        { policy_id: FT_POLICY, token: TOKEN, payee: vendorId, amount: PRICE.toString() }]));
+      const config = { contract_id: contractId, owner_account_id: ownerId, products,
+        data_dir: path.join(dir, 'development-provider'), port: 0, ...(sellerV3 ? { seller_origin: 'http://127.0.0.1:0' } : {}) };
+      const configPath = path.join(dir, 'provider-config.json'), workflowPath = path.join(dir, 'workflow.json');
+      const ordersPath = path.join(dir, 'derived-orders.json');
+      fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
+      const workflow = makeOracleDependentWorkflow({ goal, token: TOKEN, payee: vendorId,
+        policyId: FT_POLICY, price: PRICE.toString(), providerUrl: 'http://127.0.0.1:0',
+        ...(sellerV3 ? { orderBinding: 'seller-v3' } : sellerV2 ? { orderBinding: 'seller-v2' } : {}) });
+      fs.writeFileSync(workflowPath, JSON.stringify(workflow, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
+      let client;
+      const startService = async () => {
+        service = createResourceProvider({ rpcProvider: provider, contractId, ownerAccountId: ownerId,
+          products, dataDir: config.data_dir, sellerOrigin: config.seller_origin });
+        await new Promise((resolve, reject) => { service.server.once('error', reject); service.server.listen(0, '127.0.0.1', resolve); });
+        client = httpResourceProvider(`http://127.0.0.1:${service.server.address().port}`);
+      };
+      await startService();
+      const derivedOrders = [];
+      const resources = { account: ftAgent, publicKey: resourceKey.getPublicKey(),
+        getQuote: async (order, context) => {
+          derivedOrders.push({ goal_id: context.goalId, ...structuredClone(order) });
+          fs.writeFileSync(ordersPath, JSON.stringify(derivedOrders, null, 2) + '\n', { mode: 0o600 });
+          return client.getQuote(order);
+        },
+        fulfill: (order, context) => client.fulfill(order, context),
+        readStorage: (objectId, context) => client.readStorage(objectId, context),
+      };
+      const recoverWithCli = async ({ hash, next }) => {
+        // Stop both exclusive owners before launching a completely separate
+        // CLI process, with no key files or signer arguments. It may only
+        // reconcile the original hash; it cannot send another transaction.
+        await service.close(); service = undefined;
+        journal.close(); journal = undefined;
+        let recovered = false;
+        try {
+          const cli = await util.promisify(execFile)(process.execPath, [path.join(ROOT, 'bouncer/agent/workflow.mjs'),
+            '--workflow', workflowPath, '--journal', state, '--rpc', RPC, '--local-provider', configPath, '--recover-only'],
+          { timeout: 120_000, maxBuffer: 128 * 1024, env: { ...process.env, NEAR_TESTNET_RPC: RPC } });
+          if (!cli.stdout.includes('[workflow] RECOVERED') || !cli.stdout.includes(`Next unpaid step: ${next}`) ||
+              !cli.stdout.includes(hash)) throw new Error('key-free workflow CLI did not recover the recorded hash');
+          console.log(cli.stdout.trim()); recovered = true;
+        } finally {
+          journal = openConfiguredFileJournal(state, contractId, ownerId, { requireExisting: true });
+          if (recovered) await startService();
+        }
+        return { status: 'RECOVERED', next, new_payments: 0 };
+      };
+      const proof = await runDependentLiveProof({ workflow, provider, source: { account: oracleAgent, publicKey: oracleKey.getPublicKey() },
+        resources, getJournal: () => journal, log: console.log,
+        ...(sellerV3Fresh ? { recoverSourceWithoutKeys: ({ sourceHash }) => recoverWithCli({ hash: sourceHash, next: 'dependent-compute' }) } : {}),
+        recoverWithoutKeys: ({ firstHash }) => recoverWithCli({ hash: firstHash, next: 'dependent-storage' }) });
+      const sellerState = sellerV2 || sellerV3 ? JSON.parse(fs.readFileSync(path.join(config.data_dir, 'redemptions.json'), 'utf8')) : undefined;
+      const sellerClaims = sellerV3 ? verifySellerV3ProofState({ workflow, proof, journal, state: sellerState })
+        : sellerV2 ? verifySellerV2ProofState({ workflow, proof, journal, state: sellerState }) : undefined;
+      const accessControls = sellerV3 ? await verifySellerV3AccessControls({ workflow, proof, journal,
+        fulfill: client.fulfill, readStorage: client.readStorage }) : undefined;
+      const nativeBalance = BigInt(await view(contractId, 'vault_balance', { token: 'native' }));
+      const nativeSpent = BigInt(await view(contractId, 'daily_spent', { policy_id: NATIVE_POLICY }));
+      const ftBalance = BigInt(await view(contractId, 'vault_balance', { token: TOKEN }));
+      const ftSpent = BigInt(await view(contractId, 'daily_spent', { policy_id: FT_POLICY }));
+      const vendorBalance = BigInt(await view(TOKEN, 'ft_balance_of', { account_id: vendorId }));
+      if (nativeBalance !== MAX_NATIVE || nativeSpent !== MAX_NATIVE || ftBalance !== 0n || ftSpent !== 3n * PRICE || vendorBalance !== 3n * PRICE) {
+        throw new Error('dependent workflow final vault, recipient or rolling-budget mismatch');
+      }
+      const observation = proof.result.independent.delivery.result;
+      const hashes = Object.fromEntries(workflow.steps.map(step => [step.resource, journal.get(step.id).tx_hash]));
+      const evidence = { contract: contractId, owner: ownerId, vendor: vendorId, token: TOKEN,
+        oracle_tx: proof.sourceHash, resource_transactions: hashes, single_source_usd: observation.price_usd,
+        worker_timestamp: observation.timestamp, owner_setup_pool: quote.pool_id, owner_setup_swap: swap.transaction_outcome.id,
+        owner_vault_funding: funding.transaction_outcome.id, micro_usdc_per_resource: PRICE.toString(),
+        workflow: 'verified oracle -> compute -> storage -> api', exact_data_dependencies_checked: true,
+        source_broadcasts: proof.sourceBroadcasts, resource_broadcasts: proof.resourceBroadcasts,
+        source_response_recovered_with_key_free_cli: proof.sourceRecovered,
+        lost_ft_response_recovered_with_key_free_cli: true, first_ft_hash_reused: true,
+        order_binding: sellerV3 ? 'seller-v3' : sellerV2 ? 'seller-v2' : 'legacy-v1', resource_memos: proof.quoteMemos,
+        ...(sellerClaims ? { persisted_seller_claims: sellerClaims } : {}),
+        ...(accessControls ?? {}),
+        independent_execution: 'OutLayer; native testnet NEAR', ft_provider: 'self-hosted development',
+        owner_swap_guarded: false, testnet_tokens_have_no_real_value: true,
+        trust: 'single-source Coinbase data through OutLayer; no market-truth or TEE proof' };
+      fs.writeFileSync(path.join(dir, 'evidence.json'), JSON.stringify(evidence, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
+      notice(sellerV3 ? 'Seller-v3 authenticated testnet workflow' : sellerV2 ? 'Seller-v2 dependent testnet workflow' : 'Dependent testnet workflow', evidence);
+      success = true;
+      return;
+    }
     if ((await runOracleGoal({ goal, provider, account: oracleAgent, publicKey: oracleKey.getPublicKey(), journal })).status !== 'READY') throw new Error('oracle preflight was not ready');
     let broadcasts = 0;
     const lossy = new Proxy(provider, { get(target, property) {
@@ -199,7 +317,7 @@ async function main() {
     const cli = await util.promisify(execFile)(process.execPath, [path.join(ROOT, 'bouncer/agent/oracle-outlayer.mjs'),
       '--goal', goalPath, '--state', state, '--rpc', RPC, '--recover'], { timeout: 90_000, maxBuffer: 64 * 1024 });
     if (!cli.stdout.includes('REUSED') || !cli.stdout.includes(tx)) throw new Error('key-free oracle recovery did not reuse the transaction');
-    journal = new FileJournal(state, contractId, ownerId);
+    journal = openConfiguredFileJournal(state, contractId, ownerId, { requireExisting: true });
     const recovered = await recoverOracleGoal({ goal, provider, journal });
     assertOracleFreshForUse(recovered.delivery);
     if (recovered.delivery.tx_hash !== tx || broadcasts !== 1 || journal.get(goal.id)?.status !== 'completed') throw new Error('oracle recovery mismatch');
@@ -266,9 +384,10 @@ async function main() {
     success = true;
   } finally {
     journal?.close();
-    if (service) await new Promise(resolve => service.server.close(resolve));
-    if (success) fs.rmSync(dir, { recursive: true, force: true });
-    else console.error(`Public testnet recovery evidence retained in ${dir}; reconcile the recorded hash, never resend automatically.`);
+    if (service) await service.close();
+    if (success && !dependent) fs.rmSync(dir, { recursive: true, force: true });
+    else if (success) console.log(`${sellerV3 ? 'Private' : 'Public'} testnet workflow evidence retained in ${dir}; it contains no keys${sellerV3 ? ' but contains bearer claim signatures' : ''}.`);
+    else console.error(`${sellerV3 ? 'Private' : 'Public'} testnet recovery evidence retained in ${dir}; reconcile the recorded hash, never resend automatically.`);
   }
 }
 main().catch(error => { console.error(`[oracle-mission] ERROR: ${error.stack || error}`); process.exitCode = 1; });

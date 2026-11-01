@@ -11,13 +11,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import nearApi from 'near-api-js';
-import { FileJournal } from './procurement.mjs';
-import { MonotonicAccount } from './near-account.mjs';
+import { openConfiguredFileJournal } from './procurement.mjs';
+import { MonotonicAccount, PaymentRpcProvider } from './near-account.mjs';
 import { runOutlayerGoal, recoverOutlayerGoal, validateOutlayerGoal } from './outlayer.mjs';
 import { runOracleGoal, recoverOracleGoal, validateOracleGoal, assertOracleFreshForUse } from './oracle-outlayer.mjs';
 import { runResourceAgent, routedResourceProvider } from './resource-agent.mjs';
 import { startConfiguredProvider } from '../services/resource-provider.mjs';
-import { validateRpcEndpoint } from '../shared/rpc-endpoint.mjs';
 
 /**
  * Read-only preview of both asset paths before any new payment, then verify
@@ -29,11 +28,19 @@ import { validateRpcEndpoint } from '../shared/rpc-endpoint.mjs';
  * authorization boundary; callers must use the real trusted implementations.
  */
 export async function runMixedMission({ outlayer, resources, provider, journal, execute = false, log = console.log, runners = {} }) {
+  if (journal?.sharedDirectV3 === true) throw new Error('shared buyer journal does not coordinate mixed missions or OutLayer payments');
   const kind = outlayer?.kind ?? 'random';
   if (!['random', 'oracle'].includes(kind)) throw new Error('unsupported independent mission kind');
   const goal = kind === 'oracle' ? validateOracleGoal(outlayer?.goal) : validateOutlayerGoal(outlayer?.goal);
   if (!resources || resources.contractId !== goal.contract_id || resources.ownerAccountId !== goal.owner_account_id ||
       !Array.isArray(resources.goals) || !resources.goals.length) throw new Error('both mission paths must share the reviewed contract and owner');
+  resources = { ...resources, goals: structuredClone(resources.goals) };
+  // The independent leg must not be paid only to discover later that the FT
+  // leg cannot safely journal its seller-issued challenges.
+  if (execute && resources.durablePayment !== true) {
+    if (resources.goals.some(item => item?.order_binding === 'seller-v2')) throw new Error('seller-v2 mission execution requires durable signed-hash journaling');
+    if (resources.goals.some(item => item?.order_binding === 'seller-v3')) throw new Error('seller-v3 mission execution requires durable signed-hash journaling');
+  }
   if (resources.beforePayment !== undefined && typeof resources.beforePayment !== 'function') throw new Error('invalid pre-payment guard');
   const ids = resources.goals.map(item => item?.id);
   if (ids.some(id => typeof id !== 'string' || !id || id === goal.id) || new Set(ids).size !== ids.length) {
@@ -136,7 +143,7 @@ async function main() {
   if (!resources || resources.contract_id !== goal.contract_id || resources.owner_account_id !== goal.owner_account_id || !Array.isArray(resources.goals)) {
     throw new Error('mission resources must name the same contract and owner as the OutLayer goal');
   }
-  const provider = new nearApi.providers.JsonRpcProvider({ url: validateRpcEndpoint(options.rpc || process.env.NEAR_TESTNET_RPC || 'https://test.rpc.fastnear.com') });
+  const provider = new PaymentRpcProvider(options.rpc || process.env.NEAR_TESTNET_RPC || 'https://test.rpc.fastnear.com');
   const ft = accountFromFile(options['ft-key'], goal.owner_account_id, provider);
   const outlayer = accountFromFile(options['outlayer-key'], goal.owner_account_id, provider);
   const journalPath = path.resolve(expandHome(options.journal || config.journal_path || `${missionPath}.bouncer-journal.json`));
@@ -158,7 +165,9 @@ async function main() {
       console.log(`[mission] Local development provider: ${local.url}`);
     }
     const client = routedResourceProvider({ providerUrl: resources.provider_url, goals: resources.goals, overrides });
-    if (options.execute || fs.existsSync(journalPath)) journal = new FileJournal(journalPath, goal.contract_id, goal.owner_account_id);
+    if (options.execute || fs.existsSync(journalPath)) {
+      journal = openConfiguredFileJournal(journalPath, goal.contract_id, goal.owner_account_id, { requireExisting: !options.execute });
+    }
     const result = await runMixedMission({
       outlayer: { kind, goal, ...outlayer }, provider, journal, execute: options.execute,
       resources: { contractId: resources.contract_id, ownerAccountId: resources.owner_account_id, providerUrl: resources.provider_url,
@@ -170,7 +179,7 @@ async function main() {
     if (result.status === 'BLOCKED' || result.status === 'INCOMPLETE') process.exitCode = 2;
   } finally {
     journal?.close();
-    if (local) await new Promise(resolve => local.server.close(resolve));
+    if (local) await local.close();
   }
 }
 if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url) {

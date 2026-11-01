@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { goalsFromModel, planObjective, validatePlanningConfig } from '../agent/goal-planner.mjs';
 import { compareApprovedQuotes } from '../agent/quote-comparison.mjs';
 import { planFromQuotes, routedResourceProvider, runResourceAgent } from '../agent/resource-agent.mjs';
-import { orderMemo } from '../services/resource-provider.mjs';
+import { orderMemo, orderMemoV2, challengeFromOrderMemo } from '../services/resource-provider.mjs';
 
 const config = () => ({
   version: 1, contract_id: 'bouncer.testnet', owner_account_id: 'bouncer.testnet',
@@ -56,6 +56,41 @@ test('selects the cheapest authorized quote independently per FT using exact int
   ]);
   assert.deepEqual(result.quote_comparisons.map(c => c.selected_provider), ['cheaper', 'primary']);
   assert.equal(result.quote_comparisons[0].quotes[0].amount, '9007199254740994');
+});
+
+test('owner-pinned seller-v2 mode follows the selected offer and cannot be model-selected', async () => {
+  for (const v2On of ['primary', 'alternative']) {
+    const c = config(), table = products(), calls = [];
+    if (v2On === 'primary') c.resources.compute.order_binding = 'seller-v2';
+    else c.resources.compute.alternatives[0].order_binding = 'seller-v2';
+    let nonce = 0;
+    const createClient = url => ({ getQuote: async order => {
+      calls.push({ url, order: structuredClone(order) });
+      const product = table[url][order.resource];
+      const memo = order.order_binding === 'seller-v2'
+        ? orderMemoV2(order.resource, order.input, (++nonce).toString(16).padStart(32, '0')) : orderMemo(order.resource, order.input);
+      return { resource: order.resource, ...product, memo };
+    } });
+    const proposed = goalsFromModel(proposal(), c);
+    assert.equal(proposed.goals[0].order_binding, v2On === 'primary' ? 'seller-v2' : undefined);
+    const result = await compareApprovedQuotes({ config: c, proposedGoals: proposed, createClient });
+    const selected = result.goals[0]; assert.equal(selected.provider_id, 'cheaper');
+    assert.equal(selected.order_binding, v2On === 'alternative' ? 'seller-v2' : undefined);
+    const primary = calls.find(call => call.url === c.provider_url && call.order.resource === 'compute');
+    const alt = calls.find(call => call.url !== c.provider_url && call.order.resource === 'compute');
+    assert.equal(primary.order.order_binding, v2On === 'primary' ? 'seller-v2' : undefined);
+    assert.equal(alt.order.order_binding, v2On === 'alternative' ? 'seller-v2' : undefined);
+    const plan = await planFromQuotes({ contractId: c.contract_id, ownerAccountId: c.owner_account_id, goals: [selected],
+      getQuote: createClient(selected.provider_url).getQuote });
+    if (selected.order_binding) assert.equal(challengeFromOrderMemo('compute', selected.input, plan.requests[0].memo).length, 32);
+    else assert.equal(plan.requests[0].memo, orderMemo('compute', selected.input));
+    const tampered = structuredClone(proposed);
+    if (v2On === 'primary') delete tampered.goals[0].order_binding;
+    else tampered.goals[0].order_binding = 'seller-v2';
+    const count = calls.length;
+    await assert.rejects(compareApprovedQuotes({ config: c, proposedGoals: tampered, createClient }), /unauthorized financial/);
+    assert.equal(calls.length, count);
+  }
 });
 
 test('ties use owner order, not asynchronous response order', async () => {
@@ -145,6 +180,7 @@ test('invalid owner alternatives or smuggled financial authority fail before con
     c => { c.resources.compute.alternatives.push(structuredClone(c.resources.compute.alternatives[0])); },
     c => { c.resources.compute.alternatives[0].payee = 'attacker.near'; },
     c => { c.resources.compute.alternatives[0].policy_id = '../other'; },
+    c => { c.resources.compute.alternatives[0].order_binding = 'unsupported'; },
     c => { c.resources.compute.alternatives[0].provider_url = 'http://attacker.example'; },
     c => { c.resources.compute.alternatives[0].max_amount = '100000000000000000001'; },
     c => { c.resources.compute.alternatives = Array.from({ length: 5 }, (_, i) => ({ ...c.resources.compute.alternatives[0], id: `vendor${i}` })); },

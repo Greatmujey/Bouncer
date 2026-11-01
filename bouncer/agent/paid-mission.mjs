@@ -11,13 +11,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import nearApi from 'near-api-js';
-import { FileJournal } from './procurement.mjs';
-import { MonotonicAccount } from './near-account.mjs';
+import { openConfiguredFileJournal } from './procurement.mjs';
+import { MonotonicAccount, PaymentRpcProvider } from './near-account.mjs';
 import { runFtCallGoal, recoverFtCallGoal, validateFtCallGoal } from './ft-call.mjs';
 import { runProjectGoal, recoverProjectGoal, validateProjectGoal } from './outlayer-project.mjs';
 import { runResourceAgent, routedResourceProvider } from './resource-agent.mjs';
 import { startConfiguredProvider } from '../services/resource-provider.mjs';
-import { validateRpcEndpoint } from '../shared/rpc-endpoint.mjs';
 
 const OUTLAYER = 'outlayer.testnet', DEPOSIT = '{"action":"deposit_balance"}';
 function validateMission(funding, project, resources) {
@@ -45,7 +44,15 @@ async function providerCredit(provider, contractId) {
 
 /** Reusable testnet path; injected runners exist only for offline tests. */
 export async function runPaidProjectMission({ funding, project, resources, provider, journal, execute = false, log = console.log, runners = {} }) {
+  if (journal?.sharedDirectV3 === true) throw new Error('shared buyer journal does not coordinate FT-call or project missions');
   const { fund, paid, resourceIds } = validateMission(funding, project, resources);
+  resources = { ...resources, goals: structuredClone(resources.goals) };
+  // Fail before funding or paying the independent project, not later at the
+  // first resource payment, if seller-v2 cannot journal its signed hash.
+  if (execute && resources.durablePayment !== true) {
+    if (resources.goals.some(item => item?.order_binding === 'seller-v2')) throw new Error('seller-v2 mission execution requires durable signed-hash journaling');
+    if (resources.goals.some(item => item?.order_binding === 'seller-v3')) throw new Error('seller-v3 mission execution requires durable signed-hash journaling');
+  }
   if (execute && (!journal || typeof journal.get !== 'function' || typeof journal.put !== 'function')) throw new Error('live mission requires the original shared journal');
   if (journal && (typeof journal.get !== 'function' || typeof journal.put !== 'function')) throw new Error('invalid mission journal');
   const runFunding = runners.funding ?? runFtCallGoal, recoverFunding = runners.recoverFunding ?? recoverFtCallGoal;
@@ -145,7 +152,7 @@ async function main() {
   const missionPath = path.resolve(home(options.mission)), config = JSON.parse(fs.readFileSync(missionPath, 'utf8'));
   const paid = validateProjectGoal(config?.project_goal), fund = validateFtCallGoal(config?.funding_goal), resources = config?.resources;
   if (!resources || resources.contract_id !== paid.contract_id || resources.owner_account_id !== paid.owner_account_id || !Array.isArray(resources.goals)) throw new Error('mission resources must name the same contract and owner');
-  const provider = new nearApi.providers.JsonRpcProvider({ url: validateRpcEndpoint(options.rpc || process.env.NEAR_TESTNET_RPC || 'https://test.rpc.fastnear.com') });
+  const provider = new PaymentRpcProvider(options.rpc || process.env.NEAR_TESTNET_RPC || 'https://test.rpc.fastnear.com');
   const funding = accountFromFile(options['funding-key'], paid.owner_account_id, provider);
   const project = accountFromFile(options['project-key'], paid.owner_account_id, provider);
   const ft = accountFromFile(options['ft-key'], paid.owner_account_id, provider);
@@ -164,7 +171,9 @@ async function main() {
       overrides.set(original, local.url);
     }
     const client = routedResourceProvider({ providerUrl: resources.provider_url, goals: resources.goals, overrides });
-    if (options.execute || fs.existsSync(journalPath)) journal = new FileJournal(journalPath, paid.contract_id, paid.owner_account_id);
+    if (options.execute || fs.existsSync(journalPath)) {
+      journal = openConfiguredFileJournal(journalPath, paid.contract_id, paid.owner_account_id, { requireExisting: !options.execute });
+    }
     const result = await runPaidProjectMission({ funding: { goal: fund, ...funding }, project: { goal: paid, ...project }, provider, journal, execute: options.execute,
       resources: { contractId: resources.contract_id, ownerAccountId: resources.owner_account_id, providerUrl: resources.provider_url,
         goals: resources.goals, getQuote: client.getQuote, fulfill: client.fulfill, readStorage: client.readStorage, durablePayment: options.durable === true, ...ft } });
@@ -172,7 +181,7 @@ async function main() {
     if (result.independent?.delivery) console.log(`[paid-mission] Independent probe: ${JSON.stringify(result.independent.delivery)}`);
     if (result.resources) console.log(`[paid-mission] FT batch: ${JSON.stringify(result.resources.payments)}; deliveries=${result.resources.deliveries.length}`);
     if (result.status !== 'READY' && result.status !== 'FULFILLED') process.exitCode = 2;
-  } finally { journal?.close(); if (local) await new Promise(resolve => local.server.close(resolve)); }
+  } finally { journal?.close(); if (local) await local.close(); }
 }
 if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url) {
   main().catch(error => { console.error(`[paid-mission] ERROR: ${error.message}`); process.exitCode = 1; });

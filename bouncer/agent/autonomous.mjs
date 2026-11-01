@@ -18,10 +18,11 @@ optionally BOUNCER_LLM_API_KEY. The objective is sent to that model; do not
 include secrets in it. The owner config, signing key and journal are not sent.
 Planning alone sends no transactions. --compare-providers sends each order to
 all owner-approved quote endpoints; start them separately, not --local-provider.
-Supplying --key also runs a read-only quote/policy preflight; --execute
-explicitly sends real TESTNET transactions. --durable records direct-payment
-hashes before broadcast. The output and its matching journal are private and
-must be kept for recovery.
+A seller-v2 quote can persist an order even in a dry run or comparison.
+Supplying --key also runs a quote/policy preflight; --execute explicitly sends
+real TESTNET transactions. --durable records direct-payment hashes before
+broadcast and is required for seller-v2 execution. The output and its matching
+journal are private and must be kept for recovery.
 Do not use real funds or a full-access key. See bouncer/docs/AI_AGENT.md.
 `;
 
@@ -73,10 +74,18 @@ async function main() {
   catch (error) { if (error.code !== 'ENOENT') throw error; }
   let config;
   try { config = JSON.parse(readBounded(options.config, 32 * 1024)); } catch { throw new Error('could not read a valid owner config'); }
-  validatePlanningConfig(config);
+  const reviewed = validatePlanningConfig(config);
   const objective = readBounded(options['objective-file'], 4000);
   const modelClient = createModelClient({ endpoint: process.env.BOUNCER_LLM_URL, model: process.env.BOUNCER_LLM_MODEL, apiKey: process.env.BOUNCER_LLM_API_KEY || undefined });
   let goals = await planObjective({ objective, config, modelClient });
+  // Fail before asking any seller for a potentially persistent challenge. In a
+  // comparison, any approved candidate could be selected, so require durable
+  // mode even if the cheapest offer may eventually turn out to be legacy.
+  for (const binding of ['seller-v2', 'seller-v3']) {
+    const mayUseBinding = goals.goals.some(goal => goal.order_binding === binding ||
+      (options['compare-providers'] && reviewed.resources[goal.resource].alternatives?.some(offer => offer.order_binding === binding)));
+    if (options.execute && mayUseBinding && !options.durable) throw new Error(`${binding} execution requires --durable`);
+  }
   if (options['compare-providers']) {
     goals = await compareApprovedQuotes({ config, proposedGoals: goals });
     for (const comparison of goals.quote_comparisons) {
@@ -89,7 +98,7 @@ async function main() {
   console.log(`[autonomous] Saved ${goals.goals.length} validated model-proposed task(s) to ${target}`);
   console.log('[autonomous] Model output is untrusted. Review the objective, task inputs and owner limits; the model cannot set payees, tokens or policy.');
   if (!options.key) {
-    console.log(options['compare-providers'] ? '[autonomous] Quote comparison only: no blockchain transactions or fulfillment.' :
+    console.log(options['compare-providers'] ? '[autonomous] Quote comparison only: no blockchain transactions or fulfillment; seller-v2 quotes may persist.' :
       '[autonomous] Planning only: no quotes, blockchain transactions or fulfillment.');
     return;
   }

@@ -1,7 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import http from 'node:http';
+import { once } from 'node:events';
 import nearApi from 'near-api-js';
-import { MonotonicAccount } from '../agent/near-account.mjs';
+import { MonotonicAccount, PaymentRpcProvider } from '../agent/near-account.mjs';
 
 const key1 = nearApi.KeyPair.fromRandom('ed25519').getPublicKey();
 const key2 = nearApi.KeyPair.fromRandom('ed25519').getPublicKey();
@@ -59,4 +61,38 @@ test('RPC failures and nonce overflow are surfaced without sending', async () =>
   provider.viewAccessKey = async () => { throw new Error('RPC unavailable'); };
   await assert.rejects(account.createTransaction('target.testnet', [], key1), /RPC unavailable/);
   assert.equal(sends, 0);
+});
+
+test('built-in payment RPC submits once on HTTP 503 rather than retrying an ambiguous send', async () => {
+  const requests = [], server = http.createServer(async (req, res) => {
+    const chunks = []; for await (const chunk of req) chunks.push(chunk);
+    requests.push(JSON.parse(Buffer.concat(chunks).toString()));
+    res.statusCode = 503; res.end('unavailable after possible admission');
+  });
+  server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  try {
+    const provider = new PaymentRpcProvider(`http://127.0.0.1:${server.address().port}`);
+    const pair = nearApi.KeyPair.fromRandom('ed25519'), signer = new nearApi.KeyPairSigner(pair);
+    const tx = nearApi.transactions.createTransaction('owner.testnet', pair.getPublicKey(), 'bouncer.testnet', 1n,
+      [nearApi.transactions.functionCall('execute', {}, 1n, 0n)], Buffer.alloc(32, 2));
+    const [, signed] = await signer.signTransaction(tx);
+    await assert.rejects(provider.sendTransactionUntil(signed, 'FINAL'));
+    assert.equal(requests.length, 1); assert.equal(requests[0].method, 'send_tx');
+    assert.equal(requests[0].params.wait_until, 'FINAL');
+  } finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
+});
+
+test('receipt lookup is read-only and bounded, even when the RPC never answers', async () => {
+  const requests = [], server = http.createServer(async req => {
+    const chunks = []; for await (const chunk of req) chunks.push(chunk);
+    requests.push(JSON.parse(Buffer.concat(chunks).toString()));
+    // Deliberately never send a response; the client must abort its own read.
+  });
+  server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  try {
+    const provider = new PaymentRpcProvider(`http://127.0.0.1:${server.address().port}`, { receiptTimeoutMs: 80 });
+    await assert.rejects(provider.txStatusReceipts('hash', 'owner.testnet', 'FINAL'), /timed out|aborted/i);
+    assert.equal(requests.length, 1); assert.equal(requests[0].method, 'EXPERIMENTAL_tx_status');
+    assert.equal(requests[0].params.wait_until, 'FINAL');
+  } finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
 });

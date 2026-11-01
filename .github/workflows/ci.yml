@@ -10,6 +10,19 @@ jobs:
   js-tests:
     name: JavaScript tests
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        # Ephemeral test database; no testnet credentials or paid calls.
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: bouncer
+          POSTGRES_PASSWORD: bouncer-ci-only
+          POSTGRES_DB: bouncer_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U bouncer -d bouncer_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
     defaults:
       run:
         working-directory: bouncer
@@ -19,7 +32,23 @@ jobs:
         with:
           node-version: '22'
       - run: npm ci --no-audit --no-fund
-      - run: npm test
+      # Isolated, lockfile-pinned third-party seller SDK. Its NEAR driver is
+      # wrapped only in tests because the published preset is mainnet-only.
+      - run: npm ci --prefix interop/piprail --ignore-scripts --legacy-peer-deps --no-audit --no-fund
+      - name: Run JavaScript test suite
+        shell: bash
+        run: |
+          set +e
+          npm test 2>&1 | tee "$RUNNER_TEMP/bouncer-js-tests.log"
+          result=${PIPESTATUS[0]}
+          if [ "$result" -ne 0 ]; then
+            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8");const lines=s.split("\n");const failed=[];for(let i=0;i<lines.length;i++)if(/^not ok\b/.test(lines[i]))failed.push(lines.slice(i,i+24).join("\n"));const text=(failed.join("\n---\n")||s.slice(-4000)).slice(0,7500).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=JavaScript tests failed::"+text)' "$RUNNER_TEMP/bouncer-js-tests.log"
+          fi
+          exit "$result"
+        env:
+          BOUNCER_PIPRAIL_PACKAGE_ROOT: ${{ github.workspace }}/bouncer/interop/piprail/node_modules/@piprail/sdk
+          BOUNCER_TEST_POSTGRES_URL: postgresql://bouncer:bouncer-ci-only@127.0.0.1:5432/bouncer_test
+          BOUNCER_REQUIRE_POSTGRES_TESTS: '1'
       - name: Check the committed wallet bundle matches its source
         run: npm run build:web && git diff --exit-code -- web/wallet.bundle.js
       - name: Test onboarding, mobile layout and testnet wallet UI
@@ -51,6 +80,101 @@ jobs:
             node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-3000).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=Rust tests failed::"+s)' "$RUNNER_TEMP/rust-test.log"
           fi
           exit "$result"
+      - name: Test separate testnet playback-grant variant
+        working-directory: bouncer/contracts/bouncer
+        shell: bash
+        run: |
+          set +e
+          CARGO_TERM_COLOR=never CARGO_PROFILE_DEV_DEBUG=0 cargo test --lib --features youtick-playback-v10 2>&1 | tee "$RUNNER_TEMP/rust-playback-tests.log"
+          result=${PIPESTATUS[0]}
+          if [ "$result" -ne 0 ]; then
+            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-3000).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=Playback variant tests failed::"+s)' "$RUNNER_TEMP/rust-playback-tests.log"
+          fi
+          exit "$result"
+
+  outlayer-vrf-read:
+    name: Discover pinned testnet VRF probe terms (read only)
+    if: github.event_name == 'push' && github.run_attempt == '1' && contains(github.event.head_commit.message, '[vrf-capability-read]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      - name: Read public key and registry, without execution or payment
+        run: node bouncer/scripts/probe-outlayer-vrf.mjs
+
+  ref-graph-read:
+    name: Inspect existing public Ref and vault receipt graphs (read only)
+    if: github.event_name == 'push' && github.run_attempt == '1' && contains(github.event.head_commit.message, '[ref-graph-read]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      - name: Inspect two pinned historical transactions, without keys or sends
+        run: node bouncer/scripts/inspect-ref-receipts.mjs
+        env:
+          NEAR_TESTNET_RPC: https://archival-rpc.testnet.near.org
+
+  ref-router-contract:
+    name: Test and build one-shot Ref testnet router
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - name: Test routing, refund and owner guards
+        working-directory: bouncer/contracts/ref-router
+        shell: bash
+        run: |
+          set +e
+          CARGO_TERM_COLOR=never CARGO_PROFILE_DEV_DEBUG=0 cargo test --lib 2>&1 | tee "$RUNNER_TEMP/ref-router-tests.log"
+          result=${PIPESTATUS[0]}
+          if [ "$result" -ne 0 ]; then
+            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-3000).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=Ref router tests failed::"+s)' "$RUNNER_TEMP/ref-router-tests.log"
+          fi
+          exit "$result"
+      - name: Build testnet router WASM
+        working-directory: bouncer/contracts/ref-router
+        run: RUSTFLAGS="-C link-arg=-s" cargo build --target wasm32-unknown-unknown --release
+      - name: Save router for optional testnet proof
+        uses: actions/upload-artifact@v4
+        with:
+          name: ref-router-wasm
+          path: bouncer/contracts/ref-router/target/wasm32-unknown-unknown/release/bouncer_ref_router.wasm
+          if-no-files-found: error
+      - name: Test separately bounded funding V2
+        working-directory: bouncer/contracts/ref-router
+        shell: bash
+        run: |
+          set +e
+          CARGO_TERM_COLOR=never CARGO_PROFILE_DEV_DEBUG=0 cargo test --lib --features funding-v2 2>&1 | tee "$RUNNER_TEMP/ref-router-v2-tests.log"
+          result=${PIPESTATUS[0]}
+          if [ "$result" -ne 0 ]; then
+            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-3000).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=Ref router V2 tests failed::"+s)' "$RUNNER_TEMP/ref-router-v2-tests.log"
+          fi
+          exit "$result"
+      - name: Build separate testnet funding V2 WASM
+        working-directory: bouncer/contracts/ref-router
+        run: RUSTFLAGS="-C link-arg=-s" cargo build --target wasm32-unknown-unknown --release --features funding-v2
+      - name: Save the non-deployed V2 artifact for review
+        uses: actions/upload-artifact@v4
+        with:
+          name: ref-router-funding-v2-wasm
+          path: bouncer/contracts/ref-router/target/wasm32-unknown-unknown/release/bouncer_ref_router.wasm
+          if-no-files-found: error
 
   build-contract:
     name: Build Rust contract (wasm)
@@ -92,6 +216,18 @@ jobs:
           name: bouncer-wasm
           path: bouncer.wasm
           if-no-files-found: error
+      - name: Build separate experimental testnet playback WASM
+        working-directory: bouncer/contracts/bouncer
+        run: RUSTFLAGS="-C link-arg=-s" cargo build --target wasm32-unknown-unknown --release --features youtick-playback-v10
+      - name: Check experimental playback marker
+        run: |
+          node -e 'const fs=require("fs"),c=require("crypto"),p="bouncer/contracts/bouncer/target/wasm32-unknown-unknown/release/bouncer.wasm",b=fs.readFileSync(p);if(!b.subarray(0,8).equals(Buffer.from([0,97,115,109,1,0,0,0]))||!b.includes(Buffer.from("bouncer-agent-v10-youtick-testnet")))throw Error("invalid experimental playback artifact");console.log("Experimental playback WASM SHA-256",c.createHash("sha256").update(b).digest("hex"))'
+      - name: Save the non-deployed playback variant for review
+        uses: actions/upload-artifact@v4
+        with:
+          name: bouncer-youtick-playback-v10-wasm
+          path: bouncer/contracts/bouncer/target/wasm32-unknown-unknown/release/bouncer.wasm
+          if-no-files-found: error
       - name: Commit built wasm on branch pushes
         if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/arena/') && !contains(github.event.head_commit.message, '[artifact-only]')
         run: |
@@ -102,6 +238,372 @@ jobs:
             git commit -m "chore(ci): attach bouncer.wasm"
             git push
           fi
+
+  ref-setup-inspection:
+    name: Inspect previous Ref setup and build storage (read only)
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[ref-setup-readonly-20261101]')
+    needs: [build-contract, ref-router-contract]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: ref-router-wasm
+          path: ref-router-wasm
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      - name: Inspect finalized accounts, storage and quote without signing
+        run: node bouncer/scripts/probe-ref-demo-setup.mjs bouncer-ref-5b2d78f8.testnet owner.bouncer-ref-5b2d78f8.testnet
+
+  ref-sweep-channel-probe:
+    name: Inspect scoped recovery channel (no signing)
+    if: github.event_name == 'push' && github.ref == 'refs/heads/arena/88d70c7c-near-hub' && github.event.repository.private == true && github.run_attempt == '1' && contains(github.event.head_commit.message, '[ref-sweep-channel-probe-20261101]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    permissions:
+      actions: read
+      contents: write
+      issues: read
+      checks: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: guarded-ref-testnet-recovery
+          run-id: 41299191712
+          github-token: ${{ github.token }}
+          path: original-ref-evidence
+      - uses: actions/download-artifact@v4
+        with:
+          name: original-ref-sweep-recovery
+          run-id: 41300346933
+          github-token: ${{ github.token }}
+          path: prior-ref-sweep-attempt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      - name: Check both retained journals without signing or transaction broadcasts
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          BOUNCER_REF_SWEEP_ACK: testnet-original-sweep-only
+          BOUNCER_REF_SWEEP_ARTIFACT_CHECK_ONLY: '1'
+        run: node bouncer/scripts/resume-original-ref-sweep.mjs original-ref-evidence prior-ref-sweep-attempt "$RUNNER_TEMP/artifact-check-only"
+      - name: Check private read channels and annotation visibility
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          node --input-type=module - <<'NODE'
+          const headers = { authorization: `Bearer ${process.env.GITHUB_TOKEN}`, accept: 'application/vnd.github+json', 'x-github-api-version': '2022-11-28' };
+          const opts = { headers, signal: AbortSignal.timeout(15_000), redirect: 'error' };
+          const base = 'https://api.github.com/repos/abdullahimujeeb0505-stack/Bouncer';
+          const comments = await fetch(`${base}/issues/6/comments?per_page=1`, opts);
+          const contents = await fetch(`${base}/contents/bouncer/README.md?ref=${process.env.GITHUB_SHA}`, { ...opts, signal: AbortSignal.timeout(15_000) });
+          const contentsWrite = await fetch(`${base}/contents/bouncer/README.md`, { method: 'PUT', headers: { ...headers, 'content-type': 'application/json' },
+            body: JSON.stringify({ message: 'Non-mutating permission probe', content: 'cHJvYmU=', sha: '0'.repeat(40), branch: 'arena/88d70c7c-near-hub' }),
+            signal: AbortSignal.timeout(15_000), redirect: 'error' });
+          const check = await fetch(`${base}/check-runs`, { method: 'POST', headers: { ...headers, 'content-type': 'application/json' },
+            body: JSON.stringify({ name: `Scoped channel diagnostic ${process.env.GITHUB_RUN_ID}`, head_sha: process.env.GITHUB_SHA,
+              external_id: `bouncer-probe-${process.env.GITHUB_RUN_ID}`,
+              details_url: `https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/${process.env.GITHUB_RUN_ID}`,
+              status: 'completed', conclusion: 'success', output: { title: 'Read-only test', summary: 'No key or transaction was used.' } }),
+            signal: AbortSignal.timeout(15_000), redirect: 'error' });
+          console.log(`::notice title=Scoped channel access::comments_http=${comments.status}; contents_http=${contents.status}; contents_write_mismatch_http=${contentsWrite.status}; checks_create_http=${check.status}`);
+          if (!contents.ok) { console.log(`::error title=Scoped channel unavailable::Repository contents HTTP ${contents.status}`); process.exit(1); }
+          console.log('::notice title=Scoped Ref sweep channel probe::Private repository contents are readable; this is not a sweep request.');
+          NODE
+      - name: Hold the probe open for annotation visibility
+        run: sleep 60
+
+  resume-original-ref-sweep:
+    name: Resume original Ref output sweep (testnet)
+    # This has NO input-swap key and will reuse only the preserved input hash.
+    # It requests a short-lived, encrypted, sweep-only key handoff and never
+    # resends an existing sweep. First attempt, private repo and exact parent.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/arena/88d70c7c-near-hub' && github.event.before == '8256113e863f71d139a954fa57a49e6831c8e3e4' && github.event.repository.private == true && github.run_attempt == '1' && contains(github.event.head_commit.message, '[resume-original-ref-sweep-20261101]')
+    needs: [js-tests, contract-tests, build-contract, ref-router-contract]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: read
+      checks: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: guarded-ref-testnet-recovery
+          run-id: 41299191712
+          github-token: ${{ github.token }}
+          path: original-ref-evidence
+      # Inspect the prior attempt's preserved journal: it failed before the
+      # key handoff. An existing sweep in either journal forbids any send.
+      - uses: actions/download-artifact@v4
+        with:
+          name: original-ref-sweep-recovery
+          run-id: 41300346933
+          github-token: ${{ github.token }}
+          path: prior-ref-sweep-attempt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      - name: Recover original receipts and perform one scoped sweep
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          BOUNCER_REF_SWEEP_ACK: testnet-original-sweep-only
+        run: |
+          set +e
+          node bouncer/scripts/resume-original-ref-sweep.mjs original-ref-evidence prior-ref-sweep-attempt "$RUNNER_TEMP/ref-sweep-recovery" 2>&1 | tee "$RUNNER_TEMP/ref-sweep-recovery.log"
+          result=${PIPESTATUS[0]}
+          if [ "$result" -ne 0 ]; then
+            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-2500).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=Original Ref sweep did not complete::"+s)' "$RUNNER_TEMP/ref-sweep-recovery.log"
+          fi
+          exit "$result"
+      - name: Preserve original and sweep recovery evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: original-ref-sweep-recovery
+          path: ${{ runner.temp }}/ref-sweep-recovery/**
+          if-no-files-found: ignore
+          retention-days: 90
+
+  inspect-original-vrf-setup:
+    name: Inspect original VRF setup (read only)
+    if: github.event_name == 'push' && github.event.repository.private == true && github.run_attempt == '1' && contains(github.event.head_commit.message, '[inspect-original-vrf-setup-20261101]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: paid-vrf-testnet-recovery
+          run-id: 41301880679
+          github-token: ${{ github.token }}
+          path: original-vrf-evidence
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      - name: Reinspect retained setup hashes and balances without signing or sending
+        run: node bouncer/scripts/inspect-vrf-setup.mjs original-vrf-evidence
+
+  youtick-playback-read:
+    name: Inspect independent testnet playback readiness (read only)
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/arena/') && contains(github.event.head_commit.message, '[youtick-playback-read]')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: bouncer/package-lock.json
+      - run: npm ci
+        working-directory: bouncer
+      - name: Read same-block market and access views plus bridge health
+        working-directory: bouncer
+        run: node scripts/probe-youtick-playback.mjs
+
+  youtick-funding-read:
+    name: Estimate independent provider funding (read only)
+    if: github.event_name == 'push' && github.event.repository.private == true && github.run_attempt == '1' && contains(github.event.head_commit.message, '[inspect-youtick-funding-20261101]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      - name: Read fixed testnet balances and Ref pool quotes without signing
+        run: node bouncer/scripts/inspect-youtick-funding.mjs
+
+  youtick-testnet-quote-only:
+    name: Verify independent provider testnet quote (no payment)
+    if: github.event_name == 'push' && github.event.repository.private == true && github.run_attempt == '1' && contains(github.event.head_commit.message, '[youtick-testnet-quote-only-20261101]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      - name: Request and authenticate one bounded testnet offer without paying or uploading
+        run: node bouncer/scripts/quote-youtick-testnet.mjs
+
+  youtick-capability-read:
+    name: Discover independent testnet video provider (read only)
+    if: github.event_name == 'push' && github.run_attempt == '1' && contains(github.event.head_commit.message, '[youtick-capability-read-20261101]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      - name: Inspect independent public health and on-chain policy, without ordering
+        run: node bouncer/scripts/probe-youtick.mjs
+
+  reinspect-completed-ref:
+    name: Reinspect completed guarded Ref swap (read only)
+    if: github.event_name == 'push' && github.event.repository.private == true && github.run_attempt == '1' && contains(github.event.head_commit.message, '[reinspect-completed-ref-20261101]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: original-ref-sweep-recovery
+          run-id: 41302114643
+          github-token: ${{ github.token }}
+          path: completed-ref-evidence
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      - name: Reverify both original hashes without keys, writes, or sends
+        run: node bouncer/scripts/inspect-completed-ref-swap.mjs completed-ref-evidence
+
+  inspect-original-guarded-ref:
+    name: Inspect the original guarded Ref input (read only)
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[inspect-original-ref-20261101]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: guarded-ref-testnet-recovery
+          run-id: 41299191712
+          github-token: ${{ github.token }}
+          path: original-ref-evidence
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      - name: Inspect original FINAL receipt and balances without a key or send
+        run: node bouncer/scripts/inspect-original-ref-swap.mjs original-ref-evidence
+
+  paid-vrf-one-shot:
+    name: Independent FT-paid VRF diagnostic (testnet)
+    # Fresh testnet account and seed, never the separate unresolved burn hash.
+    # The exact parent + marker + first attempt prevent an incidental rerun.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/arena/88d70c7c-near-hub' && github.event.before == '6985b594938f13b98726cd3597973f1148668821' && github.event.repository.private == true && github.run_attempt == '1' && contains(github.event.head_commit.message, '[paid-vrf-proof-20261101]')
+    needs: [js-tests, contract-tests, build-contract]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: bouncer-wasm
+          path: .
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      - name: Recheck the pinned independent testnet VRF terms (read only)
+        run: node bouncer/scripts/probe-outlayer-vrf.mjs
+      - name: Run one guarded independent testnet diagnostic and recover original hashes
+        shell: bash
+        env:
+          BOUNCER_PAID_PROBE: vrf
+          BOUNCER_VRF_DEMO_ACK: testnet-only-one-shot
+          BOUNCER_VRF_DEMO_DIR: ${{ runner.temp }}/bouncer-vrf-proof
+        run: |
+          set +e
+          node bouncer/demo-ft-call.mjs 2>&1 | tee "$RUNNER_TEMP/paid-vrf-demo.log"
+          result=${PIPESTATUS[0]}
+          if [ "$result" -ne 0 ]; then
+            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-4000).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=Paid testnet VRF diagnostic failed::"+s)' "$RUNNER_TEMP/paid-vrf-demo.log"
+          fi
+          exit "$result"
+      # Public identities/journals/results plus encrypted testnet credentials;
+      # no plaintext secrets or signed transactions. Retain even on failure.
+      - name: Preserve original VRF testnet recovery evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: paid-vrf-testnet-recovery
+          path: ${{ runner.temp }}/bouncer-vrf-proof/**
+          if-no-files-found: ignore
+          retention-days: 90
+
+  guarded-ref-one-shot:
+    name: One-shot guarded Ref swap and vault credit (testnet)
+    # The explicit parent and marker prohibit reruns or incidental paid runs.
+    # This never touches the separate unresolved OutLayer project transaction.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/arena/88d70c7c-near-hub' && github.event.before == 'ee2c21ee457090c6d2bd9b548883786f7f50e714' && github.event.repository.private == true && github.run_attempt == '1' && contains(github.event.head_commit.message, '[guarded-ref-demo-v3-20261101]')
+    needs: [js-tests, contract-tests, build-contract, ref-router-contract]
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: bouncer-wasm
+          path: .
+      - uses: actions/download-artifact@v4
+        with:
+          name: ref-router-wasm
+          path: ref-router-wasm
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      - name: Execute bounded testnet route and recover both original hashes
+        shell: bash
+        env:
+          BOUNCER_REF_DEMO_ACK: testnet-only-one-shot
+          BOUNCER_REF_DEMO_DIR: ${{ runner.temp }}/bouncer-ref-proof
+        run: |
+          set +e
+          node bouncer/demo-ref-swap.mjs 2>&1 | tee "$RUNNER_TEMP/guarded-ref-demo.log"
+          result=${PIPESTATUS[0]}
+          if [ "$result" -ne 0 ]; then
+            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-4000).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=Guarded Ref testnet proof failed::"+s)' "$RUNNER_TEMP/guarded-ref-demo.log"
+          fi
+          exit "$result"
+      # No plaintext keys or signed payloads: public goal/journal/receipts and
+      # RSA-OAEP + AES-GCM ciphertext only. The decryption key is kept outside
+      # Git on the operator sandbox. Preserve even on a failed/uncertain run.
+      - name: Preserve original testnet recovery evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: guarded-ref-testnet-recovery
+          path: ${{ runner.temp }}/bouncer-ref-proof/**
+          if-no-files-found: ignore
+          retention-days: 90
 
   circle-usdc-live:
     name: Circle testnet USDC guarded multi-resource mission
@@ -191,9 +693,251 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+  dependent-workflow-live:
+    name: Dependent oracle to compute, storage and API (testnet)
+    # Explicit one-shot opt-in only. This uses a new, isolated testnet account;
+    # it does not touch or retry the separately unresolved project transaction.
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[dependent-live]')
+    needs: [js-tests, contract-tests, build-contract]
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: bouncer-wasm
+          path: .
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      # One native OutLayer purchase and three Circle testnet USDC payments to
+      # local development software. Testnet tokens have no value. No ambiguous
+      # payment is retried; recovery is by the original signed hash only.
+      - name: Run and recover the chained testnet workflow
+        shell: bash
+        run: |
+          set +e
+          node bouncer/demo-oracle-mission.mjs --dependent-workflow 2>&1 | tee "$RUNNER_TEMP/dependent-live.log"
+          result=${PIPESTATUS[0]}
+          if [ "$result" -ne 0 ]; then
+            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-4500).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=Dependent workflow live check failed::"+s)' "$RUNNER_TEMP/dependent-live.log"
+          fi
+          exit "$result"
+      # Both success and failure evidence are public testnet inputs, hashes and
+      # local-provider state. Ephemeral private keys are never written to disk.
+      - name: Preserve testnet workflow evidence, never keys
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependent-workflow-public-evidence
+          path: |
+            /tmp/bouncer-dependent-live-*/journal.json
+            /tmp/bouncer-dependent-live-*/setup-journal.json
+            /tmp/bouncer-dependent-live-*/oracle-goal.json
+            /tmp/bouncer-dependent-live-*/workflow.json
+            /tmp/bouncer-dependent-live-*/derived-orders.json
+            /tmp/bouncer-dependent-live-*/evidence.json
+            /tmp/bouncer-dependent-live-*/provider-config.json
+            /tmp/bouncer-dependent-live-*/development-provider/**
+          if-no-files-found: ignore
+          retention-days: 90
+
+  seller-v2-workflow-live:
+    name: Seller-v2 dependent workflow and recovery (testnet)
+    # One fresh, explicit testnet run. Re-running a GitHub Actions run must not
+    # silently repeat its payments; investigate an ambiguous hash instead.
+    if: github.event_name == 'push' && github.run_attempt == '1' && contains(github.event.head_commit.message, '[seller-v2-live]')
+    needs: [js-tests, contract-tests, build-contract]
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: bouncer-wasm
+          path: .
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      # One native OutLayer oracle execution, then three Circle testnet USDC
+      # payments to the self-hosted reference seller, not an independent seller.
+      # No ambiguous payment is retried; the exact signed hash is journaled.
+      - name: Run and recover seller-v2 orders
+        shell: bash
+        run: |
+          set +e
+          node bouncer/demo-oracle-mission.mjs --seller-v2-workflow 2>&1 | tee "$RUNNER_TEMP/seller-v2-live.log"
+          result=${PIPESTATUS[0]}
+          if [ "$result" -ne 0 ]; then
+            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-4500).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=Seller-v2 testnet check failed::"+s)' "$RUNNER_TEMP/seller-v2-live.log"
+          fi
+          exit "$result"
+      # Public testnet inputs, memos, hashes and local state, never private keys.
+      - name: Preserve seller-v2 testnet evidence, never keys
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: seller-v2-workflow-public-evidence
+          path: |
+            /tmp/bouncer-seller-v2-live-*/journal.json
+            /tmp/bouncer-seller-v2-live-*/setup-journal.json
+            /tmp/bouncer-seller-v2-live-*/oracle-goal.json
+            /tmp/bouncer-seller-v2-live-*/workflow.json
+            /tmp/bouncer-seller-v2-live-*/derived-orders.json
+            /tmp/bouncer-seller-v2-live-*/evidence.json
+            /tmp/bouncer-seller-v2-live-*/provider-config.json
+            /tmp/bouncer-seller-v2-live-*/development-provider/**
+          if-no-files-found: ignore
+          retention-days: 90
+
+  seller-v3-workflow-live:
+    name: Authenticated seller-v3 dependent workflow (testnet)
+    # One explicit fresh testnet run; Actions reruns never repeat its payments.
+    if: github.event_name == 'push' && github.event.repository.private == true && github.run_attempt == '1' && contains(github.event.head_commit.message, '[seller-v3-live]')
+    needs: [js-tests, contract-tests, build-contract]
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: bouncer-wasm
+          path: .
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      # One native testnet OutLayer call and three Circle testnet USDC payments
+      # to our local development seller, never an independent FT merchant.
+      - name: Run authenticated orders and key-free recovery
+        shell: bash
+        run: |
+          set +e
+          node bouncer/demo-oracle-mission.mjs --seller-v3-workflow 2>&1 | tee "$RUNNER_TEMP/seller-v3-live.log"
+          result=${PIPESTATUS[0]}
+          if [ "$result" -ne 0 ]; then
+            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-4500).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=Seller-v3 testnet check failed::"+s)' "$RUNNER_TEMP/seller-v3-live.log"
+          fi
+          exit "$result"
+      # Repository-restricted artifact: the buyer journal contains replayable
+      # testnet claim signatures and task data, but never private keys. Preserve
+      # the original on both success and failure for safe reconciliation.
+      - name: Preserve sensitive testnet recovery evidence, never keys
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: seller-v3-restricted-recovery-evidence
+          path: |
+            /tmp/bouncer-seller-v3-live-*/journal.json
+            /tmp/bouncer-seller-v3-live-*/setup-journal.json
+            /tmp/bouncer-seller-v3-live-*/oracle-goal.json
+            /tmp/bouncer-seller-v3-live-*/workflow.json
+            /tmp/bouncer-seller-v3-live-*/derived-orders.json
+            /tmp/bouncer-seller-v3-live-*/evidence.json
+            /tmp/bouncer-seller-v3-live-*/provider-config.json
+            /tmp/bouncer-seller-v3-live-*/development-provider/**
+          if-no-files-found: ignore
+          retention-days: 90
+
+  reconcile-seller-v3-oracle:
+    name: Reconcile the seller-v3 run's original oracle (read only)
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[seller-v3-reconcile]')
+    needs: js-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: seller-v3-restricted-recovery-evidence
+          path: ${{ runner.temp }}/seller-v3-original
+          github-token: ${{ github.token }}
+          run-id: 41268548592
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      # Read the preserved original only. No keys, writes, new orders, or sends.
+      - name: Verify the original source hash and no resource broadcasts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t journals < <(find "$RUNNER_TEMP/seller-v3-original" -type f -name journal.json)
+          mapfile -t goals < <(find "$RUNNER_TEMP/seller-v3-original" -type f -name oracle-goal.json)
+          test "${#journals[@]}" -eq 1 && test "${#goals[@]}" -eq 1
+          node --input-type=module - "${journals[0]}" "${goals[0]}" <<'NODE'
+          import fs from 'node:fs';
+          import { selectJournalOracle } from './bouncer/scripts/reconcile-oracle-journal.mjs';
+          const journal = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          const goal = JSON.parse(fs.readFileSync(process.argv[3], 'utf8'));
+          const { entry } = selectJournalOracle(goal, journal);
+          if (entry.tx_hash !== 'CCbbcM73XZc1r8WcmyPMYHaudaR7qfjKKYhihZpHcuZ8') throw new Error('unexpected source hash');
+          if (journal.entries.some(e => e?.request?.resource || e?.resource_authorization)) throw new Error('unexpected resource payment or authorization in journal');
+          console.log('Original journal confirms zero resource broadcasts; no signed claims or entries were printed.');
+          NODE
+          node bouncer/scripts/reconcile-oracle-journal.mjs "${journals[0]}" "${goals[0]}"
+
+  piprail-onchain-proof-live:
+    name: One-shot onchain-proof SDK interoperability (testnet)
+    # A fresh self-hosted SDK gate and one Circle testnet USDC payment only.
+    # Re-running an Actions run never repeats setup or payment.
+    if: github.event_name == 'push' && github.run_attempt == '1' && contains(github.event.head_commit.message, '[piprail-live]')
+    needs: [js-tests, contract-tests, build-contract]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: bouncer-wasm
+          path: .
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      - run: npm ci --prefix bouncer/interop/piprail --ignore-scripts --legacy-peer-deps --no-audit --no-fund
+      - name: Run one guarded payment and recover its original hash
+        env:
+          BOUNCER_PIPRAIL_PACKAGE_ROOT: ${{ github.workspace }}/bouncer/interop/piprail/node_modules/@piprail/sdk
+        shell: bash
+        run: |
+          set +e
+          node bouncer/demo-onchain-proof.mjs 2>&1 | tee "$RUNNER_TEMP/piprail-live.log"
+          result=${PIPESTATUS[0]}
+          if [ "$result" -ne 0 ]; then
+            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-4500).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=Onchain-proof testnet check failed::"+s)' "$RUNNER_TEMP/piprail-live.log"
+          fi
+          exit "$result"
+      # Public testnet inputs, responses and hashes; never private keys.
+      - name: Preserve onchain-proof recovery evidence, never keys
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: piprail-onchain-proof-public-evidence
+          path: |
+            /tmp/bouncer-piprail-live-*/setup-journal.json
+            /tmp/bouncer-piprail-live-*/journal.json
+            /tmp/bouncer-piprail-live-*/goal.json
+            /tmp/bouncer-piprail-live-*/evidence.json
+          if-no-files-found: ignore
+          retention-days: 90
+
   ft-call-live:
     name: Guarded independent FT funding, paid test connector and refund (testnet)
-    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[ft-call-live]')
+    if: github.event_name == 'push' && (contains(github.event.head_commit.message, '[ft-call-live]') || contains(github.event.head_commit.message, '[paid-compute-live]'))
     needs: build-contract
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -209,8 +953,14 @@ jobs:
         with:
           node-version: '22'
       - run: npm ci --prefix bouncer --no-audit --no-fund
+      # A receipt-inclusive historical regression must pass before any new
+      # account setup, test-token funding or project purchase is attempted.
+      - name: Verify the previous paid connector transaction (read only)
+        run: node bouncer/scripts/verify-project-history.mjs
       - name: Test pinned FT funding, paid independent probe and rejection refund
         shell: bash
+        env:
+          BOUNCER_PAID_PROBE: ${{ contains(github.event.head_commit.message, '[paid-compute-live]') && 'burn' || 'fetch' }}
         run: |
           set +e
           node bouncer/demo-ft-call.mjs 2>&1 | tee "$RUNNER_TEMP/ft-call-live.log"
@@ -303,6 +1053,110 @@ jobs:
           fi
           exit "$result"
 
+  provider-historical-verification:
+    name: Verify existing testnet FT seller receipts (read only)
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[provider-inspect]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      # Reuses three existing self-hosted-provider transactions. No credentials,
+      # signatures, transfers, or new provider purchases are made.
+      - name: Verify historical Circle testnet receipts and seller substitution
+        run: node bouncer/scripts/verify-provider-history.mjs
+
+  ft-call-historical-verification:
+    name: Verify existing guarded FT-call receipts (read only)
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[ft-call-inspect]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      # This hard-coded *completed* funding receipt is independent of the
+      # unresolved later project transaction. No signer, broadcast or payment.
+      - name: Check historical receipt graph and substitution refusals
+        run: node bouncer/scripts/verify-ft-call-history.mjs
+
+  dependent-historical-verification:
+    name: Verify dependent workflow with installed seller SDK (read only)
+    if: github.event_name == 'push' && (contains(github.event.head_commit.message, '[provider-inspect]') || contains(github.event.head_commit.message, '[seller-sdk-check]'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      # Install the exact local tarball in a separate seller application. This
+      # job only reads existing transactions; it has no key and cannot pay.
+      - name: Pack and install the private testnet SDK locally
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive=$(npm pack ./bouncer/packages/provider-sdk --pack-destination "$RUNNER_TEMP" --silent)
+          test "$archive" = 'bouncer-near-testnet-provider-sdk-0.3.0.tgz'
+          mkdir -p "$RUNNER_TEMP/seller-client"
+          printf '{"name":"seller-check","version":"1.0.0","private":true,"type":"module"}\n' > "$RUNNER_TEMP/seller-client/package.json"
+          npm install --prefix "$RUNNER_TEMP/seller-client" --ignore-scripts --no-audit --no-fund "$RUNNER_TEMP/$archive"
+          echo "BOUNCER_SELLER_SDK_MODULE=$RUNNER_TEMP/seller-client/node_modules/bouncer-near-testnet-provider-sdk/index.mjs" >> "$GITHUB_ENV"
+      - name: Check installed seller-v2 memo vector offline
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import { pathToFileURL } from 'node:url';
+          const sdk = await import(pathToFileURL(process.env.BOUNCER_SELLER_SDK_MODULE).href);
+          const input = { text: 'same work', rounds: 2 }, challenge = '00112233445566778899aabbccddeeff';
+          const expected = 'bouncer-order-v2:compute:00112233445566778899aabbccddeeff:88425334a4bb614fc54e3425a4d9cb3203fa9b4548ac732e006fd3d53d315fc5';
+          if (sdk.orderMemoV2('compute', input, challenge) !== expected || sdk.challengeFromOrderMemo('compute', input, expected) !== challenge) throw new Error('installed seller-v2 vector mismatch');
+          console.log('Installed SDK seller-v2 vector verified offline; no quote or payment.');
+          NODE
+      - name: Verify seller-v2 source, receipts and substitutions without paying
+        run: node bouncer/scripts/verify-seller-v2-history.mjs
+      - name: Verify the existing legacy source and seller receipts without paying
+        run: node bouncer/scripts/verify-dependent-history.mjs
+
+  piprail-receipt-compatibility:
+    name: Third-party SDK compatibility with an existing testnet receipt (read only)
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[piprail-sdk-check]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      - run: npm ci --prefix bouncer/interop/piprail --ignore-scripts --legacy-peer-deps --no-audit --no-fund
+      - name: Recheck old FINAL receipt with the independently published SDK (no payment)
+        env:
+          BOUNCER_PIPRAIL_PACKAGE_ROOT: ${{ github.workspace }}/bouncer/interop/piprail/node_modules/@piprail/sdk
+        shell: bash
+        run: |
+          set +e
+          node bouncer/scripts/verify-piprail-history.mjs 2>&1 | tee "$RUNNER_TEMP/piprail-history.log"
+          result=${PIPESTATUS[0]}
+          if [ "$result" -ne 0 ]; then
+            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-3000).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=Read-only PipRail receipt check failed::"+s)' "$RUNNER_TEMP/piprail-history.log"
+          fi
+          exit "$result"
+
   oracle-transaction-inspection:
     name: Reconcile one existing oracle transaction (read only)
     if: github.event_name == 'push' && contains(github.event.head_commit.message, '[oracle-inspect]')
@@ -352,6 +1206,150 @@ jobs:
       - run: npm ci --prefix bouncer --no-audit --no-fund
       - name: Inspect independent testnet contracts without keys or payments
         run: node bouncer/scripts/probe-ft-ecosystem.mjs
+
+  ref-echo-discovery:
+    name: Ref client-echo capability discovery (read only)
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[ref-echo-read]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      - name: Read testnet whitelist views without keys or payments
+        run: node bouncer/scripts/probe-ref-echo.mjs
+
+  project-history:
+    name: Historical paid connector regression (read only)
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[project-history]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      - run: node bouncer/scripts/verify-project-history.mjs
+
+  reconcile-project-journal:
+    name: Reconcile existing paid-project journal (read only)
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[project-reconcile]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          # The original public journal/goal were copied without alteration by
+          # the earlier read-only run; this copy outlives the original artifact.
+          name: reconciled-project-public-evidence
+          path: ${{ runner.temp }}/paid-project-evidence
+          github-token: ${{ github.token }}
+          run-id: 41212677218
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      # Exactly one existing public journal and goal. This script has no key,
+      # send or write path: even an unknown hash is never automatically resent.
+      - name: Inspect recorded hash and FINAL receipts without payment
+        shell: bash
+        run: |
+          mapfile -t journals < <(find "$RUNNER_TEMP/paid-project-evidence" -type f -name journal.json)
+          mapfile -t goals < <(find "$RUNNER_TEMP/paid-project-evidence" -type f -name project-goal.json)
+          test "${#journals[@]}" -eq 1 && test "${#goals[@]}" -eq 1
+          node bouncer/scripts/reconcile-project-journal.mjs "${journals[0]}" "${goals[0]}"
+      # These are only the earlier run's public testnet goals and journal,
+      # never keys or signed payloads. Preserve them even when RPC is down.
+      - name: Retain the original public recovery evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reconciled-project-public-evidence
+          path: ${{ runner.temp }}/paid-project-evidence/**
+          if-no-files-found: ignore
+          retention-days: 90
+
+  seller-v3-fresh-proof:
+    name: Fresh authenticated multi-resource proof (testnet)
+    # A DIFFERENT fresh account, journal, artifact and explicit marker from the
+    # earlier timed-out run. No Actions reruns and no production funds.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/arena/88d70c7c-near-hub' && github.event.before == 'a1abce25721de00c6123dcb2cbe23d51077a1c12' && github.event.repository.private == true && github.run_attempt == '1' && contains(github.event.head_commit.message, '[seller-v3-fresh-20261101]')
+    needs: [js-tests, contract-tests, build-contract]
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: bouncer-wasm
+          path: .
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      - name: Run a new bounded testnet workflow, with hash-only recovery
+        shell: bash
+        run: |
+          set +e
+          node bouncer/demo-oracle-mission.mjs --seller-v3-fresh 2>&1 | tee "$RUNNER_TEMP/seller-v3-fresh.log"
+          result=${PIPESTATUS[0]}
+          if [ "$result" -ne 0 ]; then
+            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-4500).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=Fresh seller-v3 testnet check failed::"+s)' "$RUNNER_TEMP/seller-v3-fresh.log"
+          fi
+          exit "$result"
+      # Contains replayable testnet claim signatures and task data, never keys.
+      # Preserve even on failure; do not change visibility while it is retained.
+      - name: Preserve restricted recovery evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: seller-v3-fresh-restricted-recovery
+          path: |
+            /tmp/bouncer-seller-v3-fresh-*/journal.json
+            /tmp/bouncer-seller-v3-fresh-*/setup-journal.json
+            /tmp/bouncer-seller-v3-fresh-*/oracle-goal.json
+            /tmp/bouncer-seller-v3-fresh-*/workflow.json
+            /tmp/bouncer-seller-v3-fresh-*/derived-orders.json
+            /tmp/bouncer-seller-v3-fresh-*/evidence.json
+            /tmp/bouncer-seller-v3-fresh-*/provider-config.json
+            /tmp/bouncer-seller-v3-fresh-*/development-provider/**
+          if-no-files-found: ignore
+          retention-days: 90
+
+  x402-independent-inspection:
+    name: Inspect one independent x402 endpoint (read only)
+    # One publicly documented endpoint, one unauthenticated GET, no proof,
+    # private key or transaction. The buyer cannot pay its Base-mainnet rail.
+    if: github.event_name == 'push' && github.run_attempt == '1' && contains(github.event.head_commit.message, '[x402-inspect]')
+    needs: js-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      - name: Classify public offer without credentials or payment
+        shell: bash
+        run: |
+          node bouncer/agent/inspect-x402.mjs --url https://piprail.com/x402/demo > "$RUNNER_TEMP/x402-report.json"
+          node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").trim().replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::notice title=Read-only independent x402 inspection::"+s.slice(0,3500))' "$RUNNER_TEMP/x402-report.json"
 
   independent-market-discovery:
     name: Independent marketplace catalog (read only)

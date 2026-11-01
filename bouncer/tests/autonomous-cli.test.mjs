@@ -109,6 +109,23 @@ test('comparison aborts on an unauthorized alternative before writing goals or p
   } finally { fs.rmSync(f.dir, { recursive: true, force: true }); }
 });
 
+test('seller-v2 execute requires durable mode before comparison quotes or goal-file creation', () => {
+  for (const pinned of ['primary', 'alternative']) {
+    const f = fixture();
+    try {
+      const configFile = f.args[1], c = JSON.parse(fs.readFileSync(configFile, 'utf8'));
+      if (pinned === 'primary') c.resources.compute.order_binding = 'seller-v2';
+      else c.resources.compute.alternatives = [{ id: 'second', provider_url: 'https://alternative.example', policy_id: 'compute-b',
+        payee: 'vendor-b.testnet', max_amount: '100', order_binding: 'seller-v2' }];
+      fs.writeFileSync(configFile, JSON.stringify(c));
+      const result = exec([...f.args, '--compare-providers', '--key', f.key, '--execute'], { MOCK_BAD_QUOTE: '1', MOCK_ALT_BAD_QUOTE: '1' });
+      assert.equal(result.status, 1); assert.match(result.stderr, /seller-v2 execution requires --durable/);
+      assert.doesNotMatch(result.stderr, /comparison failed/); assert.equal(fs.existsSync(f.output), false);
+      assert.doesNotMatch(result.stdout, /PAID|FULFILLED/);
+    } finally { fs.rmSync(f.dir, { recursive: true, force: true }); }
+  }
+});
+
 test('explicit execute uses guarded runner and stable journal with mocked transport', () => {
   const f = fixture();
   try {

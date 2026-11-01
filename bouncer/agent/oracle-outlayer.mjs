@@ -18,13 +18,13 @@ import crypto from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { pathToFileURL } from 'node:url';
 import nearApi from 'near-api-js';
-import { FileJournal } from './procurement.mjs';
-import { MonotonicAccount } from './near-account.mjs';
+import { openConfiguredFileJournal } from './procurement.mjs';
+import { MonotonicAccount, PaymentRpcProvider } from './near-account.mjs';
 import { normalizeProgram, verifyOutlayerEvidence, OUTLAYER, NATIVE } from './outlayer.mjs';
 import { isTestnetAccount } from '../shared/account-id.mjs';
-import { validateRpcEndpoint } from '../shared/rpc-endpoint.mjs';
+import { signReviewedCall } from './reviewed-transaction.mjs';
 
-const { KeyPair, KeyPairSigner, providers, transactions, utils } = nearApi;
+const { KeyPair, KeyPairSigner } = nearApi;
 const HASH = '3585b3890f49748713b43ccb9b0ef4148f317d62f4d598db80fdaffc3f3185a0';
 // Independently published project version observed in the testnet registry;
 // its WasmUrl is pinned, not followed through the mutable active-version view.
@@ -161,11 +161,13 @@ export function assertOracleFreshForUse(delivery, nowSeconds = Math.floor(Date.n
 
 /** Key-free recovery by the original signed transaction hash, never a send. */
 export async function recoverOracleGoal({ goal: rawGoal, provider, journal, publicKey, update = true, log = console.log }) {
+  if (journal?.sharedDirectV3 === true) throw new Error('shared buyer journal does not coordinate oracle payments');
   const goal = validateOracleGoal(rawGoal);
   if (!journal || typeof journal.get !== 'function' || typeof journal.put !== 'function') throw new Error('recovery requires the original journal');
   if ((await provider.viewNodeStatus())?.chain_id !== 'testnet') throw new Error('RPC must report testnet');
   const previous = journal.get(goal.id);
   if (!previous || previous.fingerprint !== fingerprint(goal)) throw new Error(`${goal.id}: journal does not match the reviewed goal`);
+  if (!['pending', 'completed'].includes(previous.status)) throw new Error(`${goal.id}: invalid journal status; stop and reconcile`);
   if (!validHash(previous.tx_hash)) throw new Error(`${goal.id}: unresolved payment without a transaction hash; reconcile manually, never resend automatically`);
   const signedBy = previous.agent_public_key || (publicKey && String(publicKey));
   if (typeof signedBy !== 'string' || !signedBy) throw new Error(`${goal.id}: original signing public key is required for recovery`);
@@ -198,6 +200,7 @@ export async function assertOracleProjectRegistry(provider) {
 
 /** Dry-run or sign one exact-input request after on-chain policy preflight. */
 export async function runOracleGoal({ goal: rawGoal, provider, account, publicKey, journal, execute = false, log = console.log }) {
+  if (journal?.sharedDirectV3 === true) throw new Error('shared buyer journal does not coordinate oracle payments');
   const goal = validateOracleGoal(rawGoal);
   if (!account || account.accountId !== goal.owner_account_id || !publicKey) throw new Error('agent key account does not match the owner');
   if (execute && (!journal || typeof journal.get !== 'function' || typeof journal.put !== 'function')) throw new Error('live execution requires a journal');
@@ -214,7 +217,7 @@ export async function runOracleGoal({ goal: rawGoal, provider, account, publicKe
   }
   const fp = fingerprint(goal), previous = journal?.get(goal.id);
   if (previous && previous.fingerprint !== fp) throw new Error(`${goal.id}: journal does not match the reviewed goal`);
-  if (previous) return recoverOracleGoal({ goal, provider, journal, publicKey, log });
+  if (previous) return recoverOracleGoal({ goal, provider, journal, publicKey, update: execute, log });
   const [policy, route, allowed, verdict] = await Promise.all([
     provider.callFunction(goal.contract_id, 'get_policy', { policy_id: goal.policy_id }, final),
     provider.callFunction(goal.contract_id, 'get_outlayer_native_project', { policy_id: goal.policy_id }, final),
@@ -226,13 +229,8 @@ export async function runOracleGoal({ goal: rawGoal, provider, account, publicKe
   if (!Array.isArray(verdict) || verdict.length !== 2 || typeof verdict[0] !== 'boolean') throw new Error('invalid policy verdict');
   if (!verdict[0]) { log(`[oracle] BLOCKED ${goal.id}: ${String(verdict[1]).slice(0, 200)}`); return { status: 'BLOCKED' }; }
   if (!execute) { log(`[oracle] READY ${goal.id}: at most ${goal.amount} yoctoNEAR to ${OUTLAYER} (dry run)`); return { status: 'READY' }; }
-  if (!account.signer || typeof account.createTransaction !== 'function' ||
-      String(await account.signer.getPublicKey()) !== String(publicKey)) throw new Error('account signer does not match the reviewed agent key');
-  const action = transactions.functionCall('execute_outlayer_native_project', signedArgs(goal), GAS, 0n);
-  const transaction = await account.createTransaction(goal.contract_id, [action], publicKey);
-  const [hashBytes, signed] = await account.signer.signTransaction(transaction);
-  if (!(hashBytes instanceof Uint8Array) || hashBytes.length !== 32 || !signed) throw new Error('signer did not return a transaction hash');
-  const txHash = utils.serialize.base_encode(hashBytes);
+  const { txHash, signed } = await signReviewedCall({ account, publicKey, ownerId: goal.owner_account_id, contractId: goal.contract_id,
+    method: 'execute_outlayer_native_project', args: signedArgs(goal), gas: GAS });
   if (!validHash(txHash)) throw new Error('signer returned an invalid transaction hash');
   const pending = { fingerprint: fp, status: 'pending', oracle_goal: goal, agent_public_key: String(publicKey),
     tx_hash: txHash, started_at: new Date().toISOString() };
@@ -270,17 +268,20 @@ async function main() {
   if (options.help) {
     console.log('Usage: node bouncer/agent/oracle-outlayer.mjs --goal GOAL.json --key AGENT_KEY.json [--state JOURNAL.json] [--rpc URL] [--execute]');
     console.log('       node bouncer/agent/oracle-outlayer.mjs --goal GOAL.json --state JOURNAL.json [--rpc URL] --recover');
-    console.log('Dry run by default; --execute spends testnet NEAR once. --recover reads the original hash without a key.');
+    console.log('Dry run by default; --execute spends testnet NEAR once. --recover needs no NEAR signing key; encrypted file journals still require their separate key.');
     return;
   }
   if (!options.goal || (!options.recover && !options.key)) throw new Error('provide --goal and --key, or --goal with --recover; see --help');
   if (options.recover && (options.execute || options.key)) throw new Error('--recover cannot be combined with --execute or --key');
   const goalPath = path.resolve(expandHome(options.goal));
   const goal = validateOracleGoal(JSON.parse(fs.readFileSync(goalPath, 'utf8')));
-  const provider = new providers.JsonRpcProvider({ url: validateRpcEndpoint(options.rpc || process.env.NEAR_TESTNET_RPC || 'https://test.rpc.fastnear.com') });
+  const provider = new PaymentRpcProvider(options.rpc || process.env.NEAR_TESTNET_RPC || 'https://test.rpc.fastnear.com');
   const state = path.resolve(expandHome(options.state || `${goalPath}.bouncer-journal.json`));
-  if (options.recover && !fs.existsSync(state)) throw new Error('original journal not found; recovery cannot create one');
-  const journal = options.execute || options.recover ? new FileJournal(state, goal.contract_id, goal.owner_account_id) : null;
+  // Observe an existing journal even in dry-run mode. If it disappeared
+  // before the lock was acquired, requireExisting prevents a new history.
+  const requireExisting = !!options.recover || fs.existsSync(state);
+  const journal = options.execute || requireExisting
+    ? openConfiguredFileJournal(state, goal.contract_id, goal.owner_account_id, { requireExisting }) : null;
   try {
     let outcome;
     if (options.recover) outcome = await recoverOracleGoal({ goal, provider, journal });

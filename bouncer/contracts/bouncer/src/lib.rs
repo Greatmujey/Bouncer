@@ -19,6 +19,16 @@ const OUTLAYER_DEPOSIT_MSG: &str = r#"{"action":"deposit_balance"}"#;
 const NATIVE_SURPLUS_RESERVE: u128 = 50_000_000_000_000_000_000_000; // 0.05 NEAR
 const MAX_OUTLAYER_INPUT_BYTES: usize = 4096;
 const MAX_FT_CALL_MESSAGE_BYTES: usize = 2048;
+// Only the separately built V10 testnet artifact exposes this narrow, owner-
+// authorized playback grant. It does not change deployed V9 contracts.
+#[cfg(feature = "youtick-playback-v10")]
+const YOUTICK_ACCESS_TESTNET: &str = "video-access-v1-260907.youtick-dev-v3.testnet";
+#[cfg(feature = "youtick-playback-v10")]
+const YOUTICK_ORIGIN_SHA256: &str = "405f0f2f5400af2a2abaa3350ffaa0b95a56f16b85129d9a1a1663bdda989924";
+#[cfg(feature = "youtick-playback-v10")]
+const YOUTICK_PLAY_GRANT_TTL_MS: u64 = 600_000;
+#[cfg(feature = "youtick-playback-v10")]
+const GAS_FOR_YOUTICK_GRANT: Gas = Gas::from_tgas(70);
 const NS_PER_HOUR: u64 = 60 * 60 * 1_000_000_000;
 const WINDOW_HOURS: u64 = 24;
 #[cfg(test)]
@@ -41,6 +51,26 @@ trait ExtFt {
     fn ft_transfer(&mut self, receiver_id: AccountId, amount: U128, memo: Option<String>);
     fn ft_transfer_call(&mut self, receiver_id: AccountId, amount: U128, memo: Option<String>, msg: String) -> PromiseOrValue<U128>;
 }
+#[cfg(feature = "youtick-playback-v10")]
+#[derive(near_sdk::serde::Serialize)]
+#[serde(crate = "near_sdk::serde")]
+pub struct YoutickPlayGrantRequest {
+    target_owner_id: AccountId,
+    session_pk: String,
+    scope: String,
+    resource_id: Option<String>,
+    ttl_ms: u64,
+    origin_hash: Option<String>,
+    device_hash: Option<String>,
+    session_pok: String,
+}
+
+#[cfg(feature = "youtick-playback-v10")]
+#[ext_contract(ext_youtick_access)]
+trait ExtYoutickAccess {
+    fn issue_session_grant(&mut self, request: YoutickPlayGrantRequest);
+}
+
 #[ext_contract(ext_self)]
 trait ExtSelf {
     fn after_execute(&mut self, policy_id: String, token: AccountId, amount: U128, bucket: u64);
@@ -394,7 +424,39 @@ impl Bouncer {
         })
     }
 
-    pub fn contract_version(&self) -> &'static str { "bouncer-agent-v9" }
+    pub fn contract_version(&self) -> &'static str {
+        #[cfg(feature = "youtick-playback-v10")]
+        { "bouncer-agent-v10-youtick-testnet" }
+        #[cfg(not(feature = "youtick-playback-v10"))]
+        { "bouncer-agent-v9" }
+    }
+
+    /// Separately built testnet-focused artifact: an owner may authorize a
+    /// short-lived YouTick Play grant for this vault and a reviewed job.
+    /// Account suffixes do not prove chain identity; clients must check testnet.
+    /// This is not a payment, publication, retrieval or delivery proof. The
+    /// fixed external access contract is trusted; on-chain code correspondence
+    /// and live playback remain unproven. Restricted zero-deposit agent keys
+    /// cannot call this 1-yocto owner-only method.
+    #[cfg(feature = "youtick-playback-v10")]
+    #[payable]
+    pub fn issue_youtick_play_grant(&mut self, job_id: String, session_pk: String, device_hash: String, session_pok: String) -> Promise {
+        require_owner(self, env::attached_deposit()).unwrap_or_else(|m| abort_with(&m));
+        let vault = env::current_account_id();
+        require(vault.as_str().ends_with(".testnet") && self.owner.as_str().ends_with(".testnet"), "testnet vault and owner required");
+        require(!job_id.is_empty() && job_id.len() <= 128 && job_id.bytes().all(|b|
+            b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b':' | b'-')), "invalid YouTick job ID");
+        let key: PublicKey = session_pk.parse().unwrap_or_else(|_| abort_with("invalid playback session key"));
+        require(session_pk.len() <= 64 && key.as_bytes().len() == 33 && key.as_bytes()[0] == 0, "invalid playback session key");
+        let hex = |s: &str, size: usize| s.len() == size && s.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+        require(hex(&device_hash, 64) && hex(&session_pok, 128), "invalid playback binding or proof");
+        let request = YoutickPlayGrantRequest { target_owner_id: vault, session_pk, scope: "Play".into(),
+            resource_id: Some(job_id), ttl_ms: YOUTICK_PLAY_GRANT_TTL_MS,
+            origin_hash: Some(YOUTICK_ORIGIN_SHA256.into()), device_hash: Some(device_hash), session_pok };
+        let access: AccountId = YOUTICK_ACCESS_TESTNET.parse().unwrap_or_else(|_| abort_with("invalid fixed access account"));
+        ext_youtick_access::ext(access).with_attached_deposit(ZERO_NEAR).with_static_gas(GAS_FOR_YOUTICK_GRANT)
+            .issue_session_grant(request)
+    }
 
     /// Lets clients verify the refund recipient; a version string alone does
     /// not verify deployed code or the RPC.
@@ -1034,6 +1096,92 @@ mod tests {
         (contract, agent_key)
     }
 
+    #[cfg(feature = "youtick-playback-v10")]
+    #[test]
+    fn testnet_play_grant_is_owner_authorized_and_narrowly_bound() {
+        use near_sdk::mock::MockAction;
+        use near_sdk::test_utils::get_created_receipts;
+        let (mut contract, _) = fixture();
+        testing_env!(owner_context(&key(1), 1, NS_PER_DAY));
+        let session_pk = String::from(&key(4));
+        drop(contract.issue_youtick_play_grant("job:one".into(), session_pk.clone(), "a".repeat(64), "b".repeat(128)));
+        assert_eq!(contract.contract_version(), "bouncer-agent-v10-youtick-testnet");
+        assert_eq!(contract.vault_balance(id("token.testnet")).0, 1_000);
+        let receipts = get_created_receipts();
+        assert_eq!(receipts.len(), 1);
+        assert_eq!(receipts[0].receiver_id, id(YOUTICK_ACCESS_TESTNET));
+        let (args, deposit) = receipts[0].actions.iter().find_map(|action| match action {
+            MockAction::FunctionCallWeight { method_name, args, attached_deposit, .. } if method_name == b"issue_session_grant" => Some((args, attached_deposit)),
+            _ => None,
+        }).expect("expected only the fixed grant method");
+        assert_eq!(*deposit, ZERO_NEAR);
+        let value: near_sdk::serde_json::Value = near_sdk::serde_json::from_slice(args).unwrap();
+        let request = &value["request"];
+        assert_eq!(request["target_owner_id"], "bouncer.testnet");
+        assert_eq!(request["session_pk"], session_pk);
+        assert_eq!(request["scope"], "Play");
+        assert_eq!(request["resource_id"], "job:one");
+        assert_eq!(request["ttl_ms"], YOUTICK_PLAY_GRANT_TTL_MS);
+        assert_eq!(request["origin_hash"], YOUTICK_ORIGIN_SHA256);
+        assert_eq!(request["device_hash"], "a".repeat(64));
+        assert_eq!(request["session_pok"], "b".repeat(128));
+    }
+
+    #[cfg(feature = "youtick-playback-v10")]
+    #[test]
+    #[should_panic(expected = "owner-only method requires exactly 1 yoctoNEAR")]
+    fn agent_cannot_issue_a_playback_grant() {
+        let (mut contract, agent) = fixture();
+        testing_env!(owner_context(&agent, 0, NS_PER_DAY));
+        drop(contract.issue_youtick_play_grant("job".into(), String::from(&key(4)), "a".repeat(64), "b".repeat(128)));
+    }
+
+    #[cfg(feature = "youtick-playback-v10")]
+    #[test]
+    #[should_panic(expected = "ESCALATION BLOCKED: caller is not owner")]
+    fn attacker_cannot_issue_a_grant_even_with_one_yocto() {
+        let (mut contract, _) = fixture();
+        testing_env!(context("attacker.testnet", "attacker.testnet", &key(4), 1, NS_PER_DAY));
+        drop(contract.issue_youtick_play_grant("job".into(), String::from(&key(4)), "a".repeat(64), "b".repeat(128)));
+    }
+
+    #[cfg(feature = "youtick-playback-v10")]
+    #[test]
+    #[should_panic(expected = "testnet vault and owner required")]
+    fn playback_grant_is_unavailable_from_mainnet_named_vault() {
+        let (mut contract, _) = fixture();
+        let mut b = VMContextBuilder::new();
+        b.current_account_id(id("vault.near")).predecessor_account_id(id("bouncer.testnet"))
+            .signer_account_id(id("bouncer.testnet")).signer_account_pk(key(1))
+            .attached_deposit(NearToken::from_yoctonear(1)).prepaid_gas(Gas::from_tgas(300));
+        testing_env!(b.build());
+        drop(contract.issue_youtick_play_grant("job".into(), String::from(&key(4)), "a".repeat(64), "b".repeat(128)));
+    }
+
+    #[cfg(feature = "youtick-playback-v10")]
+    #[test]
+    #[should_panic(expected = "invalid YouTick job ID")]
+    fn malformed_playback_job_is_rejected() {
+        let (mut contract, _) = fixture(); testing_env!(owner_context(&key(1), 1, NS_PER_DAY));
+        drop(contract.issue_youtick_play_grant("job\\nother".into(), String::from(&key(4)), "a".repeat(64), "b".repeat(128)));
+    }
+
+    #[cfg(feature = "youtick-playback-v10")]
+    #[test]
+    #[should_panic(expected = "invalid playback session key")]
+    fn malformed_playback_key_is_rejected() {
+        let (mut contract, _) = fixture(); testing_env!(owner_context(&key(1), 1, NS_PER_DAY));
+        drop(contract.issue_youtick_play_grant("job".into(), "attacker".into(), "a".repeat(64), "b".repeat(128)));
+    }
+
+    #[cfg(feature = "youtick-playback-v10")]
+    #[test]
+    #[should_panic(expected = "invalid playback binding or proof")]
+    fn malformed_playback_proof_is_rejected() {
+        let (mut contract, _) = fixture(); testing_env!(owner_context(&key(1), 1, NS_PER_DAY));
+        drop(contract.issue_youtick_play_grant("job".into(), String::from(&key(4)), "a".repeat(64), "XYZ".into()));
+    }
+
     #[test]
     fn authorized_agent_can_execute_without_deposit() {
         let (mut contract, agent) = fixture();
@@ -1195,6 +1343,43 @@ mod tests {
     }
 
     const PINNED_FT_MSG: &str = r#"{"action":"purchase","plan":"basic"}"#;
+
+    // A policy revision does not clear the hour's numeric spend. Exercise a
+    // delayed old-token refund alongside a partially refunded FT call and a
+    // newer-token transfer, without changing the existing callback ABI.
+    #[test]
+    #[allow(deprecated)]
+    fn delayed_refunds_after_policy_change_do_not_release_newer_reservations() {
+        let (mut contract, agent) = ft_call_fixture();
+        testing_env!(owner_context(&agent, 0, NS_PER_DAY));
+        drop(contract.execute("compute".into(), id("vendor.testnet"), U128(100), None, id("token.testnet")));
+        send_ft_call(&mut contract, 100);
+        assert_eq!(contract.daily_spent("compute".into()).0, 200);
+        assert_eq!(contract.vault_balance(id("token.testnet")).0, 800);
+
+        testing_env!(owner_context(&key(1), 1, NS_PER_DAY));
+        contract.set_policy("compute".into(), id("other-token.testnet"), U128(200), Some(U128(300)));
+        contract.balances.insert(id("other-token.testnet"), 500);
+        testing_env!(owner_context(&agent, 0, NS_PER_DAY));
+        drop(contract.execute("compute".into(), id("vendor.testnet"), U128(50), None, id("other-token.testnet")));
+        assert_eq!(contract.daily_spent("compute".into()).0, 250);
+
+        testing_env_with_promise_results(context("bouncer.testnet", "bouncer.testnet", &agent, 0, NS_PER_DAY),
+            PromiseResult::Successful(b"\"60\"".to_vec()));
+        assert_eq!(contract.after_execute_ft_call("compute".into(), id("token.testnet"), U128(100), WINDOW_HOURS,
+            1, id("vendor.testnet"), PINNED_FT_MSG.into()).map(|u| u.0), Some(60));
+        // Changed FT policy revision retains the original full numeric budget.
+        assert_eq!(contract.daily_spent("compute".into()).0, 250);
+        testing_env_with_promise_results(context("bouncer.testnet", "bouncer.testnet", &agent, 0, NS_PER_DAY),
+            PromiseResult::Failed);
+        contract.after_execute("compute".into(), id("token.testnet"), U128(100), WINDOW_HOURS);
+        assert_eq!(contract.vault_balance(id("token.testnet")).0, 940);
+        assert_eq!(contract.vault_balance(id("other-token.testnet")).0, 450);
+        // Old FT reservation (100) plus newer-token transfer (50) remain.
+        assert_eq!(contract.daily_spent("compute".into()).0, 150);
+        assert_eq!(contract.check("compute".into(), id("vendor.testnet"), U128(151)).1,
+            "BLOCKED: daily cap exceeded for this policy");
+    }
 
     fn ft_call_fixture() -> (Bouncer, PublicKey) {
         let (mut contract, agent) = fixture();

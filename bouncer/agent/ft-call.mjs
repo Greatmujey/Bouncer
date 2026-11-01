@@ -15,19 +15,20 @@ import crypto from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { pathToFileURL } from 'node:url';
 import nearApi from 'near-api-js';
-import { FileJournal } from './procurement.mjs';
-import { MonotonicAccount } from './near-account.mjs';
+import { openConfiguredFileJournal } from './procurement.mjs';
+import { MonotonicAccount, PaymentRpcProvider } from './near-account.mjs';
 import { isTestnetAccount, isTestnetToken } from '../shared/account-id.mjs';
-import { validateRpcEndpoint } from '../shared/rpc-endpoint.mjs';
+import { signReviewedCall } from './reviewed-transaction.mjs';
+import { isTransactionHash } from '../shared/direct-payment-settlement.mjs';
 
-const { KeyPair, KeyPairSigner, providers, transactions, utils } = nearApi;
+const { KeyPair, KeyPairSigner } = nearApi;
 const MAX = (1n << 128n) - 1n;
 const GAS = 300n * 10n ** 12n;
 const FIELDS = ['id', 'contract_id', 'owner_account_id', 'policy_id', 'payee', 'token', 'amount', 'msg', 'policy_revision', 'route_revision'];
 const equal = isDeepStrictEqual;
 const owns = (obj, keys) => obj && typeof obj === 'object' && !Array.isArray(obj) &&
   Object.keys(obj).length === keys.length && keys.every(k => Object.hasOwn(obj, k));
-const validHash = value => typeof value === 'string' && /^[1-9A-HJ-NP-Za-km-z]{32,60}$/.test(value);
+const validHash = isTransactionHash;
 function amount(value, label) {
   if (typeof value !== 'string' || !/^(?:0|[1-9][0-9]{0,38})$/.test(value) || BigInt(value) > MAX) throw new Error(`invalid ${label}`);
   return BigInt(value);
@@ -77,19 +78,29 @@ function actionReceipt(receipt, predecessor, receiver, name) {
 export function verifyFtCallSettlement(rawGoal, result, publicKey) {
   const goal = validateFtCallGoal(rawGoal);
   const tx = result?.transaction, hash = result?.transaction_outcome?.id;
-  if (result?.final_execution_status !== 'FINAL' || typeof result.status?.SuccessValue !== 'string' || !validHash(hash)) throw new Error('transaction is not a successful FINAL result');
+  if (result?.final_execution_status !== 'FINAL' || typeof result.status?.SuccessValue !== 'string' ||
+      result.status?.Failure !== undefined || result.status?.SuccessReceiptId !== undefined || !validHash(hash)) {
+    throw new Error('transaction is not a successful FINAL result');
+  }
   if (!tx || tx.hash !== hash || tx.signer_id !== goal.owner_account_id || tx.receiver_id !== goal.contract_id ||
       (publicKey !== undefined && tx.public_key !== String(publicKey)) || !Array.isArray(tx.actions) || tx.actions.length !== 1) throw new Error('transaction owner, contract or key mismatch');
   const signed = tx.actions[0]?.FunctionCall;
-  if (!signed || signed.method_name !== 'execute_ft_call' || String(signed.deposit) !== '0' ||
+  if (!signed || signed.method_name !== 'execute_ft_call' || String(signed.deposit) !== '0' || String(signed.gas) !== String(GAS) ||
       !equal(decode(signed.args, 'signed arguments'), expectedArgs(goal))) throw new Error('signed FT call does not match the reviewed goal');
   const used = amount(decode(result.status.SuccessValue, 'settlement result'), 'used amount');
   if (used > BigInt(goal.amount)) throw new Error('used amount exceeds the payment');
   const unused = BigInt(goal.amount) - used;
   if (!Array.isArray(result.receipts) || !Array.isArray(result.receipts_outcome) || !result.receipts.length || !result.receipts_outcome.length) throw new Error('missing raw receipts');
+  const receiptIds = result.receipts.map(r => r?.receipt_id), outcomeIds = result.receipts_outcome.map(r => r?.id);
+  if (receiptIds.some(id => typeof id !== 'string' || !id) || new Set(receiptIds).size !== receiptIds.length ||
+      outcomeIds.some(id => typeof id !== 'string' || !id) || new Set(outcomeIds).size !== outcomeIds.length) {
+    throw new Error('missing or duplicate FT-call receipt IDs');
+  }
   const initiations = result.receipts_outcome.filter(r => r?.outcome?.executor_id === goal.contract_id && successful(r.outcome.status) &&
     r.outcome.logs?.includes('BOUNCER guarded ft_transfer_call initiated; full amount reserved'));
   if (initiations.length !== 1) throw new Error('missing unique guarded initiation');
+  const txChildren = result.transaction_outcome?.outcome?.receipt_ids;
+  if (!Array.isArray(txChildren) || !txChildren.includes(initiations[0].id)) throw new Error('FT-call initiation is not bound to the transaction');
   const requests = result.receipts.flatMap(receipt => {
     const call = actionReceipt(receipt, goal.contract_id, goal.token, 'ft_transfer_call');
     return call ? [{ receipt, call }] : [];
@@ -118,14 +129,15 @@ export function verifyFtCallSettlement(rawGoal, result, publicKey) {
       callbackArgs.token !== goal.token || callbackArgs.amount !== goal.amount || callbackArgs.policy_revision !== goal.policy_revision ||
       !Number.isSafeInteger(callbackArgs.bucket) || callbackArgs.bucket < 0) throw new Error('settlement callback does not match the payment');
   const callbackOutcome = result.receipts_outcome.filter(r => r.id === callbacks[0].receipt.receipt_id &&
-    r.outcome?.executor_id === goal.contract_id && r.outcome?.status?.SuccessValue === result.status.SuccessValue &&
-    r.outcome.logs?.includes(expectedLog));
+    r.outcome?.executor_id === goal.contract_id && successful(r.outcome?.status) &&
+    r.outcome?.status?.SuccessValue === result.status.SuccessValue && r.outcome.logs?.includes(expectedLog));
   if (callbackOutcome.length !== 1) throw new Error('missing matching successful settlement outcome');
   // The request and callback were scheduled by the unique initiation. This
   // prevents borrowing otherwise plausible receipts from another execution.
   const children = initiations[0].outcome.receipt_ids;
-  if (!Array.isArray(children) || !children.includes(requests[0].receipt.receipt_id) || !children.includes(callbacks[0].receipt.receipt_id)) {
-    throw new Error('FT request or callback is not bound to the initiating receipt');
+  if (!Array.isArray(children) || !children.includes(requests[0].receipt.receipt_id) || !children.includes(callbacks[0].receipt.receipt_id) ||
+      initiations[0].outcome.status?.SuccessReceiptId !== callbacks[0].receipt.receipt_id) {
+    throw new Error('FT request or returned callback is not bound to the initiating receipt');
   }
   return { tx_hash: hash, token: goal.token, receiver: goal.payee, requested: goal.amount,
     used: used.toString(), unused: unused.toString(),
@@ -133,11 +145,13 @@ export function verifyFtCallSettlement(rawGoal, result, publicKey) {
 }
 
 export async function recoverFtCallGoal({ goal: rawGoal, provider, journal, publicKey, update = true, log = console.log }) {
+  if (journal?.sharedDirectV3 === true) throw new Error('shared buyer journal does not coordinate FT-call payments');
   const goal = validateFtCallGoal(rawGoal);
   if (!journal || typeof journal.get !== 'function' || typeof journal.put !== 'function') throw new Error('recovery requires the original journal');
   if ((await provider.viewNodeStatus())?.chain_id !== 'testnet') throw new Error('RPC must report testnet');
   const previous = journal.get(goal.id);
   if (!previous || previous.fingerprint !== fingerprint(goal)) throw new Error(`${goal.id}: journal does not match the reviewed goal`);
+  if (!['pending', 'completed'].includes(previous.status)) throw new Error(`${goal.id}: invalid journal status; stop and reconcile`);
   if (!validHash(previous.tx_hash)) throw new Error(`${goal.id}: no reliable transaction hash; reconcile manually, never resend automatically`);
   const signedBy = previous.agent_public_key;
   if (typeof signedBy !== 'string' || !signedBy || (publicKey && signedBy !== String(publicKey))) throw new Error(`${goal.id}: journal signing key mismatch`);
@@ -151,6 +165,7 @@ export async function recoverFtCallGoal({ goal: rawGoal, provider, journal, publ
 }
 
 export async function runFtCallGoal({ goal: rawGoal, provider, account, publicKey, journal, execute = false, log = console.log }) {
+  if (journal?.sharedDirectV3 === true) throw new Error('shared buyer journal does not coordinate FT-call payments');
   const goal = validateFtCallGoal(rawGoal);
   if (!account || account.accountId !== goal.owner_account_id || !publicKey) throw new Error('agent key account does not match the owner');
   if (execute && (!journal || typeof journal.get !== 'function' || typeof journal.put !== 'function')) throw new Error('live execution requires a journal');
@@ -160,12 +175,12 @@ export async function runFtCallGoal({ goal: rawGoal, provider, account, publicKe
     provider.callFunction(goal.contract_id, 'contract_version', {}, final), provider.callFunction(goal.contract_id, 'get_owner', {}, final),
     provider.viewAccessKey(goal.owner_account_id, publicKey, final),
   ]);
-  if (!['bouncer-agent-v6', 'bouncer-agent-v7', 'bouncer-agent-v8', 'bouncer-agent-v9'].includes(version) || owner !== goal.owner_account_id) throw new Error('unsupported Bouncer version or unexpected owner');
+  if (!['bouncer-agent-v6', 'bouncer-agent-v7', 'bouncer-agent-v8', 'bouncer-agent-v9', 'bouncer-agent-v10-youtick-testnet'].includes(version) || owner !== goal.owner_account_id) throw new Error('unsupported Bouncer version or unexpected owner');
   const permission = access?.permission?.FunctionCall;
   if (!permission || permission.receiver_id !== goal.contract_id || !equal(permission.method_names, ['execute_ft_call'])) throw new Error('agent key must be scoped ONLY to execute_ft_call on this contract');
   const previous = journal?.get(goal.id), hash = fingerprint(goal);
   if (previous && previous.fingerprint !== hash) throw new Error(`${goal.id}: journal does not match the reviewed goal`);
-  if (previous) return recoverFtCallGoal({ goal, provider, journal, publicKey, log });
+  if (previous) return recoverFtCallGoal({ goal, provider, journal, publicKey, update: execute, log });
   const [policy, route, granted, verdict] = await Promise.all([
     provider.callFunction(goal.contract_id, 'get_policy', { policy_id: goal.policy_id }, final),
     provider.callFunction(goal.contract_id, 'get_ft_call_route', { policy_id: goal.policy_id, payee: goal.payee }, final),
@@ -177,12 +192,8 @@ export async function runFtCallGoal({ goal: rawGoal, provider, account, publicKe
   if (!Array.isArray(verdict) || verdict.length !== 2 || typeof verdict[0] !== 'boolean') throw new Error('invalid policy verdict');
   if (!verdict[0]) { log(`[ft-call] BLOCKED ${goal.id}: ${String(verdict[1]).slice(0, 200)}`); return { status: 'BLOCKED' }; }
   if (!execute) { log(`[ft-call] READY ${goal.id}: at most ${goal.amount} ${goal.token} to ${goal.payee} (dry run)`); return { status: 'READY' }; }
-  if (!account.signer || typeof account.createTransaction !== 'function' || String(await account.signer.getPublicKey()) !== String(publicKey)) throw new Error('signer does not match reviewed agent key');
-  const action = transactions.functionCall('execute_ft_call', expectedArgs(goal), GAS, 0n);
-  const transaction = await account.createTransaction(goal.contract_id, [action], publicKey);
-  const [bytes, signed] = await account.signer.signTransaction(transaction);
-  if (!(bytes instanceof Uint8Array) || bytes.length !== 32 || !signed) throw new Error('signer did not return a transaction hash');
-  const txHash = utils.serialize.base_encode(bytes);
+  const { txHash, signed } = await signReviewedCall({ account, publicKey, ownerId: goal.owner_account_id, contractId: goal.contract_id,
+    method: 'execute_ft_call', args: expectedArgs(goal), gas: GAS });
   if (!validHash(txHash)) throw new Error('invalid transaction hash');
   const pending = { fingerprint: hash, status: 'pending', ft_call_goal: goal, agent_public_key: String(publicKey), tx_hash: txHash, started_at: new Date().toISOString() };
   journal.put(goal.id, pending);
@@ -216,17 +227,20 @@ async function main() {
   if (options.help) {
     console.log('Usage: node bouncer/agent/ft-call.mjs --goal GOAL.json --key AGENT_KEY.json [--state JOURNAL.json] [--rpc URL] [--execute]');
     console.log('       node bouncer/agent/ft-call.mjs --goal GOAL.json --state JOURNAL.json [--rpc URL] --recover');
-    console.log('Dry run by default; --recover reads the original transaction without a key. Settlement does not verify delivery.');
+    console.log('Dry run by default; --recover reads the original transaction without a NEAR signing key. Encrypted file journals still require their separate key. Settlement does not verify delivery.');
     return;
   }
   if (!options.goal || (!options.recover && !options.key)) throw new Error('provide --goal and --key, or --goal with --recover');
   if (options.recover && (options.execute || options.key)) throw new Error('--recover cannot be combined with --execute or --key');
   const goalPath = path.resolve(home(options.goal));
   const goal = validateFtCallGoal(JSON.parse(fs.readFileSync(goalPath, 'utf8')));
-  const provider = new providers.JsonRpcProvider({ url: validateRpcEndpoint(options.rpc || process.env.NEAR_TESTNET_RPC || 'https://test.rpc.fastnear.com') });
+  const provider = new PaymentRpcProvider(options.rpc || process.env.NEAR_TESTNET_RPC || 'https://test.rpc.fastnear.com');
   const state = path.resolve(home(options.state || `${goalPath}.bouncer-journal.json`));
-  if (options.recover && !fs.existsSync(state)) throw new Error('original journal not found; recovery cannot create one');
-  const journal = options.execute || options.recover ? new FileJournal(state, goal.contract_id, goal.owner_account_id) : null;
+  // Observe an existing journal even in dry-run mode. If it disappeared
+  // before the lock was acquired, requireExisting prevents a new history.
+  const requireExisting = !!options.recover || fs.existsSync(state);
+  const journal = options.execute || requireExisting
+    ? openConfiguredFileJournal(state, goal.contract_id, goal.owner_account_id, { requireExisting }) : null;
   try {
     let outcome;
     if (options.recover) outcome = await recoverFtCallGoal({ goal, provider, journal });

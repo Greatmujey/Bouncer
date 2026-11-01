@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "id": "api-1",
+  "contract_id": "bouncer.example.testnet",
+  "owner_account_id": "owner.example.testnet",
+  "policy_id": "circle-api",
+  "token": "3e2210e1184b45b64c8a434c0a7e7b23cc04ea7eb7a6c3c32520d03d4afcb8af",
+  "payee": "seller.example.testnet",
+  "max_amount": "1000",
+  "resource_url": "https://seller.example/api",
+  "max_quote_age_seconds": 120,
+  "accept_public_proof_risk": false,
+  "accept_unbound_resource_risk": false
+}

@@ -39,7 +39,7 @@ async function main() {
       safe(outlayer, 'get_project_pricing', { project_id })]);
     const key = project.ok && project.value?.active_version;
     const version = key ? await safe(outlayer, 'get_version', { project_id, version_key: key }) : null;
-    const select = new Set(['ping', 'whoami', 'fetch', 'refund', 'trap', 'status', 'repo_get', 'file_get']);
+    const select = new Set(['ping', 'whoami', 'burn', 'fetch', 'refund', 'trap', 'status', 'repo_get', 'file_get']);
     const rows = pricing.ok && Array.isArray(pricing.value?.operations)
       ? pricing.value.operations.filter(row => select.has(row.operation)) : [];
     notice('Independent priced project ' + project_id, { project, version, author: pricing.value?.author_account_id, selected_prices: rows,

@@ -1,0 +1,27 @@
+{
+  "contract_id": "bouncer.example.testnet",
+  "owner_account_id": "owner.bouncer.example.testnet",
+  "seller_origin": "http://127.0.0.1:8787",
+  "data_dir": "/tmp/bouncer-seller-v3-example",
+  "port": 8787,
+  "products": {
+    "compute": {
+      "policy_id": "resources",
+      "token": "3e2210e1184b45b64c8a434c0a7e7b23cc04ea7eb7a6c3c32520d03d4afcb8af",
+      "payee": "vendor.bouncer.example.testnet",
+      "amount": "1000"
+    },
+    "storage": {
+      "policy_id": "resources",
+      "token": "3e2210e1184b45b64c8a434c0a7e7b23cc04ea7eb7a6c3c32520d03d4afcb8af",
+      "payee": "vendor.bouncer.example.testnet",
+      "amount": "1000"
+    },
+    "api": {
+      "policy_id": "resources",
+      "token": "3e2210e1184b45b64c8a434c0a7e7b23cc04ea7eb7a6c3c32520d03d4afcb8af",
+      "payee": "vendor.bouncer.example.testnet",
+      "amount": "1000"
+    }
+  }
+}

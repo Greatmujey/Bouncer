@@ -162,6 +162,29 @@ test('a stale mission guard after signing leaves no journal entry or broadcast',
   await run(f); assert.equal(f.sends, 1); assert.equal(f.journal.get(request.id).status, 'completed');
 });
 
+test('durable direct payments use the FINAL receipt graph, not a mutable seller balance', async () => {
+  const f = fixture(), original = f.provider.callFunction; let balanceReads = 0;
+  f.provider.callFunction = async (...args) => {
+    if (args[1] === 'ft_balance_of') { balanceReads++; throw new Error('seller balance changed or was unavailable'); }
+    return original(...args);
+  };
+  await run(f);
+  assert.equal(balanceReads, 0); assert.equal(f.sends, 1);
+  assert.equal(f.journal.get(request.id).status, 'completed');
+  assert.equal(f.journal.get(request.id).settlement.tx_hash, hash);
+
+  const bad = fixture(), prior = bad.provider.callFunction, chain = finalResult();
+  chain.receipts[0].receipt.Action.actions[0].FunctionCall.args = enc({ receiver_id: 'other.testnet', amount: request.amount, memo: request.memo });
+  bad.setChain(chain);
+  bad.provider.callFunction = async (...args) => {
+    if (args[1] === 'ft_balance_of') throw new Error('balance must not establish a payment');
+    return prior(...args);
+  };
+  await assert.rejects(run(bad), /missing matching successful Bouncer-to-token transfer/);
+  assert.equal(bad.sends, 1); assert.equal(bad.journal.get(request.id).status, 'pending');
+  await assert.rejects(run(bad), /unresolved pending payment/); assert.equal(bad.sends, 1);
+});
+
 test('recovery refuses a changed stored request or settlement and can verify read-only', async () => {
   const f = fixture(); await run(f);
   const saved = f.journal.get(request.id);

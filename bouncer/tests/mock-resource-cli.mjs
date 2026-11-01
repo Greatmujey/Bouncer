@@ -2,6 +2,7 @@
 import nearApi from 'near-api-js';
 import { orderMemo } from '../services/resource-provider.mjs';
 import { computeResult } from './mock-delivery.mjs';
+import { mockHash, mockGuardedPayment } from './mock-guarded-payment.mjs';
 const { Account, providers } = nearApi;
 let vendorBalance = 0n;
 const transactionsByHash = new Map();
@@ -39,16 +40,12 @@ providers.JsonRpcProvider.prototype.callFunction = async (_id, method) => {
 Account.prototype.callFunctionRaw = async function (options) {
   if (options.methodName !== 'execute' || options.deposit !== 0n || options.waitUntil !== 'FINAL') throw new Error('bad payment');
   vendorBalance += BigInt(options.args.amount);
-  const result = {
-    final_execution_status: 'FINAL', status: { SuccessValue: '' }, transaction_outcome: { id: 'mock-payment' },
-    transaction: { hash: 'mock-payment', signer_id: this.accountId, receiver_id: options.contractId,
-      actions: [{ FunctionCall: { method_name: options.methodName, deposit: '0', args: Buffer.from(JSON.stringify(options.args)).toString('base64') } }] },
-    receipts_outcome: [{ outcome: { executor_id: 'wrap.testnet', status: { SuccessValue: '' } } }],
-  };
-  transactionsByHash.set('mock-payment', result);
+  const hash = mockHash('mock-payment');
+  const result = mockGuardedPayment({ hash, owner: this.accountId, contract: options.contractId, args: options.args });
+  transactionsByHash.set(hash, result);
   return result;
 };
-providers.JsonRpcProvider.prototype.viewTransactionStatus = async (hash, id, wait) => {
+providers.JsonRpcProvider.prototype.txStatusReceipts = async (hash, id, wait) => {
   if (id !== 'bouncer.testnet' || wait !== 'FINAL' || !transactionsByHash.has(hash)) throw new Error('unknown mock transaction');
   return transactionsByHash.get(hash);
 };

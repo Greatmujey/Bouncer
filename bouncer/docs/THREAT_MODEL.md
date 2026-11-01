@@ -88,6 +88,10 @@ not prove all possible callback, provider or token failure cases.
    denominated in token units, not USD; the contract does not enforce oracle prices. Rebinding a
    policy to another token retains numeric spend history in the old units. Use
    a new policy for each token rather than changing an existing policy's token.
+   A contract regression exercises one delayed direct-transfer failure and an
+   FT-call partial refund after a token change: the newer reservation remains
+   counted and the FT-call budget stays conservative. This one interleaving is
+   not a proof of all callback schedules; the callback ABI is unchanged.
 7. **Untrusted model and development-only provider.** An optional model can
    propose resource inputs but not financial authority. Injection or errors can
    still produce an unwanted task within an authorized budget; review output
@@ -97,7 +101,12 @@ not prove all possible callback, provider or token failure cases.
    provider or marketplace. GitHub data is untrusted and can be unavailable
    after payment. The older multi-token test uses synthetic testnet FTs; a
    separate Circle testnet USDC mission also pays this self-hosted provider.
-   Testnet USDC has no real value. There is no cross-chain settlement. The old
+   Testnet USDC has no real value. There is no cross-chain settlement. Ref's
+   observed instant-swap output arrives by plain `ft_transfer`, not the vault's
+   `ft_on_transfer`, and can also remain in Ref's internal balance on withdrawal
+   failure. Simply pinning a swap message would not credit the Bouncer vault or
+   prove output settlement. Comparing raw balances across asynchronous token
+   operations can over-credit; no guarded Ref swap is claimed here. The old
    solver is disabled because it previously used fake fill hashes; the older
    standalone quote comparator does not settle anything. The agent's optional
    curated quote selection is separate: it contacts only owner-configured
@@ -117,33 +126,98 @@ not prove all possible callback, provider or token failure cases.
    changed routes; legacy entries may lack either safeguard and still require
    the original quote. Provider or independent-source outages can still block
    recovery. Preserve the original goals and journal rather than selecting again.
+   The optional [x402 onchain-proof adapter](ONCHAIN_PROOF.md) is a different,
+   public transaction-hash/memo rail, not standard `exact`. A claimant can
+   copy its public proof, and the seller SDK does not bind it to the requested
+   URL or authenticate the buyer. Its default replay set is not durable across
+   gate restarts. The adapter requires explicit risk acceptance and stops after
+   an ambiguous seller request; it cannot enforce seller-side replay protection
+   or guarantee delivery. The real third-party SDK's NEAR testnet support is
+   supplied by our test-only wrapper; the live payment used a local SDK gate,
+   not an independent merchant.
 8. **Local journal and nonce tracker are not distributed coordination.** The
    file journal synchronizes its content and directory before returning, and
    blocks automatic retries of uncertain payments in one local file. Sync
    failures stop execution, but a different/deleted journal, multiple hosts or
-   unreliable storage can bypass the protection. The signer keeps its own
+   unreliable storage can bypass the protection. Local files are plaintext by
+   default; optional [AES-GCM file encryption](FILE_JOURNALS.md) protects a
+   journal at rest with a separate key, but cannot detect an older valid file,
+   coordinate other paths or revoke a leaked claim. A lost key prevents
+   recovery, and old plaintext copies remain exposed. The signer keeps its own
    process's nonces monotonic to mitigate stale RPC reads; it does not coordinate
    concurrent processes using the same key or
    retry a failed send. Use one writer per key. For OutLayer and opt-in
    `--durable` direct FT payments, the signed transaction hash is journaled
-   before the one broadcast and can be re-queried without a private key. This
+   before the one broadcast and can be re-queried without a private key. The
+   durable direct, FT-call, paid-project, native OutLayer and oracle runners
+   check the prepared action, arguments, locally derived hash and signature
+   against the reviewed call before journaling. The built-in payment RPC makes
+   one HTTP send attempt and bounds receipt reads; injected RPC providers can
+   have different retry behavior and must be reviewed separately. A timed-out
+   read remains unresolved, never evidence that a transaction did not execute.
+   An opt-in [shared buyer journal](SHARED_BUYER.md) now coordinates **direct
+   seller-v3 only** through one trusted PostgreSQL primary, with encrypted
+   bearer claims and atomic goal/challenge/hash reservations before broadcast.
+   Its owner-wide fence serializes upgraded shared workers and blocks new shared
+   payments while any owner hash is pending, including across different journals
+   and keys. It is not a distributed nonce allocator and does not coordinate
+   other protocols or older/bypassing workers. Stop all old workers before
+   upgrading. It requires a stable mission ID, original encryption key, correct
+   fencing and no stale restore. A new owner can opt into stable business-intent
+   IDs, atomically unique across participating journals/contracts even with
+   fresh challenges; the same economic operation must retain the same owner-
+   assigned ID. Legacy owners, a changed ID, a file journal, an old/bypassing
+   worker or another database can still duplicate an operation. This has
+   synthetic tests, not a live shared-database payment or production
+   exactly-once proof.
+   FT-call, OutLayer, x402 and mixed/dependent workflows are not covered.
+   Bounded atomic key rotation preserves the existing encrypted entries and
+   pending quarantine; a stolen old key, an old backup or previously exposed
+   bearer claim is not revoked. Preserve both keys if COMMIT is uncertain and
+   check the original primary with all workers stopped. An authenticated
+   encrypted checkpoint can detect a rollback relative to that one checkpoint;
+   the direct resource-agent can optionally write one before each broadcast and
+   compare the latest on restart. It cannot establish freshness if the directory
+   is also lost or rolled back, cover other journals or replace database/WAL
+   backups, independent retention and transaction reconciliation. Database
+   session/owner fences and the pending row are rechecked immediately before
+   the final synchronous guard and broadcast; network/primary failure can still
+   happen afterward, so an ambiguous hash stays quarantined.
+   These checks do not protect against a compromised host or owner key. Recovery
    requires trusted FINAL RPC receipts, Bouncer code and token code; it verifies
    payment, not delivery. An unknown or expired hash stays unresolved and is
    never automatically resent. Existing direct-payment entries and runs that
    do not opt into `--durable` may lack a pre-recorded hash and still require
    manual reconciliation. The resource, autonomous, mixed-mission and
    paid-mission CLIs must be explicitly run with `--durable` to use this path
-   for direct resource payments; it is not the default.
+   for direct resource payments; it is not the default. The separate dependent
+   workflow runner always uses durable direct FT payments and binds a normalized
+   owner manifest into the same journal. Its key-free recovery verifies the
+   recorded source and each paid delivery before any new stage. It can still
+   fail if the RPC/provider is unavailable, and journal loss, changes or another
+   host can enable duplicate spending. Its offline tests are synthetic, not
+   evidence of a new live workflow. See [dependent workflows](DEPENDENT_WORKFLOWS.md).
 9. **Provider verification and operations are not trustless.** The provider
    trusts its configured RPC, Bouncer deployment/code and token contracts. It
    verifies transaction arguments and receipts, but cannot protect against a
-   compromised or upgraded trusted contract, malicious RPC or token. Its state
-   is single-process: up to eight independent redemptions can be in flight,
-   with same-transaction coalescing but no multi-process lock or replay protection.
-   Its local state writes do not provide fsync durability; a write error stops
-   the instance and requires manual reconciliation. Storage is plaintext and
-   publicly retrievable, and there is no authentication or transport security.
-   The configured provider checks that its RPC reports testnet, but the RPC can
+   compromised or upgraded trusted contract, malicious RPC or token. The seller
+   verifier requires matching FINAL transaction, transfer and callback receipts.
+   Up to eight redemptions can be in flight with same-transaction coalescing.
+   An exclusive lock excludes other provider processes using the same local
+   directory; state and object files and directories are fsynced, subject to
+   filesystem guarantees. A crash may leave a stale lock or pending fulfillment;
+   never steal a lock automatically. A write error stops the instance for manual
+   reconciliation. Different directories/hosts have no shared replay protection.
+   Storage is plaintext. V1/v2 storage is publicly retrievable. Opt-in
+   [seller-v3](SELLER_V3.md) requires a transaction-key-signed bearer claim for
+   redemption and readback, but leaked claims are replayable. A separate
+   [shared seller](SHARED_SELLER.md) coordinates v3 claims through one PostgreSQL
+   primary, but relies on durable WAL, correct fencing/replication, trusted
+   workers and no stale restores; pending work is never automatically retried.
+   Its payments are synthetic in tests; the default buyer journal is still local,
+   and the separate shared buyer has its own narrow scope and assumptions. The
+   seller adds no TLS, authenticated users, revocation or independent adoption. The
+   configured provider checks that its RPC reports testnet, but the RPC can
    lie; an implicit 64-hex token ID does not itself identify a network.
    Orders are sent to the provider; their hashes are on chain.
    Client-side verification occurs only after payment: it recomputes the bounded

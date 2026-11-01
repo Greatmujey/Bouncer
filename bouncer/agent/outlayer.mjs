@@ -13,12 +13,12 @@ import crypto from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { pathToFileURL } from 'node:url';
 import nearApi from 'near-api-js';
-import { FileJournal } from './procurement.mjs';
-import { MonotonicAccount } from './near-account.mjs';
+import { openConfiguredFileJournal } from './procurement.mjs';
+import { MonotonicAccount, PaymentRpcProvider } from './near-account.mjs';
 import { isTestnetAccount } from '../shared/account-id.mjs';
-import { validateRpcEndpoint } from '../shared/rpc-endpoint.mjs';
+import { signReviewedCall } from './reviewed-transaction.mjs';
 
-const { KeyPair, KeyPairSigner, providers, transactions, utils } = nearApi;
+const { KeyPair, KeyPairSigner } = nearApi;
 export const OUTLAYER = 'outlayer.testnet';
 export const NATIVE = 'native';
 // Public OutLayer example, pinned by the owner before policy installation.
@@ -203,11 +203,13 @@ export function verifyOutlayerResult(rawGoal, result, publicKey) {
 
 /** Re-check an existing payment by hash. This path has no signer and cannot send. */
 export async function recoverOutlayerGoal({ goal: rawGoal, provider, journal, publicKey, update = true, log = console.log }) {
+  if (journal?.sharedDirectV3 === true) throw new Error('shared buyer journal does not coordinate OutLayer payments');
   const goal = validateOutlayerGoal(rawGoal);
   if (!journal || typeof journal.get !== 'function' || typeof journal.put !== 'function') throw new Error('recovery requires the original journal');
   if ((await provider.viewNodeStatus())?.chain_id !== 'testnet') throw new Error('RPC must report testnet');
   const previous = journal.get(goal.id);
   if (!previous || previous.fingerprint !== goalFingerprint(goal)) throw new Error(`${goal.id}: journal does not match the reviewed goal`);
+  if (!['pending', 'completed'].includes(previous.status)) throw new Error(`${goal.id}: invalid journal status; stop and reconcile`);
   if (!validHash(previous.tx_hash)) throw new Error(`${goal.id}: unresolved payment without a transaction hash; reconcile manually, never resend automatically`);
   // New entries retain the public key used to sign, not the secret. A key can
   // be revoked after sending without preventing proof of the historical tx.
@@ -226,6 +228,7 @@ export async function recoverOutlayerGoal({ goal: rawGoal, provider, journal, pu
 
 /** Preflight, one guarded send, and chain-based recovery without resending. */
 export async function runOutlayerGoal({ goal: rawGoal, provider, account, publicKey, journal, execute = false, log = console.log }) {
+  if (journal?.sharedDirectV3 === true) throw new Error('shared buyer journal does not coordinate OutLayer payments');
   const goal = validateOutlayerGoal(rawGoal);
   if (!account || account.accountId !== goal.owner_account_id || !publicKey) throw new Error('agent key account does not match the owner');
   if (execute && (!journal || typeof journal.get !== 'function' || typeof journal.put !== 'function')) throw new Error('live execution requires a journal');
@@ -243,7 +246,7 @@ export async function runOutlayerGoal({ goal: rawGoal, provider, account, public
   }
   const fingerprint = goalFingerprint(goal), previous = journal?.get(goal.id);
   if (previous && previous.fingerprint !== fingerprint) throw new Error(`${goal.id}: journal does not match the reviewed goal`);
-  if (previous) return recoverOutlayerGoal({ goal, provider, journal, publicKey, log });
+  if (previous) return recoverOutlayerGoal({ goal, provider, journal, publicKey, update: execute, log });
   const [policy, program, allowed, verdict] = await Promise.all([
     provider.callFunction(goal.contract_id, 'get_policy', { policy_id: goal.policy_id }, final),
     provider.callFunction(goal.contract_id, 'get_outlayer_program', { policy_id: goal.policy_id }, final),
@@ -260,13 +263,8 @@ export async function runOutlayerGoal({ goal: rawGoal, provider, account, public
   // broadcast. If the RPC times out or the process crashes, the journal can
   // be queried without signing or submitting another transaction. We do not
   // persist signed bytes, and an absent/expired transaction is NOT retried.
-  if (!account.signer || typeof account.createTransaction !== 'function' ||
-      String(await account.signer.getPublicKey()) !== String(publicKey)) throw new Error('account signer does not match the reviewed agent key');
-  const action = transactions.functionCall('execute_outlayer', expectedArgs(goal), GAS, 0n);
-  const transaction = await account.createTransaction(goal.contract_id, [action], publicKey);
-  const [hashBytes, signed] = await account.signer.signTransaction(transaction);
-  if (!(hashBytes instanceof Uint8Array) || hashBytes.length !== 32 || !signed) throw new Error('signer did not return a transaction hash');
-  const txHash = utils.serialize.base_encode(hashBytes);
+  const { txHash, signed } = await signReviewedCall({ account, publicKey, ownerId: goal.owner_account_id, contractId: goal.contract_id,
+    method: 'execute_outlayer', args: expectedArgs(goal), gas: GAS });
   if (!validHash(txHash)) throw new Error('signer returned an invalid transaction hash');
   const pending = { fingerprint, status: 'pending', outlayer_goal: goal, agent_public_key: String(publicKey),
     tx_hash: txHash, started_at: new Date().toISOString() };
@@ -305,17 +303,20 @@ async function main() {
   if (options.help) {
     console.log('Usage: node bouncer/agent/outlayer.mjs --goal GOAL.json --key AGENT_KEY.json [--state JOURNAL.json] [--rpc URL] [--execute]');
     console.log('       node bouncer/agent/outlayer.mjs --goal GOAL.json --state JOURNAL.json [--rpc URL] --recover');
-    console.log('Dry run by default; --execute spends testnet NEAR once. --recover only reads the existing transaction; no key is needed.');
+    console.log('Dry run by default; --execute spends testnet NEAR once. --recover reads the existing transaction without a NEAR signing key; encrypted file journals still require their separate key.');
     return;
   }
   if (!options.goal || (!options.recover && !options.key)) throw new Error('provide --goal and --key, or --goal with --recover; see --help');
   if (options.recover && (options.execute || options.key)) throw new Error('--recover cannot be combined with --execute or --key');
   const goalPath = path.resolve(expandHome(options.goal));
   const goal = validateOutlayerGoal(JSON.parse(fs.readFileSync(goalPath, 'utf8')));
-  const provider = new providers.JsonRpcProvider({ url: validateRpcEndpoint(options.rpc || process.env.NEAR_TESTNET_RPC || 'https://test.rpc.fastnear.com') });
+  const provider = new PaymentRpcProvider(options.rpc || process.env.NEAR_TESTNET_RPC || 'https://test.rpc.fastnear.com');
   const state = path.resolve(expandHome(options.state || `${goalPath}.bouncer-journal.json`));
-  if (options.recover && !fs.existsSync(state)) throw new Error('original journal not found; recovery cannot create one');
-  const journal = options.execute || options.recover ? new FileJournal(state, goal.contract_id, goal.owner_account_id) : null;
+  // Observe an existing journal even in dry-run mode. If it disappeared
+  // before the lock was acquired, requireExisting prevents a new history.
+  const requireExisting = !!options.recover || fs.existsSync(state);
+  const journal = options.execute || requireExisting
+    ? openConfiguredFileJournal(state, goal.contract_id, goal.owner_account_id, { requireExisting }) : null;
   try {
     let outcome;
     if (options.recover) outcome = await recoverOutlayerGoal({ goal, provider, journal });

@@ -6,6 +6,10 @@ edition = "2021"
 [lib]
 crate-type = ["cdylib"]
 
+[features]
+# Experimental, separately built testnet artifact; default V9 is unchanged.
+youtick-playback-v10 = []
+
 [dependencies]
 near-sdk = "5.14"
 

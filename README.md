@@ -24,8 +24,8 @@ temporary preview hosted by madethis.website, expiring **6 November 2026 at
 production deployment, and the private repository remains private.
 
 `bouncer/web/` explains the prototype's request → quote → guarded payment →
-fulfillment flow and links to the latest oracle-led Circle testnet mission and
-recovery proof. It also retains an interactive walkthrough of three real,
+fulfillment flow and links to an earlier oracle-led Circle testnet mission and
+recovery proof; the snapshot predates the dependent-workflow run below. It also retains an interactive walkthrough of three real,
 **recorded** requests from an earlier multi-token run. A separate test used a
 local AI model to propose tasks; the latest oracle mission used prepared goals. The
 two credit tokens in the earlier example are synthetic and fulfillment was
@@ -67,15 +67,16 @@ tools—it does not itself provide a model or access to the new planning/executi
 
 Bouncer is a resource-buying agent; the on-chain firewall is its spending
 kernel, not the whole product. These are connections to the tracks, not claims
-that all six are complete.
+that all six are complete. See the [interoperability roadmap](bouncer/docs/INTEROPERABILITY_ROADMAP.md)
+for the independent-seller gap, experimental authentication and outstanding swap-accounting work.
 
 | Track | Evidence today | Still needed |
 | --- | --- | --- |
 | AI Security & Defense | 1-yocto guard, scoped keys, caps, pinned project/input and delivery gating. | Independent audit and stronger prompt defenses. |
-| Agent Economy | Native-paid independent price execution feeds three FT-paid development resources. | Independent FT-paid commercial API/storage providers and signed receipts. |
+| Agent Economy | Native-paid independent price execution feeds three FT-paid development resources; x402 compatibility and authenticated seller-v3 have self-hosted tests. A new [synthetic x402-to-resources workflow](bouncer/docs/DEPENDENT_WORKFLOWS.md#paid-x402-data-as-a-workflow-source-experimental) composes both. | Independent FT-paid commercial API/storage providers, live combined x402 workflow, audited authentication and signed receipts. |
 | Autonomous Business | AI planning in a separate run; multi-resource payments, delivery checks and recovery. | Real customers, invoicing and production operations. |
 | Real-World Money | Circle testnet USDC paid for three self-hosted resources; fake USDC.e funded a separate probe. | Independent providers and real-money rails; testnet USDC has no real value. |
-| Unstoppable DeFi | Owner-setup Ref testnet swaps acquired test tokens, including Circle testnet USDC. | Agent-guarded swaps and cross-chain settlement. |
+| Unstoppable DeFi | Owner-setup Ref testnet swaps acquired test tokens, including Circle testnet USDC. | Agent-guarded swaps with safe output accounting and cross-chain settlement. |
 | AI Swarms | One coordinator sequences multiple resources. | Multiple autonomous agents and secure handoffs. |
 
 ## Contract capabilities in this branch
@@ -144,8 +145,12 @@ Offline mocks are not proof of on-chain behavior.
   metadata. GitHub data is live, unauthenticated third-party data; availability
   is not guaranteed. The provider is not commercial. It can handle up to eight
   unrelated redemptions concurrently within one process and deduplicates the same
-  in-flight transaction, but has no multi-host coordination, authentication or
-  production durability. An optional selector compares quotes from owner-approved endpoints only, within one token per
+  in-flight transaction, but has no multi-host coordination, general user
+  authentication, TLS or production durability. A separate experimental
+  [PostgreSQL-backed v3 seller](bouncer/docs/SHARED_SELLER.md) coordinates claims
+  across workers sharing one primary, but has only synthetic-payment tests and
+  requires careful database/HA operations. V3 claim signatures are replayable
+  bearer credentials. An optional selector compares quotes from owner-approved endpoints only, within one token per
   resource; every quote must match the approved constraints. The model proposes
   tasks but cannot choose financial authority. It requires a separately supplied
   model. Delivery checks cover only the bounded example protocols: storage is
@@ -273,7 +278,9 @@ resource's owner-pinned token. It chooses the cheapest using exact integer
 amounts, saves the selected route and price, and rechecks that price before the
 normal on-chain policy preflight and payment. Up to five quotes are requested
 concurrently; an invalid or unavailable quote stops queued requests and the
-comparison fails without a partial selection. See [setup and recovery limits](bouncer/docs/AI_AGENT.md#compare-owner-approved-providers).
+comparison fails without a partial selection. The owner can opt each approved
+candidate into seller-v2 order challenges; choosing a legacy candidate is still
+possible if the owner included one. See [setup and recovery limits](bouncer/docs/AI_AGENT.md#compare-owner-approved-providers).
 
 In the [live comparison job](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40666249071/job/122742140751),
 two self-hosted development endpoints quoted 0.10 and 0.08 wNEAR for the same
@@ -344,6 +351,64 @@ consensus nor TEE attestation is independently verified. Payments and previews
 are non-atomic; later failure cannot undo earlier purchases. See [the full
 failure history and trust boundaries](bouncer/docs/OUTLAYER.md).
 
+### Owner-reviewed dependent workflows
+
+The new [workflow runner](bouncer/docs/DEPENDENT_WORKFLOWS.md) passes a verified
+independent result into a compute order, then can pass verified outputs into
+storage and API steps. The owner fixes each policy, token, payee, maximum and
+provider route; provider data cannot change financial authority. Maximum-cost
+preflight aggregates shared budgets, and every signed FT payment is journaled
+before broadcast. Recovery rechecks the original source and paid steps without
+keys or repayment before any new purchase.
+
+A [1 November 2026 live testnet run](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41258992192/job/124708664361)
+exercised this runner on a fresh v9 contract. A single-source price from
+[independent OutLayer](https://testnet.nearblocks.io/txns/CMFUYVjguSqsnv65tFVnPA2uiTdvJGx4pssDTNBtFY7L),
+paid in native testnet NEAR, became the input to
+[compute](https://testnet.nearblocks.io/txns/3Vc4fohkHLmkUXqyjp2DcVaxw9B792Wi9hCVK2K3zDF1),
+whose verified result became the input to
+[storage](https://testnet.nearblocks.io/txns/EDyE96KjV6csc8s4tLsRAnw4hMzsBVdzHj1dj4sDRp8W),
+whose verified metadata became the input to
+[an API request](https://testnet.nearblocks.io/txns/BGDy5nfZ9iBLZg7gpqbGuN3nox5MHEg59Du3uf5Ki37R).
+Each resource cost 0.001 Circle **testnet** USDC and was provided by local
+development software. The run deliberately lost the first FT response after
+broadcast, then a separate, key-free CLI recovered that exact hash and verified
+its delivery before the remaining two payments. The test checked one source
+broadcast, three FT broadcasts, the on-chain budgets and the exact chained
+inputs. An [offline regression](bouncer/tests/dependent-history.test.mjs)
+reconstructs those orders and their three observed on-chain memos; it is not a
+raw RPC receipt proof. A subsequent [read-only check](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41259817473/job/124710584367)
+installed the seller SDK from a local tarball in a separate application, fetched
+the source and three FINAL payment receipts, and rejected substituted sellers.
+It sent no new transactions. The [public testnet evidence artifact](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41258992192/artifacts/13064860428)
+is retained until 30 January 2027; it contains no keys but includes task data.
+
+A separate [seller-v2 live run](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41263055741/job/124720514951)
+used three distinct seller-issued challenges on a fresh contract. Its
+[independent native-NEAR oracle](https://testnet.nearblocks.io/txns/EGKJHuRGtjk2SUUNeqLerGBn9q5sBatb74QuWuS5fRsn)
+fed [compute](https://testnet.nearblocks.io/txns/HwQB5RTFgascGDjPUmkCkiexF2WEHShHX69d6yGw7JMc),
+then [storage](https://testnet.nearblocks.io/txns/DpAJymo4MNEipNKEhEiwjBRHt6AqnHaVAXZu9QUUHb9u),
+then an [API request](https://testnet.nearblocks.io/txns/EofVKtasXZMf9TbTv4FtivigFwb8VrzYZZXToRYNq15L).
+The three payments were 0.001 Circle **testnet** USDC each to our self-hosted
+seller. After an injected lost response, a separate key-free CLI restarted the
+seller and recovered the original compute hash before continuing; the run
+checked one source broadcast, three resource-payment broadcasts and three
+persisted local claims. Owner setup transactions were separate. An [offline
+regression](bouncer/tests/seller-v2-history.test.mjs) reconstructs the chained
+inputs and observed v2 memos; it is not a raw RPC proof. A separate [read-only
+SDK check](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41263695312/job/124721960599)
+installed the SDK in another application, fetched the existing source and three
+FINAL receipts, and rejected altered sellers and challenges; it paid nothing.
+The [public artifact](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41263055741/artifacts/13066031406)
+expires 30 January 2027; it contains task data, not keys.
+
+The Circle seller is **not independent**, the independently operated oracle
+was **not paid in Circle USDC**, and testnet tokens have no real value. This
+run does not resolve or resend the separate pending project transaction below,
+demonstrate an independent FT-paid vendor, or guarantee data truth, future
+storage or atomicity. The reported price was one unauthenticated Coinbase source
+through OutLayer; its worker timestamp is not authenticated market freshness.
+
 ### Paid-provider mission and recovery
 
 In the [28 October 2026 test](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40699116807/job/122854642930),
@@ -355,8 +420,11 @@ The unified runner recovered those already-settled transactions and then paid
 and verified self-hosted [compute](https://testnet.nearblocks.io/txns/B9PLx9GQaaJc7im6VvmJ5rXoBSKm5N11ZRGNWA6EPPz5),
 [storage](https://testnet.nearblocks.io/txns/FCR2LtrGjjXAfWLK3XhEkkU6Mo8P9CFWLGs8NXXuBTau)
 and [API](https://testnet.nearblocks.io/txns/6GZ18f7y3H6vm8LXYrjKTfZccnfzLJHH8JvojHt3kXa9)
-tasks in wNEAR using the durable direct-payment path. A locally corrupted compute
-result stopped later payments; recovery reused that same compute transaction
+tasks in wNEAR using the durable direct-payment path. A later fake-token `burn`
+diagnostic funded the provider, but its project transaction remains unresolved;
+no delivery is claimed and it must not be resent automatically. See the [recovery
+evidence](bouncer/docs/OUTLAYER.md). A locally corrupted compute result in the
+earlier mission stopped later payments; recovery reused that same compute transaction
 before continuing. The unified
 runner's initiation of *all* stages is covered offline, not yet proved live.
 Previews are non-atomic, and earlier payments cannot be rolled back. The
@@ -404,7 +472,109 @@ restricted-key policy. Bouncer deliberately does not perform that flow. The
 returned three public listings without credentials or payments; it did not
 validate, hire or transact with their providers.
 
+### Experimental receipt-aware x402 adapter
+
+An explicitly opt-in [onchain-proof buyer](bouncer/docs/ONCHAIN_PROOF.md) can
+translate a compatible Circle **testnet** USDC offer into the existing guarded
+`execute` path and prove the nested transfer to a receipt-aware verifier. A
+[one-shot live testnet check](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41265514067/job/124727867996)
+used the independently published PipRail SDK with an explicit test-only NEAR
+testnet wrapper and a **self-hosted local gate**: a fresh SDK quote preceded
+[one guarded payment](https://testnet.nearblocks.io/txns/HX1p43ydbz2eJZCAXjUM3W5ajMFFFfqVjUB4gBpbeGiQ/execution),
+key-free recovery of its deliberately lost response, and one SDK-verified
+fixture response. Both layers of the 1-yocto escalation guard were rechecked.
+The owner-only Ref setup was not a guarded swap. This is **not** standard x402
+`exact`, a live independent seller purchase, or proof of merchant adoption.
+The proof and nonce are public and not bound to a URL or authenticated buyer;
+the SDK's default replay memory is not durable across restarts. The owner must
+explicitly accept those risks. Payments and seller requests are each attempted
+at most once per preserved local journal; uncertain outcomes are never
+repurchased or automatically re-redeemed.
+
+### Authenticated seller-v3 orders
+
+The opt-in [seller-v3 protocol](bouncer/docs/SELLER_V3.md) binds an exact
+seller-issued compute, storage or API order to a NEP-413 signature by the
+restricted transaction key. The buyer journals that signature before sending;
+the development seller checks it against the FINAL payment signer and protects
+v3 storage readback. Offline tests cover public-proof theft, wrong keys,
+concurrency, seller restart and key-free dependent-workflow recovery. The first
+[one-shot live attempt](bouncer/docs/SELLER_V3.md#first-testnet-attempt-stopped-before-v3-resource-payments)
+timed out at its native oracle before v3 resource payments; its original hash
+was later verified without resending. A [separate fresh testnet proof](bouncer/docs/SELLER_V3.md#separate-fresh-seller-v3-testnet-proof)
+then passed an independent native-paid OutLayer lookup followed by authenticated
+compute → storage → API payments to our self-hosted seller, including key-free
+recovery of the first FT payment. Signatures are **bearer credentials**: keep
+both recovery artifacts private. This remains a custom, unaudited testnet
+protocol—not an independent FT merchant integration, x402 `exact`, or a
+guarantee of confidential hosting.
+
+A separate [shared seller-v3 prototype](bouncer/docs/SHARED_SELLER.md) now uses
+one PostgreSQL primary to atomically reserve quotes and payment hashes across
+workers. Real-database tests cover separate-process races, crashes, lost commit
+acknowledgments, authenticated storage and buyer recovery; the payments in those
+tests are **synthetic**. Pending work is never automatically taken over, and
+split brain, stale backups, compromised workers or separate databases can defeat
+coordination. The seller alone does not coordinate buyer broadcasts or prove
+independent adoption. The live proof above used the older file-backed seller.
+
+A separate opt-in [shared buyer journal](bouncer/docs/SHARED_BUYER.md) reserves
+direct seller-v3 request IDs, seller challenges and signed transaction hashes
+before broadcast, encrypts bearer claims at rest, and supports same-hash recovery
+without the NEAR signing key. Upgraded workers also serialize shared direct
+payments per owner and quarantine that owner's new shared payments while any
+original hash remains pending. New owners may opt into **stable business-intent
+IDs**, atomically unique across participating journals and contracts even when
+sellers issue fresh challenges. The owner must retain the same ID for the same
+operation; legacy owners and changed IDs are not protected by this mechanism.
+PostgreSQL/process tests use **synthetic** receipts; no live shared-database
+payment has been made. It requires one properly fenced primary; file journals,
+other databases, FT-call, x402, OutLayer and mixed/dependent workflows are not
+covered. The fence is conservative serialization, not a distributed nonce
+allocator. Bounded
+journals can [rotate their encryption key](bouncer/docs/SHARED_BUYER.md#rotate-an-existing-journal-encryption-key)
+atomically without deleting pending payments; leaked bearer claims and old backups
+are not revoked by re-encryption. Authenticated, encrypted
+[checkpoints](bouncer/docs/SHARED_BUYER.md#authenticate-an-encrypted-checkpoint-and-detect-a-known-rollback)
+can detect rollback relative to a saved checkpoint for one bounded journal, not
+prove that the checkpoint is latest or replace a full database backup. The direct
+resource-agent CLI can also opt into fsync-backed checkpoints before broadcast
+and refuse a detected rollback on restart; this requires a separate protected
+directory and does not guarantee safety if both copies are lost or stale.
+
+Local file journals are **plaintext by default**. Operators can opt into
+[encrypted local journals](bouncer/docs/FILE_JOURNALS.md), with a separate key
+and an explicit in-place conversion that preserves pending hashes and claims.
+Synthetic tests cover wrong keys, tampering, crashes, sync failures and
+signing-key-free recovery. Encryption does not detect an older valid file,
+coordinate different journals or revoke leaked bearer claims. No live payment
+with an encrypted file journal has been made.
+
 ### Delivery checks and local receipts
+
+The experimental [seller verification SDK](bouncer/packages/provider-sdk/README.md)
+lets a testnet provider check a reviewed order against the finalized Bouncer
+transaction, actual token-transfer receipt and callback. It can be packed as a
+self-contained local npm package and installed by a seller; it is not published.
+The local development provider uses the same verifier and protects one data
+directory with an exclusive lock and
+fsync-backed state/object writes. A [read-only check of three existing Circle
+testnet payments](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41101505909/job/124219376411)
+passed against FINAL RPC receipts and rejected a substituted seller. These
+payments were to our own development provider. This is not distributed replay
+protection or proof that an independent FT seller has adopted the protocol.
+
+The buyer, AI owner catalog, dependent workflows and reference seller also
+support an **opt-in seller-v2** order: a fresh seller-issued challenge binds the
+normalized work, the seller durably claims one verified transaction per quote,
+and the buyer journals the signed hash before broadcasting. V1 remains the
+default; an owner-pinned v2 quote cannot silently fall back to v1. Offline
+adversarial tests cover concurrent claims and restart recovery. The linked v2
+live run paid only our own development seller; no independent FT seller adoption
+is claimed. The challenge is public, not authentication. The reference seller stores at most
+1,024 v2 quotes without automatic eviction; even an unpaid quote dry run can
+consume capacity. A second payment for an already-claimed quote cannot be
+redeemed. See the [wire format and recovery limits](bouncer/docs/PROVIDER_PROTOCOL.md#optional-seller-v2-binding).
 
 The resource agent recomputes bounded SHA-256 and text-statistics results,
 checks a single storage readback against the ordered bytes, and checks GitHub
@@ -458,8 +628,10 @@ ID=$(cat "$HOME/.bouncer_id")
 node bouncer/agent/resource-agent.mjs --goals "$HOME/.bouncer/testnet/$ID.goals.json" --key "$HOME/.near-credentials/testnet/$ID.agent.json" --local-provider "$HOME/.bouncer/testnet/$ID.provider.json"
 ```
 
-The agent defaults to a dry run. Add `--execute` only after reviewing the
-quotes; completed orders in the configured journal are skipped and the
+The agent defaults to a dry run with no payment; requesting a seller-v2 quote
+can still persist an order at the provider. Add `--execute` only after reviewing
+the quotes; seller-v2 execution also requires `--durable`. Completed orders in
+the configured journal are skipped and the
 provider returns their existing results. Using a different or deleted journal
 can cause repeat payments. `--local-provider` starts the loopback-only development
 provider for this command and shuts it down afterwards. Both programs support
@@ -489,7 +661,9 @@ node bouncer/agent/procurement.mjs --plan /path/to/plan.json --key /path/to/agen
 node bouncer/agent/procurement.mjs --plan /path/to/plan.json --key /path/to/agent-key.json --execute
 ```
 
-The journal is local, not a distributed exactly-once mechanism. Before sending,
+The default journal is local, not a distributed exactly-once mechanism. The
+separate [shared buyer](bouncer/docs/SHARED_BUYER.md) covers only opt-in direct
+seller-v3 payments and has not been tested with live payments. Before sending,
 requests are marked pending; if confirmation is uncertain the runner refuses to
 retry automatically. Direct procurement, the resource and autonomous agents,
 and the mixed/paid mission CLIs offer an opt-in `--durable` path for direct FT
@@ -503,9 +677,14 @@ delete or change journals to bypass this safety check. Keys must be kept private
 and different journal paths or multiple writers can still duplicate payments.
 
 The development provider trusts its configured RPC, Bouncer account/code, and
-FT contracts; it is not a trustless payment proof. Its local redemption state
-is single-process only. It has no authentication, TLS, privacy or multi-host
-replay protection and must not be exposed publicly or used with real money.
+FT contracts; it is not a trustless payment proof. A local exclusive lock
+allows one provider process per data directory, but separate directories or
+hosts do not share replay protection. V1/v2 have no claim authentication; v3
+uses replayable signed bearer claims. The server supplies no TLS or general
+privacy and must not be exposed publicly or used with real money. The separate
+[shared seller](bouncer/docs/SHARED_SELLER.md) requires one durable, fenced
+PostgreSQL primary and a trusted TLS proxy; it does not itself change the buyer
+journal. The optional shared buyer is a separate, narrowly scoped component.
 Order data is sent to the provider, and its hash is public in the payment memo.
 
 ## Local tests
@@ -515,6 +694,9 @@ npm install --prefix bouncer
 npm test --prefix bouncer
 ```
 
+The shared-seller integration tests require a disposable PostgreSQL database and
+are skipped locally without `BOUNCER_TEST_POSTGRES_URL`; CI supplies one and
+requires them. See [shared seller tests](bouncer/docs/SHARED_SELLER.md#tests).
 The JavaScript policy simulation uses exact rolling windows and is not identical
 to the contract's conservative hourly buckets. Offline demo tests use a mocked
 NEAR transport; neither proves live blockchain behavior. CI also runs native Rust
@@ -530,12 +712,17 @@ real testnet transactions. To build locally with Rust and the wasm target, run
 - `bouncer/demo-circle-usdc.mjs` — Circle testnet USDC multi-resource and failure-recovery check.
 - `bouncer/agent/procurement.mjs` — plan-driven, testnet-only procurement runner.
 - `bouncer/agent/recover-direct-payment.mjs` — key-free receipt-based recovery for opt-in signed direct payments.
+- `bouncer/agent/onchain-proof.mjs` — experimental guarded x402 onchain-proof testnet buyer and recovery.
+- `bouncer/demo-onchain-proof.mjs` — explicitly gated one-shot testnet check against a local third-party SDK gate.
 - `bouncer/agent/resource-agent.mjs` — quote, guarded payment, fulfillment orchestration.
+- `bouncer/agent/workflow.mjs` — owner-reviewed dependent source → resource workflows and key-free recovery.
 - `bouncer/agent/verify-delivery.mjs` — bounded result checks and local receipt validation.
 - `bouncer/agent/market-discovery.mjs` — isolated, read-only public catalog search.
 - `bouncer/agent/goal-planner.mjs`, `autonomous.mjs` — model proposals constrained by the owner catalog.
 - `bouncer/agent/quote-comparison.mjs` — opt-in, same-token selection among owner-approved providers.
-- `bouncer/services/resource-provider.mjs` — self-hosted test-only resource provider.
+- `bouncer/services/resource-provider.mjs` — file-backed test-only resource provider.
+- `bouncer/services/shared-resource-provider.mjs` — experimental PostgreSQL-backed seller-v3 workers.
+- `bouncer/scripts/inspect-shared-seller.mjs` — key-free, read-only shared seller status.
 - `bouncer/demo/index.html` — clearly labelled offline simulation only; it sends
   no transactions and does not exactly match contract behavior.
 - `bouncer/tests/` — offline regression tests for the demo script.

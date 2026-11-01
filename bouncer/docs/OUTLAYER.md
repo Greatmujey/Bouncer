@@ -161,7 +161,21 @@ policies. The FT route fixes the token, receiver and exact message, with policy
 and route revisions; the project route fixes its version, input, fee and
 resource limits. Separate restricted keys and policy grants are required. FT
 settlement proves only how much the trusted token reports as used, not that a
-provider delivered anything.
+provider delivered anything. The verifier binds the exact signed call and its
+gas, unique receipt IDs, initiation, transfer and returned callback to the same
+FINAL transaction. Incomplete or altered graphs remain unresolved; never
+resend them automatically. It assumes the RPC, token and Bouncer code are
+trustworthy and does not make raw Ref output a vault deposit.
+
+The strengthened verifier was checked read-only against an [existing finalized
+fake-token funding call](https://testnet.nearblocks.io/txns/3uMBAaenMBQzJyxPxEdH8tBg5M3rvAuoQy5oRpNx56MY/execution)
+using [archival testnet receipts](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41287377861/job/124791317765).
+It matched the independently pinned transaction, signing key, route and 10,000
+base-unit settlement and rejected substituted receipt links and payee. The
+check sent no payment and inspected neither the unresolved project transaction
+nor a service result. It proves neither independent FT-paid delivery nor Circle
+USDC support. `node scripts/verify-ft-call-history.mjs` repeats only this fixed
+read-only check; old receipts may require an archival RPC.
 
 The [live paid-provider test](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40699116807/job/122854642930)
 funded OutLayer with fake testnet USDC.e, then paid for a version-pinned
@@ -169,6 +183,76 @@ connectivity probe using that prepaid balance and native NEAR. The probe
 returned HTTP **405**; it is not useful API data or a commercial API purchase.
 The unified mission recovered that payment and continued to self-hosted FT
 resources, stopping later payments until a corrupted local delivery was checked.
+
+The runner also supports the independently operated connector's **`burn` test
+operation**, pinned at 10,000 micro-units of fake USDC.e and 3,333 basis points
+for the author. It accepts only canonical owner-pinned inputs with 1–200 rounds,
+recomputes the iterated SHA-256 checksum locally, and parses the provider's
+64-bit JSON number without JavaScript rounding. The live demo's `burn` mode asks
+for 50 rounds (50,000 iterated hashes after the initial seed hash), and stages
+a later **self-hosted** storage goal containing the verified result and
+transaction ID. The operation is a diagnostic
+benchmark, not arbitrary compute or a commercial resource. The `burn` path has
+passing offline tests, but live delivery has **not** been established. In the
+[30 October diagnostic](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41106347709/job/124237940287),
+[funding](https://testnet.nearblocks.io/txns/3uMBAaenMBQzJyxPxEdH8tBg5M3rvAuoQy5oRpNx56MY)
+credited OutLayer with 10,000 fake-token micro-units; the subsequent project
+send remained unresolved. Its journaled hash is
+`DTJyQq7zMVtQFExeAtVSfKLSEkDSdmZerP3CJkWx8YUD` for
+`owner.bouncer-ft-69756b49.testnet`. A [read-only reconciliation](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41212677218/job/124570783704)
+could not retrieve FINAL receipts: one RPC timed out and the other returned HTTP
+408. A [later status-only recheck](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41290865530/job/124801658634)
+received RPC errors or missing results from both configured endpoints and did
+not resolve the transaction; it submitted **zero** new payments. The explorer
+did not show the hash, but absence there is **not** proof of non-execution. The
+[public recovery evidence artifact](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41212677218)
+contains the original journal and goal and expires 29 January 2027. Preserve them
+and never automatically resend this transaction. The reconciliation script makes
+only bounded status reads: it first asks for the current status, then requests
+`FINAL` if needed; neither `NONE`, an unknown hash, nor a timeout establishes
+non-payment. It labels endpoints by number and omits RPC error payloads and
+failure details rather than logging potentially credential-bearing RPC paths.
+The RPC is still trusted for its response. This diagnostic uses neither Circle
+USDC nor a TEE attestation.
+
+The runner also has a **synthetic-only `vrf` diagnostic path**. The goal pins a
+canonical seed, the fake-token price, project/version, and an independently
+obtained 32-byte testnet public key. It verifies the exact guarded transaction,
+linked provider request/completion, fee split and native refund, then checks an
+Ed25519 signature over `vrf:{request_id}:{owner}:{seed}` and recomputes the
+SHA-256-derived output. A returned public key alone is not sufficient: the goal
+must contain a separately reviewed pin, and a mismatched key is rejected. This
+checks a signed value, not the fairness of the key or a TEE attestation. The
+connector's own documentation calls it a test probe, not a commercial API; no
+live FT-paid VRF fulfillment has been demonstrated. The [public testnet key
+endpoint](https://testnet-api.outlayer.ai/vrf/pubkey) and current registry views
+must be rechecked before any new, explicitly approved order. Do not use this as
+a substitute for resolving or replaying the separate ambiguous burn transaction.
+
+An opt-in one-shot harness for this VRF diagnostic has not yet shown a live
+result. Its [first live attempt](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41301880679/job/124834811981)
+used a fresh testnet contract, account and fixed new seed—not the unresolved
+burn account or hash. It acquired and funded fake test tokens, then stopped
+before any OutLayer deposit or project payment when the separately journaled
+wNEAR refund-test funding returned `Expired`. Its original setup hash
+`HUW8m6dQjyhBEr1KihELt6qXA92cuWzjSJ84q7AbRy3D` and artifact `13081947040`
+must be retained and reconciled; do not resend it automatically. A later
+[key-free inspection](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41303152030/job/124838094977)
+confirmed the first two original hashes FINAL and fake-token ledger/balance
+`10000`, but the third remained unavailable, with the observed wNEAR vault
+ledger and OutLayer prepaid balance both zero. These point-in-time balances
+are not proof that the missing hash never paid. The inspection made no sends
+or journal writes. Before
+creating an account, the harness seals its disposable owner, deployment,
+funding and project keys to a dedicated
+RSA recovery public key; the corresponding private key remains owner-only
+outside Git at `~/.near-credentials/testnet/bouncer-outlayer-vrf-recovery-private.pem`.
+Its owner setup transfers, OutLayer prepaid deposit and project payment each
+record an original hash before broadcast. An uncertain outcome stops and is not
+retried. The envelope is testnet-only, does not authenticate its creator, and
+does not replace checking recovered keys against FINAL chain state. A genuine
+signed diagnostic would still not establish an independent commercial seller,
+Circle-USDC acceptance, unbiased key selection or a TEE attestation.
 
 Provider-held credit is distinct from Bouncer's FT vault. In this path a project
 refund can be credited to Bouncer's balance **at OutLayer**, not returned to
@@ -204,7 +288,10 @@ previously paid but unverified, a **new** OutLayer payment is blocked until
 that earlier delivery is reconciled; if the OutLayer payment already exists,
 the runner recovers it by hash and resumes the FT recovery path. Neither
 preview reserves funds on chain. Policies, balances or quotes may change after
-preview, and a later failure cannot undo an earlier payment.
+preview, and a later failure cannot undo an earlier payment. If resource goals
+opt into `seller-v2`, their quote preview may persist unpaid orders at the
+seller; live mixed and paid-project missions require `--durable` before starting
+any independent payment. See the [seller protocol](PROVIDER_PROTOCOL.md#optional-seller-v2-binding).
 
 The regular planner can supply the FT goal inputs, including model-proposed
 inputs checked against the owner catalog. In the demo the independent random

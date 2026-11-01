@@ -10,19 +10,18 @@ import os from 'node:os';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import nearApi from 'near-api-js';
-import { FileJournal } from './agent/procurement.mjs';
+import { openConfiguredFileJournal, validateConfiguredFileJournalKey } from './agent/procurement.mjs';
 import { createResourceProvider, orderMemo } from './services/resource-provider.mjs';
 import { fetchPublicRepository } from './services/github-data.mjs';
 import { httpResourceProvider, routedResourceProvider, runResourceAgent } from './agent/resource-agent.mjs';
 import { createModelClient, goalsFromModel, planObjective } from './agent/goal-planner.mjs';
 import { compareApprovedQuotes } from './agent/quote-comparison.mjs';
-import { validateRpcEndpoint } from './shared/rpc-endpoint.mjs';
 import { waitForNewTestnetKey } from './shared/testnet-ready.mjs';
-import { MonotonicAccount } from './agent/near-account.mjs';
+import { MonotonicAccount, PaymentRpcProvider } from './agent/near-account.mjs';
 import { RANDOM_TESTNET_PROGRAM } from './agent/outlayer.mjs';
 import { runMixedMission } from './agent/mixed-mission.mjs';
 
-const { KeyPair, KeyPairSigner, providers, transactions } = nearApi;
+const { KeyPair, KeyPairSigner, transactions } = nearApi;
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const KEY_DIR = path.join(os.homedir(), '.near-credentials', 'testnet');
 const RUN_DIR = path.join(os.homedir(), '.bouncer', 'testnet');
@@ -39,7 +38,7 @@ const GAS200 = 200n * T;
 const GAS300 = 300n * T;
 const STORAGE_WNEAR = 1_250_000_000_000_000_000_000n;
 const ICON = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
-const provider = new providers.JsonRpcProvider({ url: validateRpcEndpoint(RPC) });
+const provider = new PaymentRpcProvider(RPC);
 const account = (id, key) => new MonotonicAccount(id, provider, new KeyPairSigner(key));
 const txUrl = hash => `https://testnet.nearblocks.io/txns/${hash}?network=testnet`;
 const view = (id, method, args) => provider.callFunction(id, method, args, { finality: 'final' });
@@ -109,6 +108,7 @@ async function createToken(funder, ownerId, symbol, name) {
 }
 
 async function main() {
+  validateConfiguredFileJournalKey(); // Before any live setup, funding or network request.
   console.log('BOUNCER — REAL testnet multi-token payment check');
   console.log('wNEAR + two synthetic test tokens; fulfillment uses a self-hosted development provider, not commercial vendors.\n');
   const wasmPath = path.join(ROOT, 'bouncer.wasm');
@@ -358,7 +358,7 @@ async function main() {
   let journal, alternateProvider;
   let proof, comparisonProof, deliveryProof, gatedBatchProof, ownerProof, independentProof;
   try {
-    journal = new FileJournal(journalPath, bid, ownerId);
+    journal = openConfiguredFileJournal(journalPath, bid, ownerId);
     const runner = {
       // Receipts bind the stable, reviewed origin in the saved goals file;
       // this demo temporarily maps it to an ephemeral in-process server.
@@ -612,8 +612,8 @@ async function main() {
     }
   } finally {
     journal?.close();
-    if (alternateProvider) await new Promise(resolve => alternateProvider.server.close(resolve));
-    await new Promise(resolve => devProvider.server.close(resolve));
+    if (alternateProvider) await alternateProvider.close();
+    await devProvider.close();
   }
   console.log('\n✅ Three real testnet FT payments and self-hosted resource services verified.');
   console.log('Storage, API and FT-backed compute services are self-hosted development examples, not commercial vendors or production infrastructure.');

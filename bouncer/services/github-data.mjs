@@ -4,19 +4,11 @@
  * This is untrusted third-party data, not an authenticated or permanent feed.
  */
 import { readBoundedJson } from '../shared/bounded-json.mjs';
+import { normalizeRepository } from '../packages/provider-sdk/lib/resource-order.mjs';
+export { normalizeRepository };
 
 const MAX_BODY = 64 * 1024;
 const MAX_DESCRIPTION = 2048;
-
-export function normalizeRepository(value) {
-  if (typeof value !== 'string' || Buffer.byteLength(value) > 140) throw new Error('repository must be owner/name');
-  const parts = value.split('/');
-  if (parts.length !== 2 || !/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/.test(parts[0]) ||
-      !/^[A-Za-z0-9_.-]{1,100}$/.test(parts[1]) || parts[1] === '.' || parts[1] === '..') {
-    throw new Error('repository must be a safe GitHub owner/name');
-  }
-  return `${parts[0]}/${parts[1]}`;
-}
 
 export async function fetchPublicRepository(repository, fetchImpl = globalThis.fetch) {
   const repo = normalizeRepository(repository);
