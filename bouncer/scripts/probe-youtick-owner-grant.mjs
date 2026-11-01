@@ -149,6 +149,9 @@ async function main() {
     // Ciphertext only; availability of the separate local RSA private key is an
     // operator responsibility. Envelope creation does not authenticate origin.
     notice('Encrypted disposable YouTick diagnostic credentials', envelope);
+    // Public, signed scoped proof only (not a private key or signed NEAR
+    // transaction). Retain it in annotations as well as the evidence artifact.
+    notice('Public hypothetical YouTick diagnostic review', probe);
     journal = new FileJournal(path.join(dir, 'journal.enc.json'), vault, owner, { encryptionKey: journalKey });
     const vaultState = await createFunded(provider, vault, vaultKey); writeExclusive(dir, 'vault-created.json', { account_id: vault });
     const ownerState = await createFunded(provider, owner, ownerKey); writeExclusive(dir, 'owner-created.json', { account_id: owner });
@@ -163,8 +166,11 @@ async function main() {
       const record = { kind: 'youtick-probe-transaction-v1', status: 'pending', fingerprint: fingerprint(review),
         tx_hash: signed.txHash, review };
       journal.put(id, record);
-      writeExclusive(dir, `${id}-intent.json`, { id, signer_id: signerId, tx_hash: signed.txHash, review });
-      console.log(`Recorded ${id} hash ${signed.txHash} before its only broadcast.`);
+      const intent = { id, signer_id: signerId, tx_hash: signed.txHash, review };
+      writeExclusive(dir, `${id}-intent.json`, intent);
+      // GitHub check annotations preserve the public hash even if log or
+      // artifact retrieval is unavailable; no signed transaction is exposed.
+      notice('Original diagnostic hash recorded before one broadcast', intent);
       try { await provider.sendTransactionOnce(signed.signed, 'FINAL'); }
       catch { console.log(`${id}: response failed or was lost; inspecting the original hash only.`); }
       let result;
