@@ -22,6 +22,9 @@ export function assessYoutickPlaybackReadiness({ chain, marketCodeHash, accessCo
       health?.compactUpload?.market !== YOUTICK_MARKET || health?.playbackReady !== true) {
     reasons.push('bridge health does not report legacy playback readiness');
   }
+  // The inspected legacy /v1 token path rejects Stream-backed publications.
+  // A missing kind is unknown, not evidence of Studio compatibility.
+  if (health?.mediaProvider?.kind !== 'studio') reasons.push('Studio-backed legacy playback is not established by bridge health');
   if (!state || state.market_contract_id !== YOUTICK_MARKET || state.paused !== false || state.grant_issuance_enabled !== true) {
     reasons.push('pinned access state is unavailable, paused, issuance-disabled or references another market');
   }
@@ -33,7 +36,8 @@ export function assessYoutickPlaybackReadiness({ chain, marketCodeHash, accessCo
     chain: chain === 'testnet' ? chain : null, market: YOUTICK_MARKET, access: YOUTICK_ACCESS,
     observed_market_code_hash: isTransactionHash(marketCodeHash) ? marketCodeHash : null,
     observed_access_code_hash: isTransactionHash(accessCodeHash) ? accessCodeHash : null,
-    bridge_playback_ready: health?.playbackReady === true, access_paused: typeof state?.paused === 'boolean' ? state.paused : null,
+    bridge_playback_ready: health?.playbackReady === true, media_provider: ['studio', 'stream'].includes(health?.mediaProvider?.kind) ? health.mediaProvider.kind : null,
+    access_paused: typeof state?.paused === 'boolean' ? state.paused : null,
     grant_issuance_enabled: typeof state?.grant_issuance_enabled === 'boolean' ? state.grant_issuance_enabled : null,
     play_max_ttl_ms: Number.isSafeInteger(playPolicy?.max_ttl_ms) ? playPolicy.max_ttl_ms : null,
     scope: 'read-only necessary checks only; no proof of bridge/access binding, deployed code, grant, playback, payment or delivery' };
