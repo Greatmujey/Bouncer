@@ -48,8 +48,13 @@ proof that the seller activated the right code or delivered useful data.
   unusable expiry fail closed. It does not create a checkout, keep a bearer
   code, prepare an intent, authorize or sign a payment.
 - `agent/svalin-liquidity-readiness.mjs` inspects seller token registration
-  and a few testnet Ref pool views. These are stale-able indications, **not**
-  a balance, funding transaction or executable swap quote.
+  and a few testnet Ref pool views. At 19:29 UTC on 1 November, a
+  [read-only GitHub job](https://github.com/Greatmujey/Bouncer/actions/runs/41341994197/job/124953799547)
+  observed the seller registered and, among the two pools and three inputs it
+  checked, 10 testnet wNEAR in the best single pool indicated 4.113357 test
+  USDC—below the pass's minimum 5.000001. The job did not check any wallet's
+  balance or establish that other funding routes are impossible. These are
+  stale-able indications, **not** funding or executable swap quotes.
 - `scripts/probe-svalin-pro.mjs` runs those anonymous GET/RPC reads; use a
   network environment that can reach the provider and NEAR testnet. It does
   not create a reservation, pay, activate, or call a paid endpoint.
