@@ -606,7 +606,7 @@ jobs:
     # One explicitly reviewed push only. A rerun, another parent, branch or
     # marker cannot create accounts, acquire test tokens or submit payments.
     # Prior unresolved burn/VRF setup hashes are never touched.
-    if: github.event_name == 'push' && github.ref == 'refs/heads/arena/d00d7f93-near-hub' && github.event.before == 'VRF2_UNARMED_RETRY_PARENT' && github.event.repository.private == true && github.run_attempt == '1' && contains(github.event.head_commit.message, '[paid-vrf2-proof-20261101]')
+    if: github.event_name == 'push' && github.ref == 'refs/heads/arena/d00d7f93-near-hub' && github.event.before == 'f45cf3ea7b5f724c464093db9dd481fd6855b10f' && github.event.repository.private == true && github.run_attempt == '1' && contains(github.event.head_commit.message, '[paid-vrf2-proof-20261101]')
     needs: [js-tests, contract-tests, build-contract]
     runs-on: ubuntu-latest
     timeout-minutes: 30
