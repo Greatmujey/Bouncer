@@ -23,6 +23,51 @@ fulfillment by Bouncer**. The marketplace catalog search is read-only. No model
 or inference service is bundled. This is unaudited testnet software, not suitable
 for real funds.
 
+## Reproduce the safety checks without a wallet
+
+From the repository root, with Node.js 22 and npm:
+
+```sh
+npm ci --prefix bouncer --ignore-scripts --no-audit --no-fund
+node --test bouncer/tests/multiagency-exact-ft.test.mjs bouncer/tests/multiagency-exact-runner.test.mjs bouncer/tests/svalin-pro-readiness.test.mjs bouncer/tests/svalin-liquidity-readiness.test.mjs bouncer/tests/youtick-grant-probe-evidence.test.mjs bouncer/tests/live-action-safety-gates.test.mjs
+```
+
+**See:** 30 passing offline tests (the count can increase as tests are added).
+They exercise synthetic exact-payment proofs, ambiguous-send recovery, Svalin
+readiness validation, a mocked 1-yocto rejection proof, and CI safety gates.
+The install downloads npm dependencies, but the tests do not contact a provider,
+sign transactions or spend tokens. They are not proof of independent delivery.
+
+For the actual Rust contract unit tests, with a Rust toolchain installed:
+
+```sh
+cargo test --manifest-path bouncer/contracts/bouncer/Cargo.toml --lib --features exact-ft-v11
+```
+
+These use a mock NEAR runtime, not a deployed V11 contract. The historical
+[testnet 0-yocto rejection](https://testnet.nearblocks.io/txns/5x9iGNBgrPaEbncnNhRHwRA5Eu3zz4QRTKASBGPK81n7)
+and [independent native-NEAR OutLayer request](https://testnet.nearblocks.io/txns/8nyaDkKPN1VT87S5T7sKYD6oBRwzgdfSHoYpa5RgNqh)
+are separate earlier testnet observations, not evidence of V11 or independent
+FT-paid delivery. See [submission readiness](bouncer/docs/HACKATHON_READINESS.md).
+
+## Hackathon provenance and dependencies
+
+The visible Git history starts on **October 26, 2026**, after the official
+October 19 announcement; the repository was developed during the eligible
+window. [Compare the initial commit to this working branch](https://github.com/Greatmujey/Bouncer/compare/bb67fecc62b7ed00e7ecf9cda26d44390d39302f...arena%2F3ee8cb60-near-hub).
+The initial README itself is also inside the window. Git timestamps alone do
+not establish rights to any reused material; contributors must review those
+before publication.
+
+Development used AI assistance. Main external libraries and tooling are
+`near-sdk` (Rust), `near-api-js`, HOT `near-connect`, the MCP SDK, Express,
+PostgreSQL/`pg`, Zod and esbuild; exact Node dependencies are recorded in
+[`bouncer/package-lock.json`](bouncer/package-lock.json), and Rust requirements
+in [`Cargo.toml`](bouncer/contracts/bouncer/Cargo.toml). CI also exercises
+Playwright and an external PipRail SDK; the local-model option uses Qwen and
+llama.cpp. External protocols and services are credited in the relevant docs.
+The existing Bouncer MIT license is reproduced at the [repository root](LICENSE).
+
 ## Public website (read-only)
 
 **[Open Bouncer](https://bouncer-near.vercel.app/)** — the public Vercel
@@ -224,10 +269,13 @@ allowed for local testing. The runner checks the reported chain ID, but still
 trusts the RPC. Daily budget tracking uses conservative hourly buckets rather
 than resetting at midnight.
 
-GitHub Actions also has an opt-in testnet smoke job, triggered manually or by a
-push whose commit message contains `[testnet-smoke]`. It creates real testnet
-accounts with ephemeral keys on the runner; it does not upload those keys.
-Ordinary CI runs do not create testnet accounts.
+GitHub Actions also has an opt-in testnet smoke job. A manual dispatch must
+explicitly check `run_testnet_smoke`; a push must contain `[testnet-smoke]`.
+Either path is restricted to a private repository and the first run attempt.
+It creates real testnet accounts with ephemeral keys on the runner; it does not
+upload those keys. A marker is an operator control, not proof of a person's
+consent: obtain explicit approval before using it. Ordinary CI and an unchecked
+manual dispatch do not create testnet accounts.
 
 ## Multi-token procurement check (testnet only)
 

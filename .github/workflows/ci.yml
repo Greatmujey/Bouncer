@@ -5,6 +5,12 @@ on:
     branches: [main, 'arena/**']
   pull_request:
   workflow_dispatch:
+    inputs:
+      run_testnet_smoke:
+        description: 'Approve fresh testnet account creation, deployment and token transfers (not mainnet)'
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   js-tests:
@@ -840,7 +846,7 @@ jobs:
 
   circle-usdc-live:
     name: Circle testnet USDC guarded multi-resource mission
-    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[circle-usdc-live]')
+    if: github.event.repository.private == true && github.run_attempt == '1' && github.event_name == 'push' && contains(github.event.head_commit.message, '[circle-usdc-live]')
     needs: build-contract
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -883,7 +889,7 @@ jobs:
 
   oracle-mission-live:
     name: Pinned independent oracle and Circle multi-resource mission (testnet)
-    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[oracle-live]')
+    if: github.event.repository.private == true && github.run_attempt == '1' && github.event_name == 'push' && contains(github.event.head_commit.message, '[oracle-live]')
     needs: build-contract
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -930,7 +936,7 @@ jobs:
     name: Dependent oracle to compute, storage and API (testnet)
     # Explicit one-shot opt-in only. This uses a new, isolated testnet account;
     # it does not touch or retry the separately unresolved project transaction.
-    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[dependent-live]')
+    if: github.event.repository.private == true && github.run_attempt == '1' && github.event_name == 'push' && contains(github.event.head_commit.message, '[dependent-live]')
     needs: [js-tests, contract-tests, build-contract]
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -982,7 +988,7 @@ jobs:
     name: Seller-v2 dependent workflow and recovery (testnet)
     # One fresh, explicit testnet run. Re-running a GitHub Actions run must not
     # silently repeat its payments; investigate an ambiguous hash instead.
-    if: github.event_name == 'push' && github.run_attempt == '1' && contains(github.event.head_commit.message, '[seller-v2-live]')
+    if: github.event.repository.private == true && github.run_attempt == '1' && github.event_name == 'push' && contains(github.event.head_commit.message, '[seller-v2-live]')
     needs: [js-tests, contract-tests, build-contract]
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -1125,7 +1131,7 @@ jobs:
     name: One-shot onchain-proof SDK interoperability (testnet)
     # A fresh self-hosted SDK gate and one Circle testnet USDC payment only.
     # Re-running an Actions run never repeats setup or payment.
-    if: github.event_name == 'push' && github.run_attempt == '1' && contains(github.event.head_commit.message, '[piprail-live]')
+    if: github.event.repository.private == true && github.run_attempt == '1' && github.event_name == 'push' && contains(github.event.head_commit.message, '[piprail-live]')
     needs: [js-tests, contract-tests, build-contract]
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -1170,7 +1176,7 @@ jobs:
 
   ft-call-live:
     name: Guarded independent FT funding, paid test connector and refund (testnet)
-    if: github.event_name == 'push' && (contains(github.event.head_commit.message, '[ft-call-live]') || contains(github.event.head_commit.message, '[paid-compute-live]'))
+    if: github.event.repository.private == true && github.run_attempt == '1' && github.event_name == 'push' && (contains(github.event.head_commit.message, '[ft-call-live]') || contains(github.event.head_commit.message, '[paid-compute-live]'))
     needs: build-contract
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -1219,7 +1225,7 @@ jobs:
 
   outlayer-guarded:
     name: Guarded independent OutLayer testnet compute
-    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[outlayer-live]')
+    if: github.event.repository.private == true && github.run_attempt == '1' && github.event_name == 'push' && contains(github.event.head_commit.message, '[outlayer-live]')
     needs: build-contract
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -1262,7 +1268,7 @@ jobs:
 
   outlayer-direct-research:
     name: Independent OutLayer testnet research (not guarded)
-    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[outlayer-probe]')
+    if: github.event.repository.private == true && github.run_attempt == '1' && github.event_name == 'push' && contains(github.event.head_commit.message, '[outlayer-probe]')
     runs-on: ubuntu-latest
     timeout-minutes: 8
     permissions:
@@ -1601,7 +1607,7 @@ jobs:
 
   testnet-smoke:
     name: Live testnet restricted-key smoke test
-    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && contains(github.event.head_commit.message, '[testnet-smoke]'))
+    if: github.event.repository.private == true && github.run_attempt == '1' && ((github.event_name == 'workflow_dispatch' && inputs.run_testnet_smoke == true) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[testnet-smoke]')))
     needs: build-contract
     runs-on: ubuntu-latest
     timeout-minutes: 18
@@ -1622,7 +1628,7 @@ jobs:
 
   testnet-multi:
     name: Live testnet multi-token procurement check
-    if: github.event_name == 'push' && (contains(github.event.head_commit.message, '[multi-resource-smoke]') || contains(github.event.head_commit.message, '[provider-compare]') || contains(github.event.head_commit.message, '[delivery-verify]') || contains(github.event.head_commit.message, '[separate-owner]') || contains(github.event.head_commit.message, '[mixed-outlayer]'))
+    if: github.event.repository.private == true && github.run_attempt == '1' && github.event_name == 'push' && (contains(github.event.head_commit.message, '[multi-resource-smoke]') || contains(github.event.head_commit.message, '[provider-compare]') || contains(github.event.head_commit.message, '[delivery-verify]') || contains(github.event.head_commit.message, '[separate-owner]') || contains(github.event.head_commit.message, '[mixed-outlayer]'))
     needs: build-contract
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -1667,7 +1673,7 @@ jobs:
 
   ai-testnet:
     name: Local AI-planned multi-resource testnet flow
-    if: github.event_name == 'push' && (contains(github.event.head_commit.message, '[ai-multi-resource]') || contains(github.event.head_commit.message, '[ai-provider-compare]') || contains(github.event.head_commit.message, '[ai-delivery-verify]'))
+    if: github.event.repository.private == true && github.run_attempt == '1' && github.event_name == 'push' && (contains(github.event.head_commit.message, '[ai-multi-resource]') || contains(github.event.head_commit.message, '[ai-provider-compare]') || contains(github.event.head_commit.message, '[ai-delivery-verify]'))
     needs: build-contract
     runs-on: ubuntu-latest
     timeout-minutes: 35

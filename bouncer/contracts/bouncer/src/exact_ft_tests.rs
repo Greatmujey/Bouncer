@@ -130,6 +130,17 @@ fn stranger_cannot_create_an_intent_even_with_one_yocto() {
 }
 
 #[test]
+fn owner_contract_forwarding_is_trusted_not_a_proof_of_human_approval() {
+    // Simulate an owner contract that attached 1 yocto to a cross-contract
+    // call, originating from a different transaction signer. The guard checks
+    // predecessor + deposit, not who controlled the forwarding method.
+    let mut c = empty();
+    testing_env!(context("owner.testnet", "requester.testnet", &key(3), 1, NOW));
+    c.set_policy("forwarded".into(), id("token.testnet"), U128(5), Some(U128(7)));
+    assert_eq!(c.cap_of.get("forwarded"), Some(&5));
+}
+
+#[test]
 #[should_panic(expected = "owner-only method requires exactly 1 yoctoNEAR")]
 fn agent_cannot_cancel_intent() { let mut c = fixture(); testing_env!(agent()); c.cancel_exact_ft_intent(INTENT.into()); }
 

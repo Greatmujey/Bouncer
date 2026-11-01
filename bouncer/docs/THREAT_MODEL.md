@@ -10,10 +10,14 @@ It has not been audited and must not hold valuable funds.
   to the selected policy. The signed request also names its expected token;
   the contract rejects it if the policy's token differs. The owner should create
   a separate NEAR function-call key scoped only to the contract's `execute`.
-- The owner and exactly 1 yoctoNEAR are required to change policies, grant or
-  revoke agent keys, change payees, and withdraw. Function-call keys cannot
-  attach deposits under the NEAR protocol. Grants are contract-level state;
-  they do not create or limit a protocol access key.
+- The **predecessor** must be the configured owner and attach exactly 1
+  yoctoNEAR to change policies, grant or revoke agent keys, change payees, and
+  withdraw. A function-call key cannot attach that deposit to a direct
+  transaction. This does not prove that a human approved: a full-access key
+  can be automated or compromised, and an owner account that is a contract
+  can forward a call using its own deposit. The owner's forwarding methods and
+  keys must be trusted. Grants are contract-level state; they do not create or
+  limit a protocol access key.
 - Per-transaction caps, a conservative rolling daily budget, the token vault
   balance, and a fail-closed payee allowlist are checked atomically before a
   debit. The current hour plus 24 prior hourly buckets prevent early expiry;

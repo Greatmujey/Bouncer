@@ -9,29 +9,37 @@ Tracks: `security` (AI Security & Defense) + `agents` (Agent Economy) + `realwor
 
 ## The one-sentence pitch
 
-> Every "secure AI agent wallet" today is a prompt and a promise. Bouncer is the contract that makes the promise unbreakable: **the agent holds a key that can only call one method, and that method can only move money the human already signed off on.**
+> Bouncer aims to let an agent buy resources using a restricted key while a NEAR contract enforces owner-configured spending limits. This is a testnet prototype, not an unbreakable or audited wallet.
 
 ---
 
 ## The finding this is built on
 
-An agent needs to move money. On NEAR the natural advice is "give it a scoped function-call key with a spending allowance." **That does not work.** From the NEAR protocol itself:
+An agent needs to move money, but a NEAR function-call key's `allowance` is a
+**gas** budget, not an application-level token-spending limit. The key can call
+only its allowed receiver and methods with zero attached NEAR.
 
-1. A **function-call access key's `allowance` is a *gas* budget**, not a spending limit. Nearcore's `AccessKeyPermission` docs: *"Allowance is a balance limit to use by this access key to pay for function call gas and transaction fees."*
-2. **Function-call keys cannot attach a deposit at all.** Any `FunctionCall` with attached NEAR fails. So the key can't move NEAR directly.
-3. But it *can* call `ft_transfer` on a token contract. Gas on NEAR is ~free (a 1000 TGas call is ≤ 0.1 N). So a 0.25 N "allowance" key can `ft_transfer` **your entire USDC balance**, one call after another, and it renews nothing — it just never runs out, because it's never the thing being spent.
-4. The `allowance` is also **immutable**: you cannot lower it on an existing key. You must delete and recreate.
+**Correction to the original thesis:** standard
+[NEP-141](https://github.com/near/NEPs/blob/master/neps/nep-0141.md) requires
+exactly one yoctoNEAR for `ft_transfer` and `ft_transfer_call`. A function-call
+key therefore cannot directly call either standard method successfully. A
+zero-deposit method on the receiver can nevertheless move assets controlled by
+that receiver, depending on its code. A gas allowance does not constrain the
+value of those operations; the receiver must enforce appropriate policy.
 
-**Conclusion: NEAR has no native per-agent spending limit. Anyone claiming otherwise is confusing gas allowance with value allowance.** The limit has to live in a contract that the agent cannot route around. That is the entire product.
-
-(There *is* one native primitive worth using as defense-in-depth: requiring `1 yoctoNEAR` on a method makes it unreachable by function-call keys — `DepositWithFunctionCall`. Bouncer uses this so only a **human full-access signature** can widen a policy.)
+Bouncer uses the one-yocto guard, alongside owner-predecessor authorization,
+to stop a function-call key from *directly* widening policy. The contract
+checks the predecessor and deposit, not whether a human approved. A direct
+transaction needs a deposit-capable key, which may be automated or compromised;
+an owner contract could also forward a call with its own deposit. Its forwarding
+logic must therefore be trusted. See the [current threat model](THREAT_MODEL.md).
 
 ---
 
 ## How it works
 
 ```
-        HUMAN                          AGENT                      CHAIN
+    OWNER SIGNER                      AGENT                      CHAIN
           |                              |                          |
    1. deposit USDC -------->  vault (contract) ------------------> custody
    2. set policy:             |
@@ -49,15 +57,21 @@ An agent needs to move money. On NEAR the natural advice is "give it a scoped fu
           |                        refuses > cap, unknown payee, over-budget
           |                  +---> emits a receipt (the audit trail is the chain)
           |
-   5. human widens/rotates policy only with a full-access signature
-      (1 yoctoNEAR guard = function-call keys are structurally locked out)
+   5. owner widens/rotates policy with exactly 1 yoctoNEAR
+      (a function-call key cannot attach it to a direct transaction)
 ```
 
-**The security property:** the agent is not trusted. The key is not trusted. The *contract* is the authority, and the contract is public, immutable and auditable. An agent that asks for more than its budget gets a failed transaction, not a drained vault.
+**Intended security property:** a properly scoped agent key is checked by the
+contract against owner-configured limits. A call over its budget should fail.
+This depends on the deployed code, key configuration, token behavior and
+trusted owner signer. The prototype has not been independently audited; do not
+assume that a deployment is immutable or that every failure mode is covered.
 
 ### The second half: agents compete for the spend
 
-A cap alone is a wall. Bouncer makes the wall a **market**:
+A cap alone is a wall. The original proposal imagined a **market** as well.
+The following solver-auction scenario is a future idea, **not an implemented or
+verified Bouncer feature**:
 
 - The human posts an **intent**: "swap up to 20 USDC to wNEAR, floor 1.714 wNEAR, deadline 30 min."
 - Multiple **solver agents** bid. Each must submit a signed quote.
@@ -73,14 +87,18 @@ This is the NEAR Intents thesis (let solvers compete instead of trusting one rou
 | Criterion | Our position |
 |---|---|
 | **Genuinely on-chain** | The rules are enforced in a Rust contract. Not a wrapper, not a prompt. Judges can read the test that proves a bypass fails. |
-| **Exploits a real, documented gap** | Every competitor in `security` will build "guardrails" in TypeScript around a full-access key. That is theater. We built the thing that makes it unnecessary. |
-| **Demo-able in 90s** | Human sets $20/day. Agent tries $25 → **rejected on-chain**. Agent tries allowed payee $20 → **settles**. Agent tries new payee → **rejected**. Screen record it. |
-| **Two real integrations** | NEAR function-call keys (the vuln) + NEAR Intents 1Click API (verified live: 208 assets, 25+ chains, real quotes returning `minAmountOut` in ~20s). |
-| **Multi-track eligible** | `security` + `agents` + `realworld` — one submission, three shots at a prize. |
+| **Concrete security boundary** | A restricted key and an owner-controlled contract limit different things; their combination can enforce caps under the documented assumptions. |
+| **Demonstrable behavior** | Historical testnet checks include allowed and rejected calls. Record a submission demo only after the intended multi-resource path works end to end. |
+| **Integrations** | Consult the [current status](../../README.md) for the actual historical testnet evidence and the remaining independent-FT-delivery gap. |
+| **Track fit** | Security and agent economy are the strongest current fit. Any additional track must be supported by completed evidence and selected by the entrant. |
 
 ### Risk: someone shipped this already
 
-There is a repo (`near-agent-guard`) describing a **TypeScript** "deterministic policy guard" for exactly this track. That is good news, not bad: it confirms the gap is real, and it is the weaker version of the same idea. A TypeScript guard runs *beside* the key and can be bypassed by anyone who gets the key. Bouncer's rules are **in the contract the key can only call.** We win by making that distinction the headline and by having a passing test that the TS approach cannot pass.
+Related projects may provide off-chain or on-chain guardrails; no competitor
+comparison or prize outcome has been established. A guard that runs only in
+agent-side code is not an on-chain restriction on a stolen key. Bouncer's
+specific claim is that its documented, correctly configured vault checks run in
+the contract; this should be evaluated against its threat model and evidence.
 
 ---
 
@@ -102,6 +120,6 @@ There is a repo (`near-agent-guard`) describing a **TypeScript** "deterministic 
 
 ## Honest open questions
 
-1. **NEAR testnet tooling.** This sandbox has no Rust/wasm target and no `cargo-near`, so the contract has to be compiled and deployed from **your machine**. Everything else (policy SDK, agent, 1Click client, dashboard, tests that don't need wasm) I can build and run here now.
-2. **Prize payout needs a mainnet NEAR account** — e.g. `team.near`. Do not create it for the submission; you need to own the key.
-3. **Scope.** `security` alone is a strong entry. Adding `agents` and `realworld` costs almost nothing because it's the same contract, but each track wants a different README emphasis. We write one README with three clearly-labelled sections.
+1. **NEAR testnet tooling.** Availability depends on the environment; current CI builds and tests the contract without deploying V11. See the [README](../../README.md) for reproducible commands and the current status.
+2. **Payout account.** Submission requires an entrant-controlled NEAR mainnet account ID; an ID does not require sharing its private key. Verify the current rules before submitting.
+3. **Scope and tracks.** One submission may select multiple tracks, but each selected track needs a convincing, truthful explanation of implemented work. Selection remains with the entrant.
