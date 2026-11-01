@@ -151,6 +151,7 @@ export async function recoverFtCallGoal({ goal: rawGoal, provider, journal, publ
   if ((await provider.viewNodeStatus())?.chain_id !== 'testnet') throw new Error('RPC must report testnet');
   const previous = journal.get(goal.id);
   if (!previous || previous.fingerprint !== fingerprint(goal)) throw new Error(`${goal.id}: journal does not match the reviewed goal`);
+  if (!['pending', 'completed'].includes(previous.status)) throw new Error(`${goal.id}: invalid journal status; stop and reconcile`);
   if (!validHash(previous.tx_hash)) throw new Error(`${goal.id}: no reliable transaction hash; reconcile manually, never resend automatically`);
   const signedBy = previous.agent_public_key;
   if (typeof signedBy !== 'string' || !signedBy || (publicKey && signedBy !== String(publicKey))) throw new Error(`${goal.id}: journal signing key mismatch`);
@@ -179,7 +180,7 @@ export async function runFtCallGoal({ goal: rawGoal, provider, account, publicKe
   if (!permission || permission.receiver_id !== goal.contract_id || !equal(permission.method_names, ['execute_ft_call'])) throw new Error('agent key must be scoped ONLY to execute_ft_call on this contract');
   const previous = journal?.get(goal.id), hash = fingerprint(goal);
   if (previous && previous.fingerprint !== hash) throw new Error(`${goal.id}: journal does not match the reviewed goal`);
-  if (previous) return recoverFtCallGoal({ goal, provider, journal, publicKey, log });
+  if (previous) return recoverFtCallGoal({ goal, provider, journal, publicKey, update: execute, log });
   const [policy, route, granted, verdict] = await Promise.all([
     provider.callFunction(goal.contract_id, 'get_policy', { policy_id: goal.policy_id }, final),
     provider.callFunction(goal.contract_id, 'get_ft_call_route', { policy_id: goal.policy_id, payee: goal.payee }, final),
@@ -235,8 +236,11 @@ async function main() {
   const goal = validateFtCallGoal(JSON.parse(fs.readFileSync(goalPath, 'utf8')));
   const provider = new PaymentRpcProvider(options.rpc || process.env.NEAR_TESTNET_RPC || 'https://test.rpc.fastnear.com');
   const state = path.resolve(home(options.state || `${goalPath}.bouncer-journal.json`));
-  const journal = options.execute || options.recover
-    ? openConfiguredFileJournal(state, goal.contract_id, goal.owner_account_id, { requireExisting: !!options.recover }) : null;
+  // Observe an existing journal even in dry-run mode. If it disappeared
+  // before the lock was acquired, requireExisting prevents a new history.
+  const requireExisting = !!options.recover || fs.existsSync(state);
+  const journal = options.execute || requireExisting
+    ? openConfiguredFileJournal(state, goal.contract_id, goal.owner_account_id, { requireExisting }) : null;
   try {
     let outcome;
     if (options.recover) outcome = await recoverFtCallGoal({ goal, provider, journal });

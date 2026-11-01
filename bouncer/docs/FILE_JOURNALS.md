@@ -106,6 +106,13 @@ recovery can contact the seller and requires its idempotent redemption policy;
 it cannot prove an arbitrary seller's external side effect was not performed.
 A failed or unknown RPC lookup remains unresolved; never repay automatically.
 
+The FT-call, Ref-swap, OutLayer, oracle and paid-project CLIs now inspect an
+existing journal even during dry runs. A preview of a pending hash may verify
+its original receipt, but leaves the journal unchanged; explicit recovery or
+execution can commit the verified state. Unknown journal statuses fail closed.
+A dry run with no journal still does not create one. These safeguards cannot
+detect a journal deleted before the process starts.
+
 Recovery and in-place conversion require the original file **after acquiring
 its local lock**; they refuse to create a missing parent directory or an empty
 replacement. The testnet demo recovery reopens use the same rule. This narrows

@@ -167,6 +167,7 @@ export async function recoverOracleGoal({ goal: rawGoal, provider, journal, publ
   if ((await provider.viewNodeStatus())?.chain_id !== 'testnet') throw new Error('RPC must report testnet');
   const previous = journal.get(goal.id);
   if (!previous || previous.fingerprint !== fingerprint(goal)) throw new Error(`${goal.id}: journal does not match the reviewed goal`);
+  if (!['pending', 'completed'].includes(previous.status)) throw new Error(`${goal.id}: invalid journal status; stop and reconcile`);
   if (!validHash(previous.tx_hash)) throw new Error(`${goal.id}: unresolved payment without a transaction hash; reconcile manually, never resend automatically`);
   const signedBy = previous.agent_public_key || (publicKey && String(publicKey));
   if (typeof signedBy !== 'string' || !signedBy) throw new Error(`${goal.id}: original signing public key is required for recovery`);
@@ -216,7 +217,7 @@ export async function runOracleGoal({ goal: rawGoal, provider, account, publicKe
   }
   const fp = fingerprint(goal), previous = journal?.get(goal.id);
   if (previous && previous.fingerprint !== fp) throw new Error(`${goal.id}: journal does not match the reviewed goal`);
-  if (previous) return recoverOracleGoal({ goal, provider, journal, publicKey, log });
+  if (previous) return recoverOracleGoal({ goal, provider, journal, publicKey, update: execute, log });
   const [policy, route, allowed, verdict] = await Promise.all([
     provider.callFunction(goal.contract_id, 'get_policy', { policy_id: goal.policy_id }, final),
     provider.callFunction(goal.contract_id, 'get_outlayer_native_project', { policy_id: goal.policy_id }, final),
@@ -276,8 +277,11 @@ async function main() {
   const goal = validateOracleGoal(JSON.parse(fs.readFileSync(goalPath, 'utf8')));
   const provider = new PaymentRpcProvider(options.rpc || process.env.NEAR_TESTNET_RPC || 'https://test.rpc.fastnear.com');
   const state = path.resolve(expandHome(options.state || `${goalPath}.bouncer-journal.json`));
-  const journal = options.execute || options.recover
-    ? openConfiguredFileJournal(state, goal.contract_id, goal.owner_account_id, { requireExisting: !!options.recover }) : null;
+  // Observe an existing journal even in dry-run mode. If it disappeared
+  // before the lock was acquired, requireExisting prevents a new history.
+  const requireExisting = !!options.recover || fs.existsSync(state);
+  const journal = options.execute || requireExisting
+    ? openConfiguredFileJournal(state, goal.contract_id, goal.owner_account_id, { requireExisting }) : null;
   try {
     let outcome;
     if (options.recover) outcome = await recoverOracleGoal({ goal, provider, journal });

@@ -131,6 +131,21 @@ test('one broadcast is persisted first; key-free recovery verifies the same tran
   assert.equal((await run(f, { execute: true })).status, 'REUSED'); assert.equal(f.sends(), 1);
 });
 
+test('dry-run of a pending FT call reads the original receipt but leaves the journal unchanged', async () => {
+  const f = fixture(), read = f.provider.txStatusReceipts;
+  f.provider.txStatusReceipts = async (...args) => ({ ...await read(...args), receipts: [] });
+  await assert.rejects(run(f, { execute: true }), /FT call unresolved/);
+  const pending = structuredClone(f.journal.get(goal.id));
+  f.provider.txStatusReceipts = read;
+  f.journal.put(goal.id, { ...pending, status: 'invalid' });
+  await assert.rejects(run(f, { execute: false }), /invalid journal status/);
+  f.journal.put(goal.id, pending);
+  assert.equal((await run(f, { execute: false })).status, 'REUSED');
+  assert.deepEqual(f.journal.get(goal.id), pending); assert.equal(f.sends(), 1);
+  assert.equal((await run(f, { execute: true })).status, 'REUSED');
+  assert.equal(f.journal.get(goal.id).status, 'completed'); assert.equal(f.sends(), 1);
+});
+
 test('uncertain receipt leaves pending payment and recovery never resends', async () => {
   const f = fixture(), read = f.provider.txStatusReceipts;
   f.provider.txStatusReceipts = async (...args) => { const result = await read(...args); return { ...result, receipts: [] }; };

@@ -86,6 +86,22 @@ function fixture() {
     setRoute(v) { routeOverrides = v; }, setStorage(v) { storage = v; }, setSweepPermission(v) { sweepPermission = v; }, setChain(v) { chain = v; } };
 }
 
+test('dry-run CLI opens an existing journal and fails closed before network access if it is corrupt', async () => {
+  const fs = await import('node:fs'), os = await import('node:os'), path = await import('node:path');
+  const { spawnSync } = await import('node:child_process');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ref-swap-cli-dry-'));
+  try {
+    const goalPath = path.join(dir, 'goal.json'), keyPath = path.join(dir, 'key.json'), journalPath = path.join(dir, 'journal.json');
+    fs.writeFileSync(goalPath, JSON.stringify(goal));
+    fs.writeFileSync(keyPath, JSON.stringify({ account_id: goal.owner_account_id, private_key: nearApi.KeyPair.fromRandom('ed25519').toString() }), { mode: 0o600 });
+    fs.writeFileSync(journalPath, 'invalid JSON', { mode: 0o600 });
+    const child = spawnSync(process.execPath, ['agent/ref-swap.mjs', '--goal', goalPath, '--key', keyPath, '--sweep-key', keyPath,
+      '--state', journalPath, '--rpc', 'http://127.0.0.1:1'], { cwd: process.cwd(), encoding: 'utf8', timeout: 5000 });
+    assert.notEqual(child.status, 0); assert.match(child.stderr, /file journal is unreadable or has invalid JSON/);
+    assert.equal(fs.readFileSync(journalPath, 'utf8'), 'invalid JSON');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('dry run verifies immutable router, storage and both key scopes without writes or broadcasts', async () => {
   const f = fixture(), result = await runRefSwap({ ...f.opts, execute: false });
   assert.equal(result.status, 'READY'); assert.equal(f.entries.size, 0); assert.deepEqual(f.sends, []);
@@ -100,6 +116,19 @@ test('each reviewed hash is durable before its only broadcast; a completed route
   assert.equal((await runRefSwap(f.opts)).status, 'COMPLETED');
   assert.equal((await recoverRefSwap({ goal, provider: f.provider, journal: f.journal, log: () => {} })).status, 'COMPLETED');
   assert.deepEqual(f.sends, [inputHash, f.sweep.hash]);
+});
+
+test('dry-run verifies pending input and sweep without changing their durable history', async () => {
+  let f = fixture(); f.failSend('input'); await assert.rejects(runRefSwap(f.opts), /FT call unresolved/);
+  let before = structuredClone([...f.entries]); f.failSend('');
+  assert.equal((await runRefSwap({ ...f.opts, execute: false })).status, 'OUTPUT_RECEIVED');
+  assert.deepEqual([...f.entries], before); assert.deepEqual(f.sends, [inputHash]);
+  f = fixture(); f.failSend('sweep'); await assert.rejects(runRefSwap(f.opts), /sweep unresolved/);
+  before = structuredClone([...f.entries]); f.failSend('');
+  assert.equal((await runRefSwap({ ...f.opts, execute: false })).status, 'COMPLETED');
+  assert.deepEqual([...f.entries], before); assert.deepEqual(f.sends, [inputHash, f.sweep.hash]);
+  assert.equal((await recoverRefSwap({ goal, provider: f.provider, journal: f.journal, log: () => {} })).status, 'COMPLETED');
+  assert.equal(f.journal.get(`${goal.id}-route`).status, 'completed');
 });
 
 test('lost input response recovers the same hash before a single independent sweep', async () => {

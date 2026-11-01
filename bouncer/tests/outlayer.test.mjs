@@ -140,6 +140,19 @@ test('one send is journaled before broadcast; recovery reuses the exact transact
   assert.equal(next.status, 'REUSED'); assert.equal(f.sends(), 1); assert.equal(f.reads(), 2);
 });
 
+test('dry-run recovery of an existing OutLayer hash is read-only', async () => {
+  const f = fixture(); let sends = 0;
+  f.provider.sendTransactionUntil = async () => { sends++; throw new Error('response lost'); };
+  await assert.rejects(run(f, { execute: true }), /do not resend automatically/);
+  const pending = structuredClone(f.journal.get(goal.id));
+  f.journal.put(goal.id, { ...pending, status: 'invalid' });
+  await assert.rejects(run(f), /invalid journal status/); f.journal.put(goal.id, pending);
+  assert.equal((await run(f)).status, 'REUSED');
+  assert.deepEqual(f.journal.get(goal.id), pending); assert.equal(sends, 1);
+  assert.equal((await run(f, { execute: true })).status, 'REUSED');
+  assert.equal(f.journal.get(goal.id).status, 'completed'); assert.equal(sends, 1);
+});
+
 test('ambiguous broadcast has a pre-signed hash and can recover without a signer or another payment', async () => {
   const f = fixture(); let broadcasts = 0;
   f.provider.sendTransactionUntil = async () => {

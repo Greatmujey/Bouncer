@@ -278,6 +278,7 @@ export async function recoverProjectGoal({ goal: rawGoal, provider, journal, pub
   if ((await provider.viewNodeStatus())?.chain_id !== 'testnet') throw new Error('RPC must report testnet');
   const previous = journal.get(goal.id);
   if (!previous || previous.fingerprint !== fingerprint(goal)) throw new Error(`${goal.id}: journal does not match the reviewed goal`);
+  if (!['pending', 'completed'].includes(previous.status)) throw new Error(`${goal.id}: invalid journal status; stop and reconcile`);
   if (!validHash(previous.tx_hash)) throw new Error(`${goal.id}: missing transaction hash; reconcile manually, never resend automatically`);
   const signedBy = previous.agent_public_key;
   if (typeof signedBy !== 'string' || !signedBy || (publicKey && signedBy !== String(publicKey))) throw new Error(`${goal.id}: journal signing key mismatch`);
@@ -304,7 +305,7 @@ export async function runProjectGoal({ goal: rawGoal, provider, account, publicK
   if (!permission || permission.receiver_id !== goal.contract_id || !equal(permission.method_names, ['execute_outlayer_project'])) throw new Error('agent key must be scoped ONLY to execute_outlayer_project on this contract');
   const previous = journal?.get(goal.id), hash = fingerprint(goal);
   if (previous && previous.fingerprint !== hash) throw new Error(`${goal.id}: journal does not match the reviewed goal`);
-  if (previous) return recoverProjectGoal({ goal, provider, journal, publicKey, log });
+  if (previous) return recoverProjectGoal({ goal, provider, journal, publicKey, update: execute, log });
   const [route, nativePolicy, usdPolicy, nativeGrant, usdGrant, verdict, credit, usdSpent, configuredToken, pricing, versionInfo] = await Promise.all([
     provider.callFunction(goal.contract_id, 'get_outlayer_project', { native_policy_id: goal.native_policy_id }, final),
     provider.callFunction(goal.contract_id, 'get_policy', { policy_id: goal.native_policy_id }, final),
@@ -377,8 +378,11 @@ async function main() {
   const goalPath = path.resolve(home(options.goal)), goal = validateProjectGoal(JSON.parse(fs.readFileSync(goalPath, 'utf8')));
   const provider = new PaymentRpcProvider(options.rpc || process.env.NEAR_TESTNET_RPC || 'https://test.rpc.fastnear.com');
   const state = path.resolve(home(options.state || `${goalPath}.bouncer-journal.json`));
-  const journal = options.execute || options.recover
-    ? openConfiguredFileJournal(state, goal.contract_id, goal.owner_account_id, { requireExisting: !!options.recover }) : null;
+  // Observe an existing journal even in dry-run mode. If it disappeared
+  // before the lock was acquired, requireExisting prevents a new history.
+  const requireExisting = !!options.recover || fs.existsSync(state);
+  const journal = options.execute || requireExisting
+    ? openConfiguredFileJournal(state, goal.contract_id, goal.owner_account_id, { requireExisting }) : null;
   try {
     let outcome;
     if (options.recover) outcome = await recoverProjectGoal({ goal, provider, journal });

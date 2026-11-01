@@ -132,6 +132,19 @@ test('records the transaction before one send and recovers without a signer or a
   assert.equal(again.status, 'REUSED'); assert.equal(again.delivery.tx_hash, hash); assert.equal(f.sends(), 1);
 });
 
+test('dry-run of a pending paid project verifies the hash without rewriting its journal', async () => {
+  const f = fixture(), read = f.provider.txStatusReceipts;
+  f.provider.txStatusReceipts = async (...args) => ({ ...await read(...args), receipts: [] });
+  await assert.rejects(run(f, { execute: true }), /paid project unresolved/);
+  const pending = structuredClone(f.journal.get(goal.id)); f.provider.txStatusReceipts = read;
+  f.journal.put(goal.id, { ...pending, status: 'invalid' });
+  await assert.rejects(run(f), /invalid journal status/); f.journal.put(goal.id, pending);
+  assert.equal((await run(f)).status, 'REUSED');
+  assert.deepEqual(f.journal.get(goal.id), pending); assert.equal(f.sends(), 1);
+  assert.equal((await run(f, { execute: true })).status, 'REUSED');
+  assert.equal(f.journal.get(goal.id).status, 'completed'); assert.equal(f.sends(), 1);
+});
+
 test('uncertain project result remains pending and key-free recovery never resends', async () => {
   const f = fixture(), read = f.provider.txStatusReceipts;
   f.provider.txStatusReceipts = async (...args) => ({ ...await read(...args), receipts: [] });

@@ -98,16 +98,16 @@ async function checkSweepKey(goal, provider, account, publicKey) {
     throw new Error('sweep key must be scoped ONLY to sweep_output on the immutable router');
   }
 }
-async function readVerifiedSwap(goal, provider, journal, log) {
+async function readVerifiedSwap(goal, provider, journal, log, update = true) {
   const input = refSwapFtGoal(goal), entry = journal.get(input.id);
   if (!entry) return null;
-  await recoverFtCallGoal({ goal: input, provider, journal, log });
+  await recoverFtCallGoal({ goal: input, provider, journal, update, log });
   const result = await provider.txStatusReceipts(entry.tx_hash, goal.owner_account_id, 'FINAL');
   const proof = verifyRefSwapOutput(goal, result, entry.agent_public_key);
   if (proof.tx_hash !== entry.tx_hash) throw new Error('RPC returned a different original swap');
   return proof;
 }
-async function readVerifiedSweep(goal, provider, journal, proof, log) {
+async function readVerifiedSweep(goal, provider, journal, proof, log, update = true) {
   const entry = journal.get(sweepId(goal));
   if (!entry) return null;
   if (entry.fingerprint !== sweepFingerprint(goal, proof) || !['pending', 'completed'].includes(entry.status) ||
@@ -124,8 +124,8 @@ async function readVerifiedSweep(goal, provider, journal, proof, log) {
   if (route.status === 'completed' && (route.tx_hash !== credit.tx_hash || !isDeepStrictEqual(route.swap, proof) || !isDeepStrictEqual(route.vault_credit, credit))) {
     throw new Error('completed route differs from FINAL chain evidence');
   }
-  if (entry.status !== 'completed') journal.put(sweepId(goal), { ...entry, status: 'completed', vault_credit: credit, completed_at: new Date().toISOString() });
-  if (route.status !== 'completed') journal.put(routeId(goal), { ...route, status: 'completed', tx_hash: credit.tx_hash,
+  if (update && entry.status !== 'completed') journal.put(sweepId(goal), { ...entry, status: 'completed', vault_credit: credit, completed_at: new Date().toISOString() });
+  if (update && route.status !== 'completed') journal.put(routeId(goal), { ...route, status: 'completed', tx_hash: credit.tx_hash,
     swap: proof, vault_credit: credit, completed_at: new Date().toISOString() });
   log(`[ref-swap] VERIFIED vault credit ${credit.credited} ${credit.token}; original swap ${proof.tx_hash}; sweep ${credit.tx_hash}`);
   return credit;
@@ -161,9 +161,9 @@ export async function runRefSwap({ goal: rawGoal, provider, account, publicKey, 
   if (execute && !routeEntry) journal.put(routeId(goal), { fingerprint: fingerprint(goal), status: 'pending', ref_swap_goal: goal, started_at: new Date().toISOString() });
   const inputResult = await runFtCallGoal({ goal: input, provider, account, publicKey, journal, execute, log });
   if (inputResult.status === 'BLOCKED' || inputResult.status === 'READY') return inputResult;
-  const proof = await readVerifiedSwap(goal, provider, journal, log);
+  const proof = await readVerifiedSwap(goal, provider, journal, log, execute);
   if (!proof) throw new Error('original input is missing from journal; stop and reconcile');
-  const prior = await readVerifiedSweep(goal, provider, journal, proof, log);
+  const prior = await readVerifiedSweep(goal, provider, journal, proof, log, execute);
   if (prior) return { status: 'COMPLETED', swap: proof, vault_credit: prior };
   if (routeEntry?.status === 'completed') throw new Error('completed route is missing its original sweep; stop and reconcile');
   if (!execute) return { status: 'OUTPUT_RECEIVED', swap: proof, verification: 'dry run; vault not yet credited' };
@@ -216,7 +216,10 @@ async function main() {
   const goalPath = path.resolve(home(options.goal)), goal = validateRefSwapGoal(JSON.parse(fs.readFileSync(goalPath, 'utf8')));
   const provider = new PaymentRpcProvider(options.rpc || process.env.NEAR_TESTNET_RPC || 'https://test.rpc.fastnear.com');
   const state = path.resolve(home(options.state || `${goalPath}.bouncer-journal.json`));
-  const journal = options.execute || options.recover ? openConfiguredFileJournal(state, goal.contract_id, goal.owner_account_id, { requireExisting: !!options.recover }) : null;
+  // Dry runs must see an existing history, but must not create a new journal.
+  const requireExisting = !!options.recover || fs.existsSync(state);
+  const journal = options.execute || requireExisting
+    ? openConfiguredFileJournal(state, goal.contract_id, goal.owner_account_id, { requireExisting }) : null;
   try {
     let result;
     if (options.recover) result = await recoverRefSwap({ goal, provider, journal });

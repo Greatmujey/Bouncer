@@ -209,6 +209,7 @@ export async function recoverOutlayerGoal({ goal: rawGoal, provider, journal, pu
   if ((await provider.viewNodeStatus())?.chain_id !== 'testnet') throw new Error('RPC must report testnet');
   const previous = journal.get(goal.id);
   if (!previous || previous.fingerprint !== goalFingerprint(goal)) throw new Error(`${goal.id}: journal does not match the reviewed goal`);
+  if (!['pending', 'completed'].includes(previous.status)) throw new Error(`${goal.id}: invalid journal status; stop and reconcile`);
   if (!validHash(previous.tx_hash)) throw new Error(`${goal.id}: unresolved payment without a transaction hash; reconcile manually, never resend automatically`);
   // New entries retain the public key used to sign, not the secret. A key can
   // be revoked after sending without preventing proof of the historical tx.
@@ -245,7 +246,7 @@ export async function runOutlayerGoal({ goal: rawGoal, provider, account, public
   }
   const fingerprint = goalFingerprint(goal), previous = journal?.get(goal.id);
   if (previous && previous.fingerprint !== fingerprint) throw new Error(`${goal.id}: journal does not match the reviewed goal`);
-  if (previous) return recoverOutlayerGoal({ goal, provider, journal, publicKey, log });
+  if (previous) return recoverOutlayerGoal({ goal, provider, journal, publicKey, update: execute, log });
   const [policy, program, allowed, verdict] = await Promise.all([
     provider.callFunction(goal.contract_id, 'get_policy', { policy_id: goal.policy_id }, final),
     provider.callFunction(goal.contract_id, 'get_outlayer_program', { policy_id: goal.policy_id }, final),
@@ -311,8 +312,11 @@ async function main() {
   const goal = validateOutlayerGoal(JSON.parse(fs.readFileSync(goalPath, 'utf8')));
   const provider = new PaymentRpcProvider(options.rpc || process.env.NEAR_TESTNET_RPC || 'https://test.rpc.fastnear.com');
   const state = path.resolve(expandHome(options.state || `${goalPath}.bouncer-journal.json`));
-  const journal = options.execute || options.recover
-    ? openConfiguredFileJournal(state, goal.contract_id, goal.owner_account_id, { requireExisting: !!options.recover }) : null;
+  // Observe an existing journal even in dry-run mode. If it disappeared
+  // before the lock was acquired, requireExisting prevents a new history.
+  const requireExisting = !!options.recover || fs.existsSync(state);
+  const journal = options.execute || requireExisting
+    ? openConfiguredFileJournal(state, goal.contract_id, goal.owner_account_id, { requireExisting }) : null;
   try {
     let outcome;
     if (options.recover) outcome = await recoverOutlayerGoal({ goal, provider, journal });
