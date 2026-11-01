@@ -37,8 +37,9 @@ node --test bouncer/tests/multiagency-exact-ft.test.mjs bouncer/tests/multiagenc
 They exercise synthetic exact-payment proofs, ambiguous-send recovery, Svalin
 readiness and encrypted-session validation, a mocked 1-yocto rejection proof,
 and CI safety gates.
-The install downloads npm dependencies, but the tests do not contact a provider,
-sign transactions or spend tokens. They are not proof of independent delivery.
+The install downloads npm dependencies. The tests use synthetic transactions
+and ephemeral test keys; they do not contact a provider, broadcast to a chain
+or spend tokens. They are not proof of independent delivery.
 
 For the actual Rust contract unit tests, with a Rust toolchain installed:
 
