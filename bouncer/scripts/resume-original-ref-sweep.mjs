@@ -13,20 +13,22 @@ import { PaymentRpcProvider, MonotonicAccount } from '../agent/near-account.mjs'
 import { openConfiguredFileJournal } from '../agent/procurement.mjs';
 import { recoverRefSwap, runRefSweepOnly } from '../agent/ref-swap.mjs';
 import { validateRefSwapGoal, REF_SWAP_OUTPUT } from '../agent/ref-swap-evidence.mjs';
-import { createSweepHandoffRequest, encodeSweepHandoffRequest, openSweepHandoff } from '../agent/ref-sweep-handoff.mjs';
+import { createSweepHandoffRequest, encodeSweepHandoffRequest, decodeSweepHandoffFile, openSweepHandoff } from '../agent/ref-sweep-handoff.mjs';
 import { readBoundedJson } from '../shared/bounded-json.mjs';
 
-const REPO = 'abdullahimujeeb0505-stack/Bouncer', ISSUE = 6, OWNER_LOGIN = 'abdullahimujeeb0505-stack';
+const REPO = 'abdullahimujeeb0505-stack/Bouncer', BRANCH = 'arena/88d70c7c-near-hub';
 const ORIGINAL_HASH = 'DzWVHLp51KuoUoy8oaYNQTgLNAMgSRcegYT4mjuXCXrz';
 const OUTPUT_RECEIPT = '7KEWv6Ux5EHX6R1F7ipdZmvFZKp7p6iQkpRsynXieSSX';
 const OWNER = 'owner.bouncer-ref-44f619d9.testnet', VAULT = 'bouncer-ref-44f619d9.testnet', ROUTER = 'ref-router-44f619d9.testnet';
-const OUTPUT = '6926', RESPONSE = 'BOUNCER_REF_SWEEP_RESPONSE_V1\n';
+const OUTPUT = '6926';
 const originalDir = process.argv[2], priorAttemptDir = process.argv[3], workDir = process.argv[4];
 if (!originalDir || !priorAttemptDir || !workDir || process.argv.length !== 5 || process.env.BOUNCER_REF_SWEEP_ACK !== 'testnet-original-sweep-only') {
   throw new Error('original and prior-attempt artifacts, output directory and explicit testnet sweep-only acknowledgement are required');
 }
 const token = process.env.GITHUB_TOKEN, runId = process.env.GITHUB_RUN_ID;
-if (!token || !/^[1-9][0-9]{0,19}$/.test(runId || '')) throw new Error('private GitHub Actions context required');
+if (!token || !/^[1-9][0-9]{0,19}$/.test(runId || '') || process.env.GITHUB_REPOSITORY !== REPO ||
+    process.env.GITHUB_REF !== `refs/heads/${BRANCH}` || process.env.GITHUB_RUN_ATTEMPT !== '1' ||
+    !/^[a-f0-9]{40}$/.test(process.env.GITHUB_SHA || '')) throw new Error('private first-attempt GitHub Actions context required');
 const provider = new PaymentRpcProvider(process.env.NEAR_TESTNET_RPC || 'https://test.rpc.fastnear.com');
 const view = (id, method, args) => provider.callFunction(id, method, args, { finality: 'final' });
 function find(directory, name) {
@@ -43,10 +45,11 @@ function find(directory, name) {
   if (files.length !== 1) throw new Error(`expected exactly one retained ${name}`);
   return files[0];
 }
-async function github(method, url, body) {
+async function github(method, url, body, { allowNotFound = false } = {}) {
   const response = await fetch(`https://api.github.com${url}`, { method, redirect: 'error', signal: AbortSignal.timeout(15_000),
     headers: { authorization: `Bearer ${token}`, accept: 'application/vnd.github+json', 'x-github-api-version': '2022-11-28',
       ...(body === undefined ? {} : { 'content-type': 'application/json' }) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+  if (allowNotFound && response.status === 404) return null;
   if (!response.ok) throw new Error(`GitHub handoff HTTP ${response.status}`);
   return readBoundedJson(response, { maxBytes: 2_000_000, label: 'GitHub handoff' });
 }
@@ -94,24 +97,21 @@ async function main() {
         routerBalance !== OUTPUT || vaultBalance !== '0') throw new Error('scoped key, router balance or vault state changed; stop before handoff');
     const context = { owner_account_id: OWNER, contract_id: VAULT, router_id: ROUTER, original_hash: ORIGINAL_HASH,
       output_receipt_id: OUTPUT_RECEIPT, expected_output: OUTPUT, sweep_public_key: identity.sweep_key };
-    // The workflow token only needs read access to private PR comments. Check
-    // that access *before* publishing the ephemeral request or accepting a key.
-    const since = encodeURIComponent(new Date(Date.now() - 10_000).toISOString());
-    const existingComments = await github('GET', `/repos/${REPO}/issues/${ISSUE}/comments?per_page=100&since=${since}`);
-    if (!Array.isArray(existingComments)) throw new Error('private handoff comment access is unavailable');
+    // This repository blocks issue access for workflow tokens. Test the
+    // contents-read channel before publishing the ephemeral request; only a
+    // ciphertext file at this run-specific path can answer it.
+    const accessible = await github('GET', `/repos/${REPO}/contents/bouncer/README.md?ref=${process.env.GITHUB_SHA}`);
+    if (accessible?.type !== 'file') throw new Error('private repository contents access is unavailable');
+    const responsePath = `bouncer/recovery/ref-sweep-${runId}.json`;
+    const endpoint = `/repos/${REPO}/contents/${responsePath}?ref=${encodeURIComponent(BRANCH)}`;
+    if (await github('GET', endpoint, undefined, { allowNotFound: true })) throw new Error('run-specific handoff file already exists; stop');
     const { request, privateKey } = createSweepHandoffRequest({ runId, context });
     console.log(`::notice title=Scoped Ref sweep handoff request::${encodeSweepHandoffRequest(request)}`);
     let response;
     for (let i = 0; i < 180 && !response; i++) {
-      const comments = await github('GET', `/repos/${REPO}/issues/${ISSUE}/comments?per_page=100&since=${since}`);
-      if (!Array.isArray(comments)) throw new Error('invalid handoff comment list');
-      const matches = comments.filter(item => item?.user?.login === OWNER_LOGIN && typeof item.body === 'string' &&
-        item.body.startsWith(RESPONSE) && item.body.length <= 10_000 && item.body.includes(request.challenge));
-      if (matches.length > 1) throw new Error('multiple responses to one handoff; stop without sending');
-      if (matches.length === 1) {
-        try { response = JSON.parse(matches[0].body.slice(RESPONSE.length)); }
-        catch { throw new Error('invalid encrypted handoff response'); }
-      } else await delay(2000);
+      const file = await github('GET', endpoint, undefined, { allowNotFound: true });
+      if (file) response = decodeSweepHandoffFile(file, responsePath);
+      else await delay(2000);
     }
     if (!response) throw new Error('no encrypted sweep-key handoff received before timeout; no sweep sent');
     const key = openSweepHandoff({ request, expected: context, response, privateKey });

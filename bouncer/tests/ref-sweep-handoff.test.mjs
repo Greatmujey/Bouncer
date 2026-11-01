@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import nearApi from 'near-api-js';
 import { createSweepHandoffRequest, validateSweepHandoffRequest, encodeSweepHandoffRequest, decodeSweepHandoffRequest,
-  sealSweepHandoff, openSweepHandoff } from '../agent/ref-sweep-handoff.mjs';
+  decodeSweepHandoffFile, sealSweepHandoff, openSweepHandoff } from '../agent/ref-sweep-handoff.mjs';
 
 const pair = nearApi.KeyPair.fromRandom('ed25519'), other = nearApi.KeyPair.fromRandom('ed25519');
 const context = { owner_account_id: 'owner.testnet', contract_id: 'vault.testnet', router_id: 'router.testnet',
@@ -25,6 +25,17 @@ test('job annotation request is bounded, canonical and contains no secret', () =
   assert(!encoded.includes('\n')); assert(!encoded.includes(credentials.private_key));
   for (const bad of ['', 'a=', `${encoded}\n`, 'a'.repeat(6001), Buffer.from('not-json').toString('base64url'), 'A']) {
     assert.throws(() => decodeSweepHandoffRequest(bad));
+  }
+});
+
+test('ciphertext-only GitHub file parsing rejects wrong paths, oversized and noncanonical content', () => {
+  const data = Buffer.from(JSON.stringify(encrypt())), filepath = 'bouncer/recovery/ref-sweep-123456.json';
+  const file = { type: 'file', path: filepath, encoding: 'base64', size: data.length,
+    content: data.toString('base64').replace(/.{64}/g, '$&\n') };
+  assert.equal(decodeSweepHandoffFile(file, filepath).challenge, request.challenge);
+  for (const bad of [{ ...file, path: 'elsewhere' }, { ...file, type: 'symlink' }, { ...file, size: 12_001 },
+    { ...file, size: file.size + 1 }, { ...file, content: `${file.content} ` }, { ...file, content: `${file.content}=` }]) {
+    assert.throws(() => decodeSweepHandoffFile(bad, filepath));
   }
 });
 
@@ -75,7 +86,9 @@ test('operator authenticates the exact running job annotation before encrypting 
     fs.writeFileSync(path.join(keys, 'sweep.json'), JSON.stringify({ account_id: operatorContext.owner_account_id, private_key: pair.toString() }), { mode: 0o600 });
     const { request: operatorRequest, privateKey: operatorPrivate } = createSweepHandoffRequest({ runId: '123456', context: operatorContext });
     const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd, encoding: 'utf8' }).trim();
-    const dataFile = path.join(home, 'gh-data.json'), posted = path.join(home, 'posted.json');
+    const dataFile = path.join(home, 'gh-data.json'), worktree = path.join(home, 'mock-worktree');
+    const posted = path.join(worktree, 'bouncer/recovery/ref-sweep-123456.json'), gitLog = path.join(home, 'git-ops.jsonl');
+    fs.mkdirSync(worktree);
     const mock = { run: { id: 123456, event: 'push', run_attempt: 1, status: 'in_progress', path: '.github/workflows/ci.yml',
       head_branch: 'arena/88d70c7c-near-hub', head_sha: head, repository: { private: true } },
     job: { id: 987654, run_id: 123456, run_attempt: 1, head_sha: head, name: 'Resume original Ref output sweep (testnet)',
@@ -87,11 +100,19 @@ const endpoint = process.argv[3] || '';
 if (endpoint.includes('/actions/runs/123456')) console.log(JSON.stringify(data.run));
 else if (endpoint.includes('/actions/jobs/987654')) console.log(JSON.stringify(data.job));
 else if (endpoint.includes('/check-runs/987654/annotations')) console.log(JSON.stringify(data.annotations));
-else if (endpoint.endsWith('/issues/6/comments') && process.argv.includes('POST')) {
-  const arg = process.argv.find(value => value.startsWith('body=')); fs.writeFileSync(process.env.MOCK_POSTED, arg.slice(5)); console.log('{"id":42}');
-} else { console.error('unexpected mock endpoint'); process.exit(1); }
+else { console.error('unexpected mock endpoint'); process.exit(1); }
 `, { mode: 0o755 });
-    const env = { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH}`, MOCK_DATA: dataFile, MOCK_POSTED: posted };
+    fs.writeFileSync(path.join(bin, 'git'), `#!/usr/bin/env node
+const fs = require('node:fs'), args = process.argv.slice(2);
+if (args.join(' ') === 'rev-parse HEAD') console.log(process.env.MOCK_HEAD);
+else if (args.join(' ') === 'rev-parse --show-toplevel') console.log(process.env.MOCK_WORKTREE);
+else if (args.join(' ') === 'branch --show-current') console.log('arena/88d70c7c-near-hub');
+else if (args.join(' ') === 'status --porcelain --untracked-files=all') {}
+else if (['add', 'commit', 'push'].includes(args[0])) fs.appendFileSync(process.env.MOCK_GIT_LOG, JSON.stringify(args) + '\\n');
+else { console.error('unexpected git operation'); process.exit(1); }
+`, { mode: 0o755 });
+    const env = { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH}`, MOCK_DATA: dataFile,
+      MOCK_HEAD: head, MOCK_WORKTREE: worktree, MOCK_GIT_LOG: gitLog };
     const runOperator = () => spawnSync(process.execPath, ['scripts/respond-original-ref-sweep.mjs', '987654', '123456'],
       { cwd, env, encoding: 'utf8', timeout: 5000 });
     fs.writeFileSync(dataFile, JSON.stringify({ ...mock, job: { ...mock.job, head_sha: 'f'.repeat(40) } }));
@@ -99,9 +120,13 @@ else if (endpoint.endsWith('/issues/6/comments') && process.argv.includes('POST'
     fs.writeFileSync(dataFile, JSON.stringify({ ...mock, annotations: [mock.annotations[0], mock.annotations[0]] }));
     child = runOperator(); assert.notEqual(child.status, 0); assert(!fs.existsSync(posted));
     fs.writeFileSync(dataFile, JSON.stringify(mock)); child = runOperator(); assert.equal(child.status, 0, child.stderr);
-    const body = fs.readFileSync(posted, 'utf8'), prefix = 'BOUNCER_REF_SWEEP_RESPONSE_V1\n';
-    assert(body.startsWith(prefix)); assert(!body.includes(pair.toString())); assert(!child.stdout.includes(pair.toString()));
-    const response = JSON.parse(body.slice(prefix.length));
+    const body = fs.readFileSync(posted, 'utf8');
+    assert(!body.includes(pair.toString())); assert(!child.stdout.includes(pair.toString()));
+    const operations = fs.readFileSync(gitLog, 'utf8').trim().split('\n').map(JSON.parse);
+    assert.deepEqual(operations.map(args => args[0]), ['add', 'commit', 'push']);
+    assert.deepEqual(operations[0], ['add', '--', 'bouncer/recovery/ref-sweep-123456.json']);
+    assert(operations[1].includes('--only')); assert.deepEqual(operations[2], ['push', 'origin', 'arena/88d70c7c-near-hub']);
+    const response = JSON.parse(body);
     assert.equal(String(openSweepHandoff({ request: operatorRequest, expected: operatorContext, response, privateKey: operatorPrivate }).getPublicKey()),
       operatorContext.sweep_public_key);
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
@@ -127,7 +152,9 @@ test('artifact-only recovery check refuses any prior recorded sweep without cont
     }
     fs.writeFileSync(path.join(original, 'identity.json'), JSON.stringify({ contract: vault, owner, router, sweep_key: context.sweep_public_key }));
     const env = { ...process.env, GITHUB_TOKEN: 'test-token', GITHUB_RUN_ID: '123456', NEAR_TESTNET_RPC: 'http://127.0.0.1:1',
-      BOUNCER_REF_SWEEP_ACK: 'testnet-original-sweep-only', BOUNCER_REF_SWEEP_ARTIFACT_CHECK_ONLY: '1' };
+      GITHUB_REPOSITORY: 'abdullahimujeeb0505-stack/Bouncer', GITHUB_REF: 'refs/heads/arena/88d70c7c-near-hub',
+      GITHUB_RUN_ATTEMPT: '1', GITHUB_SHA: 'a'.repeat(40), BOUNCER_REF_SWEEP_ACK: 'testnet-original-sweep-only',
+      BOUNCER_REF_SWEEP_ARTIFACT_CHECK_ONLY: '1' };
     delete env.BOUNCER_FILE_JOURNAL_KEY_FILE;
     const check = () => spawnSync(process.execPath, ['scripts/resume-original-ref-sweep.mjs', original, prior, out],
       { cwd, env, encoding: 'utf8', timeout: 5000 });

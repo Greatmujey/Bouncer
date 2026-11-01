@@ -55,6 +55,17 @@ export function decodeSweepHandoffRequest(encoded) {
   try { return JSON.parse(bytes.toString('utf8')); } catch { throw new Error('invalid encoded handoff request'); }
 }
 
+// GitHub's contents API base64-encodes files and may wrap lines. Treat every
+// field as untrusted and cap the ciphertext-only response before parsing it.
+export function decodeSweepHandoffFile(file, expectedPath) {
+  if (!file || typeof file !== 'object' || file.type !== 'file' || file.path !== expectedPath || file.encoding !== 'base64' ||
+      !Number.isSafeInteger(file.size) || file.size < 1 || file.size > 12_000 || typeof file.content !== 'string' || file.content.length > 18_000 ||
+      /[^A-Za-z0-9+/=\r\n]/.test(file.content)) throw new Error('invalid scoped handoff file metadata');
+  const encoded = file.content.replace(/[\r\n]/g, ''), bytes = Buffer.from(encoded, 'base64');
+  if (bytes.length !== file.size || bytes.toString('base64') !== encoded) throw new Error('invalid scoped handoff file encoding');
+  try { return JSON.parse(bytes.toString('utf8')); } catch { throw new Error('invalid scoped handoff file JSON'); }
+}
+
 export function createSweepHandoffRequest({ runId, context }) {
   const pair = crypto.generateKeyPairSync('rsa', { modulusLength: 3072, publicKeyEncoding: { type: 'spki', format: 'pem' },
     privateKeyEncoding: { type: 'pkcs8', format: 'pem' } });

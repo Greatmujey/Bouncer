@@ -2,7 +2,8 @@
 /**
  * Operator-side response to an ephemeral GitHub Actions testnet sweep request.
  * Reads only the separately scoped sweep key, encrypts it to the worker's
- * ephemeral RSA public key and posts ciphertext. Never prints the secret.
+ * ephemeral RSA public key and pushes a run-specific ciphertext file to this
+ * private branch. Never prints the secret or transfers an input/owner key.
  */
 import fs from 'node:fs';
 import os from 'node:os';
@@ -11,8 +12,8 @@ import { execFileSync } from 'node:child_process';
 import nearApi from 'near-api-js';
 import { decodeSweepHandoffRequest, sealSweepHandoff } from '../agent/ref-sweep-handoff.mjs';
 
-const REPO = 'abdullahimujeeb0505-stack/Bouncer', BRANCH = 'arena/88d70c7c-near-hub', ISSUE = 6;
-const REQUEST_TITLE = 'Scoped Ref sweep handoff request', RESPONSE = 'BOUNCER_REF_SWEEP_RESPONSE_V1\n';
+const REPO = 'abdullahimujeeb0505-stack/Bouncer', BRANCH = 'arena/88d70c7c-near-hub';
+const REQUEST_TITLE = 'Scoped Ref sweep handoff request';
 const ORIGINAL_HASH = 'DzWVHLp51KuoUoy8oaYNQTgLNAMgSRcegYT4mjuXCXrz';
 const OUTPUT_RECEIPT = '7KEWv6Ux5EHX6R1F7ipdZmvFZKp7p6iQkpRsynXieSSX';
 const OWNER = 'owner.bouncer-ref-44f619d9.testnet', VAULT = 'bouncer-ref-44f619d9.testnet', ROUTER = 'ref-router-44f619d9.testnet';
@@ -35,7 +36,12 @@ function main() {
   }
   const run = gh(`/repos/${REPO}/actions/runs/${runId}`);
   const job = gh(`/repos/${REPO}/actions/jobs/${jobId}`);
-  const localHead = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+  const git = args => execFileSync('git', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  const localHead = git(['rev-parse', 'HEAD']);
+  const root = git(['rev-parse', '--show-toplevel']);
+  if (git(['branch', '--show-current']) !== BRANCH || git(['status', '--porcelain', '--untracked-files=all'])) {
+    throw new Error('scoped handoff requires the clean fixed session branch');
+  }
   if (run?.id?.toString() !== runId || run.event !== 'push' || run.run_attempt !== 1 ||
       run.status !== 'in_progress' || run.path !== '.github/workflows/ci.yml' || run.head_branch !== BRANCH ||
       run.head_sha !== localHead || run.repository?.private !== true || job?.id?.toString() !== jobId ||
@@ -56,8 +62,14 @@ function main() {
   const expected = { owner_account_id: OWNER, contract_id: VAULT, router_id: ROUTER, original_hash: ORIGINAL_HASH,
     output_receipt_id: OUTPUT_RECEIPT, expected_output: '6926', sweep_public_key: sweepKey };
   const sealed = sealSweepHandoff({ request, expected, credentials });
-  const reply = gh(`/repos/${REPO}/issues/${ISSUE}/comments`, ['--method', 'POST', '-f', `body=${RESPONSE}${JSON.stringify(sealed)}`]);
-  if (!Number.isSafeInteger(reply?.id)) throw new Error('encrypted handoff reply was not acknowledged');
-  console.log(`Encrypted scoped testnet sweep credential delivered for run ${runId}; reply comment ${reply.id}. No owner key or input key was shared.`);
+  const relative = `bouncer/recovery/ref-sweep-${runId}.json`, destination = path.join(root, relative);
+  fs.mkdirSync(path.dirname(destination), { recursive: true, mode: 0o700 });
+  fs.writeFileSync(destination, JSON.stringify(sealed, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
+  // Commit only ciphertext (never an owner key, input key or signed action).
+  // A rejected/uncertain push is not retried: the worker may have received it.
+  git(['add', '--', relative]);
+  git(['commit', '--only', '-m', `Deliver encrypted scoped testnet sweep handoff for run ${runId}`, '--', relative]);
+  git(['push', 'origin', BRANCH]);
+  console.log(`Encrypted scoped testnet sweep credential delivered for run ${runId}. No owner key or input key was shared.`);
 }
 try { main(); } catch (error) { console.error(`[ref-sweep-handoff] ${error.message}`); process.exitCode = 1; }

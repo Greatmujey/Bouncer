@@ -139,8 +139,9 @@ A narrowly gated recovery job can verify that original output again and accept
 **only** the previously scoped `sweep_output` key through a challenge-bound,
 RSA-encrypted handoff to an ephemeral GitHub Actions worker. The private repo
 and Actions worker must be trusted; the request's public metadata is exposed in
-a job annotation, and the ciphertext passes through a private PR comment. The
-full-access owner key and input key are not shared. The job requires the original journal, verifies the pinned account/key
+a job annotation, and a run-specific ciphertext-only file is committed to the
+private branch for the worker to read. The full-access owner key and input key
+are not shared. The job requires the original journal, verifies the pinned account/key
 and exact receipt, and records a new sweep hash before its sole broadcast. A
 missing or uncertain sweep remains pending and must never be resent blindly.
 The first handoff attempt failed when GitHub denied its comment-write request;
