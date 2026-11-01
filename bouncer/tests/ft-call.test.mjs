@@ -173,6 +173,14 @@ test('FT calls support the distinct fresh v7 layout as well as existing v6 deplo
   assert.equal((await run(f)).status, 'READY'); assert.equal(f.sends(), 0);
 });
 
+test('the separate testnet playback variant keeps the same guarded FT route checks', async () => {
+  const f = fixture(), call = f.provider.callFunction;
+  f.provider.callFunction = async (id, method, ...rest) => method === 'contract_version' ? 'bouncer-agent-v10-youtick-testnet' : call(id, method, ...rest);
+  assert.equal((await run(f)).status, 'READY'); assert.equal(f.sends(), 0);
+  f.provider.viewNodeStatus = async () => ({ chain_id: 'mainnet' });
+  await assert.rejects(run(f), /must report testnet/); assert.equal(f.sends(), 0);
+});
+
 test('FT-call runner rejects altered prepared and signed transactions before journaling or broadcast', async () => {
   for (const mutate of [
     tx => { tx.receiverId = 'other.testnet'; }, tx => { tx.signerId = 'other.testnet'; },

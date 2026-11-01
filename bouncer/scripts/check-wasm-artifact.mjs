@@ -16,7 +16,11 @@ export function checkWasmArtifact(bytes, source) {
     throw new Error('artifact is not a bounded WebAssembly v1 binary');
   }
   if (typeof source !== 'string') throw new Error('contract source is required');
-  const matches = [...source.matchAll(/pub\s+fn\s+contract_version\s*\([^)]*\)\s*->\s*&'static\s+str\s*\{\s*"(bouncer-agent-v[0-9]+)"\s*\}/g)];
+  const direct = [...source.matchAll(/pub\s+fn\s+contract_version\s*\([^)]*\)\s*->\s*&'static\s+str\s*\{\s*"(bouncer-agent-v[0-9]+)"\s*\}/g)];
+  // This exact opt-in testnet branch has a separate version and artifact.
+  // Only the cfg(not(...)) arm describes the default deployment artifact.
+  const conditional = [...source.matchAll(/pub\s+fn\s+contract_version\s*\([^)]*\)\s*->\s*&'static\s+str\s*\{\s*#\[cfg\(feature\s*=\s*"youtick-playback-v10"\)\]\s*\{\s*"bouncer-agent-v10-youtick-testnet"\s*\}\s*#\[cfg\(not\(feature\s*=\s*"youtick-playback-v10"\)\)\]\s*\{\s*"(bouncer-agent-v[0-9]+)"\s*\}\s*\}/g)];
+  const matches = [...direct, ...conditional];
   if (matches.length !== 1) throw new Error('cannot find a unique contract source version');
   const version = matches[0][1], binary = Buffer.from(bytes);
   if (!binary.includes(Buffer.from(version))) throw new Error(`WASM does not contain source version ${version}; rebuild the artifact`);
