@@ -1,8 +1,9 @@
-# Independent Svalin Pro: read-only testnet discovery
+# Independent Svalin Pro: testnet discovery and experimental session
 
-**Status: public offer and free-route observations only. No checkout has been
-reserved, no Svalin bearer code created, no token transferred, and no paid
-service or useful FT-paid fulfillment verified. This is not a live adapter.**
+**Status: public offer and free-route observations only. No real checkout has
+been reserved, no provider-linked bearer code created, no token transferred,
+and no paid service or useful FT-paid fulfillment verified. Session recovery
+and intent preparation have only synthetic tests; this is not a live buyer.**
 
 On 1 November 2026 at about 19:25 UTC, the independent Svalin service's
 [public offer](https://svalin-api.noobshole.workers.dev/v1/pro) advertised a
@@ -47,6 +48,24 @@ proof that the seller activated the right code or delivered useful data.
   testnet profile. Drift, mainnet, wrong token/payee, malformed amounts and
   unusable expiry fail closed. It does not create a checkout, keep a bearer
   code, prepare an intent, authorize or sign a payment.
+- `agent/svalin-pro-session.mjs` is an **experimental library**, not a CLI or
+  payment runner. It creates a 256-bit random Pro bearer code locally and
+  fsyncs it inside the original encrypted owner/vault-scoped journal before
+  any reservation. With separate explicit execution and journal/key-backup
+  acknowledgments it can make one bounded reservation POST; an ambiguous
+  response is never automatically reposted. A separately approved
+  `/v1/pro/activate` POST can attempt to recover the original pending amount
+  using the same code, but activation may **mutate seller state**. An unknown,
+  active, absent, multiple or ambiguous response remains unresolved and is
+  never automatically retried. It can prepare unsigned V11 owner/agent calldata
+  with the exact amount and a commitment to the high-entropy code; neither the
+  code nor an authorization is printed or put in the public memo. The commitment
+  does not authenticate the seller or prove the code/amount association.
+  Tests use an injected synthetic HTTP provider, not the real service. Treat the
+  encrypted journal **and its separate key** as sensitive recovery material;
+  back both up independently and protect the backups. JavaScript cannot
+  guarantee wiping bearer strings from process memory. No local lock detects a
+  deleted, stale-restored, bypassed or separate journal.
 - `agent/svalin-liquidity-readiness.mjs` inspects seller token registration
   and a few testnet Ref pool views. At 19:29 UTC on 1 November, a
   [read-only GitHub job](https://github.com/Greatmujey/Bouncer/actions/runs/41341994197/job/124953799547)
@@ -60,8 +79,8 @@ proof that the seller activated the right code or delivered useful data.
   not create a reservation, pay, activate, or call a paid endpoint.
 - V11 is a separate experimental fresh-state contract; it has **not** been
   deployed or tested on chain. Its current purchase runner is specific to
-  MultiAgency and cannot buy this Svalin pass. A secure Svalin-specific buyer,
-  encrypted bearer-code backup, durable reservation/transaction recovery,
+  MultiAgency and cannot buy this Svalin pass. A Svalin payment/receipt runner,
+  secure operational journal/key backups, activation after payment,
   paid-response validation and reviewed owner deployment/setup remain to build.
 
 ## Required before a consequential test

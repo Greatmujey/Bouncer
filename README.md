@@ -17,10 +17,11 @@ delivery checks and a local journal gate later payments. See
 synthetic quote/payment/recovery tests and read-only historical compatibility
 checks. An isolated [exact-FT intent variant](bouncer/docs/EXACT_FT_INTENTS.md)
 pins a one-shot payment to owner-reviewed terms; it is not deployed. A separate
-[Svalin Pro testnet discovery](bouncer/docs/SVALIN_PRO_READINESS.md) is read-only;
-no checkout or payment was made. There is **no verified independent FT-paid
-fulfillment by Bouncer**. The marketplace catalog search is read-only. No model
-or inference service is bundled. This is unaudited testnet software, not suitable
+[Svalin Pro testnet discovery and session library](bouncer/docs/SVALIN_PRO_READINESS.md)
+include synthetic-only encrypted reservation recovery; no real checkout or
+payment was made. There is **no verified independent FT-paid fulfillment by
+Bouncer**. The marketplace catalog search is read-only. No model or inference
+service is bundled. This is unaudited testnet software, not suitable
 for real funds.
 
 ## Reproduce the safety checks without a wallet
@@ -29,12 +30,13 @@ From the repository root, with Node.js 22 and npm:
 
 ```sh
 npm ci --prefix bouncer --ignore-scripts --no-audit --no-fund
-node --test bouncer/tests/multiagency-exact-ft.test.mjs bouncer/tests/multiagency-exact-runner.test.mjs bouncer/tests/svalin-pro-readiness.test.mjs bouncer/tests/svalin-liquidity-readiness.test.mjs bouncer/tests/youtick-grant-probe-evidence.test.mjs bouncer/tests/live-action-safety-gates.test.mjs
+node --test bouncer/tests/multiagency-exact-ft.test.mjs bouncer/tests/multiagency-exact-runner.test.mjs bouncer/tests/svalin-pro-readiness.test.mjs bouncer/tests/svalin-liquidity-readiness.test.mjs bouncer/tests/svalin-pro-session.test.mjs bouncer/tests/svalin-pro-session-concurrency.test.mjs bouncer/tests/youtick-grant-probe-evidence.test.mjs bouncer/tests/live-action-safety-gates.test.mjs
 ```
 
-**See:** 30 passing offline tests (the count can increase as tests are added).
+**See:** 40 passing offline tests (the count can increase as tests are added).
 They exercise synthetic exact-payment proofs, ambiguous-send recovery, Svalin
-readiness validation, a mocked 1-yocto rejection proof, and CI safety gates.
+readiness and encrypted-session validation, a mocked 1-yocto rejection proof,
+and CI safety gates.
 The install downloads npm dependencies, but the tests do not contact a provider,
 sign transactions or spend tokens. They are not proof of independent delivery.
 

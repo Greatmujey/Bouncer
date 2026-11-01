@@ -7,7 +7,7 @@ Status recorded on November 1, 2026. Re-read the [official live rules](https://n
 - The [README quickstart](../../README.md#reproduce-the-safety-checks-without-a-wallet) gives a fresh-install, offline test command and expected results. These checks use fixtures and a mock runtime; they are **not** a live independent purchase.
 - Earlier real testnet evidence includes the 0-yocto rejection linked in the README, native-NEAR-paid OutLayer work and Circle testnet USDC payments to self-hosted development services. Testnet USDC has no real-world value.
 - The default contract and separate V11 feature are built and unit-tested in CI. V11 is **not deployed, independently audited, or tested on chain**; a version marker is not proof of deployed code. Payment settlement alone is not delivery.
-- Bouncer has **not** verified useful independent FT-paid fulfillment. Svalin is a read-only lead: no checkout, payment, activation or paid report has been performed. MultiAgency's exact-FT path has synthetic tests but no completed live purchase or task.
+- Bouncer has **not** verified useful independent FT-paid fulfillment. Svalin observations are a read-only lead: no real checkout, payment, activation or paid report has been performed. Its new encrypted session/reservation-recovery library has synthetic tests only and is not a complete buyer. MultiAgency's exact-FT path has synthetic tests but no completed live purchase or task.
 
 ## Track fit: evidence, not six claims of completion
 
