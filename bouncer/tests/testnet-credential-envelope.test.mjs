@@ -18,6 +18,16 @@ test('disposable testnet credentials round-trip under a separate private recover
   assert.deepEqual(openTestnetCredentials(first, rsa.privateKey), payload);
 });
 
+test('version 2 preserves deploy keys for failures before contracts are locked', () => {
+  const payload = { ...credentials(), version: 2, contract_secret: nearApi.KeyPair.fromRandom('ed25519').toString(),
+    router_secret: nearApi.KeyPair.fromRandom('ed25519').toString() };
+  assert.deepEqual(openTestnetCredentials(sealTestnetCredentials(payload, rsa.publicKey), rsa.privateKey), payload);
+  assert.throws(() => sealTestnetCredentials({ ...payload, router_secret: payload.contract_secret }, rsa.publicKey), /distinct/);
+  const incomplete = { ...payload }; delete incomplete.contract_secret;
+  assert.throws(() => sealTestnetCredentials(incomplete, rsa.publicKey), /invalid/);
+  assert.throws(() => sealTestnetCredentials({ ...payload, version: 1 }, rsa.publicKey), /invalid/);
+});
+
 test('tampering, wrong keys and malformed envelopes fail authentication', () => {
   const sealed = sealTestnetCredentials(credentials(), rsa.publicKey);
   for (const field of ['wrapped_key', 'iv', 'ciphertext', 'tag']) {
@@ -62,6 +72,16 @@ test('credential recovery CLI writes owner-only testnet files without printing o
     }
     child = run(); assert.notEqual(child.status, 0); assert(!child.stderr.includes(payload.owner_secret));
     assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'owner.json'))).private_key, payload.owner_secret);
+    const v2 = { ...credentials(), version: 2, contract_secret: nearApi.KeyPair.fromRandom('ed25519').toString(),
+      router_secret: nearApi.KeyPair.fromRandom('ed25519').toString() };
+    fs.writeFileSync(envelope, JSON.stringify(sealTestnetCredentials(v2, rsa.publicKey)));
+    child = spawnSync(process.execPath, [script, envelope, privateFile, 'ref-v2'], { env: { ...process.env, HOME: root }, encoding: 'utf8' });
+    assert.equal(child.status, 0, child.stderr); assert(!child.stdout.includes(v2.contract_secret));
+    const dir2 = path.join(root, '.near-credentials/testnet/ref-v2');
+    for (const [name, account, secret] of [['contract', v2.contract_id, v2.contract_secret], ['router', v2.router_id, v2.router_secret]]) {
+      const file = path.join(dir2, `${name}.json`), data = JSON.parse(fs.readFileSync(file));
+      assert.equal(fs.statSync(file).mode & 0o777, 0o600); assert.equal(data.account_id, account); assert.equal(data.private_key, secret);
+    }
     fs.chmodSync(privateFile, 0o644); child = run(); assert.notEqual(child.status, 0); assert.match(child.stderr, /owner-only/);
     fs.chmodSync(privateFile, 0o600);
     const link = path.join(root, 'private-link.pem'); fs.symlinkSync(privateFile, link);

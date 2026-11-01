@@ -102,14 +102,25 @@ methods after checking the original finalized receipts and provider balances.
 ### One-shot testnet proof harness
 
 `demo-ref-swap.mjs` is gated by an explicit testnet acknowledgement and a
-separate CI marker; it has not yet established a live swap. It creates fresh,
-disposable testnet accounts, obtains a fresh bounded quote, deploys the exact
-router and removes its deploy key, funds only the capped input, and deliberately
-loses each response to exercise original-hash recovery. Do not rerun an
-uncertain transaction. Ordinary CI does **not** run this funded test.
+separate CI marker; it has not yet established a live swap. The first attempt
+stopped during account creation because the initial helper grant could not
+cover storage and the proposed subaccount funding. It failed before vault
+funding, the swap input or any sweep. Its owner-key envelope was retained, but
+that first envelope did not contain the Bouncer deploy key; the disposable
+account may therefore be unrecoverable. The revised harness seals both deploy
+keys too, uses a second helper-funded router account, and checks the available
+storage stake before allocating funds. These corrections are not yet a live
+proof.
+
+The harness creates fresh, disposable testnet accounts, obtains a fresh bounded
+quote, deploys the exact router and removes its deploy key, funds only the capped
+input, and deliberately loses each response to exercise original-hash recovery.
+Do not rerun an uncertain transaction. Ordinary CI does **not** run this funded
+test.
 
 To make an unsuccessful **testnet-only** run recoverable without publishing its
-signing keys, the harness encrypts its disposable owner, input and sweep keys to
+signing keys, the revised harness encrypts its disposable owner, input, sweep,
+Bouncer deployment and router deployment keys to
 `config/testnet-ref-demo-recovery-public.pem` using RSA-OAEP-SHA256 and
 AES-256-GCM. Only ciphertext, public identities and journal/receipt evidence are
 retained in the repository-restricted Action artifact/annotation. The matching

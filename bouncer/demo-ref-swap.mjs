@@ -99,15 +99,20 @@ async function main() {
   const contractKey = KeyPair.fromRandom('ed25519'), ownerKey = KeyPair.fromRandom('ed25519'), routerKey = KeyPair.fromRandom('ed25519');
   const inputKey = KeyPair.fromRandom('ed25519'), sweepKey = KeyPair.fromRandom('ed25519'), attackKey = KeyPair.fromRandom('ed25519');
   const suffix = crypto.randomBytes(4).toString('hex'), contractId = `bouncer-ref-${suffix}.testnet`;
-  const ownerId = `owner.${contractId}`, routerId = `router.${contractId}`;
+  // A second funded root account prevents the router's code-storage stake from
+  // exhausting the vault's limited testnet helper grant.
+  const ownerId = `owner.${contractId}`, routerId = `ref-router-${suffix}.testnet`;
   const dir = process.env.BOUNCER_REF_DEMO_DIR || fs.mkdtempSync(path.join(os.tmpdir(), 'bouncer-ref-proof-'));
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  const credentials = { version: 1, owner_account_id: ownerId, contract_id: contractId, router_id: routerId,
-    owner_secret: ownerKey.toString(), input_secret: inputKey.toString(), sweep_secret: sweepKey.toString() };
+  const credentials = { version: 2, owner_account_id: ownerId, contract_id: contractId, router_id: routerId,
+    owner_secret: ownerKey.toString(), input_secret: inputKey.toString(), sweep_secret: sweepKey.toString(),
+    contract_secret: contractKey.toString(), router_secret: routerKey.toString() };
   const envelope = sealTestnetCredentials(credentials, recoveryPub);
   writePublic(dir, 'sealed-testnet-credentials.json', envelope);
   writePublic(dir, 'identity.json', { contract: contractId, owner: ownerId, router: routerId, input_key: inputKey.getPublicKey().toString(),
-    sweep_key: sweepKey.getPublicKey().toString(), owner_key: ownerKey.getPublicKey().toString(), router_code_hash: routerCodeHash });
+    sweep_key: sweepKey.getPublicKey().toString(), owner_key: ownerKey.getPublicKey().toString(),
+    contract_key: contractKey.getPublicKey().toString(), router_key: routerKey.getPublicKey().toString(), router_code_hash: routerCodeHash });
+  writePublic(dir, 'reviewed-quote.json', quote);
   // The ciphertext can be recovered via the check-run annotation without
   // exposing plaintext testnet keys; the RSA private key remains outside Git.
   notice('Encrypted disposable testnet recovery credentials', envelope);
@@ -116,16 +121,27 @@ async function main() {
   const deploy = await setupAttempt('deploy Bouncer', () => contract.signAndSendTransaction({ receiverId: contractId,
     actions: [transactions.deployContract(wasm)], waitUntil: 'FINAL' }));
   receiptsOk(deploy, 'deploy Bouncer');
-  // NEAR storage price is 10^19 yocto/byte on this testnet. Add 0.5 NEAR and
-  // bound the disposable allocation; the router needs its code-storage stake.
-  const routerFunding = BigInt(routerWasm.length + 20_000) * 10n ** 19n + ONE / 2n;
-  if (routerFunding > 30n * ONE) throw new Error('router WASM storage exceeds disposable testnet budget');
-  for (const [id, key, near] of [[ownerId, ownerKey, 5n * ONE], [routerId, routerKey, routerFunding]]) {
-    const result = await setupAttempt('create disposable subaccount', () => contract.signAndSendTransaction({ receiverId: id, waitUntil: 'FINAL',
-      actions: [transactions.createAccount(), transactions.transfer(near), transactions.addKey(key.getPublicKey(), transactions.fullAccessKey())] }));
-    receiptsOk(result, 'create disposable subaccount');
+  // Check storage stake before allocating funds or attempting the route. The
+  // protocol price must agree with this narrow testnet harness's review.
+  const protocol = await provider.experimental_protocolConfig({ finality: 'final' });
+  if (protocol?.runtime_config?.storage_amount_per_byte !== '10000000000000000000') throw new Error('unexpected testnet storage price');
+  const storagePrice = 10n ** 19n, routerRequired = BigInt(routerWasm.length + 20_000) * storagePrice + ONE / 2n;
+  if (routerRequired > 10n * ONE) throw new Error('router WASM storage exceeds disposable testnet budget');
+  const vaultAccount = await provider.query({ request_type: 'view_account', account_id: contractId, finality: 'final' });
+  const ownerFunding = 3n * ONE / 2n;
+  if (typeof vaultAccount?.amount !== 'string' || !Number.isSafeInteger(vaultAccount?.storage_usage) ||
+      BigInt(vaultAccount.amount) - BigInt(vaultAccount.storage_usage) * storagePrice < ownerFunding + ONE / 2n) {
+    throw new Error('testnet helper grant cannot fund the owner while retaining vault storage and gas');
   }
-  const owner = accountFor(ownerId, ownerKey), router = accountFor(routerId, routerKey), agent = accountFor(ownerId, inputKey),
+  const created = await setupAttempt('create disposable owner', () => contract.signAndSendTransaction({ receiverId: ownerId, waitUntil: 'FINAL',
+    actions: [transactions.createAccount(), transactions.transfer(ownerFunding), transactions.addKey(ownerKey.getPublicKey(), transactions.fullAccessKey())] }));
+  receiptsOk(created, 'create disposable owner');
+  const router = await createFunded(routerId, routerKey);
+  const routerAccount = await provider.query({ request_type: 'view_account', account_id: routerId, finality: 'final' });
+  if (typeof routerAccount?.amount !== 'string' || BigInt(routerAccount.amount) < routerRequired) {
+    throw new Error('testnet helper grant cannot cover the router code storage and reserve');
+  }
+  const owner = accountFor(ownerId, ownerKey), agent = accountFor(ownerId, inputKey),
     sweep = accountFor(ownerId, sweepKey), attacker = accountFor(ownerId, attackKey);
   await call(contract, contractId, 'new', { owner: ownerId });
   if (await view(contractId, 'contract_version') !== 'bouncer-agent-v9' || await view(contractId, 'get_owner') !== ownerId) throw new Error('unexpected Bouncer owner/version');

@@ -37,12 +37,13 @@ function main() {
         (typeof process.getuid === 'function' && stat.uid !== process.getuid())) throw new Error('testnet credential directories must be owner-only and not symlinks');
   }
   const dir = path.join(root, process.argv[4]); fs.mkdirSync(dir, { mode: 0o700 }); // never overwrite a previous recovery
-  for (const [name, secret] of [['owner.json', payload.owner_secret], ['input.json', payload.input_secret], ['sweep.json', payload.sweep_secret]]) {
-    writeExclusive(dir, name, { account_id: payload.owner_account_id, private_key: secret });
-  }
-  writeExclusive(dir, 'identity.json', { version: 1, owner_account_id: payload.owner_account_id, contract_id: payload.contract_id,
-    router_id: payload.router_id, public_keys: Object.fromEntries([['owner', payload.owner_secret], ['input', payload.input_secret], ['sweep', payload.sweep_secret]]
-      .map(([name, secret]) => [name, nearApi.KeyPair.fromString(secret).getPublicKey().toString()])) });
+  const keys = [['owner', payload.owner_account_id, payload.owner_secret], ['input', payload.owner_account_id, payload.input_secret],
+    ['sweep', payload.owner_account_id, payload.sweep_secret], ...(payload.version === 2 ? [
+      ['contract', payload.contract_id, payload.contract_secret], ['router', payload.router_id, payload.router_secret],
+    ] : [])];
+  for (const [name, account_id, secret] of keys) writeExclusive(dir, `${name}.json`, { account_id, private_key: secret });
+  writeExclusive(dir, 'identity.json', { version: payload.version, owner_account_id: payload.owner_account_id, contract_id: payload.contract_id,
+    router_id: payload.router_id, public_keys: Object.fromEntries(keys.map(([name, , secret]) => [name, nearApi.KeyPair.fromString(secret).getPublicKey().toString()])) });
   const dfd = fs.openSync(dir, 'r'), pfd = fs.openSync(root, 'r');
   try { fs.fsyncSync(dfd); fs.fsyncSync(pfd); } finally { fs.closeSync(dfd); fs.closeSync(pfd); }
   console.log(`Restored disposable testnet keys into ${dir}. Verify each public key and route against FINAL chain state before use; never resend an uncertain transaction.`);

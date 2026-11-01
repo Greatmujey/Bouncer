@@ -196,6 +196,27 @@ jobs:
             git push
           fi
 
+  ref-setup-inspection:
+    name: Inspect previous Ref setup and build storage (read only)
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[ref-setup-readonly-20261101]')
+    needs: [build-contract, ref-router-contract]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: ref-router-wasm
+          path: ref-router-wasm
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      - name: Inspect finalized accounts, storage and quote without signing
+        run: node bouncer/scripts/probe-ref-demo-setup.mjs bouncer-ref-5b2d78f8.testnet owner.bouncer-ref-5b2d78f8.testnet
+
   guarded-ref-one-shot:
     name: One-shot guarded Ref swap and vault credit (testnet)
     # The explicit parent and marker prohibit reruns or incidental paid runs.
