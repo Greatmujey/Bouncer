@@ -219,6 +219,10 @@ jobs:
       - name: Build separate experimental testnet playback WASM
         working-directory: bouncer/contracts/bouncer
         run: RUSTFLAGS="-C link-arg=-s" cargo build --target wasm32-unknown-unknown --release --features youtick-playback-v10
+      - name: Optimize separately built experimental playback WASM
+        run: |
+          wasm-opt -O1 --strip-debug -o playback.opt.wasm bouncer/contracts/bouncer/target/wasm32-unknown-unknown/release/bouncer.wasm
+          mv playback.opt.wasm bouncer/contracts/bouncer/target/wasm32-unknown-unknown/release/bouncer.wasm
       - name: Check experimental playback marker
         run: |
           node -e 'const fs=require("fs"),c=require("crypto"),p="bouncer/contracts/bouncer/target/wasm32-unknown-unknown/release/bouncer.wasm",b=fs.readFileSync(p);if(!b.subarray(0,8).equals(Buffer.from([0,97,115,109,1,0,0,0]))||!b.includes(Buffer.from("bouncer-agent-v10-youtick-testnet")))throw Error("invalid experimental playback artifact");console.log("Experimental playback WASM SHA-256",c.createHash("sha256").update(b).digest("hex"))'
@@ -397,6 +401,53 @@ jobs:
       - run: npm ci --prefix bouncer --no-audit --no-fund
       - name: Reinspect retained setup hashes and balances without signing or sending
         run: node bouncer/scripts/inspect-vrf-setup.mjs original-vrf-evidence
+
+  youtick-owner-grant-probe:
+    name: One-shot hypothetical YouTick owner grant (testnet; no purchase)
+    # The branch, exact parent, marker and first attempt deliberately fence this
+    # disposable one-shot. Never rerun an ambiguous transaction. The job ID is
+    # hypothetical and cannot satisfy the production paid-publication runner.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/arena/d00d7f93-near-hub' && github.event.before == '32beadafa7b5088b69543b0da15537f69af0f350' && github.event.repository.private == true && github.run_attempt == '1' && contains(github.event.head_commit.message, '[youtick-grant-probe-once-20261101]')
+    needs: [js-tests, contract-tests, build-contract]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: bouncer-youtick-playback-v10-wasm
+          path: youtick-v10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      - name: Verify the 1-yocto guard and grant on a made-up job, with no FT payment
+        shell: bash
+        env:
+          BOUNCER_YOUTICK_GRANT_PROBE_ACK: testnet-hypothetical-no-payment-once
+          BOUNCER_YOUTICK_GRANT_PROBE_DIR: ${{ runner.temp }}/bouncer-youtick-grant-proof
+          BOUNCER_YOUTICK_V10_WASM: ${{ github.workspace }}/youtick-v10/bouncer.wasm
+        run: |
+          set +e
+          node bouncer/scripts/probe-youtick-owner-grant.mjs 2>&1 | tee "$RUNNER_TEMP/youtick-grant-probe.log"
+          result=${PIPESTATUS[0]}
+          if [ "$result" -ne 0 ]; then
+            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-4000).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=Hypothetical YouTick grant probe stopped::"+s)' "$RUNNER_TEMP/youtick-grant-probe.log"
+          fi
+          exit "$result"
+      # Public probe/transaction hashes, chain receipts, encrypted journal and
+      # RSA-sealed disposable keys only. No plaintext private keys or signed
+      # transactions. Always retain original hashes on failure or timeout.
+      - name: Preserve original testnet diagnostic and encrypted recovery evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: youtick-hypothetical-grant-testnet-evidence
+          path: ${{ runner.temp }}/bouncer-youtick-grant-proof/**
+          if-no-files-found: ignore
+          retention-days: 90
 
   youtick-playback-read:
     name: Inspect independent testnet playback readiness (read only)
