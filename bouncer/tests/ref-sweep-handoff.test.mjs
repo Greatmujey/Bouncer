@@ -71,7 +71,7 @@ test('live handoff commands fail before network without the explicit recovery co
   assert.notEqual(response.status, 0); assert.match(response.stderr, /usage/);
 });
 
-test('operator authenticates the exact running job annotation before encrypting its scoped key', async () => {
+test('operator authenticates the run-bound Actions check before encrypting its scoped key', async () => {
   const fs = await import('node:fs'), path = await import('node:path'), os = await import('node:os');
   const { spawnSync, execFileSync } = await import('node:child_process'), { fileURLToPath } = await import('node:url');
   const cwd = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -92,14 +92,18 @@ test('operator authenticates the exact running job annotation before encrypting 
     const mock = { run: { id: 123456, event: 'push', run_attempt: 1, status: 'in_progress', path: '.github/workflows/ci.yml',
       head_branch: 'arena/88d70c7c-near-hub', head_sha: head, repository: { private: true } },
     job: { id: 987654, run_id: 123456, run_attempt: 1, head_sha: head, name: 'Resume original Ref output sweep (testnet)',
-      status: 'in_progress', steps: [{ name: 'Recover original receipts and perform one scoped sweep', status: 'in_progress' }] },
-    annotations: [{ annotation_level: 'notice', title: 'Scoped Ref sweep handoff request', message: encodeSweepHandoffRequest(operatorRequest) }] };
+      status: 'in_progress', started_at: '2026-11-01T10:00:00Z',
+      steps: [{ name: 'Recover original receipts and perform one scoped sweep', status: 'in_progress' }] },
+    check: { id: 111222, name: 'Scoped Ref sweep handoff 123456', head_sha: head, status: 'completed', conclusion: 'success',
+      app: { id: 15368, slug: 'github-actions' }, external_id: 'bouncer-ref-sweep-123456',
+      details_url: 'https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/123456', started_at: '2026-11-01T10:00:01Z',
+      output: { title: 'Scoped Ref sweep handoff request', summary: encodeSweepHandoffRequest(operatorRequest) } } };
     fs.writeFileSync(path.join(bin, 'gh'), `#!/usr/bin/env node
 const fs = require('node:fs'); const data = JSON.parse(fs.readFileSync(process.env.MOCK_DATA, 'utf8'));
 const endpoint = process.argv[3] || '';
 if (endpoint.includes('/actions/runs/123456')) console.log(JSON.stringify(data.run));
 else if (endpoint.includes('/actions/jobs/987654')) console.log(JSON.stringify(data.job));
-else if (endpoint.includes('/check-runs/987654/annotations')) console.log(JSON.stringify(data.annotations));
+else if (endpoint.includes('/check-runs/111222')) console.log(JSON.stringify(data.check));
 else { console.error('unexpected mock endpoint'); process.exit(1); }
 `, { mode: 0o755 });
     fs.writeFileSync(path.join(bin, 'git'), `#!/usr/bin/env node
@@ -113,11 +117,13 @@ else { console.error('unexpected git operation'); process.exit(1); }
 `, { mode: 0o755 });
     const env = { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH}`, MOCK_DATA: dataFile,
       MOCK_HEAD: head, MOCK_WORKTREE: worktree, MOCK_GIT_LOG: gitLog };
-    const runOperator = () => spawnSync(process.execPath, ['scripts/respond-original-ref-sweep.mjs', '987654', '123456'],
+    const runOperator = () => spawnSync(process.execPath, ['scripts/respond-original-ref-sweep.mjs', '987654', '123456', '111222'],
       { cwd, env, encoding: 'utf8', timeout: 5000 });
     fs.writeFileSync(dataFile, JSON.stringify({ ...mock, job: { ...mock.job, head_sha: 'f'.repeat(40) } }));
     let child = runOperator(); assert.notEqual(child.status, 0); assert(!fs.existsSync(posted));
-    fs.writeFileSync(dataFile, JSON.stringify({ ...mock, annotations: [mock.annotations[0], mock.annotations[0]] }));
+    fs.writeFileSync(dataFile, JSON.stringify({ ...mock, check: { ...mock.check, external_id: 'other-run' } }));
+    child = runOperator(); assert.notEqual(child.status, 0); assert(!fs.existsSync(posted));
+    fs.writeFileSync(dataFile, JSON.stringify({ ...mock, check: { ...mock.check, app: { id: 9, slug: 'other-app' } } }));
     child = runOperator(); assert.notEqual(child.status, 0); assert(!fs.existsSync(posted));
     fs.writeFileSync(dataFile, JSON.stringify(mock)); child = runOperator(); assert.equal(child.status, 0, child.stderr);
     const body = fs.readFileSync(posted, 'utf8');

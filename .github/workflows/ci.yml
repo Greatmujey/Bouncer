@@ -266,6 +266,8 @@ jobs:
             signal: AbortSignal.timeout(15_000), redirect: 'error' });
           const check = await fetch(`${base}/check-runs`, { method: 'POST', headers: { ...headers, 'content-type': 'application/json' },
             body: JSON.stringify({ name: `Scoped channel diagnostic ${process.env.GITHUB_RUN_ID}`, head_sha: process.env.GITHUB_SHA,
+              external_id: `bouncer-probe-${process.env.GITHUB_RUN_ID}`,
+              details_url: `https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/${process.env.GITHUB_RUN_ID}`,
               status: 'completed', conclusion: 'success', output: { title: 'Read-only test', summary: 'No key or transaction was used.' } }),
             signal: AbortSignal.timeout(15_000), redirect: 'error' });
           console.log(`::notice title=Scoped channel access::comments_http=${comments.status}; contents_http=${contents.status}; contents_write_mismatch_http=${contentsWrite.status}; checks_create_http=${check.status}`);
@@ -287,6 +289,7 @@ jobs:
     permissions:
       actions: read
       contents: read
+      checks: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4

@@ -30,12 +30,13 @@ function readOwnerOnly(file) {
   } finally { fs.closeSync(fd); }
 }
 function main() {
-  const jobId = process.argv[2], runId = process.argv[3];
-  if (!/^[1-9][0-9]{0,19}$/.test(jobId || '') || !/^[1-9][0-9]{0,19}$/.test(runId || '') || process.argv.length !== 4) {
-    throw new Error('usage: node respond-original-ref-sweep.mjs REQUEST_JOB_ID RUN_ID');
+  const jobId = process.argv[2], runId = process.argv[3], checkId = process.argv[4];
+  if (![jobId, runId, checkId].every(value => /^[1-9][0-9]{0,19}$/.test(value || '')) || process.argv.length !== 5) {
+    throw new Error('usage: node respond-original-ref-sweep.mjs JOB_ID RUN_ID HANDOFF_CHECK_ID');
   }
   const run = gh(`/repos/${REPO}/actions/runs/${runId}`);
   const job = gh(`/repos/${REPO}/actions/jobs/${jobId}`);
+  const check = gh(`/repos/${REPO}/check-runs/${checkId}`);
   const git = args => execFileSync('git', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
   const localHead = git(['rev-parse', 'HEAD']);
   const root = git(['rev-parse', '--show-toplevel']);
@@ -50,10 +51,15 @@ function main() {
       !job.steps?.some(step => step.name === 'Recover original receipts and perform one scoped sweep' && step.status === 'in_progress')) {
     throw new Error('expected private first-attempt original-sweep job is not running at the current HEAD');
   }
-  const annotations = gh(`/repos/${REPO}/check-runs/${jobId}/annotations?per_page=100`);
-  const matches = Array.isArray(annotations) ? annotations.filter(item => item?.annotation_level === 'notice' && item.title === REQUEST_TITLE) : [];
-  if (matches.length !== 1) throw new Error('expected exactly one authenticated job handoff annotation');
-  const request = decodeSweepHandoffRequest(matches[0].message);
+  if (check?.id?.toString() !== checkId || check.name !== `Scoped Ref sweep handoff ${runId}` || check.head_sha !== localHead ||
+      check.status !== 'completed' || check.conclusion !== 'success' || check.app?.id !== 15368 || check.app?.slug !== 'github-actions' ||
+      check.external_id !== `bouncer-ref-sweep-${runId}` || check.details_url !== `https://github.com/${REPO}/actions/runs/${runId}` ||
+      check.output?.title !== REQUEST_TITLE || typeof check.started_at !== 'string' || typeof job.started_at !== 'string' ||
+      !Number.isFinite(Date.parse(check.started_at)) || !Number.isFinite(Date.parse(job.started_at)) ||
+      Date.parse(check.started_at) < Date.parse(job.started_at)) {
+    throw new Error('handoff check is not bound to the expected current GitHub Actions job');
+  }
+  const request = decodeSweepHandoffRequest(check.output?.summary);
   if (request?.run_id !== runId) throw new Error('handoff run does not match its Actions job');
   const file = path.join(os.homedir(), '.near-credentials/testnet/bouncer-ref-v3-20261101/sweep.json');
   const credentials = readOwnerOnly(file);

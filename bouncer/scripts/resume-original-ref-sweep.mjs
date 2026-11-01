@@ -106,7 +106,17 @@ async function main() {
     const endpoint = `/repos/${REPO}/contents/${responsePath}?ref=${encodeURIComponent(BRANCH)}`;
     if (await github('GET', endpoint, undefined, { allowNotFound: true })) throw new Error('run-specific handoff file already exists; stop');
     const { request, privateKey } = createSweepHandoffRequest({ runId, context });
-    console.log(`::notice title=Scoped Ref sweep handoff request::${encodeSweepHandoffRequest(request)}`);
+    // Job annotations are not available until this job ends. Publish the
+    // public-only challenge as a completed GitHub Actions check instead; its
+    // app, head, run-specific name, details URL and external id are verified
+    // by the operator before the scoped key can be encrypted to it.
+    const checkName = `Scoped Ref sweep handoff ${runId}`, details = `https://github.com/${REPO}/actions/runs/${runId}`;
+    const published = await github('POST', `/repos/${REPO}/check-runs`, { name: checkName, head_sha: process.env.GITHUB_SHA,
+      external_id: `bouncer-ref-sweep-${runId}`, details_url: details, status: 'completed', conclusion: 'success',
+      output: { title: 'Scoped Ref sweep handoff request', summary: encodeSweepHandoffRequest(request) } });
+    if (!Number.isSafeInteger(published?.id) || published.name !== checkName || published.head_sha !== process.env.GITHUB_SHA ||
+        published.app?.slug !== 'github-actions') throw new Error('GitHub did not acknowledge the authenticated public handoff check');
+    console.log(`::notice title=Scoped Ref sweep handoff check published::run_id=${runId}; check_id=${published.id}; no_input_key_requested=true`);
     let response;
     for (let i = 0; i < 180 && !response; i++) {
       const file = await github('GET', endpoint, undefined, { allowNotFound: true });
