@@ -111,6 +111,13 @@ access receipt `2VAPLpVfQVNmwtvYp2ivu94VX76S3ifsRaGugHNmC2Ny`). The public
 original review and hashes are retained in `evidence/youtick-hypothetical-grant-20261101/`;
 the encrypted journal and sealed disposable keys are in the workflow artifact
 `youtick-hypothetical-grant-testnet-evidence` (retention ends 30 January 2027).
+After the sandbox restarted, the local RSA private recovery key was no longer
+present: the sealed credentials and encrypted journal cannot currently be
+opened unless an independent backup is found. The original public hashes remain
+available for read-only inspection. The old diagnostic script now refuses to
+create new accounts or grants using the retired recovery key. No paid YouTick
+order was involved. Future probes need an operator-controlled durable key backup
+verified before side effects.
 The original artifact also contains full public RPC receipts, which can include
 transaction signatures and nonces; do not resend them. Later diagnostic runs
 redact those fields from stored receipt copies. No plaintext private keys were put

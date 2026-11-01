@@ -56,3 +56,10 @@ test('mismatched returned hash, signed payload and signature fail before journal
     assert.equal(f.writes, 0); assert.equal(f.sends, 0);
   }
 });
+
+test('durable direct procurement prefers one-shot send and never falls back after ambiguity', async () => {
+  const f = fixture(); let oneShots = 0;
+  f.provider.sendTransactionOnce = async (_signed, wait) => { oneShots++; assert.equal(wait, 'FINAL'); throw new Error('ambiguous one-shot result'); };
+  await assert.rejects(run(f), /payment could not be confirmed.*do not retry automatically.*ambiguous one-shot result/);
+  assert.equal(oneShots, 1); assert.equal(f.sends, 0); assert.equal(f.writes, 1);
+});

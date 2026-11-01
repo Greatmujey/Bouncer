@@ -616,6 +616,10 @@ jobs:
       - run: npm ci --prefix bouncer --no-audit --no-fund
       - name: Public GETs and historical FastNear read-only index queries only
         run: node bouncer/scripts/probe-multiagency.mjs
+      - name: Verify historical independent public research handoff (not our purchase)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node bouncer/scripts/probe-multiagency-publication.mjs
 
   vrf2-setup-inspection:
     name: Reinspect original VRF2 setup and preserve encrypted journal (read only)

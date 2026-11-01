@@ -27,7 +27,9 @@ PaymentRpcProvider.prototype.callFunction = async (_id, method) => {
 MonotonicAccount.prototype.createTransaction = async function(receiver, actions, key) {
   return nearApi.transactions.createTransaction(owner, key, receiver, BigInt(read().sends + 1), actions, Buffer.alloc(32, 9));
 };
-PaymentRpcProvider.prototype.sendTransactionUntil = async signed => {
+PaymentRpcProvider.prototype.sendTransactionUntil = async () => { throw new Error('retrying transport must not be used in durable CLI'); };
+PaymentRpcProvider.prototype.sendTransactionOnce = async (signed, wait) => {
+  if (wait !== 'FINAL') throw new Error('synthetic broadcast requires FINAL');
   const txHash = nearApi.utils.serialize.base_encode(crypto.createHash('sha256').update(nearApi.transactions.encodeTransaction(signed.transaction)).digest());
   const pool = new pg.Pool({ connectionString: process.env.BOUNCER_BUYER_DATABASE_URL, max: 1 });
   try {

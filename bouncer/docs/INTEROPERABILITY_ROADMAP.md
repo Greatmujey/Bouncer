@@ -19,6 +19,7 @@ that agent.
 | Shared seller-v3 replay coordination | [Real PostgreSQL tests](SHARED_SELLER.md) exercise multiple worker processes, crashes and uncertain commits. | Synthetic payments only; one trusted, durable primary, with no automatic pending-work takeover. |
 | Shared direct-v3 buyer coordination | [Real PostgreSQL/process tests](SHARED_BUYER.md) reserve the signed hash and encrypted claim before a simulated send and recover the same hash; new owners can opt into stable intent IDs across journals. | Synthetic receipts only; one fenced primary, stable owner-assigned IDs and trusted workers. FT-call, x402, OutLayer and workflows are not covered. |
 | Owner-only Ref testnet setup | Owner acquired test tokens and separately funded the vault in the live runs. | This is **not** an agent-guarded swap. Plain outgoing Ref `ft_transfer` does not call Bouncer's deposit hook. |
+| Independent MultiAgency research candidate | [Read-only readiness, historical indexer control and report handoff](MULTIAGENCY_RESEARCH.md); experimental quote/payment/recovery verifier has synthetic tests. | No Bouncer quote, payment, job or independent fulfillment; current workers and refund terms remain unproven. |
 
 No independent FT-paid commercial compute, storage or API purchase is
 established. Testnet USDC has no real value. A FINAL receipt establishes the

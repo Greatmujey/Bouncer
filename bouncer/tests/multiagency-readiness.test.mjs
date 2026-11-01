@@ -34,6 +34,7 @@ test('historical control requires indexer event and exact FINAL linked Bouncer r
     x => { x.indexed.receipts[0].execution_outcome.outcome.logs.push(x.indexed.receipts[0].execution_outcome.outcome.logs[0]); },
     x => { x.indexed.receipts[0].execution_outcome.outcome.status = { Failure: {} }; },
     x => { x.final.final_execution_status = 'EXECUTED_OPTIMISTIC'; },
+    x => { x.final.receipts_outcome[1].outcome.logs = []; },
     x => { x.final.receipts_outcome[0].outcome.receipt_ids = []; },
     x => { x.final.receipts[0].receipt.Action.actions[0].FunctionCall.deposit = '0'; },
   ]) { const bad = control(); mutate(bad); assert.throws(() => verifyMultiAgencyIndexerControl(bad)); }

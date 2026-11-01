@@ -138,6 +138,12 @@ export function assertVrf2Snapshot(stage, s) {
 }
 
 async function main() {
+  // The original private recovery key disappeared with its ephemeral sandbox.
+  // This permanently fenced attempt must not generate another set of secrets
+  // sealed to a public key whose private half is unavailable.
+  if (KEY_ID === '77f3170a5df339b2ef4affeb39e8fa549d3b4ca9ac5579d0a21f9936e927508b') {
+    throw new Error('retired VRF2 recovery key is unavailable; no account creation or payment permitted');
+  }
   if (process.env.BOUNCER_VRF2_ACK !== 'fresh-testnet-fake-token-vrf-one-shot' || !process.env.BOUNCER_VRF2_DIR ||
       !process.env.BOUNCER_VRF2_WASM) throw new Error('explicit fresh testnet acknowledgement, evidence directory and reviewed artifact are required');
   const dir = path.resolve(process.env.BOUNCER_VRF2_DIR), wasm = fs.readFileSync(process.env.BOUNCER_VRF2_WASM);

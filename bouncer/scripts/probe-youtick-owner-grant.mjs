@@ -87,6 +87,11 @@ export function assertProbeRuntime(protocol) {
 }
 
 async function main() {
+  // The original private recovery key disappeared with its ephemeral sandbox.
+  // Do not seal another diagnostic's credentials to the retired public key.
+  if (KEY_ID === '13c804af6c55d701c9f39752dbbec3a2dae086f9179051c7ad868fd7d82e5176') {
+    throw new Error('retired YouTick recovery key is unavailable; no account creation or grant permitted');
+  }
   if (process.env.BOUNCER_YOUTICK_GRANT_PROBE_ACK !== 'testnet-hypothetical-no-payment-once' ||
       !process.env.BOUNCER_YOUTICK_GRANT_PROBE_DIR || !process.env.BOUNCER_YOUTICK_V10_WASM) {
     throw new Error('explicit hypothetical testnet acknowledgement, fresh evidence directory and reviewed V10 artifact are required');

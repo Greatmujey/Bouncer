@@ -32,7 +32,7 @@ export function verifyMultiAgencyIndexerControl({ indexed, final }) {
   if (!record(args) || args.payee !== PRIOR_PAYEE || args.amount !== '1000' ||
       args.expected_token !== CIRCLE_TESTNET_USDC || typeof args.policy_id !== 'string' ||
       typeof args.memo !== 'string' || !args.memo.startsWith('bouncer-order-v3:')) throw new Error('indexed payment differs from the control');
-  let matches = 0;
+  const matches = [];
   for (const item of indexed.receipts) {
     if (item?.receipt?.predecessor_id !== PRIOR_BUYER || item.receipt.receiver_id !== CIRCLE_TESTNET_USDC ||
         !record(item.execution_outcome?.outcome?.status) || typeof item.execution_outcome.outcome.status.SuccessValue !== 'string') continue;
@@ -41,15 +41,21 @@ export function verifyMultiAgencyIndexerControl({ indexed, final }) {
       let event;
       try { event = JSON.parse(line.slice(11)); } catch { continue; }
       if (event?.standard !== 'nep141' || event.version !== '1.0.0' || event.event !== 'ft_transfer' || !Array.isArray(event.data)) continue;
-      matches += event.data.filter(v => v?.old_owner_id === PRIOR_BUYER && v.new_owner_id === PRIOR_PAYEE &&
-        v.amount === '1000' && v.memo === args.memo).length;
+      for (const v of event.data) if (v?.old_owner_id === PRIOR_BUYER && v.new_owner_id === PRIOR_PAYEE &&
+        v.amount === '1000' && v.memo === args.memo) matches.push({ receipt_id: item.receipt.receipt_id, log: line });
     }
   }
-  if (matches !== 1) throw new Error('indexer did not expose the unique nested Circle transfer event and memo');
+  if (matches.length !== 1) throw new Error('indexer did not expose the unique nested Circle transfer event and memo');
   const request = { id: 'historical-indexer-control', resource: 'compute', policy_id: args.policy_id,
     token: CIRCLE_TESTNET_USDC, payee: PRIOR_PAYEE, amount: '1000', memo: args.memo };
   verifyDirectPayment({ result: final, contractId: PRIOR_BUYER, ownerAccountId: PRIOR_OWNER,
     request, publicKey: tx.public_key, txHash: PRIOR_HASH });
+  const matchingReceipt = final.receipts.filter(item => item.receipt_id === matches[0].receipt_id && item.predecessor_id === PRIOR_BUYER &&
+    item.receiver_id === CIRCLE_TESTNET_USDC && Array.isArray(item.receipt?.Action?.actions) &&
+    item.receipt.Action.actions.length === 1 && item.receipt.Action.actions[0]?.FunctionCall?.method_name === 'ft_transfer');
+  const matchingFinal = final.receipts_outcome.filter(item => item.id === matches[0].receipt_id &&
+    item.outcome?.executor_id === CIRCLE_TESTNET_USDC && item.outcome?.logs?.filter(line => line === matches[0].log).length === 1);
+  if (matchingReceipt.length !== 1 || matchingFinal.length !== 1) throw new Error('indexed event was not in the same FINAL token receipt');
   return { tx_hash: PRIOR_HASH, nested_circle_event_indexed: true, independently_final_verified: true,
     scope: 'historical self-hosted vendor control only; not a MultiAgency payment or delivery' };
 }
@@ -60,7 +66,8 @@ export function summarizeMultiAgencyReadiness({ config, health, engagements, tas
   if (!record(config) || config.network !== 'testnet' || config.treasury !== MULTIAGENCY_TREASURY ||
       config.usdc !== CIRCLE_TESTNET_USDC || config.deposit !== '3000000' || config.board !== MULTIAGENCY_BOARD ||
       !record(health) || !Array.isArray(engagements) || engagements.length > 100 ||
-      !record(tasks) || !Array.isArray(tasks.tasks) || tasks.tasks.length > 100 || !Number.isSafeInteger(nowMs)) {
+      !record(tasks) || !Array.isArray(tasks.tasks) || tasks.tasks.length > 100 || !Number.isSafeInteger(nowMs) ||
+      nowMs < 1 || !Number.isFinite(new Date(nowMs).getTime())) {
     throw new Error('independent provider config or bounded public readiness data differs from reviewed testnet profile');
   }
   const completed = Date.parse(health.coordinator?.last_completed_at);
@@ -72,6 +79,8 @@ export function summarizeMultiAgencyReadiness({ config, health, engagements, tas
   const ready = tasks.tasks.filter(t => record(t) && t.state === 'ready').length;
   return { status: 'BLOCKED_OR_UNPROVEN', network: config.network, token: config.usdc,
     treasury: config.treasury, observed_default_deposit_micro_usdc: config.deposit,
+    observed_at: new Date(nowMs).toISOString(),
+    coordinator_last_completed_at: Number.isFinite(completed) ? new Date(completed).toISOString() : null,
     coordinator_recent: coordinatorRecent, listed_ready_tasks: ready,
     last_listed_paid_job_created_at: paid[0]?.created_at ?? null,
     independent_worker_capacity: 'UNPROVEN', historical_nested_indexer_control: indexerControl,

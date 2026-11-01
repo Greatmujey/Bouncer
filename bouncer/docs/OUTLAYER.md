@@ -312,15 +312,23 @@ micro-units, while the vault ledger/token balances and OutLayer prepaid balance
 were zero; the funding/project policies had not yet been created. Those views
 do **not** prove the unavailable transaction was never accepted. The inspection
 sent nothing and wrote no journal entries. The original encrypted journal was
-reconstructed from its bounded ciphertext annotations, authenticated locally
-with the separately retained recovery key, and still records that hash pending.
-Any later continuation must first verify the original funding and use its
-journal, not silently create a replacement payment.
+reconstructed and authenticated locally at that time; it recorded the hash
+pending. **Recovery-key incident:** after the sandbox restarted, the RSA private
+key and local decrypted/reconstructed files that had been stored outside the
+repository were no longer present. The private half is currently unavailable;
+the artifact still contains the sealed credentials and encrypted journal, but
+we cannot presently authenticate or decrypt them. A second encrypted artifact
+copy is `13089055574`; both expire 30 January 2027. The public intent and
+original hash remain in the repository. Do not treat the ciphertext as an
+accessible journal or silently create a replacement payment. The old paid VRF2
+script now refuses to run with that retired recovery key before any network
+activity.
 
-The encrypted credential envelope and journal are retained separately. The
-local `unseal-vrf2-journal-key.mjs` can derive the journal key to a new private
-file without writing any NEAR signing keys; losing the RSA private key prevents
-journal recovery. Neither the file lock nor in-process FT/project exclusion
+Only if an independently preserved copy of the original RSA private key is
+restored can `unseal-vrf2-journal-key.mjs` derive the original journal key to a
+new private file without writing NEAR signing keys. Future live attempts need
+an operator-controlled durable key backup verified before any side effects;
+an ephemeral sandbox path alone is insufficient. Neither the file lock nor in-process FT/project exclusion
 protects against discarded or rolled-back journals, other journal paths,
 bypassing callers or multiple independent databases. Injected RPC providers
 must independently provide bounded one-attempt sending. Do not rerun the
