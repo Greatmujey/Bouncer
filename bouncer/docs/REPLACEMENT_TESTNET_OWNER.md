@@ -67,3 +67,21 @@ resulting public account and key via FINAL views. If the request or final view
 is ambiguous, preserve its identity and fence and reconcile read-only; do not
 repeat it. A successful owner bootstrap is **not** Circle funding, vault
 creation, a provider purchase, an audit or proof that a backup was exported.
+
+### Next: restricted resource agent (not live yet)
+
+The funded vault does **not** yet have a resource policy, agent key, seller
+allowlist or verified provider delivery. The new testnet-only setup planner and
+local encrypted keyring are preparation, not a live provisioning command. Its
+proposed policy is Circle test USDC, 3,000 atoms per transaction and 6,907 per
+rolling day; the separate agent key would only call `execute` and
+`execute_ft_call` on this vault with a limited test-NEAR gas allowance. The
+plan does not add a payee. The owner key remains necessary for policy changes.
+
+Before any live setup, the planner still needs durable original-hash journals,
+strict receipt/state verification, one-shot fences and read-only reconciliation.
+The planned zero-yocto owner call is an expected failure that must be verified
+as the exact vault guard failure, not just an arbitrary rejected transaction. The
+nearcore harness exercises these actions on a disposable mock-token chain; it
+is not testnet proof. The two local ciphertext copies and their colocated
+wrapping key are not an off-device backup.

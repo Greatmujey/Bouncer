@@ -14,6 +14,7 @@ import { verifyVaultBootstrapReceipt } from '../agent/keyless-vault-bootstrap-ru
 import { newTestnetVaultId, V11_EXPECTED_BYTES, V11_EXPECTED_SHA256, VAULT_NATIVE_FUNDING_YOCTO } from '../agent/keyless-vault-bootstrap-readiness.mjs';
 import { readPinnedJsonView } from '../agent/read-only-near-rpc.mjs';
 import { CIRCLE_TESTNET_USDC as CIRCLE } from '../scripts/circle-testnet-setup.mjs';
+import { exerciseSandboxResourceAgent } from './v11-sandbox-resource-agent.mjs';
 import { inspectVaultCircleFunding } from '../agent/keyless-vault-circle-readiness.mjs';
 import { signVaultCircle } from '../agent/keyless-vault-circle.mjs';
 import { broadcastVaultCircleOnce, reconcileVaultCircle } from '../agent/keyless-vault-circle-runner.mjs';
@@ -117,9 +118,11 @@ export async function exerciseSandboxBootstrapRunner({ rpcUrl, root, sourceFtOwn
     assert.equal(funded.state.vault_tracked_circle_atoms, '6907');
     assert.equal(funded.state.owner_circle_atoms, '0'); assert.equal(rpc.transportCalls, 3);
     checkpoint('mock-FT vault registration and full deposit recovered the original funding receipt after a simulated lost acknowledgement');
+    const resourceAgent = await exerciseSandboxResourceAgent({ rpc, ownerPlan: plan, ownerKey, directory, checkpoint });
     return { scope: 'disposable local nearcore and mock FT only; Circle metadata was synthesized; not testnet or seller delivery',
       sandbox_transaction_hash: envelope.tx_hash, original_receipt_id: evidence.root_receipt_id,
-      original_hash_journaled_before_send: true, lost_ack_recovered_without_resend: true, transport_calls: 3,
+      original_hash_journaled_before_send: true, lost_ack_recovered_without_resend: true, transport_calls: rpc.transportCalls,
+      sandbox_resource_agent: resourceAgent,
       recovered_v11_code_hash: accountAfter.code_hash, vault_key_count: vaultKeys.keys.length,
       owner_and_version_checked: true, mock_ft_vault_registered: true, mock_ft_vault_actual_atoms: funded.state.vault_actual_circle_atoms,
       mock_ft_vault_tracked_atoms: funded.state.vault_tracked_circle_atoms, mock_ft_funding_original_hash: funding.tx_hash,
