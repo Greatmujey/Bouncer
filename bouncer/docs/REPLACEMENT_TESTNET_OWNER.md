@@ -68,23 +68,27 @@ is ambiguous, preserve its identity and fence and reconcile read-only; do not
 repeat it. A successful owner bootstrap is **not** Circle funding, vault
 creation, a provider purchase, an audit or proof that a backup was exported.
 
-### Next: restricted resource agent (not live yet)
+### Restricted resource agent (live testnet; no seller yet)
 
-The funded vault does **not** yet have a resource policy, installed agent key,
-seller allowlist or verified provider delivery. A separate testnet agent key
-has been generated locally and authenticated from two encrypted copies; it has
-not been installed. The testnet-only setup planner and keyring are preparation,
-not proof of live provisioning. Its proposed policy is Circle test USDC, 3,000
-atoms per transaction and 6,907 per
-rolling day; the separate agent key would only call `execute` and
-`execute_ft_call` on this vault with a limited test-NEAR gas allowance. The
-plan does not add a payee. The owner key remains necessary for policy changes.
+The Circle policy is now configured at **3,000 atoms per transaction and 6,907
+per rolling day**, with a granted agent and no allowed seller. The distinct
+[zero-yocto control](https://testnet.nearblocks.io/txns/2oECAQZt97rBUkHWuXuY7wMBqEVAuhH3ekeFxR2BWXyK)
+was rejected by the vault's exact owner-policy guard. Its higher owner nonce
+prevents future execution of the earlier exposed probe, but does not establish
+whether that earlier probe had any past receipt. Do not resend either hash.
 
-The setup is separately journaled, with original-hash fences, receipt/state
-checks and read-only reconciliation; each live action must be verified before
-proceeding to the next. The planned zero-yocto owner call is an expected failure
-that must be verified as the exact vault guard failure, not just an arbitrary
-rejected transaction. The [isolated nearcore run](https://github.com/Greatmujey/Bouncer/actions/runs/41525285229)
-exercised the one-shot setup and recovery after a simulated lost acknowledgement
-on a disposable mock-token chain; this is not testnet proof. The two local
-ciphertext copies and their colocated wrapping key are not an off-device backup.
+The [configuration](https://testnet.nearblocks.io/txns/F4NJaYVwafsLAtmvVe1c7k9LQQswR9cou3JZPicw7knZ)
+and [restricted-key installation](https://testnet.nearblocks.io/txns/7B6B8df6ZWP4unPNbv7VkrtLp8SKmXvyEL3cGUuZ4YP8)
+were individually journaled and verified at FINAL. The installed agent key is
+restricted to `execute` and `execute_ft_call` on this vault with a 0.1 test-NEAR
+gas allowance; the owner key remains necessary for policy changes. The vault
+still had zero keys and 6,907 actual and tracked Circle atoms in the final
+installation snapshot. This is **not** seller fulfillment, an audit, or a backup.
+Original-hash fences and verification summaries are in
+`evidence/testnet-owner-v2/`; never resend these actions.
+
+The two-method Circle agent is not sufficient for the stricter provider runners,
+which require dedicated one-method keys. Those keys and seller routes have not
+been installed. The [isolated nearcore run](https://github.com/Greatmujey/Bouncer/actions/runs/41525285229)
+used a disposable mock-token chain, not live Circle or a seller. The agent's two
+local ciphertext copies and colocated wrapping key are not an off-device backup.
