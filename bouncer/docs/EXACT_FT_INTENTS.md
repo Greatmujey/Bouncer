@@ -1,8 +1,11 @@
 # Experimental exact, one-shot FT intents (V11)
 
-**Fresh testnet state only; not deployed, audited, migrated, or an independent
-purchase.** This is a separately compiled `exact-ft-v11` feature, not a change
-to the pinned V9 `bouncer.wasm` or the separate YouTick V10 variant. V11 adds
+**Testnet prototype only; not audited, migrated, production-ready, or proof of an
+independent purchase.** A fresh keyless V11 testnet vault has been deployed and
+funded with Circle test USDC; its recorded deployment and funding evidence is in
+`evidence/testnet-owner-v2/`. This is a separately compiled `exact-ft-v11`
+feature, not a change to the pinned V9 `bouncer.wasm` or the separate YouTick
+V10 variant. V11 adds
 state fields and **must not be installed over any V9/V10 vault**: no migration
 or source-to-binary reproducibility is established. The two experimental
 features must not be enabled together. CI tests and uploads a build for review;
