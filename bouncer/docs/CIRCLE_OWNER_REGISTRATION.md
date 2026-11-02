@@ -6,6 +6,19 @@ vault, authorize an agent, buy a resource, or use real money. It is separate
 from the keyless vault's later registration. The local backup file must be kept
 private; a local duplicate is not proof of an owner-exported backup.
 
+## Verified testnet result
+
+[Run 41479018977](https://github.com/Greatmujey/Bouncer/actions/runs/41479018977)
+at commit `8471c017622f7c827f1d7f0d61b3985299e76910` submitted the one original
+transaction [`GK5ybyT4za2yEE3YNFxsbLfiHEzXRGef5vXe4NqEjPgK`](https://testnet.nearblocks.io/txns/GK5ybyT4za2yEE3YNFxsbLfiHEzXRGef5vXe4NqEjPgK).
+Its matching FINAL receipt `3hAC4Q3JU3kqqawbi79DL9Z9QtXcNKjBRGk2XdG8ZSXf`
+reported a 0.00125 test-NEAR storage registration; fresh FINAL block
+`9aVcxWY4tG1Wa3rhU8FoKuV5dkbrAeY6QkGAT3y7HYNK` showed the owner registered
+with Circle's actual testnet token and a **zero** USDC balance. The public
+attempt-fence artifact is `13159920166`. The original local journal is marked
+FINAL verified and retains the same signed hash; do not resend it. These are
+trusted-RPC observations, not consensus proofs or USDC funding.
+
 ## Limits and custody
 
 A public FINAL-block preflight checks testnet identity, a plain owner with the

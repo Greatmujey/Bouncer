@@ -40,6 +40,12 @@ test('offline signing durably journals before exporting only fixed public bearer
     fs.unlinkSync(f.paths.evidence);
     const restored = await signAndJournalCircleRegistration({ plan: f.plan, paths: f.paths, restore: true });
     assert.equal(restored.tx_hash, result.tx_hash); assert.deepEqual(JSON.parse(fs.readFileSync(f.paths.evidence)), evidence);
+    journal.status = 'ORIGINAL_FINAL_VERIFIED';
+    fs.writeFileSync(f.paths.journal, JSON.stringify(journal), { mode: 0o600 });
+    fs.unlinkSync(f.paths.evidence);
+    const confirmed = await signAndJournalCircleRegistration({ plan: f.plan, paths: f.paths, restore: true });
+    assert.equal(confirmed.tx_hash, result.tx_hash); assert.deepEqual(JSON.parse(fs.readFileSync(f.paths.evidence)), evidence);
+    await assert.rejects(signAndJournalCircleRegistration({ plan: f.plan, paths: f.paths, nowMs: NOW }), /already journaled/);
   } finally { f.cleanup(); }
 });
 

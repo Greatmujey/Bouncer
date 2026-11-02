@@ -54,7 +54,9 @@ export async function signAndJournalCircleRegistration({ plan: raw, paths, resto
   try {
     if (restore) {
       const existing = readBoundedPrivate(paths.journal);
-      if (existing?.version !== 1 || existing.status !== 'ORIGINAL_SIGNED_NOT_CONFIRMED') throw new Error('invalid original registration journal');
+      if (existing?.version !== 1 || !['ORIGINAL_SIGNED_NOT_CONFIRMED', 'ORIGINAL_FINAL_VERIFIED'].includes(existing.status)) {
+        throw new Error('invalid original registration journal');
+      }
       return publishOriginal(existing.envelope, plan, paths.evidence);
     }
     if (fs.existsSync(paths.journal)) throw new Error('original registration already journaled; inspect it, never sign a replacement');
