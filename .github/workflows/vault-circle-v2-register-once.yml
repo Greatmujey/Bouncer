@@ -1,0 +1,79 @@
+# ONE-SHOT TESTNET CIRCLE REGISTRATION FOR THE REPLACEMENT KEYLESS VAULT.
+# Public signed bytes can be relayed by anyone. Never resend an unresolved hash.
+name: Register replacement vault with Circle once
+
+on:
+  push:
+    branches: ['arena/25a7aaf6-near-hub']
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  register:
+    if: github.event.before == 'e94fbcb5ef88a8cf45456250c7530f56753c1c41' && github.run_attempt == 1 && contains(github.event.head_commit.message, '[vault-circle-v2-register-once]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: bouncer
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+      - name: Retrieve pinned public V11 artifact for safety tests
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api repos/Greatmujey/Bouncer/git/blobs/c67c70401dc733a0905e79258cc8169c2e6b5210 --jq .content | base64 -d > "$RUNNER_TEMP/v11-testnet.wasm"
+          printf '%s  %s\n' '1acf931c07a530257999478c121193863ecf7201d357812a44b4d61c16a77921' "$RUNNER_TEMP/v11-testnet.wasm" | sha256sum -c -
+      - name: Test fixed action, journal, fence and receipt guards
+        env:
+          BOUNCER_V11_WASM: ${{ runner.temp }}/v11-testnet.wasm
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          node --test tests/keyless-vault-circle*.test.mjs tests/github-original-fence.test.mjs tests/read-only-near-receipts.test.mjs
+      - name: Prepare original-hash fence
+        id: fence_info
+        run: |
+          set -euo pipefail
+          file='evidence/testnet-owner-v2/vault-circle-register-original.json'
+          test -f "$file"
+          digest="$(sha256sum "$file" | cut -d' ' -f1)"
+          echo "sha=$digest" >> "$GITHUB_OUTPUT"
+          mkdir -p "$RUNNER_TEMP/vault-circle-register-fence"
+          cp "$file" "$RUNNER_TEMP/vault-circle-register-fence/register-original.json"
+          printf 'network=testnet\nrun_id=%s\ncommit=%s\nenvelope_sha256=%s\nrequest=one Circle testnet vault registration; reconcile, never blindly resend\n' \
+            "$GITHUB_RUN_ID" "$GITHUB_SHA" "$digest" > "$RUNNER_TEMP/vault-circle-register-fence/attempt.txt"
+      - name: Retain original-hash fence before CI send
+        id: fence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: vault-circle-v2-register-fence-${{ github.run_id }}-${{ steps.fence_info.outputs.sha }}
+          path: ${{ runner.temp }}/vault-circle-register-fence/
+          retention-days: 30
+          if-no-files-found: error
+      - name: Recheck fresh state, submit once, and verify original receipt
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          BOUNCER_FENCE_ARTIFACT_ID: ${{ steps.fence.outputs.artifact-id }}
+          BOUNCER_VAULT_CIRCLE_KIND: register
+        run: |
+          set -euo pipefail
+          if ! node scripts/broadcast-vault-circle-v2-once.mjs > "$RUNNER_TEMP/vault-circle-register-result.json" 2> "$RUNNER_TEMP/vault-circle-register-error.log"; then
+            python3 -c 'import os; s=open(os.environ["RUNNER_TEMP"]+"/vault-circle-register-error.log").read()[-4000:]; print("::error title=Original vault Circle registration unconfirmed; do not retry::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
+            exit 1
+          fi
+          {
+            echo '## One Circle testnet vault registration'
+            echo 'Owner signed locally; the storage deposit may remain locked. This is not vault USDC funding or provider delivery.'
+            echo '```json'
+            cat "$RUNNER_TEMP/vault-circle-register-result.json"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          python3 -c 'import os,json; s=json.dumps(json.load(open(os.environ["RUNNER_TEMP"]+"/vault-circle-register-result.json")),separators=(",",":")); print("::notice title=Replacement vault Circle registration result::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'

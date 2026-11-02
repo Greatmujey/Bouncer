@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "kind": "register",
+  "network": "testnet",
+  "owner": "bouncer-owner-3869c162b193fa1729515442.testnet",
+  "public_key": "ed25519:7GQ6BtmKSTT5XVnVAikGftXDZtfJYxoWXc61PE1H1tVr",
+  "vault": "vault.bouncer-owner-3869c162b193fa1729515442.testnet",
+  "token": "3e2210e1184b45b64c8a434c0a7e7b23cc04ea7eb7a6c3c32520d03d4afcb8af",
+  "expected_circle_code_hash": "EoAUFWELjD9gYzsjKDXYRmHDHf1RJ95jaKNSYE6v9b2z",
+  "storage_min_yocto": "1250000000000000000000",
+  "amount_atoms": "6907",
+  "expected_owner_atoms": "6907",
+  "expected_vault_atoms": "0",
+  "expected_tracked_atoms": "0",
+  "expected_registration": "NOT_REGISTERED_AT_VIEW",
+  "nonce": "275948535000005",
+  "block_hash": "F7VmRXv9yjyNYaAxetkHpHkPXExxKnn8r8CeTsH75FvS",
+  "do_not_blindly_resend": true,
+  "tx_hash": "GeDj7JBXfSMGfwkG3hC14dDFKeHbH82o4hMmUPFfroe4",
+  "signed_tx_base64": "LgAAAGJvdW5jZXItb3duZXItMzg2OWMxNjJiMTkzZmExNzI5NTE1NDQyLnRlc3RuZXQAXRfw5jZweYT2FAPCrjfGxDpcJcASg9/8VqLJzvz+W/XFq2dG+foAAEAAAAAzZTIyMTBlMTE4NGI0NWI2NGM4YTQzNGMwYTdlN2IyM2NjMDRlYTdlYjdhNmMzYzMyNTIwZDAzZDRhZmNiOGFm0a2gptIWl9HfdxInRZkcO+GA5vw+cIHpcuLjJGeRVZMBAAAAAg8AAABzdG9yYWdlX2RlcG9zaXReAAAAeyJhY2NvdW50X2lkIjoidmF1bHQuYm91bmNlci1vd25lci0zODY5YzE2MmIxOTNmYTE3Mjk1MTU0NDIudGVzdG5ldCIsInJlZ2lzdHJhdGlvbl9vbmx5Ijp0cnVlfQAgPYh5LQAAAABIVjcZPMNDAAAAAAAAAAAH414ufT71zpDRVqsShkqAGC90izXMmJO/gP96p28iG77fMPi5GF099aL0dIjhOBU7gwU/2W+/J+qSxK4fZyEI",
+  "scope": "public fixed-action bearer; no private key; retain original hash and never blindly resend"
+}
