@@ -80,8 +80,10 @@ that forwarder by its existing exact `ft_transfer`; the forwarder would open
 one fixed escrow request, claim any owed payout as the payer, then return
 leftover tokens to the vault with `ft_transfer_call`. An [offline experimental
 forwarder](../experiments/paypercall-forwarder/README.md) now compiles and has
-synthetic-host tests, but is not nearcore-tested or safe for live use. It would
-add a new contract, token registration and native storage costs; PayPerCall
+passed a [disposable nearcore test](https://github.com/Greatmujey/Bouncer/actions/runs/41474554586)
+using a mock token and a tiny stand-in. It has not been tested against actual
+PayPerCall or Circle and is not safe for live use. It would add a new contract,
+token registration and native storage costs; PayPerCall
 would see the forwarder rather than the
 vault as payer. The vault's allowlisted payee would be the forwarder, so the
 final escrow/request restrictions would depend on the new contract's code and

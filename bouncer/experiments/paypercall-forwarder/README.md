@@ -1,11 +1,11 @@
 # Experimental PayPerCall forwarder — do not deploy
 
-This is **local research code**, not a production integration or an approval to
-spend. It is unaudited, has not run in the new nearcore scenario, has not been
-run against PayPerCall or Circle, and has no owner setup or payment runner.
-No independent provider delivery has been shown. The last successful
-[nearcore run](https://github.com/Greatmujey/Bouncer/actions/runs/41469462871)
-exercised the **different** two-vault refund-boundary scenario, not this bridge.
+This is **experimental code**, not a production integration or an approval to
+spend. It is unaudited, has not run against the real PayPerCall contract or
+Circle, and has no owner setup or payment runner. No independent provider
+delivery has been shown. The [isolated nearcore run](https://github.com/Greatmujey/Bouncer/actions/runs/41474554586)
+exercised this bridge using V11, an example mock FT and a tiny escrow stand-in;
+the stand-in is not PayPerCall and the mock token is not Circle.
 
 ## The hypothesis
 
@@ -80,11 +80,15 @@ recovery budget need actual runtime and token checks.
   detects it. An optional **2021-era `near-mock-vm`/VMLogic** cross-check
   independently records the generated calls. It does not model current nearcore
   gas, access-key admission, receipt execution, consensus, or token semantics.
-- A new disposable nearcore scenario has been **written but not run**. It uses
-  an example mock FT and a tiny hard-coded 40/60 stand-in contract; even if it
-  passes, it is **not** PayPerCall, Circle or seller fulfillment. A separate
-  authorized branch push/CI run is required to execute it in the available
-  environment. Do not report it as passing beforehand.
+- [Nearcore run 41474554586](https://github.com/Greatmujey/Bouncer/actions/runs/41474554586)
+  passed at commit `81faeb6dafefb848dd18b03a79656ca416952336`. In a disposable
+  protocol-88 chain, it deployed keyless V11 and generated forwarder contracts,
+  installed distinct receiver-restricted keys, checked the 1-yocto owner guard
+  and replay rejection, and exercised a 40-unit immediate return plus a later
+  60-unit plain refund routed through the forwarder to V11. The final mock-token
+  balance and tracked ledger were 100, with 100 conservative rolling spend.
+  The 40/60 escrow is a hard-coded stand-in; this is **not** PayPerCall, Circle
+  or seller fulfillment, and it did not test actual escrow claim behavior.
 
 ## Unresolved risks and prerequisites
 

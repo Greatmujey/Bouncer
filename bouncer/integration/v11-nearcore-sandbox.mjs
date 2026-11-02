@@ -17,6 +17,7 @@ import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -59,7 +60,7 @@ async function freeLoopbackPort() {
   return port;
 }
 
-async function stopChild(child) {
+export async function stopSandboxChild(child) {
   if (!child || child.exitCode !== null || child.signalCode !== null) return;
   const exited = once(child, 'exit').catch(() => {});
   child.kill('SIGTERM');
@@ -70,7 +71,7 @@ async function stopChild(child) {
   }
 }
 
-async function startSandbox(binaryPath, directory, tokenPublicKey) {
+export async function startSandbox(binaryPath, directory, tokenPublicKey) {
   const version = spawnSync(binaryPath, ['--version'], { encoding: 'utf8', timeout: 15_000 });
   assert.equal(version.status, 0, 'sandbox binary did not report its version');
   const versionText = `${version.stdout ?? ''} ${version.stderr ?? ''}`.trim();
@@ -129,7 +130,7 @@ async function startSandbox(binaryPath, directory, tokenPublicKey) {
     assert.equal(protocol.protocol_version, 88, 'this harness is pinned to protocol 88');
     return { provider, rpcUrl, child, rootKey, versionText, protocol: protocol.protocol_version };
   } catch (error) {
-    await stopChild(child);
+    await stopSandboxChild(child);
     throw error;
   }
 }
@@ -471,9 +472,11 @@ async function run() {
   } finally {
     journal?.close();
     journalKey?.fill(0);
-    if (sandbox) await stopChild(sandbox.child);
+    if (sandbox) await stopSandboxChild(sandbox.child);
     fs.rmSync(directory, { recursive: true, force: true });
   }
 }
 
-run().catch(error => { console.error('V11 sandbox integration FAILED:', error?.stack ?? String(error)); process.exitCode = 1; });
+if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url) {
+  run().catch(error => { console.error('V11 sandbox integration FAILED:', error?.stack ?? String(error)); process.exitCode = 1; });
+}

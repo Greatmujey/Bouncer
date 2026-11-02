@@ -1,11 +1,19 @@
 # V11 nearcore sandbox validation (opt-in)
 
-**New, not yet run:** A separate [experimental forwarder](../experiments/paypercall-forwarder/README.md)
-scenario has been prepared for a future isolated nearcore run. Its current
-passing tests use synthetic hosts and an old mock VM, not nearcore, Circle,
-PayPerCall or seller fulfillment. The earlier passing run below does not cover it.
+**Latest forwarder result:** [run 41474554586](https://github.com/Greatmujey/Bouncer/actions/runs/41474554586)
+at commit `81faeb6dafefb848dd18b03a79656ca416952336` passed the separate
+[experimental forwarder](../experiments/paypercall-forwarder/README.md) scenario
+on disposable nearcore. The generated keyless forwarder, V11 vault, two distinct
+restricted keys, mock FT and a hard-coded 40/60 escrow stand-in were exercised.
+Partial and later plain refunds returned 100 mock tokens to the vault's actual
+and tracked balances, while the prior 100-unit spend remained conservative;
+1-yocto guard and replay assertions also passed. The stand-in was not PayPerCall,
+the mock FT was not Circle, and no seller delivery was tested. GitHub reports
+successful job/steps; this shell could not read the redirected detailed logs.
+[Normal CI](https://github.com/Greatmujey/Bouncer/actions/runs/41474554646) and
+the Vercel branch status passed as well.
 
-**Latest passing result:** [run 41469462871](https://github.com/Greatmujey/Bouncer/actions/runs/41469462871)
+**Previous escrow-boundary result:** [run 41469462871](https://github.com/Greatmujey/Bouncer/actions/runs/41469462871)
 at commit `3dba62a45a1758de7858bb1979fc29f880f1f2af` passed the prior
 checks and the new escrow-boundary scenario on disposable nearcore. Two keyless
 V11 vaults and the example mock FT stood in for a buyer and a receiver; no

@@ -1,0 +1,95 @@
+# Optional disposable-chain integration against source-built PayPerCall.
+# No live account, Circle token, seller endpoint, project secret or real money.
+name: V11 upstream PayPerCall isolated sandbox
+
+on:
+  push:
+    branches: ['arena/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  upstream-escrow:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[paypercall-upstream-sandbox]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: bouncer
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+      - name: Install existing lockfile and exercise offline guards
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          node --test tests/v11-upstream-paypercall-sandbox.test.mjs tests/v11-sandbox-harness.test.mjs tests/v11-sandbox-setup-rpc.test.mjs
+      - name: Recover and verify pinned source inputs, V11 and mock FT
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/paypercall-src/src"
+          fetch_blob() {
+            local repo="$1" blob="$2" target="$3"
+            gh api "repos/$repo/git/blobs/$blob" --jq .content | base64 --decode > "$target"
+            test "$(git hash-object "$target")" = "$blob"
+          }
+          # All three source files and the lockfile are exact Git blobs from
+          # devx-agent/near-paypercall@9159811bc6443ce29ae3c32482d0808f094caa87.
+          fetch_blob devx-agent/near-paypercall a03d97c7b6ae3ba20dfd996566cd7953900bed0e "$RUNNER_TEMP/paypercall-src/Cargo.toml"
+          fetch_blob devx-agent/near-paypercall ce37b2c83399b800dae3b324e45e725532c2c44c "$RUNNER_TEMP/paypercall-src/Cargo.lock"
+          fetch_blob devx-agent/near-paypercall 8d4ecd06d1c9e40bd23a0bd19cf14d20af7c1712 "$RUNNER_TEMP/paypercall-src/src/lib.rs"
+          fetch_blob devx-agent/near-paypercall 9025164a9e62862b1eb8746a237f59d6abe3c0e7 "$RUNNER_TEMP/paypercall-src/src/tests.rs"
+          fetch_blob Greatmujey/Bouncer c67c70401dc733a0905e79258cc8169c2e6b5210 "$RUNNER_TEMP/bouncer-v11.wasm"
+          fetch_blob near/nearcore 3ab410d723c8029e70993b0829a17ddd52d8b135 "$RUNNER_TEMP/mock-ft.wasm"
+          echo '1acf931c07a530257999478c121193863ecf7201d357812a44b4d61c16a77921  '"$RUNNER_TEMP/bouncer-v11.wasm" | sha256sum -c -
+          echo 'b10ed11ac6d60698c6809ef7e96b578f2e5768354fe4b15d044843c2b6ab8a04  '"$RUNNER_TEMP/mock-ft.wasm" | sha256sum -c -
+      - name: Build only the pinned escrow source and lockfile
+        run: |
+          set -euo pipefail
+          rustc --version
+          cargo --version
+          rustup target add wasm32-unknown-unknown
+          # The generated hash identifies this local compiler output only. It
+          # does not prove reproducibility or deployed contract identity.
+          if ! cargo build --locked --release --target wasm32-unknown-unknown --lib \
+              --manifest-path "$RUNNER_TEMP/paypercall-src/Cargo.toml" > "$RUNNER_TEMP/escrow-build.log" 2>&1; then
+            python3 -c 'import os; s=open(os.environ["RUNNER_TEMP"]+"/escrow-build.log").read()[-5000:]; print("::error title=Source build failed::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
+            exit 1
+          fi
+          cp "$RUNNER_TEMP/paypercall-src/target/wasm32-unknown-unknown/release/paypercall.wasm" "$RUNNER_TEMP/paypercall.wasm"
+          sha256sum "$RUNNER_TEMP/paypercall.wasm" | tee "$RUNNER_TEMP/paypercall.sha256"
+      - name: Download and verify the isolated nearcore executable
+        run: |
+          set -euo pipefail
+          curl --fail --show-error --silent --location --proto '=https' --tlsv1.2 --max-time 180 --retry 2 --max-filesize 419430400 \
+            'https://s3-us-west-1.amazonaws.com/build.nearprotocol.com/nearcore/Linux-x86_64/2.14.0/near-sandbox.tar.gz' \
+            --output "$RUNNER_TEMP/near-sandbox.tar.gz"
+          python3 scripts/extract-pinned-near-sandbox.py "$RUNNER_TEMP/near-sandbox.tar.gz" "$RUNNER_TEMP/near-sandbox"
+      - name: Run source-built escrow, V11 and mock FT on loopback only
+        env:
+          BOUNCER_V11_WASM_PATH: ${{ runner.temp }}/bouncer-v11.wasm
+          BOUNCER_MOCK_FT_WASM_PATH: ${{ runner.temp }}/mock-ft.wasm
+          BOUNCER_SANDBOX_BIN: ${{ runner.temp }}/near-sandbox
+          BOUNCER_PAYPERCALL_FIXTURE_WASM: ${{ runner.temp }}/paypercall.wasm
+        run: |
+          set -euo pipefail
+          ulimit -Sn 65535
+          export BOUNCER_PAYPERCALL_FIXTURE_SHA256="$(cut -d' ' -f1 "$RUNNER_TEMP/paypercall.sha256")"
+          if ! node integration/v11-paypercall-upstream-sandbox.mjs > "$RUNNER_TEMP/upstream-result.json" 2> "$RUNNER_TEMP/upstream-error.log"; then
+            python3 -c 'import os; s=open(os.environ["RUNNER_TEMP"]+"/upstream-error.log").read()[-5000:]; print("::error title=Isolated scenario failed::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
+            exit 1
+          fi
+          {
+            echo '## Source-built PayPerCall on isolated nearcore'
+            echo 'Source and lockfile are pinned, but the compiler output is not a reproducible build or evidence of currently deployed code. The token is a nearcore example FT, not Circle. The seller and refund fault are local simulations; no independent fulfillment.'
+            echo '```json'
+            cat "$RUNNER_TEMP/upstream-result.json"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
