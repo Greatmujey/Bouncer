@@ -14,6 +14,9 @@ import { verifyVaultBootstrapReceipt } from '../agent/keyless-vault-bootstrap-ru
 import { newTestnetVaultId, V11_EXPECTED_BYTES, V11_EXPECTED_SHA256, VAULT_NATIVE_FUNDING_YOCTO } from '../agent/keyless-vault-bootstrap-readiness.mjs';
 import { readPinnedJsonView } from '../agent/read-only-near-rpc.mjs';
 import { CIRCLE_TESTNET_USDC as CIRCLE } from '../scripts/circle-testnet-setup.mjs';
+import { inspectVaultCircleFunding } from '../agent/keyless-vault-circle-readiness.mjs';
+import { signVaultCircle } from '../agent/keyless-vault-circle.mjs';
+import { broadcastVaultCircleOnce, reconcileVaultCircle } from '../agent/keyless-vault-circle-runner.mjs';
 
 const { transactions: tx } = nearApi;
 const OWNER = 'bouncer-owner-aaaaaaaaaaaaaaaaaaaaaaaa.testnet', NEAR = 10n ** 24n;
@@ -21,9 +24,22 @@ const checks = Object.fromEntries(['new_direct_child_absent', 'owner_and_circle_
   'testnet_protocol_floor', 'selected_v11_wasm_features', 'owner_native_estimate', 'vault_native_estimate'].map(k => [k, 'PASS']));
 const features = { global_contract_host_fns: true, reftypes_bulk_memory: true, gas_key_host_fns: true, universal_accounts: true };
 
-export async function exerciseSandboxBootstrapRunner({ rpcUrl, root, wasm, directory, checkpoint }) {
+// The genesis token is a pinned example FT, not Circle. Override ONLY its
+// metadata view so the production Circle-specific preflight can be exercised
+// on this isolated chain; all account state, transactions and receipts remain
+// real local nearcore results. Never import this adapter in production.
+class SandboxMockCircleRpc extends SandboxSetupRpc {
+  async callFunctionRaw(contract, method, args, reference) {
+    const actual = await super.callFunctionRaw(contract, method, args, reference);
+    if (contract !== CIRCLE || method !== 'ft_metadata') return actual;
+    const metadata = JSON.parse(Buffer.from(actual.result).toString('utf8'));
+    return { ...actual, result: [...Buffer.from(JSON.stringify({ ...metadata, symbol: 'USDC', decimals: 6 }))] };
+  }
+}
+
+export async function exerciseSandboxBootstrapRunner({ rpcUrl, root, sourceFtOwner, wasm, directory, checkpoint }) {
   return withSandboxOnlyFetch(rpcUrl, async () => {
-    const ownerKey = nearApi.KeyPair.fromRandom('ed25519'), publicKey = String(ownerKey.getPublicKey()), rpc = new SandboxSetupRpc(rpcUrl);
+    const ownerKey = nearApi.KeyPair.fromRandom('ed25519'), publicKey = String(ownerKey.getPublicKey()), rpc = new SandboxMockCircleRpc(rpcUrl);
     const plan = { version: 1, purpose: 'new-bouncer-testnet-owner', network: 'testnet', account_id: OWNER, public_key: publicKey };
     const vault = newTestnetVaultId(plan);
     const created = await root.signAndSendTransaction({ receiverId: OWNER, actions: [tx.createAccount(), tx.transfer(100n * NEAR),
@@ -67,10 +83,46 @@ export async function exerciseSandboxBootstrapRunner({ rpcUrl, root, wasm, direc
     assert.equal(actualOwner, OWNER); assert.equal(version, 'bouncer-agent-v11-exact-ft-testnet');
     assert.equal(rpc.transportCalls, 1);
     checkpoint('generic fixed 6-NEAR keyless deployment recovered its original receipt after a simulated lost acknowledgement');
-    return { scope: 'disposable local nearcore only; Circle prerequisite fields are synthetic and no token was moved',
+
+    // Real mock-FT balance/registration on the disposable chain; Circle
+    // metadata is synthetic. The source account belongs only to this test.
+    const bounds = await rpc.callFunctionRaw(CIRCLE, 'storage_balance_bounds', {}, { finality: 'final' });
+    const min = JSON.parse(Buffer.from(bounds.result).toString('utf8')).min;
+    const fundOwner = await sourceFtOwner.signAndSendTransaction({ receiverId: CIRCLE, actions: [
+      tx.functionCall('storage_deposit', { account_id: OWNER, registration_only: true }, 50n * 10n ** 12n, BigInt(min)),
+      tx.functionCall('ft_transfer', { receiver_id: OWNER, amount: '6907' }, 50n * 10n ** 12n, 1n),
+    ], waitUntil: 'FINAL', throwOnFailure: false });
+    requireFinalSuccess(fundOwner, 'fund synthetic owner with mock FT');
+    const initial = await inspectVaultCircleFunding({ plan, provider: rpc });
+    assert.equal(initial.register_eligible, true); assert.equal(initial.owner_circle_atoms, '6907');
+    async function fence(kind, signed) {
+      const file = path.join(directory, `sandbox-circle-vault-${kind}-original.json`);
+      syncWrite(file, JSON.stringify(signed) + '\n', 'wx', 0o600);
+      return record => record.tx_hash === signed.tx_hash && record.kind === kind && fs.existsSync(file);
+    }
+    const registration = await signVaultCircle({ plan, snapshot: initial, kind: 'register', amountAtoms: '6907', keyPair: ownerKey });
+    const registered = await broadcastVaultCircleOnce({ plan, envelope: registration, provider: rpc,
+      persistAttempt: await fence('register', registration) });
+    assert.equal(registered.status, 'VAULT_CIRCLE_REGISTERED_AT_FINAL');
+    const ready = await inspectVaultCircleFunding({ plan, provider: rpc });
+    assert.equal(ready.fund_eligible, true); assert.equal(ready.vault_actual_circle_atoms, '0');
+    const funding = await signVaultCircle({ plan, snapshot: ready, kind: 'fund', amountAtoms: '6907', keyPair: ownerKey });
+    rpc.loseNextAcknowledgementForTest();
+    await assert.rejects(broadcastVaultCircleOnce({ plan, envelope: funding, provider: rpc,
+      persistAttempt: await fence('fund', funding) }), /never resend/);
+    assert.equal(rpc.transportCalls, 3);
+    const funded = await reconcileVaultCircle({ plan, envelope: funding, provider: rpc });
+    assert.equal(funded.status, 'VAULT_FUNDED_CIRCLE_TEST_USDC_AT_FINAL');
+    assert.equal(funded.state.vault_actual_circle_atoms, '6907');
+    assert.equal(funded.state.vault_tracked_circle_atoms, '6907');
+    assert.equal(funded.state.owner_circle_atoms, '0'); assert.equal(rpc.transportCalls, 3);
+    checkpoint('mock-FT vault registration and full deposit recovered the original funding receipt after a simulated lost acknowledgement');
+    return { scope: 'disposable local nearcore and mock FT only; Circle metadata was synthesized; not testnet or seller delivery',
       sandbox_transaction_hash: envelope.tx_hash, original_receipt_id: evidence.root_receipt_id,
-      original_hash_journaled_before_send: true, lost_ack_recovered_without_resend: true, transport_calls: 1,
+      original_hash_journaled_before_send: true, lost_ack_recovered_without_resend: true, transport_calls: 3,
       recovered_v11_code_hash: accountAfter.code_hash, vault_key_count: vaultKeys.keys.length,
-      owner_and_version_checked: true, testnet_deployment: false, circle_funding: false, seller_contacted: false };
+      owner_and_version_checked: true, mock_ft_vault_registered: true, mock_ft_vault_actual_atoms: funded.state.vault_actual_circle_atoms,
+      mock_ft_vault_tracked_atoms: funded.state.vault_tracked_circle_atoms, mock_ft_funding_original_hash: funding.tx_hash,
+      mock_ft_funding_lost_ack_recovered_without_resend: true, testnet_deployment: false, circle_funding: false, seller_contacted: false };
   });
 }

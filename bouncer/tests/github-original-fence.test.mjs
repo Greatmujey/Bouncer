@@ -27,5 +27,12 @@ test('changed, expired, oversized, wrong-branch or unavailable fences prevent a 
   }
   assert.equal(await githubOriginalFence({ ...args, fetchImpl: async () => new Response('', { status: 404 }) }), false);
   await assert.rejects(githubOriginalFence({ ...args, digest: 'wrong', fetchImpl: async () => response(metadata()) }), /invalid original-hash/);
+  await assert.rejects(githubOriginalFence({ ...args, prefix: 'unrelated', fetchImpl: async () => response(metadata()) }), /invalid original-hash/);
+  for (const kind of ['register', 'fund']) {
+    const prefix = `vault-circle-v2-${kind}-fence`, m = metadata(); m.name = `${prefix}-5678-${args.digest}`;
+    assert.equal(await githubOriginalFence({ ...args, prefix, fetchImpl: async () => response(m) }), true);
+    assert.equal(await githubOriginalFence({ ...args, prefix: `vault-circle-v2-${kind === 'fund' ? 'register' : 'fund'}-fence`,
+      fetchImpl: async () => response(m) }), false);
+  }
   await assert.rejects(githubOriginalFence({ ...args, fetchImpl: async () => new Response('{') }));
 });

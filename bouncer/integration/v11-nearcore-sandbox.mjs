@@ -444,8 +444,8 @@ async function run() {
 
     // A separate newly generated test owner exercises the generic fixed
     // deployment, original receipt verifier and lost-response recovery. Its
-    // Circle prerequisite fields are synthetic; no Circle transfer is made.
-    const bootstrapRunnerEvidence = await exerciseSandboxBootstrapRunner({ rpcUrl: sandbox.rpcUrl, root, wasm, directory, checkpoint });
+    // Circle metadata is synthetic; only disposable mock-FT tokens move.
+    const bootstrapRunnerEvidence = await exerciseSandboxBootstrapRunner({ rpcUrl: sandbox.rpcUrl, root, sourceFtOwner: owner, wasm, directory, checkpoint });
     assertSandboxStatus(await provider.status());
     const evidence = {
       scope: 'ISOLATED LOCAL SANDBOX ONLY: mock FT, fake balances and no seller service; not a testnet deployment, audit or fulfillment proof',
