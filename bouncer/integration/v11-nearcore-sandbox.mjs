@@ -400,7 +400,7 @@ async function run() {
     // Separate local receiver-contract experiment: not PayPerCall, not a real
     // seller. Compare a later plain FT return with a transfer-call callback.
     const escrowBoundaryEvidence = await exerciseSandboxEscrowBoundary({ rpcUrl: sandbox.rpcUrl,
-      root, tokenOwner: owner, wasm, storageMin: bounds.min, checkpoint });
+      root, tokenOwner: owner, wasm, storageMin: bounds.min, checkpoint, exerciseRunner:true });
     // This next scenario uses an experimental generated bridge and a tiny
     // stand-in, not the actual PayPerCall escrow or a provider. It must pass
     // independently before it can be described as nearcore evidence.

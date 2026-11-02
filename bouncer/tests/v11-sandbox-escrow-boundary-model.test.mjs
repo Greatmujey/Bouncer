@@ -25,6 +25,7 @@ for (const callbackOnPlain of [false, true]) {
         const result = await operation;
         assert.match(result.scope, /NOT PayPerCall or Circle/);
         assert.equal(result.locked_exact_policy_rejected_ft_call, true);
+        assert.equal(result.v11_runner_first_payment_and_original_hash_recovery, false, 'synthetic RPC does not model full receipt graphs');
         assert.equal(result.unlocked_route_repeated_within_daily_budget, true);
         assert.equal(result.plain_return_vault_ledger_delta, '0');
         assert.equal(result.callback_return_vault_ledger_delta, '100');
