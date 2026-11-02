@@ -12,7 +12,7 @@ globalThis.fetch = async (url, options) => {
   if (request.method === 'status') result = { chain_id: config.mainnet ? 'mainnet' : 'testnet' };
   else if (request.method === 'block') result = { header: { hash: config.block, timestamp_nanosec: String(BigInt(Date.now()) * 1_000_000n) } };
   else if (request.method === 'EXPERIMENTAL_protocol_config' && p.block_id === config.block) {
-    result = { chain_id: 'testnet', runtime_config: { storage_amount_per_byte: '10000000000000000000' } };
+    result = { chain_id: 'testnet', protocol_version: 88, runtime_config: { storage_amount_per_byte: '10000000000000000000' } };
   } else if (request.method === 'query' && p.block_id === config.block) {
     if (p.request_type === 'view_account' && p.account_id === config.goal.vault) {
       if (config.occupied) result = { block_hash: config.block, amount: '1', locked: '0', storage_usage: 0 };

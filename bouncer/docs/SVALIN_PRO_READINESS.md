@@ -115,14 +115,65 @@ ambiguity, not a real payment or an observation of the deployed seller.
   journal **and its separate key**, including later updates.
 - `agent/svalin-setup-preflight.mjs` assesses the **uncreated** vault and
   owner at one fresh, pinned FINAL testnet block. It checks the owner's full
-  access key, an unused agent key, structured evidence that the direct child
-  does not exist, Circle registration bounds and owner/vault/seller
-  registrations, and the owner's test-USDC balance and deficit. It estimates
+  access key and safely represented nonce, an unused agent key, structured
+  evidence that the direct child does not exist, Circle registration bounds
+  and owner/vault/seller registrations, and the owner's test-USDC balance and
+  deficit. It estimates
   native storage and a reserve, but these estimates are not guarantees of gas
   or future storage. It reports unavailable and mismatched views as blocked or
   unknown; it never signs, sends, touches a journal or contacts the seller.
   A passing indication is not a code review, backup, owner consent or permission
   to broadcast. It has only been exercised against mocked RPC responses.
+- `agent/svalin-setup-stage-preflight.mjs` adds a **read-only library** for each
+  next setup stage and the post-funding profile. It checks the original encrypted
+  journal before and after one fresh pinned FINAL snapshot: all prior original
+  receipt records must match, and the requested stage must normally be
+  unrecorded. An exact pending hash may be supplied **only for a read-only
+  recheck**; this never grants permission to send or retry it. Later snapshots
+  check the owner's full-access key and safely represented nonce, reviewed
+  keyless vault/code/owner, policy lock and agent grant, exact restricted-key
+  permission, token registration and bounds, and stage-appropriate balances.
+  The post-funding profile requires matching tracked and token balances. Before funding, V11's specific `check` failure for an
+  empty balance is used as a behavior-dependent indication that the expected
+  payee passes earlier checks; it cannot enumerate all payees or agent grants.
+  Neither matching a journal nor matching a trusted RPC proves consensus,
+  artifact review, backups, owner consent or future state. A journal can still
+  be erased, restored stale or bypassed. This library signs and sends nothing;
+  its tests use invented receipts and mocked views. An optional integration
+  also executes the hash-pinned V11 bytecode in a synthetic host through those
+  staged checks; it is not nearcore or a real Circle token. The checker itself
+  does not sign or send.
+- `agent/svalin-setup-runner.mjs` and `agent/svalin-setup-rpc.mjs` add an
+  **experimental single-stage coordinator and one-shot testnet transport**.
+  Unlike the read-only checker, these libraries can sign and submit a setup
+  transaction when explicitly invoked by a caller. There is no CLI or automatic
+  multi-stage execution. The coordinator checks a fresh pinned snapshot and
+  full-access nonce, validates the owner signer and exact reviewed bytes, fsyncs
+  the original hash to the encrypted journal, rechecks the stage and nonce,
+  and attempts at most one transport call. It holds the same in-process journal
+  fence as participating payment/session operations throughout, with nested
+  journal helpers sharing only an internal, short-lived scope. Any ambiguous
+  result or post-record failure remains fenced for same-hash read-only recovery;
+  it never retries. A compliant transport repeats the signed-byte, approval and
+  snapshot-freshness checks synchronously immediately before its one HTTP send.
+  The bundled transport checks the reported testnet chain but trusts the
+  selected RPC. A transport-call count is not proof that an HTTP request
+  actually reached the network; an injected transport must independently honor
+  the before-submit guard and one-attempt contract.
+
+  **Not ready for live use:** all coordinator/transport tests use ephemeral keys,
+  fabricated RPC and receipts (including an optional test that signs the exact
+  recovered artifact); no V11 stage has been submitted or independently audited.
+  The explicit per-stage booleans are caller assertions—not evidence of human
+  consent, independent artifact review or a usable backup. Deleted, stale,
+  bypassed or separate journals, concurrent owner-key users, mutable chain state
+  and a dishonest RPC remain outside the guarantee. The original journal and
+  its separate key must be backed up before any specifically approved use and
+  after updates. A keyless V11 vault currently has **no upgrade, account delete
+  or Circle `storage_unregister` method**: the initial storage stake and token
+  registration deposit may remain permanently locked. Independent artifact and
+  execution-path review, real-chain compatibility, a funded owner and explicit
+  authorization are still required.
 - `agent/svalin-pro-readiness.mjs` makes a bounded anonymous offer GET and
   validates a later checkout **offline** against the reviewed monthly
   testnet profile. Drift, mainnet, wrong token/payee, malformed amounts and
@@ -296,7 +347,7 @@ network, real V11 artifact or seller:
 ```sh
 npm run svalin-setup-plan -- --help
 npm run svalin-setup-preflight -- --help
-node --test tests/svalin-setup-plan.test.mjs tests/svalin-setup-evidence.test.mjs tests/svalin-setup-journal.test.mjs tests/svalin-setup-preflight.test.mjs
+node --test tests/journal-operation-scope.test.mjs tests/svalin-setup-plan.test.mjs tests/svalin-setup-evidence.test.mjs tests/svalin-setup-journal.test.mjs tests/svalin-setup-preflight.test.mjs tests/svalin-setup-stage-preflight.test.mjs tests/pinned-access-key-nonce.test.mjs tests/svalin-setup-runner.test.mjs tests/svalin-setup-rpc.test.mjs
 ```
 
 A real plan requires a **public** Svalin goal, a separately obtained and
@@ -337,9 +388,10 @@ It does not check on-chain key permissions, nonce availability, block freshness
 or consent. Signed bytes must be protected. `svalin-setup-journal.mjs` can
 initialize an explicitly new original manifest and record that verified hash in
 an encrypted `FileJournal`, but this alone does not authorize or send anything.
-A future executor would still need to recheck the exact signed bytes and fresh
-prerequisites at any separately approved broadcast. To inspect a supplied result later,
-`inspectSvalinSetupAttempt` takes `plan`, `trustedReviewHash`,
+The separate experimental coordinator rechecks signed bytes and fresh
+prerequisites, but has only synthetic tests and is not yet approved for live
+use. To inspect a supplied result later, `inspectSvalinSetupAttempt` takes
+`plan`, `trustedReviewHash`,
 `trustedOriginalHash`, `trustedOwnerPublicKey`, `attempt` and `result`. These
 anchors must come from the protected original record, not from an untrusted
 replacement result. The library reconstructs the constrained plan and matches
@@ -366,20 +418,51 @@ hash; it did not establish an independent build or retrieve the binary here.
 The old private-only annotation exporter cannot run while the repository is
 public and must not be used for credentials or private data.
 
-An **unrun, synthetic-tested** alternative, `.github/workflows/v11-existing-artifact-bridge.yml`,
-is narrowly gated to the first creation push of the current session branch in
-this public repository with an explicit opt-in marker. It downloads the already
-existing artifact `13105539480`, checks the archive and WASM size and hashes,
-and creates only an unreferenced Git blob, not a commit or branch change. The
-GitHub credential is sent only to the API, not the signed storage host. The
-workflow requires separate approval before the push: normal CI will also run,
-and a Vercel preview may use its separate allowance. A small non-secret,
-unreferenced Git blob was created and retrieved successfully through the
-GitHub API without changing a branch; this checks the basic round trip, not
-this workflow or the actual V11 artifact. If the blob POST result is unknown,
-check the expected content-derived blob ID before considering any retry. The
-bridge has not yet been exercised live; integrity checks do not authorize
-deployment, registration, seller contact or payment.
+With the owner's approval, the public first-push workflow
+`.github/workflows/v11-existing-artifact-bridge.yml` ran once as
+`41371637056` and copied existing artifact `13105539480` into the unreferenced
+Git blob `c67c70401dc733a0905e79258cc8169c2e6b5210`. The workflow checked the
+archive and WASM size and hashes before its one blob POST; it did not deploy,
+sign, fund or contact a seller. The GitHub credential was restricted to the
+GitHub API, not the signed storage host. The resulting blob was separately
+retrieved through the GitHub API and independently checked: 536,325 bytes,
+Git blob SHA-1 `c67c70401dc733a0905e79258cc8169c2e6b5210`, and WASM SHA-256
+`1acf931c07a530257999478c121193863ecf7201d357812a44b4d61c16a77921`.
+The accompanying normal CI run `41371636589` passed and its new build reported
+the same WASM hash. The blob is **unreferenced** and may be garbage-collected;
+the original Actions artifact expires on 30 January 2027. Preserve a verified
+copy separately. Repeated builds from the same workflow are not an independent
+source-to-binary review, and transport integrity does not authorize any deployment.
+
+The optional `tests/v11-bytecode-offline.test.mjs` loads only that exact hashed
+binary and executes selected methods in a deliberately incomplete synthetic
+host. It checks the 1-yocto owner guard, a single consumed intent and mocked
+success/failure callbacks, and uses those bytes in an unsigned synthetic setup
+review. It is not nearcore and does not establish gas, access-key, receipt, FT,
+consensus or deployed-chain behavior. Run it with
+`BOUNCER_V11_WASM_PATH` set to a local verified copy; without that input it
+skips rather than fetching or trusting an arbitrary artifact.
+
+A separate [static compatibility indication](../evidence/v11-static-review-20261102/README.md)
+compares all 41 imported function names and signatures to pinned nearcore
+2.14.0 declarations; none differed. WABT 1.0.39 also validated the artifact
+with SIMD and multi-value disabled, and observed a bulk-memory `memory.copy`.
+Selected nearcore config diffs enable bulk memory at protocol 84, gas-key host
+functions at 85 and the imported universal-accounts host function at 88. The
+static review does not execute nearcore, verify all limits, attest deployed
+network software, prove source-to-binary provenance or constitute an audit.
+
+**Runtime-version warning:** this recovered binary imports
+`env.promise_batch_action_universal_state_init`; nearcore gates that host
+function behind `UniversalAccounts` at [protocol 88](https://github.com/near/nearcore/blob/2.14.0/core/primitives-core/src/version.rs).
+A read-only status response at `2026-11-02T01:38:18Z` reported testnet at 88,
+while mainnet reported 86. The observed testnet node reported 2.14.0-rc.5,
+not the 2.14.0 source commit compared above. These observations can change and
+do not prove a working deployment: the binary is **not usable on a protocol-86 chain**, even
+if this imported function is never deliberately called. The setup preflight
+now blocks a missing, malformed or less-than-88 pinned testnet protocol
+version; this is a necessary floor, not validation of every import, WASM
+feature or future artifact. Recheck a trusted fresh RPC before any action.
 
 The Rust contract has no tracked Cargo lockfile, and CI selects a stable
 toolchain and installs Binaryen rather than pinning a complete reproducible

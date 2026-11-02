@@ -39,7 +39,7 @@ function fixture() {
     agentGasAllowanceYocto: '100000000000000000000000', vaultTokenStorageDepositYocto: REG });
   const state = {
     network: 'testnet', block: { header: { hash: BLOCK, timestamp_nanosec: String(BigInt(NOW) * 1_000_000n) } },
-    protocol: { chain_id: 'testnet', runtime_config: { storage_amount_per_byte: COST } },
+    protocol: { chain_id: 'testnet', protocol_version: 88, runtime_config: { storage_amount_per_byte: COST } },
     owner: { block_hash: BLOCK, amount: 20n * 10n ** 24n, storage_usage: 10_000 },
     ownerKey: { block_hash: BLOCK, nonce: 5n, permission: 'FullAccess' },
     keys: { block_hash: BLOCK, keys: [{ public_key: ownerKey, access_key: { permission: 'FullAccess' } }] },
@@ -75,6 +75,10 @@ test('pre-creation snapshot checks owner, absence, storage, registration and fun
   assert.deepEqual(result.blockers, []); assert.equal(Object.values(result.checks).every(x => x === 'PASS'), true);
   assert.equal(result.review_sha256, f.plan.review.review_sha256); assert.equal(result.network, 'testnet');
   assert.equal(result.reviewed_token_registration_yocto, REG); assert.equal(result.required_test_usdc_atoms, '5009999');
+  assert.equal(result.observed_protocol_version, 88);
+  assert.equal(result.observed_owner_nonce, '5');
+  assert.equal(result.v11_minimum_protocol_version, 88);
+  assert.equal(result.runtime_linking_and_all_host_imports_verified, false);
   assert.equal(result.observed_token_registration_min_yocto, REG);
   assert.equal(result.observed_owner_test_usdc_atoms, '5009999'); assert.equal(result.missing_test_usdc_atoms, '0');
   assert.ok(BigInt(result.estimated_vault_minimum_yocto) < 7n * 10n ** 24n);
@@ -96,8 +100,16 @@ test('pre-creation readiness fails closed on wrong authority, occupied accounts,
   const cases = [
     ['testnet_protocol_and_storage_cost', s => { s.protocol.chain_id = 'mainnet'; }],
     ['testnet_protocol_and_storage_cost', s => { s.protocol.runtime_config.storage_amount_per_byte = '0'; }],
+    ['v11_protocol_floor', s => { s.protocol.protocol_version = 87; }],
+    ['v11_protocol_floor', s => { s.protocol.protocol_version = '88'; }],
+    ['v11_protocol_floor', s => { delete s.protocol.protocol_version; }],
+    ['v11_protocol_floor', s => { s.protocol.protocol_version = 88.5; }],
     ['owner_full_access_key', s => { s.ownerKey.permission = { FunctionCall: {} }; }],
     ['owner_full_access_key', s => { s.ownerKey.block_hash = OTHER_BLOCK; }],
+    ['owner_nonce_safely_represented', s => { s.ownerKey.nonce = -1n; }],
+    ['owner_nonce_safely_represented', s => { s.ownerKey.nonce = BigInt(Number.MAX_SAFE_INTEGER); }],
+    ['owner_nonce_safely_represented', s => { s.ownerKey.nonce = 2.5; }],
+    ['owner_nonce_safely_represented', s => { delete s.ownerKey.nonce; }],
     ['agent_key_not_already_on_owner', (s, f) => { s.keys.keys.push({ public_key: f.agentKey, access_key: { permission: 'FullAccess' } }); }],
     ['agent_key_not_already_on_owner', s => { s.keys.keys = []; }],
     ['agent_key_not_already_on_owner', s => { s.keys.keys.push(s.keys.keys[0]); }],
@@ -130,7 +142,8 @@ test('pre-creation readiness fails closed on wrong authority, occupied accounts,
 test('view failures are unknown, sanitized and cannot authorize anything', async () => {
   for (const [failure, check] of [['presence', 'new_direct_child_absent'], ['bounds', 'circle_registration_min_matches_review'],
     ['ownerUsdc', 'owner_test_usdc_covers_funding'], ['sellerRegistration', 'seller_registered_for_circle'],
-    ['protocol', 'testnet_protocol_and_storage_cost'], ['keys', 'agent_key_not_already_on_owner']]) {
+    ['protocol', 'testnet_protocol_and_storage_cost'], ['protocol', 'v11_protocol_floor'],
+    ['keys', 'agent_key_not_already_on_owner']]) {
     const f = fixture(); f.state.failures.add(failure);
     const result = await inspectSvalinSetupPrerequisites(f.args);
     assert.equal(result.checks[check], 'UNKNOWN', check); assert.equal(result.execution_authorized, false);
