@@ -64,7 +64,11 @@ jobs:
         run: |
           set -euo pipefail
           ulimit -Sn 65535
-          node integration/v11-nearcore-sandbox.mjs | tee "$RUNNER_TEMP/v11-sandbox-result.json"
+          if ! node integration/v11-nearcore-sandbox.mjs > "$RUNNER_TEMP/v11-sandbox-result.json" 2> "$RUNNER_TEMP/v11-sandbox-error.log"; then
+            python3 -c 'import os; s=open(os.environ["RUNNER_TEMP"]+"/v11-sandbox-error.log").read()[-5000:]; print("::error title=Isolated V11 scenario failed::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
+            exit 1
+          fi
+          cat "$RUNNER_TEMP/v11-sandbox-result.json"
           {
             echo '## V11 isolated sandbox result'
             echo 'Only an ephemeral local chain and an upstream example FT were used. This is not testnet, Circle, an audit, or independent seller fulfillment.'

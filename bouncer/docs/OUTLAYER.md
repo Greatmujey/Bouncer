@@ -161,8 +161,11 @@ The FT-call and project runners now recognize the pinned V11 code only after a
 fresh, single-FINAL-block check of its owner, code hash, zero vault keys, a
 finite-allowance **one-method** owner access key, and the relevant exact-intent
 policy and token/payee locks. The funding route, policy, grants and (for a
-project) provider price, version and credit are read from that same block. The
-runners still require the exact owner-pinned terms and original-hash journal;
+project) provider price, version and credit are read from that same block. A
+V11 project preflight also checks that OutLayer reports at least the vault's
+tracked prepaid allowance for the **vault account**, the actual predecessor;
+a deficit blocks spending for reconciliation. Excess provider credit is not
+made spendable automatically. The runners still require the exact owner-pinned terms and original-hash journal;
 settlement is not provider delivery. Older versions keep their existing checks.
 The current replacement Circle agent's two-method key does **not** satisfy
 these runner requirements; provider-specific keys have not been installed.

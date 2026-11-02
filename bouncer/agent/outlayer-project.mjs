@@ -312,7 +312,7 @@ async function runProjectGoalUnlocked({ goal: rawGoal, provider, account, public
   const boundary=version===V11_RESOURCE_VERSION?await inspectV11ResourceBoundary({provider,contract:goal.contract_id,owner:goal.owner_account_id,
     publicKey:String(publicKey),method:'execute_outlayer_project',policyId:p.usd_policy_id,token:p.token,payee:OUTLAYER}):null;
   const view=(account,method,args)=>boundary?boundary.view(account,method,args):provider.callFunction(account,method,args,final);
-  const [route, nativePolicy, usdPolicy, nativeGrant, usdGrant, verdict, credit, usdSpent, configuredToken, pricing, versionInfo] = await Promise.all([
+  const [route, nativePolicy, usdPolicy, nativeGrant, usdGrant, verdict, credit, usdSpent, configuredToken, pricing, versionInfo, providerCredit] = await Promise.all([
     view(goal.contract_id, 'get_outlayer_project', { native_policy_id: goal.native_policy_id }),
     view(goal.contract_id, 'get_policy', { policy_id: goal.native_policy_id }),
     view(goal.contract_id, 'get_policy', { policy_id: p.usd_policy_id }),
@@ -324,10 +324,16 @@ async function runProjectGoalUnlocked({ goal: rawGoal, provider, account, public
     view(OUTLAYER, 'get_payment_token_contract', {}),
     view(OUTLAYER, 'get_project_pricing', { project_id: p.project_id }),
     view(OUTLAYER, 'get_version', { project_id: p.project_id, version_key: p.version_key }),
+    // OutLayer debits the immediate predecessor (the vault), not the owner.
+    // Only V11 makes this extra pinned solvency check; legacy behavior stays intact.
+    boundary?view(OUTLAYER, 'get_user_stablecoin_balance', { account_id: goal.contract_id }):null,
   ]);
   if (!equal(route, goal.route) || nativePolicy?.token !== 'native' || usdPolicy?.token !== p.token || nativeGrant !== true || usdGrant !== true) throw new Error('project route, policies or key grants changed');
   const usd = BigInt(p.attached_usd), max = unsigned(usdPolicy.per_tx_cap, 'prepaid cap'), daily = unsigned(usdPolicy.daily_cap, 'prepaid daily cap');
   const available = unsigned(credit, 'prepaid credit');
+  if (boundary && unsigned(providerCredit, 'provider prepaid credit') < available) {
+    throw new Error('provider prepaid credit is below the vault tracked allowance; reconcile before spending');
+  }
   if (usd > max || (daily > 0n && unsigned(usdSpent, 'prepaid spend') + usd > daily)) {
     log(`[project] BLOCKED ${goal.id}: prepaid cap or rolling budget`); return { status: 'BLOCKED' };
   }
