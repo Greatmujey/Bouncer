@@ -70,19 +70,21 @@ creation, a provider purchase, an audit or proof that a backup was exported.
 
 ### Next: restricted resource agent (not live yet)
 
-The funded vault does **not** yet have a resource policy, agent key, seller
-allowlist or verified provider delivery. The new testnet-only setup planner and
-local encrypted keyring are preparation, not a live provisioning command. Its
-proposed policy is Circle test USDC, 3,000 atoms per transaction and 6,907 per
+The funded vault does **not** yet have a resource policy, installed agent key,
+seller allowlist or verified provider delivery. A separate testnet agent key
+has been generated locally and authenticated from two encrypted copies; it has
+not been installed. The testnet-only setup planner and keyring are preparation,
+not proof of live provisioning. Its proposed policy is Circle test USDC, 3,000
+atoms per transaction and 6,907 per
 rolling day; the separate agent key would only call `execute` and
 `execute_ft_call` on this vault with a limited test-NEAR gas allowance. The
 plan does not add a payee. The owner key remains necessary for policy changes.
 
-Before any live setup, the planner still needs durable original-hash journals,
-strict receipt/state verification, one-shot fences and read-only reconciliation.
-The planned zero-yocto owner call is an expected failure that must be verified
-as the exact vault guard failure, not just an arbitrary rejected transaction.
-The [isolated nearcore run](https://github.com/Greatmujey/Bouncer/actions/runs/41524192299)
-executed the proposed probe, policy and restricted-key actions on a disposable
-mock-token chain; this is not testnet proof. The two local ciphertext copies
-and their colocated wrapping key are not an off-device backup.
+The setup is separately journaled, with original-hash fences, receipt/state
+checks and read-only reconciliation; each live action must be verified before
+proceeding to the next. The planned zero-yocto owner call is an expected failure
+that must be verified as the exact vault guard failure, not just an arbitrary
+rejected transaction. The [isolated nearcore run](https://github.com/Greatmujey/Bouncer/actions/runs/41525285229)
+exercised the one-shot setup and recovery after a simulated lost acknowledgement
+on a disposable mock-token chain; this is not testnet proof. The two local
+ciphertext copies and their colocated wrapping key are not an off-device backup.

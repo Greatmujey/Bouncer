@@ -1,0 +1,15 @@
+#!/usr/bin/env node
+/** Read-only lookup of exactly the original signed hash, never a resend. */
+import crypto from 'node:crypto';
+import { publicResourceAgentInputs } from './resource-agent-v2-common.mjs';
+import { reconcileTestnetResourceAgent } from '../agent/testnet-resource-agent-runner.mjs';
+import { ReadOnlyNearReceiptProvider } from '../agent/read-only-near-receipts.mjs';
+const stage=process.env.BOUNCER_RESOURCE_AGENT_STAGE;
+if(!['guard-probe','configure','install'].includes(stage))throw new Error('fixed resource-agent stage required');
+try{
+ const {owner,agent,anchor,envelope,bytes}=publicResourceAgentInputs(stage);
+ const result=await reconcileTestnetResourceAgent({ownerPlan:owner,agentPlan:agent,envelope,expectedCircleCodeHash:anchor.circle_code_hash,
+  provider:new ReadOnlyNearReceiptProvider('https://rpc.testnet.near.org',{timeoutMs:12_000})});
+ console.log(JSON.stringify({...result,signed_envelope_sha256:crypto.createHash('sha256').update(bytes).digest('hex'),
+  reconciliation_run_id:process.env.GITHUB_RUN_ID??null,reconciliation_commit:process.env.GITHUB_SHA??null},null,2));
+}catch(error){console.error(`Original resource-agent ${stage} reconciliation stopped; do not resend: ${error?.message??'unknown error'}`);process.exitCode=1}
