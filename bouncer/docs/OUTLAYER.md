@@ -155,6 +155,30 @@ See [Coinbase's public endpoint documentation](https://docs.cdp.coinbase.com/coi
 
 ## Separate prepaid FT and priced connector path
 
+### V11 compatibility and present limits
+
+The FT-call and project runners now recognize the pinned V11 code only after a
+fresh, single-FINAL-block check of its owner, code hash, zero vault keys, a
+finite-allowance **one-method** owner access key, and the relevant exact-intent
+policy and token/payee locks. The funding route, policy, grants and (for a
+project) provider price, version and credit are read from that same block. The
+runners still require the exact owner-pinned terms and original-hash journal;
+settlement is not provider delivery. Older versions keep their existing checks.
+The current replacement Circle agent's two-method key does **not** satisfy
+these runner requirements; provider-specific keys have not been installed.
+
+V11 enforces the exact-policy lock on-chain for both methods, and the
+exact-token/payee lock for direct FT calls. **Its prepaid project method does
+not enforce the token/payee lock on-chain.** The runner's additional pair-lock
+check is only a snapshot: it can race, and a signer calling the contract directly
+can bypass it. Do not treat that off-chain check as an on-chain isolation
+primitive. Provider-held credit and refunds also need explicit recovery review:
+a later plain-FT return to the keyless vault does not restore its tracked FT
+ledger. No new OutLayer funding or execution is authorized merely by adding
+runner compatibility; live prices, configured token, deployed code/behavior,
+terms and a safe recovery path still need verification. OutLayer currently uses
+fake `usdc.fakes.testnet`, **not Circle test USDC**.
+
 V7 can fund an owner-pinned OutLayer prepaid balance using `execute_ft_call`,
 then call an owner-pinned project under **separate** native and prepaid-token
 policies. The FT route fixes the token, receiver and exact message, with policy

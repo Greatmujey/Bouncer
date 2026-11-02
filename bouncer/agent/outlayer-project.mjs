@@ -18,6 +18,8 @@ import { isTestnetAccount } from '../shared/account-id.mjs';
 import { signReviewedCall } from './reviewed-transaction.mjs';
 import { verifyOutlayerProbeVrf } from './outlayer-vrf.mjs';
 import { withExclusiveJournalOperation } from './journal-operation.mjs';
+import { inspectV11ResourceBoundary, V11_RESOURCE_VERSION } from './v11-resource-preflight.mjs';
+import { assertFreshFinalBlock } from '../shared/fresh-final-block.mjs';
 
 const { KeyPair, KeyPairSigner } = nearApi;
 const OUTLAYER = 'outlayer.testnet', PROJECT = 'connectors.outlayer.testnet/connector-probe', TOKEN = 'usdc.fakes.testnet';
@@ -301,24 +303,27 @@ async function runProjectGoalUnlocked({ goal: rawGoal, provider, account, public
   const final = { finality: 'final' };
   const [version, owner, access] = await Promise.all([provider.callFunction(goal.contract_id, 'contract_version', {}, final),
     provider.callFunction(goal.contract_id, 'get_owner', {}, final), provider.viewAccessKey(goal.owner_account_id, publicKey, final)]);
-  if (!['bouncer-agent-v7', 'bouncer-agent-v8', 'bouncer-agent-v9'].includes(version) || owner !== goal.owner_account_id) throw new Error('unsupported Bouncer version or unexpected owner');
+  if (!['bouncer-agent-v7', 'bouncer-agent-v8', 'bouncer-agent-v9', V11_RESOURCE_VERSION].includes(version) || owner !== goal.owner_account_id) throw new Error('unsupported Bouncer version or unexpected owner');
   const permission = access?.permission?.FunctionCall;
   if (!permission || permission.receiver_id !== goal.contract_id || !equal(permission.method_names, ['execute_outlayer_project'])) throw new Error('agent key must be scoped ONLY to execute_outlayer_project on this contract');
   const previous = journal?.get(goal.id), hash = fingerprint(goal);
   if (previous && previous.fingerprint !== hash) throw new Error(`${goal.id}: journal does not match the reviewed goal`);
   if (previous) return recoverProjectGoalUnlocked({ goal, provider, journal, publicKey, update: execute, log });
+  const boundary=version===V11_RESOURCE_VERSION?await inspectV11ResourceBoundary({provider,contract:goal.contract_id,owner:goal.owner_account_id,
+    publicKey:String(publicKey),method:'execute_outlayer_project',policyId:p.usd_policy_id,token:p.token,payee:OUTLAYER}):null;
+  const view=(account,method,args)=>boundary?boundary.view(account,method,args):provider.callFunction(account,method,args,final);
   const [route, nativePolicy, usdPolicy, nativeGrant, usdGrant, verdict, credit, usdSpent, configuredToken, pricing, versionInfo] = await Promise.all([
-    provider.callFunction(goal.contract_id, 'get_outlayer_project', { native_policy_id: goal.native_policy_id }, final),
-    provider.callFunction(goal.contract_id, 'get_policy', { policy_id: goal.native_policy_id }, final),
-    provider.callFunction(goal.contract_id, 'get_policy', { policy_id: p.usd_policy_id }, final),
-    provider.callFunction(goal.contract_id, 'is_agent_key_allowed', { policy_id: goal.native_policy_id, public_key: String(publicKey) }, final),
-    provider.callFunction(goal.contract_id, 'is_agent_key_allowed', { policy_id: p.usd_policy_id, public_key: String(publicKey) }, final),
-    provider.callFunction(goal.contract_id, 'check', { policy_id: goal.native_policy_id, payee: OUTLAYER, amount: goal.amount }, final),
-    provider.callFunction(goal.contract_id, 'outlayer_prepaid_balance', { token: p.token }, final),
-    provider.callFunction(goal.contract_id, 'daily_spent', { policy_id: p.usd_policy_id }, final),
-    provider.callFunction(OUTLAYER, 'get_payment_token_contract', {}, final),
-    provider.callFunction(OUTLAYER, 'get_project_pricing', { project_id: p.project_id }, final),
-    provider.callFunction(OUTLAYER, 'get_version', { project_id: p.project_id, version_key: p.version_key }, final),
+    view(goal.contract_id, 'get_outlayer_project', { native_policy_id: goal.native_policy_id }),
+    view(goal.contract_id, 'get_policy', { policy_id: goal.native_policy_id }),
+    view(goal.contract_id, 'get_policy', { policy_id: p.usd_policy_id }),
+    view(goal.contract_id, 'is_agent_key_allowed', { policy_id: goal.native_policy_id, public_key: String(publicKey) }),
+    view(goal.contract_id, 'is_agent_key_allowed', { policy_id: p.usd_policy_id, public_key: String(publicKey) }),
+    view(goal.contract_id, 'check', { policy_id: goal.native_policy_id, payee: OUTLAYER, amount: goal.amount }),
+    view(goal.contract_id, 'outlayer_prepaid_balance', { token: p.token }),
+    view(goal.contract_id, 'daily_spent', { policy_id: p.usd_policy_id }),
+    view(OUTLAYER, 'get_payment_token_contract', {}),
+    view(OUTLAYER, 'get_project_pricing', { project_id: p.project_id }),
+    view(OUTLAYER, 'get_version', { project_id: p.project_id, version_key: p.version_key }),
   ]);
   if (!equal(route, goal.route) || nativePolicy?.token !== 'native' || usdPolicy?.token !== p.token || nativeGrant !== true || usdGrant !== true) throw new Error('project route, policies or key grants changed');
   const usd = BigInt(p.attached_usd), max = unsigned(usdPolicy.per_tx_cap, 'prepaid cap'), daily = unsigned(usdPolicy.daily_cap, 'prepaid daily cap');
@@ -337,6 +342,7 @@ async function runProjectGoalUnlocked({ goal: rawGoal, provider, account, public
     log(`[project] BLOCKED ${goal.id}: insufficient recorded prepaid credit`); return { status: 'BLOCKED' };
   }
   if (!execute) { log(`[project] READY ${goal.id}: native <=${goal.amount}, fake test USD=${p.attached_usd} (dry run)`); return { status: 'READY' }; }
+  if(boundary)assertFreshFinalBlock({header:{hash:boundary.block_hash,timestamp_nanosec:boundary.block_timestamp_nanosec}},Date.now());
   const { txHash, signed } = await signReviewedCall({ account, publicKey, ownerId: goal.owner_account_id, contractId: goal.contract_id,
     method: 'execute_outlayer_project', args: signedArgs(goal), gas: GAS });
   if (!validHash(txHash)) throw new Error('invalid transaction hash');

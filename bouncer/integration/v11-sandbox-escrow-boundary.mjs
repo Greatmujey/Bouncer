@@ -12,8 +12,10 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import nearApi from 'near-api-js';
 import { CIRCLE_TESTNET_USDC as TOKEN } from '../scripts/circle-testnet-setup.mjs';
-import { V11_SHA256, assertSandboxStatus, requireFinalSuccess, requireReceiptLog } from './v11-sandbox-support.mjs';
+import { V11_SHA256, assertSandboxStatus, requireFinalSuccess } from './v11-sandbox-support.mjs';
 import { loopbackSandboxUrl, withSandboxOnlyFetch } from './v11-sandbox-setup-rpc.mjs';
+import { PaymentRpcProvider } from '../agent/near-account.mjs';
+import { runFtCallGoal, recoverFtCallGoal } from '../agent/ft-call.mjs';
 
 const BUYER = 'escrow-buyer.testnet', BUYER_VAULT = 'vault.escrow-buyer.testnet';
 const RECEIVER = 'escrow-receiver.testnet', RECEIVER_VAULT = 'vault.escrow-receiver.testnet';
@@ -24,6 +26,15 @@ const key = () => nearApi.KeyPair.fromRandom('ed25519');
 const account = (id, provider, pair) => new nearApi.Account(id, provider, new nearApi.KeyPairSigner(pair));
 const fn = (method, args = {}, deposit = 0n, gas = 100n * TGAS) => tx.functionCall(method, args, gas, deposit);
 const pub = pair => String(pair.getPublicKey());
+
+// Test-only chain alias: verify the loopback node's actual isolated identity,
+// then let the production testnet runner exercise its real pinned views/send.
+class SandboxPaymentRpc extends PaymentRpcProvider {
+  async viewNodeStatus() {
+    const status=await super.viewNodeStatus();assertSandboxStatus(status);
+    return {...status,chain_id:'testnet'};
+  }
+}
 
 export async function exerciseSandboxEscrowBoundary({ rpcUrl, root, tokenOwner, wasm, storageMin, checkpoint = () => {} }) {
   const endpoint = loopbackSandboxUrl(rpcUrl);
@@ -105,8 +116,17 @@ async function exercise({ endpoint, root, tokenOwner, wasm, storageMin, checkpoi
   await must(receiver, RECEIVER_VAULT, 'grant_agent_key', { policy_id: RETURN_POLICY, public_key: pub(receiverAgentKey) }, 1n);
   await must(receiver, RECEIVER_VAULT, 'set_ft_call_message', { policy_id: RETURN_POLICY, payee: BUYER_VAULT, msg: RETURN_MSG }, 1n);
 
-  const first = await must(buyerAgent, BUYER_VAULT, 'execute_ft_call', request(BUY_POLICY), 0n, 300n * TGAS);
-  requireReceiptLog(first, BUYER_VAULT, 'BOUNCER ft_transfer_call settled; used=100; unused=0');
+  // Exercise the actual V11-capable FT runner with a one-method key and its
+  // pinned code, keyless-state, policy/payee-lock and route checks. This is a
+  // synthetic receiver/FT, not independent provider fulfillment.
+  const runnerRpc=new SandboxPaymentRpc(endpoint), entries=new Map();
+  const journal={get:id=>entries.get(id),put:(id,value)=>entries.set(id,structuredClone(value))};
+  const goal={id:'sandbox-ft-runner',contract_id:BUYER_VAULT,owner_account_id:BUYER,policy_id:BUY_POLICY,
+    payee:RECEIVER_VAULT,token:TOKEN,amount:'100',msg:FT_MSG,policy_revision:1,route_revision:1};
+  const first=await runFtCallGoal({goal,provider:runnerRpc,account:buyerAgent,publicKey:pub(buyerAgentKey),journal,execute:true,log:()=>{}});
+  assert.equal(first.status,'REUSED');assert.equal(first.settlement.used,'100');assert.equal(first.settlement.unused,'0');
+  const recovered=await recoverFtCallGoal({goal,provider:runnerRpc,journal,log:()=>{}});
+  assert.equal(recovered.settlement.tx_hash,first.settlement.tx_hash);
   assert.equal(await ftBalance(BUYER_VAULT), '900'); assert.equal(await tracked(BUYER_VAULT), '900');
   assert.equal(await ftBalance(RECEIVER_VAULT), '100'); assert.equal(await tracked(RECEIVER_VAULT), '100');
   assert.equal(await spent(BUYER_VAULT, BUY_POLICY), '100');
@@ -138,11 +158,12 @@ async function exercise({ endpoint, root, tokenOwner, wasm, storageMin, checkpoi
   checkpoint('sandbox receiver shows plain-FT return is untracked; transfer-call return credits the receiver hook');
   return { scope: 'ONLY isolated local nearcore, V11 bytecode and an example mock FT; receiver is another V11 vault, NOT PayPerCall or Circle',
     buyer_and_receiver_are_keyless_local_contracts: true, locked_exact_policy_rejected_ft_call: true,
+    v11_runner_first_payment_and_original_hash_recovery:true,
     unlocked_route_repeated_within_daily_budget: true, third_call_rejected_by_daily_budget: true,
     plain_return_token_delta: '100', plain_return_vault_ledger_delta: '0',
     callback_return_token_delta: '100', callback_return_vault_ledger_delta: '100',
     final_token_balance: '1000', final_vault_tracked_balance: '900', conservative_spend: '200',
-    local_hashes: { first_payment: first.transaction_outcome.id, plain_return: plain.transaction_outcome.id,
+    local_hashes: { first_payment: first.settlement.tx_hash, plain_return: plain.transaction_outcome.id,
       second_payment: second.transaction_outcome.id, callback_return: callbackReturn.transaction_outcome.id },
     seller_contacted: false, independent_fulfillment_verified: false, production_testnet_chain_check_not_exercised: true };
 }
