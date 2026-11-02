@@ -81,7 +81,8 @@ plan does not add a payee. The owner key remains necessary for policy changes.
 Before any live setup, the planner still needs durable original-hash journals,
 strict receipt/state verification, one-shot fences and read-only reconciliation.
 The planned zero-yocto owner call is an expected failure that must be verified
-as the exact vault guard failure, not just an arbitrary rejected transaction. The
-nearcore harness exercises these actions on a disposable mock-token chain; it
-is not testnet proof. The two local ciphertext copies and their colocated
-wrapping key are not an off-device backup.
+as the exact vault guard failure, not just an arbitrary rejected transaction.
+The [isolated nearcore run](https://github.com/Greatmujey/Bouncer/actions/runs/41524192299)
+executed the proposed probe, policy and restricted-key actions on a disposable
+mock-token chain; this is not testnet proof. The two local ciphertext copies
+and their colocated wrapping key are not an off-device backup.

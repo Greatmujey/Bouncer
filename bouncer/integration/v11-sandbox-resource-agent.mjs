@@ -9,6 +9,7 @@ import { syncWrite } from '../agent/circle-owner-offline-journal.mjs';
 import { createTestnetResourceAgentKeyring } from '../agent/testnet-resource-agent-keyring.mjs';
 import { inspectTestnetResourceAgentSetup, signTestnetResourceAgentSetup,
   verifySignedTestnetResourceAgentSetup } from '../agent/testnet-resource-agent-setup.mjs';
+import { verifyTestnetResourceAgentReceipt } from '../agent/testnet-resource-agent-evidence.mjs';
 import { requireFinalSuccess } from './v11-sandbox-support.mjs';
 
 export async function exerciseSandboxResourceAgent({ rpc, ownerPlan, ownerKey, directory, checkpoint }) {
@@ -27,7 +28,9 @@ export async function exerciseSandboxResourceAgent({ rpc, ownerPlan, ownerKey, d
       verifySignedTestnetResourceAgentSetup(original, ownerPlan, agent);
     }});
     const result = await rpc.txStatusReceipts(envelope.tx_hash, ownerPlan.account_id, 'FINAL');
-    assert.equal(result.transaction?.hash, envelope.tx_hash);
+    const proof = verifyTestnetResourceAgentReceipt({ ownerPlan, agentPlan: agent, envelope, result });
+    assert.equal(proof.tx_hash, envelope.tx_hash);
+    assert.equal(proof.guard_failure_verified, stage === 'guard-probe');
     if (stage === 'guard-probe') {
       assert.equal(result.final_execution_status, 'FINAL');
       assert.match(JSON.stringify(result.status?.Failure), /owner-only method requires exactly 1 yoctoNEAR/);
