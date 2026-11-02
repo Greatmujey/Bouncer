@@ -1,0 +1,66 @@
+# ONE TESTNET RESTRICTED AGENT ACCESS KEY INSTALLATION. No full-access key.
+# The public signature is a bearer; never resend an unresolved original hash.
+name: Install replacement restricted resource-agent key once
+on:
+  push:
+    branches: ['arena/25a7aaf6-near-hub']
+permissions:
+  contents: read
+  actions: read
+jobs:
+  probe:
+    if: github.event.before == 'd41d1ffe829a905e4b05904ff7ebf4c43ac12180' && github.run_attempt == 1 && contains(github.event.head_commit.message, '[resource-agent-v2-install-once]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: bouncer
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Test fixed actions, journals, fence and receipts
+        run: node --test tests/testnet-resource-agent-*.test.mjs tests/github-original-fence.test.mjs tests/read-only-near-receipts.test.mjs
+      - name: Prepare original-hash fence
+        id: fence_info
+        run: |
+          set -euo pipefail
+          file='evidence/testnet-owner-v2/resource-agent-install-original.json'
+          test -f "$file"
+          digest="$(sha256sum "$file" | cut -d' ' -f1)"
+          echo "sha=$digest" >> "$GITHUB_OUTPUT"
+          mkdir -p "$RUNNER_TEMP/resource-agent-install-fence"
+          cp "$file" "$RUNNER_TEMP/resource-agent-install-fence/original.json"
+          printf 'network=testnet\nrun_id=%s\ncommit=%s\nenvelope_sha256=%s\nrequest=one function-call access key restricted to vault execute methods; reconcile original, never blindly resend\n' \
+            "$GITHUB_RUN_ID" "$GITHUB_SHA" "$digest" > "$RUNNER_TEMP/resource-agent-install-fence/attempt.txt"
+      - name: Retain original-hash fence before CI send
+        id: fence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: resource-agent-v2-install-fence-${{ github.run_id }}-${{ steps.fence_info.outputs.sha }}
+          path: ${{ runner.temp }}/resource-agent-install-fence/
+          retention-days: 30
+          if-no-files-found: error
+      - name: Recheck state, submit once and verify restricted access key
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          BOUNCER_FENCE_ARTIFACT_ID: ${{ steps.fence.outputs.artifact-id }}
+          BOUNCER_RESOURCE_AGENT_STAGE: install
+        run: |
+          set -euo pipefail
+          if ! node scripts/broadcast-resource-agent-v2-once.mjs > "$RUNNER_TEMP/resource-agent-install-result.json" 2> "$RUNNER_TEMP/resource-agent-install-error.log"; then
+            python3 -c 'import os; s=open(os.environ["RUNNER_TEMP"]+"/resource-agent-install-error.log").read()[-4000:]; print("::error title=Original resource-agent probe unconfirmed; do not resend::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
+            exit 1
+          fi
+          {
+            echo '## One restricted resource-agent access key'
+            echo 'The owner installs the reviewed function-call key, restricted to the vault and two zero-deposit execution methods. No payee is added and no FT is moved.'
+            echo '```json'
+            cat "$RUNNER_TEMP/resource-agent-install-result.json"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          python3 -c 'import os,json; s=json.dumps(json.load(open(os.environ["RUNNER_TEMP"]+"/resource-agent-install-result.json")),separators=(",",":")); print("::notice title=Replacement resource-agent install result::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
