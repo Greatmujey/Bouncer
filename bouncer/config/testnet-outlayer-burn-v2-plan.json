@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "purpose": "unsigned-v11-outlayer-burn-diagnostic",
+  "network": "testnet",
+  "owner": "bouncer-owner-3869c162b193fa1729515442.testnet",
+  "owner_public_key": "ed25519:7GQ6BtmKSTT5XVnVAikGftXDZtfJYxoWXc61PE1H1tVr",
+  "vault": "vault.bouncer-owner-3869c162b193fa1729515442.testnet",
+  "vault_code_hash": "2ofBTEQTwUtrYAye4NPH2r9ccQkgfGgRZ3yRS9aP97aG",
+  "existing_resource_public_key": "ed25519:6Xhp4mi3kmwoVAKSvgxfuJJfNZf98645hcxfPjHXJGJz",
+  "funding_public_key": "ed25519:EbMFAiEeyj1kG5cT6pvUdgJG248CgaAGfz6RYQq2z9Cw",
+  "project_public_key": "ed25519:28bJSf3ZAVJbQUiVK67ydTAqGWb8QFcw6ho7hYT1ngpR"
+}
