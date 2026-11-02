@@ -1,0 +1,36 @@
+# Original-hash acquisition recovery only; never sends.
+name: Reconcile OutLayer acquisition (read only)
+on:
+  push:
+    branches: ['arena/**']
+permissions:
+  contents: read
+jobs:
+  reconcile:
+    if: contains(github.event.head_commit.message, '[outlayer-acquisition-reconcile:')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    defaults:
+      run:
+        working-directory: bouncer
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: node --test tests/outlayer-burn-acquisition.test.mjs tests/read-only-near-receipts.test.mjs
+      - name: Verify original and current next-stage state
+        env:
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+        run: |
+          set -euo pipefail
+          stage="$(python3 -c 'import os,re; x=re.findall(r"\[outlayer-acquisition-reconcile:(wrap|swap-fake)\]",os.environ["COMMIT_MESSAGE"]); assert len(x)==1; print(x[0])')"
+          if ! node scripts/reconcile-outlayer-acquisition.mjs "$stage" > "$RUNNER_TEMP/outlayer-reconcile.json" 2> "$RUNNER_TEMP/outlayer-reconcile-error.log"; then
+            python3 -c 'import os; s=open(os.environ["RUNNER_TEMP"]+"/outlayer-reconcile-error.log").read()[-2500:]; print("::error title=Original acquisition unknown; never resend::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
+            exit 1
+          fi
+          python3 -c 'import os,json; s=json.dumps(json.load(open(os.environ["RUNNER_TEMP"]+"/outlayer-reconcile.json")),separators=(",",":")); print("::notice title=OutLayer acquisition original reconciliation::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
+          { echo '## Read-only acquisition reconciliation'; echo 'No signing or sending. Only original receipt and fresh state are inspected.'; echo '```json'; cat "$RUNNER_TEMP/outlayer-reconcile.json"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
