@@ -131,9 +131,12 @@ ambiguity, not a real payment or an observation of the deployed seller.
 - `agent/svalin-setup-stage-preflight.mjs` adds a **read-only library** for each
   next setup stage and the post-funding profile. It checks the original encrypted
   journal before and after one fresh pinned FINAL snapshot: all prior original
-  receipt records must match, and the requested stage must normally be
-  unrecorded. An exact pending hash may be supplied **only for a read-only
-  recheck**; this never grants permission to send or retry it. Later snapshots
+  stage evidence must match, and the requested stage must normally be
+  unrecorded. The specific self-addressed restricted AddKey stage can instead
+  use a separately labeled trusted-RPC local outcome if nearcore omits its root
+  receipt body; the following fresh snapshot must still verify key permissions.
+  An exact pending hash may be supplied **only for a read-only recheck**; this
+  never grants permission to send or retry it. Later snapshots
   check the owner's full-access key and safely represented nonce, reported
   selected WASM feature gates, reviewed keyless vault/code/owner, policy lock
   and agent grant, exact restricted-key permission, token registration and
@@ -169,7 +172,7 @@ ambiguity, not a real payment or an observation of the deployed seller.
 
   **Not ready for live use:** all coordinator/transport tests use ephemeral keys,
   fabricated RPC and receipts (including an optional test that signs the exact
-  recovered artifact); no V11 stage has been submitted or independently audited.
+  recovered artifact); no V11 stage has been submitted on testnet or independently audited.
   The explicit per-stage booleans are caller assertions—not evidence of human
   consent, independent artifact review or a usable backup. Deleted, stale,
   bypassed or separate journals, concurrent owner-key users, mutable chain state
@@ -415,10 +418,18 @@ use. To inspect a supplied result later, `inspectSvalinSetupAttempt` takes
 `trustedOriginalHash`, `trustedOwnerPublicKey`, `attempt` and `result`. These
 anchors must come from the protected original record, not from an untrusted
 replacement result. The library reconstructs the constrained plan and matches
-its actions in the transaction and root receipt. The resolver/callback graph
-check is stricter than a successful `ft_transfer_call` alone. It has not been
-exercised against a real V11 deployment or funding transaction; independent
-review and a future authorized live workflow remain necessary.
+its actions in the transaction and, when supplied, the root receipt. Only the
+same-account single-AddKey stage permits an omitted local root body; it reports
+`FINAL_LOCAL_ADD_KEY_OUTCOME_MATCH`, not a receipt match. The trusted-RPC
+transaction, root outcome and any strictly shaped system gas-refund child must
+match, and a fresh state check must separately verify the key. Registration
+accepts a linked protocol gas refund, but still rejects a token-created refund.
+The resolver/callback graph check is stricter than a successful
+`ft_transfer_call` alone. A disposable nearcore run of the earlier verifier found
+both incompatibilities and intentionally failed; the changes described here still need
+an approved nearcore rerun. There has been no V11 testnet deployment or Circle
+funding transaction; independent review and a future authorized live workflow
+remain necessary.
 On 1 November 2026, the approved private push build `41361570652` and its PR
 build `41361575492` succeeded and independently reported the same 536,325-byte
 V11 artifact SHA-256,
@@ -505,8 +516,8 @@ blocks an already-registered vault: this version does not silently skip the
 registration or assume a refund. Registering an unregistered owner and acquiring
 its test USDC are not part of these batches. NEAR's [batched-action
 rules](https://docs.near.org/smart-contracts/anatomy/actions) describe actions
-in one receipt as atomic; this has not yet been exercised with the V11 artifact
-on chain. The later FT deposit invokes asynchronous token/receiver receipts and
+in one receipt as atomic; there has been no V11 testnet deployment. The later
+FT deposit invokes asynchronous token/receiver receipts and
 must be reconciled along with the vault's tracked and actual balances. Never
 repeat an unresolved setup transaction simply because a response was lost.
 
@@ -572,9 +583,10 @@ proof of independent fulfillment.
    blocked for manual reconciliation. Retain the latest original journal and
    separately protected key; stale backups, bypassing the journal, another
    process, a dishonest RPC or compromised local machine defeat the fence.
-7. After all five original receipt graphs are recorded, `--check-stage
-   verify_funded_vault --rpc TRUSTED_TESTNET_RPC` checks the current reported
-   keyless vault, policy, restricted agent key, Circle registrations and both
+7. After all five original stages are reconciled—including the separately
+   labeled outcome-only AddKey evidence if its root receipt was omitted—
+   `--check-stage verify_funded_vault --rpc TRUSTED_TESTNET_RPC` checks the
+   current reported keyless vault, policy, restricted agent key, Circle registrations and both
    tracked and on-token balances. `READ_ONLY_FUNDED_VAULT_PROFILE_MATCH` is a
    trusted-RPC indication, not a consensus proof, code audit, consent or seller
    delivery. Buyer-side checks do **not** fix Svalin's payer-attribution issue.

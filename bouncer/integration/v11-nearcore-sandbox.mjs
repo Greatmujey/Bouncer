@@ -23,6 +23,9 @@ import { setTimeout as delay } from 'node:timers/promises';
 import nearApi from 'near-api-js';
 import { buildUnsignedSvalinTrialSetup } from '../agent/svalin-setup-plan.mjs';
 import { verifySignedSvalinSetup, inspectSvalinSetupAttempt } from '../agent/svalin-setup-evidence.mjs';
+import { FileJournal } from '../agent/procurement.mjs';
+import { initializeSvalinSetupJournal, recordSvalinSetupSignedAttempt, reconcileSvalinSetupResult,
+  inspectSvalinSetupJournal } from '../agent/svalin-setup-journal.mjs';
 import { CIRCLE_TESTNET_USDC as TOKEN } from '../scripts/circle-testnet-setup.mjs';
 import { SVALIN_PAYEE as SELLER } from '../agent/svalin-pro-readiness.mjs';
 import { SVALIN_TRIAL_MAX_ATOMS as FUNDING } from '../agent/svalin-pro-preflight.mjs';
@@ -147,7 +150,7 @@ async function run() {
   readVerifiedFile(binary, SANDBOX_SHA256);
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'bouncer-v11-sandbox-'));
   const tokenKey = key(), ownerKey = key(), sellerKey = key(), attackerKey = key(), agentKey = key(), probeKey = key();
-  let sandbox;
+  let sandbox, journal, journalKey;
   try {
     sandbox = await startSandbox(binary, directory, pub(tokenKey));
     const { provider } = sandbox;
@@ -190,7 +193,15 @@ async function run() {
       wasmBytes: wasm, agentPublicKey: pub(agentKey), initialVaultFundingYocto: (7n * NEAR).toString(),
       agentGasAllowanceYocto: NEAR.toString(), vaultTokenStorageDepositYocto: bounds.min,
     });
+    // Exercise the actual encrypted setup journal with disposable keys and
+    // chain results. This is not the live testnet runner or stage preflight.
+    journalKey = crypto.randomBytes(32);
+    const journalFile = path.join(directory, 'sandbox-setup-journal.json');
+    journal = new FileJournal(journalFile, VAULT, OWNER, { encryptionKey: journalKey });
+    const journalBase = () => ({ plan, trustedReviewHash: plan.review.review_sha256, ownerPublicKey: pub(ownerKey), journal });
+    await initializeSvalinSetupJournal({ ...journalBase(), confirmNew: true });
     const stageEvidence = [], verifierBlockers = [];
+    let journalStagesReconciled = 0;
     const checkpoint = message => console.error(`Sandbox checkpoint: ${message}`);
     const setupStage = async index => {
       const batch = plan.batches[index];
@@ -198,6 +209,14 @@ async function run() {
       const signed = await owner.createSignedTransaction(batch.receiverId, batch.actions);
       const proof = verifySignedSvalinSetup({ plan, trustedReviewHash: plan.review.review_sha256,
         stageId: batch.id, ownerPublicKey: pub(ownerKey), signed });
+      // Once a blocker is recorded, later sends are sandbox-only contract
+      // diagnostics, not journaled or accepted as a complete setup.
+      const useJournal = verifierBlockers.length === 0;
+      if (useJournal) {
+        const recorded = await recordSvalinSetupSignedAttempt({ ...journalBase(), stageId: batch.id, signed,
+          acknowledgeRecovery: true });
+        assert.equal(recorded.tx_hash, proof.attempt.tx_hash, `${batch.id}: journal must fence the original before send`);
+      }
       const sent = await provider.sendTransactionUntil(signed, WAIT);
       requireFinalSuccess(sent, batch.id);
       const outcome = await provider.txStatusReceipts(proof.attempt.tx_hash, OWNER, WAIT);
@@ -211,6 +230,21 @@ async function run() {
         // blockers below. Do not synthesize receipts or call either stage
         // verified; the job will still fail while any blocker is present.
         if (index === 2) {
+          // If a future runtime/RPC shape fails this narrow verifier, report
+          // only bounded sandbox structure, never keys or raw signatures.
+          const txRootIds = outcome.transaction_outcome?.outcome?.receipt_ids;
+          const rootId = outcome.transaction_outcome?.outcome?.status?.SuccessReceiptId;
+          const root = outcome.receipts_outcome?.find(item => item.id === rootId)?.outcome;
+          const children = (root?.receipt_ids ?? []).slice(0, 8).map(id => {
+            const child = outcome.receipts?.find(item => item.receipt_id === id);
+            const action = child?.receipt?.Action;
+            return { present: Boolean(child), predecessor: child?.predecessor_id, receiver: child?.receiver_id,
+              gas_price: action?.gas_price, action_types: action?.actions?.map(value => Object.keys(value)[0]) };
+          });
+          checkpoint(`local AddKey diagnostic: ${JSON.stringify({ verifier_error: error?.message,
+            transaction_root_count: txRootIds?.length, receipt_count: outcome.receipts?.length,
+            outcome_count: outcome.receipts_outcome?.length, root_body_present: outcome.receipts?.some(item => item.receipt_id === rootId),
+            root_child_count: root?.receipt_ids?.length, children })}`);
           assertOmittedLocalAddKeyReceipt(outcome, proof.attempt, error);
           verifierBlockers.push('same-account AddKey root receipt omitted by nearcore');
           stageEvidence.push({ stage: batch.id, sandbox_transaction_hash: proof.attempt.tx_hash,
@@ -241,11 +275,26 @@ async function run() {
         }
         throw error;
       }
-      const expected = index === 4 ? 'FINAL_FUNDING_RECEIPTS_MATCH' : 'FINAL_SETUP_RECEIPT_MATCH';
+      const expected = index === 4 ? 'FINAL_FUNDING_RECEIPTS_MATCH' :
+        index === 2 ? 'FINAL_LOCAL_ADD_KEY_OUTCOME_MATCH' : 'FINAL_SETUP_RECEIPT_MATCH';
       assert.equal(checked.status, expected, `${batch.id}: receipt verification failed`);
+      if (useJournal) {
+        const settled = await reconcileSvalinSetupResult({ ...journalBase(), stageId: batch.id, result: outcome });
+        assert.equal(settled.status, expected, `${batch.id}: journal evidence did not reconcile`);
+        assert.equal(settled.tx_hash, proof.attempt.tx_hash);
+        const state = await inspectSvalinSetupJournal(journalBase());
+        assert.equal(state.stages[index].state, index === 2 ? 'FINAL_LOCAL_ADD_KEY_OUTCOME_MATCH' : 'FINAL_RECEIPTS_MATCH');
+        journalStagesReconciled++;
+        if (index === 2) {
+          journal.close();
+          journal = new FileJournal(journalFile, VAULT, OWNER, { encryptionKey: journalKey, requireExisting: true });
+          assert.equal((await inspectSvalinSetupJournal(journalBase())).stages[index].state, 'FINAL_LOCAL_ADD_KEY_OUTCOME_MATCH');
+        }
+      }
       stageEvidence.push({ stage: batch.id, sandbox_transaction_hash: proof.attempt.tx_hash,
-        status: checked.status });
-      checkpoint(`${batch.id}: original transaction and receipts matched`);
+        status: checked.status, encrypted_journal_reconciled: useJournal });
+      checkpoint(index === 2 ? `${batch.id}: original transaction and local outcome matched; local receipt body was omitted` :
+        `${batch.id}: original transaction and receipts matched`);
     };
 
     await setupStage(0);
@@ -346,7 +395,10 @@ async function run() {
       v11_sha256: V11_SHA256, mock_ft_sha256: MOCK_FT_SHA256, sandbox_binary_sha256: SANDBOX_SHA256,
       genesis_token_is_circle: false, keys_are_ephemeral: true, seller_contacted: false, real_funds_used: false,
       setup_stage_observations: stageEvidence,
-      all_original_setup_receipts_verified: verifierBlockers.length === 0,
+      all_setup_stages_reconciled: verifierBlockers.length === 0 && journalStagesReconciled === 5,
+      encrypted_journal_stages_reconciled: journalStagesReconciled,
+      local_add_key_receipt_body_omitted: stageEvidence.some(stage =>
+        ['FINAL_LOCAL_ADD_KEY_OUTCOME_MATCH', 'BLOCKED_PRODUCTION_VERIFIER_OMITTED_LOCAL_RECEIPT'].includes(stage.status)),
       known_setup_verifier_blockers: verifierBlockers,
       guard: { restricted_zero_deposit_blocked_by_contract: true, restricted_one_yocto_rejected_by_protocol: true,
         non_owner_one_yocto_blocked: true, owner_two_yocto_blocked: true, owner_one_yocto_configuration_succeeded: true },
@@ -358,7 +410,10 @@ async function run() {
     if (verifierBlockers.length) {
       throw new Error('sandbox contract diagnostics finished, but the production setup verifier remains blocked; no successful setup verification claimed');
     }
+    assert.equal(journalStagesReconciled, 5, 'all sandbox setup stages must reconcile in the original encrypted journal');
   } finally {
+    journal?.close();
+    journalKey?.fill(0);
     if (sandbox) await stopChild(sandbox.child);
     fs.rmSync(directory, { recursive: true, force: true });
   }

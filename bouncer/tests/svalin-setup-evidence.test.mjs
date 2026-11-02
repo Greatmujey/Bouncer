@@ -253,7 +253,7 @@ test('a FINAL failure is only a reconciliation warning and does not authorize re
   assert.equal(inspect(f).status, 'FINAL_FAILURE_NEEDS_RECONCILIATION');
 });
 
-test('registration requires the reviewed Circle deposit, returned balance and no refund receipt', () => {
+test('registration requires the reviewed deposit and balance and rejects unverified refunds', () => {
   const f = fixture(3);
   assert.equal(inspect(f).status, 'FINAL_SETUP_RECEIPT_MATCH');
   for (const value of [
@@ -307,5 +307,111 @@ test('funding requires the exact Circle event, vault callback, resolver and prom
   for (const change of changes) {
     const r = structuredClone(f.result); change(r);
     assert.throws(() => inspect({ ...f, result: r }), undefined, String(change));
+  }
+});
+
+// Synthetic shape corresponding to nearcore's system gas-refund construction.
+// This is not a captured testnet receipt or a proof of deployed token code.
+function addSystemGasRefund(result) {
+  const id = hash(57), root = result.receipts_outcome[0].outcome;
+  root.receipt_ids = [id];
+  result.receipts.push(receipt(id, 'system', OWNER, { signer_id: OWNER, signer_public_key: OWNER_KEY,
+    gas_price: '0', input_data_ids: [], output_data_receivers: [], is_promise_yield: false,
+    actions: [{ Transfer: { deposit: '12345' } }] }));
+  result.receipts_outcome.push(outcome(id, OWNER, { SuccessValue: '' }));
+}
+
+test('same-account AddKey can match a FINAL original local outcome without inventing a receipt body', () => {
+  for (const gasRefund of [false, true]) {
+    const f = fixture(2); f.result.receipts = []; // nearcore omits the local root body
+    if (gasRefund) addSystemGasRefund(f.result);
+    const proof = inspect(f);
+    assert.equal(proof.status, 'FINAL_LOCAL_ADD_KEY_OUTCOME_MATCH');
+    assert.equal(proof.root_receipt, hash(8));
+    assert.match(proof.scope, /receipt body was omitted/);
+    assert.equal(proof.do_not_resend, true);
+    assert.equal(proof.current_state_verified, false);
+    assert.equal(proof.deployed_code_at_execution_verified, false);
+    assert.equal(proof.owner_approval_verified, false);
+  }
+  const failed = fixture(2); failed.result.receipts = [];
+  failed.result.status = { Failure: { ActionError: { index: 0 } } };
+  failed.result.receipts_outcome[0].outcome.status = { Failure: { ActionError: { index: 0 } } };
+  assert.equal(inspect(failed).status, 'FINAL_FAILURE_NEEDS_RECONCILIATION');
+});
+
+test('an omitted local root never excuses wrong original identity, action, outcome or an invented receipt', () => {
+  const f = fixture(2); f.result.receipts = [];
+  const changes = [
+    r => { delete r.receipts; },
+    r => { r.final_execution_status = 'EXECUTED'; },
+    r => { r.transaction.hash = hash(70); },
+    r => { r.transaction.signer_id = 'attacker.testnet'; },
+    r => { r.transaction.receiver_id = 'attacker.testnet'; },
+    r => { r.transaction.public_key = AGENT_KEY; },
+    r => { r.transaction.actions[0].AddKey.access_key.permission.FunctionCall.method_names.push('set_policy'); },
+    r => { r.transaction_outcome.id = hash(70); },
+    r => { r.transaction_outcome.outcome.executor_id = 'attacker.testnet'; },
+    r => { r.transaction_outcome.outcome.receipt_ids = [hash(70), hash(8)]; },
+    r => { r.transaction_outcome.outcome.receipt_ids = [hash(8), hash(70)]; },
+    r => { r.transaction_outcome.outcome.status.SuccessReceiptId = hash(70); },
+    r => { r.receipts_outcome = []; },
+    r => { r.receipts_outcome[0].id = hash(70); },
+    r => { r.receipts_outcome[0].outcome.executor_id = 'attacker.testnet'; },
+    r => { r.receipts_outcome[0].outcome.status = { SuccessValue: encode('unexpected') }; },
+    r => { r.status.SuccessValue = encode('unexpected'); r.receipts_outcome[0].outcome.status.SuccessValue = r.status.SuccessValue; },
+    r => { r.receipts_outcome.push(structuredClone(r.receipts_outcome[0])); },
+    // A present but wrong receipt must never be treated like an omitted body.
+    r => { r.receipts.push(receipt(hash(8), OWNER, OWNER, { signer_id: OWNER,
+      signer_public_key: OWNER_KEY, actions: [] })); },
+  ];
+  for (const change of changes) {
+    const result = structuredClone(f.result); change(result);
+    assert.throws(() => inspect({ ...f, result }), undefined, String(change));
+  }
+  // No other stage can use the local-body exception, even with an empty list.
+  for (const index of [0, 1, 3, 4]) {
+    const other = fixture(index); other.result.receipts = [];
+    assert.throws(() => inspect(other));
+  }
+});
+
+test('local AddKey and registration only accept a complete, linked system gas refund', () => {
+  for (const index of [2, 3]) {
+    const f = fixture(index); if (index === 2) f.result.receipts = [];
+    addSystemGasRefund(f.result);
+    assert.equal(inspect(f).status, index === 2 ? 'FINAL_LOCAL_ADD_KEY_OUTCOME_MATCH' : 'FINAL_SETUP_RECEIPT_MATCH');
+    const changes = [
+      r => { r.transaction_outcome.outcome.receipt_ids.push(hash(70)); },
+      r => { r.receipts.push(receipt(hash(70), TOKEN, OWNER, { actions: [{ Transfer: { deposit: '1' } }] })); },
+      r => { r.receipts_outcome.push(outcome(hash(70), OWNER, { SuccessValue: '' })); },
+      r => { r.receipts_outcome[0].outcome.receipt_ids.push(hash(70)); },
+      r => { r.receipts_outcome[0].outcome.receipt_ids = [hash(70)]; },
+      r => { r.receipts = r.receipts.filter(item => item.receipt_id !== hash(57)); },
+      r => { r.receipts_outcome = r.receipts_outcome.filter(item => item.id !== hash(57)); },
+      r => { r.receipts.find(item => item.receipt_id === hash(57)).predecessor_id = TOKEN; },
+      r => { r.receipts.find(item => item.receipt_id === hash(57)).receiver_id = 'attacker.testnet'; },
+      r => { r.receipts.find(item => item.receipt_id === hash(57)).receipt.Action.signer_id = 'system'; },
+      r => { r.receipts.find(item => item.receipt_id === hash(57)).receipt.Action.signer_public_key = AGENT_KEY; },
+      r => { r.receipts.find(item => item.receipt_id === hash(57)).receipt.Action.gas_price = '1'; },
+      r => { r.receipts.find(item => item.receipt_id === hash(57)).receipt.Action.is_promise_yield = true; },
+      r => { r.receipts.find(item => item.receipt_id === hash(57)).receipt.Action.refund_to = 'attacker.testnet'; },
+      r => { r.receipts.find(item => item.receipt_id === hash(57)).receipt.Action.future_unknown_field = true; },
+      r => { r.receipts.find(item => item.receipt_id === hash(57)).receipt.Action.input_data_ids = [hash(70)]; },
+      r => { r.receipts.find(item => item.receipt_id === hash(57)).receipt.Action.output_data_receivers = [{ data_id: hash(70) }]; },
+      r => { r.receipts.find(item => item.receipt_id === hash(57)).receipt.Action.actions = [{ FunctionCall: {} }]; },
+      r => { r.receipts.find(item => item.receipt_id === hash(57)).receipt.Action.actions[0].Transfer.deposit = '0'; },
+      r => { r.receipts.find(item => item.receipt_id === hash(57)).receipt.Action.actions[0].Transfer.deposit = (1n << 128n).toString(); },
+      r => { r.receipts_outcome.find(item => item.id === hash(57)).outcome.executor_id = 'attacker.testnet'; },
+      r => { r.receipts_outcome.find(item => item.id === hash(57)).outcome.status = { SuccessReceiptId: hash(70) }; },
+      r => { r.receipts_outcome.find(item => item.id === hash(57)).outcome.receipt_ids = [hash(70)]; },
+    ];
+    for (const change of changes) {
+      const result = structuredClone(f.result); change(result);
+      assert.throws(() => inspect({ ...f, result }), undefined, `stage ${index}: ${change}`);
+    }
+    const failedRefund = structuredClone(f.result);
+    failedRefund.receipts_outcome.find(item => item.id === hash(57)).outcome.status = { Failure: { ActionError: {} } };
+    assert.equal(inspect({ ...f, result: failedRefund }).status, 'FINAL_FAILURE_NEEDS_RECONCILIATION');
   }
 });

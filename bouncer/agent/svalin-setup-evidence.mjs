@@ -166,9 +166,9 @@ function decodeJson(encoded, label) {
   try { return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)); }
   catch { throw new Error(`invalid ${label}`); }
 }
-function graph(result) {
+function graph(result, allowEmptyReceipts = false) {
   if (!Array.isArray(result.receipts) || !Array.isArray(result.receipts_outcome) ||
-      result.receipts.length < 1 || result.receipts.length > 256 ||
+      (!allowEmptyReceipts && result.receipts.length < 1) || result.receipts.length > 256 ||
       result.receipts_outcome.length < 1 || result.receipts_outcome.length > 256) {
     throw new Error('bounded receipt-inclusive FINAL outcome is required');
   }
@@ -200,13 +200,56 @@ function rootOf(result, batch, attempt, g) {
     throw new Error('original transaction identity, actions or root receipt mismatch');
   }
   const id = txOutcome.status.SuccessReceiptId, receipt = g.receipts.get(id), outcome = g.outcomes.get(id);
+  if (!outcome || outcome.executor_id !== attempt.receiver_id) {
+    throw new Error('original action receipt outcome is missing or has the wrong executor');
+  }
+  // nearcore does not include the local root receipt body in tx_status when
+  // signer and receiver are the same. Accept ONLY this planner's self-directed
+  // single AddKey stage without the body: the original trusted hash, exact
+  // transaction actions, root link and root outcome were checked above. This
+  // remains trusted-RPC evidence, not an independently verified receipt body.
+  if (!receipt && attempt.stage_id === 'install_restricted_agent_key' &&
+      attempt.signer_id === attempt.receiver_id && txOutcome.receipt_ids.length === 1 && txOutcome.receipt_ids[0] === id &&
+      batch.actions.length === 1 && batch.actions[0].enum === 'addKey') {
+    return { id, receipt: null, outcome, localReceiptOmitted: true };
+  }
   const action = receipt?.receipt?.Action;
   if (!receipt || receipt.predecessor_id !== attempt.signer_id || receipt.receiver_id !== attempt.receiver_id ||
       !record(action) || action.signer_id !== attempt.signer_id || action.signer_public_key !== attempt.signer_public_key ||
-      !actionsMatch(batch.actions, action.actions) || !outcome || outcome.executor_id !== attempt.receiver_id) {
+      !actionsMatch(batch.actions, action.actions)) {
     throw new Error('original action receipt is missing or differs from the reviewed batch');
   }
-  return { id, receipt, outcome };
+  return { id, receipt, outcome, localReceiptOmitted: false };
+}
+// A successful action can generate a nearcore gas-refund receipt even when the
+// contract created no promise. Do not mistake that for a storage-deposit refund
+// from the token. Match only the protocol's system transfer to this original
+// signer and key; any unknown/missing child or contract-origin transfer blocks.
+function onlyProtocolGasRefund(rootOutcome, g, attempt, localRootOmitted = false) {
+  const childCount = rootOutcome.receipt_ids.length;
+  // For these two simple stages, the complete graph consists only of the root
+  // and optionally one gas refund. Reject unlinked or otherwise unknown data.
+  if (childCount > 1 || g.outcomes.size !== 1 + childCount ||
+      g.receipts.size !== (localRootOmitted ? 0 : 1) + childCount) return false;
+  if (childCount === 0) return true;
+  const id = rootOutcome.receipt_ids[0], receipt = g.receipts.get(id), outcome = g.outcomes.get(id);
+  const action = receipt?.receipt?.Action, actions = action?.actions, transfer = actions?.[0]?.Transfer;
+  const deposit = numericString(transfer?.deposit);
+  const knownActionFields = ['signer_id', 'signer_public_key', 'gas_price', 'input_data_ids', 'output_data_receivers',
+    'actions', 'is_promise_yield', 'refund_to'];
+  return receipt?.predecessor_id === 'system' && receipt?.receiver_id === attempt.signer_id &&
+    keysAre(receipt?.receipt, ['Action']) && record(action) && Object.keys(action).every(key => knownActionFields.includes(key)) &&
+    action.signer_id === attempt.signer_id &&
+    action.signer_public_key === attempt.signer_public_key && numericString(action.gas_price) === '0' &&
+    (action.is_promise_yield === undefined || action.is_promise_yield === false) &&
+    (action.refund_to === undefined || action.refund_to === null) &&
+    Array.isArray(action.input_data_ids) && action.input_data_ids.length === 0 &&
+    Array.isArray(action.output_data_receivers) && action.output_data_receivers.length === 0 &&
+    Array.isArray(actions) && actions.length === 1 && keysAre(actions[0], ['Transfer']) &&
+    keysAre(transfer, ['deposit']) && deposit !== null && BigInt(deposit) > 0n &&
+    BigInt(deposit) <= (1n << 128n) - 1n && outcome?.executor_id === attempt.signer_id &&
+    statusKind(outcome?.status) === 'value' && outcome.status.SuccessValue === '' &&
+    Array.isArray(outcome.receipt_ids) && outcome.receipt_ids.length === 0;
 }
 function childCall(g, root, predecessor, receiver, method) {
   const matches = root.receipt_ids.flatMap(id => {
@@ -275,7 +318,9 @@ export function inspectSvalinSetupAttempt({ plan, trustedReviewHash, trustedOrig
   if (!record(result) || result.final_execution_status !== 'FINAL' || !['value', 'failure'].includes(statusKind(result.status))) {
     throw new Error('original transaction is not terminal FINAL; preserve it and do not resend');
   }
-  const index = STAGES.indexOf(attempt.stage_id), batch = plan.batches[index], g = graph(result);
+  const index = STAGES.indexOf(attempt.stage_id), batch = plan.batches[index];
+  const mayOmitLocalReceipt = attempt.stage_id === 'install_restricted_agent_key' && attempt.signer_id === attempt.receiver_id;
+  const g = graph(result, mayOmitLocalReceipt);
   const root = rootOf(result, batch, attempt, g);
   const failure = statusKind(result.status) === 'failure' ||
     [...g.outcomes.values()].some(outcome => statusKind(outcome.status) === 'failure');
@@ -287,20 +332,27 @@ export function inspectSvalinSetupAttempt({ plan, trustedReviewHash, trustedOrig
   else if (statusKind(root.outcome.status) !== 'value' || root.outcome.status.SuccessValue !== result.status.SuccessValue) {
     throw new Error('the original setup action receipt is not terminal and successful');
   } else if (attempt.stage_id === 'register_vault_for_test_usdc') {
-    // Circle's pinned source returns the exact minimum with zero available for
-    // a newly registered account. A refund child means the account was already
-    // registered or the price changed; treat either as unresolved, not a
-    // registration proof. Deployed code and fresh state still need verification.
+    // A freshly registered account returns the reviewed minimum with zero
+    // available. A token-origin refund means prior registration or a changed
+    // price and remains unresolved; distinguish it from a protocol gas refund.
+    // Deployed code and fresh state still need independent verification.
     const balance = decodeJson(root.outcome.status.SuccessValue, 'token registration result');
     const reviewedDeposit = batch.actions[0].functionCall.deposit.toString();
     if (!keysAre(balance, ['total', 'available']) || balance.total !== reviewedDeposit || balance.available !== '0' ||
-        root.outcome.receipt_ids.length !== 0) {
+        result.transaction_outcome.outcome.receipt_ids.length !== 1 || !onlyProtocolGasRefund(root.outcome, g, attempt)) {
       throw new Error('token registration result does not match the reviewed fresh registration');
     }
   }
+  if (root.localReceiptOmitted && (root.outcome.status.SuccessValue !== '' ||
+      !onlyProtocolGasRefund(root.outcome, g, attempt, true))) {
+    throw new Error('local AddKey outcome or its child receipts are unexpected or incomplete');
+  }
   return { stage_id: attempt.stage_id, tx_hash: attempt.tx_hash,
-    status: funding ? 'FINAL_FUNDING_RECEIPTS_MATCH' : 'FINAL_SETUP_RECEIPT_MATCH',
+    status: funding ? 'FINAL_FUNDING_RECEIPTS_MATCH' : root.localReceiptOmitted ?
+      'FINAL_LOCAL_ADD_KEY_OUTCOME_MATCH' : 'FINAL_SETUP_RECEIPT_MATCH',
     root_receipt: root.id, funding, do_not_resend: true, current_state_verified: false,
     deployed_code_at_execution_verified: false, owner_approval_verified: false, seller_delivery_verified: false,
-    scope: 'trusted-RPC original-hash action and receipt matching only; verify deployed code and fresh state separately' };
+    scope: root.localReceiptOmitted ?
+      'trusted-RPC original transaction and local outcome matched; root receipt body was omitted; verify deployed code and fresh state separately' :
+      'trusted-RPC original-hash action and receipt matching only; verify deployed code and fresh state separately' };
 }

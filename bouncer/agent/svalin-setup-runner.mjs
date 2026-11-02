@@ -159,12 +159,15 @@ export async function runSvalinSetupStageOnce({ plan, trustedReviewHash, ownerPu
       if (sent?.transaction_outcome?.id !== txHash) return unresolved(stageId, txHash, true);
       const result = await provider.txStatusReceipts(txHash, identity.owner, 'FINAL');
       const settled = await reconcileSvalinSetupResult({ ...args, result, update: true });
-      const success = ['FINAL_SETUP_RECEIPT_MATCH', 'FINAL_FUNDING_RECEIPTS_MATCH'].includes(settled.status);
+      const success = ['FINAL_SETUP_RECEIPT_MATCH', 'FINAL_LOCAL_ADD_KEY_OUTCOME_MATCH',
+        'FINAL_FUNDING_RECEIPTS_MATCH'].includes(settled.status);
       return { status: settled.status, stage_id: stageId, tx_hash: txHash, broadcast_attempts: 1,
         do_not_resend: true, current_state_verified: false, post_stage_snapshot_required: success,
         owner_approval_verified: false, seller_contacted: false,
-        scope: success ? 'trusted-RPC original receipts matched only; verify current state before any separately approved next stage' :
-          'original did not establish successful setup; preserve and reconcile the journal, never resend automatically' };
+        scope: settled.status === 'FINAL_LOCAL_ADD_KEY_OUTCOME_MATCH' ?
+          'trusted-RPC original transaction and local outcome matched; root receipt body omitted; verify current state before any separately approved next stage' :
+          success ? 'trusted-RPC original receipts matched only; verify current state before any separately approved next stage' :
+            'original did not establish successful setup; preserve and reconcile the journal, never resend automatically' };
     } catch {
       return unresolved(stageId, txHash, attempted);
     }

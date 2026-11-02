@@ -57,7 +57,10 @@ function validEvidence(proof, attempt) {
     'current_state_verified', 'deployed_code_at_execution_verified', 'owner_approval_verified', 'seller_delivery_verified', 'scope']) ||
       proof.deployed_code_at_execution_verified !== false || proof.owner_approval_verified !== false ||
       proof.seller_delivery_verified !== false || !isTransactionHash(proof.root_receipt)) return false;
-  if (attempt.stage_id !== 'fund_vault_with_test_usdc') return proof.status === 'FINAL_SETUP_RECEIPT_MATCH' && proof.funding === null;
+  if (attempt.stage_id !== 'fund_vault_with_test_usdc') {
+    return proof.funding === null && (proof.status === 'FINAL_SETUP_RECEIPT_MATCH' ||
+      (attempt.stage_id === 'install_restricted_agent_key' && proof.status === 'FINAL_LOCAL_ADD_KEY_OUTCOME_MATCH'));
+  }
   const f = proof.funding;
   return proof.status === 'FINAL_FUNDING_RECEIPTS_MATCH' &&
     fields(f, ['token', 'amount_atoms', 'vault_callback_receipt', 'token_resolver_receipt']) &&
@@ -113,7 +116,8 @@ function loadState(journal, plan, identity) {
 function publicState(stages) {
   return { status: 'LOCAL_SETUP_JOURNAL_ONLY', stages: STAGES.map((stage_id, i) => {
     const entry = stages[i];
-    return { stage_id, state: !entry ? 'NOT_RECORDED' : entry.status === 'completed' ? 'FINAL_RECEIPTS_MATCH' :
+    return { stage_id, state: !entry ? 'NOT_RECORDED' : entry.status === 'completed' ?
+      (entry.svalin_setup.evidence.status === 'FINAL_LOCAL_ADD_KEY_OUTCOME_MATCH' ? 'FINAL_LOCAL_ADD_KEY_OUTCOME_MATCH' : 'FINAL_RECEIPTS_MATCH') :
       entry.svalin_setup.evidence ? 'FINAL_FAILURE_NEEDS_RECONCILIATION' : 'ORIGINAL_HASH_PENDING',
     tx_hash: entry?.tx_hash ?? null, do_not_resend: Boolean(entry) };
   }), sends: 0, seller_requests: 0, current_state_verified: false, owner_approval_verified: false, broadcast_authorized: false,
@@ -186,7 +190,9 @@ export async function reconcileSvalinSetupResult({ plan, trustedReviewHash, owne
     }
     return { status: evidence.status, stage_id: stageId, tx_hash: entry.tx_hash, evidence,
       journal_updated: update && !entry.svalin_setup.evidence, sends: 0, do_not_resend: true, broadcast_authorized: false,
-      scope: 'trusted-RPC original receipt match only; no current-state verification or seller delivery' };
+      scope: evidence.status === 'FINAL_LOCAL_ADD_KEY_OUTCOME_MATCH' ?
+        'trusted-RPC original transaction and local outcome match; root receipt body omitted; no current-state verification or seller delivery' :
+        'trusted-RPC original receipt match only; no current-state verification or seller delivery' };
   }, exclusiveScope);
 }
 

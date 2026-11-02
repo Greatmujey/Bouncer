@@ -63,7 +63,8 @@ function safeTime(now) {
 }
 function nextStage(state, index, pendingHash) {
   return state?.status === 'LOCAL_SETUP_JOURNAL_ONLY' && Array.isArray(state.stages) && state.stages.length === 5 &&
-    state.stages.every((entry, i) => entry.stage_id === STAGES[i] && (i < index ? entry.state === 'FINAL_RECEIPTS_MATCH' :
+    state.stages.every((entry, i) => entry.stage_id === STAGES[i] && (i < index ?
+      (entry.state === 'FINAL_RECEIPTS_MATCH' || (i === 2 && entry.state === 'FINAL_LOCAL_ADD_KEY_OUTCOME_MATCH')) :
       i === index && pendingHash !== null ? entry.state === 'ORIGINAL_HASH_PENDING' && entry.tx_hash === pendingHash && entry.do_not_resend === true :
         entry.state === 'NOT_RECORDED'));
 }
@@ -92,7 +93,8 @@ function summarized(checks) {
 
 /**
  * By default the requested stage must be the journal's first unrecorded stage;
- * verify_funded_vault requires all five original receipts reconciled. An
+ * verify_funded_vault requires all five original stages reconciled, including
+ * a separately labeled local AddKey outcome if its receipt body was omitted. An
  * optional exact pendingOriginalHash permits ONLY a read-only recheck of a
  * recorded original, never permission to broadcast or retry it. The journal is
  * checked before and after RPC, but later races and deleted, rolled-back,

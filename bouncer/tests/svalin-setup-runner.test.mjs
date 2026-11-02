@@ -6,7 +6,8 @@ import fs from 'node:fs';
 import nearApi from 'near-api-js';
 import { runSvalinSetupStageOnce, recoverSvalinSetupStage } from '../agent/svalin-setup-runner.mjs';
 import { prepareSvalinProSession } from '../agent/svalin-pro-session.mjs';
-import { fixture, resultFor, STAGES, OWNER } from './fixtures/svalin-setup-fixture.mjs';
+import { fixture, resultFor, STAGES, OWNER, addSyntheticSystemGasRefund,
+  omitSyntheticLocalAddKeyReceipt } from './fixtures/svalin-setup-fixture.mjs';
 import { BLOCK, NOW, snapshot, providerFor } from './fixtures/svalin-setup-rpc-fixture.mjs';
 import { readExactArtifact } from './fixtures/v11-synthetic-host.mjs';
 
@@ -294,5 +295,35 @@ test('concurrent runners sharing a journal cannot both sign or send', async () =
     release(); const result = await pending;
     assert.equal(result.status, 'FINAL_SETUP_RECEIPT_MATCH'); assert.equal(first.sends, 1); assert.equal(second.sends, 0);
     assert.deepEqual(second.events, []);
+  } finally { f.close(); }
+});
+
+test('nearcore-shaped local AddKey and system gas refund reconcile without losing the one-send fence', async () => {
+  const f = fixture();
+  try {
+    await f.init();
+    for (let index = 0; index < STAGES.length; index++) {
+      const h = harness(f, index, { receipt: hash => {
+        const result = resultFor(f, index, hash);
+        if (index === 2) return omitSyntheticLocalAddKeyReceipt(f, result);
+        if (index === 3) return addSyntheticSystemGasRefund(f, result);
+        return result;
+      } });
+      const result = await runSvalinSetupStageOnce(h.options);
+      const expected = index === 2 ? 'FINAL_LOCAL_ADD_KEY_OUTCOME_MATCH' :
+        index === 4 ? 'FINAL_FUNDING_RECEIPTS_MATCH' : 'FINAL_SETUP_RECEIPT_MATCH';
+      assert.equal(result.status, expected, STAGES[index]);
+      assert.equal(result.broadcast_attempts, 1); assert.equal(h.sends, 1);
+      assert.equal(result.do_not_resend, true); assert.equal(result.post_stage_snapshot_required, true);
+      const state = await f.status();
+      assert.equal(state.stages[index].state, index === 2 ? 'FINAL_LOCAL_ADD_KEY_OUTCOME_MATCH' : 'FINAL_RECEIPTS_MATCH');
+      if (index === 2) assert.match(result.scope, /receipt body omitted/);
+      await assert.rejects(runSvalinSetupStageOnce(h.options), /journal is not ready/);
+      assert.equal(h.sends, 1, 'a reconciled original cannot be automatically resent');
+      if (index === 2) {
+        f.reopen();
+        assert.equal((await f.status()).stages[index].state, 'FINAL_LOCAL_ADD_KEY_OUTCOME_MATCH');
+      }
+    }
   } finally { f.close(); }
 });

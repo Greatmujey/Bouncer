@@ -13,13 +13,30 @@ This is a real compatibility blocker in the setup verifier, not a failed V11
 contract guard and not permission to advance a live setup. nearcore 2.14.0
 [intentionally omits a same-account transaction's local receipt body](https://github.com/near/nearcore/blob/2.14.0/chain/chain/src/chain.rs#L3294-L3323)
 from the receipt list, even though its execution outcome is reported. The
-production verifier currently fails closed on that shape; a correction requires
-separate review and approval. A subsequent diagnostic run
-[41425756155](https://github.com/Greatmujey/Bouncer/actions/runs/41425756155)
-confirmed the actual restricted-key state and method rejection, then reached the
-mock-token registration but the verifier rejected its result. The exact cause
-of that second mismatch is still being investigated; funding and transfer tests
-had not yet run. Synthetic JavaScript harness tests do not prove nearcore behavior.
+production verifier at that run's commit failed closed on that shape.
+
+A further diagnostic run [41426463533](https://github.com/Greatmujey/Bouncer/actions/runs/41426463533)
+confirmed the actual restricted-key state and method rejection. It also found
+that the registration verifier rejects a **system gas-refund** child even when
+the fresh mock-token registration balance matches. The harness recognized both
+specific blockers only for further local diagnostics; neither stage was marked
+verified and the overall job failed deliberately. After that, the original
+funding receipt graph matched, and the sandbox checked mock-token balances,
+allowlist and caps, one successful exact-FT transfer, replay rejection, and a
+failed mock transfer whose callback restored the balance and rolling budget.
+These are real nearcore checks of the named cases, but not a passing five-stage
+setup-verification run. Synthetic JavaScript harness tests do not prove
+nearcore behavior.
+
+A later local candidate changes the verifier to recognize only the reviewed,
+self-addressed, single-AddKey outcome when its root body is omitted, with the
+separate status `FINAL_LOCAL_ADD_KEY_OUTCOME_MATCH`. It does not fabricate or
+claim a matching root receipt. Registration permits only a fully linked,
+terminal, single system gas-refund transfer to the original signer/key, or no
+child; token-created refunds and unknown/incomplete graphs remain blocked. Both
+still require the original trusted transaction hash and a separate fresh state
+check. The local candidate has not yet been validated by another nearcore run;
+it is not authorization for testnet setup, funding or seller contact.
 
 The opt-in job starts a fresh, one-validator nearcore **2.14.0** sandbox on
 loopback, with protocol **88**, and destroys its temporary chain afterwards.
@@ -34,8 +51,11 @@ account ID or private key from its environment, and checks its own chain ID.
   account-creation batch, and verify its code hash, owner, version and **zero
   vault access keys**.
 - Execute all five action batches from `buildUnsignedSvalinTrialSetup` using a
-  local owner key. Verify each signed transaction against its review, then
-  check its original FINAL receipt graph with `inspectSvalinSetupAttempt`.
+  local owner key. Record each original signed hash in an ephemeral encrypted
+  setup journal before sending, then reconcile its FINAL evidence; for the
+  omitted local AddKey body, check its separately labeled outcome and fresh key
+  state instead. Reopen the journal after that stage. This harness does **not**
+  exercise the live testnet runner or stage preflight against nearcore.
 - Exercise the one-yocto guard with an owner-scoped function-call key that is
   allowed to attempt `set_policy`: zero deposit should reach the contract and
   fail; one yocto should be rejected by the protocol. Separately check a

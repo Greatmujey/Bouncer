@@ -78,6 +78,27 @@ export function resultFor(f, index, txHash) {
   }
   return result;
 }
+/** Synthetic nearcore-shaped variants. They retain no live keys or receipts. */
+export function addSyntheticSystemGasRefund(f, result) {
+  const rootId = result.transaction_outcome.outcome.status.SuccessReceiptId;
+  const root = result.receipts_outcome.find(item => item.id === rootId);
+  if (!root || root.outcome.receipt_ids.length !== 0) throw new Error('unexpected synthetic root');
+  const id = hash(241);
+  root.outcome.receipt_ids.push(id);
+  result.receipts.push(receipt(id, 'system', OWNER, { signer_id: OWNER, signer_public_key: f.ownerKey,
+    gas_price: '0', input_data_ids: [], output_data_receivers: [], is_promise_yield: false,
+    actions: [{ Transfer: { deposit: '12345' } }] }));
+  result.receipts_outcome.push(outcome(id, OWNER, { SuccessValue: '' }));
+  return result;
+}
+export function omitSyntheticLocalAddKeyReceipt(f, result) {
+  if (result.transaction.signer_id !== result.transaction.receiver_id ||
+      !result.transaction.actions?.[0]?.AddKey) throw new Error('expected synthetic local AddKey');
+  const id = result.transaction_outcome.outcome.status.SuccessReceiptId;
+  result.receipts = result.receipts.filter(item => item.receipt_id !== id);
+  return addSyntheticSystemGasRefund(f, result);
+}
+
 export function fixture({ wasmBytes = stubWasm() } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'svalin-setup-journal-'));
   const file = path.join(dir, 'journal.json'), key = crypto.randomBytes(32);
