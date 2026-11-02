@@ -1,0 +1,47 @@
+# A bounded view-only snapshot. No secrets, signing, payment or seller contact.
+name: Current testnet readiness (read only)
+
+on:
+  push:
+    branches: ['arena/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  snapshot:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[current-testnet-readonly]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: bouncer
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+      - name: Install lockfile and test view-only guards
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          node --test tests/historical-owner-readiness.test.mjs tests/paypercall-inspect.test.mjs tests/svalin-liquidity-readiness.test.mjs
+      - name: Inspect public testnet at fresh FINAL blocks
+        run: |
+          set -euo pipefail
+          if ! node scripts/current-testnet-snapshot.mjs > "$RUNNER_TEMP/testnet-views.json" 2> "$RUNNER_TEMP/testnet-errors.log"; then
+            python3 -c 'import os; s=open(os.environ["RUNNER_TEMP"]+"/testnet-errors.log").read()[-4000:]; print("::error title=Read-only views unavailable::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
+            exit 1
+          fi
+          {
+            echo '## Point-in-time public testnet views'
+            echo 'Each section uses a fresh FINAL block reported by the selected RPC. These views do not establish private-key custody, tradable quotes, deployed-source equivalence, seller terms or independent delivery. No transaction was sent.'
+            echo '```json'
+            cat "$RUNNER_TEMP/testnet-views.json"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          # Compact public-only result is also accessible as a check annotation
+          # if log/artifact redirects are unavailable to the operator.
+          python3 -c 'import os,json; p=os.environ["RUNNER_TEMP"]+"/testnet-views.json"; s=json.dumps(json.load(open(p)),separators=(",",":")); assert len(s)<12000; print("::notice title=Public testnet snapshot::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
