@@ -126,7 +126,7 @@ async function exercise({ endpoint, root, tokenOwner, wasm, storageMin, checkpoi
     const goal={id:'sandbox-ft-runner',contract_id:BUYER_VAULT,owner_account_id:BUYER,policy_id:BUY_POLICY,
       payee:RECEIVER_VAULT,token:TOKEN,amount:'100',msg:FT_MSG,policy_revision:1,route_revision:1};
     const first=await runFtCallGoal({goal,provider:runnerRpc,account:buyerAgent,publicKey:pub(buyerAgentKey),journal,execute:true,log:()=>{}});
-    assert.equal(first.status,'REUSED');assert.equal(first.settlement.used,'100');assert.equal(first.settlement.unused,'0');
+    assert.equal(first.status,'SETTLED');assert.equal(first.settlement.used,'100');assert.equal(first.settlement.unused,'0');
     const recovered=await recoverFtCallGoal({goal,provider:runnerRpc,journal,log:()=>{}});
     assert.equal(recovered.settlement.tx_hash,first.settlement.tx_hash);firstHash=first.settlement.tx_hash;
   } else {
