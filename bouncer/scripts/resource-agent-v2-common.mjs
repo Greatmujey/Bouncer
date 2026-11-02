@@ -4,7 +4,7 @@ import { validateOwnerBootstrapPlan } from '../agent/testnet-owner-bootstrap.mjs
 import { validateTestnetResourceAgentPlan } from '../agent/testnet-resource-agent-keyring.mjs';
 import { verifyTestnetResourceAgentFundingAnchor } from '../agent/testnet-resource-agent-funding-anchor.mjs';
 import { verifySignedTestnetResourceAgentSetup } from '../agent/testnet-resource-agent-setup.mjs';
-const stages=['guard-probe','configure','install'];
+const stages=['guard-probe','guard-control','configure','install'];
 function load(url,max=100_000){
  const stat=fs.lstatSync(url);if(!stat.isFile()||stat.isSymbolicLink()||stat.size<1||stat.size>max)throw new Error('invalid public resource-agent input');
  const bytes=fs.readFileSync(url);if(bytes.length!==stat.size)throw new Error('public resource-agent input changed');

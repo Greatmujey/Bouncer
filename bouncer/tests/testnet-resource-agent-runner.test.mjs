@@ -5,7 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import nearApi from 'near-api-js';
 import {createTestnetResourceAgentKeyring} from '../agent/testnet-resource-agent-keyring.mjs';
-import {inspectTestnetResourceAgentSetup,signTestnetResourceAgentSetup,verifySignedTestnetResourceAgentSetup} from '../agent/testnet-resource-agent-setup.mjs';
+import {inspectTestnetResourceAgentSetup,inspectTestnetResourceAgentGuardControl,signTestnetResourceAgentSetup,
+ verifySignedTestnetResourceAgentSetup,GUARD_CONTROL_POLICY_ID} from '../agent/testnet-resource-agent-setup.mjs';
 import {broadcastTestnetResourceAgentOnce,reconcileTestnetResourceAgent} from '../agent/testnet-resource-agent-runner.mjs';
 import {V11_NEAR_CODE_HASH} from '../agent/keyless-vault-bootstrap.mjs';
 
@@ -40,14 +41,15 @@ function fixture(){
    else if(method==='storage_balance_bounds')v={min,max:null};
    else if(method==='storage_balance_of')v={total:min,available:'0'};
    else if(method==='ft_balance_of')v=args.account_id===agent.vault?'6907':'0';
-   else if(method==='get_policy')v=phase>=1?{token:agent.token,per_tx_cap:'3000',daily_cap:'6907'}:null;
+   else if(method==='get_policy')v=args.policy_id===GUARD_CONTROL_POLICY_ID?null:
+    phase>=1?{token:agent.token,per_tx_cap:'3000',daily_cap:'6907'}:null;
    else if(method==='is_agent_key_allowed')v=phase>=1;
    else if(method==='daily_spent')v='0';
    else throw Error('unexpected view');
    return {block_hash:hash,result:[...Buffer.from(JSON.stringify(v))]};
   },
   async sendTransactionOnce(signed,wait,{beforeSubmit}){
-   assert.equal(wait,'FINAL');assert.equal(String(signed.transaction.nonce),active.nonce);beforeSubmit();sends++;nonce++;
+   assert.equal(wait,'FINAL');assert.equal(String(signed.transaction.nonce),active.nonce);beforeSubmit();sends++;nonce=Number(active.nonce);
    if(active.stage==='configure')phase=1;if(active.stage==='install')phase=2;
    if(lost){lost=false;throw Error('simulated lost acknowledgement')}
    return {final_execution_status:'FINAL',transaction_outcome:{id:active.tx_hash}};
@@ -59,7 +61,7 @@ function fixture(){
     {AddKey:{public_key:agent.public_key,access_key:{nonce:0,permission:{FunctionCall:{allowance:agent.gas_allowance_yocto,
      receiver_id:agent.vault,method_names:agent.methods}}}}});
    const fail={ActionError:{kind:{FunctionCallError:{ExecutionError:'ESCALATION BLOCKED: owner-only method requires exactly 1 yoctoNEAR'}}}};
-   const status=active.stage==='guard-probe'?{Failure:fail}:{SuccessValue:''};
+   const status=['guard-probe','guard-control'].includes(active.stage)?{Failure:fail}:{SuccessValue:''};
    return {final_execution_status:'FINAL',status,transaction:{hash:active.tx_hash,signer_id:owner.account_id,public_key:owner.public_key,
     receiver_id:receiver,nonce:active.nonce,actions:structuredClone(actions)},
     transaction_outcome:{id:active.tx_hash,outcome:{executor_id:owner.account_id,status:{SuccessReceiptId:root},receipt_ids:[root]}},
@@ -68,11 +70,13 @@ function fixture(){
     receipts_outcome:[{id:root,outcome:{executor_id:receiver,status:structuredClone(status),receipt_ids:[]}}]};
   }
  };
- const prepare=async stage=>{
-  const snapshot=await inspectTestnetResourceAgentSetup({ownerPlan:owner,agentPlan:agent,provider:p,now:()=>now});
-  const envelope=await signTestnetResourceAgentSetup({ownerPlan:owner,agentPlan:agent,snapshot,stage,keyPair:key,nowMs:now});p.active=envelope;return envelope;
+ const prepare=async (stage,originalProbe)=>{
+  const snapshot=stage==='guard-control'?
+   await inspectTestnetResourceAgentGuardControl({ownerPlan:owner,agentPlan:agent,provider:p,now:()=>now}):
+   await inspectTestnetResourceAgentSetup({ownerPlan:owner,agentPlan:agent,provider:p,now:()=>now});
+  const envelope=await signTestnetResourceAgentSetup({ownerPlan:owner,agentPlan:agent,snapshot,stage,keyPair:key,originalProbe,nowMs:now});p.active=envelope;return envelope;
  };
- const args=envelope=>({ownerPlan:owner,agentPlan:agent,envelope,expectedCircleCodeHash:hash,provider:p,now:()=>now,
+ const args=(envelope,originalProbe)=>({ownerPlan:owner,agentPlan:agent,envelope,originalProbe,expectedCircleCodeHash:hash,provider:p,now:()=>now,
   persistAttempt:async a=>a.tx_hash===envelope.tx_hash&&a.stage===envelope.stage});
  return {owner,agent,p,prepare,args,cleanup:()=>fs.rmSync(dir,{recursive:true,force:true})};
 }
@@ -89,6 +93,26 @@ test('one-shot setup verifies expected guard failure, recovers lost acknowledgem
   assert.equal(i.status,'RESTRICTED_RESOURCE_AGENT_INSTALLED_AT_FINAL');assert.equal(i.state.owner_key_count,2);
   assert.equal(i.state.vault_key_count,0);assert.equal(i.state.vault_actual_circle_atoms,'6907');assert.equal(f.p.sends,3);
   await assert.rejects(broadcastTestnetResourceAgentOnce(f.args(install)),/never resend/);assert.equal(f.p.sends,3);
+ }finally{f.cleanup()}
+});
+
+test('distinct control rejects zero-yocto escalation and finalizes a nonce above the unresolved original',async()=>{
+ const f=fixture();try{
+  const original=await f.prepare('guard-probe'); // journaled/published, deliberately not sent
+  const control=await f.prepare('guard-control',original);
+  assert.equal(BigInt(control.nonce),BigInt(original.nonce)+1n);
+  await assert.rejects(broadcastTestnetResourceAgentOnce(f.args(control)),/invalid restricted|bound|terms/);
+  assert.equal(f.p.sends,0);
+  f.p.lost=true;
+  await assert.rejects(broadcastTestnetResourceAgentOnce(f.args(control,original)),/never resend/);
+  assert.equal(f.p.sends,1);
+  const result=await reconcileTestnetResourceAgent(f.args(control,original));
+  assert.equal(result.status,'GUARD_CONTROL_REJECTED_AND_ORIGINAL_NONCE_SUPERSEDED_AT_FINAL');
+  assert.equal(result.receipt.guard_failure_verified,true);assert.equal(result.state.owner_key_nonce,control.nonce);
+  assert.equal(result.state.policy,null);assert.equal(result.state.guard_control_policy,null);
+  assert.equal(result.superseded_original_probe_hash,original.tx_hash);
+  assert.equal(result.original_probe_receipt_status,'UNKNOWN_UNLESS_SEPARATELY_VERIFIED');
+  assert.equal(f.p.sends,1,'lost acknowledgement must not cause a resend');
  }finally{f.cleanup()}
 });
 

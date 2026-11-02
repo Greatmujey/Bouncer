@@ -4,7 +4,7 @@
 import { publicResourceAgentInputs } from './resource-agent-v2-common.mjs';
 import { signAndJournalTestnetResourceAgent } from '../agent/testnet-resource-agent-journal.mjs';
 const [stage,option,...rest]=process.argv.slice(2);
-if(!['guard-probe','configure','install'].includes(stage)||(option&&option!=='--restore-original')||rest.length)throw new Error('usage: sign-resource-agent-v2-offline.mjs guard-probe|configure|install [--restore-original]');
+if(!['guard-probe','guard-control','configure','install'].includes(stage)||(option&&option!=='--restore-original')||rest.length)throw new Error('usage: sign-resource-agent-v2-offline.mjs guard-probe|guard-control|configure|install [--restore-original]');
 try{
  const {owner,agent}=publicResourceAgentInputs();
  const base='/home/user/near_hub/.bouncer-private/replacement-owner';

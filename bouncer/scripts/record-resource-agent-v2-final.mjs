@@ -5,7 +5,7 @@ import { publicResourceAgentInputs } from './resource-agent-v2-common.mjs';
 import { readBoundedPrivate } from '../agent/circle-owner-offline-journal.mjs';
 import { recordFinalTestnetResourceAgentResult } from '../agent/testnet-resource-agent-journal.mjs';
 const [stage,...rest]=process.argv.slice(2);
-if(!['guard-probe','configure','install'].includes(stage)||rest.length)throw new Error('a fixed resource-agent stage is required');
+if(!['guard-probe','guard-control','configure','install'].includes(stage)||rest.length)throw new Error('a fixed resource-agent stage is required');
 try{
  const {owner,agent,envelope}=publicResourceAgentInputs(stage),base='/home/user/near_hub/.bouncer-private/replacement-owner';
  const result=readBoundedPrivate(`${base}/resource-agent/${stage}-final.json`,100_000);

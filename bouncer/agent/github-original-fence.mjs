@@ -9,7 +9,7 @@ export async function githubOriginalFence({ artifactId, runId, headSha, digest, 
       typeof token !== 'string' || token.length < 20 || !Number.isSafeInteger(maxArtifactBytes) ||
       maxArtifactBytes < 1 || maxArtifactBytes > 2_000_000 || !['vault-v2-bootstrap-fence',
         'vault-circle-v2-register-fence', 'vault-circle-v2-fund-fence',
-        'resource-agent-v2-guard-probe-fence', 'resource-agent-v2-configure-fence',
+        'resource-agent-v2-guard-probe-fence', 'resource-agent-v2-guard-control-fence', 'resource-agent-v2-configure-fence',
         'resource-agent-v2-install-fence'].includes(prefix) || typeof fetchImpl !== 'function') {
     throw new Error('invalid original-hash artifact fence parameters');
   }

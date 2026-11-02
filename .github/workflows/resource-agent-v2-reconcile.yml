@@ -7,7 +7,7 @@ permissions:
   contents: read
 jobs:
   reconcile:
-    if: contains(github.event.head_commit.message, '[resource-agent-v2-reconcile-guard-probe]') || contains(github.event.head_commit.message, '[resource-agent-v2-reconcile-configure]') || contains(github.event.head_commit.message, '[resource-agent-v2-reconcile-install]')
+    if: contains(github.event.head_commit.message, '[resource-agent-v2-reconcile-guard-probe]') || contains(github.event.head_commit.message, '[resource-agent-v2-reconcile-guard-control]') || contains(github.event.head_commit.message, '[resource-agent-v2-reconcile-configure]') || contains(github.event.head_commit.message, '[resource-agent-v2-reconcile-install]')
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     defaults:
@@ -30,6 +30,7 @@ jobs:
           set -euo pipefail
           case "$COMMIT_MESSAGE" in
             *'[resource-agent-v2-reconcile-guard-probe]'*) stage=guard-probe ;;
+            *'[resource-agent-v2-reconcile-guard-control]'*) stage=guard-control ;;
             *'[resource-agent-v2-reconcile-configure]'*) stage=configure ;;
             *'[resource-agent-v2-reconcile-install]'*) stage=install ;;
             *) echo 'No fixed stage'; exit 1 ;;

@@ -38,12 +38,15 @@ async function fixture(){
 function markFinal(f,stage){
  const file=path.join(f.workDir,`${stage}-journal.json`),j=JSON.parse(fs.readFileSync(file));
  const result={stage,network:'testnet',owner:f.owner.account_id,vault:f.agent.vault,agent_public_key:f.agent.public_key,tx_hash:j.envelope.tx_hash,
-  status:stage==='guard-probe'?'ONE_YOCTO_GUARD_REJECTED_AT_FINAL':'RESOURCE_POLICY_CONFIGURED_AT_FINAL',
-  receipt:{tx_hash:j.envelope.tx_hash,root_receipt_id:hash,guard_failure_verified:stage==='guard-probe'},
+  status:stage==='guard-probe'?'ONE_YOCTO_GUARD_REJECTED_AT_FINAL':stage==='guard-control'?
+   'GUARD_CONTROL_REJECTED_AND_ORIGINAL_NONCE_SUPERSEDED_AT_FINAL':'RESOURCE_POLICY_CONFIGURED_AT_FINAL',
+  receipt:{tx_hash:j.envelope.tx_hash,root_receipt_id:hash,guard_failure_verified:['guard-probe','guard-control'].includes(stage)},
   state:{owner:f.owner.account_id,vault:f.agent.vault,owner_key_nonce:j.envelope.nonce,vault_key_count:0,
-   vault_actual_circle_atoms:'6907',vault_tracked_circle_atoms:'6907',circle_code_hash:hash,
-   guard_probe_eligible:stage==='guard-probe',install_eligible:stage==='configure',agent_granted:stage==='configure'},
-  seller_contacted:false,do_not_resend:true};
+   vault_actual_circle_atoms:'6907',vault_tracked_circle_atoms:'6907',circle_code_hash:hash,policy:null,
+   guard_probe_eligible:stage==='guard-probe',guard_control_eligible:stage==='guard-control',guard_control_policy:null,
+   install_eligible:stage==='configure',agent_granted:stage==='configure'},
+  ...(stage==='guard-control'?{superseded_original_probe_hash:j.envelope.supersedes_probe_hash,
+   original_probe_receipt_status:'UNKNOWN_UNLESS_SEPARATELY_VERIFIED'}:{}),seller_contacted:false,do_not_resend:true};
  const args={ownerPlan:f.owner,agentPlan:f.agent,ownerDir:f.ownerDir,workDir:f.workDir,stage,result};
  assert.equal(recordFinalTestnetResourceAgentResult(args).journal_status,'ORIGINAL_FINAL_VERIFIED');
  assert.equal(recordFinalTestnetResourceAgentResult(args).idempotent,true);
@@ -73,6 +76,25 @@ test('journals exact original before export, forbids re-signing and requires eac
    policy:{token:f.agent.token,per_tx_cap:'3000',daily_cap:'6907'},agent_granted:true,install_eligible:true});
   const installed=await signAndJournalTestnetResourceAgent(f.args('install'));assert.equal(installed.nonce,'45');
   assert.equal(installed.private_key_exported,false);assert.equal(installed.do_not_blindly_resend,true);
+ }finally{f.cleanup()}
+});
+
+test('a distinct verified nonce-fence control preserves the unresolved original before configuration',async()=>{
+ const f=await fixture();try{
+  save(path.join(f.workDir,'guard-probe-snapshot.json'),f.ready);
+  const original=await signAndJournalTestnetResourceAgent(f.args('guard-probe'));
+  const originalFile=path.join(f.workDir,'guard-probe-journal.json'),originalBytes=fs.readFileSync(originalFile,'utf8');
+  save(path.join(f.workDir,'guard-control-snapshot.json'),{...f.ready,guard_control_policy:null,guard_control_eligible:true});
+  const control=await signAndJournalTestnetResourceAgent(f.args('guard-control'));
+  assert.equal(BigInt(control.nonce),BigInt(original.nonce)+1n);
+  await assert.rejects(signAndJournalTestnetResourceAgent(f.args('configure')));
+  markFinal(f,'guard-control');
+  assert.equal(fs.readFileSync(originalFile,'utf8'),originalBytes,'the earlier original must remain unchanged');
+  save(path.join(f.workDir,'configure-snapshot.json'),{...f.ready,owner_key_nonce:control.nonce});
+  const configured=await signAndJournalTestnetResourceAgent(f.args('configure'));
+  assert.equal(BigInt(configured.nonce),BigInt(control.nonce)+1n);
+  assert.equal(JSON.parse(originalBytes).status,'ORIGINAL_SIGNED_NOT_CONFIRMED');
+  await assert.rejects(signAndJournalTestnetResourceAgent(f.args('guard-control')),/never sign a replacement/);
  }finally{f.cleanup()}
 });
 

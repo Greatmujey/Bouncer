@@ -7,7 +7,7 @@ permissions:
   contents: read
 jobs:
   inspect:
-    if: contains(github.event.head_commit.message, '[resource-agent-v2-readonly]')
+    if: contains(github.event.head_commit.message, '[resource-agent-v2-readonly]') || contains(github.event.head_commit.message, '[resource-agent-v2-control-readonly]')
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     defaults:
@@ -24,9 +24,13 @@ jobs:
       - name: Test resource-agent preflight and original-hash guards
         run: node --test tests/testnet-resource-agent-*.test.mjs
       - name: Inspect one pinned FINAL testnet state
+        env:
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
         run: |
           set -euo pipefail
-          if ! node scripts/inspect-resource-agent-v2.mjs > "$RUNNER_TEMP/resource-agent-preflight.json" 2> "$RUNNER_TEMP/resource-agent-preflight-error.log"; then
+          script=scripts/inspect-resource-agent-v2.mjs
+          if [[ "$COMMIT_MESSAGE" == *'[resource-agent-v2-control-readonly]'* ]]; then script=scripts/inspect-resource-agent-v2-control.mjs; fi
+          if ! node "$script" > "$RUNNER_TEMP/resource-agent-preflight.json" 2> "$RUNNER_TEMP/resource-agent-preflight-error.log"; then
             python3 -c 'import os; s=open(os.environ["RUNNER_TEMP"]+"/resource-agent-preflight-error.log").read()[-4000:]; print("::error title=Resource-agent preflight unavailable::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
             exit 1
           fi

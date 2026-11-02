@@ -5,7 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import nearApi from 'near-api-js';
 import {createTestnetResourceAgentKeyring} from '../agent/testnet-resource-agent-keyring.mjs';
-import {inspectTestnetResourceAgentSetup,signTestnetResourceAgentSetup,verifySignedTestnetResourceAgentSetup} from '../agent/testnet-resource-agent-setup.mjs';
+import {inspectTestnetResourceAgentSetup,signTestnetResourceAgentSetup,verifySignedTestnetResourceAgentSetup,
+ verifyGuardControlParent,GUARD_CONTROL_POLICY_ID} from '../agent/testnet-resource-agent-setup.mjs';
 import {V11_NEAR_CODE_HASH} from '../agent/keyless-vault-bootstrap.mjs';
 import {verifyTestnetResourceAgentReceipt} from '../agent/testnet-resource-agent-evidence.mjs';
 import {inspectInstalledTestnetResourceAgent} from '../agent/testnet-resource-agent-state.mjs';
@@ -46,6 +47,25 @@ test('probe, owner policy and restricted access-key actions are exact, independe
    assert.throws(()=>verifySignedTestnetResourceAgentSetup(bad,f.owner,f.p));
    assert.throws(()=>verifySignedTestnetResourceAgentSetup({...e,stage:stage==='install'?'configure':'install'},f.owner,f.p));
   }
+ }finally{f.cleanup()}
+});
+test('distinct zero-deposit guard control binds the original and safely skips its nonce',async()=>{
+ const f=fixture();try{
+  const common={ownerPlan:f.owner,agentPlan:f.p,keyPair:f.key,nowMs:f.now};
+  const original=await signTestnetResourceAgentSetup({...common,snapshot:f.snapshot,stage:'guard-probe'});
+  const snapshot={...f.snapshot,guard_control_policy:null,guard_control_eligible:true};
+  const control=await signTestnetResourceAgentSetup({...common,snapshot,stage:'guard-control',originalProbe:original});
+  assert.equal(original.nonce,'43');assert.equal(control.nonce,'44');
+  assert.equal(control.policy_id,GUARD_CONTROL_POLICY_ID);assert.equal(control.supersedes_probe_hash,original.tx_hash);
+  assert.equal(verifyGuardControlParent(control,original,f.owner,f.p),true);
+  const call=verifySignedTestnetResourceAgentSetup(control,f.owner,f.p).transaction.actions[0].functionCall;
+  assert.equal(call.deposit,0n);assert.deepEqual(JSON.parse(Buffer.from(call.args).toString()),
+   {policy_id:GUARD_CONTROL_POLICY_ID,token:f.p.token,per_tx_cap:'1',daily_cap:'1'});
+  await assert.rejects(signTestnetResourceAgentSetup({...common,snapshot,stage:'guard-control'}));
+  await assert.rejects(signTestnetResourceAgentSetup({...common,snapshot:{...snapshot,owner_key_nonce:'43'},stage:'guard-control',originalProbe:original}));
+  await assert.rejects(signTestnetResourceAgentSetup({...common,snapshot:{...snapshot,guard_control_policy:{}},stage:'guard-control',originalProbe:original}));
+  assert.throws(()=>verifyGuardControlParent({...control,supersedes_probe_hash:hash},original,f.owner,f.p));
+  assert.throws(()=>verifyGuardControlParent(control,{...original,nonce:'44'},f.owner,f.p));
  }finally{f.cleanup()}
 });
 test('refuses stale, inconsistent, wrong-key or not-yet-configured snapshots',async()=>{

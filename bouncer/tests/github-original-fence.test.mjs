@@ -34,7 +34,7 @@ test('changed, expired, oversized, wrong-branch or unavailable fences prevent a 
     assert.equal(await githubOriginalFence({ ...args, prefix: `vault-circle-v2-${kind === 'fund' ? 'register' : 'fund'}-fence`,
       fetchImpl: async () => response(m) }), false);
   }
-  for (const stage of ['guard-probe', 'configure', 'install']) {
+  for (const stage of ['guard-probe', 'guard-control', 'configure', 'install']) {
     const prefix = `resource-agent-v2-${stage}-fence`, m = metadata(); m.name = `${prefix}-5678-${args.digest}`;
     assert.equal(await githubOriginalFence({ ...args, prefix, fetchImpl: async () => response(m) }), true);
     const other = stage === 'configure' ? 'install' : 'configure';

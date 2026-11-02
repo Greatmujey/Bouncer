@@ -63,7 +63,8 @@ export function verifyTestnetResourceAgentReceipt({ownerPlan,agentPlan,envelope,
  }
  if(outcome.receipt_ids.length>1||outcomes.size!==1+outcome.receipt_ids.length||receipts.size!==(omitted?0:1)+outcome.receipt_ids.length||
   outcome.receipt_ids.some(id=>!systemRefund(receipts.get(id),outcomes.get(id),owner))) throw new Error('resource-agent receipt graph has unknown children');
- if(envelope.stage==='guard-probe'){
+ const guard=envelope.stage==='guard-probe'||envelope.stage==='guard-control';
+ if(guard){
   if(!record(result.status?.Failure)||Object.keys(result.status).length!==1||!isDeepStrictEqual(outcome.status,result.status)||
     !JSON.stringify(result.status.Failure).includes('ESCALATION BLOCKED: owner-only method requires exactly 1 yoctoNEAR'))
      throw new Error('original probe did not fail at the one-yocto owner guard');
@@ -71,5 +72,5 @@ export function verifyTestnetResourceAgentReceipt({ownerPlan,agentPlan,envelope,
   throw new Error('resource-agent configuration or key installation did not succeed');
  }
  return {stage:envelope.stage,tx_hash:envelope.tx_hash,root_receipt_id:rootId,local_receipt_body_omitted:omitted,
-  guard_failure_verified:envelope.stage==='guard-probe',trusted_rpc_not_consensus_proof:true,current_state_verified:false,do_not_resend:true};
+  guard_failure_verified:guard,trusted_rpc_not_consensus_proof:true,current_state_verified:false,do_not_resend:true};
 }

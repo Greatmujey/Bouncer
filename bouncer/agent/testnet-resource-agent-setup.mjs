@@ -12,7 +12,10 @@ import { V11_NEAR_CODE_HASH } from './keyless-vault-bootstrap.mjs';
 import { assertFreshFinalBlock } from '../shared/fresh-final-block.mjs';
 import { pinnedAccessKeyNonce } from '../shared/pinned-access-key-nonce.mjs';
 import { isTransactionHash } from '../shared/direct-payment-settlement.mjs';
-const TGAS=10n**12n, stages=['guard-probe','configure','install'];
+const TGAS=10n**12n, stages=['guard-probe','guard-control','configure','install'];
+// A distinct, harmless escalation test. It deliberately skips the nonce of an
+// already-published zero-deposit probe; it never re-signs or resends that probe.
+export const GUARD_CONTROL_POLICY_ID='guard-control-nonce-fence';
 const sha=b=>crypto.createHash('sha256').update(b).digest();
 const samePolicy=(x,p)=>x!==null && typeof x==='object' && !Array.isArray(x) &&
   Object.keys(x).sort().join(',')==='daily_cap,per_tx_cap,token' && x.token===p.token &&
@@ -20,6 +23,8 @@ const samePolicy=(x,p)=>x!==null && typeof x==='object' && !Array.isArray(x) &&
 function policyArgs(p){return {policy_id:p.policy_id,token:p.token,per_tx_cap:p.per_tx_cap_atoms,daily_cap:p.daily_cap_atoms}}
 function actions(p,stage){
   if(stage==='guard-probe') return [nearApi.transactions.functionCall('set_policy',policyArgs(p),30n*TGAS,0n)];
+  if(stage==='guard-control') return [nearApi.transactions.functionCall('set_policy',
+    {policy_id:GUARD_CONTROL_POLICY_ID,token:p.token,per_tx_cap:'1',daily_cap:'1'},30n*TGAS,0n)];
   if(stage==='configure') return [nearApi.transactions.functionCall('set_policy',policyArgs(p),30n*TGAS,1n),
     nearApi.transactions.functionCall('grant_agent_key',{policy_id:p.policy_id,public_key:p.public_key},30n*TGAS,1n)];
   if(stage==='install') return [nearApi.transactions.addKey(nearApi.utils.PublicKey.from(p.public_key),
@@ -44,6 +49,18 @@ export async function inspectTestnetResourceAgentSetup({ownerPlan,agentPlan,prov
     observed_at:new Date(finished).toISOString(),
     scope:'trusted-RPC pinned preflight only; no transaction sent, no payee approved, no independent provider delivery'};
 }
+/** Same-FINAL-block check for the distinct zero-yocto nonce-fence probe. */
+export async function inspectTestnetResourceAgentGuardControl({ownerPlan,agentPlan,provider,now=Date.now}={}) {
+  const p=validateTestnetResourceAgentPlan(agentPlan,ownerPlan);
+  const state=await inspectTestnetResourceAgentSetup({ownerPlan,agentPlan:p,provider,now});
+  const control=await readPinnedJsonView(provider,state.block_hash,p.vault,'get_policy',{policy_id:GUARD_CONTROL_POLICY_ID});
+  const finished=now();
+  if(!Number.isSafeInteger(finished)||finished<Date.parse(state.observed_at))throw new Error('local clock moved backwards');
+  assertFreshFinalBlock({header:{hash:state.block_hash,timestamp_nanosec:state.block_timestamp_nanosec}},finished);
+  return {...state,guard_control_policy:control,guard_control_eligible:state.guard_probe_eligible===true&&control===null,
+    observed_at:new Date(finished).toISOString(),
+    scope:'trusted-RPC pinned control and original policy views; no transaction sent or seller contacted'};
+}
 function validateSnapshot(s,owner,p,stage,nowMs){
   if(!stages.includes(stage)||!s||s.network!=='testnet'||s.owner!==owner.account_id||s.public_key!==owner.public_key||
      s.vault!==p.vault||s.agent_public_key!==p.public_key||s.circle_token!==p.token||s.vault_code_hash!==V11_NEAR_CODE_HASH||
@@ -51,27 +68,41 @@ function validateSnapshot(s,owner,p,stage,nowMs){
      s.vault_actual_circle_atoms!=='6907'||s.vault_tracked_circle_atoms!=='6907'||
      s.signed!==false||s.sent!==false||s.seller_contacted!==false||pinnedAccessKeyNonce(s.owner_key_nonce)===null||
      (stage==='install' ? !(s.install_eligible===true&&samePolicy(s.policy,p)&&s.agent_granted===true) :
-       !(s[stage==='configure'?'configure_eligible':'guard_probe_eligible']===true&&s.policy===null&&s.agent_granted===false))) {
+       !(s[stage==='configure'?'configure_eligible':stage==='guard-control'?'guard_control_eligible':'guard_probe_eligible']===true&&
+         s.policy===null&&s.agent_granted===false&&(stage!=='guard-control'||s.guard_control_policy===null)))) {
     throw new Error('fresh testnet agent setup snapshot is not eligible');
   }
   assertFreshFinalBlock({header:{hash:s.block_hash,timestamp_nanosec:s.block_timestamp_nanosec}},nowMs);
 }
-function terms(owner,p,stage,nonce,block){
+function terms(owner,p,stage,nonce,block,originalProbe){
   return {version:1,purpose:'bounded-testnet-resource-agent-setup',network:'testnet',stage,owner:owner.account_id,
-    owner_public_key:owner.public_key,vault:p.vault,agent_public_key:p.public_key,policy_id:p.policy_id,
-    nonce,block_hash:block,do_not_blindly_resend:true};
+    owner_public_key:owner.public_key,vault:p.vault,agent_public_key:p.public_key,
+    policy_id:stage==='guard-control'?GUARD_CONTROL_POLICY_ID:p.policy_id,nonce,block_hash:block,do_not_blindly_resend:true,
+    ...(stage==='guard-control'?{supersedes_probe_hash:originalProbe.tx_hash,supersedes_probe_nonce:originalProbe.nonce}:{})};
 }
 function check(e,owner,p){
+  const nonce=pinnedAccessKeyNonce(e?.nonce),prior=pinnedAccessKeyNonce(e?.supersedes_probe_nonce);
   if(!e||e.version!==1||e.purpose!=='bounded-testnet-resource-agent-setup'||e.network!=='testnet'||!stages.includes(e.stage)||
     e.owner!==owner.account_id||e.owner_public_key!==owner.public_key||e.vault!==p.vault||e.agent_public_key!==p.public_key||
-    e.policy_id!==p.policy_id||pinnedAccessKeyNonce(e.nonce)===null||e.nonce==='0'||!isTransactionHash(e.block_hash)||
-    e.do_not_blindly_resend!==true) throw new Error('invalid restricted agent setup terms');
+    e.policy_id!==(e.stage==='guard-control'?GUARD_CONTROL_POLICY_ID:p.policy_id)||nonce===null||nonce===0n||!isTransactionHash(e.block_hash)||
+    e.do_not_blindly_resend!==true||(e.stage==='guard-control'&&
+      (!isTransactionHash(e.supersedes_probe_hash)||prior===null||prior===0n||nonce!==prior+1n))||
+    (e.stage!=='guard-control'&&(e.supersedes_probe_hash!==undefined||e.supersedes_probe_nonce!==undefined))) {
+    throw new Error('invalid restricted agent setup terms');
+  }
 }
-export async function signTestnetResourceAgentSetup({ownerPlan,agentPlan,snapshot,stage,keyPair,nowMs=Date.now()}={}) {
+export async function signTestnetResourceAgentSetup({ownerPlan,agentPlan,snapshot,stage,keyPair,originalProbe,nowMs=Date.now()}={}) {
   const owner=validateOwnerBootstrapPlan(ownerPlan), p=validateTestnetResourceAgentPlan(agentPlan,owner);
   validateSnapshot(snapshot,owner,p,stage,nowMs);
   if(!keyPair||String(keyPair.getPublicKey())!==owner.public_key) throw new Error('setup signing key differs from owner');
-  const e=terms(owner,p,stage,(pinnedAccessKeyNonce(snapshot.owner_key_nonce)+1n).toString(),snapshot.block_hash);
+  const current=pinnedAccessKeyNonce(snapshot.owner_key_nonce);
+  if(stage==='guard-control'){
+    verifySignedTestnetResourceAgentSetup(originalProbe,owner,p);
+    if(originalProbe.stage!=='guard-probe'||BigInt(originalProbe.nonce)!==current+1n||current+2n>BigInt(Number.MAX_SAFE_INTEGER)-1n){
+      throw new Error('control requires the exact still-pending original probe and one higher nonce');
+    }
+  }else if(originalProbe!==undefined)throw new Error('unexpected original probe for setup stage');
+  const e=terms(owner,p,stage,(current+(stage==='guard-control'?2n:1n)).toString(),snapshot.block_hash,originalProbe);
   const receiver=stage==='install'?owner.account_id:p.vault;
   const tx=nearApi.transactions.createTransaction(owner.account_id,keyPair.getPublicKey(),receiver,BigInt(e.nonce),
     actions(p,stage),nearApi.utils.serialize.base_decode(e.block_hash));
@@ -99,4 +130,16 @@ export function verifySignedTestnetResourceAgentSetup(e,ownerPlan,agentPlan){
      !actual.equals(Buffer.from(nearApi.transactions.encodeTransaction(expected)))||!Array.isArray(sig)||sig.length!==64||
      !key.verify(digest,Uint8Array.from(sig))||nearApi.utils.serialize.base_encode(digest)!==e.tx_hash) throw new Error('restricted setup signature or action differs');
   return signed;
+}
+
+/** Bind a distinct control probe to the immutable earlier zero-yocto original.
+ * Once the control's higher nonce is FINAL, that original cannot execute later.
+ * This says nothing about whether the original may already have been included. */
+export function verifyGuardControlParent(control,originalProbe,ownerPlan,agentPlan){
+  verifySignedTestnetResourceAgentSetup(originalProbe,ownerPlan,agentPlan);
+  verifySignedTestnetResourceAgentSetup(control,ownerPlan,agentPlan);
+  if(originalProbe.stage!=='guard-probe'||control.stage!=='guard-control'||
+    control.supersedes_probe_hash!==originalProbe.tx_hash||control.supersedes_probe_nonce!==originalProbe.nonce||
+    BigInt(control.nonce)!==BigInt(originalProbe.nonce)+1n)throw new Error('control is not bound to the original probe');
+  return true;
 }
