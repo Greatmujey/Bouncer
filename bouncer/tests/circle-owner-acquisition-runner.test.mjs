@@ -8,7 +8,8 @@ import { inspectCircleOwnerAcquisition, ACQUISITION_INPUT_YOCTO as INPUT } from 
 import { signOwnerAcquisition } from '../agent/circle-owner-acquisition.mjs';
 import { verifyOwnerAcquisitionReceipt, broadcastOwnerAcquisitionOnce } from '../agent/circle-owner-acquisition-runner.mjs';
 
-const NOW = Date.parse('2026-11-02T16:45:00Z'), BLOCK = mockHash('funding-block'), ROOT = mockHash('funding-root'), OUTPUT = mockHash('funding-output');
+const NOW = Date.parse('2026-11-02T16:45:00Z'), BLOCK = mockHash('funding-block'), ROOT = mockHash('funding-root'),
+  HOOK = mockHash('funding-hook'), OUTPUT = mockHash('funding-output');
 const pair = nearApi.KeyPair.fromRandom('ed25519'), pub = String(pair.getPublicKey());
 const plan = { version: 1, purpose: 'new-bouncer-testnet-owner', network: 'testnet',
   account_id: 'bouncer-owner-0123456789abcdef01234567.testnet', public_key: pub };
@@ -61,12 +62,19 @@ function receipt(e) {
     args: Buffer.from(c.args).toString('base64'), gas: c.gas.toString(), deposit: c.deposit.toString() } }));
   const receipts = [{ receipt_id: ROOT, predecessor_id: plan.account_id, receiver_id: WRAP,
     receipt: { Action: { signer_id: plan.account_id, signer_public_key: pub, actions: structuredClone(calls) } } }];
-  const outcomes = [{ id: ROOT, outcome: { executor_id: WRAP, status: { SuccessValue: '' }, receipt_ids: e.kind === 'swap' ? [OUTPUT] : [] } }];
+  const outcomes = [{ id: ROOT, outcome: { executor_id: WRAP, status: { SuccessValue: '' }, receipt_ids: e.kind === 'swap' ? [HOOK] : [] } }];
   if (e.kind === 'swap') {
+    const outer = JSON.parse(Buffer.from(calls[0].FunctionCall.args, 'base64').toString('utf8'));
+    receipts.push({ receipt_id: HOOK, predecessor_id: WRAP, receiver_id: REF, receipt: { Action: { actions: [{ FunctionCall: {
+      method_name: 'ft_on_transfer', args: Buffer.from(JSON.stringify({ sender_id: plan.account_id, amount: INPUT, msg: outer.msg })).toString('base64'),
+      gas: '150000000000000', deposit: '0' } }] } } });
     receipts.push({ receipt_id: OUTPUT, predecessor_id: REF, receiver_id: CIRCLE, receipt: { Action: { actions: [{ FunctionCall: {
       method_name: 'ft_transfer', args: Buffer.from(JSON.stringify({ receiver_id: plan.account_id, amount: '6500' })).toString('base64'),
       gas: '15000000000000', deposit: '1' } }] } } });
-    outcomes.push({ id: OUTPUT, outcome: { executor_id: CIRCLE, status: { SuccessValue: '' }, receipt_ids: [] } });
+    const event = { standard: 'nep141', version: '1.0.0', event: 'ft_transfer',
+      data: [{ old_owner_id: REF, new_owner_id: plan.account_id, amount: '6500' }] };
+    outcomes.push({ id: HOOK, outcome: { executor_id: REF, status: { SuccessValue: Buffer.from('"0"').toString('base64') }, receipt_ids: [OUTPUT] } });
+    outcomes.push({ id: OUTPUT, outcome: { executor_id: CIRCLE, status: { SuccessValue: '' }, logs: [`EVENT_JSON:${JSON.stringify(event)}`], receipt_ids: [] } });
   }
   return { final_execution_status: 'FINAL', status: { SuccessValue: '' },
     transaction: { hash: e.tx_hash, signer_id: plan.account_id, receiver_id: WRAP, public_key: pub, nonce: e.nonce, actions: calls },
@@ -90,10 +98,12 @@ test('wrap and swap original receipts pin every action and the linked Circle pay
       const altered = structuredClone(r); change(altered); assert.throws(() => verifyOwnerAcquisitionReceipt(altered, e, plan));
     }
     if (kind === 'swap') {
-      for (const change of [x => { x.receipts[1].predecessor_id = 'other.testnet'; },
+      for (const change of [x => { x.receipts[2].predecessor_id = 'other.testnet'; },
         x => { x.receipts_outcome[0].outcome.receipt_ids = []; },
-        x => { x.receipts[1].receipt.Action.actions[0].FunctionCall.args = Buffer.from('{"receiver_id":"other.testnet","amount":"6500"}').toString('base64'); },
-        x => { x.receipts_outcome[1].outcome.status = { Failure: {} }; }]) {
+        x => { x.receipts[2].receipt.Action.actions[0].FunctionCall.args = Buffer.from('{"receiver_id":"other.testnet","amount":"6500"}').toString('base64'); },
+        x => { x.receipts_outcome[2].outcome.status = { Failure: {} }; },
+        x => { x.receipts_outcome[1].outcome.status = { SuccessValue: Buffer.from('"1"').toString('base64') }; },
+        x => { x.receipts_outcome[2].outcome.logs = []; }]) {
         const altered = structuredClone(r); change(altered); assert.throws(() => verifyOwnerAcquisitionReceipt(altered, e, plan));
       }
     }

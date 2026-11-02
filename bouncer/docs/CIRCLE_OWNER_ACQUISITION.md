@@ -12,7 +12,13 @@ observed the owner registered with Circle and holding **zero** test USDC. It
 also observed Ref registered with both tokens, a wNEAR storage minimum of
 0.00125 test NEAR, and pool 1845 indicating 6,917 USDC atomic units for 0.01
 wNEAR. This is a stale, point-in-time indication, not a reserved price or proof
-of funding; fresh checks are mandatory before either action.
+of Circle funding; fresh checks are mandatory before the swap.
+
+The [one-shot wrap](https://github.com/Greatmujey/Bouncer/actions/runs/41480629786)
+subsequently verified original testnet transaction
+[`BF84QZFMFRuUSWkNWueUBQRD1yvtM6diL2yUGoHaeKpd`](https://testnet.nearblocks.io/txns/BF84QZFMFRuUSWkNWueUBQRD1yvtM6diL2yUGoHaeKpd),
+its FINAL receipt and a fresh 0.01 wNEAR owner balance. Circle balance was
+still zero. The original hash is journaled; **do not resend it**.
 
 ## Two narrowly fixed actions
 
@@ -31,8 +37,9 @@ Circle registration journal is required before wrapping; the exact verified
 wrap journal is required before signing the swap. Each broadcaster rereads
 fresh FINAL account, nonce, code, registration, balances and price, records a
 public fence, sends at most once, and verifies the original linked receipt and
-subsequent balances. A swap additionally requires one successful Circle
-`ft_transfer` receipt from Ref to the owner. A lost response or failed receipt
+subsequent balances. A swap additionally requires the exact Ref swap hook,
+its full-input-used result, one linked successful Circle `ft_transfer` receipt
+from Ref to the owner, and its matching NEP-141 event. A lost response or failed receipt
 check is **unknown**, not permission to repeat: retain and reconcile the
 original hash. These checks trust the selected RPC and are not consensus proofs.
 

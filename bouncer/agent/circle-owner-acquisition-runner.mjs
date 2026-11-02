@@ -62,19 +62,42 @@ export function verifyOwnerAcquisitionReceipt(result, envelope, rawPlan) {
   if (seen.size !== outcomes.size) throw new Error('acquisition receipt graph has unlinked outcomes');
   let circleTransfer = null;
   if (envelope.kind === 'swap') {
+    const outerArgs = JSON.parse(Buffer.from(expected[0].functionCall.args).toString('utf8'));
+    const children = rootOutcomes[0].outcome.receipt_ids, hooks = result.receipts.filter(r => children.includes(r?.receipt_id) &&
+      r.predecessor_id === WRAP && r.receiver_id === REF && r.receipt?.Action?.actions?.length === 1 &&
+      r.receipt.Action.actions[0]?.FunctionCall?.method_name === 'ft_on_transfer');
+    if (hooks.length !== 1) throw new Error('unique Ref swap hook was not verified');
+    const hook = hooks[0], hookCall = hook.receipt.Action.actions[0].FunctionCall, hookOutcome = outcomes.get(hook.receipt_id);
+    let hookArgs, hookReturn;
+    try {
+      hookArgs = JSON.parse(Buffer.from(hookCall.args, 'base64').toString('utf8'));
+      hookReturn = JSON.parse(Buffer.from(hookOutcome?.status?.SuccessValue, 'base64').toString('utf8'));
+    } catch { throw new Error('Ref swap hook did not return the full input as used'); }
+    if (numeric(hookCall.deposit) !== 0n || hookOutcome?.executor_id !== REF || hookReturn !== '0' ||
+        hookArgs?.sender_id !== plan.account_id || hookArgs.amount !== INPUT || hookArgs.msg !== outerArgs.msg) {
+      throw new Error('Ref swap hook does not match the original fixed route');
+    }
     const matches = [];
     for (const r of result.receipts) {
-      if (r?.predecessor_id !== REF || r.receiver_id !== CIRCLE || !seen.has(r.receipt_id) ||
+      if (r?.predecessor_id !== REF || r.receiver_id !== CIRCLE || !hookOutcome.receipt_ids.includes(r.receipt_id) ||
           !Array.isArray(r.receipt?.Action?.actions) || r.receipt.Action.actions.length !== 1) continue;
       const call = r.receipt.Action.actions[0]?.FunctionCall, outcome = outcomes.get(r.receipt_id);
       if (call?.method_name !== 'ft_transfer' || numeric(call.deposit) !== 1n || typeof call.args !== 'string' ||
           outcome?.executor_id !== CIRCLE || typeof outcome.status?.SuccessValue !== 'string') continue;
       let args; try { args = JSON.parse(Buffer.from(call.args, 'base64').toString('utf8')); } catch { continue; }
       const amount = numeric(args?.amount);
-      if (args?.receiver_id === plan.account_id && amount !== null && amount >= BigInt(envelope.min_output_atoms) &&
-          amount <= BigInt(MAX_OUT)) matches.push({ receipt_id: r.receipt_id, amount_atoms: amount.toString() });
+      if (args?.receiver_id !== plan.account_id || amount === null || amount < BigInt(envelope.min_output_atoms) || amount > BigInt(MAX_OUT)) continue;
+      const events = (outcome.logs || []).flatMap(log => {
+        if (typeof log !== 'string' || !log.startsWith('EVENT_JSON:') || log.length > 16_384) return [];
+        try { const event = JSON.parse(log.slice(11)); return event.standard === 'nep141' && event.version === '1.0.0' &&
+          event.event === 'ft_transfer' ? [event] : []; } catch { return []; }
+      });
+      if (events.length === 1 && Array.isArray(events[0].data) && events[0].data.length === 1 &&
+          events[0].data[0]?.old_owner_id === REF && events[0].data[0]?.new_owner_id === plan.account_id &&
+          events[0].data[0]?.amount === amount.toString()) matches.push({ receipt_id: r.receipt_id, amount_atoms: amount.toString(),
+            transfer_event_verified: true });
     }
-    if (matches.length !== 1) throw new Error('unique successful Ref-to-owner Circle transfer was not verified');
+    if (matches.length !== 1) throw new Error('unique successful Ref-to-owner Circle transfer and event were not verified');
     circleTransfer = matches[0];
   }
   return { tx_hash: envelope.tx_hash, root_receipt_id: rootId, linked_successful_outcomes: seen.size,
