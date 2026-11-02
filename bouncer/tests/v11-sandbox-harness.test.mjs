@@ -8,7 +8,8 @@ import path from 'node:path';
 import test from 'node:test';
 import nearApi from 'near-api-js';
 import { SANDBOX_CHAIN_ID, MOCK_TOKEN_GENESIS_BALANCE, readVerifiedFile, withMockTokenInGenesis,
-  assertSandboxStatus, requireFinalSuccess, requireReceiptLog } from '../integration/v11-sandbox-support.mjs';
+  assertSandboxStatus, requireFinalSuccess, assertOmittedLocalAddKeyReceipt,
+  requireReceiptLog } from '../integration/v11-sandbox-support.mjs';
 import { CIRCLE_TESTNET_USDC as TOKEN } from '../scripts/circle-testnet-setup.mjs';
 
 const publicKey = String(nearApi.KeyPair.fromRandom('ed25519').getPublicKey());
@@ -74,4 +75,32 @@ test('receipt checks reject unknown or failed outcomes except an explicitly coun
   assert.throws(() => requireReceiptLog(failed, 'mock-ft', 'mock success'));
   failed.receipts_outcome.push(structuredClone(failed.receipts_outcome[0]));
   assert.throws(() => requireReceiptLog(failed, 'vault.testnet', 'mock success'));
+});
+
+test('local AddKey omission diagnostic requires a specific rejected same-account FINAL outcome', () => {
+  const attempt = { stage_id: 'install_restricted_agent_key', tx_hash: 'original-local-hash',
+    signer_id: 'owner.testnet', receiver_id: 'owner.testnet', signer_public_key: publicKey };
+  const result = { final_execution_status: 'FINAL', status: { SuccessValue: '' },
+    transaction: { hash: attempt.tx_hash, signer_id: attempt.signer_id, receiver_id: attempt.receiver_id, public_key: publicKey },
+    transaction_outcome: { id: attempt.tx_hash, outcome: { executor_id: attempt.signer_id,
+      receipt_ids: ['local-root'], status: { SuccessReceiptId: 'local-root' } } },
+    receipts: [], receipts_outcome: [receipt('owner.testnet', { SuccessValue: '' })] };
+  result.receipts_outcome[0].id = 'local-root';
+  const error = new Error('original action receipt is missing or differs from the reviewed batch');
+  assert.equal(assertOmittedLocalAddKeyReceipt(result, attempt, error), 'local-root');
+  const changes = [
+    r => { r.final_execution_status = 'EXECUTED_OPTIMISTIC'; },
+    r => { r.transaction.hash = 'other'; }, r => { r.transaction.signer_id = 'other.testnet'; },
+    r => { r.transaction.receiver_id = 'other.testnet'; }, r => { r.transaction.public_key = 'other'; },
+    r => { r.transaction_outcome.id = 'other'; }, r => { r.transaction_outcome.outcome.executor_id = 'other.testnet'; },
+    r => { r.transaction_outcome.outcome.receipt_ids = []; },
+    r => { r.receipts.push({ receipt_id: 'local-root' }); },
+    r => { r.receipts_outcome = []; }, r => { r.receipts_outcome.push(structuredClone(r.receipts_outcome[0])); },
+    r => { r.receipts_outcome[0].outcome.executor_id = 'other.testnet'; },
+    r => { r.receipts_outcome[0].outcome.status = { Failure: {} }; }, r => { r.status = { Failure: {} }; },
+  ];
+  for (const change of changes) { const r = structuredClone(result); change(r); assert.throws(() => assertOmittedLocalAddKeyReceipt(r, attempt, error)); }
+  assert.throws(() => assertOmittedLocalAddKeyReceipt(result, { ...attempt, stage_id: 'create_keyless_vault' }, error));
+  assert.throws(() => assertOmittedLocalAddKeyReceipt(result, { ...attempt, receiver_id: 'vault.testnet' }, error));
+  assert.throws(() => assertOmittedLocalAddKeyReceipt(result, attempt, new Error('unrelated verifier failure')));
 });

@@ -1,8 +1,21 @@
 # V11 nearcore sandbox validation (opt-in)
 
-**Status: prepared, not yet run against nearcore.** The ordinary JavaScript
-unit tests for this harness use synthetic records. Until the separate sandbox
-job succeeds, they do not establish V11 runtime compatibility.
+**Status: partial nearcore run; setup verification blocked.** On 2 November
+2026, [run 41424909003](https://github.com/Greatmujey/Bouncer/actions/runs/41424909003)
+started the pinned protocol-88 sandbox, deployed the recovered V11, checked its
+code hash, owner and keyless account, exercised the one-yocto guard, and matched
+the original receipts for the first two setup batches. The same-account agent
+key installation then finalized, but the setup verifier rejected its omitted
+local root-receipt body and the job failed. No later setup or FT checks ran in
+that first attempt.
+
+This is a real compatibility blocker in the setup verifier, not a failed V11
+contract guard and not permission to advance a live setup. nearcore 2.14.0
+[intentionally omits a same-account transaction's local receipt body](https://github.com/near/nearcore/blob/2.14.0/chain/chain/src/chain.rs#L3294-L3323)
+from the receipt list, even though its execution outcome is reported. The
+production verifier currently fails closed on that shape; a correction requires
+separate review and approval. Synthetic JavaScript harness tests do not prove
+nearcore behavior.
 
 The opt-in job starts a fresh, one-validator nearcore **2.14.0** sandbox on
 loopback, with protocol **88**, and destroys its temporary chain afterwards.
@@ -64,8 +77,14 @@ that cannot reach S3 need the exact files supplied separately.
 `.github/workflows/v11-nearcore-sandbox.yml` is skipped on ordinary branch
 pushes. A branch commit containing `[v11-nearcore-sandbox]` requests the job;
 after the workflow is on the default branch, it also supports manual dispatch.
-It uses the existing Node lockfile, no repository secrets, and prints a
-sandbox-only summary only after every check passes. The repository's normal CI
+It uses the existing Node lockfile and no repository secrets. To gather more
+contract diagnostics while the known verifier blocker is being investigated,
+the harness may continue **only on this disposable chain** after strictly
+recognizing the omitted same-account AddKey receipt. It records that stage as
+blocked, does not invent a receipt, and deliberately fails the job at the end;
+any different verification error fails immediately. Checkpoint messages identify
+which bounded checks actually ran. No setup success is claimed unless the real
+production verifier accepts every original stage. The repository's normal CI
 and any configured preview deployment may also run on a branch push.
 
 A passing result would be real nearcore runtime evidence for these bounded

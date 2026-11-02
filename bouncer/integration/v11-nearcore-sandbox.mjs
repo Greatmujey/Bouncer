@@ -27,7 +27,8 @@ import { CIRCLE_TESTNET_USDC as TOKEN } from '../scripts/circle-testnet-setup.mj
 import { SVALIN_PAYEE as SELLER } from '../agent/svalin-pro-readiness.mjs';
 import { SVALIN_TRIAL_MAX_ATOMS as FUNDING } from '../agent/svalin-pro-preflight.mjs';
 import { V11_SHA256, MOCK_FT_SHA256, SANDBOX_SHA256, SANDBOX_CHAIN_ID, readVerifiedFile,
-  withMockTokenInGenesis, assertSandboxStatus, requireFinalSuccess, requireReceiptLog } from './v11-sandbox-support.mjs';
+  withMockTokenInGenesis, assertSandboxStatus, requireFinalSuccess, assertOmittedLocalAddKeyReceipt,
+  requireReceiptLog } from './v11-sandbox-support.mjs';
 
 const { transactions: tx, KeyPair, KeyPairSigner, Account, providers, utils } = nearApi;
 const ROOT = 'testnet', OWNER = 'owner.testnet', VAULT = 'trial.owner.testnet';
@@ -190,6 +191,8 @@ async function run() {
       agentGasAllowanceYocto: NEAR.toString(), vaultTokenStorageDepositYocto: bounds.min,
     });
     const stageEvidence = [];
+    let localReceiptBlocker = false;
+    const checkpoint = message => console.error(`Sandbox checkpoint: ${message}`);
     const setupStage = async index => {
       const batch = plan.batches[index];
       assert.equal(batch.signerId, OWNER);
@@ -199,12 +202,29 @@ async function run() {
       const sent = await provider.sendTransactionUntil(signed, WAIT);
       requireFinalSuccess(sent, batch.id);
       const outcome = await provider.txStatusReceipts(proof.attempt.tx_hash, OWNER, WAIT);
-      const checked = inspectSvalinSetupAttempt({ plan, trustedReviewHash: plan.review.review_sha256,
-        trustedOriginalHash: proof.attempt.tx_hash, trustedOwnerPublicKey: pub(ownerKey), attempt: proof.attempt, result: outcome });
+      let checked;
+      try {
+        checked = inspectSvalinSetupAttempt({ plan, trustedReviewHash: plan.review.review_sha256,
+          trustedOriginalHash: proof.attempt.tx_hash, trustedOwnerPublicKey: pub(ownerKey), attempt: proof.attempt, result: outcome });
+      } catch (error) {
+        // nearcore omits the original *local* receipt body when signer and
+        // receiver are the same. The current production verifier rejects it.
+        // Continue ONLY the isolated contract tests after strictly diagnosing
+        // this one known blocker; never synthesize a receipt, call it verified,
+        // or return a passing job while the production verifier is blocked.
+        if (index !== 2) throw error;
+        assertOmittedLocalAddKeyReceipt(outcome, proof.attempt, error);
+        localReceiptBlocker = true;
+        stageEvidence.push({ stage: batch.id, sandbox_transaction_hash: proof.attempt.tx_hash,
+          status: 'BLOCKED_PRODUCTION_VERIFIER_OMITTED_LOCAL_RECEIPT' });
+        checkpoint('agent-key transaction finalized but production receipt verifier failed closed; remaining tests are sandbox diagnostics only');
+        return;
+      }
       const expected = index === 4 ? 'FINAL_FUNDING_RECEIPTS_MATCH' : 'FINAL_SETUP_RECEIPT_MATCH';
       assert.equal(checked.status, expected, `${batch.id}: receipt verification failed`);
       stageEvidence.push({ stage: batch.id, sandbox_transaction_hash: proof.attempt.tx_hash,
         status: checked.status });
+      checkpoint(`${batch.id}: original transaction and receipts matched`);
     };
 
     await setupStage(0);
@@ -212,6 +232,7 @@ async function run() {
     assert.deepEqual((await provider.viewAccessKeyList(VAULT, CHAIN_QUERY)).keys, [], 'the sandbox vault must have no access keys');
     assert.equal(await view(VAULT, 'contract_version'), 'bouncer-agent-v11-exact-ft-testnet');
     assert.equal(await view(VAULT, 'get_owner'), OWNER);
+    checkpoint('V11 code hash, owner, version and keyless vault confirmed');
 
     // Give a separate sandbox-only key permission to try set_policy. This lets
     // the WASM's 1-yocto guard be tested, rather than merely relying on the
@@ -225,6 +246,7 @@ async function run() {
     assertFailure(await call(owner, VAULT, 'set_policy', policyArgs, 2n), 'owner attached two yocto', /exactly 1 yoctoNEAR/);
     assertFailure(await call(attacker, VAULT, 'set_policy', policyArgs, 1n), 'non-owner attached one yocto', /caller is not owner/);
     assert.equal(await view(VAULT, 'get_policy', { policy_id: POLICY }), null);
+    checkpoint('one-yocto guard and non-owner rejection confirmed on V11');
 
     await setupStage(1);
     assert.deepEqual(await view(VAULT, 'get_policy', { policy_id: POLICY }),
@@ -237,6 +259,7 @@ async function run() {
     assert.deepEqual(permission.FunctionCall.method_names, ['execute_exact_ft']);
     await rejectedByProtocol(call(agent, VAULT, 'set_policy', policyArgs, 0n), 'agent cannot call owner method',
       /MethodNameMismatch|method.*(?:not allowed|permission|restricted|mismatch)/i);
+    checkpoint('agent key permissions and method restriction confirmed by chain state and admission');
     await setupStage(3);
     const registration = await view(TOKEN, 'storage_balance_of', { account_id: VAULT });
     assert.deepEqual(registration, { total: bounds.min, available: '0' });
@@ -249,6 +272,7 @@ async function run() {
     assert.equal(await vaultBalance(), FUNDING);
     assert.equal((await check(ATTACKER, '1'))[0], false);
     assert.match((await check(SELLER, '5010000'))[1], /per-tx cap/);
+    checkpoint('mock FT balances, allowlist and per-transaction cap confirmed');
 
     const block = await provider.viewBlock(CHAIN_QUERY);
     const timestamp = block.header.timestamp_nanosec ?? String(block.header.timestamp);
@@ -270,6 +294,7 @@ async function run() {
     assertFailure(await call(agent, VAULT, 'execute_exact_ft', { intent_id: 'success' }, 0n, 150n * TGAS),
       'consumed intent replay', /consumed, cancelled, expired or stale/);
     assert.match((await check(SELLER, '3010000'))[1], /daily cap exceeded/);
+    checkpoint('mock exact FT transfer, balances, replay rejection and rolling cap confirmed');
 
     // The second payee is allowed by the owner but is NOT registered in the
     // mock FT. Its transfer receipt must fail; the real callback must restore
@@ -291,6 +316,7 @@ async function run() {
     assert.equal(consumedFailure.active, false);
     assertFailure(await call(agent, VAULT, 'execute_exact_ft', { intent_id: 'failure' }, 0n, 150n * TGAS),
       'failed intent replay', /consumed, cancelled, expired or stale/);
+    checkpoint('failed mock FT receipt, refund callback, restored balances and replay rejection confirmed');
 
     assertSandboxStatus(await provider.status());
     const evidence = {
@@ -298,7 +324,9 @@ async function run() {
       chain_id: SANDBOX_CHAIN_ID, nearcore_version: sandbox.versionText, protocol_version: sandbox.protocol,
       v11_sha256: V11_SHA256, mock_ft_sha256: MOCK_FT_SHA256, sandbox_binary_sha256: SANDBOX_SHA256,
       genesis_token_is_circle: false, keys_are_ephemeral: true, seller_contacted: false, real_funds_used: false,
-      keyless_deployment_and_five_original_setup_batches: stageEvidence,
+      setup_stage_observations: stageEvidence,
+      all_original_setup_receipts_verified: !localReceiptBlocker,
+      known_setup_verifier_blockers: localReceiptBlocker ? ['same-account AddKey root receipt omitted by nearcore'] : [],
       guard: { restricted_zero_deposit_blocked_by_contract: true, restricted_one_yocto_rejected_by_protocol: true,
         non_owner_one_yocto_blocked: true, owner_two_yocto_blocked: true, owner_one_yocto_configuration_succeeded: true },
       restricted_agent_method_filter_checked: true, allowlist_and_caps_checked: true,
@@ -306,6 +334,9 @@ async function run() {
       failed_ft_receipt_and_refund_callback_checked: true,
     };
     console.log(JSON.stringify(evidence, null, 2));
+    if (localReceiptBlocker) {
+      throw new Error('sandbox contract diagnostics finished, but the production setup verifier remains blocked; no successful setup verification claimed');
+    }
   } finally {
     if (sandbox) await stopChild(sandbox.child);
     fs.rmSync(directory, { recursive: true, force: true });

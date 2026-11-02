@@ -79,6 +79,38 @@ export function requireFinalSuccess(result, label, { allowReceiptFailure = false
   return failures;
 }
 
+/** Diagnose, but DO NOT accept as verified setup, nearcore's omitted local
+ * transaction receipt for the same-account AddKey stage. This is only used by
+ * the disposable-chain harness to finish other tests after recording a known
+ * verifier blocker. It does not build a replacement receipt or alter evidence.
+ * The production verifier must already have rejected at its root-receipt check,
+ * after matching the original transaction and its reviewed actions. */
+export function assertOmittedLocalAddKeyReceipt(result, attempt, verifierError) {
+  assert.equal(attempt?.stage_id, 'install_restricted_agent_key', 'diagnostic is restricted to the AddKey stage');
+  assert.equal(attempt.signer_id, attempt.receiver_id, 'diagnostic requires a same-account transaction');
+  assert.equal(verifierError?.message, 'original action receipt is missing or differs from the reviewed batch');
+  assert.equal(result?.final_execution_status, 'FINAL');
+  assert.equal(result?.transaction?.hash, attempt.tx_hash);
+  assert.equal(result?.transaction?.signer_id, attempt.signer_id);
+  assert.equal(result?.transaction?.receiver_id, attempt.receiver_id);
+  assert.equal(result?.transaction?.public_key, attempt.signer_public_key);
+  assert.equal(result?.transaction_outcome?.id, attempt.tx_hash);
+  const txOutcome = result?.transaction_outcome?.outcome;
+  const rootId = txOutcome?.status?.SuccessReceiptId;
+  assert.equal(txOutcome?.executor_id, attempt.signer_id);
+  assert.equal(typeof rootId, 'string');
+  assert.ok(Array.isArray(txOutcome.receipt_ids) && txOutcome.receipt_ids.includes(rootId));
+  assert.ok(Array.isArray(result.receipts) && !result.receipts.some(receipt => receipt?.receipt_id === rootId),
+    'the actual local root receipt must be absent, not merely mismatched');
+  assert.ok(Array.isArray(result.receipts_outcome));
+  const roots = result.receipts_outcome.filter(item => item?.id === rootId);
+  assert.equal(roots.length, 1, 'exactly one local root outcome is required');
+  assert.equal(roots[0].outcome?.executor_id, attempt.receiver_id);
+  assert.deepEqual(roots[0].outcome?.status, { SuccessValue: '' });
+  assert.deepEqual(result.status, { SuccessValue: '' });
+  return rootId;
+}
+
 export function requireReceiptLog(result, executorId, text) {
   const matches = (result?.receipts_outcome ?? []).filter(item => item?.outcome?.executor_id === executorId &&
     Array.isArray(item.outcome.logs) && item.outcome.logs.some(log => typeof log === 'string' && log.includes(text)));
