@@ -45,6 +45,16 @@ were still at the owner. Neither an independent audit nor provider fulfillment
 is implied. Its keyless storage stake may remain locked, and recovery-file
 export remains unconfirmed. Do not resend the original deployment.
 
+The next two fixed, separately journaled actions register this vault with Circle
+and deposit the already acquired test USDC using `ft_transfer_call`. A fresh
+pinned preflight verifies the V11 code, owner, zero keys, token code, storage
+bounds and both actual/tracked balances. The registration deposit may remain
+locked. The [isolated nearcore test](https://github.com/Greatmujey/Bouncer/actions/runs/41521801807)
+exercised the registration, full deposit and original-hash recovery after a
+simulated lost response using a **mock FT and synthetic Circle metadata**; it is
+not testnet Circle funding or independent provider fulfillment. On any uncertain
+result, reconcile the recorded original hash without sending a replacement.
+
 The helper workflow is bound to one session-branch push and first run
 attempt. It checks a fresh FINAL view that the new name is absent, retains a
 public plan-hash fence and makes at most one helper request. It checks the
