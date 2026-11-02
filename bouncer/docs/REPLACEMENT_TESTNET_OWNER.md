@@ -39,21 +39,26 @@ balance were not touched.
 A separate [one-shot deployment](https://github.com/Greatmujey/Bouncer/actions/runs/41520563526)
 created `vault.bouncer-owner-3869c162b193fa1729515442.testnet` with 6 test NEAR.
 The original receipt and a fresh FINAL view matched the pinned V11 code, owner,
-and **zero vault access keys**. As of that view, Circle storage for the vault
-was not registered and its tracked Circle balance was zero; the 6,907 atoms
-were still at the owner. Neither an independent audit nor provider fulfillment
-is implied. Its keyless storage stake may remain locked, and recovery-file
-export remains unconfirmed. Do not resend the original deployment.
+and **zero vault access keys**. Neither an independent audit nor provider
+fulfillment is implied. Its keyless storage stake may remain locked, and
+recovery-file export remains unconfirmed. Do not resend the original deployment.
 
-The next two fixed, separately journaled actions register this vault with Circle
-and deposit the already acquired test USDC using `ft_transfer_call`. A fresh
-pinned preflight verifies the V11 code, owner, zero keys, token code, storage
-bounds and both actual/tracked balances. The registration deposit may remain
-locked. The [isolated nearcore test](https://github.com/Greatmujey/Bouncer/actions/runs/41521801807)
-exercised the registration, full deposit and original-hash recovery after a
-simulated lost response using a **mock FT and synthetic Circle metadata**; it is
-not testnet Circle funding or independent provider fulfillment. On any uncertain
-result, reconcile the recorded original hash without sending a replacement.
+Two subsequent fixed, separately journaled actions registered this vault with
+Circle and deposited **6,907 atoms (0.006907 test USDC)** via `ft_transfer_call`.
+The [original funding run](https://github.com/Greatmujey/Bouncer/actions/runs/41522848477)
+verified the transfer event, vault callback and token resolver; the fresh FINAL
+view matched **6,907 actual and 6,907 tracked atoms**. A separate
+[read-only reconciliation](https://github.com/Greatmujey/Bouncer/actions/runs/41523321141)
+checked the same original hash and balances. This is vault funding, not an
+independent provider purchase or delivery. Circle storage registration may remain
+locked. An RPC error after the registration attempt was resolved by checking
+its original hash, without resending.
+
+The [isolated nearcore test](https://github.com/Greatmujey/Bouncer/actions/runs/41521801807)
+previously exercised registration, deposit and lost-ack recovery using a **mock
+FT and synthetic Circle metadata**; it is separate from the real testnet
+receipt evidence above. On any uncertain result, reconcile the recorded
+original hash without sending a replacement.
 
 The helper workflow is bound to one session-branch push and first run
 attempt. It checks a fresh FINAL view that the new name is absent, retains a
