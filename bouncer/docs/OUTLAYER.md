@@ -189,12 +189,25 @@ full-access key, so their code can change. The `burn` operation is a diagnostic,
 not useful commercial compute. `agent/outlayer-v11-burn-plan.mjs` describes
 one **unsigned, offline** attempt using two dedicated one-method keys, fixed
 receiver/message, separate native/FT caps, and a maximum 0.02 test-NEAR native
-request. It cannot sign or broadcast. Actual execution still needs fresh
-same-block provider/quote checks, verified key custody, durable one-shot journals,
-original-hash reconciliation and isolated-chain tests. The fake-token storage
+request. It cannot sign or broadcast. `agent/outlayer-v11-burn-preflight.mjs`
+adds stage-specific, fresh single-block preliminary checks for account/key
+identity, balances, policies, code hashes, registration, price, quote, locks
+and rolling spend. Its `eligible` result is **necessary state information, not
+authorization**: it cannot prove earlier original receipts, custody, future
+state, seller uptime or deployed-source equivalence. V11 does not expose a
+direct funding-payee allowlist view; the contract still checks it on execution.
+The read-only workflow exercises the initial check with byte-pattern placeholder
+public keys without private keys; never install or fund those placeholders.
+Actual execution still needs verified key custody, durable one-shot journals,
+original-hash reconciliation, rechecks immediately before each send and
+isolated-chain tests of all exact stages. No coordinator exists yet. The fake-token storage
 registrations can lock test NEAR, and a failed project may leave fake provider
 credit inaccessible to this immutable vault. Neither the snapshot nor the plan
-establishes a payment, provider uptime, Circle support or fulfillment.
+establishes a payment, provider uptime, Circle support or fulfillment. A
+[separate isolated nearcore run](https://github.com/Greatmujey/Bouncer/actions/runs/41531879599)
+executed the V11 FT runner, verified its original receipt and recovered the same
+hash against a mock token and another local V11 receiver; it was not a live
+OutLayer transaction.
 
 V7 can fund an owner-pinned OutLayer prepaid balance using `execute_ft_call`,
 then call an owner-pinned project under **separate** native and prepaid-token

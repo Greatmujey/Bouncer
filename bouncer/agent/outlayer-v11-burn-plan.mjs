@@ -26,13 +26,13 @@ const action=(name,args,gas=20n,deposit=1n)=>tx.functionCall(name,args,gas*TGAS,
 const project={project_id:PROJECT,version_key:VERSION,usd_policy_id:USD,token:TOKEN,attached_usd:FT_AMOUNT,
   input_data:INPUT,max_instructions:1_000_000_000,max_memory_mb:256,max_execution_seconds:60};
 const projectRoute={project,route_revision:1,native_policy_revision:1,usd_policy_revision:1,native_payee_revision:1,usd_payee_revision:1,active:true};
-const exactFields=['version','purpose','network','owner','owner_public_key','vault','vault_code_hash','funding_public_key','project_public_key'];
+const exactFields=['version','purpose','network','owner','owner_public_key','vault','vault_code_hash','existing_resource_public_key','funding_public_key','project_public_key'];
 
-export function createOutlayerBurnPlan({ownerPlan,fundingPublicKey,projectPublicKey}={}){
+export function createOutlayerBurnPlan({ownerPlan,existingResourcePublicKey,fundingPublicKey,projectPublicKey}={}){
   const owner=validateOwnerBootstrapPlan(ownerPlan);
   const plan={version:1,purpose:'unsigned-v11-outlayer-burn-diagnostic',network:'testnet',owner:owner.account_id,
     owner_public_key:owner.public_key,vault:newTestnetVaultId(owner),vault_code_hash:V11_NEAR_CODE_HASH,
-    funding_public_key:fundingPublicKey,project_public_key:projectPublicKey};
+    existing_resource_public_key:existingResourcePublicKey,funding_public_key:fundingPublicKey,project_public_key:projectPublicKey};
   return validateOutlayerBurnPlan(plan,owner);
 }
 export function validateOutlayerBurnPlan(p,ownerPlan){
@@ -40,10 +40,10 @@ export function validateOutlayerBurnPlan(p,ownerPlan){
   if(!p||typeof p!=='object'||Array.isArray(p)||Object.keys(p).sort().join(',')!==[...exactFields].sort().join(',')||
     p.version!==1||p.purpose!=='unsigned-v11-outlayer-burn-diagnostic'||p.network!=='testnet'||p.owner!==owner.account_id||
     p.owner_public_key!==owner.public_key||p.vault!==newTestnetVaultId(owner)||p.vault_code_hash!==V11_NEAR_CODE_HASH||
-    p.funding_public_key===p.project_public_key||p.funding_public_key===owner.public_key||p.project_public_key===owner.public_key){
+    new Set([p.owner_public_key,p.existing_resource_public_key,p.funding_public_key,p.project_public_key]).size!==4){
     throw new Error('invalid bounded OutLayer burn plan');
   }
-  key(p.funding_public_key,'funding');key(p.project_public_key,'project');return {...p};
+  key(p.existing_resource_public_key,'existing resource');key(p.funding_public_key,'funding');key(p.project_public_key,'project');return {...p};
 }
 
 /** Produce reviewed action objects, not transactions; no nonce, block, hash,

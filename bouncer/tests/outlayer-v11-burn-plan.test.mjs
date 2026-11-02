@@ -5,8 +5,9 @@ import { buildOutlayerBurnStage,createOutlayerBurnPlan,OUTLAYER_BURN_REVIEW } fr
 import { OUTLAYER_FAKE_USD,OUTLAYER_TESTNET } from '../agent/outlayer-v11-readiness.mjs';
 const owner={version:1,purpose:'new-bouncer-testnet-owner',network:'testnet',account_id:'bouncer-owner-aaaaaaaaaaaaaaaaaaaaaaaa.testnet',
  public_key:String(nearApi.KeyPair.fromRandom('ed25519').getPublicKey())};
-const funding=String(nearApi.KeyPair.fromRandom('ed25519').getPublicKey()), project=String(nearApi.KeyPair.fromRandom('ed25519').getPublicKey());
-const plan=createOutlayerBurnPlan({ownerPlan:owner,fundingPublicKey:funding,projectPublicKey:project});
+const funding=String(nearApi.KeyPair.fromRandom('ed25519').getPublicKey()), project=String(nearApi.KeyPair.fromRandom('ed25519').getPublicKey()),
+ existing=String(nearApi.KeyPair.fromRandom('ed25519').getPublicKey());
+const plan=createOutlayerBurnPlan({ownerPlan:owner,existingResourcePublicKey:existing,fundingPublicKey:funding,projectPublicKey:project});
 const build=stage=>buildOutlayerBurnStage({plan,ownerPlan:owner,stage});
 const unpack=a=>{const f=a.functionCall;return {name:f.methodName,args:JSON.parse(Buffer.from(f.args).toString()),gas:f.gas,deposit:f.deposit}};
 
@@ -52,5 +53,5 @@ test('plan rejects added terms, key reuse, altered identity and unsupported stag
  for(const invalid of [{...plan,extra:true},{...plan,network:'mainnet'},{...plan,vault:'attacker.testnet'},
   {...plan,vault_code_hash:'other'},{...plan,funding_public_key:project},{...plan,funding_public_key:owner.public_key},
   {...plan,project_public_key:'ed25519:bad'}])assert.throws(()=>buildOutlayerBurnStage({plan:invalid,ownerPlan:owner,stage:'configure'}));
- assert.throws(()=>build('withdraw'));assert.throws(()=>createOutlayerBurnPlan({ownerPlan:owner,fundingPublicKey:funding,projectPublicKey:funding}));
+ assert.throws(()=>build('withdraw'));assert.throws(()=>createOutlayerBurnPlan({ownerPlan:owner,existingResourcePublicKey:existing,fundingPublicKey:funding,projectPublicKey:funding}));
 });

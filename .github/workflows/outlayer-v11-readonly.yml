@@ -22,7 +22,7 @@ jobs:
         with:
           node-version: '22'
       - run: npm ci --ignore-scripts --no-audit --no-fund
-      - run: node --test tests/outlayer-v11-readiness.test.mjs
+      - run: node --test tests/outlayer-v11-readiness.test.mjs tests/outlayer-v11-burn-plan.test.mjs tests/outlayer-v11-burn-preflight.test.mjs
       - name: Inspect public views without funding or orders
         run: |
           set -euo pipefail
@@ -36,5 +36,20 @@ jobs:
             echo 'No key, payment, seller request or fulfillment. USDC.e is fake test currency; quotes and state can change.'
             echo '```json'
             cat "$RUNNER_TEMP/outlayer.json"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Check diagnostic preconditions with non-installable placeholders
+        run: |
+          set -euo pipefail
+          if ! node scripts/inspect-outlayer-v11-burn-preflight.mjs > "$RUNNER_TEMP/burn-preflight.json" 2> "$RUNNER_TEMP/burn-preflight-errors.log"; then
+            python3 -c 'import os; s=open(os.environ["RUNNER_TEMP"]+"/burn-preflight-errors.log").read()[-4000:]; print("::error title=Read-only burn preflight unavailable::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
+            exit 1
+          fi
+          python3 -c 'import os,json; s=json.dumps(json.load(open(os.environ["RUNNER_TEMP"]+"/burn-preflight.json")),separators=(",",":")); print("::notice title=OutLayer burn preconditions only::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
+          {
+            echo '## Preliminary state checks with non-installable placeholder public keys'
+            echo 'Not an authorization, executable plan, proof of earlier receipts, funding, order or independent fulfillment.'
+            echo '```json'
+            cat "$RUNNER_TEMP/burn-preflight.json"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
