@@ -27,7 +27,14 @@ The [one-shot helper run](https://github.com/Greatmujey/Bouncer/actions/runs/415
 verified the replacement owner at FINAL with 10 test NEAR and its sole expected
 full-access public key. The public fence is artifact `13176866986`; do not
 repeat this helper request. Circle registration/funding and vault creation
-were not part of this run.
+were not part of that helper run.
+
+Separate one-shot operations subsequently registered the replacement owner with
+Circle and acquired **6,907 atoms (0.006907 test USDC)** by swapping 0.01 test
+NEAR. Their original hashes, FINAL receipt summaries and artifact fences are
+retained in `evidence/testnet-owner-v2/`; do not resend those transactions.
+This funds the owner, not a vault, and is not a provider purchase. The old
+owner and its balance were not touched.
 
 The helper workflow is bound to one session-branch push and first run
 attempt. It checks a fresh FINAL view that the new name is absent, retains a
