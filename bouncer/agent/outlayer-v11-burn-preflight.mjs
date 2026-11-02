@@ -22,11 +22,12 @@ const amount=x=>typeof x==='string'&&/^(0|[1-9][0-9]{0,38})$/.test(x)&&BigInt(x)
 const registered=x=>x&&typeof x==='object'&&amount(x.total)&&BigInt(x.total)>=BigInt(storage)&&amount(x.available)&&BigInt(x.available)<=BigInt(x.total);
 const positive=x=>amount(x)&&BigInt(x)>0n;
 const read=(observations,name)=>observations[name]?.status==='OBSERVED'?observations[name].value:undefined;
-const permission=(entry,vault,methods)=>{
+const permission=(entry,vault,methods,min,max)=>{
  const p=entry?.access_key?.permission?.FunctionCall;
  return p&&Object.keys(entry.access_key.permission).join(',')==='FunctionCall'&&p.receiver_id===vault&&equal(p.method_names,methods)&&
-   positive(p.allowance)&&BigInt(p.allowance)<=100000000000000000000000n&&pinnedAccessKeyNonce(entry.access_key.nonce)!==null;
+   positive(p.allowance)&&BigInt(p.allowance)>=min&&BigInt(p.allowance)<=max&&pinnedAccessKeyNonce(entry.access_key.nonce)!==null;
 };
+const oldAllowance=100000000000000000000000n, newAllowance=500000000000000000000000n, minimumForSend=400000000000000000000000n;
 const policy=(value,token,cap)=>equal(value,{token,per_tx_cap:cap,daily_cap:cap});
 
 export async function inspectOutlayerBurnStage({ownerPlan,plan:raw,stage,provider,now=Date.now}={}){
@@ -34,10 +35,10 @@ export async function inspectOutlayerBurnStage({ownerPlan,plan:raw,stage,provide
  if(!stages.includes(stage))throw new Error('unknown burn diagnostic stage');
  const base=await inspectOutlayerV11Readiness({ownerPlan,provider,now}), hash=base.block_hash, o=base.observations;
  const view=(id,method,args={})=>readPinnedJsonView(provider,hash,id,method,args);
- const [protocol,ownerAccount,ownerKeys,vaultAccount,wrapAccount,circleActual,circleTracked,wrapMeta,wrapRegistration,wrapBalance,refWrap,refToken,
+ const [protocol,gasPrice,ownerAccount,ownerKeys,vaultAccount,wrapAccount,circleActual,circleTracked,wrapMeta,wrapRegistration,wrapBalance,refWrap,refToken,
    fundPolicy,usdPolicy,nativePolicy,fundRoute,projectRoute,fundGrant,usdGrant,nativeGrant,fundLock,usdLock,pairLock,fundSpent,usdSpent,nativeSpent,
    circlePolicy,circleGrant,circleSpent,fundVerdict,nativeVerdict]=await Promise.all([
-   provider.experimental_protocolConfig({blockId:hash}),
+   provider.experimental_protocolConfig({blockId:hash}),provider.gasPrice(hash),
    provider.query({request_type:'view_account',account_id:plan.owner,block_id:hash}),
    provider.query({request_type:'view_access_key_list',account_id:plan.owner,block_id:hash}),
    provider.query({request_type:'view_account',account_id:plan.vault,block_id:hash}),
@@ -60,7 +61,12 @@ export async function inspectOutlayerBurnStage({ownerPlan,plan:raw,stage,provide
    view(plan.vault,'check',{policy_id:NATIVE,payee:SELLER,amount:nano}),
  ]);
  const blockers=[], require=(name,condition)=>{if(!condition)blockers.push(name)};
- const cost=protocol?.runtime_config?.storage_amount_per_byte;
+ const cost=protocol?.runtime_config?.storage_amount_per_byte,gas=gasPrice?.gas_price;
+ // 300 Tgas plus a conservative 30% margin and 0.001 NEAR overhead. This is
+ // an estimate, not a protocol reservation; admission prices may move.
+ const gasEstimate=positive(gas)?300n*10n**12n*BigInt(gas)*13n/10n+10n**21n:null;
+ const needed=gasEstimate!==null&&gasEstimate>minimumForSend?gasEstimate:minimumForSend;
+ require('bounded_agent_gas',gasEstimate!==null&&needed<=newAllowance);
  const available=account=>amount(account?.amount)&&Number.isSafeInteger(account.storage_usage)&&account.storage_usage>=0&&positive(cost)?
    BigInt(account.amount)-BigInt(account.storage_usage)*BigInt(cost):-1n;
  require('protocol',protocol?.chain_id==='testnet'&&positive(cost));
@@ -77,10 +83,11 @@ export async function inspectOutlayerBurnStage({ownerPlan,plan:raw,stage,provide
  const ownerNonce=pinnedAccessKeyNonce(owner?.access_key?.nonce);
  require('known_owner_keys',ownerKeys?.block_hash===hash&&Array.isArray(keys)&&owner?.access_key?.permission==='FullAccess'&&ownerNonce!==null&&
    keys.filter(x=>x?.access_key?.permission==='FullAccess').length===1&&
-   permission(existing,plan.vault,['execute','execute_ft_call']));
+   permission(existing,plan.vault,['execute','execute_ft_call'],1n,oldAllowance));
  const installed=stage==='fund-provider'||stage==='run-project';
  require('dedicated_keys',Array.isArray(keys)&&(installed?
-   keys.length===4&&permission(fund,plan.vault,['execute_ft_call'])&&permission(proj,plan.vault,['execute_outlayer_project']):
+   keys.length===4&&permission(fund,plan.vault,['execute_ft_call'],stage==='fund-provider'?needed:1n,newAllowance)&&
+     permission(proj,plan.vault,['execute_outlayer_project'],needed,newAllowance):
    keys.length===2&&!fund&&!proj));
  const config=read(o,'configured_token'),meta=read(o,'fake_token_metadata'),bounds=read(o,'fake_storage_bounds');
  const priced=read(o,'pricing'), project=read(o,'project'), version=read(o,'project_version'), estimate=read(o,'native_estimate');
@@ -132,7 +139,8 @@ export async function inspectOutlayerBurnStage({ownerPlan,plan:raw,stage,provide
  return {version:1,stage,network:'testnet',owner:plan.owner,vault:plan.vault,block_hash:hash,
    block_timestamp_nanosec:base.block_timestamp_nanosec,observed_at:new Date(end).toISOString(),
    signer_public_key:stage==='fund-provider'?plan.funding_public_key:stage==='run-project'?plan.project_public_key:plan.owner_public_key,
-   signer_key_nonce:signerNonce?.toString()??null,eligible:blockers.length===0,blockers,
+   signer_key_nonce:signerNonce?.toString()??null,gas_price_yocto_per_gas:positive(gas)?gas:null,
+   estimated_minimum_agent_allowance_yocto:gasEstimate===null?null:needed.toString(),eligible:blockers.length===0,blockers,
    signed:false,sent:false,seller_contacted:false,independent_fulfillment_verified:false,
    scope:'trusted-RPC state indication only; prior original receipts, durable journal, key custody and one-shot sender are separately required'};
 }

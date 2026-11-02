@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import nearApi from 'near-api-js';
 import {createOutlayerBurnPlan,buildOutlayerBurnStage} from '../agent/outlayer-v11-burn-plan.mjs';
 import {inspectOutlayerBurnStage} from '../agent/outlayer-v11-burn-preflight.mjs';
+import {ReadOnlyNearRpcProvider} from '../agent/read-only-near-rpc.mjs';
 import {CIRCLE_TESTNET_USDC as CIRCLE} from '../scripts/circle-testnet-setup.mjs';
 
 const owner=JSON.parse(fs.readFileSync(new URL('../config/testnet-owner-v2-plan.json',import.meta.url)));
@@ -14,7 +15,7 @@ const plan=createOutlayerBurnPlan({ownerPlan:owner,existingResourcePublicKey:exi
 const F='usdc.fakes.testnet',W='wrap.testnet',O='outlayer.testnet',R='ref-finance-101.testnet';
 const P='connectors.outlayer.testnet/connector-probe',h='11111111111111111111111111111111',now=Date.parse('2026-11-02T21:51:42Z');
 const reg={total:'1250000000000000000000',available:'0'},allowance='100000000000000000000000';
-const perm=methods=>({FunctionCall:{receiver_id:plan.vault,method_names:methods,allowance}});
+const perm=(methods,gasAllowance=allowance)=>({FunctionCall:{receiver_id:plan.vault,method_names:methods,allowance:gasAllowance}});
 const row=(public_key,permission,nonce=10)=>({public_key,access_key:{nonce,permission}});
 const stored=name=>structuredClone(snapshot.observations[name].value);
 const route=JSON.parse(Buffer.from(buildOutlayerBurnStage({ownerPlan:owner,plan,stage:'run-project'}).actions[0].functionCall.args).toString()).expected_route;
@@ -33,8 +34,8 @@ function fixture(stage='register-fake'){
   fundSpent:providerPaid?'10000':'0',usdSpent:'0',nativeSpent:'0',fundVerdict:[true,'ok'],nativeVerdict:[true,'ok'],
   version:stored('project_version'),pricing:stored('pricing'),quote:'21645',
   keys:[row(plan.owner_public_key,'FullAccess'),row(existing,perm(['execute','execute_ft_call']))],
-  cost:'10000000000000000000',blockOffsetMs:0,mixedBlock:false,unavailable:null};
- if(installed)state.keys.push(row(funding,perm(['execute_ft_call'])),row(projectKey,perm(['execute_outlayer_project'])));
+  cost:'10000000000000000000',gasPrice:'1000000000',blockOffsetMs:0,mixedBlock:false,unavailable:null};
+ if(installed)state.keys.push(row(funding,perm(['execute_ft_call'],'500000000000000000000000')),row(projectKey,perm(['execute_outlayer_project'],'500000000000000000000000')));
  const account=(id)=>({block_hash:state.mixedBlock?'22222222222222222222222222222222':h,
    code_hash:id===plan.vault?plan.vault_code_hash:id===F?state.fakeCode:id===O?state.providerCode:id===W?'DsbyUrKaSJAT91Pewfi71QExPLBooDp1z4sL9GUDhNHa':'11111111111111111111111111111111',
    amount:id===plan.vault?state.vaultAmount:state.ownerAmount,storage_usage:id===plan.vault?state.vaultStorage:100});
@@ -42,6 +43,7 @@ function fixture(stage='register-fake'){
   async viewNodeStatus(){return {chain_id:state.chain}},
   async viewBlock(){return {header:{hash:state.blockHash,timestamp_nanosec:String(BigInt(now+state.blockOffsetMs)*1000000n)}}},
   async experimental_protocolConfig(){return {chain_id:state.chain,runtime_config:{storage_amount_per_byte:state.cost}}},
+  async gasPrice(block){assert.equal(block,h);return {gas_price:state.gasPrice}},
   async query(q){assert.equal(q.block_id,h);if(q.request_type==='view_account')return account(q.account_id);
    if(q.request_type==='view_access_key_list')return {block_hash:h,keys:q.account_id===plan.vault?[]:q.account_id===plan.owner?state.keys:
       Array.from({length:q.account_id===O?state.providerKeyCount:state.fakeKeyCount},()=>row(publicKey(),'FullAccess'))};throw Error('unexpected query')},
@@ -89,6 +91,10 @@ test('stage order, extra full access keys, wrong restricted methods and changed 
  assert.ok((await inspect('fund-provider',f)).blockers.includes('known_owner_keys'));
  const g=fixture('fund-provider');g.state.keys[2].access_key.permission.FunctionCall.method_names.push('execute');
  assert.ok((await inspect('fund-provider',g)).blockers.includes('dedicated_keys'));
+ const low=fixture('fund-provider');low.state.keys[2].access_key.permission.FunctionCall.allowance='100000000000000000000000';
+ assert.ok((await inspect('fund-provider',low)).blockers.includes('dedicated_keys'));
+ const spentKey=fixture('run-project');spentKey.state.keys[2].access_key.permission.FunctionCall.allowance='200000000000000000000000';
+ assert.equal((await inspect('run-project',spentKey)).eligible,true,'funding key may have spent gas after its one use');
  const c=fixture();c.state.circleTracked='6906';assert.ok((await inspect('register-fake',c)).blockers.includes('circle_balance_and_policy_unchanged'));
  const l=fixture('run-project');l.state.pairLock=true;assert.ok((await inspect('run-project',l)).blockers.includes('exact_ft_locks_clear'));
  const d=fixture('fund-provider');d.state.fundSpent='1';assert.ok((await inspect('fund-provider',d)).blockers.includes('rolling_spend'));
@@ -100,7 +106,19 @@ test('mismatched contract versions, changed price, quota and insufficient reserv
  const v=fixture();v.state.version.wasm_hash='0'.repeat(64);assert.ok((await inspect('register-fake',v)).blockers.includes('provider_terms'));
  const p=fixture();p.state.pricing.operation.price_usd='10001';assert.ok((await inspect('register-fake',p)).blockers.includes('provider_terms'));
  const q=fixture();q.state.quote='14999';assert.ok((await inspect('register-fake',q)).blockers.includes('bounded_ref_quote'));
+ const gas=fixture();gas.state.gasPrice='1500000000';assert.ok((await inspect('register-fake',gas)).blockers.includes('bounded_agent_gas'));
  const r=fixture();r.state.vaultAmount='5000000000000000000000000';assert.ok((await inspect('register-fake',r)).blockers.includes('keyless_vault_reserve'));
+});
+test('read-only transport accepts only a block-pinned gas price query and still denies sends',async()=>{
+ let calls=0;
+ const provider=new ReadOnlyNearRpcProvider('http://127.0.0.1:9999',{fetchImpl:async(_url,request)=>{
+  calls++;const body=JSON.parse(request.body);assert.equal(body.method,'gas_price');assert.deepEqual(body.params,[h]);
+  return new Response(JSON.stringify({jsonrpc:'2.0',id:body.id,result:{gas_price:'1000000000'}}),{status:200});
+ }});
+ assert.equal((await provider.gasPrice(h)).gas_price,'1000000000');
+ await assert.rejects(provider.gasPrice(null),/read-only RPC method denied/);
+ await assert.rejects(provider.sendJsonRpc('gas_price',[h,h]),/read-only RPC method denied/);
+ await assert.rejects(provider.sendJsonRpc('send_tx',{}),/read-only RPC method denied/);assert.equal(calls,1);
 });
 test('network, mixed block, stale block and unknown view never authorize',async()=>{
  const n=fixture();n.state.chain='mainnet';await assert.rejects(inspect('register-fake',n),/testnet/);

@@ -188,8 +188,14 @@ quote and zero provider/vault prepaid credit. The provider and token each had a
 full-access key, so their code can change. The `burn` operation is a diagnostic,
 not useful commercial compute. `agent/outlayer-v11-burn-plan.mjs` describes
 one **unsigned, offline** attempt using two dedicated one-method keys, fixed
-receiver/message, separate native/FT caps, and a maximum 0.02 test-NEAR native
-request. It cannot sign or broadcast. `agent/outlayer-v11-burn-preflight.mjs`
+receiver/message, separate native/FT caps, two 0.5 test-NEAR key gas
+allowances, and a maximum 0.02 test-NEAR native request. The allowances are gas
+budgets, not deposits to the provider. The first [isolated nearcore attempt](https://github.com/Greatmujey/Bouncer/actions/runs/41534163762)
+rejected the funding call at admission with the earlier 0.1 test-NEAR
+allowance: at that sandbox gas price the 300-Tgas transaction cost about 0.301
+test NEAR upfront. The offline plan now uses 0.5 per key and a pinned-price
+estimate with margin; actual admission cost may change. It cannot sign or
+broadcast. `agent/outlayer-v11-burn-preflight.mjs`
 adds stage-specific, fresh single-block preliminary checks for account/key
 identity, balances, policies, code hashes, registration, price, quote, locks
 and rolling spend. Its `eligible` result is **necessary state information, not

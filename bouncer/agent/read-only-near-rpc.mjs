@@ -22,7 +22,8 @@ export class ReadOnlyNearRpcProvider extends nearApi.providers.JsonRpcProvider {
     const viewTypes = ['view_account', 'view_access_key_list', 'view_access_key', 'call_function'];
     const protocolView = method === 'EXPERIMENTAL_protocol_config' && record(params) &&
       Object.keys(params).length === 1 && isTransactionHash(params.block_id);
-    if ((!['status', 'block', 'query'].includes(method) && !protocolView) ||
+    const gasView = method === 'gas_price' && Array.isArray(params) && params.length === 1 && isTransactionHash(params[0]);
+    if ((!['status', 'block', 'query'].includes(method) && !protocolView && !gasView) ||
         (method === 'query' && (!record(params) || !viewTypes.includes(params.request_type)))) {
       throw new Error('read-only RPC method denied');
     }

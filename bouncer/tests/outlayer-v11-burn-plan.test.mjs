@@ -41,7 +41,8 @@ test('provider agents use separate single-method access keys and zero-deposit ac
  const keys=build('install-keys');assert.equal(keys.receiver_id,plan.owner);assert.equal(keys.actions.length,2);
  const permissions=keys.actions.map(a=>a.addKey.accessKey.permission.functionCall);
  assert.deepEqual(permissions.map(x=>x.methodNames),[['execute_ft_call'],['execute_outlayer_project']]);
- for(const x of permissions){assert.equal(x.receiverId,plan.vault);assert.equal(x.allowance,100000000000000000000000n)}
+ for(const x of permissions){assert.equal(x.receiverId,plan.vault);assert.equal(x.allowance,500000000000000000000000n)}
+ assert.equal(OUTLAYER_BURN_REVIEW.agent_gas_allowance_yocto,'500000000000000000000000');
  const fundingCall=build('fund-provider'),run=build('run-project');
  assert.equal(fundingCall.signer_public_key,funding);assert.equal(run.signer_public_key,project);
  assert.equal(unpack(fundingCall.actions[0]).deposit,0n);assert.equal(unpack(run.actions[0]).deposit,0n);

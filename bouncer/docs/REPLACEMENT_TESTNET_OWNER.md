@@ -88,7 +88,11 @@ Original-hash fences and verification summaries are in
 `evidence/testnet-owner-v2/`; never resend these actions.
 
 The two-method Circle agent is not sufficient for the stricter provider runners,
-which require dedicated one-method keys. Those keys and seller routes have not
-been installed. The [isolated nearcore run](https://github.com/Greatmujey/Bouncer/actions/runs/41525285229)
+which require dedicated one-method keys. Its 0.1 test-NEAR gas allowance may
+also be too low for a 200–300 Tgas call: a separate [sandbox test](https://github.com/Greatmujey/Bouncer/actions/runs/41534163762)
+rejected a 300-Tgas call at admission with that allowance at the sandbox gas
+price. That rejection was local, not a live transaction; the exact testnet
+admission cost can change. Dedicated keys and seller routes have not been
+installed. The [isolated nearcore run](https://github.com/Greatmujey/Bouncer/actions/runs/41525285229)
 used a disposable mock-token chain, not live Circle or a seller. The agent's two
 local ciphertext copies and colocated wrapping key are not an off-device backup.

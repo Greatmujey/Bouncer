@@ -15,7 +15,7 @@ const { transactions:tx, utils }=nearApi, TGAS=10n**12n;
 const VERSION='2d406ed8005a422c38aec0616990989970e2c444c1386d4f09d54cce59468fb9';
 const AUTHOR='zavodil.testnet', REF='ref-finance-101.testnet', WRAP='wrap.testnet';
 const STORAGE=1250000000000000000000n, WRAP_INPUT='100000000000000', MIN_OUTPUT='15000', FT_AMOUNT='10000';
-const NATIVE='20000000000000000000000', ALLOWANCE=100000000000000000000000n;
+const NATIVE='20000000000000000000000', ALLOWANCE=500000000000000000000000n; // 0.5 test NEAR per single-method key
 const FUND='ol-funding', USD='ol-project-usd', NEAR='ol-project-native';
 const DEPOSIT_MSG='{"action":"deposit_balance"}', INPUT='{"operation":"burn","rounds":50}';
 const key=(value,label)=>{
@@ -88,5 +88,5 @@ export function buildOutlayerBurnStage({plan,ownerPlan,stage}={}){
 }
 export const OUTLAYER_BURN_REVIEW={asset:'fake USDC.e, not Circle',project:PROJECT,version:VERSION,author:AUTHOR,
   funding_atoms:FT_AMOUNT,wrap_input_yocto:WRAP_INPUT,min_fake_atoms:MIN_OUTPUT,project_native_max_yocto:NATIVE,
-  storage_yocto_per_registration:STORAGE.toString(),input:INPUT,prepaid_refund_risk:'provider credit may return without restoring V11 tracked allowance; no vault withdrawal path established',
+  storage_yocto_per_registration:STORAGE.toString(),agent_gas_allowance_yocto:ALLOWANCE.toString(),input:INPUT,prepaid_refund_risk:'provider credit may return without restoring V11 tracked allowance; no vault withdrawal path established',
   trust:'provider and token can upgrade; cached-worker availability and source/deployed equivalence are unproven'};
