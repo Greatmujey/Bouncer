@@ -159,8 +159,10 @@ See [Coinbase's public endpoint documentation](https://docs.cdp.coinbase.com/coi
 
 The FT-call and project runners now recognize the pinned V11 code only after a
 fresh, single-FINAL-block check of its owner, code hash, zero vault keys, a
-finite-allowance **one-method** owner access key, and the relevant exact-intent
-policy and token/payee locks. The funding route, policy, grants and (for a
+finite-allowance **one-method** owner access key, a conservative pinned-price
+gas estimate, and the relevant exact-intent policy and token/payee locks. Gas
+prices and transaction overhead may change; the estimate cannot guarantee
+admission. The funding route, policy, grants and (for a
 project) provider price, version and credit are read from that same block. A
 V11 project preflight also checks that OutLayer reports at least the vault's
 tracked prepaid allowance for the **vault account**, the actual predecessor;
@@ -203,13 +205,18 @@ authorization**: it cannot prove earlier original receipts, custody, future
 state, seller uptime or deployed-source equivalence. For the funding stage it
 also checks V11's `check` verdict for the selected payee; this is not a
 reservation, and the contract checks the allowlist again during execution.
-A [read-only workflow](https://github.com/Greatmujey/Bouncer/actions/runs/41533660098)
+A [read-only workflow](https://github.com/Greatmujey/Bouncer/actions/runs/41534925775)
 observed its initial state checks passing on 2 November with byte-pattern
 placeholder public keys without private keys; never install or fund those
-placeholders. Its [snapshot](../evidence/testnet-owner-v2/outlayer-burn-preflight-20261102.json)
-is not a transaction authorization. Actual execution still needs verified key custody, durable one-shot journals,
+placeholders. Its [snapshot](../evidence/testnet-owner-v2/outlayer-burn-gas-preflight-20261102.json)
+is not a transaction authorization. A later [isolated nearcore run](https://github.com/Greatmujey/Bouncer/actions/runs/41534926018)
+passed six exact plan stages with an example mock FT and a local V11 receiver;
+the receiver deliberately has no OutLayer project method, whose failure left
+prepaid and native accounting conservatively reserved. The wrap and Ref swap
+stages were **not** tested there. This was not a live seller or delivery.
+Actual execution still needs verified key custody, durable one-shot journals,
 original-hash reconciliation, rechecks immediately before each send and
-isolated-chain tests of all exact stages. No coordinator exists yet. The fake-token storage
+isolated-chain tests of the remaining stages. No coordinator exists yet. The fake-token storage
 registrations can lock test NEAR, and a failed project may leave fake provider
 credit inaccessible to this immutable vault. Neither the snapshot nor the plan
 establishes a payment, provider uptime, Circle support or fulfillment. A

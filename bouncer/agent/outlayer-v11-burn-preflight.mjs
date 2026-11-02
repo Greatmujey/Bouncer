@@ -11,6 +11,7 @@ import { CIRCLE_TESTNET_USDC as CIRCLE } from '../scripts/circle-testnet-setup.m
 import { readPinnedJsonView } from './read-only-near-rpc.mjs';
 import { assertFreshFinalBlock } from '../shared/fresh-final-block.mjs';
 import { pinnedAccessKeyNonce } from '../shared/pinned-access-key-nonce.mjs';
+import { estimateV11ResourceGasAllowance } from '../shared/access-key-gas.mjs';
 
 const WRAP='wrap.testnet', REF='ref-finance-101.testnet', USD='ol-project-usd', FUND='ol-funding', NATIVE='ol-project-native';
 const providerCode='5waWVnt6g3FZfjR6vfYXZzpAi3sZdFy8cK2sLz4EJQDt';
@@ -62,9 +63,8 @@ export async function inspectOutlayerBurnStage({ownerPlan,plan:raw,stage,provide
  ]);
  const blockers=[], require=(name,condition)=>{if(!condition)blockers.push(name)};
  const cost=protocol?.runtime_config?.storage_amount_per_byte,gas=gasPrice?.gas_price;
- // 300 Tgas plus a conservative 30% margin and 0.001 NEAR overhead. This is
- // an estimate, not a protocol reservation; admission prices may move.
- const gasEstimate=positive(gas)?300n*10n**12n*BigInt(gas)*13n/10n+10n**21n:null;
+ // An estimate, not a protocol reservation; admission prices may move.
+ let gasEstimate=null;try{gasEstimate=estimateV11ResourceGasAllowance(gas)}catch{/* unknown price fails closed */}
  const needed=gasEstimate!==null&&gasEstimate>minimumForSend?gasEstimate:minimumForSend;
  require('bounded_agent_gas',gasEstimate!==null&&needed<=newAllowance);
  const available=account=>amount(account?.amount)&&Number.isSafeInteger(account.storage_usage)&&account.storage_usage>=0&&positive(cost)?

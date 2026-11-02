@@ -20,10 +20,11 @@ import { verifyOutlayerProbeVrf } from './outlayer-vrf.mjs';
 import { withExclusiveJournalOperation } from './journal-operation.mjs';
 import { inspectV11ResourceBoundary, V11_RESOURCE_VERSION } from './v11-resource-preflight.mjs';
 import { assertFreshFinalBlock } from '../shared/fresh-final-block.mjs';
+import { V11_RESOURCE_GAS as GAS } from '../shared/access-key-gas.mjs';
 
 const { KeyPair, KeyPairSigner } = nearApi;
 const OUTLAYER = 'outlayer.testnet', PROJECT = 'connectors.outlayer.testnet/connector-probe', TOKEN = 'usdc.fakes.testnet';
-const MAX = (1n << 128n) - 1n, GAS = 300n * 10n ** 12n;
+const MAX = (1n << 128n) - 1n;
 const FIELDS = ['id', 'contract_id', 'owner_account_id', 'native_policy_id', 'amount', 'route', 'expected_author'];
 const ROUTE = ['project', 'route_revision', 'native_policy_revision', 'usd_policy_revision', 'native_payee_revision', 'usd_payee_revision', 'active'];
 const CONFIG = ['project_id', 'version_key', 'usd_policy_id', 'token', 'attached_usd', 'input_data', 'max_instructions', 'max_memory_mb', 'max_execution_seconds'];

@@ -23,10 +23,10 @@ import { isTransactionHash } from '../shared/direct-payment-settlement.mjs';
 import { withExclusiveJournalOperation } from './journal-operation.mjs';
 import { inspectV11ResourceBoundary, V11_RESOURCE_VERSION } from './v11-resource-preflight.mjs';
 import { assertFreshFinalBlock } from '../shared/fresh-final-block.mjs';
+import { V11_RESOURCE_GAS as GAS } from '../shared/access-key-gas.mjs';
 
 const { KeyPair, KeyPairSigner } = nearApi;
 const MAX = (1n << 128n) - 1n;
-const GAS = 300n * 10n ** 12n;
 const FIELDS = ['id', 'contract_id', 'owner_account_id', 'policy_id', 'payee', 'token', 'amount', 'msg', 'policy_revision', 'route_revision'];
 const equal = isDeepStrictEqual;
 const owns = (obj, keys) => obj && typeof obj === 'object' && !Array.isArray(obj) &&

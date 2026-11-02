@@ -229,14 +229,15 @@ test('V11 project runner pins vault identity, one-method key, exact locks and pr
   const { V11_NEAR_CODE_HASH } = await import('../agent/keyless-vault-bootstrap.mjs');
   const { V11_RESOURCE_VERSION } = await import('../agent/v11-resource-preflight.mjs');
   const f=fixture(), original=f.provider.callFunction.bind(f.provider), block='1'.repeat(32);
-  let locked=false, code=V11_NEAR_CODE_HASH, keyMethods=['execute_outlayer_project'], providerCredit='15000';
+  let locked=false, code=V11_NEAR_CODE_HASH, keyMethods=['execute_outlayer_project'], providerCredit='15000',allowance='500000000000000000000000';
   f.provider.callFunction=async(account,method,args,ref)=>method==='contract_version'?V11_RESOURCE_VERSION:original(account,method,args,ref);
   f.provider.viewBlock=async()=>({header:{hash:block,timestamp_nanosec:String(BigInt(Date.now())*1_000_000n)}});
+  f.provider.gasPrice=async id=>{assert.equal(id,block);return {gas_price:'1000000000'}};
   f.provider.query=async q=>{
     assert.equal(q.block_id,block);
     if(q.request_type==='view_account')return {block_hash:block,code_hash:code};
     if(q.request_type==='view_access_key_list')return {block_hash:block,keys:[]};
-    if(q.request_type==='view_access_key')return {block_hash:block,permission:{FunctionCall:{receiver_id:goal.contract_id,method_names:keyMethods,allowance:'100'}}};
+    if(q.request_type==='view_access_key')return {block_hash:block,permission:{FunctionCall:{receiver_id:goal.contract_id,method_names:keyMethods,allowance}}};
     throw Error('unexpected query');
   };
   f.provider.callFunctionRaw=async(account,method,args,ref)=>{
@@ -251,5 +252,7 @@ test('V11 project runner pins vault identity, one-method key, exact locks and pr
   locked=true;await assert.rejects(run(f),/exact-intent lock/);locked=false;
   code='wrong';await assert.rejects(run(f),/vault code/);code=V11_NEAR_CODE_HASH;
   keyMethods=['execute_outlayer_project','execute'];await assert.rejects(run(f),/restricted key/);
-  assert.equal(f.sends(),0);
+  keyMethods=['execute_outlayer_project'];allowance='100000000000000000000000';
+  await assert.rejects(run(f,{execute:true}),/gas allowance.*before signing/);
+  assert.equal(f.sends(),0);assert.equal(f.journal.get(goal.id),undefined);
 });

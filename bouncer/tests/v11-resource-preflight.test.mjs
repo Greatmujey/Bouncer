@@ -8,9 +8,10 @@ const other=nearApi.utils.serialize.base_encode(Buffer.alloc(32,9));
 const publicKey=String(nearApi.KeyPair.fromRandom('ed25519').getPublicKey());
 const now=Date.now();
 function fixture(){
- const opts={chain:'testnet',code:V11_NEAR_CODE_HASH,vaultKeys:[],method:'execute_ft_call',allowance:'100',lockedPolicy:false,lockedPayee:false,mixed:false};
+ const opts={chain:'testnet',code:V11_NEAR_CODE_HASH,vaultKeys:[],method:'execute_ft_call',allowance:'500000000000000000000000',gasPrice:'1000000000',lockedPolicy:false,lockedPayee:false,mixed:false};
  const provider={
   async viewNodeStatus(){return {chain_id:opts.chain}},
+  async gasPrice(block){assert.equal(block,hash);return {gas_price:opts.gasPrice}},
   async viewBlock(){return {header:{hash,timestamp_nanosec:String(BigInt(now)*1_000_000n)}}},
   async query(q){
    assert.equal(q.block_id,hash);
@@ -39,9 +40,11 @@ function fixture(){
 test('V11 resource boundary pins code, zero vault keys, scoped finite allowance and both exact-intent locks',async()=>{
  const f=fixture(), state=await inspectV11ResourceBoundary(f.args);
  assert.equal(state.block_hash,hash);assert.match(state.scope,/not an audit/);
+ assert.equal(state.estimated_minimum_agent_allowance_yocto,'391000000000000000000000');
  assert.equal(await state.view('vault.testnet','is_exact_ft_policy_locked',{policy_id:'fake-funding'}),false);
  for(const [field,value] of [['code',other],['vaultKeys',[{public_key:publicKey}]],['method','set_policy'],
-  ['allowance',null],['allowance','0'],['lockedPolicy',true],['lockedPayee',true],['mixed',true],['chain','mainnet']]){
+  ['allowance',null],['allowance','0'],['allowance','100000000000000000000000'],['gasPrice','0'],['gasPrice','invalid'],
+  ['lockedPolicy',true],['lockedPayee',true],['mixed',true],['chain','mainnet']]){
   const x=fixture();x.opts[field]=value;await assert.rejects(inspectV11ResourceBoundary(x.args));
  }
 });
