@@ -118,7 +118,8 @@ export async function exerciseSandboxBootstrapRunner({ rpcUrl, root, sourceFtOwn
     assert.equal(funded.state.vault_tracked_circle_atoms, '6907');
     assert.equal(funded.state.owner_circle_atoms, '0'); assert.equal(rpc.transportCalls, 3);
     checkpoint('mock-FT vault registration and full deposit recovered the original funding receipt after a simulated lost acknowledgement');
-    const resourceAgent = await exerciseSandboxResourceAgent({ rpc, ownerPlan: plan, ownerKey, directory, checkpoint });
+    const resourceAgent = await exerciseSandboxResourceAgent({ rpc, ownerPlan: plan, ownerKey, directory, checkpoint,
+      expectedCircleCodeHash: funded.state.circle_code_hash });
     return { scope: 'disposable local nearcore and mock FT only; Circle metadata was synthesized; not testnet or seller delivery',
       sandbox_transaction_hash: envelope.tx_hash, original_receipt_id: evidence.root_receipt_id,
       original_hash_journaled_before_send: true, lost_ack_recovered_without_resend: true, transport_calls: rpc.transportCalls,

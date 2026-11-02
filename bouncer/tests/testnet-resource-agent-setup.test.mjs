@@ -8,6 +8,7 @@ import {createTestnetResourceAgentKeyring} from '../agent/testnet-resource-agent
 import {inspectTestnetResourceAgentSetup,signTestnetResourceAgentSetup,verifySignedTestnetResourceAgentSetup} from '../agent/testnet-resource-agent-setup.mjs';
 import {V11_NEAR_CODE_HASH} from '../agent/keyless-vault-bootstrap.mjs';
 import {verifyTestnetResourceAgentReceipt} from '../agent/testnet-resource-agent-evidence.mjs';
+import {inspectInstalledTestnetResourceAgent} from '../agent/testnet-resource-agent-state.mjs';
 const hash=nearApi.utils.serialize.base_encode(Buffer.alloc(32,8));
 function fixture(){
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'bouncer-plan-'));fs.chmodSync(root,0o700);
@@ -150,5 +151,58 @@ test('receipt evidence binds the original guard failure, policy actions and loca
    assert.equal(verify(withRefund).tx_hash,e.tx_hash);
    withRefund.receipts[withRefund.receipts.length-1].receiver_id='evil.testnet';assert.throws(()=>verify(withRefund),/unknown children/);
   }
+ }finally{f.cleanup()}
+});
+
+
+test('post-install inspection pins both keys, policy, token identity and exact balances',async()=>{
+ const f=fixture();try{
+  const full={nonce:44,permission:'FullAccess'},agent={nonce:0,permission:{FunctionCall:{allowance:f.p.gas_allowance_yocto,
+   receiver_id:f.p.vault,method_names:['execute','execute_ft_call']}}},min='1250000000000000000000';
+  let mutate=null;
+  const provider={
+   async viewNodeStatus(){return {chain_id:'testnet'}},
+   async viewBlock(){return {header:{hash,timestamp_nanosec:(BigInt(f.now)*1000000n).toString()}}},
+   async query(q){assert.equal(q.block_id,hash);let result;
+    if(q.request_type==='view_account')result=q.account_id===f.owner.account_id?
+     {block_hash:hash,code_hash:'11111111111111111111111111111111',amount:'3000000000000000000000000',locked:'0'}:
+     q.account_id===f.p.vault?{block_hash:hash,code_hash:V11_NEAR_CODE_HASH,amount:'6000000000000000000000000'}:
+     {block_hash:hash,code_hash:hash};
+    else if(q.request_type==='view_access_key_list')result={block_hash:hash,keys:q.account_id===f.p.vault?[]:
+     [{public_key:f.owner.public_key,access_key:structuredClone(full)},{public_key:f.p.public_key,access_key:structuredClone(agent)}]};
+    else if(q.request_type==='view_access_key')result={block_hash:hash,...structuredClone(q.public_key===f.owner.public_key?full:agent)};
+    else throw Error('unexpected query');
+    if(mutate)result=mutate('query',q,result);return result;
+   },
+   async callFunctionRaw(account,method,args,ref){assert.equal(ref.blockId,hash);let value;
+    if(method==='get_owner')value=f.owner.account_id;
+    else if(method==='contract_version')value='bouncer-agent-v11-exact-ft-testnet';
+    else if(method==='get_policy')value={token:f.p.token,per_tx_cap:'3000',daily_cap:'6907'};
+    else if(method==='is_agent_key_allowed')value=true;
+    else if(method==='daily_spent')value='0';
+    else if(method==='ft_balance_of')value=args.account_id===f.p.vault?'6907':'0';
+    else if(method==='vault_balance')value='6907';
+    else if(method==='storage_balance_bounds')value={min,max:null};
+    else if(method==='storage_balance_of')value={total:min,available:'0'};
+    else if(method==='ft_metadata')value={symbol:'USDC',decimals:6};
+    else throw Error('unexpected view');
+    if(mutate)value=mutate('view',{account,method,args},value);
+    return {block_hash:hash,result:[...Buffer.from(JSON.stringify(value))]};
+   }
+  };
+  const inspect=()=>inspectInstalledTestnetResourceAgent({ownerPlan:f.owner,agentPlan:f.p,expectedCircleCodeHash:hash,provider,now:()=>f.now});
+  const state=await inspect();assert.equal(state.status,'RESTRICTED_RESOURCE_AGENT_INSTALLED_AT_FINAL');
+  assert.equal(state.owner_key_count,2);assert.equal(state.vault_key_count,0);assert.equal(state.daily_spent_atoms,'0');
+  for(const m of [
+   (kind,q,r)=>{if(kind==='query'&&q.request_type==='view_access_key'&&q.public_key===f.p.public_key)r.permission.FunctionCall.method_names.push('set_policy');return r},
+   (kind,q,r)=>{if(kind==='query'&&q.request_type==='view_access_key_list'&&q.account_id===f.owner.account_id)r.keys.push({public_key:'extra',access_key:full});return r},
+   (kind,q,r)=>{if(kind==='query'&&q.request_type==='view_account'&&q.account_id===f.p.token)r.code_hash=V11_NEAR_CODE_HASH;return r},
+   (kind,q,r)=>kind==='view'&&q.method==='daily_spent'?'1':r,
+   (kind,q,r)=>kind==='view'&&q.method==='vault_balance'?'6906':r,
+   (kind,q,r)=>kind==='view'&&q.method==='is_agent_key_allowed'?false:r,
+   (kind,q,r)=>{if(kind==='query'&&q.request_type==='view_access_key_list'&&q.account_id===f.p.vault)r.keys.push({public_key:'extra'});return r}
+  ]){mutate=m;await assert.rejects(inspect())}
+  mutate=null;
+  await assert.rejects(inspectInstalledTestnetResourceAgent({ownerPlan:f.owner,agentPlan:f.p,expectedCircleCodeHash:V11_NEAR_CODE_HASH,provider,now:()=>f.now}),/state differs/);
  }finally{f.cleanup()}
 });

@@ -9,38 +9,41 @@ import { syncWrite } from '../agent/circle-owner-offline-journal.mjs';
 import { createTestnetResourceAgentKeyring } from '../agent/testnet-resource-agent-keyring.mjs';
 import { inspectTestnetResourceAgentSetup, signTestnetResourceAgentSetup,
   verifySignedTestnetResourceAgentSetup } from '../agent/testnet-resource-agent-setup.mjs';
-import { verifyTestnetResourceAgentReceipt } from '../agent/testnet-resource-agent-evidence.mjs';
-import { requireFinalSuccess } from './v11-sandbox-support.mjs';
+import { broadcastTestnetResourceAgentOnce, reconcileTestnetResourceAgent } from '../agent/testnet-resource-agent-runner.mjs';
+import { inspectInstalledTestnetResourceAgent } from '../agent/testnet-resource-agent-state.mjs';
 
-export async function exerciseSandboxResourceAgent({ rpc, ownerPlan, ownerKey, directory, checkpoint }) {
+export async function exerciseSandboxResourceAgent({ rpc, ownerPlan, ownerKey, directory, checkpoint, expectedCircleCodeHash }) {
   const agent = createTestnetResourceAgentKeyring({ dir: path.join(directory,'sandbox-resource-agent'), ownerPlan }).plan;
   const receipts = {};
   for (const stage of ['guard-probe','configure','install']) {
     const snapshot = await inspectTestnetResourceAgentSetup({ ownerPlan, agentPlan: agent, provider: rpc });
     assert.equal(snapshot[stage === 'guard-probe' ? 'guard_probe_eligible' : stage === 'configure' ? 'configure_eligible' : 'install_eligible'], true);
     const envelope = await signTestnetResourceAgentSetup({ ownerPlan, agentPlan: agent, snapshot, stage, keyPair: ownerKey });
-    const signed = verifySignedTestnetResourceAgentSetup(envelope, ownerPlan, agent);
+    verifySignedTestnetResourceAgentSetup(envelope, ownerPlan, agent);
     const fence = path.join(directory, `resource-agent-${stage}-original.json`);
     syncWrite(fence, JSON.stringify(envelope) + '\n', 'wx', 0o600);
-    await rpc.sendTransactionOnce(signed, 'FINAL', { beforeSubmit: () => {
-      const original = JSON.parse(fs.readFileSync(fence, 'utf8'));
-      assert.equal(original.tx_hash, envelope.tx_hash);
-      verifySignedTestnetResourceAgentSetup(original, ownerPlan, agent);
-    }});
-    const result = await rpc.txStatusReceipts(envelope.tx_hash, ownerPlan.account_id, 'FINAL');
-    const proof = verifyTestnetResourceAgentReceipt({ ownerPlan, agentPlan: agent, envelope, result });
-    assert.equal(proof.tx_hash, envelope.tx_hash);
-    assert.equal(proof.guard_failure_verified, stage === 'guard-probe');
+    const args = { ownerPlan, agentPlan:agent, envelope, expectedCircleCodeHash, provider:rpc,
+      persistAttempt: async attempt => {
+        const original = JSON.parse(fs.readFileSync(fence, 'utf8'));
+        verifySignedTestnetResourceAgentSetup(original, ownerPlan, agent);
+        return attempt.tx_hash === original.tx_hash && attempt.stage === stage;
+      }};
+    let result;
+    if (stage === 'configure') {
+      const calls = rpc.transportCalls;
+      rpc.loseNextAcknowledgementForTest();
+      await assert.rejects(broadcastTestnetResourceAgentOnce(args), /never resend/);
+      assert.equal(rpc.transportCalls, calls + 1);
+      result = await reconcileTestnetResourceAgent(args);
+      assert.equal(rpc.transportCalls, calls + 1, 'lost acknowledgement recovery must not send twice');
+    } else {
+      result = await broadcastTestnetResourceAgentOnce(args);
+    }
+    assert.equal(result.tx_hash, envelope.tx_hash);
+    assert.equal(result.receipt.guard_failure_verified, stage === 'guard-probe');
     if (stage === 'guard-probe') {
-      assert.equal(result.final_execution_status, 'FINAL');
-      assert.match(JSON.stringify(result.status?.Failure), /owner-only method requires exactly 1 yoctoNEAR/);
-      const root = result.transaction_outcome?.outcome?.status?.SuccessReceiptId;
-      const failed = result.receipts_outcome?.filter(x => x.id === root && x.outcome?.executor_id === agent.vault &&
-        JSON.stringify(x.outcome.status?.Failure) === JSON.stringify(result.status.Failure));
-      assert.equal(failed?.length, 1, 'the linked vault receipt must show the expected failure');
-      const after = await inspectTestnetResourceAgentSetup({ ownerPlan, agentPlan: agent, provider: rpc });
-      assert.equal(after.policy, null); assert.equal(after.agent_granted, false);
-    } else requireFinalSuccess(result, stage);
+      assert.equal(result.state.policy, null); assert.equal(result.state.agent_granted, false);
+    }
     receipts[stage] = envelope.tx_hash;
   }
   // Same-account AddKey is locally executed; its receipt body may be omitted.
@@ -61,8 +64,12 @@ export async function exerciseSandboxResourceAgent({ rpc, ownerPlan, ownerKey, d
   assert.equal(access.permission?.FunctionCall?.receiver_id, agent.vault);
   assert.deepEqual(access.permission?.FunctionCall?.method_names, ['execute','execute_ft_call']);
   assert.equal(String(access.permission?.FunctionCall?.allowance), agent.gas_allowance_yocto);
+  const state = await inspectInstalledTestnetResourceAgent({ ownerPlan, agentPlan:agent, expectedCircleCodeHash, provider:rpc });
+  assert.equal(state.vault_key_count, 0); assert.equal(state.vault_actual_circle_atoms, '6907');
+  assert.equal(state.vault_tracked_circle_atoms, '6907');
   checkpoint('sandbox resource-agent planner: zero-yocto escalation rejected, policy configured, restricted key installed');
   return { scope:'isolated local chain and mock FT only; no live policy, Circle funding, audit, payee or seller delivery',
     zero_yocto_policy_rejected_by_vault:true, policy_configured_after_guard:true, restricted_agent_key_installed:true,
+    post_install_pinned_state_checked:true, lost_ack_reconciled_without_resend:true,
     allowed_methods:['execute','execute_ft_call'], payee_added:false, sandbox_original_hashes:receipts };
 }
