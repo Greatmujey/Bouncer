@@ -1,0 +1,14 @@
+{
+  "status": "ORIGINAL_VAULT_CIRCLE_FUNDING_RECONCILIATION_PENDING",
+  "network": "testnet",
+  "owner": "bouncer-owner-3869c162b193fa1729515442.testnet",
+  "vault": "vault.bouncer-owner-3869c162b193fa1729515442.testnet",
+  "tx_hash": "FjS46YNbX13qczqR3XrhCPsep7ThaA8osX3jZED1HSoL",
+  "signed_envelope_sha256": "95b51afb31b183f6e06d557b2041569320ad759c024af048b12ae61bd9d11d47",
+  "fence_artifact_id": "13178386540",
+  "run_id": "41522848477",
+  "commit": "19032e41fe6277ea5dd017a51d6eb9aa69ef58cf",
+  "result": "CI send-and-verification step reported success; final run and public receipt output not yet available",
+  "do_not_resend": true,
+  "scope": "original hash and public fence retained; independent read-only receipt and state reconciliation requested"
+}
