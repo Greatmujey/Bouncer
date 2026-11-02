@@ -11,6 +11,19 @@
   "commit": "7a19fd4d82d7debf97d120c7f51228bb249fd9e9",
   "reason": "CI fence helper rejected the new artifact prefix before its send call",
   "public_bearer_may_have_been_relayed_elsewhere": true,
+  "original_hash_reconciliation_run": "41526802629",
+  "original_hash_reconciliation_result": "RPC_TIMEOUT_RECEIPT_UNKNOWN",
+  "validity_diagnostics_run": "41527217405",
+  "validity_diagnostics": {
+    "original_block_height": 275953369,
+    "final_block_height": 275954201,
+    "transaction_validity_period_blocks": 86400,
+    "validity_window_passed_at_final": false,
+    "owner_nonce_at_final": "275948535000006",
+    "receipt_status": "UNKNOWN_UNLESS_SEPARATELY_VERIFIED"
+  },
+  "distinct_higher_nonce_control_sandbox_run": "41528285890",
+  "sandbox_scope": "disposable nearcore and mock FT only; not live guard verification",
   "do_not_resend": true,
   "scope": "zero-yocto policy probe only; no FT transfer; original-hash reconciliation required"
 }
