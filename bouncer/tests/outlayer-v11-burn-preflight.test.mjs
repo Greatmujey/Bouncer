@@ -30,7 +30,8 @@ function fixture(stage='register-fake'){
   fundPolicy:configured?policy(F,'10000'):null,usdPolicy:configured?policy(F,'10000'):null,nativePolicy:configured?policy('native','20000000000000000000000'):null,
   fundRoute:configured?{token:F,msg:'{"action":"deposit_balance"}',policy_revision:1,route_revision:1,active:true}:null,
   projectRoute:configured?route:null,fundGrant:configured,usdGrant:configured,nativeGrant:configured,fundLock:false,usdLock:false,pairLock:false,
-  fundSpent:providerPaid?'10000':'0',usdSpent:'0',nativeSpent:'0',version:stored('project_version'),pricing:stored('pricing'),quote:'21645',
+  fundSpent:providerPaid?'10000':'0',usdSpent:'0',nativeSpent:'0',fundVerdict:[true,'ok'],nativeVerdict:[true,'ok'],
+  version:stored('project_version'),pricing:stored('pricing'),quote:'21645',
   keys:[row(plan.owner_public_key,'FullAccess'),row(existing,perm(['execute','execute_ft_call']))],
   cost:'10000000000000000000',blockOffsetMs:0,mixedBlock:false,unavailable:null};
  if(installed)state.keys.push(row(funding,perm(['execute_ft_call'])),row(projectKey,perm(['execute_outlayer_project'])));
@@ -56,6 +57,7 @@ function fixture(stage='register-fake'){
     else if(method==='is_exact_ft_policy_locked')v=args.policy_id==='ol-funding'?state.fundLock:state.usdLock;
     else if(method==='is_exact_ft_payee_locked')v=state.pairLock;
     else if(method==='daily_spent')v=args.policy_id==='circle-resources'?'0':args.policy_id==='ol-funding'?state.fundSpent:args.policy_id==='ol-project-usd'?state.usdSpent:state.nativeSpent;
+    else if(method==='check')v=args.policy_id==='ol-funding'?state.fundVerdict:state.nativeVerdict;
    }else if(id===CIRCLE&&method==='ft_balance_of')v=state.circleActual;
    else if(id===F){if(method==='ft_metadata')v=stored('fake_token_metadata');else if(method==='storage_balance_bounds')v=stored('fake_storage_bounds');
     else if(method==='storage_balance_of')v=args.account_id===plan.owner?state.ownerReg:args.account_id===plan.vault?state.vaultReg:reg;
@@ -90,6 +92,8 @@ test('stage order, extra full access keys, wrong restricted methods and changed 
  const c=fixture();c.state.circleTracked='6906';assert.ok((await inspect('register-fake',c)).blockers.includes('circle_balance_and_policy_unchanged'));
  const l=fixture('run-project');l.state.pairLock=true;assert.ok((await inspect('run-project',l)).blockers.includes('exact_ft_locks_clear'));
  const d=fixture('fund-provider');d.state.fundSpent='1';assert.ok((await inspect('fund-provider',d)).blockers.includes('rolling_spend'));
+ const v=fixture('fund-provider');v.state.fundVerdict=[false,'payee not allowed'];assert.ok((await inspect('fund-provider',v)).blockers.includes('funding_payee_and_policy_verdict'));
+ const n=fixture('run-project');n.state.nativeVerdict=[false,'insufficient'];assert.ok((await inspect('run-project',n)).blockers.includes('native_payee_and_policy_verdict'));
 });
 test('mismatched contract versions, changed price, quota and insufficient reserves fail closed',async()=>{
  const f=fixture();f.state.providerCode='11111111111111111111111111111111';assert.ok((await inspect('register-fake',f)).blockers.includes('provider_token_code'));

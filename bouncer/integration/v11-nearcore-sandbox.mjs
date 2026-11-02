@@ -36,6 +36,7 @@ import { exerciseSandboxNativeFaucet } from './v11-sandbox-native-faucet.mjs';
 import { exerciseSandboxEscrowBoundary } from './v11-sandbox-escrow-boundary.mjs';
 import { exerciseSandboxForwarder } from './v11-sandbox-forwarder.mjs';
 import { exerciseSandboxBootstrapRunner } from './v11-sandbox-bootstrap-runner.mjs';
+import { exerciseSandboxOutlayerBurn } from './v11-sandbox-outlayer-burn.mjs';
 import { FAUCET_RETURN } from '../agent/native-testnet-faucet.mjs';
 import { V11_SHA256, MOCK_FT_SHA256, SANDBOX_SHA256, SANDBOX_CHAIN_ID, readVerifiedFile,
   withMockTokenInGenesis, assertSandboxStatus, requireFinalSuccess, assertOmittedLocalAddKeyReceipt,
@@ -446,6 +447,7 @@ async function run() {
     // deployment, original receipt verifier and lost-response recovery. Its
     // Circle metadata is synthetic; only disposable mock-FT tokens move.
     const bootstrapRunnerEvidence = await exerciseSandboxBootstrapRunner({ rpcUrl: sandbox.rpcUrl, root, sourceFtOwner: owner, wasm, directory, checkpoint });
+    const outlayerBurnEvidence = await exerciseSandboxOutlayerBurn({ rpcUrl: sandbox.rpcUrl, root, wasm, mockFt, checkpoint });
     assertSandboxStatus(await provider.status());
     const evidence = {
       scope: 'ISOLATED LOCAL SANDBOX ONLY: mock FT, fake balances and no seller service; not a testnet deployment, audit or fulfillment proof',
@@ -469,6 +471,7 @@ async function run() {
       buyer_runner_and_original_hash_recovery: buyerRunnerEvidence,
       native_faucet_and_original_hash_recovery: nativeFaucetEvidence,
       generic_keyless_bootstrap_and_original_hash_recovery: bootstrapRunnerEvidence,
+      outlayer_burn_plan_with_local_receiver_standin: outlayerBurnEvidence,
     };
     console.log(JSON.stringify(evidence, null, 2));
     if (verifierBlockers.length) {

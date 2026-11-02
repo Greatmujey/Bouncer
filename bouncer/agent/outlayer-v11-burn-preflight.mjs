@@ -36,7 +36,7 @@ export async function inspectOutlayerBurnStage({ownerPlan,plan:raw,stage,provide
  const view=(id,method,args={})=>readPinnedJsonView(provider,hash,id,method,args);
  const [protocol,ownerAccount,ownerKeys,vaultAccount,wrapAccount,circleActual,circleTracked,wrapMeta,wrapRegistration,wrapBalance,refWrap,refToken,
    fundPolicy,usdPolicy,nativePolicy,fundRoute,projectRoute,fundGrant,usdGrant,nativeGrant,fundLock,usdLock,pairLock,fundSpent,usdSpent,nativeSpent,
-   circlePolicy,circleGrant,circleSpent]=await Promise.all([
+   circlePolicy,circleGrant,circleSpent,fundVerdict,nativeVerdict]=await Promise.all([
    provider.experimental_protocolConfig({blockId:hash}),
    provider.query({request_type:'view_account',account_id:plan.owner,block_id:hash}),
    provider.query({request_type:'view_access_key_list',account_id:plan.owner,block_id:hash}),
@@ -56,6 +56,8 @@ export async function inspectOutlayerBurnStage({ownerPlan,plan:raw,stage,provide
    view(plan.vault,'get_policy',{policy_id:'circle-resources'}),
    view(plan.vault,'is_agent_key_allowed',{policy_id:'circle-resources',public_key:plan.existing_resource_public_key}),
    view(plan.vault,'daily_spent',{policy_id:'circle-resources'}),
+   view(plan.vault,'check',{policy_id:FUND,payee:SELLER,amount:fee}),
+   view(plan.vault,'check',{policy_id:NATIVE,payee:SELLER,amount:nano}),
  ]);
  const blockers=[], require=(name,condition)=>{if(!condition)blockers.push(name)};
  const cost=protocol?.runtime_config?.storage_amount_per_byte;
@@ -103,6 +105,9 @@ export async function inspectOutlayerBurnStage({ownerPlan,plan:raw,stage,provide
  require('balances_known',[ownerFake,vaultFake,tracked,native,credit,providerCredit].every(amount));
  require('exact_ft_locks_clear',fundLock===false&&usdLock===false&&pairLock===false);
  require('rolling_spend',fundSpent===(stage==='run-project'?fee:'0')&&usdSpent==='0'&&nativeSpent==='0');
+ const passing=x=>Array.isArray(x)&&x.length===2&&x[0]===true&&typeof x[1]==='string';
+ if(stage==='fund-provider')require('funding_payee_and_policy_verdict',passing(fundVerdict));
+ if(stage==='run-project')require('native_payee_and_policy_verdict',passing(nativeVerdict));
  const notConfigured=fundPolicy===null&&usdPolicy===null&&nativePolicy===null&&fundRoute===null&&projectRoute===null&&
    fundGrant===false&&usdGrant===false&&nativeGrant===false;
  const expectedProject=JSON.parse(Buffer.from(buildOutlayerBurnStage({plan,ownerPlan,stage:'run-project'}).actions[0].functionCall.args).toString()).expected_route;

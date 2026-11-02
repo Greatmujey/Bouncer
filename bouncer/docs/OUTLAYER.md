@@ -194,11 +194,14 @@ adds stage-specific, fresh single-block preliminary checks for account/key
 identity, balances, policies, code hashes, registration, price, quote, locks
 and rolling spend. Its `eligible` result is **necessary state information, not
 authorization**: it cannot prove earlier original receipts, custody, future
-state, seller uptime or deployed-source equivalence. V11 does not expose a
-direct funding-payee allowlist view; the contract still checks it on execution.
-The read-only workflow exercises the initial check with byte-pattern placeholder
-public keys without private keys; never install or fund those placeholders.
-Actual execution still needs verified key custody, durable one-shot journals,
+state, seller uptime or deployed-source equivalence. For the funding stage it
+also checks V11's `check` verdict for the selected payee; this is not a
+reservation, and the contract checks the allowlist again during execution.
+A [read-only workflow](https://github.com/Greatmujey/Bouncer/actions/runs/41533660098)
+observed its initial state checks passing on 2 November with byte-pattern
+placeholder public keys without private keys; never install or fund those
+placeholders. Its [snapshot](../evidence/testnet-owner-v2/outlayer-burn-preflight-20261102.json)
+is not a transaction authorization. Actual execution still needs verified key custody, durable one-shot journals,
 original-hash reconciliation, rechecks immediately before each send and
 isolated-chain tests of all exact stages. No coordinator exists yet. The fake-token storage
 registrations can lock test NEAR, and a failed project may leave fake provider
