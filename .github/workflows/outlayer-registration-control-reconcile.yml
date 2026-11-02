@@ -1,0 +1,33 @@
+# Read-only original control lookup and post-fence state; never sends.
+name: Reconcile OutLayer registration nonce control (read only)
+on:
+  push:
+    branches: ['arena/**']
+permissions:
+  contents: read
+jobs:
+  reconcile:
+    if: contains(github.event.head_commit.message, '[outlayer-registration-control-reconcile]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    defaults:
+      run:
+        working-directory: bouncer
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: node --test tests/outlayer-registration-control.test.mjs tests/outlayer-registration-control-runner.test.mjs tests/read-only-near-receipts.test.mjs
+      - name: Verify the original control and fresh registration state
+        run: |
+          set -euo pipefail
+          if ! node scripts/reconcile-outlayer-registration-control.mjs > "$RUNNER_TEMP/outlayer-control-result.json" 2> "$RUNNER_TEMP/outlayer-control-error.log"; then
+            python3 -c 'import os; s=open(os.environ["RUNNER_TEMP"]+"/outlayer-control-error.log").read()[-2500:]; print("::error title=Control unknown; never resend::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
+            exit 1
+          fi
+          python3 -c 'import os,json; s=json.dumps(json.load(open(os.environ["RUNNER_TEMP"]+"/outlayer-control-result.json")),separators=(",",":")); print("::notice title=OutLayer registration nonce control reconciliation::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
+          { echo '## Read-only control reconciliation'; echo 'No signing, send or seller payment. The original registration history may remain unknown.'; echo '```json'; cat "$RUNNER_TEMP/outlayer-control-result.json"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
