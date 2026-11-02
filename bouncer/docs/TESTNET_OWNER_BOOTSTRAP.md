@@ -8,10 +8,19 @@ appear in the committed plan. Never reuse this testnet key for mainnet.
 
 The local recovery file contains the full-access private key. Keep it private,
 store an offline copy, and never paste it into chat, source control or a
-website. Local duplicate files were checked against the public key, but that
-is **not** proof that the owner has exported or safely retained a backup. A
-keyless vault must not be considered safely recoverable merely because these
-local files existed.
+website. Local duplicate files were checked against the public key and the
+recovery file was opened for the user, but that is **not** proof that the owner
+has exported or safely retained a backup. A keyless vault must not be considered
+safely recoverable merely because these local files existed.
+
+[One-shot run 41477680991](https://github.com/Greatmujey/Bouncer/actions/runs/41477680991)
+at commit `9870549982c2cfa47013a9d3212d7ffbdecaa501` succeeded. At FINAL block
+`9ujjZF3N1sU9cc9Xgi7e9agNAbRBbjxyjgVejqnpPFB6` it observed
+`bouncer-owner-160217b55c7400c0810c0e49.testnet` with exactly the expected one
+full-access key and 10 test NEAR. The public attempt fence is artifact
+`13157938135`. The helper acknowledged the request; no owner transaction was
+signed, Circle registration or funding was checked, or vault deployed by that
+run. Do not repeat the helper request.
 
 ## One-shot fence
 
