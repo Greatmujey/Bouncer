@@ -35,11 +35,12 @@ and check supplied receipts against that review. They do not sign, fetch,
 broadcast, retry or prove current state. A stage-aware read-only library can
 compare that journal with pinned RPC views. A separate **experimental owner
 CLI and setup coordinator can sign and attempt one explicitly acknowledged
-testnet stage**. The five-stage CLI and original-hash recovery have been
-exercised only against a synthetic chain and fabricated receipts. Its
-acknowledgments do not prove independent review, backups or human consent. It
-is not ready for live deployment: the artifact and execution path still need
-independent review, real prerequisites and specific approval.
+testnet stage**. The setup coordinator and original-hash recovery were exercised
+on a disposable nearcore chain with a mock token and simulated approvals; the
+owner CLI itself has only synthetic coverage. Acknowledgments do not prove
+independent review, backups or human consent. V11 remains unaudited; live
+prerequisites are unverified, and live setup requires explicit risk acceptance
+and specific approval. Do not use real funds.
 A keyless V11 vault cannot currently be upgraded or deleted, and its account
 and Circle registration deposits may remain locked.
 There is **no verified independent FT-paid fulfillment by Bouncer**. The marketplace catalog search is read-only. No model or inference
@@ -108,8 +109,8 @@ The existing Bouncer MIT license is reproduced at the [repository root](LICENSE)
 ## Public website (read-only)
 
 **[Open Bouncer](https://bouncer-near.vercel.app/)** — the public Vercel
-website. It is a testnet snapshot, not a running agent, and the source
-repository remains private. The replacement project's initial deployment used
+website. It is a testnet snapshot, not a running agent. The source repository
+is public. The replacement project's initial deployment used
 website assets from working-branch commit `d4b818e`; a durable hosting URL does
 not imply production readiness or live independent FT-paid fulfillment.
 
@@ -543,6 +544,11 @@ original delivery was verified. These are prepared goals, a development provider
 and testnet funds with **no real value**, not commercial delivery or mainnet payments.
 
 ### Read-only independent marketplace discovery
+
+A separate [PayPerCall testnet inspector](bouncer/docs/PAYPERCALL_INSPECTION.md)
+reads a bounded catalog or checks exact answer bytes against a call view. It
+never contacts the operator or pays; the current V11 vault is not compatible
+with that escrow, and an observed listing is not a verified working offer.
 
 ```sh
 npm run discover --prefix bouncer -- --query research --limit 5

@@ -1,10 +1,11 @@
 # Experimental native-NEAR testnet faucet
 
-**Status: synthetic tests only. No Bouncer faucet request, transfer or cleanup
-has been made on testnet.** The helper and receipt shapes may change; a safe
-stop is possible even after a real transaction succeeds. This path supplies
-native **test NEAR**, not Circle test USDC. It does not prove owner-key control,
-deploy the V11 vault, buy a resource or verify independent delivery.
+**Status: isolated nearcore sandbox passed; live testnet untried. No Bouncer
+faucet request, transfer or cleanup has been made on testnet.** The helper and
+receipt shapes may change; a safe stop is possible even after a real transaction
+succeeds. This path supplies native **test NEAR**, not Circle test USDC. It does
+not prove owner-key control, deploy the V11 vault, buy a resource or verify
+independent delivery.
 
 ## What this does
 
@@ -94,8 +95,9 @@ approval and test-USDC funding; obtaining test NEAR does not satisfy either.
 
 The local regression tests use synthetic helper responses, RPC views and
 receipts, including timeouts, forged graphs, disk failure, drift and recovery.
-An opt-in disposable-nearcore harness is also prepared: it uses an in-process
-fake helper and sandbox-only accounts, not the public faucet. Its wiring was
-tested with a synthetic loopback RPC, but the new faucet scenario has **not**
-yet been run against actual nearcore. Neither test establishes compatibility
-with a current live helper or testnet.
+The [isolated nearcore run for `c6c646a`](https://github.com/Greatmujey/Bouncer/actions/runs/41459488001)
+passed the faucet scenario using an in-process fake helper and sandbox-only
+accounts. It reconciled a 5-NEAR local transfer and beneficiary refund using
+the original encrypted journal after two simulated lost acknowledgements. It
+contacted neither the public helper nor testnet. These tests do not establish
+compatibility with a current live helper or testnet.

@@ -96,7 +96,11 @@ export class SyntheticNearHost {
       promise_result: (index, registerId) => {
         assert.equal(index, 0n, 'unexpected mocked promise result index');
         if (this.context.promiseResult === 'failed') return 2n;
-        if (this.context.promiseResult === 'success') { this.register(registerId, Buffer.alloc(0)); return 1n; }
+        if (this.context.promiseResult === 'success') {
+          const value = this.context.promiseValue ?? Buffer.alloc(0);
+          if (!(value instanceof Uint8Array)) throw new Error('invalid mocked promise value');
+          this.register(registerId, value); return 1n;
+        }
         throw new Error('promise result was not supplied to the synthetic host');
       },
     });

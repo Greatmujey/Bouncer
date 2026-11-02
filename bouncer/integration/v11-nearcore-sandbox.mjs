@@ -32,6 +32,7 @@ import { SVALIN_TRIAL_MAX_ATOMS as FUNDING } from '../agent/svalin-pro-preflight
 import { RUNNER_OWNER, exerciseSandboxOwnerRunner } from './v11-sandbox-owner-runner.mjs';
 import { exerciseSandboxBuyerRunner } from './v11-sandbox-buyer-runner.mjs';
 import { exerciseSandboxNativeFaucet } from './v11-sandbox-native-faucet.mjs';
+import { exerciseSandboxEscrowBoundary } from './v11-sandbox-escrow-boundary.mjs';
 import { FAUCET_RETURN } from '../agent/native-testnet-faucet.mjs';
 import { V11_SHA256, MOCK_FT_SHA256, SANDBOX_SHA256, SANDBOX_CHAIN_ID, readVerifiedFile,
   withMockTokenInGenesis, assertSandboxStatus, requireFinalSuccess, assertOmittedLocalAddKeyReceipt,
@@ -393,6 +394,11 @@ async function run() {
       'failed intent replay', /consumed, cancelled, expired or stale/);
     checkpoint('failed mock FT receipt, refund callback, restored balances and replay rejection confirmed');
 
+    // Separate local receiver-contract experiment: not PayPerCall, not a real
+    // seller. Compare a later plain FT return with a transfer-call callback.
+    const escrowBoundaryEvidence = await exerciseSandboxEscrowBoundary({ rpcUrl: sandbox.rpcUrl,
+      root, tokenOwner: owner, wasm, storageMin: bounds.min, checkpoint });
+
     // The first scenario above deliberately uses direct signing/evidence so it
     // can diagnose specific verifier failures. A second, fresh owner and vault
     // exercise the actual stage preflight and one-stage coordinator instead.
@@ -445,6 +451,7 @@ async function run() {
       restricted_agent_method_filter_checked: true, allowlist_and_caps_checked: true,
       exact_ft_success_receipts_and_balances_checked: true, replay_rejected: true,
       failed_ft_receipt_and_refund_callback_checked: true,
+      mock_escrow_refund_boundary: escrowBoundaryEvidence,
       owner_runner_and_stage_preflight: ownerRunnerEvidence,
       buyer_runner_and_original_hash_recovery: buyerRunnerEvidence,
       native_faucet_and_original_hash_recovery: nativeFaucetEvidence,

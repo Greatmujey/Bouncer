@@ -42,6 +42,12 @@ jobs:
           gh api repos/near/nearcore/git/blobs/3ab410d723c8029e70993b0829a17ddd52d8b135 --jq .content | base64 --decode > "$RUNNER_TEMP/mock-ft.wasm"
           echo '1acf931c07a530257999478c121193863ecf7201d357812a44b4d61c16a77921  '"$RUNNER_TEMP/bouncer-v11.wasm" | sha256sum -c -
           echo 'b10ed11ac6d60698c6809ef7e96b578f2e5768354fe4b15d044843c2b6ab8a04  '"$RUNNER_TEMP/mock-ft.wasm" | sha256sum -c -
+      - name: Exercise the pinned bytecode and escrow-harness guards offline
+        env:
+          BOUNCER_V11_WASM_PATH: ${{ runner.temp }}/bouncer-v11.wasm
+        run: |
+          node --test tests/v11-bytecode-offline.test.mjs tests/paypercall-v11-bytecode.test.mjs \
+            tests/v11-sandbox-escrow-boundary.test.mjs tests/v11-sandbox-escrow-boundary-model.test.mjs
       - name: Download and verify the isolated nearcore executable
         run: |
           set -euo pipefail

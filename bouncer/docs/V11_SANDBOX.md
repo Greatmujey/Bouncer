@@ -1,7 +1,15 @@
 # V11 nearcore sandbox validation (opt-in)
 
-**Latest result: the hardened owner/setup and buyer happy paths passed on a
-fresh disposable chain.** On 2 November 2026,
+**Latest passing result:** [run 41459488001](https://github.com/Greatmujey/Bouncer/actions/runs/41459488001)
+at commit `c6c646a32644ae1b4db4fa7b208e9050c4ab22d3` passed the prior
+owner/setup and buyer checks and the new local fake-helper faucet scenario.
+It reconciled 5 local NEAR, the beneficiary refund and the same original hashes
+after simulated lost acknowledgements. This was an isolated chain and in-process
+helper, not a public faucet, Circle funding or independent delivery. A
+mock-escrow refund boundary scenario was added after that run; its result must
+be checked separately and is not implied by the earlier success.
+
+**Previous hardened owner/buyer result:** On 2 November 2026,
 [run 41444752557](https://github.com/Greatmujey/Bouncer/actions/runs/41444752557)
 at commit `bee6160d53cb3abde8676ae19c377889d98684c5` passed the isolated
 nearcore job after the Svalin plain-owner and bounded-gas-allowance checks were
@@ -143,11 +151,12 @@ account ID or private key from its environment, and checks its own chain ID.
   acknowledgement after finality, reopen the encrypted buyer journal, reject
   another send and recover the same hash. Check the mock-token balances and
   rolling spend, with no real seller request or delivery verification.
-- A **new, not-yet-run-on-nearcore** scenario is prepared for the native-NEAR
-  faucet coordinator. It creates a local-only beneficiary and in-process fake
-  helper, then checks two original-hash recoveries and local balance deltas.
-  Its wiring has passed synthetic loopback tests only; no public helper or
-  testnet is contacted. See [TESTNET_NATIVE_FAUCET.md](TESTNET_NATIVE_FAUCET.md).
+- The native-NEAR faucet coordinator scenario creates a local-only beneficiary
+  and in-process fake helper, then checks two original-hash recoveries and
+  local balance deltas. It passed the [isolated nearcore run for `c6c646a`](https://github.com/Greatmujey/Bouncer/actions/runs/41459488001),
+  including recovery of the original transfer and cleanup after simulated lost
+  acknowledgements. No public helper or testnet was contacted. See
+  [TESTNET_NATIVE_FAUCET.md](TESTNET_NATIVE_FAUCET.md).
 - Exercise the one-yocto guard with an owner-scoped function-call key that is
   allowed to attempt `set_policy`: zero deposit should reach the contract and
   fail; one yocto should be rejected by the protocol. Separately check a
