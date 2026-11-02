@@ -44,7 +44,7 @@ Existing private-repository and first-attempt CI gates do not retroactively prot
 
 - [ ] Complete and verify the intended independent FT-paid multi-resource flow; distinguish any still-missing resource and provider behavior.
 - [ ] Complete the outstanding security, privacy and rights review of the now-public repository and Actions history; get explicit approval before any additional publication.
-- [ ] Keep the hosted demo available; its current site is a historical, read-only snapshot and wallet connection is disabled.
+- [ ] Keep the hosted testnet site available; wallet connection is identity-only and the page is not a live purchasing dashboard. Verify real wallet sign-in end to end and preserve the shared-origin restrictions.
 - [ ] After the full intended flow works, the human records and posts the public X demo: state it was built at NEAR HACKATHON, include `@NEARProtocol` and `#NEARHackathon`, and attach the appropriate video or screenshots. A local-only demo requires video under the current rules. Do not post on the human's behalf.
 - [ ] The human supplies the project/team/contact details, track choices, entrant-controlled **mainnet** payout account ID, public repo and demo-post URLs, description, and the required consent. Never request or store a wallet seed or private key.
 - [ ] Re-read the rules, print the exact submission payload, and wait for explicit approval before sending it. Generate one request ID and reuse it on any permitted retry; never commit the payload or submit twice.

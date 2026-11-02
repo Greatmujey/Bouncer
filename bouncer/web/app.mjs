@@ -3,6 +3,15 @@ import { setupTour } from './tour.mjs';
 
 setupTour();
 
+// Keep the workspace navigation in sync with the section the reader selected.
+const navigation = [...document.querySelectorAll('.side-link, .mobile-nav a')];
+for (const link of navigation) {
+  link.addEventListener('click', () => {
+    const target = link.getAttribute('href');
+    for (const item of navigation) item.classList.toggle('active', item.getAttribute('href') === target);
+  });
+}
+
 const grid = document.querySelector('#resource-grid');
 const status = document.querySelector('#rpc-status');
 const refresh = document.querySelector('#refresh-balances');

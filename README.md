@@ -106,7 +106,7 @@ Playwright and an external PipRail SDK; the local-model option uses Qwen and
 llama.cpp. External protocols and services are credited in the relevant docs.
 The existing Bouncer MIT license is reproduced at the [repository root](LICENSE).
 
-## Public website (read-only)
+## Public website (testnet prototype)
 
 **[Open Bouncer](https://bouncer-near.vercel.app/)** — the public Vercel
 website. It is a testnet snapshot, not a running agent. The source repository
@@ -115,16 +115,16 @@ website assets from working-branch commit `d4b818e`; a durable hosting URL does
 not imply production readiness or live independent FT-paid fulfillment.
 
 `bouncer/web/` explains the prototype's request → quote → guarded payment →
-fulfillment flow and links to an earlier oracle-led Circle testnet mission and
-recovery proof; the snapshot predates the dependent-workflow run below. It also retains an interactive walkthrough of three real,
+fulfillment flow, links to recent testnet vault and guard transactions, and
+preserves an earlier oracle-led Circle testnet mission. It also retains an interactive walkthrough of three real,
 **recorded** requests from an earlier multi-token run. A separate test used a
 local AI model to propose tasks; the latest oracle mission used prepared goals. The
 two credit tokens in the earlier example are synthetic and fulfillment was
 self-hosted. The site
 is not a live agent dashboard or commercial marketplace. It includes an
-optional, identity-only testnet wallet connection on an isolated top-level
-origin; **wallet connection is disabled on the public Vercel site and shared-origin previews**.
-The connector has been exercised with a mock and a real Meteor UI opened and
+optional, identity-only testnet wallet connection on the dedicated Vercel
+origin; shared-origin and embedded previews offer a link to open the site in a
+new tab instead. The connector has been exercised with a mock and a real Meteor UI opened and
 cancelled, but not with a real wallet sign-in. Connecting does not create a
 vault, grant spending access, or sign transactions. The site can try an
 optional public-RPC read of the recorded contract’s current vault balances; if
@@ -136,10 +136,10 @@ To view it locally from the repository root (Node is not required):
 python3 -m http.server 4173 --bind 0.0.0.0 --directory bouncer/web
 ```
 
-The Vercel build publishes **only the seven whitelisted static website files**,
-not the checkout, credentials or journals. GitHub Pages is not yet configured
-for this private repository; the prepared Pages workflow requires a supported
-plan and separate enablement. The opt-in `[publish-web-preview]` workflow still
+The Vercel build publishes **only the ten whitelisted static website files**,
+not the checkout, credentials or journals. GitHub Pages has not been reverified
+since the repository became public; its shared origin is not wallet-enabled.
+The opt-in `[publish-web-preview]` workflow still
 provides a temporary guest preview. See [website and wallet notes](bouncer/docs/WEB.md).
 
 ## AI assistant access (MCP)

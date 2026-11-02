@@ -10,16 +10,18 @@ class Element {
   async click() { await this.listeners.click?.(); }
 }
 function fakeBrowser(url, { top = true, storageFails = false, approved = '' } = {}) {
-  const nodes = Object.fromEntries(['wallet-connect', 'wallet-disconnect', 'wallet-choice', 'wallet-status'].map(id => [id, new Element()]));
-  nodes['wallet-choice'].value = 'meteor-wallet';
-  const data = new Map();
-  const win = { location: location(url), localStorage: {
+  const nodes = Object.fromEntries(['wallet-connect', 'wallet-disconnect', 'wallet-choice', 'wallet-status', 'wallet-open-site'].map(id => [id, new Element()]));
+  nodes['wallet-choice'].value = 'meteor-wallet'; nodes['wallet-open-site'].hidden = true;
+  const data = new Map(), labels = [new Element(), new Element()];
+  const win = { location: { ...location(url), href: url }, localStorage: {
     getItem(key) { if (storageFails) throw new Error('storage disabled'); return data.get(key) ?? null; },
-    setItem(key, value) { data.set(key, value); }, removeItem(key) { data.delete(key); },
+    setItem(key, value) { if (storageFails) throw new Error('storage disabled'); data.set(key, value); },
+    removeItem(key) { if (storageFails) throw new Error('storage disabled'); data.delete(key); },
   } };
   win.self = {}; win.top = top ? win.self : {};
-  const doc = { querySelector(sel) { if (sel === 'meta[name="bouncer-wallet-origin"]') return { content: approved }; return nodes[sel.slice(1)]; } };
-  return { win, doc, nodes, data };
+  const doc = { querySelector(sel) { if (sel === 'meta[name="bouncer-wallet-origin"]') return { content: approved }; return nodes[sel.slice(1)]; },
+    querySelectorAll(sel) { return sel === '[data-wallet-label]' ? labels : []; } };
+  return { win, doc, nodes, data, labels };
 }
 function connectorClass(config = {}) {
   return class FakeConnector {
@@ -48,6 +50,8 @@ test('wallet origin policy blocks shared origins, unapproved sites, HTTP and ifr
   assert.equal(walletOriginAllowed(location('https://owner.github.io/Bouncer/'), true, 'https://owner.github.io'), false);
   assert.equal(walletOriginAllowed(location('https://bouncer-testnet.vercel.app/'), true), false);
   assert.equal(walletOriginAllowed(location('https://bouncer-near.vercel.app/'), true), false);
+  assert.equal(walletOriginAllowed(location('https://bouncer-near.vercel.app/'), true, 'https://bouncer-near.vercel.app'), true);
+  assert.equal(walletOriginAllowed(location('https://bouncer-near.vercel.app/'), false, 'https://bouncer-near.vercel.app'), false);
   assert.equal(walletOriginAllowed(location('https://other.example/'), true), false);
   assert.equal(walletOriginAllowed(location('http://other.example/'), true, 'http://other.example'), false);
   assert.equal(walletOriginAllowed(location('https://other.example/'), true, 'https://other.example'), true);
@@ -78,7 +82,8 @@ test('shared guest, GitHub Pages and embedded preview never instantiate the wall
     const browser = fakeBrowser(url, { top, approved });
     await initWallet({ window: browser.win, document: browser.doc, NearConnector: class { constructor() { throw new Error('must not initialize'); } } });
     assert.equal(browser.nodes['wallet-connect'].disabled, true);
-    assert.match(browser.nodes['wallet-status'].textContent, /disabled/);
+    assert.match(browser.nodes['wallet-status'].textContent, /new tab/);
+    assert.equal(browser.nodes['wallet-open-site'].hidden, false);
   }
 });
 
@@ -98,12 +103,24 @@ test('connects and disconnects a wallet-reported account without requesting a ke
   assert.match(browser.nodes['wallet-status'].textContent, /Connected: alice\.testnet \(wallet-reported\)/);
   assert.equal(browser.nodes['wallet-connect'].hidden, true);
   assert.equal(browser.nodes['wallet-disconnect'].hidden, false);
+  assert.deepEqual(browser.labels.map(node => node.textContent), ['Account connected', 'Account connected']);
   await browser.nodes['wallet-disconnect'].click();
   assert.equal(config.disconnected, 'meteor-wallet');
   assert.match(browser.nodes['wallet-status'].textContent, /disconnected/i);
+  assert.deepEqual(browser.labels.map(node => node.textContent), ['Connect wallet', 'Connect wallet']);
 });
 
-test('wallet errors and non-testnet accounts fail closed; storage errors do not fake a connection', async () => {
+test('the dedicated Vercel origin can connect; implicit IDs use the fixed testnet network', async () => {
+  for (const account of ['greatmujey.testnet', 'a'.repeat(64)]) {
+    const browser = fakeBrowser('https://bouncer-near.vercel.app/', { approved: 'https://bouncer-near.vercel.app' }), config = { account };
+    await initWallet({ window: browser.win, document: browser.doc, NearConnector: connectorClass(config) });
+    await browser.nodes['wallet-connect'].click();
+    assert.match(browser.nodes['wallet-status'].textContent, new RegExp(`^Connected: ${account}`));
+    assert.equal(config.options.network, 'testnet');
+  }
+});
+
+test('wallet errors and named mainnet accounts fail closed; blocked browser storage falls back to this session', async () => {
   for (const config of [{ fail: true }, { account: 'alice.near' }]) {
     const browser = fakeBrowser('http://127.0.0.1:4173/');
     await initWallet({ window: browser.win, document: browser.doc, NearConnector: connectorClass(config) });
@@ -111,8 +128,12 @@ test('wallet errors and non-testnet accounts fail closed; storage errors do not 
     assert.equal(browser.nodes['wallet-disconnect'].hidden, true);
     assert.doesNotMatch(browser.nodes['wallet-status'].textContent, /^Connected:/);
   }
-  const browser = fakeBrowser('http://127.0.0.1:4173/', { storageFails: true });
-  await initWallet({ window: browser.win, document: browser.doc, NearConnector: connectorClass() });
-  assert.equal(browser.nodes['wallet-connect'].disabled, true);
-  assert.match(browser.nodes['wallet-status'].textContent, /could not initialize/i);
+  const browser = fakeBrowser('http://127.0.0.1:4173/', { storageFails: true }), config = {};
+  await initWallet({ window: browser.win, document: browser.doc, NearConnector: connectorClass(config) });
+  assert.equal(browser.nodes['wallet-connect'].disabled, false);
+  await browser.nodes['wallet-connect'].click();
+  assert.match(browser.nodes['wallet-status'].textContent, /Connected: alice\.testnet/);
+  assert.equal(browser.nodes['wallet-disconnect'].hidden, false);
+  await browser.nodes['wallet-disconnect'].click();
+  assert.match(browser.nodes['wallet-status'].textContent, /disconnected/i);
 });

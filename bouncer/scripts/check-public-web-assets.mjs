@@ -1,5 +1,5 @@
 // Read-only smoke test of the verified production URL from a networked runner.
-// Compare published bytes to the seven allowed website files and sample paths
+// Compare published bytes to the allowed website files and sample paths
 // that must not expose the private checkout. This never sends a transaction.
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
@@ -12,7 +12,10 @@ const origin = 'https://bouncer-near.vercel.app/';
 const web = fileURLToPath(new URL('../web/', import.meta.url));
 const typeFor = file => file.endsWith('.html') ? 'text/html'
   : file.endsWith('.css') ? 'text/css'
-    : file.endsWith('.svg') ? 'image/svg+xml' : 'javascript';
+    : file.endsWith('.svg') ? 'image/svg+xml'
+      : file.endsWith('.jpg') ? 'image/jpeg'
+        : file.endsWith('.woff2') ? 'font/woff2'
+          : file.endsWith('.txt') ? 'text/plain' : 'javascript';
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 validatePublicWeb(web);
 
@@ -28,4 +31,4 @@ for (const file of ['.git/HEAD', '.github/workflows/ci.yml', 'bouncer/agent/proc
   const response = await fetch(new URL(file, origin), { redirect: 'error', signal: AbortSignal.timeout(15_000) });
   assert.equal(response.status, 404, `Unexpected public response for ${file}: HTTP ${response.status}`);
 }
-console.log('Public website: all seven files match the reviewed checkout; sampled private paths returned 404.');
+console.log(`Public website: all ${PUBLIC_WEB_FILES.length} files match the reviewed checkout; sampled private paths returned 404.`);

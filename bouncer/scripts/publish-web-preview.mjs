@@ -55,13 +55,13 @@ async function main() {
     throw new Error(`Unexpected preview host result: ${JSON.stringify(fin)}`);
   }
   const url = `${host}${fin.url}`;
-  for (const [file, expectedType] of [['', 'text/html'], ['styles.css', 'text/css'], ['app.mjs', 'javascript'], ['evidence.mjs', 'javascript'], ['tour.mjs', 'javascript'], ['wallet.bundle.js', 'javascript']]) {
+  for (const [file, expectedType] of [['', 'text/html'], ['styles.css', 'text/css'], ['hero-orbit.jpg', 'image/jpeg'], ['manrope-latin.woff2', 'font'], ['app.mjs', 'javascript'], ['evidence.mjs', 'javascript'], ['tour.mjs', 'javascript'], ['wallet.bundle.js', 'javascript']]) {
     const response = await fetch(url + file, { signal: AbortSignal.timeout(30_000) });
     if (!response.ok || !response.headers.get('content-type')?.includes(expectedType)) {
       throw new Error(`Preview ${file || 'index.html'} is not reachable with the expected content type (HTTP ${response.status})`);
     }
     // Ensure the published document is the site we intended, not an interstitial.
-    if (!file && !(await response.text()).includes('Bouncer helps it get them.')) throw new Error('Preview homepage was replaced by another page');
+    if (!file && !(await response.text()).includes('room to do more.')) throw new Error('Preview homepage was replaced by another page');
   }
   const expires = new Date(fin.expiresAt).toISOString();
   const urlFile = process.env.BOUNCER_PREVIEW_URL_FILE;

@@ -28,7 +28,6 @@ try {
   const page = await context.newPage();
   await page.route('**/meteor-near-connect-latest.js?*', route => route.fulfill({ status: 200, contentType: 'text/javascript', body: executor }));
   await page.goto(`http://127.0.0.1:${server.address().port}/`, { waitUntil: 'networkidle' });
-  await page.locator('#tour-skip').click();
   await page.waitForFunction(() => !document.querySelector('#wallet-connect').disabled);
   await page.locator('#wallet-connect').click();
   const button = page.frameLocator('iframe').first().getByRole('button', { name: 'Meteor Web' });

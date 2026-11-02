@@ -1,11 +1,12 @@
 // Stage only the reviewed public website assets. Never publish a checkout,
-// journals, credentials, generated files, or a wallet-enabled configuration.
+// journals, credentials or unrelated generated files.
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const PUBLIC_WEB_FILES = Object.freeze([
-  'index.html', 'styles.css', 'favicon.svg', 'evidence.mjs',
+  'index.html', 'styles.css', 'favicon.svg', 'hero-orbit.jpg',
+  'manrope-latin.woff2', 'manrope-OFL.txt', 'evidence.mjs',
   'app.mjs', 'tour.mjs', 'wallet.bundle.js',
 ]);
 const DEFAULT_SOURCE = fileURLToPath(new URL('../web/', import.meta.url));
@@ -20,13 +21,13 @@ export function validatePublicWeb(source = DEFAULT_SOURCE) {
     if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`Refusing unexpected website file ${file}`);
   }
 
-  // The public site is currently read-only. Keep the origin override empty on
-  // all public hosts until wallet security and real sign-in have been reviewed.
+  // Approve only the user's dedicated Vercel origin. Guest/path-shared hosts
+  // and iframes are still rejected by walletOriginAllowed at runtime.
   const html = fs.readFileSync(path.join(rootPath, 'index.html'), 'utf8');
   const metas = (html.match(/<meta\b[^>]*>/gi) || [])
     .filter(tag => /\bname\s*=\s*["']bouncer-wallet-origin["']/i.test(tag));
-  if (metas.length !== 1 || metas[0] !== '<meta name="bouncer-wallet-origin" content="">') {
-    throw new Error('Public website must have exactly one empty wallet-origin override');
+  if (metas.length !== 1 || metas[0] !== '<meta name="bouncer-wallet-origin" content="https://bouncer-near.vercel.app">') {
+    throw new Error('Public website must approve exactly the dedicated Bouncer wallet origin');
   }
 }
 
@@ -46,5 +47,5 @@ const invokedDirectly = process.argv[1] && path.resolve(process.argv[1]) === fil
 if (invokedDirectly) {
   if (process.argv.length !== 3) throw new Error('Usage: node stage-public-web.mjs <new-output-directory>');
   const staged = stagePublicWeb(process.argv[2]);
-  console.log(`Staged ${staged.length} reviewed public website files; wallet origin remains disabled.`);
+  console.log(`Staged ${staged.length} reviewed public website files; wallet sign-in is limited to the dedicated origin or approved development hosts.`);
 }

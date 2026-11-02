@@ -152,24 +152,29 @@ test('latest oracle-led mission links to the verified testnet data and three res
   assert.equal((html.match(/class="track-card"/g) || []).length, 6);
 });
 
-test('website discloses snapshot, synthetic credits, self-hosted services, and testnet limitations', () => {
+test('website discloses testnet limitations, historical examples and identity-only wallet connection', () => {
   const html = fs.readFileSync(new URL('../web/index.html', import.meta.url), 'utf8');
-  assert.match(html, /Verified testnet snapshot/);
-  assert.match(html, /not a running agent/);
+  assert.match(html, /unaudited testnet prototype/i);
+  assert.match(html, /not a live purchasing dashboard/i);
   assert.match(html, /self-hosted development examples, not commercial vendors/);
   assert.match(html, /newly created testnet tokens/);
-  assert.match(html, /Unaudited/);
-  assert.match(html, /separate refund test/);
+  assert.match(html, /Separate earlier refund test/);
+  assert.match(html, /Refund recovery and the vault’s independent audit remain open/);
+  assert.match(html, /not proof of independent provider payment or delivery/);
   assert.doesNotMatch(html, /Start buying/i);
   assert.match(html, /Connect a testnet wallet/i);
-  assert.match(html, /does not create a vault, grant an agent access, sign a transaction, or spend funds/i);
+  assert.match(html, /does not create a vault, grant spending access or send a transaction/i);
+  assert.match(html, /Never enter a seed phrase or private key into Bouncer/i);
   assert.match(html, /Gemini CLI and Claude Code passed local connection checks/i);
   assert.match(html, /ChatGPT web and other hosted assistants need HTTPS/i);
   assert.match(html, /Model conversations have not been tested/i);
   assert.match(html, /id="welcome-tour"/);
   assert.match(html, /local AI model to propose resource tasks/i);
   assert.match(html, /not yet an open marketplace/i);
-  assert.match(html, /FUTURE WE’RE BUILDING TOWARD · NOT AVAILABLE YET/);
-  assert.match(html, /goal, not a completed demo/i);
   assert.equal((html.match(/data-story-tab=/g) || []).length, 3);
+  for (const tx of [
+    'Ep5vWogSd2nqitJFdLxR8J9CnZaqUjn6wnbRCaXVq2fM',
+    'Fegksi5b8KmqnHN3fHaH1Ak9vyLFA2JjgoqL5UAtjpu2',
+    '2xrD5cbvz2MgaThp3VdwbRZU8GAXoJHcbsHN4TispdjL',
+  ]) assert.ok(html.includes(explorerTx(tx)), `missing current transaction ${tx}`);
 });
