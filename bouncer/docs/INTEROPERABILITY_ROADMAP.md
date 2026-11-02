@@ -255,6 +255,63 @@ consent, and no offers or payments were requested:
   audited authority, accounting and recovery model; it is not implemented here.
   No API request, signature or payment was sent.
 
+### YouTick V2 historical provider evidence (checked 2 November 2026)
+
+YouTick separately [reports a 13 October testnet acceptance](https://github.com/4rmus/youtick/blob/410dd180f42d25f77c2317b9659923f6a4149245/docs/v2-testnet-runbook.md#e5b-acceptance-2026-10-13-provider-testnet):
+a creator paid a 0.5 test-USDC upload fee, a 17 MB video was processed and
+published, and a second account bought a 5 test-USDC ticket and played it.
+These are the provider's historical observations, not independently verified
+Bouncer receipts or a Bouncer purchase. The report did not cover refunds or
+upload recovery; it also describes an earlier stranded job.
+
+That V2 setup is not the V1 route researched above. Its [documented testnet
+Bridge](https://github.com/4rmus/youtick/blob/410dd180f42d25f77c2317b9659923f6a4149245/docs/v2-testnet-runbook.md#bridge)
+was configured for allowlisted creators, and its [NEAR Auth upload relayer](https://github.com/4rmus/youtick/blob/410dd180f42d25f77c2317b9659923f6a4149245/workers/relayer/src/upload.ts)
+requires an exact signed delegate for a direct USDC `ft_transfer_call`.
+The V2 contract source also has an FT receiver, but that does not establish
+that its current Bridge will admit a Bouncer vault, that our nested payment is
+accepted end to end, or that the current deployed versions match this source.
+No V2 quote, upload, payment or provider contact was made. Keep it a research
+lead, not a verified independent Bouncer purchase.
+
+### OutLayer connector leads: historical chain evidence (checked 2 November 2026)
+
+NearBlocks records an OutLayer operator's successful 30 September testnet
+[pricing transaction](https://testnet.nearblocks.io/txns/DhF1hvqbGihY2eBQ54WWDgjoL5vfuzNQKNonUQ9VLipt)
+for `connectors.outlayer.testnet/github`: GitHub read operations including
+`repo_get` were priced at 1,000 six-decimal units. The provider's
+[connector README](https://github.com/out-layer/outlayer/blob/aaf60a26855e30bc3318126382903df92dea7d3d/connectors/github-connector/README.md)
+independently describes $0.001 reads, but requires the owner's GitHub App
+credential and a policy stored with OutLayer; without a policy only the free
+`status` operation runs. A separate [5 October version activation](https://testnet.nearblocks.io/txns/EVbLWcxgxwf167mxatTvrHAbvYULPw5qUWpDaLjssTyK)
+identifies version `b8ae4fd3a60ef8f8fb9eab77f2f9a65f6bbfdd4b1ff6024e086f1fdd72e8379b`
+as active **at that time**. Neither transaction proves the currently active
+version, current prices, seller fulfillment, or that the published source
+matches the historical WASM. No GitHub credential was supplied, seller contacted,
+checkout initiated, or code executed for this lead.
+
+A [historical token-configuration transaction](https://testnet.nearblocks.io/txns/ECxfaEipVep1Z8UcC2vLvL3E2dGuhUc26W99NZzBWpxi)
+set OutLayer's testnet payment token to `usdc.fakes.testnet`, **not Circle**;
+that is not a fresh view of the token configuration. Historical operator pricing
+also included a [`markets` operation](https://testnet.nearblocks.io/txns/B9ZGB5f8fkANE2e1t6tYVYAYg1JESqoNmsDENjPZ6B6e)
+on the Hyperliquid connector, but the inspected connector submodule was not
+publicly accessible and whether that operation needs credentials, exposes the
+right data, or can safely serve Bouncer is unknown. No trading, orders, deposits
+or requests were made.
+
+These are stronger historical leads, **not** a compatible independent
+purchase. The existing Bouncer OutLayer project path requires a separately
+owner-pinned native policy and a prepaid-token policy; V11 explicitly rejects
+an exact-FT-locked token policy on this route. Its narrow buyer currently
+supports only the connector-probe's synthetic operations. An earlier guarded
+FT-funded probe returned HTTP 405, and a separate burn transaction remains
+unresolved: do not resend it. OutLayer's HTTPS payment keys spend a separate
+provider-held balance and do not, by themselves, enforce Bouncer's per-call
+policy. A real route needs fresh trusted on-chain registry, token, price,
+version and custody checks, explicit credential/data consent, a reviewed
+adapter and a useful, independently verified result. A historical transaction
+or provider README is not permission to use anyone's GitHub credentials.
+
 The right next step is seller cooperation or a compatible deployed protocol,
 not weakening the owner guard or claiming a self-hosted adapter is independent.
 

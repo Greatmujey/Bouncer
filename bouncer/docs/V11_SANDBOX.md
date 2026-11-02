@@ -1,7 +1,25 @@
 # V11 nearcore sandbox validation (opt-in)
 
-**Status: five-stage sandbox reconciliation passed, with one outcome-only
-exception.** On 2 November 2026, [run 41430287526](https://github.com/Greatmujey/Bouncer/actions/runs/41430287526)
+**Latest result: the actual owner setup runner and stage preflight passed on a
+disposable local chain.** On 2 November 2026, [run 41435563441](https://github.com/Greatmujey/Bouncer/actions/runs/41435563441)
+at commit `c22757d3e773a8862427c7ea7fd18298f5f5a050` passed both the prior
+contract scenario and a fresh five-stage owner-runner scenario on nearcore
+2.14.0 / protocol 88. The new scenario checked pinned FINAL prerequisites and
+post-funding state, the exact restricted-key allowance, original hashes in an
+encrypted journal before each one-shot transport call, and receipt/outcome
+reconciliation. It deliberately lost a successful local registration response,
+reopened the original journal, confirmed the pending attempt could not be sent
+again, and recovered the original hash without a second send. The AddKey result
+is still outcome-only, not root-receipt-body proof.
+
+This run **simulated the testnet chain ID and approval assertions only in a
+test-only loopback adapter**; the actual state, transactions and receipts came
+from the disposable nearcore sandbox, not testnet. The checks do not establish
+production's real network identity check, the owner CLI against nearcore,
+Circle registration/funding, independent artifact review, user approval,
+verified backups, a live deployment, or independent seller fulfillment.
+
+**Earlier passing result:** On 2 November 2026, [run 41430287526](https://github.com/Greatmujey/Bouncer/actions/runs/41430287526)
 ran commit `b820ce923ad696655fd4abf338b9d365b0295055` against nearcore 2.14.0,
 protocol 88 and the example mock FT. All five original stages reconciled in the
 same encrypted setup journal, which was reopened after the agent-key stage. Four
@@ -13,20 +31,8 @@ execution, replay rejection and failed transfer refund callback. It did not
 separately log the installed key's allowance in that run. The successful run did not log whether the
 registration gas-refund child was present; its strict verifier accepts either
 that specific child or none. This is not a testnet deployment, Circle
-registration, independent review or seller fulfillment. The live testnet runner
-and stage preflight were not run against nearcore.
-
-**Prepared locally, not yet validated against nearcore:** the working-tree
-harness adds a second fresh sandbox owner and vault that call the actual stage
-preflight, one-stage coordinator, single-send transport and original-hash
-recovery. A test-only adapter first requires the named loopback sandbox and
-then aliases its chain ID to `testnet` solely so the testnet-only coordinator
-can run. The approval booleans are simulated. No production network checks
-are changed. Synthetic loopback tests exercise the wiring, but neither those
-nor the previously passing run establish that this new scenario passes on
-nearcore. Even a future passing run would not test production's real testnet
-identity check or establish a live deployment, Circle registration, independent
-review, owner consent, backups or seller fulfillment.
+registration, independent review or seller fulfillment. That earlier run did
+not exercise the setup runner or stage preflight against nearcore.
 
 **Earlier failures:** [run 41424909003](https://github.com/Greatmujey/Bouncer/actions/runs/41424909003)
 started the pinned protocol-88 sandbox, deployed the recovered V11, checked its
@@ -68,6 +74,17 @@ covered by synthetic adversarial tests and the earlier failed-run observation,
 not separately demonstrated in the successful rerun. Neither run authorizes
 testnet setup, funding or seller contact.
 
+**Prepared next check, not yet run against nearcore:** the current local harness
+adds the actual experimental buyer and payment-evidence recovery after the
+funded owner-runner scenario. An in-process fake seller supplies the reservation;
+the test owner pins the exact intent; the restricted buyer journals its original
+hash, sends once on the local mock chain, loses the acknowledgement, reopens the
+journal and tries to recover without a second send or seller request. A
+synthetic loopback test checks the wiring, but it cannot establish how the
+real nearcore receipts will behave. The existing passing run above predates this
+addition. This is not a testnet purchase, Circle transfer, seller contact,
+owner approval, or fulfillment proof.
+
 The opt-in job starts a fresh, one-validator nearcore **2.14.0** sandbox on
 loopback, with protocol **88**, and destroys its temporary chain afterwards.
 It does not use a wallet, connect to testnet or mainnet, contact a provider,
@@ -86,13 +103,12 @@ account ID or private key from its environment, and checks its own chain ID.
   omitted local AddKey body, check its separately labeled outcome and fresh key
   state instead. Reopen the journal after that stage. The previously passing
   run did **not** exercise the setup runner or stage preflight against nearcore.
-- In the locally prepared extension, run the actual setup runner and pinned
-  stage preflight on a second sandbox owner/vault; verify the exact restricted
-  key allowance and a post-funding profile. Drop one successful local send's
-  acknowledgement, reopen the original encrypted journal, and check that
-  original-hash recovery and the pending-stage fence do not resend. This
-  extension is pending a nearcore run and deliberately simulates the network
-  identity and approvals as described above.
+- The latest run exercised the actual setup runner and pinned stage preflight
+  on a second sandbox owner/vault, including the exact restricted-key allowance
+  and a post-funding profile. It dropped one successful local send's
+  acknowledgement, reopened the original encrypted journal, and checked that
+  original-hash recovery and the pending-stage fence did not resend. The
+  network identity and approvals were simulated as described above.
 - Exercise the one-yocto guard with an owner-scoped function-call key that is
   allowed to attempt `set_policy`: zero deposit should reach the contract and
   fail; one yocto should be rejected by the protocol. Separately check a

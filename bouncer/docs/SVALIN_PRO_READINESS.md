@@ -429,10 +429,12 @@ The resolver/callback graph check is stricter than a successful
 both incompatibilities and intentionally failed. The [isolated rerun of commit
 `b820ce9`](https://github.com/Greatmujey/Bouncer/actions/runs/41430287526)
 passed with the example mock FT and reconciled five stages in an encrypted journal;
-the AddKey root body remained omitted, and the testnet runner and stage preflight
-were not exercised against nearcore. There has been no V11 testnet deployment or
-Circle funding transaction; independent review and a future authorized live
-workflow remain necessary.
+the AddKey root body remained omitted. A [later isolated run](https://github.com/Greatmujey/Bouncer/actions/runs/41435563441)
+also passed the actual setup runner, pinned stage preflights, post-funding check
+and same-hash recovery on nearcore, with a test-only simulated network identity
+and approval flags. There has been no V11 testnet deployment or Circle funding
+transaction; independent review and a future authorized live workflow remain
+necessary.
 On 1 November 2026, the approved private push build `41361570652` and its PR
 build `41361575492` succeeded and independently reported the same 536,325-byte
 V11 artifact SHA-256,

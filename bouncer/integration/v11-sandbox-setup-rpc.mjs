@@ -15,7 +15,7 @@
 import { ExperimentalSvalinSetupRpc } from '../agent/svalin-setup-rpc.mjs';
 import { SANDBOX_CHAIN_ID, assertSandboxStatus } from './v11-sandbox-support.mjs';
 
-function loopbackSandboxUrl(value) {
+export function loopbackSandboxUrl(value) {
   let url;
   try { url = new URL(value); } catch { throw new Error('sandbox setup adapter requires a loopback HTTP URL'); }
   if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1' || !url.port || url.pathname !== '/' ||

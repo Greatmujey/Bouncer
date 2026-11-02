@@ -30,6 +30,7 @@ import { CIRCLE_TESTNET_USDC as TOKEN } from '../scripts/circle-testnet-setup.mj
 import { SVALIN_PAYEE as SELLER } from '../agent/svalin-pro-readiness.mjs';
 import { SVALIN_TRIAL_MAX_ATOMS as FUNDING } from '../agent/svalin-pro-preflight.mjs';
 import { RUNNER_OWNER, exerciseSandboxOwnerRunner } from './v11-sandbox-owner-runner.mjs';
+import { exerciseSandboxBuyerRunner } from './v11-sandbox-buyer-runner.mjs';
 import { V11_SHA256, MOCK_FT_SHA256, SANDBOX_SHA256, SANDBOX_CHAIN_ID, readVerifiedFile,
   withMockTokenInGenesis, assertSandboxStatus, requireFinalSuccess, assertOmittedLocalAddKeyReceipt,
   assertRegistrationWithOnlyGasRefund, requireReceiptLog } from './v11-sandbox-support.mjs';
@@ -394,7 +395,7 @@ async function run() {
     // can diagnose specific verifier failures. A second, fresh owner and vault
     // exercise the actual stage preflight and one-stage coordinator instead.
     // All accounts and tokens remain exclusively on this disposable chain.
-    let ownerRunnerEvidence = null;
+    let ownerRunnerEvidence = null, buyerRunnerEvidence = null;
     if (verifierBlockers.length === 0) {
       await create(RUNNER_OWNER, runnerOwnerKey);
       await mustCall(owner, TOKEN, 'storage_deposit', { account_id: RUNNER_OWNER, registration_only: true },
@@ -403,6 +404,13 @@ async function run() {
         1n, 50n * TGAS);
       ownerRunnerEvidence = await exerciseSandboxOwnerRunner({ rpcUrl: sandbox.rpcUrl, wasm, tokenStorageMin: bounds.min,
         directory, ownerKey: runnerOwnerKey, agentKey: runnerAgentKey, checkpoint });
+      // The same fresh, funded sandbox vault now exercises the actual buyer
+      // and original-hash recovery. Seller responses are in-process fixtures;
+      // neither Svalin nor any other network service is contacted.
+      const runnerOwner = makeAccount(RUNNER_OWNER, provider, runnerOwnerKey);
+      buyerRunnerEvidence = await exerciseSandboxBuyerRunner({ rpcUrl: sandbox.rpcUrl, wasm, directory,
+        agentKey: runnerAgentKey, checkpoint, pinIntent: call =>
+          mustCall(runnerOwner, call.receiver_id, call.method, call.args, 1n, 100n * TGAS) });
     }
 
     assertSandboxStatus(await provider.status());
@@ -423,6 +431,7 @@ async function run() {
       exact_ft_success_receipts_and_balances_checked: true, replay_rejected: true,
       failed_ft_receipt_and_refund_callback_checked: true,
       owner_runner_and_stage_preflight: ownerRunnerEvidence,
+      buyer_runner_and_original_hash_recovery: buyerRunnerEvidence,
     };
     console.log(JSON.stringify(evidence, null, 2));
     if (verifierBlockers.length) {
