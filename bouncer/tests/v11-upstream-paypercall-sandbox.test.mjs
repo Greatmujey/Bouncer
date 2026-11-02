@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import wabt from 'wabt';
-import { validateUpstreamFixture, exerciseUpstreamPayPerCall } from '../integration/v11-paypercall-upstream-sandbox.mjs';
+import { validateUpstreamFixture, exerciseUpstreamPayPerCall, waitForPatchedFaultKey } from '../integration/v11-paypercall-upstream-sandbox.mjs';
 
 const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const exports = ['new', 'register_service', 'storage_deposit', 'storage_withdraw', 'get_storage_credit',
@@ -34,4 +34,21 @@ test('source-built escrow harness refuses non-loopback URLs and mismatched local
   await assert.rejects(exerciseUpstreamPayPerCall({ rpcUrl: 'http://127.0.0.1:3030', root: fake('testnet'),
     tokenOwner: fake('owner.testnet'), wasm: Buffer.alloc(536325), escrowWasm: Buffer.alloc(8),
     escrowSha256: '0'.repeat(64), storageMin: '1' }), /pinned V11/);
+});
+
+test('artificial sandbox fault key must reach FINAL with the exact key and full-access permission', async () => {
+  const item = { public_key: 'ed25519:fixed-test', access_key: { permission: 'FullAccess' } };
+  let reads = 0, pauses = 0;
+  const provider = { async viewAccessKeyList(id, final) {
+    assert.equal(id, 'bridge.upstream-buyer.testnet'); assert.deepEqual(final, { finality: 'final' });
+    return { keys: ++reads < 3 ? [] : [item] };
+  } };
+  await waitForPatchedFaultKey(provider, item.public_key, { pause: async ms => { assert.equal(ms, 500); pauses++; } });
+  assert.equal(reads, 3); assert.equal(pauses, 2);
+  const fixed = keys => ({ viewAccessKeyList: async () => ({ keys }) });
+  await assert.rejects(waitForPatchedFaultKey(fixed([{ ...item, public_key: 'wrong' }]), item.public_key), /unexpected isolated fault key/);
+  await assert.rejects(waitForPatchedFaultKey(fixed([{ ...item, access_key: { permission: 'FunctionCall' } }]), item.public_key), /unexpected isolated fault key/);
+  await assert.rejects(waitForPatchedFaultKey(fixed([item, item]), item.public_key), /unexpected isolated fault-key list/);
+  await assert.rejects(waitForPatchedFaultKey(fixed([]), item.public_key, { maxViews: 2, pause: async () => {} }), /did not reach FINAL/);
+  await assert.rejects(waitForPatchedFaultKey(fixed([]), item.public_key, { maxViews: 41 }), /invalid isolated fault-key wait/);
 });

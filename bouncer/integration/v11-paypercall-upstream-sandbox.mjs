@@ -17,6 +17,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { setTimeout as delay } from 'node:timers/promises';
 import nearApi from 'near-api-js';
 import { buildExperimentalForwarder } from '../experiments/paypercall-forwarder/build.mjs';
 import { CIRCLE_TESTNET_USDC as TOKEN } from '../scripts/circle-testnet-setup.mjs';
@@ -49,6 +50,27 @@ export function validateUpstreamFixture(bytes, expectedSha256) {
   const names = WebAssembly.Module.exports(module).filter(item => item.kind === 'function').map(item => item.name);
   if (escrowExports.some(name => !names.includes(name))) throw new Error('source-built escrow fixture is missing expected methods');
   return { sha256: expectedSha256, bytes: bytes.length };
+}
+
+/** A sandbox state patch becomes visible at HEAD before it is FINAL. Wait for
+ * the one exact disposable fault key to enter a FINAL view before using it. */
+export async function waitForPatchedFaultKey(provider, expectedPublicKey, { pause = delay, maxViews = 40 } = {}) {
+  if (typeof provider?.viewAccessKeyList !== 'function' || typeof expectedPublicKey !== 'string' ||
+      typeof pause !== 'function' || !Number.isSafeInteger(maxViews) || maxViews < 1 || maxViews > 40) {
+    throw new Error('invalid isolated fault-key wait');
+  }
+  for (let i = 0; i < maxViews; i++) {
+    const keys = (await provider.viewAccessKeyList(ADAPTER, { finality: 'final' }))?.keys;
+    if (!Array.isArray(keys) || keys.length > 1) throw new Error('unexpected isolated fault-key list');
+    if (keys.length === 1) {
+      if (keys[0]?.public_key !== expectedPublicKey || keys[0]?.access_key?.permission !== 'FullAccess') {
+        throw new Error('unexpected isolated fault key');
+      }
+      return;
+    }
+    if (i + 1 < maxViews) await pause(500);
+  }
+  throw new Error('isolated fault key did not reach FINAL in time');
 }
 
 /** No signing before the exact loopback endpoint, pinned V11 and fixture shape
@@ -155,7 +177,7 @@ async function exercise({ endpoint, root, tokenOwner, wasm, escrowWasm, upstream
   await provider.sendJsonRpc('sandbox_patch_state', { records: [{ AccessKey: { account_id: ADAPTER,
     public_key: pub(faultKey), access_key: { nonce: 0, permission: 'FullAccess' } } }] });
   const fault = account(ADAPTER, provider, faultKey);
-  assert.equal((await provider.viewAccessKeyList(ADAPTER, { finality: 'final' })).keys.length, 1);
+  await waitForPatchedFaultKey(provider, pub(faultKey));
   await must(fault, TOKEN, 'storage_unregister', { force: false }, 1n, 100n * TGAS);
   assert.equal(await view(TOKEN, 'storage_balance_of', { account_id: ADAPTER }), null);
   await batch(fault, ADAPTER, [tx.deleteKey(faultKey.getPublicKey())], 'remove isolated fault key');
