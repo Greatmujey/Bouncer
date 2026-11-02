@@ -1,0 +1,23 @@
+{
+  "status": "OWNER_OBSERVED_AT_FINAL",
+  "network": "testnet",
+  "account_id": "bouncer-owner-3869c162b193fa1729515442.testnet",
+  "helper_acknowledgement": "ACKNOWLEDGED",
+  "block_hash": "DsBw5ExBXDXJyCrRLFguVwv4qssdQeCwPbYcwNdwE6cn",
+  "block_timestamp": "2026-11-02T20:25:44.286Z",
+  "native_balance_yocto": "10000000000000000000000000",
+  "owner_key_count": 1,
+  "expected_full_access_public_key": "ed25519:7GQ6BtmKSTT5XVnVAikGftXDZtfJYxoWXc61PE1H1tVr",
+  "private_key_checked_by_runner": false,
+  "owner_backup_checked_by_runner": false,
+  "circle_usdc_funded": false,
+  "vault_deployed": false,
+  "signed": false,
+  "seller_contacted": false,
+  "do_not_repeat_helper_request": true,
+  "scope": "one public helper request and trusted-RPC views; this is not a receipt proof or evidence of backup export",
+  "public_plan_sha256": "2a6e04f5483a89498a423fee66702f852a6c5836e028ce7af104c5bc9cdbf23c",
+  "fence_artifact_id": "13176866986",
+  "run_id": "41519023912",
+  "commit": "a741d6091c914f71379cf3af1f6e26f8eaf7e53f"
+}

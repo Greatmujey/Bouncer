@@ -23,7 +23,13 @@ also be lost or accidentally exposed by forced adds, archives or uploads. Never
 force-add, publish, log or upload this directory, and never use this testnet
 key on mainnet. The user should securely retain their own recovery copy.
 
-The one-shot helper workflow is bound to one session-branch push and first run
+The [one-shot helper run](https://github.com/Greatmujey/Bouncer/actions/runs/41519023912)
+verified the replacement owner at FINAL with 10 test NEAR and its sole expected
+full-access public key. The public fence is artifact `13176866986`; do not
+repeat this helper request. Circle registration/funding and vault creation
+were not part of this run.
+
+The helper workflow is bound to one session-branch push and first run
 attempt. It checks a fresh FINAL view that the new name is absent, retains a
 public plan-hash fence and makes at most one helper request. It checks the
 resulting public account and key via FINAL views. If the request or final view
