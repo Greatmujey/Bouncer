@@ -17,6 +17,7 @@
     "svalin-preflight": "node agent/svalin-pro-preflight.mjs",
     "svalin-setup-plan": "node agent/svalin-setup-plan.mjs",
     "svalin-setup-preflight": "node agent/svalin-setup-preflight.mjs",
+    "svalin-setup": "node agent/svalin-setup.mjs",
     "recover-youtick-grant": "node agent/recover-youtick-grant.mjs",
     "encrypt-file-journal": "node scripts/encrypt-file-journal.mjs",
     "init-file-journal-key": "node scripts/init-file-journal-key.mjs",
@@ -62,6 +63,7 @@
     "zod": "4.6.7"
   },
   "devDependencies": {
-    "esbuild": "0.28.2"
+    "esbuild": "0.28.2",
+    "wabt": "1.0.39"
   }
 }

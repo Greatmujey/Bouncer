@@ -142,7 +142,7 @@ export async function initializeSvalinSetupJournal({ plan, trustedReviewHash, ow
  * backups; signed transaction bytes remain a broadcastable capability and are
  * neither returned nor persisted here. Recording does NOT send the transaction. */
 export async function recordSvalinSetupSignedAttempt({ plan, trustedReviewHash, ownerPublicKey, journal, stageId, signed,
-  acknowledgeRecovery = false }) {
+  acknowledgeRecovery = false, exclusiveScope }) {
   const identity = checkedIdentity(plan, trustedReviewHash, ownerPublicKey, journal);
   if (acknowledgeRecovery !== true) throw new Error('explicit original-journal and recovery-backup acknowledgment is required');
   return withExclusiveJournalOperation(journal, () => {
@@ -160,13 +160,14 @@ export async function recordSvalinSetupSignedAttempt({ plan, trustedReviewHash, 
     return { status: 'ORIGINAL_SIGNED_HASH_RECORDED', stage_id: stageId, tx_hash: attempt.tx_hash,
       sends: 0, do_not_resend: true, current_state_verified: false, owner_approval_verified: false, broadcast_authorized: false,
       scope: 'public hash durably recorded; no broadcast, chain check, backup proof or owner approval' };
-  });
+  }, exclusiveScope);
 }
 
 /** Reconcile only the hash already in the protected journal, using a supplied
  * receipt-inclusive FINAL response. No signature, network request or retry is
  * performed. A FINAL failure stays pending and blocks later stages. */
-export async function reconcileSvalinSetupResult({ plan, trustedReviewHash, ownerPublicKey, journal, stageId, result, update = true }) {
+export async function reconcileSvalinSetupResult({ plan, trustedReviewHash, ownerPublicKey, journal, stageId, result,
+  update = true, exclusiveScope }) {
   const identity = checkedIdentity(plan, trustedReviewHash, ownerPublicKey, journal);
   if (typeof update !== 'boolean') throw new Error('invalid setup journal update option');
   return withExclusiveJournalOperation(journal, () => {
@@ -186,11 +187,11 @@ export async function reconcileSvalinSetupResult({ plan, trustedReviewHash, owne
     return { status: evidence.status, stage_id: stageId, tx_hash: entry.tx_hash, evidence,
       journal_updated: update && !entry.svalin_setup.evidence, sends: 0, do_not_resend: true, broadcast_authorized: false,
       scope: 'trusted-RPC original receipt match only; no current-state verification or seller delivery' };
-  });
+  }, exclusiveScope);
 }
 
 /** Read the protected local state without RPC, signing or writes. */
-export async function inspectSvalinSetupJournal({ plan, trustedReviewHash, ownerPublicKey, journal }) {
+export async function inspectSvalinSetupJournal({ plan, trustedReviewHash, ownerPublicKey, journal, exclusiveScope }) {
   const identity = checkedIdentity(plan, trustedReviewHash, ownerPublicKey, journal);
-  return withExclusiveJournalOperation(journal, () => publicState(loadState(journal, plan, identity)));
+  return withExclusiveJournalOperation(journal, () => publicState(loadState(journal, plan, identity)), exclusiveScope);
 }

@@ -27,11 +27,21 @@ check covers a narrowly capped testnet vault profile; a passing snapshot is
 not deployment, funding proof, consent or delivery. An offline setup planner
 prepares five unsigned batches for a fresh keyless V11 vault, including Circle
 registration; it does not sign, deploy, register or fund it. A separate
-read-only pre-creation check reports registration and balance blockers and
-storage estimates, not an authorization. An offline verifier and encrypted local
+read-only pre-creation check reports registration, balance and selected
+RPC-reported WASM-feature blockers and storage estimates, not an authorization.
+An offline verifier and encrypted local
 journal fence can retain an existing signed setup transaction's original hash
 and check supplied receipts against that review. They do not sign, fetch,
-broadcast, retry or prove current state.
+broadcast, retry or prove current state. A stage-aware read-only library can
+compare that journal with pinned RPC views. A separate **experimental owner
+CLI and setup coordinator can sign and attempt one explicitly acknowledged
+testnet stage**. The five-stage CLI and original-hash recovery have been
+exercised only against a synthetic chain and fabricated receipts. Its
+acknowledgments do not prove independent review, backups or human consent. It
+is not ready for live deployment: the artifact and execution path still need
+independent review, real prerequisites and specific approval.
+A keyless V11 vault cannot currently be upgraded or deleted, and its account
+and Circle registration deposits may remain locked.
 There is **no verified independent FT-paid fulfillment by Bouncer**. The marketplace catalog search is read-only. No model or inference
 service is bundled. This is unaudited testnet software, not suitable
 for real funds.
@@ -42,16 +52,22 @@ From the repository root, with Node.js 22 and npm:
 
 ```sh
 npm ci --prefix bouncer --ignore-scripts --no-audit --no-fund
-node --test bouncer/tests/fresh-final-block.test.mjs bouncer/tests/multiagency-exact-ft.test.mjs bouncer/tests/multiagency-exact-runner.test.mjs bouncer/tests/svalin-pro-readiness.test.mjs bouncer/tests/svalin-pro-preflight.test.mjs bouncer/tests/svalin-setup-plan.test.mjs bouncer/tests/svalin-setup-evidence.test.mjs bouncer/tests/svalin-setup-journal.test.mjs bouncer/tests/svalin-setup-preflight.test.mjs bouncer/tests/v11-wasm-annotations.test.mjs bouncer/tests/svalin-liquidity-readiness.test.mjs bouncer/tests/svalin-pro-session.test.mjs bouncer/tests/svalin-pro-session-concurrency.test.mjs bouncer/tests/svalin-pro-runner.test.mjs bouncer/tests/svalin-pro-cli.test.mjs bouncer/tests/youtick-grant-probe-evidence.test.mjs bouncer/tests/live-action-safety-gates.test.mjs
+node --test bouncer/tests/journal-operation-scope.test.mjs bouncer/tests/fresh-final-block.test.mjs bouncer/tests/multiagency-exact-ft.test.mjs bouncer/tests/multiagency-exact-runner.test.mjs bouncer/tests/svalin-pro-readiness.test.mjs bouncer/tests/svalin-pro-preflight.test.mjs bouncer/tests/svalin-setup-plan.test.mjs bouncer/tests/svalin-setup-evidence.test.mjs bouncer/tests/svalin-setup-journal.test.mjs bouncer/tests/svalin-setup-preflight.test.mjs bouncer/tests/svalin-setup-stage-preflight.test.mjs bouncer/tests/pinned-access-key-nonce.test.mjs bouncer/tests/svalin-setup-runner.test.mjs bouncer/tests/svalin-setup-rpc.test.mjs bouncer/tests/svalin-setup-cli.test.mjs bouncer/tests/v11-wasm-annotations.test.mjs bouncer/tests/svalin-liquidity-readiness.test.mjs bouncer/tests/svalin-pro-session.test.mjs bouncer/tests/svalin-pro-session-concurrency.test.mjs bouncer/tests/svalin-pro-runner.test.mjs bouncer/tests/svalin-pro-cli.test.mjs bouncer/tests/youtick-grant-probe-evidence.test.mjs bouncer/tests/live-action-safety-gates.test.mjs
+# Optional: Python 3 tests for the existing-artifact bridge and static ABI parser
+python3 -m unittest discover -s bouncer/tests -p 'v11_artifact_bridge_test.py'
+python3 -m unittest discover -s bouncer/tests -p 'v11_static_compatibility_test.py'
+# Optional: exercise the exact recovered V11 binary in an intentionally incomplete mock host
+BOUNCER_V11_WASM_PATH=/absolute/path/to/recovered-v11.wasm node --test bouncer/tests/v11-bytecode-offline.test.mjs bouncer/tests/svalin-setup-stage-preflight.test.mjs bouncer/tests/svalin-setup-runner.test.mjs bouncer/tests/svalin-setup-cli.test.mjs
 ```
 
-**See:** 118 passing offline tests (the count can increase as tests are added).
-They exercise synthetic exact-payment proofs, ambiguous-send recovery, stale or
-mixed FINAL-block rejection, unsigned V11 setup planning and pre-creation
-checks, compressed artifact transport, original-hash receipt checks and encrypted
+These tests exercise synthetic exact-payment proofs, ambiguous-send recovery, stale or
+mixed FINAL-block rejection, unsigned V11 planning, one-stage setup coordination,
+compressed artifact transport, original-hash receipt checks and encrypted
 setup-journal crash recovery, Svalin pre-reservation checks and reservation/
 payment/activation/report handling, a mocked 1-yocto rejection
-proof, and CI safety gates.
+proof, and CI safety gates. Optional tests use the hash-identified V11 artifact
+with fabricated RPC/receipts and an intentionally incomplete synthetic host;
+they are not a NEAR runtime, deployment or audit.
 The install downloads npm dependencies. The tests use synthetic transactions
 and ephemeral test keys; they do not contact a provider, broadcast to a chain
 or spend tokens. They are not proof of independent delivery. An optional

@@ -55,6 +55,10 @@ jobs:
           BOUNCER_PIPRAIL_PACKAGE_ROOT: ${{ github.workspace }}/bouncer/interop/piprail/node_modules/@piprail/sdk
           BOUNCER_TEST_POSTGRES_URL: postgresql://bouncer:bouncer-ci-only@127.0.0.1:5432/bouncer_test
           BOUNCER_REQUIRE_POSTGRES_TESTS: '1'
+      - name: Test offline V11 artifact transport and static inspection
+        # Python tests use synthetic data; the exact-artifact case skips unless
+        # its local inputs are explicitly supplied. No chain or seller access.
+        run: python3 -m unittest discover -s tests -p 'v11*_test.py'
       - name: Check the committed wallet bundle matches its source
         run: npm run build:web && git diff --exit-code -- web/wallet.bundle.js
       - name: Test onboarding, mobile layout and testnet wallet UI

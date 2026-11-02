@@ -1,0 +1,29 @@
+{
+  "status": "PUBLIC_RPC_SELF_REPORTED_STATUS_ONLY",
+  "observed_utc_approximately": "2026-11-02T08:51:26Z",
+  "observations": [
+    {
+      "source": "https://rpc.testnet.near.org/status",
+      "chain_id": "testnet",
+      "reported_protocol_version": 88,
+      "reported_node_version": "2.14.0-rc.5",
+      "reported_node_commit": "b7b4737cab46f17a6daa2ed694d7aebbd204363a",
+      "reported_latest_block_height": 275876196,
+      "reported_latest_block_time": "2026-11-02T08:51:25.886945974Z"
+    },
+    {
+      "source": "https://rpc.mainnet.near.org/status",
+      "chain_id": "mainnet",
+      "reported_protocol_version": 86,
+      "reported_node_version": "2.14.0",
+      "reported_node_commit": "bc4e9e8cfb03d9e82f027883055624e18576993e",
+      "reported_latest_block_height": 222696656,
+      "reported_latest_block_time": "2026-11-02T08:51:25.048733206Z"
+    }
+  ],
+  "reported_head_is_not_a_finality_proof": true,
+  "node_binary_or_validator_set_attested": false,
+  "on_chain_runtime_configuration_checked": false,
+  "vault_owner_balance_or_registration_checked": false,
+  "scope": "Separate public status GETs, not finality, consensus, code provenance or deployment authorization."
+}

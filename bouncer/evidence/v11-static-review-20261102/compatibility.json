@@ -1,0 +1,41 @@
+{
+  "all_protocol_or_gas_limits_verified": false,
+  "artifact_bytes": 536325,
+  "artifact_sha256": "1acf931c07a530257999478c121193863ecf7201d357812a44b4d61c16a77921",
+  "deployment_or_transaction_performed": false,
+  "env_function_imports_compared": 41,
+  "host_signature_mismatches": 0,
+  "import_declaration_gates": {
+    "gas_key_host_fns": 3,
+    "global_contract_host_fns": 4,
+    "ungated_declaration": 33,
+    "universal_accounts": 1
+  },
+  "independent_security_audit": false,
+  "nearcore_pinned_source_sha256": {
+    "core/parameters/res/runtime_configs/78.yaml": "461e81e1aacdaddc4a0ade0adf69ad6ace793c3a694d8c35c2c7524a6c88d57b",
+    "core/parameters/res/runtime_configs/84.yaml": "8f860426b89f9d681b40187ede410563ef3d1503a8f360261b83a064a26f7792",
+    "core/parameters/res/runtime_configs/85.yaml": "fa4169a67850342c71a517239e5882eb4987c1b32d4b1055c3cb6798bac10c2b",
+    "core/parameters/res/runtime_configs/88.yaml": "38ac9c614478e36ad4db676f995d1ca68502123f29e1f29ccebd3863406c24b0",
+    "core/parameters/res/runtime_configs/parameters.yaml": "3a73e1f62746e965c398533ccfaa5579ac5921ca70f7013b3b8a695d275536df",
+    "core/parameters/res/runtime_configs/parameters_testnet.yaml": "a78f78325b4fbb1b0e5f5f4b30a45976f8098b14fa525a13118ee609c2cad535",
+    "runtime/near-vm-runner/src/imports.rs": "19124f190457cf856f22a1b015d19d882836bfee2b9484f6bdb90aed85444520"
+  },
+  "nearcore_runtime_executed": false,
+  "nearcore_selected_protocol_feature_diffs": {
+    "gas_key_host_fns": 85,
+    "global_contract_host_fns": 78,
+    "reftypes_bulk_memory": 84,
+    "universal_accounts": 88
+  },
+  "nearcore_source_commit": "bc4e9e8cfb03d9e82f027883055624e18576993e",
+  "observed_network_state_checked": false,
+  "scope": "static checks of one pinned WASM and selected nearcore 2.14.0 source files; not runtime compatibility or an audit",
+  "source_to_binary_provenance_verified": false,
+  "status": "STATIC_COMPATIBILITY_INDICATION_ONLY",
+  "wabt_validation": {
+    "bulk_memory_also_disabled": "FAILS_ON_MEMORY_COPY_AS_EXPECTED",
+    "simd_and_multivalue_disabled": "PASS"
+  },
+  "wabt_version": "1.0.39"
+}

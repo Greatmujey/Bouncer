@@ -13,13 +13,34 @@ import { SVALIN_TRIAL_MAX_ATOMS } from './svalin-pro-preflight.mjs';
 import { SVALIN_PAYEE } from './svalin-pro-readiness.mjs';
 import { CIRCLE_TESTNET_USDC } from '../scripts/circle-testnet-setup.mjs';
 import { assertFreshFinalBlock } from '../shared/fresh-final-block.mjs';
+import { pinnedAccessKeyNonce } from '../shared/pinned-access-key-nonce.mjs';
 import { ReadOnlyNearRpcProvider, readPinnedJsonView } from './read-only-near-rpc.mjs';
 
 const U128_MAX = (1n << 128n) - 1n;
 const OWNER_ESTIMATE_RESERVE = 10n ** 24n; // 1 test NEAR; not a fee guarantee
 const VAULT_EXTRA_STORAGE_BYTES = 50_000n; // margin for account/state; not a storage proof
 const VAULT_ESTIMATE_RESERVE = 10n ** 23n; // 0.1 test NEAR; not a gas guarantee
+// The recovered V11 artifact imports `promise_batch_action_universal_state_init`
+// even when that path is unused. The pinned 2.14.0 release enables its host
+// gate at 88; the separately observed rc.5 source enables it at 87. Keep 88 as
+// a conservative common floor, not proof of a running node's exact runtime
+// configuration, deployment compatibility or independent artifact review.
+export const MIN_V11_TESTNET_PROTOCOL = 88;
+// These are the selected gates used by the hash-pinned recovered artifact,
+// including WABT's observed bulk-memory instruction. They are NOT a complete
+// validator or an attestation of the node, the artifact or future bytecode.
+export const V11_SELECTED_WASM_FEATURES = Object.freeze([
+  'global_contract_host_fns', 'reftypes_bulk_memory', 'gas_key_host_fns', 'universal_accounts',
+]);
 const record = x => x !== null && typeof x === 'object' && !Array.isArray(x);
+export function reportedV11WasmFeatures(protocol) {
+  const config = protocol?.runtime_config?.wasm_config;
+  return Object.fromEntries(V11_SELECTED_WASM_FEATURES.map(name => [name,
+    record(config) && typeof config[name] === 'boolean' ? config[name] : null]));
+}
+export function selectedV11WasmFeaturesEnabled(protocol) {
+  return protocol?.chain_id === 'testnet' && Object.values(reportedV11WasmFeatures(protocol)).every(value => value === true);
+}
 function amount(x) {
   if (typeof x === 'bigint') return x >= 0n && x <= U128_MAX ? x : null;
   if (typeof x !== 'string' || !/^(?:0|[1-9][0-9]{0,38})$/.test(x)) return null;
@@ -88,8 +109,13 @@ export async function inspectSvalinSetupPrerequisites({ plan, trustedReviewHash,
   };
   put('testnet_protocol_and_storage_cost', ['protocol'], () => reads.protocol.value?.chain_id === 'testnet' &&
     amount(reads.protocol.value?.runtime_config?.storage_amount_per_byte) > 0n);
+  put('v11_protocol_floor', ['protocol'], () => reads.protocol.value?.chain_id === 'testnet' &&
+    Number.isSafeInteger(reads.protocol.value?.protocol_version) &&
+    reads.protocol.value.protocol_version >= MIN_V11_TESTNET_PROTOCOL);
+  put('v11_selected_wasm_features_enabled', ['protocol'], () => selectedV11WasmFeaturesEnabled(reads.protocol.value));
   const cost = amount(reads.protocol.value?.runtime_config?.storage_amount_per_byte);
   put('owner_full_access_key', ['owner_key'], () => atBlock('owner_key') && reads.owner_key.value.permission === 'FullAccess');
+  put('owner_nonce_safely_represented', ['owner_key'], () => atBlock('owner_key') && pinnedAccessKeyNonce(reads.owner_key.value.nonce) !== null);
   put('agent_key_not_already_on_owner', ['owner_keys'], () => {
     const keys = reads.owner_keys.value?.keys;
     return atBlock('owner_keys') && Array.isArray(keys) && keys.length <= 10_000 &&
@@ -140,6 +166,11 @@ export async function inspectSvalinSetupPrerequisites({ plan, trustedReviewHash,
     network: 'testnet', block_hash: hash, block_timestamp: new Date(fresh.timestamp_ms).toISOString(),
     checked_at: new Date(finished).toISOString(), review_sha256: identity.review_sha256,
     owner: goal.owner, vault: goal.vault, token: CIRCLE_TESTNET_USDC, payee: SVALIN_PAYEE,
+    observed_protocol_version: Number.isSafeInteger(reads.protocol.value?.protocol_version) ? reads.protocol.value.protocol_version : null,
+    observed_owner_nonce: reads.owner_key.available && atBlock('owner_key') ? pinnedAccessKeyNonce(reads.owner_key.value?.nonce)?.toString() ?? null : null,
+    v11_minimum_protocol_version: MIN_V11_TESTNET_PROTOCOL,
+    observed_v11_selected_wasm_features: reportedV11WasmFeatures(reads.protocol.value),
+    runtime_linking_and_all_host_imports_verified: false,
     reviewed_vault_funding_yocto: initial.toString(), reviewed_token_registration_yocto: registration.toString(),
     observed_token_registration_min_yocto: observedMin?.toString() ?? null,
     required_test_usdc_atoms: SVALIN_TRIAL_MAX_ATOMS, observed_owner_test_usdc_atoms: observedUsdc?.toString() ?? null,
