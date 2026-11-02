@@ -33,8 +33,17 @@ Separate one-shot operations subsequently registered the replacement owner with
 Circle and acquired **6,907 atoms (0.006907 test USDC)** by swapping 0.01 test
 NEAR. Their original hashes, FINAL receipt summaries and artifact fences are
 retained in `evidence/testnet-owner-v2/`; do not resend those transactions.
-This funds the owner, not a vault, and is not a provider purchase. The old
-owner and its balance were not touched.
+This funds the owner and is not a provider purchase. The old owner and its
+balance were not touched.
+
+A separate [one-shot deployment](https://github.com/Greatmujey/Bouncer/actions/runs/41520563526)
+created `vault.bouncer-owner-3869c162b193fa1729515442.testnet` with 6 test NEAR.
+The original receipt and a fresh FINAL view matched the pinned V11 code, owner,
+and **zero vault access keys**. As of that view, Circle storage for the vault
+was not registered and its tracked Circle balance was zero; the 6,907 atoms
+were still at the owner. Neither an independent audit nor provider fulfillment
+is implied. Its keyless storage stake may remain locked, and recovery-file
+export remains unconfirmed. Do not resend the original deployment.
 
 The helper workflow is bound to one session-branch push and first run
 attempt. It checks a fresh FINAL view that the new name is absent, retains a
