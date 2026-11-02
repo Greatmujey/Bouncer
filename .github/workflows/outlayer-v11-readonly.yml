@@ -1,0 +1,40 @@
+# Single-block public testnet views; no signing, seller request or transaction.
+name: Replacement V11 OutLayer readiness (read only)
+on:
+  push:
+    branches: ['arena/**']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  snapshot:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[outlayer-v11-readonly]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: bouncer
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: node --test tests/outlayer-v11-readiness.test.mjs
+      - name: Inspect public views without funding or orders
+        run: |
+          set -euo pipefail
+          if ! node scripts/inspect-outlayer-v11-readiness.mjs > "$RUNNER_TEMP/outlayer.json" 2> "$RUNNER_TEMP/outlayer-errors.log"; then
+            python3 -c 'import os; s=open(os.environ["RUNNER_TEMP"]+"/outlayer-errors.log").read()[-4000:]; print("::error title=OutLayer read-only snapshot unavailable::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
+            exit 1
+          fi
+          python3 -c 'import os,json; s=json.dumps(json.load(open(os.environ["RUNNER_TEMP"]+"/outlayer.json")),separators=(",",":")); print("::notice title=V11 OutLayer public snapshot::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
+          {
+            echo '## Read-only, single-block testnet snapshot'
+            echo 'No key, payment, seller request or fulfillment. USDC.e is fake test currency; quotes and state can change.'
+            echo '```json'
+            cat "$RUNNER_TEMP/outlayer.json"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
