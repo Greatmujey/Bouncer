@@ -61,5 +61,10 @@ test('changed, expired, oversized, wrong-branch or unavailable fences prevent a 
     fetchImpl: async () => response(control) }), true);
   assert.equal(await githubOriginalFence({ ...args, prefix: 'outlayer-burn-register-fence',
     fetchImpl: async () => response(control) }), false);
+  const afterControl = metadata(); afterControl.name = `outlayer-burn-register-after-control-fence-5678-${args.digest}`;
+  assert.equal(await githubOriginalFence({ ...args, prefix: 'outlayer-burn-register-after-control-fence',
+    fetchImpl: async () => response(afterControl) }), true);
+  assert.equal(await githubOriginalFence({ ...args, prefix: 'outlayer-burn-control-fence',
+    fetchImpl: async () => response(afterControl) }), false);
   await assert.rejects(githubOriginalFence({ ...args, fetchImpl: async () => new Response('{') }));
 });
