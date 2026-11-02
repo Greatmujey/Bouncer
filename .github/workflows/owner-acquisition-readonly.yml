@@ -27,7 +27,7 @@ jobs:
       - name: Install lockfile and test FINAL-view guards
         run: |
           npm ci --ignore-scripts --no-audit --no-fund
-          node --test tests/circle-owner-acquisition-readiness.test.mjs tests/circle-owner-registration.test.mjs
+          node --test tests/circle-owner-acquisition*.test.mjs tests/circle-owner-registration.test.mjs tests/circle-owner-offline-journal.test.mjs
       - name: Inspect the owner, wNEAR, Circle and Ref at one FINAL block
         run: |
           set -euo pipefail
