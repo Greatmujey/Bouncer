@@ -8,7 +8,9 @@ export async function githubOriginalFence({ artifactId, runId, headSha, digest, 
   if (!id(artifactId) || !id(runId) || !/^[a-f0-9]{40}$/.test(headSha ?? '') || !/^[a-f0-9]{64}$/.test(digest ?? '') ||
       typeof token !== 'string' || token.length < 20 || !Number.isSafeInteger(maxArtifactBytes) ||
       maxArtifactBytes < 1 || maxArtifactBytes > 2_000_000 || !['vault-v2-bootstrap-fence',
-        'vault-circle-v2-register-fence', 'vault-circle-v2-fund-fence'].includes(prefix) || typeof fetchImpl !== 'function') {
+        'vault-circle-v2-register-fence', 'vault-circle-v2-fund-fence',
+        'resource-agent-v2-guard-probe-fence', 'resource-agent-v2-configure-fence',
+        'resource-agent-v2-install-fence'].includes(prefix) || typeof fetchImpl !== 'function') {
     throw new Error('invalid original-hash artifact fence parameters');
   }
   const response = await fetchImpl(`https://api.github.com/repos/Greatmujey/Bouncer/actions/artifacts/${artifactId}`, {
