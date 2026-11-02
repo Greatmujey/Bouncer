@@ -5,6 +5,8 @@ import { CIRCLE_TESTNET_USDC as TOKEN } from '../scripts/circle-testnet-setup.mj
 import { V11_NEAR_CODE_HASH } from '../agent/keyless-vault-bootstrap.mjs';
 import { TOPUP_SOURCE, TOPUP_VAULT, TOPUP_VAULT_OWNER, TOPUP_ATOMS, inspectNamedVaultTopup,
   assertNamedVaultTopupBefore, signNamedVaultTopup, verifySignedNamedVaultTopup } from '../agent/named-vault-topup.mjs';
+import { verifyNamedVaultTopupReceipt, reconcileNamedVaultTopup,
+  broadcastNamedVaultTopupOnce } from '../agent/named-vault-topup-runner.mjs';
 
 const TIME = Date.parse('2026-11-02T22:00:00.000Z');
 const HASH = nearApi.utils.serialize.base_encode(Buffer.alloc(32, 9));
@@ -94,5 +96,100 @@ test('altered signed action, amount, nonce, public key, hash or target is reject
     { token: 'other.testnet' }, { tx_hash: WRONG }, { public_key: String(nearApi.KeyPair.fromRandom('ed25519').getPublicKey()) },
     { signed_tx_base64: e.signed_tx_base64.slice(0, -4) + 'AAAA' }]) {
     assert.throws(() => verifySignedNamedVaultTopup({ ...e, ...change }, f.plan));
+  }
+});
+
+const id = n => nearApi.utils.serialize.base_encode(Buffer.alloc(32, n));
+const ROOT = id(1), HOOK = id(2), RESOLVER = id(3), DATA = id(4);
+const b64 = x => Buffer.from(JSON.stringify(x)).toString('base64');
+const outcome = (rid, executor, status, receipt_ids = [], logs = []) => ({ id: rid, outcome: { executor_id: executor, status, receipt_ids, logs } });
+const receipt = (rid, from, to, action) => ({ receipt_id: rid, predecessor_id: from, receiver_id: to, receipt: { Action: action } });
+const call = (method, args) => ({ FunctionCall: { method_name: method, args: b64(args), gas: '70000000000000', deposit: '0' } });
+function chainReceipt(f, envelope) {
+  const signed = verifySignedNamedVaultTopup(envelope, f.plan), c = signed.transaction.actions[0].functionCall;
+  const rootCall = { FunctionCall: { method_name: c.methodName, args: Buffer.from(c.args).toString('base64'),
+    gas: c.gas.toString(), deposit: c.deposit.toString() } };
+  const result = { final_execution_status: 'FINAL', status: { SuccessValue: b64(TOPUP_ATOMS) },
+    transaction: { hash: envelope.tx_hash, signer_id: TOPUP_SOURCE, public_key: f.pub, receiver_id: TOKEN,
+      nonce: envelope.nonce, actions: [structuredClone(rootCall)] },
+    transaction_outcome: { id: envelope.tx_hash, outcome: { executor_id: TOPUP_SOURCE, status: { SuccessReceiptId: ROOT }, receipt_ids: [ROOT] } },
+    receipts: [receipt(ROOT, TOPUP_SOURCE, TOKEN, { signer_id: TOPUP_SOURCE, signer_public_key: f.pub, actions: [structuredClone(rootCall)] }),
+      receipt(HOOK, TOKEN, TOPUP_VAULT, { signer_id: TOPUP_SOURCE, signer_public_key: f.pub,
+        actions: [call('ft_on_transfer', { sender_id: TOPUP_SOURCE, amount: TOPUP_ATOMS, msg: '' })],
+        input_data_ids: [], output_data_receivers: [{ data_id: DATA, receiver_id: TOKEN }] }),
+      receipt(RESOLVER, TOKEN, TOKEN, { signer_id: TOPUP_SOURCE, signer_public_key: f.pub,
+        actions: [call('ft_resolve_transfer', { sender_id: TOPUP_SOURCE, receiver_id: TOPUP_VAULT, amount: TOPUP_ATOMS })],
+        input_data_ids: [DATA], output_data_receivers: [] })],
+    receipts_outcome: [outcome(ROOT, TOKEN, { SuccessReceiptId: RESOLVER }, [HOOK, RESOLVER],
+      ['EVENT_JSON:' + JSON.stringify({ standard: 'nep141', version: '1.0.0', event: 'ft_transfer',
+        data: [{ old_owner_id: TOPUP_SOURCE, new_owner_id: TOPUP_VAULT, amount: TOPUP_ATOMS }] })]),
+      outcome(HOOK, TOPUP_VAULT, { SuccessValue: b64('0') }, [], ['BOUNCER deposit received']),
+      outcome(RESOLVER, TOKEN, { SuccessValue: b64(TOPUP_ATOMS) })] };
+  return result;
+}
+function attachRunner(f, envelope, { loseSend = false, fenceOk = true } = {}) {
+  let sends = 0, fences = 0, lookups = 0;
+  const result = chainReceipt(f, envelope);
+  f.p.enforcesSetupBeforeSubmitGuard = true;
+  f.p.sendTransactionOnce = async (signed, wait, { beforeSubmit }) => {
+    assert.equal(wait, 'FINAL'); assert.equal(fences, 1); assert.equal(signed.transaction.nonce, BigInt(envelope.nonce));
+    beforeSubmit(); sends++; f.s.nonce = Number(envelope.nonce); f.s.sourceKeys[0].access_key.nonce = f.s.nonce;
+    f.s.sourceBalance = '34000000'; f.s.actual = '6006907'; f.s.tracked = '6006907';
+    if (loseSend) throw Error('lost synthetic acknowledgement');
+    return { final_execution_status: 'FINAL', transaction_outcome: { id: envelope.tx_hash } };
+  };
+  f.p.txStatusReceipts = async (hash, owner, wait) => {
+    lookups++; assert.equal(hash, envelope.tx_hash); assert.equal(owner, TOPUP_SOURCE); assert.equal(wait, 'FINAL');
+    return structuredClone(result);
+  };
+  const persistAttempt = async value => { fences++; assert.equal(value.tx_hash, envelope.tx_hash); return fenceOk; };
+  return { result, persistAttempt, get sends() { return sends; }, get fences() { return fences; }, get lookups() { return lookups; } };
+}
+
+test('fenced one-shot topup verifies the original Circle callback graph and both vault balances', async () => {
+  const f = fixture(), e = await sign(f), runner = attachRunner(f, e);
+  const result = await broadcastNamedVaultTopupOnce({ plan: f.plan, envelope: e, provider: f.p, now: f.now, persistAttempt: runner.persistAttempt });
+  assert.equal(result.status, 'NAMED_TESTNET_TOPUP_FINAL_VERIFIED'); assert.equal(result.tx_hash, e.tx_hash);
+  assert.equal(result.state.source_circle_atoms, '34000000'); assert.equal(result.state.vault_actual_circle_atoms, '6006907');
+  assert.equal(result.state.vault_tracked_circle_atoms, '6006907'); assert.equal(result.receipt.funding.full_amount_accepted, true);
+  assert.equal(result.seller_contacted, false); assert.equal(runner.sends, 1); assert.equal(runner.lookups, 1);
+  await assert.rejects(broadcastNamedVaultTopupOnce({ plan: f.plan, envelope: e, provider: f.p, now: f.now, persistAttempt: runner.persistAttempt }));
+  assert.equal(runner.sends, 1);
+});
+
+test('lost topup response recovers the original hash and never sends a replacement', async () => {
+  const f = fixture(), e = await sign(f), runner = attachRunner(f, e, { loseSend: true });
+  await assert.rejects(broadcastNamedVaultTopupOnce({ plan: f.plan, envelope: e, provider: f.p, now: f.now,
+    persistAttempt: runner.persistAttempt }), /unconfirmed.*never resend/);
+  assert.equal(runner.sends, 1); assert.equal(runner.lookups, 0);
+  const recovered = await reconcileNamedVaultTopup({ plan: f.plan, envelope: e, provider: f.p, now: f.now });
+  assert.equal(recovered.tx_hash, e.tx_hash); assert.equal(runner.sends, 1); assert.equal(runner.lookups, 1);
+});
+
+test('missing fence, old or noncanonical reference, and changed state prevent the topup send', async () => {
+  const f = fixture(), e = await sign(f), runner = attachRunner(f, e, { fenceOk: false });
+  await assert.rejects(broadcastNamedVaultTopupOnce({ plan: f.plan, envelope: e, provider: f.p, now: f.now,
+    persistAttempt: runner.persistAttempt }), /fence/); assert.equal(runner.sends, 0);
+  const g = fixture(), eg = await sign(g), rg = attachRunner(g, eg);
+  g.p.viewBlock = async opts => opts?.blockId ? { header: { hash: WRONG, height: eg.block_height } } :
+    { header: { hash: HASH, height: eg.block_height, timestamp_nanosec: String(BigInt(TIME) * 1_000_000n) } };
+  await assert.rejects(broadcastNamedVaultTopupOnce({ plan: g.plan, envelope: eg, provider: g.p, now: g.now,
+    persistAttempt: rg.persistAttempt }), /reference block/); assert.equal(rg.sends, 0);
+  const h = fixture(), eh = await sign(h), rh = attachRunner(h, eh);
+  h.s.sourceBalance = '39999999';
+  await assert.rejects(broadcastNamedVaultTopupOnce({ plan: h.plan, envelope: eh, provider: h.p, now: h.now,
+    persistAttempt: rh.persistAttempt })); assert.equal(rh.sends, 0);
+});
+
+test('receipt validation rejects forged roots, events, callbacks, resolver links and failed outcomes', async () => {
+  const f = fixture(), e = await sign(f), runner = attachRunner(f, e), good = runner.result;
+  assert.equal(verifyNamedVaultTopupReceipt(good, e, f.plan).funding.amount_atoms, TOPUP_ATOMS);
+  for (const mutate of [r => { r.transaction.signer_id = 'other.testnet'; }, r => { r.transaction.nonce = '1'; },
+    r => { r.receipts[0].receiver_id = 'other.testnet'; }, r => { r.receipts_outcome[0].outcome.logs = []; },
+    r => { r.receipts[1].receipt.Action.output_data_receivers[0].data_id = id(7); },
+    r => { r.receipts_outcome[1].outcome.status.SuccessValue = b64('1'); },
+    r => { r.receipts_outcome[2].outcome.status.SuccessValue = b64('0'); },
+    r => { r.receipts_outcome.pop(); }, r => { r.receipts_outcome[1].outcome.status = { Failure: {} }; }]) {
+    const bad = structuredClone(good); mutate(bad); assert.throws(() => verifyNamedVaultTopupReceipt(bad, e, f.plan));
   }
 });

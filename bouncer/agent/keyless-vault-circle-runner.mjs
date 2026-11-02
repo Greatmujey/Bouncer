@@ -35,7 +35,15 @@ function onlySystemRefund(receipt, outcome, plan) {
 /** Verify transaction, exact root action, bounded linked successful outcomes,
  * and (for funding) Circle event + vault hook + dependent token resolver. */
 export function verifyVaultCircleReceipt(result, envelope, rawPlan) {
-  const plan = validateOwnerBootstrapPlan(rawPlan), signed = verifySignedVaultCircle(envelope, plan), expected = signed.transaction.actions[0];
+  const plan = validateOwnerBootstrapPlan(rawPlan), signed = verifySignedVaultCircle(envelope, plan);
+  return verifyCircleVaultReceiptGraph(result, envelope, plan, signed.transaction.actions[0]);
+}
+
+/** Internal graph verifier for an already signature-validated, fixed-action
+ * Circle envelope. Callers MUST first verify the signed transaction and its
+ * exact source, receiver, amount, key and nonce; this function verifies only
+ * the matching FINAL transaction/receipt graph, not that prior authorization. */
+export function verifyCircleVaultReceiptGraph(result, envelope, plan, expected) {
   const t = result?.transaction, txo = result?.transaction_outcome, top = txo?.outcome;
   if (result?.final_execution_status !== 'FINAL' || typeof result.status?.SuccessValue !== 'string' ||
       t?.hash !== envelope.tx_hash || t.signer_id !== plan.account_id || t.public_key !== plan.public_key || t.receiver_id !== CIRCLE ||

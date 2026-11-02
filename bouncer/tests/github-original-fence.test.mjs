@@ -46,5 +46,10 @@ test('changed, expired, oversized, wrong-branch or unavailable fences prevent a 
     fetchImpl: async () => response(recovery) }), true);
   assert.equal(await githubOriginalFence({ ...args, prefix: 'vault-v2-bootstrap-fence',
     fetchImpl: async () => response(recovery) }), false);
+  const topup = metadata(); topup.name = `named-vault-topup-fence-5678-${args.digest}`;
+  assert.equal(await githubOriginalFence({ ...args, prefix: 'named-vault-topup-fence',
+    fetchImpl: async () => response(topup) }), true);
+  assert.equal(await githubOriginalFence({ ...args, prefix: 'named-testnet-recovery-fence',
+    fetchImpl: async () => response(topup) }), false);
   await assert.rejects(githubOriginalFence({ ...args, fetchImpl: async () => new Response('{') }));
 });

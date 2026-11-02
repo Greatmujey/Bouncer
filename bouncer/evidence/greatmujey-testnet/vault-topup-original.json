@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "network": "testnet",
+  "source": "greatmujey.testnet",
+  "public_key": "ed25519:76e7VsPsBxT7GWR7KqgzYrd3JzQyWyDT7qLZdHxdan23",
+  "vault": "vault.bouncer-owner-3869c162b193fa1729515442.testnet",
+  "token": "3e2210e1184b45b64c8a434c0a7e7b23cc04ea7eb7a6c3c32520d03d4afcb8af",
+  "amount_atoms": "6000000",
+  "source_before_atoms": "40000000",
+  "vault_before_atoms": "6907",
+  "nonce": "275963014000001",
+  "block_hash": "C4uCuoKy8W6CyzBiWV4z2UA79FYKdwdhh4DNsdMjXyWE",
+  "block_height": 275963396,
+  "tx_hash": "Ep5vWogSd2nqitJFdLxR8J9CnZaqUjn6wnbRCaXVq2fM",
+  "signed_tx_base64": "EgAAAGdyZWF0bXVqZXkudGVzdG5ldABal/0B2yhqytER2yMbZcOlY28RW+aqlOx4j5z7zr5GWIGta6X8+gAAQAAAADNlMjIxMGUxMTg0YjQ1YjY0YzhhNDM0YzBhN2U3YjIzY2MwNGVhN2ViN2E2YzNjMzI1MjBkMDNkNGFmY2I4YWakcFPQKF2pDUN37/Axdi/yeDbVzAYsEwu/HYFhleITTwEAAAACEAAAAGZ0X3RyYW5zZmVyX2NhbGxiAAAAeyJyZWNlaXZlcl9pZCI6InZhdWx0LmJvdW5jZXItb3duZXItMzg2OWMxNjJiMTkzZmExNzI5NTE1NDQyLnRlc3RuZXQiLCJhbW91bnQiOiI2MDAwMDAwIiwibXNnIjoiIn0AgPQg5rUAAAEAAAAAAAAAAAAAAAAAAAAAngs+Kvpimx0B0AClg/5SdFeahovogBO9sOOwg+/x9b2mjKtrrID8ySdyXD4JRo5VpoAy1gSMuPscwJFDhuPXDQ==",
+  "do_not_blindly_resend": true,
+  "scope": "public fixed-action bearer; preserve the original hash, never blindly resend"
+}
