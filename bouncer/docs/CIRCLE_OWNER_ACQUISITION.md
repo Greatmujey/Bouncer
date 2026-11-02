@@ -12,13 +12,21 @@ observed the owner registered with Circle and holding **zero** test USDC. It
 also observed Ref registered with both tokens, a wNEAR storage minimum of
 0.00125 test NEAR, and pool 1845 indicating 6,917 USDC atomic units for 0.01
 wNEAR. This is a stale, point-in-time indication, not a reserved price or proof
-of Circle funding; fresh checks are mandatory before the swap.
+of Circle funding; fresh checks were mandatory before the swap.
 
 The [one-shot wrap](https://github.com/Greatmujey/Bouncer/actions/runs/41480629786)
 subsequently verified original testnet transaction
 [`BF84QZFMFRuUSWkNWueUBQRD1yvtM6diL2yUGoHaeKpd`](https://testnet.nearblocks.io/txns/BF84QZFMFRuUSWkNWueUBQRD1yvtM6diL2yUGoHaeKpd),
 its FINAL receipt and a fresh 0.01 wNEAR owner balance. Circle balance was
-still zero. The original hash is journaled; **do not resend it**.
+still zero at that stage. The original hash is journaled; **do not resend it**.
+
+The subsequent [one-shot swap](https://github.com/Greatmujey/Bouncer/actions/runs/41481206186)
+verified original testnet transaction
+[`ENLCEW8R2DDtxeQL72hzyZrKaRkvepH5GDvfUoQvhQtW`](https://testnet.nearblocks.io/txns/ENLCEW8R2DDtxeQL72hzyZrKaRkvepH5GDvfUoQvhQtW),
+its linked FINAL Ref hook, Circle transfer receipt `VjWUAvy8zYC5fR82J3ggM6wLQj2BKUae61fJtqedHai`,
+NEP-141 event and fresh owner balance: **6,917 atoms = 0.006917 test USDC**.
+The wNEAR input balance became zero. This is funding of the *owner*, not a
+vault or a seller. The original swap is journaled; **do not resend it**.
 
 ## Two narrowly fixed actions
 
