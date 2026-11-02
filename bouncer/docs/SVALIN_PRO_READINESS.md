@@ -425,11 +425,14 @@ transaction, root outcome and any strictly shaped system gas-refund child must
 match, and a fresh state check must separately verify the key. Registration
 accepts a linked protocol gas refund, but still rejects a token-created refund.
 The resolver/callback graph check is stricter than a successful
-`ft_transfer_call` alone. A disposable nearcore run of the earlier verifier found
-both incompatibilities and intentionally failed; the changes described here still need
-an approved nearcore rerun. There has been no V11 testnet deployment or Circle
-funding transaction; independent review and a future authorized live workflow
-remain necessary.
+`ft_transfer_call` alone. An earlier disposable nearcore run of the verifier found
+both incompatibilities and intentionally failed. The [isolated rerun of commit
+`b820ce9`](https://github.com/Greatmujey/Bouncer/actions/runs/41430287526)
+passed with the example mock FT and reconciled five stages in an encrypted journal;
+the AddKey root body remained omitted, and the testnet runner and stage preflight
+were not exercised against nearcore. There has been no V11 testnet deployment or
+Circle funding transaction; independent review and a future authorized live
+workflow remain necessary.
 On 1 November 2026, the approved private push build `41361570652` and its PR
 build `41361575492` succeeded and independently reported the same 536,325-byte
 V11 artifact SHA-256,

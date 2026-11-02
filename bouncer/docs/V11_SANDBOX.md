@@ -1,7 +1,34 @@
 # V11 nearcore sandbox validation (opt-in)
 
-**Status: partial nearcore run; setup verification blocked.** On 2 November
-2026, [run 41424909003](https://github.com/Greatmujey/Bouncer/actions/runs/41424909003)
+**Status: five-stage sandbox reconciliation passed, with one outcome-only
+exception.** On 2 November 2026, [run 41430287526](https://github.com/Greatmujey/Bouncer/actions/runs/41430287526)
+ran commit `b820ce923ad696655fd4abf338b9d365b0295055` against nearcore 2.14.0,
+protocol 88 and the example mock FT. All five original stages reconciled in the
+same encrypted setup journal, which was reopened after the agent-key stage. Four
+stages matched their relevant receipt evidence; the self-addressed AddKey stage
+matched the original transaction and linked outcome **without its omitted root
+receipt body**. The harness separately checked the installed key's receiver
+and method restrictions, the one-yocto guard, allowlist, caps, mock-FT
+execution, replay rejection and failed transfer refund callback. It did not
+separately log the installed key's allowance in that run. The successful run did not log whether the
+registration gas-refund child was present; its strict verifier accepts either
+that specific child or none. This is not a testnet deployment, Circle
+registration, independent review or seller fulfillment. The live testnet runner
+and stage preflight were not run against nearcore.
+
+**Prepared locally, not yet validated against nearcore:** the working-tree
+harness adds a second fresh sandbox owner and vault that call the actual stage
+preflight, one-stage coordinator, single-send transport and original-hash
+recovery. A test-only adapter first requires the named loopback sandbox and
+then aliases its chain ID to `testnet` solely so the testnet-only coordinator
+can run. The approval booleans are simulated. No production network checks
+are changed. Synthetic loopback tests exercise the wiring, but neither those
+nor the previously passing run establish that this new scenario passes on
+nearcore. Even a future passing run would not test production's real testnet
+identity check or establish a live deployment, Circle registration, independent
+review, owner consent, backups or seller fulfillment.
+
+**Earlier failures:** [run 41424909003](https://github.com/Greatmujey/Bouncer/actions/runs/41424909003)
 started the pinned protocol-88 sandbox, deployed the recovered V11, checked its
 code hash, owner and keyless account, exercised the one-yocto guard, and matched
 the original receipts for the first two setup batches. The same-account agent
@@ -28,15 +55,18 @@ These are real nearcore checks of the named cases, but not a passing five-stage
 setup-verification run. Synthetic JavaScript harness tests do not prove
 nearcore behavior.
 
-A later local candidate changes the verifier to recognize only the reviewed,
+Commit `b820ce9` changes the verifier to recognize only the reviewed,
 self-addressed, single-AddKey outcome when its root body is omitted, with the
 separate status `FINAL_LOCAL_ADD_KEY_OUTCOME_MATCH`. It does not fabricate or
 claim a matching root receipt. Registration permits only a fully linked,
 terminal, single system gas-refund transfer to the original signer/key, or no
 child; token-created refunds and unknown/incomplete graphs remain blocked. Both
 still require the original trusted transaction hash and a separate fresh state
-check. The local candidate has not yet been validated by another nearcore run;
-it is not authorization for testnet setup, funding or seller contact.
+check. The isolated rerun passed with the omitted AddKey body; it did not log
+whether a registration gas-refund child occurred, so that specific child is
+covered by synthetic adversarial tests and the earlier failed-run observation,
+not separately demonstrated in the successful rerun. Neither run authorizes
+testnet setup, funding or seller contact.
 
 The opt-in job starts a fresh, one-validator nearcore **2.14.0** sandbox on
 loopback, with protocol **88**, and destroys its temporary chain afterwards.
@@ -45,7 +75,7 @@ consume real funds, or deploy an internet-facing contract. All signing keys
 are generated solely for the disposable chain. The harness accepts no RPC URL,
 account ID or private key from its environment, and checks its own chain ID.
 
-## Planned checks
+## Bounded checks
 
 - Hash-check the recovered V11 WASM, deploy and initialize it in the same
   account-creation batch, and verify its code hash, owner, version and **zero
@@ -54,8 +84,15 @@ account ID or private key from its environment, and checks its own chain ID.
   local owner key. Record each original signed hash in an ephemeral encrypted
   setup journal before sending, then reconcile its FINAL evidence; for the
   omitted local AddKey body, check its separately labeled outcome and fresh key
-  state instead. Reopen the journal after that stage. This harness does **not**
-  exercise the live testnet runner or stage preflight against nearcore.
+  state instead. Reopen the journal after that stage. The previously passing
+  run did **not** exercise the setup runner or stage preflight against nearcore.
+- In the locally prepared extension, run the actual setup runner and pinned
+  stage preflight on a second sandbox owner/vault; verify the exact restricted
+  key allowance and a post-funding profile. Drop one successful local send's
+  acknowledgement, reopen the original encrypted journal, and check that
+  original-hash recovery and the pending-stage fence do not resend. This
+  extension is pending a nearcore run and deliberately simulates the network
+  identity and approvals as described above.
 - Exercise the one-yocto guard with an owner-scoped function-call key that is
   allowed to attempt `set_policy`: zero deposit should reach the contract and
   fail; one yocto should be rejected by the protocol. Separately check a

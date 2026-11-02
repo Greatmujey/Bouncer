@@ -29,6 +29,7 @@ import { initializeSvalinSetupJournal, recordSvalinSetupSignedAttempt, reconcile
 import { CIRCLE_TESTNET_USDC as TOKEN } from '../scripts/circle-testnet-setup.mjs';
 import { SVALIN_PAYEE as SELLER } from '../agent/svalin-pro-readiness.mjs';
 import { SVALIN_TRIAL_MAX_ATOMS as FUNDING } from '../agent/svalin-pro-preflight.mjs';
+import { RUNNER_OWNER, exerciseSandboxOwnerRunner } from './v11-sandbox-owner-runner.mjs';
 import { V11_SHA256, MOCK_FT_SHA256, SANDBOX_SHA256, SANDBOX_CHAIN_ID, readVerifiedFile,
   withMockTokenInGenesis, assertSandboxStatus, requireFinalSuccess, assertOmittedLocalAddKeyReceipt,
   assertRegistrationWithOnlyGasRefund, requireReceiptLog } from './v11-sandbox-support.mjs';
@@ -121,7 +122,7 @@ async function startSandbox(binaryPath, directory, tokenPublicKey) {
     if (!ready) throw new Error(`local sandbox did not become ready: ${tail}`);
     const protocol = await provider.experimental_protocolConfig(CHAIN_QUERY);
     assert.equal(protocol.protocol_version, 88, 'this harness is pinned to protocol 88');
-    return { provider, child, rootKey, versionText, protocol: protocol.protocol_version };
+    return { provider, rpcUrl, child, rootKey, versionText, protocol: protocol.protocol_version };
   } catch (error) {
     await stopChild(child);
     throw error;
@@ -150,6 +151,7 @@ async function run() {
   readVerifiedFile(binary, SANDBOX_SHA256);
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'bouncer-v11-sandbox-'));
   const tokenKey = key(), ownerKey = key(), sellerKey = key(), attackerKey = key(), agentKey = key(), probeKey = key();
+  const runnerOwnerKey = key(), runnerAgentKey = key();
   let sandbox, journal, journalKey;
   try {
     sandbox = await startSandbox(binary, directory, pub(tokenKey));
@@ -180,7 +182,7 @@ async function run() {
     await create(SELLER, sellerKey);
     await create(ATTACKER, attackerKey);
     await mustBatch(token, TOKEN, [tx.deployContract(mockFt), func('new_default_meta',
-      { owner_id: OWNER, total_supply: '10000000' }, 0n, 50n * TGAS)], 'deploy mock FT');
+      { owner_id: OWNER, total_supply: '30000000' }, 0n, 50n * TGAS)], 'deploy mock FT');
     const bounds = await view(TOKEN, 'storage_balance_bounds');
     assert.ok(typeof bounds?.min === 'string' && /^[1-9][0-9]*$/.test(bounds.min), 'mock FT minimum missing');
     assert.ok(BigInt(bounds.min) <= 10n ** 23n, 'mock FT minimum exceeds the planner limit');
@@ -388,6 +390,21 @@ async function run() {
       'failed intent replay', /consumed, cancelled, expired or stale/);
     checkpoint('failed mock FT receipt, refund callback, restored balances and replay rejection confirmed');
 
+    // The first scenario above deliberately uses direct signing/evidence so it
+    // can diagnose specific verifier failures. A second, fresh owner and vault
+    // exercise the actual stage preflight and one-stage coordinator instead.
+    // All accounts and tokens remain exclusively on this disposable chain.
+    let ownerRunnerEvidence = null;
+    if (verifierBlockers.length === 0) {
+      await create(RUNNER_OWNER, runnerOwnerKey);
+      await mustCall(owner, TOKEN, 'storage_deposit', { account_id: RUNNER_OWNER, registration_only: true },
+        BigInt(bounds.min), 50n * TGAS);
+      await mustCall(owner, TOKEN, 'ft_transfer', { receiver_id: RUNNER_OWNER, amount: '6000000', memo: 'local sandbox runner' },
+        1n, 50n * TGAS);
+      ownerRunnerEvidence = await exerciseSandboxOwnerRunner({ rpcUrl: sandbox.rpcUrl, wasm, tokenStorageMin: bounds.min,
+        directory, ownerKey: runnerOwnerKey, agentKey: runnerAgentKey, checkpoint });
+    }
+
     assertSandboxStatus(await provider.status());
     const evidence = {
       scope: 'ISOLATED LOCAL SANDBOX ONLY: mock FT, fake balances and no seller service; not a testnet deployment, audit or fulfillment proof',
@@ -405,6 +422,7 @@ async function run() {
       restricted_agent_method_filter_checked: true, allowlist_and_caps_checked: true,
       exact_ft_success_receipts_and_balances_checked: true, replay_rejected: true,
       failed_ft_receipt_and_refund_callback_checked: true,
+      owner_runner_and_stage_preflight: ownerRunnerEvidence,
     };
     console.log(JSON.stringify(evidence, null, 2));
     if (verifierBlockers.length) {
