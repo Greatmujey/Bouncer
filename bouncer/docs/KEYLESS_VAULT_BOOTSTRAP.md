@@ -21,9 +21,10 @@ and `new` with the owner above. It installs **no vault access key** and does
 not configure a seller, create an agent key, register Circle storage, transfer
 USDC, or send a transaction. A local write-ahead journal checks both testnet
 owner key copies and the original verified acquisition before exporting the
-signed public bearer. The current code has only fixture/offline tests; there is
-no implemented broadcaster for this deployment, and no deployment signature
-has been created.
+signed public bearer. A guarded one-shot runner and original-hash read-only
+reconciler now exist and have fixture tests; no live deployment signature or
+broadcast has been created. The isolated nearcore test is separate and must
+pass before treating the runner as compatible with an actual receipt graph.
 
 The exact artifact SHA-256 is
 `1acf931c07a530257999478c121193863ecf7201d357812a44b4d61c16a77921`.
@@ -31,9 +32,17 @@ An isolated nearcore test exercised this artifact, but the artifact is not
 independently audited or independently reproduced. A keyless V11 vault cannot
 upgrade or delete itself with the current contract; native storage stake and
 Circle registration may remain locked. Two local testnet owner key copies
-were checked, but whether the user exported a backup is unconfirmed. Before any
-deployment, build and test a one-shot broadcaster, a durable original-hash
-fence, receipt verification and read-only recovery; recheck the state and
-nonce at a fresh FINAL block. Publishing signed bytes permits anyone to relay
-their exact fixed transaction before the CI guard, so never blindly resend or
-replace an unresolved original hash.
+were checked previously, but their paths were outside the repository and are
+no longer present after the workspace refresh; whether the user exported a
+backup is unconfirmed. The existing owner's on-chain funds and public original
+transaction evidence are not a substitute for its private key. Do not assume
+that key custody survives a workspace refresh, claim the account is usable, or
+sign as it without recovering the matching private key. Do not overwrite or
+resend its original registration, wrap or swap transactions. If a genuinely new
+testnet owner is needed, keep it distinct from this history.
+
+Before any deployment, test the one-shot path on isolated nearcore, establish a
+durable original-hash fence, and recheck state and nonce at a fresh FINAL block.
+Publishing signed bytes permits anyone to relay their exact fixed transaction
+before the CI guard, so never blindly resend or replace an unresolved original
+hash.

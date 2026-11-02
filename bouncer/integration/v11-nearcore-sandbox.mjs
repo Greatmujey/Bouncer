@@ -35,6 +35,7 @@ import { exerciseSandboxBuyerRunner } from './v11-sandbox-buyer-runner.mjs';
 import { exerciseSandboxNativeFaucet } from './v11-sandbox-native-faucet.mjs';
 import { exerciseSandboxEscrowBoundary } from './v11-sandbox-escrow-boundary.mjs';
 import { exerciseSandboxForwarder } from './v11-sandbox-forwarder.mjs';
+import { exerciseSandboxBootstrapRunner } from './v11-sandbox-bootstrap-runner.mjs';
 import { FAUCET_RETURN } from '../agent/native-testnet-faucet.mjs';
 import { V11_SHA256, MOCK_FT_SHA256, SANDBOX_SHA256, SANDBOX_CHAIN_ID, readVerifiedFile,
   withMockTokenInGenesis, assertSandboxStatus, requireFinalSuccess, assertOmittedLocalAddKeyReceipt,
@@ -441,6 +442,10 @@ async function run() {
       nativeFaucetEvidence = await exerciseSandboxNativeFaucet({ rpcUrl: sandbox.rpcUrl, directory, root, checkpoint });
     }
 
+    // A separate newly generated test owner exercises the generic fixed
+    // deployment, original receipt verifier and lost-response recovery. Its
+    // Circle prerequisite fields are synthetic; no Circle transfer is made.
+    const bootstrapRunnerEvidence = await exerciseSandboxBootstrapRunner({ rpcUrl: sandbox.rpcUrl, root, wasm, directory, checkpoint });
     assertSandboxStatus(await provider.status());
     const evidence = {
       scope: 'ISOLATED LOCAL SANDBOX ONLY: mock FT, fake balances and no seller service; not a testnet deployment, audit or fulfillment proof',
@@ -463,6 +468,7 @@ async function run() {
       owner_runner_and_stage_preflight: ownerRunnerEvidence,
       buyer_runner_and_original_hash_recovery: buyerRunnerEvidence,
       native_faucet_and_original_hash_recovery: nativeFaucetEvidence,
+      generic_keyless_bootstrap_and_original_hash_recovery: bootstrapRunnerEvidence,
     };
     console.log(JSON.stringify(evidence, null, 2));
     if (verifierBlockers.length) {
