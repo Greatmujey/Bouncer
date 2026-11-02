@@ -76,7 +76,9 @@ export async function inspectOutlayerBurnStage({ownerPlan,plan:raw,stage,provide
  require('wrap_code_and_metadata',wrapAccount?.block_hash===hash&&wrapAccount.code_hash===wrapCode&&wrapMeta?.symbol==='wNEAR'&&wrapMeta.decimals===24);
  require('wrap_and_ref_registration',registered(wrapRegistration)&&registered(refWrap)&&registered(refToken));
  require('wrap_balance_known',amount(wrapBalance));
- require('circle_balance_and_policy_unchanged',circleActual==='6907'&&circleTracked==='6907'&&
+ // The original 6,907 atoms plus the verified named-account 6-USDC topup.
+ // Funding does not change or grant the existing Circle policy's caps.
+ require('circle_balance_and_policy_unchanged',circleActual==='6006907'&&circleTracked==='6006907'&&
    equal(circlePolicy,{token:CIRCLE,per_tx_cap:'3000',daily_cap:'6907'})&&circleGrant===true&&circleSpent==='0');
  const keys=ownerKeys?.keys, lookup=pub=>Array.isArray(keys)?keys.find(x=>x.public_key===pub):null;
  const owner=lookup(plan.owner_public_key),existing=lookup(plan.existing_resource_public_key),fund=lookup(plan.funding_public_key),proj=lookup(plan.project_public_key);

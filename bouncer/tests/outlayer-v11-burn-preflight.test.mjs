@@ -25,7 +25,7 @@ function fixture(stage='register-fake'){
  const n=stages.indexOf(stage),configured=n>=5,installed=n>=6,received=n>=4,providerPaid=n>=7;
  const state={chain:'testnet',blockHash:h,ownerNonce:10,ownerAmount:'4000000000000000000000000',vaultAmount:'6000000000000000000000000',vaultStorage:500000,
   fakeCode:'E1E1CJYxT5FjzVSF55QoEWzv6dbqTe2yB6Hpmjks7JJ7',providerCode:'5waWVnt6g3FZfjR6vfYXZzpAi3sZdFy8cK2sLz4EJQDt',
-  providerKeyCount:1,fakeKeyCount:1,circleActual:'6907',circleTracked:'6907',ownerReg:n>=1?reg:null,vaultReg:n>=1?reg:null,
+  providerKeyCount:1,fakeKeyCount:1,circleActual:'6006907',circleTracked:'6006907',ownerReg:n>=1?reg:null,vaultReg:n>=1?reg:null,
   ownerFake:n>=3?'21645':'0',vaultFake:received&&!providerPaid?'10000':'0',tracked:received&&!providerPaid?'10000':'0',native:configured?'20000000000000000000000':'0',
   credit:providerPaid?'10000':'0',providerCredit:providerPaid?'10000':'0',wrapBalance:n===2?'100000000000000':'0',
   fundPolicy:configured?policy(F,'10000'):null,usdPolicy:configured?policy(F,'10000'):null,nativePolicy:configured?policy('native','20000000000000000000000'):null,
@@ -95,7 +95,9 @@ test('stage order, extra full access keys, wrong restricted methods and changed 
  assert.ok((await inspect('fund-provider',low)).blockers.includes('dedicated_keys'));
  const spentKey=fixture('run-project');spentKey.state.keys[2].access_key.permission.FunctionCall.allowance='200000000000000000000000';
  assert.equal((await inspect('run-project',spentKey)).eligible,true,'funding key may have spent gas after its one use');
- const c=fixture();c.state.circleTracked='6906';assert.ok((await inspect('register-fake',c)).blockers.includes('circle_balance_and_policy_unchanged'));
+ const c=fixture();c.state.circleTracked='6006906';assert.ok((await inspect('register-fake',c)).blockers.includes('circle_balance_and_policy_unchanged'));
+ const stale=fixture();stale.state.circleActual='6907';stale.state.circleTracked='6907';
+ assert.ok((await inspect('register-fake',stale)).blockers.includes('circle_balance_and_policy_unchanged'));
  const l=fixture('run-project');l.state.pairLock=true;assert.ok((await inspect('run-project',l)).blockers.includes('exact_ft_locks_clear'));
  const d=fixture('fund-provider');d.state.fundSpent='1';assert.ok((await inspect('fund-provider',d)).blockers.includes('rolling_spend'));
  const v=fixture('fund-provider');v.state.fundVerdict=[false,'payee not allowed'];assert.ok((await inspect('fund-provider',v)).blockers.includes('funding_payee_and_policy_verdict'));
