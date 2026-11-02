@@ -1,11 +1,13 @@
 # Experimental PayPerCall forwarder — do not deploy
 
 This is **experimental code**, not a production integration or an approval to
-spend. It is unaudited, has not run against the real PayPerCall contract or
+spend. It is unaudited, has not run against the deployed PayPerCall contract or
 Circle, and has no owner setup or payment runner. No independent provider
-delivery has been shown. The [isolated nearcore run](https://github.com/Greatmujey/Bouncer/actions/runs/41474554586)
-exercised this bridge using V11, an example mock FT and a tiny escrow stand-in;
-the stand-in is not PayPerCall and the mock token is not Circle.
+delivery has been shown. An [isolated nearcore run](https://github.com/Greatmujey/Bouncer/actions/runs/41474554586)
+exercised this bridge with an example mock FT and a tiny escrow stand-in. A
+[later isolated run](https://github.com/Greatmujey/Bouncer/actions/runs/41476520726)
+used the same mock FT with PayPerCall **compiled from pinned published source**;
+that local build is not proof of the deployed contract's code identity.
 
 ## The hypothesis
 
@@ -27,8 +29,8 @@ experiment generates one immutable WASM contract for one reviewed order:
    or later plain refund reaches the forwarder, not V11. `return_tokens` asks
    the token to send a bounded amount **only** to the fixed vault via
    `ft_transfer_call`, so V11's receiver hook can credit the balance. A
-   `claim` call targets only the fixed escrow and token. Neither claim behavior
-   nor an actual escrow has been validated by these tests.
+   `claim` call targets only the fixed escrow and token. Claim behavior has
+   been tested against a locally source-built escrow, not the deployed one.
 
 These are separate receiver-scoped keys because one NEAR function-call key
 cannot authorize two different receivers. The earlier synthetic design reused
@@ -87,8 +89,20 @@ recovery budget need actual runtime and token checks.
   and replay rejection, and exercised a 40-unit immediate return plus a later
   60-unit plain refund routed through the forwarder to V11. The final mock-token
   balance and tracked ledger were 100, with 100 conservative rolling spend.
-  The 40/60 escrow is a hard-coded stand-in; this is **not** PayPerCall, Circle
-  or seller fulfillment, and it did not test actual escrow claim behavior.
+  The 40/60 escrow was a hard-coded stand-in and did not test claim behavior.
+- [Nearcore run 41476520726](https://github.com/Greatmujey/Bouncer/actions/runs/41476520726)
+  at commit `61c1bbb` subsequently built PayPerCall from pinned source and its
+  lockfile, then ran the forwarder and V11 with the example mock FT. It checked
+  service registration, storage credit, open, partial return, rejection, a
+  failed payout recorded as `owed`, `claim`, and native storage-credit return.
+  A **temporary sandbox-only key** was injected and deleted to unregister the
+  empty mock-FT account and force the payout failure; the forwarder was checked
+  keyless again before rejection and claim. The claim returned 60 mock units,
+  bringing actual and tracked V11 balances back to 100 with rolling spend still
+  100. This artificial fault is not normal testnet behavior. No Circle token,
+  deployed escrow or seller delivery was involved. The source-built artifact
+  is not an independent reproducible-build or audit claim, and the detailed
+  sandbox log was not available in this environment.
 
 ## Unresolved risks and prerequisites
 
@@ -111,9 +125,10 @@ recovery budget need actual runtime and token checks.
   permissionless `refund_expired`; an appropriately authorized external caller
   would have to do that after verifying the exact call and deadline.
 - Before any live use, the new code, promises, storage and keyless recovery
-  require further adversarial review and actual runtime validation. A fresh
-  public operator and an explicit, separate live-test approval are also needed.
-  Nothing here uses real money or contacts a provider.
+  require further adversarial review and validation against the real contracts.
+  A compatible independent operator, a recoverable funded owner and documented
+  testnet-only scope are also needed. The existing user authorization covers
+  scoped testnet work, not real-money spending. These tests contact no provider.
 
 ## Local tests
 

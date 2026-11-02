@@ -32,9 +32,14 @@ The contract's code hash and access-key counts are observations, not an audit
 or proof that the code equals the referenced source. `payment_ready` is always
 false.
 
-The shell used for development could not reach the public NEAR RPC, so no live
-catalog observation by this inspector is claimed. A separate operator response
-reported no public Circle-test-USDC service at the time it was written.
+A [read-only testnet snapshot](https://github.com/Greatmujey/Bouncer/actions/runs/41476638933)
+on 2 November 2026 at block `HmhKfsNMEjRYqQ5SBeaqVTWgQ4n2sQsiVJtXaNhLgeeD`
+found two readable services, no Circle candidate, and no Circle storage
+registration for the escrow. The same RPC view showed one full-access escrow
+key and code hash `7idSVVpK69Loc9KhVuCm4KPG33xaQd8mtC6boq5L49q7`; these are
+point-in-time observations, not evidence that the deployed code equals the
+published source or cannot change. Conditions can change; rerun the inspector
+before considering any testnet transaction.
 
 ## Check a previously observed call
 
@@ -79,12 +84,13 @@ method is a **new, immutable one-shot forwarder**: the locked vault would pay
 that forwarder by its existing exact `ft_transfer`; the forwarder would open
 one fixed escrow request, claim any owed payout as the payer, then return
 leftover tokens to the vault with `ft_transfer_call`. An [offline experimental
-forwarder](../experiments/paypercall-forwarder/README.md) now compiles and has
-passed a [disposable nearcore test](https://github.com/Greatmujey/Bouncer/actions/runs/41474554586)
-using a mock token and a tiny stand-in. It has not been tested against actual
-PayPerCall or Circle and is not safe for live use. It would add a new contract,
-token registration and native storage costs; PayPerCall
-would see the forwarder rather than the
+forwarder](../experiments/paypercall-forwarder/README.md) has passed disposable
+nearcore tests using a mock token, first with a tiny stand-in and then with
+[PayPerCall built from pinned published source](https://github.com/Greatmujey/Bouncer/actions/runs/41476520726).
+The latter included an artificially failed refund and subsequent `claim`. It
+has not been tested against the deployed PayPerCall contract or Circle and is
+not safe for live use. It would add a new contract, token registration and
+native storage costs; PayPerCall would see the forwarder rather than the
 vault as payer. The vault's allowlisted payee would be the forwarder, so the
 final escrow/request restrictions would depend on the new contract's code and
 immutable setup, not V11 alone. Its expiry, one-shot behavior, races, claims,

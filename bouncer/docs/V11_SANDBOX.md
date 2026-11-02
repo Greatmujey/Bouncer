@@ -1,6 +1,24 @@
 # V11 nearcore sandbox validation (opt-in)
 
-**Latest forwarder result:** [run 41474554586](https://github.com/Greatmujey/Bouncer/actions/runs/41474554586)
+**Latest source-built escrow result:** [run 41476520726](https://github.com/Greatmujey/Bouncer/actions/runs/41476520726)
+at commit `61c1bbb` passed a disposable nearcore test using PayPerCall compiled
+from pinned published source and lockfile, V11, the generated forwarder, and
+nearcore's example mock FT. The test checked local service registration and
+prepaid storage, the 40-unit immediate return, escrow rejection, an induced
+failed payout recorded as `owed`, forwarder `claim`, and the 60-unit late return
+through the V11 hook. Actual and tracked mock-token balances ended at 100, while
+rolling spend remained 100. It also tested native storage-credit recovery and
+the zero- versus one-yocto owner guard. To induce the payout failure, the test
+injected a **temporary sandbox-only full-access key** into the forwarder to
+unregister its empty mock-FT account, then deleted the key and rechecked the
+forwarder was keyless before the rejection and claim. This is an artificial
+fault, not an ordinary deployed-chain operation. No actual Circle, deployed
+escrow, operator endpoint or independent seller delivery was involved. The
+local build does not prove deployed-code identity, reproducibility or audit.
+GitHub reports the job/steps successful; detailed log redirects were not
+accessible from this shell.
+
+**Previous forwarder stand-in result:** [run 41474554586](https://github.com/Greatmujey/Bouncer/actions/runs/41474554586)
 at commit `81faeb6dafefb848dd18b03a79656ca416952336` passed the separate
 [experimental forwarder](../experiments/paypercall-forwarder/README.md) scenario
 on disposable nearcore. The generated keyless forwarder, V11 vault, two distinct
