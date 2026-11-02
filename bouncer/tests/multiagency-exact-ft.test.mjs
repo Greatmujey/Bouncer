@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import nearApi from 'near-api-js';
 import { prepareMultiAgencyExactFt, assertPreparedExactFt, assertMultiAgencyExactFtView, verifyMultiAgencyExactFtPayment } from '../agent/multiagency-exact-ft.mjs';
+import { preflightExactFt } from '../agent/exact-ft-runtime.mjs';
 import { CIRCLE_TESTNET_USDC as TOKEN } from '../scripts/circle-testnet-setup.mjs';
 import { MULTIAGENCY_TREASURY as TREASURY } from '../agent/multiagency-readiness.mjs';
 import { mockGuardedPayment, mockHash } from './mock-guarded-payment.mjs';
@@ -87,6 +88,39 @@ test('shared verifier rejects malformed and non-Circle-testnet prepared intents 
     const p = prepare(); change(p); p.review_hash = crypto.createHash('sha256').update(JSON.stringify(p.review)).digest('hex');
     p.owner_call.args.review_hash = p.review_hash; assert.throws(() => assertPreparedExactFt(p));
   }
+});
+
+test('MultiAgency review cannot describe different transfer terms, even after a self-consistent rehash', async () => {
+  const changes = [
+    p => { p.owner_call.args.payee = 'attacker.testnet'; },
+    p => { p.owner_call.args.amount = '3000001'; },
+    p => { p.owner_call.args.memo = 'ma-ffffffffff'; },
+    p => { p.review.quote.payment.receiver = 'attacker.testnet'; },
+    p => { p.review.quote.payment.amount = '3000001'; p.owner_call.args.amount = '3000001'; },
+    p => { p.review.goal.accept_unsigned_quote_and_memo_risk = false; },
+    p => { p.review.quote.extra = 'unreviewed'; },
+    p => { p.review.expires_at_ms = '1900000000000'; p.owner_call.args.expires_at_ms = '1900000000000'; },
+    p => { p.review.protocol = 'unknown'; },
+  ];
+  for (const change of changes) {
+    const p = prepare(); change(p);
+    // Give the modified public review a matching hash and derived ID. This
+    // specifically tests the binding to calldata, not just hash integrity.
+    p.review_hash = crypto.createHash('sha256').update(JSON.stringify(p.review)).digest('hex');
+    p.intent_id = `ma-${p.review_hash.slice(0, 60)}`;
+    p.owner_call.args.review_hash = p.review_hash; p.owner_call.args.intent_id = p.intent_id;
+    p.agent_call.args.intent_id = p.intent_id;
+    assert.throws(() => assertPreparedExactFt(p), /reviewed provider terms/);
+    let rpcTouched = false;
+    const provider = { async viewNodeStatus() { rpcTouched = true; throw Error('unexpected RPC'); } };
+    await assert.rejects(preflightExactFt({ prepared: p, publicKey: key, provider }), /reviewed provider terms/);
+    assert.equal(rpcTouched, false);
+  }
+  // A wholly consistent new review is not proof it was approved. The caller
+  // must compare it with the retained original owner-controlled commitment.
+  const original = prepare(), changed = prepare({ goal: { ...goal, brief: `${goal.brief} Add an appendix.` } });
+  assert.doesNotThrow(() => assertPreparedExactFt(changed));
+  assert.notEqual(changed.review_hash, original.review_hash);
 });
 
 test('the owner-pinned on-chain view must match every reviewed immutable field and authority revision', () => {

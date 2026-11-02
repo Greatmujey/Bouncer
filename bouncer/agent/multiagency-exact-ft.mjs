@@ -11,6 +11,8 @@ import { isTransactionHash } from '../shared/direct-payment-settlement.mjs';
 import { isTestnetAccount } from '../shared/account-id.mjs';
 import { CIRCLE_TESTNET_USDC } from '../scripts/circle-testnet-setup.mjs';
 import { validateMultiAgencyGoal, validateMultiAgencyQuote } from './multiagency-research.mjs';
+import { validateSvalinProGoal } from './svalin-pro-session.mjs';
+import { SVALIN_NETWORK, SVALIN_PAYEE } from './svalin-pro-readiness.mjs';
 
 const GAS = '200000000000000';
 const INIT_LOG = 'BOUNCER exact FT intent consumed; transfer initiated';
@@ -89,6 +91,40 @@ function success(status) {
   return record(status) && status.Failure === undefined && typeof status.SuccessValue === 'string' && status.SuccessReceiptId === undefined;
 }
 
+/** Reconstruct the public transfer fields from each supported review format.
+ * Hashing a review alone does NOT show that separate calldata matches it. This
+ * check also does not authenticate an unsigned seller or a human decision;
+ * callers must still reconstruct from their original owner-controlled goal and
+ * durable reservation, and compare against the retained trusted commitment. */
+function assertReviewTerms(prepared) {
+  const { review, review_hash: hash, intent_id: id } = prepared, a = prepared.owner_call.args;
+  try {
+    if (review.protocol === 'bouncer:multiagency-exact-ft:v1') {
+      if (!fields(review, ['protocol', 'goal', 'quote', 'agent_public_key', 'expires_at_ms'])) throw Error();
+      const goal = validateMultiAgencyGoal(review.goal);
+      const q = validateMultiAgencyQuote(goal, review.quote, { nowMs: 0, allowExpired: true });
+      const cutoff = Date.parse(q.expires_at) - 5 * 60_000;
+      if (!Number.isSafeInteger(cutoff) || cutoff <= 0 || review.expires_at_ms !== String(cutoff) ||
+          id !== `ma-${hash.slice(0, 60)}` || a.expected_token !== q.payment.token || a.payee !== q.payment.receiver ||
+          a.amount !== goal.amount || a.amount !== q.payment.amount || a.memo !== q.code || a.memo !== q.payment.memo) throw Error();
+    } else if (review.protocol === 'bouncer:svalin-pro-exact-ft:v1') {
+      if (!fields(review, ['protocol', 'goal', 'checkout', 'code_commitment', 'agent_public_key', 'expires_at_ms'])) throw Error();
+      validateSvalinProGoal(review.goal);
+      const c = review.checkout;
+      if (!fields(c, ['network', 'token', 'payee', 'plan', 'amount_atoms', 'expires_at']) ||
+          c.network !== SVALIN_NETWORK || c.token !== CIRCLE_TESTNET_USDC || c.payee !== SVALIN_PAYEE || c.plan !== 'month' ||
+          typeof c.amount_atoms !== 'string' || !/^500[0-9]{4}$/.test(c.amount_atoms) ||
+          BigInt(c.amount_atoms) <= 5_000_000n || BigInt(c.amount_atoms) > 5_009_999n ||
+          typeof review.code_commitment !== 'string' || !/^[a-f0-9]{64}$/.test(review.code_commitment)) throw Error();
+      const expires = typeof c.expires_at === 'string' ? Date.parse(c.expires_at) : NaN, cutoff = expires - 5 * 60_000;
+      if (!Number.isSafeInteger(expires) || new Date(expires).toISOString() !== c.expires_at ||
+          !Number.isSafeInteger(cutoff) || cutoff <= 0 || review.expires_at_ms !== String(cutoff) ||
+          id !== `sv-${hash.slice(0, 60)}` || a.expected_token !== c.token || a.payee !== c.payee ||
+          a.amount !== c.amount_atoms || a.memo !== `bouncer-svalin:${hash.slice(0, 32)}`) throw Error();
+    } else throw Error();
+  } catch { throw new Error('reviewed provider terms do not match the exact FT action'); }
+}
+
 /** Execution receipt block, used to pin the historic contract identity/view. */
 export function multiAgencyExactExecutionBlock(result, vault) {
   const children = result?.transaction_outcome?.outcome?.receipt_ids;
@@ -124,6 +160,7 @@ export function assertPreparedExactFt(prepared) {
     throw new Error('prepared exact FT intent is internally inconsistent');
   }
   normalizeAgentKey(review.agent_public_key);
+  assertReviewTerms(prepared);
   return prepared;
 }
 

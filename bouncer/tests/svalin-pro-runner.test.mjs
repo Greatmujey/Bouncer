@@ -9,6 +9,7 @@ import { FileJournal } from '../agent/procurement.mjs';
 import { prepareSvalinProSession, reserveSvalinProOnce, prepareSvalinProExactFt } from '../agent/svalin-pro-session.mjs';
 import { paySvalinProExactFtOnce, recoverSvalinProPayment, activateSvalinProOnce, inspectSvalinProActivation, requestSvalinProRiskOnce } from '../agent/svalin-pro-runner.mjs';
 import { preflightExactFt } from '../agent/exact-ft-runtime.mjs';
+import { assertPreparedExactFt } from '../agent/multiagency-exact-ft.mjs';
 import { CIRCLE_TESTNET_USDC as TOKEN } from '../scripts/circle-testnet-setup.mjs';
 import { SVALIN_ORIGIN, SVALIN_PAYEE } from '../agent/svalin-pro-readiness.mjs';
 import { mockGuardedPayment, mockHash } from './mock-guarded-payment.mjs';
@@ -178,6 +179,50 @@ test('synthetic complete path fences reservation, one exact payment, activation 
     f.reopen(); assert.equal((await recover(f)).settlement.tx_hash, paid.settlement.tx_hash);
     assert.equal((await activate(f)).activation_posts, 0); assert.equal((await risk(f)).paid_requests, 0);
     await assert.rejects(pay(f), /already recorded/); assert.equal(f.sends, 1); assert.equal(f.activations, 1); assert.equal(f.paidRequests, 1);
+  } finally { f.close(); }
+});
+
+test('Svalin review and calldata must agree on provider, amount, memo and expiry before any RPC', async () => {
+  const f = fixture(); try {
+    await f.reserveAndPin(); assert.doesNotThrow(() => assertPreparedExactFt(f.prepared));
+    const changes = [
+      p => { p.owner_call.args.payee = 'attacker.testnet'; },
+      p => { p.owner_call.args.amount = '5004218'; },
+      p => { p.review.checkout.amount_atoms = '5004218'; },
+      p => { p.review.checkout.payee = 'attacker.testnet'; p.owner_call.args.payee = 'attacker.testnet'; },
+      p => { p.review.checkout.network = 'near:mainnet'; },
+      p => { p.review.checkout.plan = 'year'; },
+      p => { p.review.code_commitment = 'not-a-commitment'; },
+      p => { p.review.goal.accept_exact_amount_matching_risk = false; },
+      p => { p.review.expires_at_ms = '1900000000000'; p.owner_call.args.expires_at_ms = '1900000000000'; },
+      p => { p.review.extra = 'unreviewed'; },
+      p => { p.review.protocol = 'unknown'; },
+    ];
+    for (const change of changes) {
+      const p = structuredClone(f.prepared); change(p);
+      p.review_hash = crypto.createHash('sha256').update(JSON.stringify(p.review)).digest('hex');
+      p.intent_id = `sv-${p.review_hash.slice(0, 60)}`;
+      p.owner_call.args.review_hash = p.review_hash; p.owner_call.args.intent_id = p.intent_id;
+      p.owner_call.args.memo = `bouncer-svalin:${p.review_hash.slice(0, 32)}`; p.agent_call.args.intent_id = p.intent_id;
+      assert.throws(() => assertPreparedExactFt(p), /reviewed provider terms/);
+      let rpcTouched = false;
+      const provider = { async viewNodeStatus() { rpcTouched = true; throw Error('unexpected RPC'); } };
+      await assert.rejects(preflightExactFt({ prepared: p, publicKey: f.publicKey, provider }), /reviewed provider terms/);
+      assert.equal(rpcTouched, false); assert.equal(f.sends, 0);
+    }
+    const wrongMemo = structuredClone(f.prepared); wrongMemo.owner_call.args.memo = 'different';
+    assert.throws(() => assertPreparedExactFt(wrongMemo), /reviewed provider terms/);
+    // A new, consistent code commitment cannot be authenticated without the
+    // original encrypted session; shape and hashing do not prove approval.
+    const differentCode = structuredClone(f.prepared); differentCode.review.code_commitment = 'a'.repeat(64);
+    differentCode.review_hash = crypto.createHash('sha256').update(JSON.stringify(differentCode.review)).digest('hex');
+    differentCode.intent_id = `sv-${differentCode.review_hash.slice(0, 60)}`;
+    differentCode.owner_call.args.review_hash = differentCode.review_hash;
+    differentCode.owner_call.args.intent_id = differentCode.intent_id;
+    differentCode.owner_call.args.memo = `bouncer-svalin:${differentCode.review_hash.slice(0, 32)}`;
+    differentCode.agent_call.args.intent_id = differentCode.intent_id;
+    assert.doesNotThrow(() => assertPreparedExactFt(differentCode));
+    assert.notEqual(differentCode.review_hash, f.prepared.review_hash);
   } finally { f.close(); }
 });
 
