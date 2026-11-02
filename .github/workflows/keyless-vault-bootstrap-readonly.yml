@@ -22,10 +22,20 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22'
-      - name: Install lockfile and test pinned read-only checks
+      - name: Retrieve the public hash-pinned V11 artifact for offline tests
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api repos/Greatmujey/Bouncer/git/blobs/c67c70401dc733a0905e79258cc8169c2e6b5210 --jq .content | base64 -d > "$RUNNER_TEMP/v11-testnet.wasm"
+          printf '%s  %s\n' '1acf931c07a530257999478c121193863ecf7201d357812a44b4d61c16a77921' "$RUNNER_TEMP/v11-testnet.wasm" | sha256sum -c -
+          test "$(wc -c < "$RUNNER_TEMP/v11-testnet.wasm")" -eq 536325
+      - name: Install lockfile and test pinned read-only and offline guards
+        env:
+          BOUNCER_V11_WASM: ${{ runner.temp }}/v11-testnet.wasm
         run: |
           npm ci --ignore-scripts --no-audit --no-fund
-          node --test tests/keyless-vault-bootstrap-readiness.test.mjs tests/circle-owner-registration.test.mjs tests/circle-owner-acquisition*.test.mjs
+          node --test tests/keyless-vault-bootstrap*.test.mjs tests/circle-owner-registration.test.mjs tests/circle-owner-acquisition*.test.mjs
       - name: Inspect new direct-child vault without keys or transactions
         run: |
           set -euo pipefail
