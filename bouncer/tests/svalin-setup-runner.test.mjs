@@ -116,6 +116,7 @@ test('unsafe or unavailable snapshot blocks before signing; signer substitution 
   try {
     await f.init();
     for (const mutate of [s => { s.protocol.protocol_version = 87; }, s => { s.presence.exists = true; },
+      s => { s.protocol.runtime_config.wasm_config.universal_accounts = false; },
       s => { s.ownerKey.permission = { FunctionCall: {} }; }, s => { s.ownerKey.nonce = BigInt(Number.MAX_SAFE_INTEGER); },
       s => { s.ownerUsdc = '1'; }, s => { s.failures.add('ownerKey'); }]) {
       const h = harness(f, 0); mutate(h.s);
@@ -140,7 +141,7 @@ test('unsafe or unavailable snapshot blocks before signing; signer substitution 
 });
 
 test('post-sign state drift fences the original hash and cannot trigger a send or replacement', async () => {
-  for (const drift of ['nonce', 'registration', 'protocol']) {
+  for (const drift of ['nonce', 'registration', 'protocol', 'wasm-feature']) {
     const f = fixture();
     try {
       await f.init(); let h;
@@ -149,6 +150,7 @@ test('post-sign state drift fences the original hash and cannot trigger a send o
         if (drift === 'nonce') h.s.ownerKey.nonce += 1n;
         if (drift === 'registration') h.s.vaultRegistration = { total: '1', available: '0' };
         if (drift === 'protocol') h.s.protocol.protocol_version = 87;
+        if (drift === 'wasm-feature') h.s.protocol.runtime_config.wasm_config.universal_accounts = false;
         return result;
       } });
       const result = await runSvalinSetupStageOnce(h.options);

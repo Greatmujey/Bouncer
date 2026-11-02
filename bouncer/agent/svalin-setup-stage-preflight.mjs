@@ -13,7 +13,8 @@
 import { isDeepStrictEqual } from 'node:util';
 import { inspectSvalinSetupJournal } from './svalin-setup-journal.mjs';
 import { verifySvalinSetupPlan } from './svalin-setup-evidence.mjs';
-import { inspectSvalinSetupPrerequisites, MIN_V11_TESTNET_PROTOCOL } from './svalin-setup-preflight.mjs';
+import { inspectSvalinSetupPrerequisites, MIN_V11_TESTNET_PROTOCOL, reportedV11WasmFeatures,
+  selectedV11WasmFeaturesEnabled } from './svalin-setup-preflight.mjs';
 import { SVALIN_TRIAL_MAX_ATOMS } from './svalin-pro-preflight.mjs';
 import { SVALIN_PAYEE } from './svalin-pro-readiness.mjs';
 import { CIRCLE_TESTNET_USDC } from '../scripts/circle-testnet-setup.mjs';
@@ -181,6 +182,7 @@ export async function inspectSvalinSetupStage({ plan, trustedReviewHash, ownerPu
   put('testnet_protocol_and_storage_cost', ['protocol'], () => reads.protocol.value?.chain_id === 'testnet' &&
     Number.isSafeInteger(reads.protocol.value?.protocol_version) && reads.protocol.value.protocol_version >= MIN_V11_TESTNET_PROTOCOL &&
     amount(reads.protocol.value?.runtime_config?.storage_amount_per_byte) > 0n);
+  put('v11_selected_wasm_features_enabled', ['protocol'], () => selectedV11WasmFeaturesEnabled(reads.protocol.value));
   const cost = amount(reads.protocol.value?.runtime_config?.storage_amount_per_byte);
   put('owner_full_access_key', ['owner_key'], () => atBlock('owner_key') && reads.owner_key.value.permission === 'FullAccess');
   put('owner_nonce_safely_represented', ['owner_key'], () => atBlock('owner_key') && pinnedAccessKeyNonce(reads.owner_key.value.nonce) !== null);
@@ -257,6 +259,7 @@ export async function inspectSvalinSetupStage({ plan, trustedReviewHash, ownerPu
     observed_protocol_version: Number.isSafeInteger(reads.protocol.value?.protocol_version) ? reads.protocol.value.protocol_version : null,
     observed_owner_nonce: reads.owner_key.available && atBlock('owner_key') ? pinnedAccessKeyNonce(reads.owner_key.value?.nonce)?.toString() ?? null : null,
     v11_minimum_protocol_version: MIN_V11_TESTNET_PROTOCOL,
+    observed_v11_selected_wasm_features: reportedV11WasmFeatures(reads.protocol.value),
     estimated_owner_available_yocto: estimatedOwnerAvailable?.toString() ?? null,
     estimated_vault_available_yocto: estimatedVaultAvailable?.toString() ?? null,
     checks, blockers, ...flags(), current_state_is_not_authorization: true,

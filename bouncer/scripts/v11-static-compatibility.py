@@ -3,8 +3,8 @@
 
 Inputs are local and digest-pinned. WABT validates the module with selected
 features disabled; its reported host-import signatures are compared with
-nearcore 2.14.0's pinned import declarations and selected protocol diffs.
-No RPC, seller, signatures, compilation or transactions. This is NOT a
+one of two pinned nearcore source profiles' import declarations and selected
+protocol diffs. No RPC, seller, signatures, compilation or transactions. This is NOT a
 nearcore execution, consensus/fee check, complete validator, code audit, or
 proof that the artifact was built from this repository's Rust source.
 """
@@ -33,6 +33,22 @@ SOURCE_SHA256 = {
     'core/parameters/res/runtime_configs/84.yaml': '8f860426b89f9d681b40187ede410563ef3d1503a8f360261b83a064a26f7792',
     'core/parameters/res/runtime_configs/85.yaml': 'fa4169a67850342c71a517239e5882eb4987c1b32d4b1055c3cb6798bac10c2b',
     'core/parameters/res/runtime_configs/88.yaml': '38ac9c614478e36ad4db676f995d1ca68502123f29e1f29ccebd3863406c24b0',
+}
+# The public testnet status endpoint reported this older rc.5 commit on
+# 2026-11-02. Its selected 87/88 diffs differ from the final 2.14.0 release:
+# it enables universal accounts at 87, not 88. A status response does not
+# attest the node binary, all validators or the network's runtime config.
+TESTNET_RC5_COMMIT = 'b7b4737cab46f17a6daa2ed694d7aebbd204363a'
+TESTNET_RC5_SOURCE_SHA256 = {
+    **SOURCE_SHA256,
+    'core/parameters/res/runtime_configs/87.yaml': 'bffdc7c3a54df7b12ca344f75d28e3844e60f6e252ed7c304f650e0727c1a36c',
+    'core/parameters/res/runtime_configs/88.yaml': '0c6d8a1d013a553c98260aaf51d2a8aff1f54dd925a7e3b10f5d064256c796f7',
+    'core/parameters/src/view.rs': '232d7a2b69b2df7b94505073395524968d7b262afc9c73d577197b7d8959ab8d',
+    'core/primitives-core/src/version.rs': 'e3cdb3e17d1b9d76ec824c1d77f4cb7e492d3be0385132a3cbeffb5a6cead4a2',
+}
+SOURCE_PROFILES = {
+    'release-2.14.0': (NEARCORE_COMMIT, SOURCE_SHA256, 88),
+    'testnet-rc5-20261102': (TESTNET_RC5_COMMIT, TESTNET_RC5_SOURCE_SHA256, 87),
 }
 EXPECTED_GATE_COUNTS = {'ungated_declaration': 33, 'global_contract_host_fns': 4,
                         'gas_key_host_fns': 3, 'universal_accounts': 1}
@@ -117,10 +133,12 @@ def compare_host_abi(imports, declarations):
     return dict(sorted(gates.items()))
 
 
-def check_selected_config(files: dict[str, str]) -> dict[str, int]:
+def check_selected_config(files: dict[str, str], universal_accounts_version: int = 88) -> dict[str, int]:
+    if universal_accounts_version not in (87, 88):
+        raise ValueError('unrecognized pinned universal-accounts feature version')
     prefixes = 'core/parameters/res/runtime_configs/'
     flags = {'global_contract_host_fns': 78, 'reftypes_bulk_memory': 84,
-             'gas_key_host_fns': 85, 'universal_accounts': 88}
+             'gas_key_host_fns': 85, 'universal_accounts': universal_accounts_version}
     for base in ('parameters.yaml', 'parameters_testnet.yaml'):
         text = files[prefixes + base]
         for name in flags:
@@ -130,7 +148,28 @@ def check_selected_config(files: dict[str, str]) -> dict[str, int]:
         text = files[f'{prefixes}{version}.yaml']
         if not re.search(rf'^{name}:\s*\{{\s*old:\s*false,\s*new:\s*true\s*\}}', text, re.M):
             raise ValueError('pinned nearcore protocol diff does not match expected feature flags')
+    # For the rc.5 profile, inspect its next selected diff too; otherwise a
+    # later explicit reversal at 88 would invalidate the 87-only indication.
+    if universal_accounts_version == 87 and re.search(r'^universal_accounts\s*:', files[prefixes + '88.yaml'], re.M):
+        raise ValueError('selected nearcore 88 diff changes universal-accounts again')
     return flags
+
+
+def check_universal_feature_version(source: str, expected: int) -> None:
+    found = re.findall(r'ProtocolFeature::UniversalAccounts\s*=>\s*(\d+)\s*,', source)
+    if found != [str(expected)]:
+        raise ValueError('pinned nearcore universal-accounts feature version differs')
+
+
+def check_selected_protocol_view_fields(source: str) -> list[str]:
+    """Check pinned source declarations and assignments, not live RPC behavior."""
+    names = ('global_contract_host_fns', 'reftypes_bulk_memory', 'gas_key_host_fns', 'universal_accounts')
+    patterns = [r'^\s*pub\s+wasm_config:\s*VMConfigView\s*,\s*$']
+    patterns += [rf'^\s*pub\s+{name}:\s*bool\s*,\s*$' for name in names]
+    patterns += [rf'^\s*{name}:\s*config\.{name}\s*,\s*$' for name in names]
+    if any(len(re.findall(pattern, source, re.M)) != 1 for pattern in patterns):
+        raise ValueError('selected protocol view fields missing or changed')
+    return list(names)
 
 
 def run_wabt(name: str, args: list[str], *, expected: int = 0) -> subprocess.CompletedProcess:
@@ -145,13 +184,20 @@ def run_wabt(name: str, args: list[str], *, expected: int = 0) -> subprocess.Com
     return result
 
 
-def inspect(wasm_path: pathlib.Path, source_dir: pathlib.Path) -> dict:
+def inspect(wasm_path: pathlib.Path, source_dir: pathlib.Path, profile: str = 'release-2.14.0') -> dict:
+    if profile not in SOURCE_PROFILES:
+        raise ValueError('unrecognized pinned nearcore source profile')
+    source_commit, source_hashes, universal_version = SOURCE_PROFILES[profile]
     data = read_pinned(wasm_path, EXPECTED_WASM_SHA256, EXPECTED_WASM_SIZE)
     if len(data) != EXPECTED_WASM_SIZE:
         raise ValueError('unexpected exact WASM size')
     texts = {name: read_pinned(source_dir / name, digest, 2_000_000).decode('utf-8', errors='strict')
-             for name, digest in SOURCE_SHA256.items()}
-    versions = check_selected_config(texts)
+             for name, digest in source_hashes.items()}
+    versions = check_selected_config(texts, universal_version)
+    view_fields = None
+    if profile == 'testnet-rc5-20261102':
+        check_universal_feature_version(texts['core/primitives-core/src/version.rs'], universal_version)
+        view_fields = check_selected_protocol_view_fields(texts['core/parameters/src/view.rs'])
     if run_wabt('wasm-validate', ['--version']).stdout.strip() != WABT_VERSION:
         raise ValueError('unexpected WABT version')
     # Source nearcore 2.14.0 disables SIMD and multi-value, while allowing
@@ -175,12 +221,12 @@ def inspect(wasm_path: pathlib.Path, source_dir: pathlib.Path) -> dict:
     gates = compare_host_abi(imports, declarations)
     if len(imports) != 41 or gates != dict(sorted(EXPECTED_GATE_COUNTS.items())):
         raise ValueError('host import inventory differs from the exact reviewed artifact')
-    return {
+    report = {
         'status': 'STATIC_COMPATIBILITY_INDICATION_ONLY',
         'artifact_sha256': EXPECTED_WASM_SHA256,
         'artifact_bytes': len(data),
-        'nearcore_source_commit': NEARCORE_COMMIT,
-        'nearcore_pinned_source_sha256': SOURCE_SHA256,
+        'nearcore_source_commit': source_commit,
+        'nearcore_pinned_source_sha256': source_hashes,
         'wabt_version': WABT_VERSION,
         'wabt_validation': {'simd_and_multivalue_disabled': 'PASS',
                             'bulk_memory_also_disabled': 'FAILS_ON_MEMORY_COPY_AS_EXPECTED'},
@@ -194,17 +240,24 @@ def inspect(wasm_path: pathlib.Path, source_dir: pathlib.Path) -> dict:
         'source_to_binary_provenance_verified': False,
         'independent_security_audit': False,
         'deployment_or_transaction_performed': False,
-        'scope': 'static checks of one pinned WASM and selected nearcore 2.14.0 source files; not runtime compatibility or an audit',
+        'scope': ('static checks of one pinned WASM and selected nearcore 2.14.0 source files; not runtime compatibility or an audit'
+                  if profile == 'release-2.14.0' else
+                  'static checks of one pinned WASM and selected testnet rc.5 source files; not runtime compatibility or an audit'),
     }
+    if view_fields is not None:
+        report['nearcore_selected_protocol_view_boolean_fields'] = view_fields
+    return report
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--wasm', required=True, type=pathlib.Path, help='exact recovered 536,325-byte V11 WASM')
-    parser.add_argument('--nearcore-dir', required=True, type=pathlib.Path, help='local pinned nearcore 2.14.0 source tree')
+    parser.add_argument('--nearcore-dir', required=True, type=pathlib.Path, help='local source files for the selected pinned profile')
+    parser.add_argument('--source-profile', choices=tuple(SOURCE_PROFILES), default='release-2.14.0',
+                        help='pinned source profile (default: release-2.14.0)')
     args = parser.parse_args()
     try:
-        report = inspect(args.wasm, args.nearcore_dir)
+        report = inspect(args.wasm, args.nearcore_dir, args.source_profile)
     except (ValueError, UnicodeError, OSError) as exc:
         print(f'Static compatibility check blocked: {exc}', file=sys.stderr)
         return 1

@@ -77,6 +77,43 @@ class HostAbiTests(unittest.TestCase):
             with self.assertRaises(ValueError, msg=key):
                 mod.check_selected_config(altered)
 
+    def test_rc5_profile_checks_feature_at_87_and_rejects_a_later_reversal(self):
+        root = 'core/parameters/res/runtime_configs/'
+        names = {'global_contract_host_fns': 78, 'reftypes_bulk_memory': 84,
+                 'gas_key_host_fns': 85, 'universal_accounts': 87}
+        base = ''.join(f'{name}: false\n' for name in names)
+        files = {root + 'parameters.yaml': base, root + 'parameters_testnet.yaml': base,
+                 root + '88.yaml': '# other independent changes\n'}
+        files.update({root + str(version) + '.yaml': f'{name}: {{ old: false, new: true }}\n'
+                      for name, version in names.items()})
+        self.assertEqual(mod.check_selected_config(files, 87), names)
+        changed = dict(files)
+        changed[root + '88.yaml'] += 'universal_accounts: { old: true, new: false }\n'
+        with self.assertRaises(ValueError):
+            mod.check_selected_config(changed, 87)
+        with self.assertRaises(ValueError):
+            mod.check_selected_config(files, 86)
+        mod.check_universal_feature_version('ProtocolFeature::UniversalAccounts => 87,', 87)
+        for source in ('ProtocolFeature::UniversalAccounts => 88,', '',
+                       'ProtocolFeature::UniversalAccounts => 87,\nProtocolFeature::UniversalAccounts => 87,'):
+            with self.assertRaises(ValueError):
+                mod.check_universal_feature_version(source, 87)
+        with self.assertRaises(ValueError):
+            mod.inspect(Path('/not-used'), Path('/not-used'), 'unrecognized')
+
+    def test_selected_protocol_view_must_declare_and_populate_all_boolean_flags(self):
+        names = ('global_contract_host_fns', 'reftypes_bulk_memory', 'gas_key_host_fns', 'universal_accounts')
+        source = 'pub wasm_config: VMConfigView,\n'
+        source += ''.join(f'pub {name}: bool,\n' for name in names)
+        source += ''.join(f'{name}: config.{name},\n' for name in names)
+        self.assertEqual(mod.check_selected_protocol_view_fields(source), list(names))
+        for changed in (source.replace('VMConfigView', 'Other'),
+                        source.replace('pub universal_accounts: bool,', 'pub universal_accounts: String,'),
+                        source.replace('universal_accounts: config.universal_accounts,', ''),
+                        source + 'pub global_contract_host_fns: bool,\n'):
+            with self.assertRaises(ValueError):
+                mod.check_selected_protocol_view_fields(changed)
+
     def test_regular_file_pinning_rejects_substitution_symlink_and_oversize(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -109,6 +146,22 @@ class HostAbiTests(unittest.TestCase):
         self.assertEqual(result['nearcore_selected_protocol_feature_diffs']['universal_accounts'], 88)
         for flag in ('nearcore_runtime_executed', 'source_to_binary_provenance_verified', 'independent_security_audit',
                      'deployment_or_transaction_performed'):
+            self.assertFalse(result[flag], flag)
+
+    @unittest.skipUnless(os.environ.get('BOUNCER_V11_WASM_PATH') and os.environ.get('BOUNCER_NEARCORE_TESTNET_RC5_DIR'),
+                         'set the local exact V11 and pinned testnet rc.5 source paths')
+    def test_actual_artifact_and_observed_rc5_source_profile(self):
+        result = mod.inspect(Path(os.environ['BOUNCER_V11_WASM_PATH']),
+                             Path(os.environ['BOUNCER_NEARCORE_TESTNET_RC5_DIR']), 'testnet-rc5-20261102')
+        self.assertEqual(result['nearcore_source_commit'], mod.TESTNET_RC5_COMMIT)
+        self.assertEqual(result['nearcore_selected_protocol_feature_diffs']['universal_accounts'], 87)
+        self.assertEqual(result['nearcore_selected_protocol_view_boolean_fields'],
+                         ['global_contract_host_fns', 'reftypes_bulk_memory', 'gas_key_host_fns', 'universal_accounts'])
+        self.assertEqual(result['env_function_imports_compared'], 41)
+        self.assertEqual(result['host_signature_mismatches'], 0)
+        self.assertEqual(result['import_declaration_gates'], dict(sorted(mod.EXPECTED_GATE_COUNTS.items())))
+        for flag in ('observed_network_state_checked', 'nearcore_runtime_executed', 'source_to_binary_provenance_verified',
+                     'independent_security_audit', 'deployment_or_transaction_performed'):
             self.assertFalse(result[flag], flag)
 
 

@@ -171,6 +171,25 @@ test('state drift, unsafe keys, changed token prerequisites and non-pristine bal
   }
 });
 
+test('every setup stage and final snapshot reject missing or disabled reported WASM feature gates', async () => {
+  for (let index = 0; index <= 5; index++) {
+    const f = fixture();
+    try {
+      await completeThrough(f, index);
+      for (const feature of ['global_contract_host_fns', 'reftypes_bulk_memory', 'gas_key_host_fns', 'universal_accounts']) {
+        for (const value of [false, null, 'true']) {
+          const s = snapshot(f, index); s.protocol.runtime_config.wasm_config[feature] = value;
+          const result = await inspect(f, index, s);
+          assert.equal(result.status, 'BLOCKED_OR_UNKNOWN', `${stageName(index)} ${feature}`);
+          assert.equal(result.checks.v11_selected_wasm_features_enabled, 'BLOCKED', `${stageName(index)} ${feature}`);
+          assert.equal(result.observed_v11_selected_wasm_features[feature], value === false ? false : null);
+          assert.equal(result.transaction_signed, false); assert.equal(result.transaction_sent, false);
+        }
+      }
+    } finally { f.close(); }
+  }
+});
+
 test('unavailable and wrong-block views remain UNKNOWN, sanitized and unable to authorize', async () => {
   const f = fixture();
   try {

@@ -68,8 +68,9 @@ ambiguity, not a real payment or an observation of the deployed seller.
   some accidental substitutions, but can be forged and are not an audit,
   approval, a real transaction hash, or proof that the binary came from this
   source. The action objects are mutable; the library can compare them to a
-  separately retained review before any future approved signing workflow.
-  No such reviewed deployment workflow is supplied yet.
+  separately retained review before any approved signing workflow. An
+  experimental CLI is described below; neither it nor the artifact has been
+  independently reviewed or used for a real V11 deployment.
 - `agent/svalin-setup-evidence.mjs` is an **offline library**, not an
   executor. It can verify an already-signed SDK transaction's Ed25519
   signature and exact reviewed bytes and derive its real transaction hash; it
@@ -118,7 +119,10 @@ ambiguity, not a real payment or an observation of the deployed seller.
   access key and safely represented nonce, an unused agent key, structured
   evidence that the direct child does not exist, Circle registration bounds
   and owner/vault/seller registrations, and the owner's test-USDC balance and
-  deficit. It estimates
+  deficit. It also requires the trusted RPC's pinned protocol configuration to
+  report four selected WASM feature gates as enabled; a missing, false or
+  malformed flag blocks. This is not full runtime validation or RPC attestation.
+  It estimates
   native storage and a reserve, but these estimates are not guarantees of gas
   or future storage. It reports unavailable and mismatched views as blocked or
   unknown; it never signs, sends, touches a journal or contacts the seller.
@@ -130,9 +134,10 @@ ambiguity, not a real payment or an observation of the deployed seller.
   receipt records must match, and the requested stage must normally be
   unrecorded. An exact pending hash may be supplied **only for a read-only
   recheck**; this never grants permission to send or retry it. Later snapshots
-  check the owner's full-access key and safely represented nonce, reviewed
-  keyless vault/code/owner, policy lock and agent grant, exact restricted-key
-  permission, token registration and bounds, and stage-appropriate balances.
+  check the owner's full-access key and safely represented nonce, reported
+  selected WASM feature gates, reviewed keyless vault/code/owner, policy lock
+  and agent grant, exact restricted-key permission, token registration and
+  bounds, and stage-appropriate balances.
   The post-funding profile requires matching tracked and token balances. Before funding, V11's specific `check` failure for an
   empty balance is used as a behavior-dependent indication that the expected
   payee passes earlier checks; it cannot enumerate all payees or agent grants.
@@ -146,8 +151,9 @@ ambiguity, not a real payment or an observation of the deployed seller.
 - `agent/svalin-setup-runner.mjs` and `agent/svalin-setup-rpc.mjs` add an
   **experimental single-stage coordinator and one-shot testnet transport**.
   Unlike the read-only checker, these libraries can sign and submit a setup
-  transaction when explicitly invoked by a caller. There is no CLI or automatic
-  multi-stage execution. The coordinator checks a fresh pinned snapshot and
+  transaction when explicitly invoked by a caller. The separate experimental
+  CLI exposes one stage at a time; there is no automatic multi-stage execution.
+  The coordinator checks a fresh pinned snapshot and
   full-access nonce, validates the owner signer and exact reviewed bytes, fsyncs
   the original hash to the encrypted journal, rechecks the stage and nonce,
   and attempts at most one transport call. It holds the same in-process journal
@@ -174,6 +180,18 @@ ambiguity, not a real payment or an observation of the deployed seller.
   registration deposit may remain permanently locked. Independent artifact and
   execution-path review, real-chain compatibility, a funded owner and explicit
   authorization are still required.
+- `agent/svalin-setup.mjs` is the **experimental owner CLI** over those
+  components. It reconstructs every stage from the unchanged canonical planner
+  JSON and exact artifact, verifies a separately retained review digest and
+  owner public key, and requires the original encrypted journal. Local status,
+  pinned-stage checks, original-hash recovery and each one-stage execution are
+  separate actions; only execution opens the owner private key or can submit.
+  Execution requires explicit artifact-review, backup, keyless-risk and
+  one-stage flags and first checks state without opening the key. These flags
+  are assertions, not evidence of approval or backup. A loopback synthetic RPC
+  test drives all five stages, a lost response and same-hash recovery; an
+  optional test signs the recovered WASM against fabricated receipts. Neither
+  is a nearcore or live test. See [owner CLI operation](#experimental-owner-setup-cli).
 - `agent/svalin-pro-readiness.mjs` makes a bounded anonymous offer GET and
   validates a later checkout **offline** against the reviewed monthly
   testnet profile. Drift, mainnet, wrong token/payee, malformed amounts and
@@ -280,8 +298,9 @@ intent, payment, activation or paid call is authorized by this plan.
 
 1. Independently review and build the separate V11 artifact, confirm its NEAR
    code hash, then obtain explicit owner approval for a **new testnet vault**
-   and setup. V11 is not deployed; the offline planner below prepares actions
-   but there is no automated reviewed setup or deployment yet. Do not upgrade
+   and setup. V11 is not deployed; the offline planner prepares actions and
+   the experimental owner CLI has not been independently reviewed or live-tested.
+   Do not upgrade
    an old V9/V10 vault or use an unreviewed artifact. The owner must control
    its own key; the deployed vault must have **no access keys**. The current
    contract exposes no upgrade/delete or Circle `storage_unregister` method:
@@ -347,7 +366,8 @@ network, real V11 artifact or seller:
 ```sh
 npm run svalin-setup-plan -- --help
 npm run svalin-setup-preflight -- --help
-node --test tests/journal-operation-scope.test.mjs tests/svalin-setup-plan.test.mjs tests/svalin-setup-evidence.test.mjs tests/svalin-setup-journal.test.mjs tests/svalin-setup-preflight.test.mjs tests/svalin-setup-stage-preflight.test.mjs tests/pinned-access-key-nonce.test.mjs tests/svalin-setup-runner.test.mjs tests/svalin-setup-rpc.test.mjs
+npm run svalin-setup -- --help
+node --test tests/journal-operation-scope.test.mjs tests/svalin-setup-plan.test.mjs tests/svalin-setup-evidence.test.mjs tests/svalin-setup-journal.test.mjs tests/svalin-setup-preflight.test.mjs tests/svalin-setup-stage-preflight.test.mjs tests/pinned-access-key-nonce.test.mjs tests/svalin-setup-runner.test.mjs tests/svalin-setup-rpc.test.mjs tests/svalin-setup-cli.test.mjs
 ```
 
 A real plan requires a **public** Svalin goal, a separately obtained and
@@ -447,22 +467,31 @@ A separate [static compatibility indication](../evidence/v11-static-review-20261
 compares all 41 imported function names and signatures to pinned nearcore
 2.14.0 declarations; none differed. WABT 1.0.39 also validated the artifact
 with SIMD and multi-value disabled, and observed a bulk-memory `memory.copy`.
-Selected nearcore config diffs enable bulk memory at protocol 84, gas-key host
-functions at 85 and the imported universal-accounts host function at 88. The
-static review does not execute nearcore, verify all limits, attest deployed
-network software, prove source-to-binary provenance or constitute an audit.
+The 2.14.0 release's selected config diffs enable bulk memory at protocol 84,
+gas-key host functions at 85 and the imported universal-accounts host function
+at 88. A [second static comparison](../evidence/v11-static-testnet-rc5-20261102/README.md)
+checked the exact source commit reported by one testnet node: its **rc.5 source**
+also matches all 41 signatures but enables universal accounts at **87**, not
+88. The two source profiles differ in their protocol-87/88 configuration; the
+setup deliberately keeps 88 as a conservative common floor. Neither review
+executes nearcore, checks all limits, attests the running network, proves
+source-to-binary provenance or constitutes an audit.
 
-**Runtime-version warning:** this recovered binary imports
-`env.promise_batch_action_universal_state_init`; nearcore gates that host
-function behind `UniversalAccounts` at [protocol 88](https://github.com/near/nearcore/blob/2.14.0/core/primitives-core/src/version.rs).
-A read-only status response at `2026-11-02T01:38:18Z` reported testnet at 88,
-while mainnet reported 86. The observed testnet node reported 2.14.0-rc.5,
-not the 2.14.0 source commit compared above. These observations can change and
-do not prove a working deployment: the binary is **not usable on a protocol-86 chain**, even
-if this imported function is never deliberately called. The setup preflight
-now blocks a missing, malformed or less-than-88 pinned testnet protocol
-version; this is a necessary floor, not validation of every import, WASM
-feature or future artifact. Recheck a trusted fresh RPC before any action.
+**Runtime-version warning:** the recovered binary imports
+`env.promise_batch_action_universal_state_init`, gated by `UniversalAccounts`
+even when the function is never called. At approximately `2026-11-02T08:51Z`,
+public status endpoints reported testnet protocol 88 and mainnet protocol 86.
+In both selected source configurations, protocol 86 predates the gate; it
+would not provide that import. These self-reported observations can change and
+are not a live deployment test or proof of the running runtime configuration.
+The preflight blocks a missing, malformed or less-than-88 pinned testnet
+protocol version. It also requires reported `wasm_config` flags for
+`global_contract_host_fns`, `reftypes_bulk_memory`, `gas_key_host_fns` and
+`universal_accounts` to be boolean `true` at that pinned block. These are
+selected gates from the inspected binary and nearcore source, not a full
+validator: a dishonest RPC can fabricate them and a future artifact may need
+other features. Recheck a trusted fresh RPC and independently review
+compatibility before any action.
 
 The Rust contract has no tracked Cargo lockfile, and CI selects a stable
 toolchain and installs Binaryen rather than pinning a complete reproducible
@@ -480,6 +509,75 @@ in one receipt as atomic; this has not yet been exercised with the V11 artifact
 on chain. The later FT deposit invokes asynchronous token/receiver receipts and
 must be reconciled along with the vault's tracked and actual balances. Never
 repeat an unresolved setup transaction simply because a response was lost.
+
+## Experimental owner setup CLI
+
+**Do not use this to deploy yet:** the artifact and execution path still need
+independent review, real-chain compatibility checks, secure verified backups,
+a funded testnet owner and explicit approval for each intended transaction.
+The command is capable of sending testnet transactions; merely invoking `--help`
+never does. It is not a wallet, faucet, token acquisition route, seller call or
+proof of independent fulfillment.
+
+1. Keep the planner's complete JSON output **unchanged**, including its trailing
+   newline. To save it as JSON, invoke `node agent/svalin-setup-plan.mjs` directly
+   or use `npm run --silent svalin-setup-plan -- ...`; normal npm banners would
+   corrupt a redirected JSON file. Independently retain its `review_sha256`, the
+   reviewed exact WASM, owner public key and all five stage descriptions. The CLI reconstructs and
+   compares the entire constrained plan, digest and WASM; the digest alone is
+   not a signature, an audit or consent. Use the same original review and
+   software throughout. Keep owner and agent private keys out of the repository,
+   chat, command-line values and logs.
+2. On a trusted machine create a separate owner-only 32-byte file-journal key
+   with `npm run init-file-journal-key -- --help`; securely back up that key.
+   Set `BOUNCER_FILE_JOURNAL_KEY_FILE` to its path. The journal must be a
+   separate file from the review, WASM and keys. Only for a genuinely new setup,
+   use `--init-journal --confirm-new-journal --ack-key-backup` and then securely
+   back up the **new original journal as well as its separate key**. A missing
+   or rolled-back journal can mask prior work: never initialize a replacement
+   if any earlier setup may have been attempted.
+3. Every action requires `--review`, `--review-sha256`, `--wasm`,
+   `--owner-public-key` and `--state`, plus the original journal-key environment
+   variable. `--journal-status` reads the local fence without network access.
+   `--check-stage STAGE --rpc TRUSTED_TESTNET_RPC` performs only read-only RPC
+   queries. The RPC must be HTTPS (HTTP is allowed only on loopback), report
+   testnet and be trusted; the checks use a fresh pinned FINAL block and require
+   the selected WASM feature flags in its protocol configuration. A match is
+   neither consent nor proof that balances, storage, runtime linkage or gas
+   will remain sufficient. A blocked/unknown check exits 2; invalid input exits 1.
+4. Only after review, backups and **separate approval for one exact stage**,
+   `--execute-stage STAGE --rpc TRUSTED_TESTNET_RPC --owner-key OWNER.json`
+   additionally requires `--execute --ack-backups --ack-reviewed-artifact
+   --accept-keyless-lock`. The owner-key JSON must contain `account_id` and
+   `private_key`, match the retained public key, and be an owner-only regular
+   file, not a symlink or hard link. The signer file is opened only after an
+   initial matching read-only check. JavaScript cannot guarantee that secret
+   strings have been erased from memory. All flags are **operator assertions**;
+   the program cannot establish that review, backup or human consent occurred.
+   Each invocation attempts at most one transaction and never contacts the
+   seller. It cannot automatically execute subsequent stages.
+5. The order is `create_keyless_vault`, `configure_locked_policy`,
+   `install_restricted_agent_key`, `register_vault_for_test_usdc`, then
+   `fund_vault_with_test_usdc`. Inspect and back up every updated original
+   journal and separately check the next stage before any further approval.
+   Registration and funding use test assets, and owner/seller registration and
+   acquiring owner test USDC are separate prerequisites, not actions this
+   command performs. Initial storage and registration deposits can remain locked.
+6. If a result is unknown, a stage fails, the process crashes, or a hash is
+   recorded without a confirmed result, **stop; never rerun that stage or
+   replace the journal**. `--recover-stage STAGE --rpc TRUSTED_TESTNET_RPC`
+   looks up only the original hash and changes no journal entries. Add
+   `--record-evidence --ack-backups` only when deliberately recording matching
+   FINAL evidence; it still never signs or broadcasts. A FINAL failure remains
+   blocked for manual reconciliation. Retain the latest original journal and
+   separately protected key; stale backups, bypassing the journal, another
+   process, a dishonest RPC or compromised local machine defeat the fence.
+7. After all five original receipt graphs are recorded, `--check-stage
+   verify_funded_vault --rpc TRUSTED_TESTNET_RPC` checks the current reported
+   keyless vault, policy, restricted agent key, Circle registrations and both
+   tracked and on-token balances. `READ_ONLY_FUNDED_VAULT_PROFILE_MATCH` is a
+   trusted-RPC indication, not a consensus proof, code audit, consent or seller
+   delivery. Buyer-side checks do **not** fix Svalin's payer-attribution issue.
 
 ## Preflight trust limits
 

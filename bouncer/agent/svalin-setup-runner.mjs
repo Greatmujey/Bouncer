@@ -1,7 +1,8 @@
 /**
  * EXPERIMENTAL, synthetic-tested one-stage V11 testnet setup coordinator.
- * No CLI, automatic retries, faucet, acquisition, seller request, reservation,
- * payment, mainnet support or automatic multi-stage execution is provided.
+ * The separate owner CLI is experimental; there are no automatic retries,
+ * faucet, acquisition, seller request, payment, mainnet support or automatic
+ * multi-stage execution.
  *
  * A caller must independently review the exact artifact, protect the owner
  * signer and back up the ORIGINAL encrypted journal and its separate key.

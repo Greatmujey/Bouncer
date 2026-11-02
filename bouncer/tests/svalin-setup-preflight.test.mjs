@@ -39,7 +39,8 @@ function fixture() {
     agentGasAllowanceYocto: '100000000000000000000000', vaultTokenStorageDepositYocto: REG });
   const state = {
     network: 'testnet', block: { header: { hash: BLOCK, timestamp_nanosec: String(BigInt(NOW) * 1_000_000n) } },
-    protocol: { chain_id: 'testnet', protocol_version: 88, runtime_config: { storage_amount_per_byte: COST } },
+    protocol: { chain_id: 'testnet', protocol_version: 88, runtime_config: { storage_amount_per_byte: COST,
+      wasm_config: { global_contract_host_fns: true, reftypes_bulk_memory: true, gas_key_host_fns: true, universal_accounts: true } } },
     owner: { block_hash: BLOCK, amount: 20n * 10n ** 24n, storage_usage: 10_000 },
     ownerKey: { block_hash: BLOCK, nonce: 5n, permission: 'FullAccess' },
     keys: { block_hash: BLOCK, keys: [{ public_key: ownerKey, access_key: { permission: 'FullAccess' } }] },
@@ -76,6 +77,9 @@ test('pre-creation snapshot checks owner, absence, storage, registration and fun
   assert.equal(result.review_sha256, f.plan.review.review_sha256); assert.equal(result.network, 'testnet');
   assert.equal(result.reviewed_token_registration_yocto, REG); assert.equal(result.required_test_usdc_atoms, '5009999');
   assert.equal(result.observed_protocol_version, 88);
+  assert.deepEqual(result.observed_v11_selected_wasm_features, { global_contract_host_fns: true,
+    reftypes_bulk_memory: true, gas_key_host_fns: true, universal_accounts: true });
+  assert.equal(result.checks.v11_selected_wasm_features_enabled, 'PASS');
   assert.equal(result.observed_owner_nonce, '5');
   assert.equal(result.v11_minimum_protocol_version, 88);
   assert.equal(result.runtime_linking_and_all_host_imports_verified, false);
@@ -104,6 +108,11 @@ test('pre-creation readiness fails closed on wrong authority, occupied accounts,
     ['v11_protocol_floor', s => { s.protocol.protocol_version = '88'; }],
     ['v11_protocol_floor', s => { delete s.protocol.protocol_version; }],
     ['v11_protocol_floor', s => { s.protocol.protocol_version = 88.5; }],
+    ['v11_selected_wasm_features_enabled', s => { s.protocol.runtime_config.wasm_config.global_contract_host_fns = false; }],
+    ['v11_selected_wasm_features_enabled', s => { s.protocol.runtime_config.wasm_config.reftypes_bulk_memory = false; }],
+    ['v11_selected_wasm_features_enabled', s => { s.protocol.runtime_config.wasm_config.gas_key_host_fns = 'true'; }],
+    ['v11_selected_wasm_features_enabled', s => { delete s.protocol.runtime_config.wasm_config.universal_accounts; }],
+    ['v11_selected_wasm_features_enabled', s => { s.protocol.runtime_config.wasm_config = null; }],
     ['owner_full_access_key', s => { s.ownerKey.permission = { FunctionCall: {} }; }],
     ['owner_full_access_key', s => { s.ownerKey.block_hash = OTHER_BLOCK; }],
     ['owner_nonce_safely_represented', s => { s.ownerKey.nonce = -1n; }],
@@ -143,7 +152,7 @@ test('view failures are unknown, sanitized and cannot authorize anything', async
   for (const [failure, check] of [['presence', 'new_direct_child_absent'], ['bounds', 'circle_registration_min_matches_review'],
     ['ownerUsdc', 'owner_test_usdc_covers_funding'], ['sellerRegistration', 'seller_registered_for_circle'],
     ['protocol', 'testnet_protocol_and_storage_cost'], ['protocol', 'v11_protocol_floor'],
-    ['keys', 'agent_key_not_already_on_owner']]) {
+    ['protocol', 'v11_selected_wasm_features_enabled'], ['keys', 'agent_key_not_already_on_owner']]) {
     const f = fixture(); f.state.failures.add(failure);
     const result = await inspectSvalinSetupPrerequisites(f.args);
     assert.equal(result.checks[check], 'UNKNOWN', check); assert.equal(result.execution_authorized, false);
@@ -242,6 +251,9 @@ test('actual setup CLI uses only pinned read RPCs and reports missing funds with
     assert.equal(result.observed_owner_test_usdc_atoms, '10'); assert.equal(result.missing_test_usdc_atoms, '5009989');
     r = run({ occupied: true }); assert.equal(r.status, 2, r.stderr);
     result = JSON.parse(r.stdout); assert.equal(result.checks.new_direct_child_absent, 'BLOCKED');
+    r = run({ missingFeature: true }); assert.equal(r.status, 2, r.stderr);
+    result = JSON.parse(r.stdout); assert.equal(result.checks.v11_selected_wasm_features_enabled, 'BLOCKED');
+    assert.equal(result.observed_v11_selected_wasm_features.universal_accounts, null);
     r = run({ mainnet: true }); assert.equal(r.status, 1); assert.match(r.stderr, /testnet/);
     requests = fs.readFileSync(log, 'utf8').trim().split('\n'); assert.deepEqual(requests, ['status']);
     assert.deepEqual(fs.readdirSync(dir).sort(), ['config.json', 'goal.json', 'requests.log', 'stub.wasm']);
