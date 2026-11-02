@@ -29,7 +29,7 @@ const originalHash = signed => nearApi.utils.serialize.base_encode(sha256(nearAp
 function locallySimulatedApproval(plan, stageId) {
   return { network: 'testnet', stage_id: stageId, review_sha256: plan.review.review_sha256,
     artifact_sha256: plan.review.artifact.sha256, one_broadcast_approved: true,
-    independent_artifact_review_attested: true, journal_and_key_backups_attested: true,
+    unaudited_artifact_risk_accepted: true, journal_and_key_backups_attested: true,
     keyless_vault_storage_risk_accepted: true };
 }
 function expectProfile(profile, expected) {

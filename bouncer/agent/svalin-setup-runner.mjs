@@ -4,11 +4,12 @@
  * faucet, acquisition, seller request, payment, mainnet support or automatic
  * multi-stage execution.
  *
- * A caller must independently review the exact artifact, protect the owner
- * signer and back up the ORIGINAL encrypted journal and its separate key.
- * Keyless V11 vaults cannot be upgraded/deleted and storage deposits may be
- * locked. Boolean acknowledgements here are caller assertions, NOT proof of
- * any review, backup or human consent. A trusted, single-attempt sender and
+ * The exact artifact and this runner are unaudited; independent review remains
+ * recommended. A testnet operator must explicitly accept that risk, protect
+ * the owner signer and back up the ORIGINAL encrypted journal and its separate
+ * key. Keyless V11 vaults cannot be upgraded/deleted and storage deposits may
+ * be locked. Boolean acknowledgements are caller assertions, NOT proof of risk
+ * comprehension, backup or human consent. A trusted, single-attempt sender and
  * an honest testnet RPC are required. State may change after any snapshot.
  * This module has NOT been used with a real V11 deployment or receipt.
  */
@@ -25,7 +26,7 @@ import { isTransactionHash } from '../shared/direct-payment-settlement.mjs';
 const STAGES = ['create_keyless_vault', 'configure_locked_policy', 'install_restricted_agent_key',
   'register_vault_for_test_usdc', 'fund_vault_with_test_usdc'];
 const APPROVAL_KEYS = ['network', 'stage_id', 'review_sha256', 'artifact_sha256', 'one_broadcast_approved',
-  'independent_artifact_review_attested', 'journal_and_key_backups_attested', 'keyless_vault_storage_risk_accepted'];
+  'unaudited_artifact_risk_accepted', 'journal_and_key_backups_attested', 'keyless_vault_storage_risk_accepted'];
 const record = x => x !== null && typeof x === 'object' && !Array.isArray(x);
 const digest = x => crypto.createHash('sha256').update(x).digest();
 
@@ -34,9 +35,9 @@ function checkApproval(approval, plan, trustedReviewHash, stageId) {
       APPROVAL_KEYS.some(k => !Object.hasOwn(approval, k)) || approval.network !== 'testnet' ||
       approval.stage_id !== stageId || approval.review_sha256 !== trustedReviewHash ||
       approval.artifact_sha256 !== plan.review.artifact.sha256 || approval.one_broadcast_approved !== true ||
-      approval.independent_artifact_review_attested !== true || approval.journal_and_key_backups_attested !== true ||
+      approval.unaudited_artifact_risk_accepted !== true || approval.journal_and_key_backups_attested !== true ||
       approval.keyless_vault_storage_risk_accepted !== true) {
-    throw new Error('separate exact-stage, artifact-review, recovery-backup and irreversible-vault acknowledgments are required');
+    throw new Error('separate exact-stage, unaudited-artifact-risk, recovery-backup and irreversible-vault acknowledgments are required');
   }
 }
 function checkedTime(now) {

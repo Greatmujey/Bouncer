@@ -31,6 +31,8 @@ import { SVALIN_PAYEE as SELLER } from '../agent/svalin-pro-readiness.mjs';
 import { SVALIN_TRIAL_MAX_ATOMS as FUNDING } from '../agent/svalin-pro-preflight.mjs';
 import { RUNNER_OWNER, exerciseSandboxOwnerRunner } from './v11-sandbox-owner-runner.mjs';
 import { exerciseSandboxBuyerRunner } from './v11-sandbox-buyer-runner.mjs';
+import { exerciseSandboxNativeFaucet } from './v11-sandbox-native-faucet.mjs';
+import { FAUCET_RETURN } from '../agent/native-testnet-faucet.mjs';
 import { V11_SHA256, MOCK_FT_SHA256, SANDBOX_SHA256, SANDBOX_CHAIN_ID, readVerifiedFile,
   withMockTokenInGenesis, assertSandboxStatus, requireFinalSuccess, assertOmittedLocalAddKeyReceipt,
   assertRegistrationWithOnlyGasRefund, requireReceiptLog } from './v11-sandbox-support.mjs';
@@ -395,7 +397,7 @@ async function run() {
     // can diagnose specific verifier failures. A second, fresh owner and vault
     // exercise the actual stage preflight and one-stage coordinator instead.
     // All accounts and tokens remain exclusively on this disposable chain.
-    let ownerRunnerEvidence = null, buyerRunnerEvidence = null;
+    let ownerRunnerEvidence = null, buyerRunnerEvidence = null, nativeFaucetEvidence = null;
     if (verifierBlockers.length === 0) {
       await create(RUNNER_OWNER, runnerOwnerKey);
       await mustCall(owner, TOKEN, 'storage_deposit', { account_id: RUNNER_OWNER, registration_only: true },
@@ -411,6 +413,19 @@ async function run() {
       buyerRunnerEvidence = await exerciseSandboxBuyerRunner({ rpcUrl: sandbox.rpcUrl, wasm, directory,
         agentKey: runnerAgentKey, checkpoint, pinIntent: call =>
           mustCall(runnerOwner, call.receiver_id, call.method, call.args, 1n, 100n * TGAS) });
+
+      // Create ONLY local accounts matching the public faucet beneficiary name.
+      // The helper itself is an in-process sandbox stub; no public endpoint is
+      // contacted, and neither these test keys nor balances exist on testnet.
+      const parentKey = key(), faucetKey = key(), beneficiaryKey = key();
+      await create('nonofficial.testnet', parentKey);
+      const parent = makeAccount('nonofficial.testnet', provider, parentKey);
+      await mustBatch(parent, 'faucet.nonofficial.testnet', [tx.createAccount(), tx.transfer(10n * NEAR),
+        tx.addKey(faucetKey.getPublicKey(), tx.fullAccessKey())], 'create local faucet parent');
+      const faucet = makeAccount('faucet.nonofficial.testnet', provider, faucetKey);
+      await mustBatch(faucet, FAUCET_RETURN, [tx.createAccount(), tx.transfer(NEAR),
+        tx.addKey(beneficiaryKey.getPublicKey(), tx.fullAccessKey())], 'create local faucet beneficiary');
+      nativeFaucetEvidence = await exerciseSandboxNativeFaucet({ rpcUrl: sandbox.rpcUrl, directory, root, checkpoint });
     }
 
     assertSandboxStatus(await provider.status());
@@ -432,6 +447,7 @@ async function run() {
       failed_ft_receipt_and_refund_callback_checked: true,
       owner_runner_and_stage_preflight: ownerRunnerEvidence,
       buyer_runner_and_original_hash_recovery: buyerRunnerEvidence,
+      native_faucet_and_original_hash_recovery: nativeFaucetEvidence,
     };
     console.log(JSON.stringify(evidence, null, 2));
     if (verifierBlockers.length) {

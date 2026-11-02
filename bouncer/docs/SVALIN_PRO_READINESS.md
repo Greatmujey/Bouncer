@@ -332,10 +332,12 @@ because the owner's current state has changed.
   not create a reservation, pay, activate, or call a paid endpoint.
 - V11 is a separate experimental fresh-state contract; it has been exercised
   on an isolated nearcore chain but **not** deployed on live testnet.
-  Independent review, reviewed owner setup and deployment, securely verified
-  operational backups, sufficient test-token funding, a consenting available
-  seller and real end-to-end testing are still missing. The local sandbox and
-  its mock token do not prove any of those.
+  Independent review, an owner-approved deployment, securely verified operational
+  backups, sufficient test-token funding, an available seller and real
+  end-to-end testing are still missing. The local sandbox and its mock token do
+  not prove any of those. Independent review remains recommended, but the
+  testnet-only setup path can proceed with explicit unaudited-risk acceptance;
+  that acceptance does not constitute an audit or make the artifact safe.
 
 ## Smallest testnet trial: before making a reservation
 
@@ -345,14 +347,15 @@ permission is not a prerequisite to inspect or use its publicly offered API;
 its amount-only attribution remains a known limitation. No setup, reservation,
 intent, payment, activation or paid call is authorized by this plan.
 
-1. Independently review and build the separate V11 artifact, confirm its NEAR
-   code hash, then obtain explicit owner approval for a **new testnet vault**
-   and setup. V11 is not deployed; the offline planner prepares actions and
-   the experimental owner CLI has not been independently reviewed or live-tested.
-   Do not upgrade
-   an old V9/V10 vault or use an unreviewed artifact. The owner must control
-   its own key; the deployed vault must have **no access keys**. The current
-   contract exposes no upgrade/delete or Circle `storage_unregister` method:
+1. Verify the exact separate V11 artifact and its NEAR code hash, then obtain
+   explicit owner approval for a **new testnet vault** and each setup stage.
+   V11 is not deployed; the artifact and experimental owner CLI have not been
+   independently reviewed or live-tested. Independent review is recommended;
+   a testnet operator who chooses to proceed without it must explicitly accept
+   the unaudited-artifact risk. A hash is not an audit or a reproducible-build
+   proof. Do not upgrade an old V9/V10 vault. The owner must control its own
+   key; the deployed vault must have **no access keys**. The current contract
+   exposes no upgrade/delete or Circle `storage_unregister` method:
    a keyless vault can leave its storage stake and token-registration deposit
    locked. Its owner can withdraw tracked tokens and eligible native surplus,
    subject to the contract and token rules.
@@ -484,9 +487,16 @@ exercised the actual restricted buyer against the same kind of disposable chain:
 it journaled before one mock-FT payment, lost the acknowledgement after finality,
 reopened the journal and recovered that original hash without a second send.
 The offer and reservation were from an in-process fake seller; no Svalin
-activation, attribution or delivery was verified. There has been no V11
-testnet deployment or Circle funding transaction; independent review and a
-future authorized live workflow remain necessary.
+activation, attribution or delivery was verified. A [fresh isolated run of
+`bee6160`](https://github.com/Greatmujey/Bouncer/actions/runs/41444752557)
+passed after the plain-owner and capped-gas-allowance checks were added; the
+sandbox owner and key satisfied those checks. Synthetic tests cover hostile or
+unavailable owner views and post-sign drift; this nearcore run did not exercise
+an adversarial global-code owner. Its [normal CI build](https://github.com/Greatmujey/Bouncer/actions/runs/41444752580)
+reported the same V11 SHA-256 as the sandbox input, but did not independently
+attest reproducibility. There has been no V11 testnet deployment or Circle
+funding transaction. A future live workflow requires authorization and must
+explicitly disclose that independent review has not occurred.
 On 1 November 2026, the approved private push build `41361570652` and its PR
 build `41361575492` succeeded and independently reported the same 536,325-byte
 V11 artifact SHA-256,
@@ -580,12 +590,15 @@ repeat an unresolved setup transaction simply because a response was lost.
 
 ## Experimental owner setup CLI
 
-**Do not use this to deploy yet:** the artifact and execution path still need
-independent review, real-chain compatibility checks, secure verified backups,
-a funded testnet owner and explicit approval for each intended transaction.
-The command is capable of sending testnet transactions; merely invoking `--help`
-never does. It is not a wallet, faucet, token acquisition route, seller call or
-proof of independent fulfillment.
+**Experimental testnet only:** the artifact and execution path are unaudited
+and have not been live-tested. Independent review is recommended; the CLI does
+not require a claim that one happened, but requires explicit acceptance of that
+risk for each stage. Real-chain compatibility, secure verified backups, a
+funded testnet owner and explicit approval for each intended transaction remain
+necessary. The command is capable of sending testnet transactions; merely
+invoking `--help` never does. It is not a wallet, faucet, Circle acquisition
+route, seller call or proof of independent fulfillment. A separate, not-yet-live-
+verified native-NEAR helper is documented in [TESTNET_NATIVE_FAUCET.md](TESTNET_NATIVE_FAUCET.md).
 
 1. Keep the planner's complete JSON output **unchanged**, including its trailing
    newline. To save it as JSON, invoke `node agent/svalin-setup-plan.mjs` directly
@@ -613,15 +626,17 @@ proof of independent fulfillment.
    the selected WASM feature flags in its protocol configuration. A match is
    neither consent nor proof that balances, storage, runtime linkage or gas
    will remain sufficient. A blocked/unknown check exits 2; invalid input exits 1.
-4. Only after review, backups and **separate approval for one exact stage**,
+4. Only after inspecting the exact artifact and plan, backing up recovery
+   material and obtaining **separate approval for one exact stage**,
    `--execute-stage STAGE --rpc TRUSTED_TESTNET_RPC --owner-key OWNER.json`
-   additionally requires `--execute --ack-backups --ack-reviewed-artifact
-   --accept-keyless-lock`. The owner-key JSON must contain `account_id` and
-   `private_key`, match the retained public key, and be an owner-only regular
+   additionally requires `--execute --ack-backups --accept-unaudited-artifact
+   --accept-keyless-lock`. The unaudited flag accepts risk; it does not attest
+   that anyone reviewed the binary. The owner-key JSON must contain `account_id`
+   and `private_key`, match the retained public key, and be an owner-only regular
    file, not a symlink or hard link. The signer file is opened only after an
    initial matching read-only check. JavaScript cannot guarantee that secret
    strings have been erased from memory. All flags are **operator assertions**;
-   the program cannot establish that review, backup or human consent occurred.
+   the program cannot establish risk comprehension, backup or human consent.
    Each invocation attempts at most one transaction and never contacts the
    seller. It cannot automatically execute subsequent stages.
 5. The order is `create_keyless_vault`, `configure_locked_policy`,
@@ -737,8 +752,10 @@ any separately approved retry; do not automatically repeat the request.
 ## Required before a consequential test
 
 1. Verify the current testnet offer, seller registration, test-token funding,
-   provider terms and independently reviewed V11 deployment. Do not reuse or
-   resend any prior ambiguous funding/payment operation.
+   provider terms and the exact V11 deployment. Independent review remains
+   recommended; a decision to test an unaudited artifact must be explicit and
+   must never be described as an audit. Do not reuse or resend any prior
+   ambiguous funding/payment operation.
 2. Get explicit owner approval for the provider, monthly testnet amount range,
    desired public-account data, timing, side effects and risks **before** a
    two-day checkout reservation. Persist and independently back up the bearer

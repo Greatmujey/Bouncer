@@ -14,7 +14,7 @@ import { readExactArtifact } from './fixtures/v11-synthetic-host.mjs';
 function approval(f, index) {
   return { network: 'testnet', stage_id: STAGES[index], review_sha256: f.trustedReviewHash,
     artifact_sha256: f.plan.review.artifact.sha256, one_broadcast_approved: true,
-    independent_artifact_review_attested: true, journal_and_key_backups_attested: true,
+    unaudited_artifact_risk_accepted: true, journal_and_key_backups_attested: true,
     keyless_vault_storage_risk_accepted: true };
 }
 function transactionHash(signed) {
@@ -92,7 +92,9 @@ test('exact-stage acknowledgments, retained review and correct signer are requir
     for (const mutate of [
       a => { a.network = 'mainnet'; }, a => { a.stage_id = STAGES[1]; }, a => { a.review_sha256 = '0'.repeat(64); },
       a => { a.artifact_sha256 = '0'.repeat(64); }, a => { a.one_broadcast_approved = false; },
-      a => { a.independent_artifact_review_attested = false; }, a => { a.journal_and_key_backups_attested = false; },
+      a => { a.unaudited_artifact_risk_accepted = false; },
+      a => { delete a.unaudited_artifact_risk_accepted; a.independent_artifact_review_attested = true; },
+      a => { a.journal_and_key_backups_attested = false; },
       a => { a.keyless_vault_storage_risk_accepted = false; }, a => { a.unreviewed = true; }, a => { delete a.network; },
     ]) {
       const h = harness(f, 0); mutate(h.options.approval);

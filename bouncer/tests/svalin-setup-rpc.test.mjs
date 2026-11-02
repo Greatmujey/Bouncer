@@ -167,7 +167,7 @@ test('synthetic JSON-RPC connects the read-only adapter, signer, journal, one-sh
         signer: new nearApi.KeyPairSigner(f.ownerPair), provider: rpc, now: () => NOW,
         approval: { network: 'testnet', stage_id: STAGES[0], review_sha256: f.trustedReviewHash,
           artifact_sha256: f.plan.review.artifact.sha256, one_broadcast_approved: true,
-          independent_artifact_review_attested: true, journal_and_key_backups_attested: true,
+          unaudited_artifact_risk_accepted: true, journal_and_key_backups_attested: true,
           keyless_vault_storage_risk_accepted: true } });
       assert.equal(result.status, 'FINAL_SETUP_RECEIPT_MATCH'); assert.equal(sends, 1);
       assert.equal((await f.status()).stages[0].tx_hash, result.tx_hash);

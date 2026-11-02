@@ -31,7 +31,7 @@ jobs:
         run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Exercise sandbox-harness guards offline
         run: |
-          node --test tests/v11-sandbox-harness.test.mjs tests/v11-sandbox-setup-rpc.test.mjs tests/v11-sandbox-owner-runner.test.mjs tests/v11-sandbox-buyer-runner.test.mjs
+          node --test tests/v11-sandbox-harness.test.mjs tests/v11-sandbox-setup-rpc.test.mjs tests/v11-sandbox-owner-runner.test.mjs tests/v11-sandbox-buyer-runner.test.mjs tests/native-testnet-faucet*.test.mjs tests/v11-sandbox-native-faucet.test.mjs
           python3 -m unittest discover -s tests -p 'v11_sandbox_extract_test.py'
       - name: Recover pinned V11 and the nearcore example FT
         env:
