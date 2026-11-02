@@ -182,6 +182,20 @@ runner compatibility; live prices, configured token, deployed code/behavior,
 terms and a safe recovery path still need verification. OutLayer currently uses
 fake `usdc.fakes.testnet`, **not Circle test USDC**.
 
+The [2 November read-only snapshot](../evidence/testnet-owner-v2/outlayer-readonly-20261102.json)
+observed that fake token, a 10,000-atom `burn` price, an indicated pool-54
+quote and zero provider/vault prepaid credit. The provider and token each had a
+full-access key, so their code can change. The `burn` operation is a diagnostic,
+not useful commercial compute. `agent/outlayer-v11-burn-plan.mjs` describes
+one **unsigned, offline** attempt using two dedicated one-method keys, fixed
+receiver/message, separate native/FT caps, and a maximum 0.02 test-NEAR native
+request. It cannot sign or broadcast. Actual execution still needs fresh
+same-block provider/quote checks, verified key custody, durable one-shot journals,
+original-hash reconciliation and isolated-chain tests. The fake-token storage
+registrations can lock test NEAR, and a failed project may leave fake provider
+credit inaccessible to this immutable vault. Neither the snapshot nor the plan
+establishes a payment, provider uptime, Circle support or fulfillment.
+
 V7 can fund an owner-pinned OutLayer prepaid balance using `execute_ft_call`,
 then call an owner-pinned project under **separate** native and prepaid-token
 policies. The FT route fixes the token, receiver and exact message, with policy
