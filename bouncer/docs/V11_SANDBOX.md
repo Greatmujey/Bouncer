@@ -1,13 +1,29 @@
 # V11 nearcore sandbox validation (opt-in)
 
-**Latest passing result:** [run 41459488001](https://github.com/Greatmujey/Bouncer/actions/runs/41459488001)
+**New, not yet run:** A separate [experimental forwarder](../experiments/paypercall-forwarder/README.md)
+scenario has been prepared for a future isolated nearcore run. Its current
+passing tests use synthetic hosts and an old mock VM, not nearcore, Circle,
+PayPerCall or seller fulfillment. The earlier passing run below does not cover it.
+
+**Latest passing result:** [run 41469462871](https://github.com/Greatmujey/Bouncer/actions/runs/41469462871)
+at commit `3dba62a45a1758de7858bb1979fc29f880f1f2af` passed the prior
+checks and the new escrow-boundary scenario on disposable nearcore. Two keyless
+V11 vaults and the example mock FT stood in for a buyer and a receiver; no
+PayPerCall or Circle contract was used. The passing assertions show the locked
+policy rejected the generic FT call, while an unlocked route repeated within its
+200-unit cap. A later 100-unit **plain** return increased the buyer's mock-token
+balance but not its tracked ledger, and withdrawal above the tracked balance
+failed. A separate 100-unit `ft_transfer_call` return credited the receiver
+hook, while prior rolling spend remained conservative. This validates that local
+runtime mechanism, not a deployed escrow or a fix. GitHub reports the job and
+step successful; this shell could not retrieve the redirected detailed job log.
+
+**Previous passing result:** [run 41459488001](https://github.com/Greatmujey/Bouncer/actions/runs/41459488001)
 at commit `c6c646a32644ae1b4db4fa7b208e9050c4ab22d3` passed the prior
-owner/setup and buyer checks and the new local fake-helper faucet scenario.
-It reconciled 5 local NEAR, the beneficiary refund and the same original hashes
+owner/setup and buyer checks and the local fake-helper faucet scenario. It
+reconciled 5 local NEAR, the beneficiary refund and the same original hashes
 after simulated lost acknowledgements. This was an isolated chain and in-process
-helper, not a public faucet, Circle funding or independent delivery. A
-mock-escrow refund boundary scenario was added after that run; its result must
-be checked separately and is not implied by the earlier success.
+helper, not a public faucet, Circle funding or independent delivery.
 
 **Previous hardened owner/buyer result:** On 2 November 2026,
 [run 41444752557](https://github.com/Greatmujey/Bouncer/actions/runs/41444752557)

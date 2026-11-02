@@ -67,17 +67,22 @@ repeated unlocked route, immediate unused-amount callback and ledger behavior;
 it does not run a token, PayPerCall or nearcore. A separate sandbox scenario is
 prepared to compare plain and callback-based returns using **another V11 vault
 as a stand-in receiver and the example mock FT**. Its local model tests are
-synthetic; the earlier [nearcore run](https://github.com/Greatmujey/Bouncer/actions/runs/41459488001)
-predates the new scenario, whose result must be checked separately. Neither
-scenario proves PayPerCall, Circle or independent-provider compatibility.
+synthetic. The [separate isolated nearcore run](https://github.com/Greatmujey/Bouncer/actions/runs/41469462871)
+passed the added scenario: a 100-unit plain return changed the mock-token
+balance but not the vault ledger; a separate transfer-call return credited the
+receiver hook. The locked policy rejected the generic FT call, while an unlocked
+route repeated within its cap. Neither scenario proves PayPerCall, Circle or
+independent-provider compatibility.
 
 One possible path that does not require the provider to change its refund
 method is a **new, immutable one-shot forwarder**: the locked vault would pay
 that forwarder by its existing exact `ft_transfer`; the forwarder would open
 one fixed escrow request, claim any owed payout as the payer, then return
-leftover tokens to the vault with `ft_transfer_call`. This is a design idea,
-not implemented or verified. It would add a new contract, token registration
-and native storage costs; PayPerCall would see the forwarder rather than the
+leftover tokens to the vault with `ft_transfer_call`. An [offline experimental
+forwarder](../experiments/paypercall-forwarder/README.md) now compiles and has
+synthetic-host tests, but is not nearcore-tested or safe for live use. It would
+add a new contract, token registration and native storage costs; PayPerCall
+would see the forwarder rather than the
 vault as payer. The vault's allowlisted payee would be the forwarder, so the
 final escrow/request restrictions would depend on the new contract's code and
 immutable setup, not V11 alone. Its expiry, one-shot behavior, races, claims,

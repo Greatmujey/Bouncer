@@ -33,6 +33,7 @@ import { RUNNER_OWNER, exerciseSandboxOwnerRunner } from './v11-sandbox-owner-ru
 import { exerciseSandboxBuyerRunner } from './v11-sandbox-buyer-runner.mjs';
 import { exerciseSandboxNativeFaucet } from './v11-sandbox-native-faucet.mjs';
 import { exerciseSandboxEscrowBoundary } from './v11-sandbox-escrow-boundary.mjs';
+import { exerciseSandboxForwarder } from './v11-sandbox-forwarder.mjs';
 import { FAUCET_RETURN } from '../agent/native-testnet-faucet.mjs';
 import { V11_SHA256, MOCK_FT_SHA256, SANDBOX_SHA256, SANDBOX_CHAIN_ID, readVerifiedFile,
   withMockTokenInGenesis, assertSandboxStatus, requireFinalSuccess, assertOmittedLocalAddKeyReceipt,
@@ -398,6 +399,11 @@ async function run() {
     // seller. Compare a later plain FT return with a transfer-call callback.
     const escrowBoundaryEvidence = await exerciseSandboxEscrowBoundary({ rpcUrl: sandbox.rpcUrl,
       root, tokenOwner: owner, wasm, storageMin: bounds.min, checkpoint });
+    // This next scenario uses an experimental generated bridge and a tiny
+    // stand-in, not the actual PayPerCall escrow or a provider. It must pass
+    // independently before it can be described as nearcore evidence.
+    const forwarderEvidence = await exerciseSandboxForwarder({ rpcUrl: sandbox.rpcUrl,
+      root, tokenOwner: owner, wasm, storageMin: bounds.min, checkpoint });
 
     // The first scenario above deliberately uses direct signing/evidence so it
     // can diagnose specific verifier failures. A second, fresh owner and vault
@@ -452,6 +458,7 @@ async function run() {
       exact_ft_success_receipts_and_balances_checked: true, replay_rejected: true,
       failed_ft_receipt_and_refund_callback_checked: true,
       mock_escrow_refund_boundary: escrowBoundaryEvidence,
+      experimental_forwarder_with_mock_escrow: forwarderEvidence,
       owner_runner_and_stage_preflight: ownerRunnerEvidence,
       buyer_runner_and_original_hash_recovery: buyerRunnerEvidence,
       native_faucet_and_original_hash_recovery: nativeFaucetEvidence,

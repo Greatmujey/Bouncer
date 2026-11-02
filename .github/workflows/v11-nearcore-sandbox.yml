@@ -47,7 +47,8 @@ jobs:
           BOUNCER_V11_WASM_PATH: ${{ runner.temp }}/bouncer-v11.wasm
         run: |
           node --test tests/v11-bytecode-offline.test.mjs tests/paypercall-v11-bytecode.test.mjs \
-            tests/v11-sandbox-escrow-boundary.test.mjs tests/v11-sandbox-escrow-boundary-model.test.mjs
+            tests/v11-sandbox-escrow-boundary.test.mjs tests/v11-sandbox-escrow-boundary-model.test.mjs \
+            tests/paypercall-forwarder-experimental.test.mjs tests/v11-sandbox-forwarder.test.mjs
       - name: Download and verify the isolated nearcore executable
         run: |
           set -euo pipefail
