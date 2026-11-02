@@ -1,0 +1,17 @@
+# User-named testnet account and vault funding
+
+On 2 November 2026, a [read-only FINAL snapshot](https://github.com/Greatmujey/Bouncer/actions/runs/41539032525) reported `greatmujey.testnet` **absent** as a NEAR account, while Circle's testnet FT contract had registered that name and held **40 test USDC** for it. An FT balance can exist for a name that has not yet been created as an account. The explorer shows two successful 20-test-USDC credits ([first](https://testnet.nearblocks.io/txns/592mYGHYqB7UbHRbEPyWLHF2ko7z4CsGWEFNwU42SrxU), [second](https://testnet.nearblocks.io/txns/Ds87NN8DxyvdZ67ZkhzRDJ9njvgVBd7qot46QctAtAf6)). Earlier direct test-NEAR faucet transfers to the nonexistent name failed; a listed transfer is not proof of a successful deposit.
+
+## Recovery
+
+A new, dedicated Ed25519 **testnet-only** key was generated locally. The private key was not sent to GitHub, the helper, a seller, the repository or chat. After an immutable public attempt fence, [one helper request](https://github.com/Greatmujey/Bouncer/actions/runs/41539515077) created `greatmujey.testnet`. Fresh public FINAL views reported the expected single full-access public key, a plain account with **10 test NEAR**, Circle registration and the **40 test USDC**. The public fence artifact is `13186200758`. Do not repeat the helper request.
+
+The testnet recovery file was opened privately for the user; **an off-device backup is not confirmed**. The key can control the named account. Save it privately, never paste it into chat or a website, and never use it for mainnet. Two locally encrypted copies and a local wrapping key were checked, but they are not an independent backup and loss of the workspace could lose access.
+
+## Bouncer vault topup
+
+One locally signed, original-hash-fenced `ft_transfer_call` moved **6 test USDC** from `greatmujey.testnet` to the existing keyless Bouncer V11 vault, not to a seller. [Transaction `Ep5vWogSd2nqitJFdLxR8J9CnZaqUjn6wnbRCaXVq2fM`](https://testnet.nearblocks.io/txns/Ep5vWogSd2nqitJFdLxR8J9CnZaqUjn6wnbRCaXVq2fM) was reported FINAL by the [one-shot workflow](https://github.com/Greatmujey/Bouncer/actions/runs/41540572718); its matching Circle transfer event, vault `ft_on_transfer` callback, resolver and linked receipt graph were verified. The original public bearer is `../evidence/greatmujey-testnet/vault-topup-original.json`, the public fence artifact is `13185239976`, and the original local journal is retained privately. **Never resend or replace this transaction.**
+
+At the workflow's fresh pinned FINAL block, the named account held **34 test USDC**; the vault held **6.006907 test USDC**, both on-token and in Bouncer's tracked ledger. These are testnet tokens with no financial value. The vault's existing per-transaction and rolling caps were **not changed** by the deposit; money in the vault does not automatically authorize a larger purchase. The keyless vault remains unaudited and its owner-key backup remains unconfirmed.
+
+The same initial public snapshot reported zero native NEAR and zero Circle USDC for `greatmujey.near`; it did not enumerate all other mainnet assets. No mainnet transaction or real-money payment was made. A larger balance does not establish an independent seller, x402 compatibility or delivery: connecting a real FT-paid resource with safe settlement and recovery remains the next task.
