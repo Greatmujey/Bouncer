@@ -26,6 +26,8 @@ async function persistAttempt(record){
 }
 try{
  const result=await broadcastTestnetResourceAgentOnce({ownerPlan:owner,agentPlan:agent,envelope,originalProbe,expectedCircleCodeHash:anchor.circle_code_hash,
-  provider:new ExperimentalSvalinSetupRpc('https://rpc.testnet.near.org',{readTimeoutMs:12_000}),persistAttempt});
+  // The same fixed endpoint is used for the pinned preflight and single send.
+  // Read-only reconciliation can independently query other RPCs if this fails.
+  provider:new ExperimentalSvalinSetupRpc('https://test.rpc.fastnear.com',{readTimeoutMs:12_000}),persistAttempt});
  console.log(JSON.stringify({...result,signed_envelope_sha256:digest,fence_artifact_id:artifact,run_id:run,commit:sha},null,2));
 }catch(error){console.error(`Original resource-agent ${stage} stopped: ${error?.message??'unknown error'}`);process.exitCode=1}
