@@ -28,7 +28,7 @@ import { SVALIN_PAYEE as SELLER } from '../agent/svalin-pro-readiness.mjs';
 import { SVALIN_TRIAL_MAX_ATOMS as FUNDING } from '../agent/svalin-pro-preflight.mjs';
 import { V11_SHA256, MOCK_FT_SHA256, SANDBOX_SHA256, SANDBOX_CHAIN_ID, readVerifiedFile,
   withMockTokenInGenesis, assertSandboxStatus, requireFinalSuccess, assertOmittedLocalAddKeyReceipt,
-  requireReceiptLog } from './v11-sandbox-support.mjs';
+  assertRegistrationWithOnlyGasRefund, requireReceiptLog } from './v11-sandbox-support.mjs';
 
 const { transactions: tx, KeyPair, KeyPairSigner, Account, providers, utils } = nearApi;
 const ROOT = 'testnet', OWNER = 'owner.testnet', VAULT = 'trial.owner.testnet';
@@ -190,8 +190,7 @@ async function run() {
       wasmBytes: wasm, agentPublicKey: pub(agentKey), initialVaultFundingYocto: (7n * NEAR).toString(),
       agentGasAllowanceYocto: NEAR.toString(), vaultTokenStorageDepositYocto: bounds.min,
     });
-    const stageEvidence = [];
-    let localReceiptBlocker = false;
+    const stageEvidence = [], verifierBlockers = [];
     const checkpoint = message => console.error(`Sandbox checkpoint: ${message}`);
     const setupStage = async index => {
       const batch = plan.batches[index];
@@ -207,18 +206,40 @@ async function run() {
         checked = inspectSvalinSetupAttempt({ plan, trustedReviewHash: plan.review.review_sha256,
           trustedOriginalHash: proof.attempt.tx_hash, trustedOwnerPublicKey: pub(ownerKey), attempt: proof.attempt, result: outcome });
       } catch (error) {
-        // nearcore omits the original *local* receipt body when signer and
-        // receiver are the same. The current production verifier rejects it.
-        // Continue ONLY the isolated contract tests after strictly diagnosing
-        // this one known blocker; never synthesize a receipt, call it verified,
-        // or return a passing job while the production verifier is blocked.
-        if (index !== 2) throw error;
-        assertOmittedLocalAddKeyReceipt(outcome, proof.attempt, error);
-        localReceiptBlocker = true;
-        stageEvidence.push({ stage: batch.id, sandbox_transaction_hash: proof.attempt.tx_hash,
-          status: 'BLOCKED_PRODUCTION_VERIFIER_OMITTED_LOCAL_RECEIPT' });
-        checkpoint('agent-key transaction finalized but production receipt verifier failed closed; remaining tests are sandbox diagnostics only');
-        return;
+        // The production verifier has already failed closed. Continue ONLY on
+        // this isolated chain after diagnosing one of the specific known
+        // blockers below. Do not synthesize receipts or call either stage
+        // verified; the job will still fail while any blocker is present.
+        if (index === 2) {
+          assertOmittedLocalAddKeyReceipt(outcome, proof.attempt, error);
+          verifierBlockers.push('same-account AddKey root receipt omitted by nearcore');
+          stageEvidence.push({ stage: batch.id, sandbox_transaction_hash: proof.attempt.tx_hash,
+            status: 'BLOCKED_PRODUCTION_VERIFIER_OMITTED_LOCAL_RECEIPT' });
+          checkpoint('agent-key transaction finalized but production receipt verifier failed closed; remaining tests are sandbox diagnostics only');
+          return;
+        }
+        if (index === 3 && error?.message === 'token registration result does not match the reviewed fresh registration') {
+          const fresh = await view(TOKEN, 'storage_balance_of', { account_id: VAULT });
+          const rootId = outcome.transaction_outcome?.outcome?.status?.SuccessReceiptId;
+          const root = outcome.receipts_outcome?.find(item => item.id === rootId)?.outcome;
+          // Bounded, public sandbox diagnostics only. Do not print keys,
+          // transaction signatures, arbitrary RPC values or environment data.
+          const children = (root?.receipt_ids ?? []).slice(0, 8).map(id => {
+            const child = outcome.receipts?.find(item => item.receipt_id === id);
+            const action = child?.receipt?.Action;
+            return { present: Boolean(child), predecessor: child?.predecessor_id, receiver: child?.receiver_id,
+              signer: action?.signer_id, gas_price: action?.gas_price,
+              action_types: action?.actions?.map(value => Object.keys(value)[0]) };
+          });
+          checkpoint(`registration diagnostic: ${JSON.stringify({ fresh, child_count: root?.receipt_ids?.length, children })}`);
+          assertRegistrationWithOnlyGasRefund(outcome, proof.attempt, error, bounds.min, fresh);
+          verifierBlockers.push('registration verifier rejects a linked protocol gas refund');
+          stageEvidence.push({ stage: batch.id, sandbox_transaction_hash: proof.attempt.tx_hash,
+            status: 'BLOCKED_PRODUCTION_VERIFIER_SYSTEM_GAS_REFUND' });
+          checkpoint('mock registration state matches but production verifier rejects the gas-refund child');
+          return;
+        }
+        throw error;
       }
       const expected = index === 4 ? 'FINAL_FUNDING_RECEIPTS_MATCH' : 'FINAL_SETUP_RECEIPT_MATCH';
       assert.equal(checked.status, expected, `${batch.id}: receipt verification failed`);
@@ -325,8 +346,8 @@ async function run() {
       v11_sha256: V11_SHA256, mock_ft_sha256: MOCK_FT_SHA256, sandbox_binary_sha256: SANDBOX_SHA256,
       genesis_token_is_circle: false, keys_are_ephemeral: true, seller_contacted: false, real_funds_used: false,
       setup_stage_observations: stageEvidence,
-      all_original_setup_receipts_verified: !localReceiptBlocker,
-      known_setup_verifier_blockers: localReceiptBlocker ? ['same-account AddKey root receipt omitted by nearcore'] : [],
+      all_original_setup_receipts_verified: verifierBlockers.length === 0,
+      known_setup_verifier_blockers: verifierBlockers,
       guard: { restricted_zero_deposit_blocked_by_contract: true, restricted_one_yocto_rejected_by_protocol: true,
         non_owner_one_yocto_blocked: true, owner_two_yocto_blocked: true, owner_one_yocto_configuration_succeeded: true },
       restricted_agent_method_filter_checked: true, allowlist_and_caps_checked: true,
@@ -334,7 +355,7 @@ async function run() {
       failed_ft_receipt_and_refund_callback_checked: true,
     };
     console.log(JSON.stringify(evidence, null, 2));
-    if (localReceiptBlocker) {
+    if (verifierBlockers.length) {
       throw new Error('sandbox contract diagnostics finished, but the production setup verifier remains blocked; no successful setup verification claimed');
     }
   } finally {

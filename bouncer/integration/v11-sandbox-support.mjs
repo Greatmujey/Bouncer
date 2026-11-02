@@ -111,6 +111,47 @@ export function assertOmittedLocalAddKeyReceipt(result, attempt, verifierError) 
   return rootId;
 }
 
+/** Diagnose a fresh mock-FT registration that the production verifier rejects
+ * solely because a linked protocol gas-refund receipt is present. This is NOT
+ * production verification. The harness still fails the job for this blocker. */
+export function assertRegistrationWithOnlyGasRefund(result, attempt, verifierError, minimum, freshBalance) {
+  assert.equal(attempt?.stage_id, 'register_vault_for_test_usdc');
+  assert.equal(verifierError?.message, 'token registration result does not match the reviewed fresh registration');
+  assert.equal(result?.final_execution_status, 'FINAL');
+  assert.equal(result?.transaction?.hash, attempt.tx_hash);
+  const rootId = result?.transaction_outcome?.outcome?.status?.SuccessReceiptId;
+  const roots = (result?.receipts_outcome ?? []).filter(item => item?.id === rootId);
+  assert.equal(roots.length, 1);
+  const root = roots[0].outcome;
+  assert.equal(root.executor_id, attempt.receiver_id);
+  assert.equal(root.status?.SuccessValue, result?.status?.SuccessValue);
+  const expectedBalance = { total: minimum, available: '0' };
+  assert.deepEqual(JSON.parse(Buffer.from(root.status.SuccessValue, 'base64').toString('utf8')), expectedBalance);
+  assert.deepEqual(freshBalance, expectedBalance);
+  assert.ok(Array.isArray(root.receipt_ids));
+  assert.equal(root.receipt_ids.length, 1, 'expected exactly one protocol gas refund');
+  const childId = root.receipt_ids[0];
+  const children = (result.receipts ?? []).filter(item => item?.receipt_id === childId);
+  const childOutcomes = (result.receipts_outcome ?? []).filter(item => item?.id === childId);
+  assert.equal(children.length, 1);
+  assert.equal(childOutcomes.length, 1);
+  const child = children[0], action = child.receipt?.Action, out = childOutcomes[0].outcome;
+  assert.equal(child.predecessor_id, 'system');
+  assert.equal(child.receiver_id, attempt.signer_id);
+  assert.equal(action?.signer_id, attempt.signer_id);
+  assert.equal(action?.signer_public_key, attempt.signer_public_key);
+  assert.equal(String(action?.gas_price), '0');
+  assert.deepEqual(action?.input_data_ids, []);
+  assert.deepEqual(action?.output_data_receivers, []);
+  assert.equal(action?.actions?.length, 1);
+  assert.deepEqual(Object.keys(action.actions[0]), ['Transfer']);
+  assert.deepEqual(Object.keys(action.actions[0].Transfer), ['deposit']);
+  assert.match(String(action.actions[0].Transfer.deposit), /^[1-9][0-9]*$/);
+  assert.equal(out?.executor_id, attempt.signer_id);
+  assert.deepEqual(out?.status, { SuccessValue: '' });
+  assert.deepEqual(out?.receipt_ids, []);
+}
+
 export function requireReceiptLog(result, executorId, text) {
   const matches = (result?.receipts_outcome ?? []).filter(item => item?.outcome?.executor_id === executorId &&
     Array.isArray(item.outcome.logs) && item.outcome.logs.some(log => typeof log === 'string' && log.includes(text)));

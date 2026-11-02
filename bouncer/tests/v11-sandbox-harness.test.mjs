@@ -8,7 +8,7 @@ import path from 'node:path';
 import test from 'node:test';
 import nearApi from 'near-api-js';
 import { SANDBOX_CHAIN_ID, MOCK_TOKEN_GENESIS_BALANCE, readVerifiedFile, withMockTokenInGenesis,
-  assertSandboxStatus, requireFinalSuccess, assertOmittedLocalAddKeyReceipt,
+  assertSandboxStatus, requireFinalSuccess, assertOmittedLocalAddKeyReceipt, assertRegistrationWithOnlyGasRefund,
   requireReceiptLog } from '../integration/v11-sandbox-support.mjs';
 import { CIRCLE_TESTNET_USDC as TOKEN } from '../scripts/circle-testnet-setup.mjs';
 
@@ -103,4 +103,41 @@ test('local AddKey omission diagnostic requires a specific rejected same-account
   assert.throws(() => assertOmittedLocalAddKeyReceipt(result, { ...attempt, stage_id: 'create_keyless_vault' }, error));
   assert.throws(() => assertOmittedLocalAddKeyReceipt(result, { ...attempt, receiver_id: 'vault.testnet' }, error));
   assert.throws(() => assertOmittedLocalAddKeyReceipt(result, attempt, new Error('unrelated verifier failure')));
+});
+
+test('registration diagnostic only recognizes exact balance plus a linked system gas refund', () => {
+  const attempt = { stage_id: 'register_vault_for_test_usdc', tx_hash: 'registration-hash',
+    signer_id: 'owner.testnet', receiver_id: TOKEN, signer_public_key: publicKey };
+  const minimum = '1250000000000000000000', balance = { total: minimum, available: '0' };
+  const encoded = Buffer.from(JSON.stringify(balance)).toString('base64');
+  const root = { id: 'registration-root', outcome: { executor_id: TOKEN, status: { SuccessValue: encoded }, receipt_ids: ['gas-refund'] } };
+  const gas = { receipt_id: 'gas-refund', predecessor_id: 'system', receiver_id: attempt.signer_id,
+    receipt: { Action: { signer_id: attempt.signer_id, signer_public_key: publicKey, gas_price: '0', input_data_ids: [],
+      output_data_receivers: [], actions: [{ Transfer: { deposit: '999' } }] } } };
+  const gasOutcome = { id: 'gas-refund', outcome: { executor_id: attempt.signer_id, status: { SuccessValue: '' }, receipt_ids: [] } };
+  const result = { final_execution_status: 'FINAL', status: { SuccessValue: encoded }, transaction: { hash: attempt.tx_hash },
+    transaction_outcome: { outcome: { status: { SuccessReceiptId: 'registration-root' } } },
+    receipts: [gas], receipts_outcome: [root, gasOutcome] };
+  const error = new Error('token registration result does not match the reviewed fresh registration');
+  assert.doesNotThrow(() => assertRegistrationWithOnlyGasRefund(result, attempt, error, minimum, balance));
+  const changes = [
+    r => { r.final_execution_status = 'EXECUTED'; }, r => { r.transaction.hash = 'other'; },
+    r => { r.status.SuccessValue = Buffer.from('{}').toString('base64'); },
+    r => { r.receipts_outcome[0].outcome.executor_id = 'other.testnet'; },
+    r => { r.receipts_outcome[0].outcome.receipt_ids = []; },
+    r => { r.receipts_outcome[0].outcome.receipt_ids.push('other'); },
+    r => { r.receipts[0].predecessor_id = TOKEN; }, // contract transfer is NOT a protocol refund
+    r => { r.receipts[0].receiver_id = 'attacker.testnet'; },
+    r => { r.receipts[0].receipt.Action.signer_id = 'system'; }, // deposit refund, not gas refund
+    r => { r.receipts[0].receipt.Action.signer_public_key = 'other'; },
+    r => { r.receipts[0].receipt.Action.gas_price = '1'; },
+    r => { r.receipts[0].receipt.Action.actions = [{ FunctionCall: { method_name: 'x' } }]; },
+    r => { r.receipts[0].receipt.Action.actions[0].Transfer.deposit = '0'; },
+    r => { r.receipts_outcome[1].outcome.status = { Failure: {} }; },
+    r => { r.receipts_outcome[1].outcome.receipt_ids = ['other']; },
+  ];
+  for (const change of changes) { const r = structuredClone(result); change(r); assert.throws(() => assertRegistrationWithOnlyGasRefund(r, attempt, error, minimum, balance)); }
+  assert.throws(() => assertRegistrationWithOnlyGasRefund(result, attempt, error, minimum, { ...balance, available: '1' }));
+  assert.throws(() => assertRegistrationWithOnlyGasRefund(result, { ...attempt, stage_id: 'other' }, error, minimum, balance));
+  assert.throws(() => assertRegistrationWithOnlyGasRefund(result, attempt, new Error('other'), minimum, balance));
 });

@@ -14,8 +14,12 @@ contract guard and not permission to advance a live setup. nearcore 2.14.0
 [intentionally omits a same-account transaction's local receipt body](https://github.com/near/nearcore/blob/2.14.0/chain/chain/src/chain.rs#L3294-L3323)
 from the receipt list, even though its execution outcome is reported. The
 production verifier currently fails closed on that shape; a correction requires
-separate review and approval. Synthetic JavaScript harness tests do not prove
-nearcore behavior.
+separate review and approval. A subsequent diagnostic run
+[41425756155](https://github.com/Greatmujey/Bouncer/actions/runs/41425756155)
+confirmed the actual restricted-key state and method rejection, then reached the
+mock-token registration but the verifier rejected its result. The exact cause
+of that second mismatch is still being investigated; funding and transfer tests
+had not yet run. Synthetic JavaScript harness tests do not prove nearcore behavior.
 
 The opt-in job starts a fresh, one-validator nearcore **2.14.0** sandbox on
 loopback, with protocol **88**, and destroys its temporary chain afterwards.
@@ -80,12 +84,14 @@ after the workflow is on the default branch, it also supports manual dispatch.
 It uses the existing Node lockfile and no repository secrets. To gather more
 contract diagnostics while the known verifier blocker is being investigated,
 the harness may continue **only on this disposable chain** after strictly
-recognizing the omitted same-account AddKey receipt. It records that stage as
-blocked, does not invent a receipt, and deliberately fails the job at the end;
-any different verification error fails immediately. Checkpoint messages identify
-which bounded checks actually ran. No setup success is claimed unless the real
-production verifier accepts every original stage. The repository's normal CI
-and any configured preview deployment may also run on a branch push.
+recognizing the omitted same-account AddKey receipt, or a fresh mock-token
+registration whose only linked child is a verified system gas refund. It records
+such stages as blocked, does not invent a receipt, and deliberately fails the
+job at the end; any different verification error fails immediately. Checkpoint
+messages identify which bounded checks actually ran. No setup success is
+claimed unless the real production verifier accepts every original stage. The
+repository's normal CI and any configured preview deployment may also run on a
+branch push.
 
 A passing result would be real nearcore runtime evidence for these bounded
 cases with this example FT, **not** a security audit, V11 source-to-binary
