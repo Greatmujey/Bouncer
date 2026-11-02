@@ -1,0 +1,71 @@
+# ONE-SHOT TESTNET OWNER SETUP. The committed signed envelope is a public
+# bearer transaction; any observer can relay the same fixed bytes earlier.
+# No private key is present. Original hash is journaled locally before push.
+# Bound to one parent and run_attempt 1; no dispatch or automatic retries.
+name: Register testnet owner with Circle once
+
+on:
+  push:
+    branches: ['arena/25a7aaf6-near-hub']
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  register:
+    if: github.event.before == 'f4fb5dd2851a9e7894ab9f047ad5564011c153a3' && github.run_attempt == 1 && contains(github.event.head_commit.message, '[circle-owner-register-once]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: bouncer
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+      - name: Install lockfile and run fixed-action safety tests
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          node --test tests/circle-owner-registration.test.mjs tests/circle-owner-registration-runner.test.mjs tests/circle-owner-offline-journal.test.mjs
+      - name: Prepare original-hash fence
+        id: fence_info
+        run: |
+          set -euo pipefail
+          file='evidence/testnet-circle-owner-registration/original-signed-registration.json'
+          test -f "$file"
+          digest="$(sha256sum "$file" | cut -d' ' -f1)"
+          echo "sha=$digest" >> "$GITHUB_OUTPUT"
+          mkdir -p "$RUNNER_TEMP/circle-registration-fence"
+          cp "$file" "$RUNNER_TEMP/circle-registration-fence/original-signed-registration.json"
+          printf 'network=testnet\nrun_id=%s\ncommit=%s\nenvelope_sha256=%s\nrequest=one original signed transaction; reconcile, never blindly resend\n' \
+            "$GITHUB_RUN_ID" "$GITHUB_SHA" "$digest" > "$RUNNER_TEMP/circle-registration-fence/attempt.txt"
+      - name: Retain the public original-hash fence before the CI send
+        id: fence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: circle-registration-fence-${{ github.run_id }}-${{ steps.fence_info.outputs.sha }}
+          path: ${{ runner.temp }}/circle-registration-fence/
+          retention-days: 30
+          if-no-files-found: error
+      - name: Recheck fresh state, submit once, and verify the original receipt
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          BOUNCER_FENCE_ARTIFACT_ID: ${{ steps.fence.outputs.artifact-id }}
+        run: |
+          set -euo pipefail
+          if ! node scripts/broadcast-circle-owner-once.mjs > "$RUNNER_TEMP/circle-result.json" 2> "$RUNNER_TEMP/circle-error.log"; then
+            python3 -c 'import os; s=open(os.environ["RUNNER_TEMP"]+"/circle-error.log").read()[-4000:]; print("::error title=Original Circle registration unconfirmed; do not retry::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
+            exit 1
+          fi
+          {
+            echo '## Circle testnet owner registration'
+            echo 'The owner signed locally; the public bearer transaction could have been relayed before CI. A single CI send and original-hash receipt check were used. This is not USDC funding, vault deployment or seller delivery.'
+            echo '```json'
+            cat "$RUNNER_TEMP/circle-result.json"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          python3 -c 'import os,json; p=os.environ["RUNNER_TEMP"]+"/circle-result.json"; s=json.dumps(json.load(open(p)),separators=(",",":")); print("::notice title=Circle testnet owner registration::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
