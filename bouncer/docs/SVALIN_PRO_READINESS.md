@@ -358,19 +358,33 @@ notices, but GitHub returned only 4,096 characters from each. The extractor
 correctly rejected those incomplete chunks and wrote no WASM file; the hash
 annotation alone does not retrieve or review the artifact.
 
-A revised, **not yet live-tested** fallback splits non-secret V11 binary into
-at most 90 notices of 4,000 characters, with at most nine in each of ten
-separately guarded steps. The local extractor accepts only a complete artifact
-matching the exact run's separately retained SHA-256. Synthetic tests cannot
-establish that GitHub will retain every part. A future retry requires a
-separately approved private-repository push with `[v11-wasm-review-export]`;
-it triggers normal CI and may create a Vercel preview. It exposes the binary to
-repository log/check readers and could become visible if the repository becomes
-public; never use it for credentials or private data. It does not authorize
-deployment, registration, seller contact or payment. The Rust contract has no
-tracked Cargo lockfile, and CI selects a stable toolchain and installs Binaryen
-rather than pinning a complete reproducible build environment. A CI artifact or
-its hash is therefore not, by itself, an independent source-to-binary review.
+The separately approved retry, push run `41362684342`, used 4,000-character
+chunks; GitHub retained only 49 of the 53 required chunks in that check. The
+extractor again failed closed and wrote no WASM. The later main-branch build
+`41366026760`, triggered by the owner's merge, also reported the same size and
+hash; it did not establish an independent build or retrieve the binary here.
+The old private-only annotation exporter cannot run while the repository is
+public and must not be used for credentials or private data.
+
+An **unrun, synthetic-tested** alternative, `.github/workflows/v11-existing-artifact-bridge.yml`,
+is narrowly gated to the first creation push of the current session branch in
+this public repository with an explicit opt-in marker. It downloads the already
+existing artifact `13105539480`, checks the archive and WASM size and hashes,
+and creates only an unreferenced Git blob, not a commit or branch change. The
+GitHub credential is sent only to the API, not the signed storage host. The
+workflow requires separate approval before the push: normal CI will also run,
+and a Vercel preview may use its separate allowance. A small non-secret,
+unreferenced Git blob was created and retrieved successfully through the
+GitHub API without changing a branch; this checks the basic round trip, not
+this workflow or the actual V11 artifact. If the blob POST result is unknown,
+check the expected content-derived blob ID before considering any retry. The
+bridge has not yet been exercised live; integrity checks do not authorize
+deployment, registration, seller contact or payment.
+
+The Rust contract has no tracked Cargo lockfile, and CI selects a stable
+toolchain and installs Binaryen rather than pinning a complete reproducible
+build environment. A CI artifact or its hash is therefore not, by itself, an
+independent source-to-binary review.
 
 The five batches respectively create/init the keyless vault, configure its
 locked policy, add the restricted agent key on the owner, register the vault

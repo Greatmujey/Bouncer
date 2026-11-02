@@ -1,0 +1,30 @@
+# One-time transport of an already-built, non-secret V11 artifact. This never
+# runs on a PR, a private repository, a rerun, or an ordinary push. Creating an
+# unreferenced Git blob is not a commit, deployment, NEAR transaction or audit.
+name: Bridge existing public V11 artifact
+
+on:
+  push:
+    branches:
+      - 'arena/e03cb47e-near-hub'
+
+permissions: {}
+
+jobs:
+  bridge-existing-v11:
+    if: github.event_name == 'push' && github.repository == 'Greatmujey/Bouncer' && github.event.repository.private == false && github.ref == 'refs/heads/arena/e03cb47e-near-hub' && github.event.created == true && github.event.before == '0000000000000000000000000000000000000000' && github.run_attempt == '1' && contains(github.event.head_commit.message, '[v11-existing-artifact-bridge-20261102]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Verify bridge behavior offline
+        run: python3 -m unittest discover -s bouncer/tests -p 'v11_artifact_bridge_test.py'
+      - name: Verify existing artifact and create only its Git blob
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 bouncer/scripts/v11-existing-artifact-bridge.py

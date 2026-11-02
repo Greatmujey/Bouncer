@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
 const workflow = fs.readFileSync(new URL('../../.github/workflows/ci.yml', import.meta.url), 'utf8');
+const publicBridgeWorkflow = fs.readFileSync(new URL('../../.github/workflows/v11-existing-artifact-bridge.yml', import.meta.url), 'utf8');
 const mutationJobs = [
   'resume-original-ref-sweep', 'youtick-owner-grant-probe', 'youtick-testnet-quote-only',
   'paid-vrf2-one-shot', 'paid-vrf-one-shot', 'guarded-ref-one-shot',
@@ -115,6 +116,37 @@ test('private V11 artifact annotation export is opt-in and cannot enable histori
     c => { c.github.event_name = 'pull_request'; }, c => { c.github.ref = 'refs/heads/main'; },
     c => { c.github.event.head_commit.message = 'ordinary commit'; },
   ]) { const other = structuredClone(ctx); change(other); assert.equal(evaluate(expr, other), false); }
+});
+
+test('existing V11 artifact bridge is public-only, one-shot, branch-scoped and cannot enable live jobs', () => {
+  assert.match(publicBridgeWorkflow, /on:\n  push:\n    branches:\n      - 'arena\/e03cb47e-near-hub'/);
+  assert.doesNotMatch(publicBridgeWorkflow, /^  (?:pull_request|workflow_dispatch):/m);
+  assert.match(publicBridgeWorkflow, /permissions: \{\}/);
+  assert.match(publicBridgeWorkflow, /permissions:\n      actions: read\n      contents: write/);
+  assert.match(publicBridgeWorkflow, /persist-credentials: false/);
+  assert.equal([...publicBridgeWorkflow.matchAll(/run: python3 bouncer\/scripts\/v11-existing-artifact-bridge\.py/g)].length, 1);
+  const conditions = [...publicBridgeWorkflow.matchAll(/^    if: (.+)$/gm)];
+  assert.equal(conditions.length, 1);
+  const expr = conditions[0][1];
+  const ctx = { github: { event_name: 'push', repository: 'Greatmujey/Bouncer',
+    ref: 'refs/heads/arena/e03cb47e-near-hub', run_attempt: '1',
+    event: { repository: { private: false }, created: true, before: '0'.repeat(40),
+      head_commit: { message: 'Bridge existing artifact [v11-existing-artifact-bridge-20261102]' } } },
+    inputs: { run_testnet_smoke: false } };
+  assert.equal(evaluate(expr, ctx), true, 'the explicitly approved context can run the bridge');
+  for (const change of [
+    c => { c.github.event.repository.private = true; }, c => { c.github.run_attempt = '2'; },
+    c => { c.github.event_name = 'pull_request'; }, c => { c.github.event_name = 'workflow_dispatch'; },
+    c => { c.github.ref = 'refs/heads/main'; }, c => { c.github.repository = 'someone/Bouncer'; },
+    c => { c.github.event.created = false; }, c => { c.github.event.before = 'b'.repeat(40); },
+    c => { c.github.event.head_commit.message = 'ordinary push'; },
+  ]) { const other = structuredClone(ctx); change(other); assert.equal(evaluate(expr, other), false); }
+  for (const job of mutationJobs) {
+    assert.equal(evaluate(condition(job), ctx), false, `${job}: bridge must not run historical live actions`);
+    const privateContext = structuredClone(ctx); privateContext.github.event.repository.private = true;
+    assert.equal(evaluate(condition(job), privateContext), false, `${job}: bridge marker must not enable a live job`);
+  }
+  assert.equal(evaluate(condition('svalin-pro-readiness'), ctx), false, 'bridge must not contact the seller');
 });
 
 test('manual dispatch defaults to no live smoke and requires a separate explicit checkbox', () => {

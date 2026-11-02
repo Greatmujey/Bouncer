@@ -43,9 +43,12 @@ From the repository root, with Node.js 22 and npm:
 ```sh
 npm ci --prefix bouncer --ignore-scripts --no-audit --no-fund
 node --test bouncer/tests/fresh-final-block.test.mjs bouncer/tests/multiagency-exact-ft.test.mjs bouncer/tests/multiagency-exact-runner.test.mjs bouncer/tests/svalin-pro-readiness.test.mjs bouncer/tests/svalin-pro-preflight.test.mjs bouncer/tests/svalin-setup-plan.test.mjs bouncer/tests/svalin-setup-evidence.test.mjs bouncer/tests/svalin-setup-journal.test.mjs bouncer/tests/svalin-setup-preflight.test.mjs bouncer/tests/v11-wasm-annotations.test.mjs bouncer/tests/svalin-liquidity-readiness.test.mjs bouncer/tests/svalin-pro-session.test.mjs bouncer/tests/svalin-pro-session-concurrency.test.mjs bouncer/tests/svalin-pro-runner.test.mjs bouncer/tests/svalin-pro-cli.test.mjs bouncer/tests/youtick-grant-probe-evidence.test.mjs bouncer/tests/live-action-safety-gates.test.mjs
+# Optional: Python 3 tests for the unrun existing-artifact bridge
+python3 -m unittest discover -s bouncer/tests -p 'v11_artifact_bridge_test.py'
 ```
 
-**See:** 118 passing offline tests (the count can increase as tests are added).
+**See:** 119 passing Node tests and 11 passing optional Python tests (the
+counts can increase as tests are added).
 They exercise synthetic exact-payment proofs, ambiguous-send recovery, stale or
 mixed FINAL-block rejection, unsigned V11 setup planning and pre-creation
 checks, compressed artifact transport, original-hash receipt checks and encrypted
