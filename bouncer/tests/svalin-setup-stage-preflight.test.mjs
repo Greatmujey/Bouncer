@@ -171,6 +171,29 @@ test('state drift, unsafe keys, changed token prerequisites and non-pristine bal
   }
 });
 
+test('every setup stage and final snapshot reject an owner with local or global contract code', async () => {
+  for (let index = 0; index <= 5; index++) {
+    const f = fixture();
+    try {
+      await completeThrough(f, index);
+      for (const mutate of [
+        s => { s.owner.code_hash = OTHER; },
+        s => { delete s.owner.code_hash; },
+        s => { s.owner.global_contract_hash = OTHER; },
+        s => { s.owner.global_contract_account_id = 'shared.testnet'; },
+        s => { s.owner.state = 'uninitialized'; },
+        s => { s.owner.block_hash = OTHER; },
+      ]) {
+        const s = snapshot(f, index); mutate(s);
+        const result = await inspect(f, index, s);
+        assert.equal(result.status, 'BLOCKED_OR_UNKNOWN', stageName(index));
+        assert.equal(result.checks.owner_has_no_contract_code, 'BLOCKED', stageName(index));
+        assert.equal(result.transaction_signed, false); assert.equal(result.transaction_sent, false);
+      }
+    } finally { f.close(); }
+  }
+});
+
 test('every setup stage and final snapshot reject missing or disabled reported WASM feature gates', async () => {
   for (let index = 0; index <= 5; index++) {
     const f = fixture();
@@ -195,7 +218,8 @@ test('unavailable and wrong-block views remain UNKNOWN, sanitized and unable to 
   try {
     await completeThrough(f, 4);
     for (const [failure, check] of [['protocol', 'testnet_protocol_and_storage_cost'], ['ownerKeys', 'agent_key_state'],
-      ['vault', 'vault_code_matches_review'], ['vaultKeys', 'vault_has_no_access_keys'], ['policy', 'strict_trial_policy'],
+      ['owner', 'owner_has_no_contract_code'], ['vault', 'vault_code_matches_review'],
+      ['vaultKeys', 'vault_has_no_access_keys'], ['policy', 'strict_trial_policy'],
       ['verdict', 'expected_payee_check'], ['tracked', 'vault_token_and_tracked_balances'],
       ['vaultRegistration', 'vault_registration_state']]) {
       const s = snapshot(f, 4); s.failures.add(failure);

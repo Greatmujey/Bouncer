@@ -21,7 +21,11 @@ const status = () => ({ kind: 'pro', plan: 'pro', active: true, until: new Date(
 PaymentRpcProvider.prototype.viewNodeStatus = async () => ({ chain_id: 'testnet' });
 PaymentRpcProvider.prototype.viewBlock = async () => ({ header: { hash: finalBlock, timestamp_nanosec: (BigInt(now) * 1_000_000n).toString() } });
 PaymentRpcProvider.prototype.viewAccount = async (id, { blockId }) => {
-  if (id !== config.goal.vault || ![finalBlock, txBlock, executionBlock].includes(blockId)) throw new Error('unexpected synthetic vault lookup');
+  if (![finalBlock, txBlock, executionBlock].includes(blockId)) throw new Error('unexpected synthetic account block');
+  if (id === config.goal.owner) return { block_hash: blockId,
+    code_hash: config.ownerContract ? config.goal.vault_code_hash : '11111111111111111111111111111111',
+    ...(config.ownerGlobal ? { global_contract_account_id: 'shared.testnet' } : {}) };
+  if (id !== config.goal.vault) throw new Error('unexpected synthetic vault lookup');
   return { block_hash: blockId, code_hash: config.goal.vault_code_hash };
 };
 PaymentRpcProvider.prototype.viewAccessKeyList = async (id, { blockId }) => {
@@ -29,7 +33,8 @@ PaymentRpcProvider.prototype.viewAccessKeyList = async (id, { blockId }) => {
 };
 PaymentRpcProvider.prototype.viewAccessKey = async (id, publicKey, { blockId }) => {
   if (id !== config.goal.owner || String(publicKey) !== a?.agent_public_key) throw new Error('unexpected synthetic agent key');
-  return { block_hash: blockId, permission: { FunctionCall: { receiver_id: config.goal.vault, method_names: ['execute_exact_ft'] } } };
+  return { block_hash: blockId, permission: { FunctionCall: { receiver_id: config.goal.vault,
+    method_names: ['execute_exact_ft'], allowance: '100000000000000000000000' } } };
 };
 PaymentRpcProvider.prototype.callFunction = async (id, method, args, { blockId }) => {
   if (method === 'storage_balance_of') return { total: '1250000000000000000000' };

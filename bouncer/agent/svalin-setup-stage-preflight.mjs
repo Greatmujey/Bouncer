@@ -21,6 +21,7 @@ import { CIRCLE_TESTNET_USDC } from '../scripts/circle-testnet-setup.mjs';
 import { readPinnedJsonView } from './read-only-near-rpc.mjs';
 import { assertFreshFinalBlock } from '../shared/fresh-final-block.mjs';
 import { pinnedAccessKeyNonce } from '../shared/pinned-access-key-nonce.mjs';
+import { hasPlainOwnerProfileAt } from '../shared/plain-owner-profile.mjs';
 import { isTransactionHash } from '../shared/direct-payment-settlement.mjs';
 
 const STAGES = Object.freeze(['create_keyless_vault', 'configure_locked_policy', 'install_restricted_agent_key',
@@ -187,6 +188,7 @@ export async function inspectSvalinSetupStage({ plan, trustedReviewHash, ownerPu
   put('v11_selected_wasm_features_enabled', ['protocol'], () => selectedV11WasmFeaturesEnabled(reads.protocol.value));
   const cost = amount(reads.protocol.value?.runtime_config?.storage_amount_per_byte);
   put('owner_full_access_key', ['owner_key'], () => atBlock('owner_key') && reads.owner_key.value.permission === 'FullAccess');
+  put('owner_has_no_contract_code', ['owner_account'], () => hasPlainOwnerProfileAt(reads.owner_account.value, hash));
   put('owner_nonce_safely_represented', ['owner_key'], () => atBlock('owner_key') && pinnedAccessKeyNonce(reads.owner_key.value.nonce) !== null);
   put('agent_key_state', ['owner_keys'], () => keyList(reads.owner_keys.value, hash, identity, index >= 3, allowance));
   put('vault_code_matches_review', ['vault_account'], () => atBlock('vault_account') && reads.vault_account.value.code_hash === goal.vault_code_hash);

@@ -21,7 +21,9 @@ globalThis.fetch = async (url, options) => {
   const shared = { block_hash: config.block, block_height: 42 };
   if (p.request_type === 'view_account') {
     if (![config.goal.vault, config.goal.owner].includes(p.account_id)) throw new Error('unknown synthetic account');
-    return response(rpc.id, { ...shared, code_hash: config.goal.vault_code_hash, amount: '1000000000000000000000000', locked: '0' });
+    const owner = p.account_id === config.goal.owner;
+    return response(rpc.id, { ...shared, code_hash: owner && !config.ownerContract ? '11111111111111111111111111111111' : config.goal.vault_code_hash,
+      amount: '1000000000000000000000000', locked: '0' });
   }
   if (p.request_type === 'view_access_key_list') return response(rpc.id, { ...shared, keys: [] });
   if (p.request_type === 'view_access_key') return response(rpc.id, { ...shared, nonce: 1, permission: { FunctionCall: {

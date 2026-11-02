@@ -40,8 +40,9 @@ async function fakeRpc(wasm, agentKey, { corruptEvent = false } = {}) {
         const block = p.block_id ?? FINAL;
         assert.ok([FINAL, TX_BLOCK, EXEC_BLOCK].includes(block));
         if (p.request_type === 'view_account') {
-          assert.equal(p.account_id, RUNNER_VAULT);
-          result = { block_hash: block, code_hash: codeHash, amount: String(7n * 10n ** 24n), locked: '0' };
+          assert.ok([RUNNER_VAULT, RUNNER_OWNER].includes(p.account_id));
+          result = { block_hash: block, code_hash: p.account_id === RUNNER_VAULT ? codeHash : '11111111111111111111111111111111',
+            amount: String(7n * 10n ** 24n), locked: '0' };
         } else if (p.request_type === 'view_access_key_list') {
           assert.equal(p.account_id, RUNNER_VAULT);
           result = { block_hash: block, keys: [] };

@@ -41,7 +41,7 @@ function fixture() {
     network: 'testnet', block: { header: { hash: BLOCK, timestamp_nanosec: String(BigInt(NOW) * 1_000_000n) } },
     protocol: { chain_id: 'testnet', protocol_version: 88, runtime_config: { storage_amount_per_byte: COST,
       wasm_config: { global_contract_host_fns: true, reftypes_bulk_memory: true, gas_key_host_fns: true, universal_accounts: true } } },
-    owner: { block_hash: BLOCK, amount: 20n * 10n ** 24n, storage_usage: 10_000 },
+    owner: { block_hash: BLOCK, code_hash: '11111111111111111111111111111111', amount: 20n * 10n ** 24n, storage_usage: 10_000 },
     ownerKey: { block_hash: BLOCK, nonce: 5n, permission: 'FullAccess' },
     keys: { block_hash: BLOCK, keys: [{ public_key: ownerKey, access_key: { permission: 'FullAccess' } }] },
     presence: { exists: false, block_hash: BLOCK },
@@ -115,6 +115,12 @@ test('pre-creation readiness fails closed on wrong authority, occupied accounts,
     ['v11_selected_wasm_features_enabled', s => { s.protocol.runtime_config.wasm_config = null; }],
     ['owner_full_access_key', s => { s.ownerKey.permission = { FunctionCall: {} }; }],
     ['owner_full_access_key', s => { s.ownerKey.block_hash = OTHER_BLOCK; }],
+    ['owner_has_no_contract_code', s => { s.owner.code_hash = OTHER_BLOCK; }],
+    ['owner_has_no_contract_code', s => { delete s.owner.code_hash; }],
+    ['owner_has_no_contract_code', s => { s.owner.global_contract_hash = OTHER_BLOCK; }],
+    ['owner_has_no_contract_code', s => { s.owner.global_contract_account_id = 'contract.testnet'; }],
+    ['owner_has_no_contract_code', s => { s.owner.state = 'uninitialized'; }],
+    ['owner_has_no_contract_code', s => { s.owner.block_hash = OTHER_BLOCK; }],
     ['owner_nonce_safely_represented', s => { s.ownerKey.nonce = -1n; }],
     ['owner_nonce_safely_represented', s => { s.ownerKey.nonce = BigInt(Number.MAX_SAFE_INTEGER); }],
     ['owner_nonce_safely_represented', s => { s.ownerKey.nonce = 2.5; }],
@@ -152,7 +158,8 @@ test('view failures are unknown, sanitized and cannot authorize anything', async
   for (const [failure, check] of [['presence', 'new_direct_child_absent'], ['bounds', 'circle_registration_min_matches_review'],
     ['ownerUsdc', 'owner_test_usdc_covers_funding'], ['sellerRegistration', 'seller_registered_for_circle'],
     ['protocol', 'testnet_protocol_and_storage_cost'], ['protocol', 'v11_protocol_floor'],
-    ['protocol', 'v11_selected_wasm_features_enabled'], ['keys', 'agent_key_not_already_on_owner']]) {
+    ['protocol', 'v11_selected_wasm_features_enabled'], ['keys', 'agent_key_not_already_on_owner'],
+    ['owner', 'owner_has_no_contract_code']]) {
     const f = fixture(); f.state.failures.add(failure);
     const result = await inspectSvalinSetupPrerequisites(f.args);
     assert.equal(result.checks[check], 'UNKNOWN', check); assert.equal(result.execution_authorized, false);
@@ -254,6 +261,8 @@ test('actual setup CLI uses only pinned read RPCs and reports missing funds with
     r = run({ missingFeature: true }); assert.equal(r.status, 2, r.stderr);
     result = JSON.parse(r.stdout); assert.equal(result.checks.v11_selected_wasm_features_enabled, 'BLOCKED');
     assert.equal(result.observed_v11_selected_wasm_features.universal_accounts, null);
+    r = run({ ownerContract: true }); assert.equal(r.status, 2, r.stderr);
+    result = JSON.parse(r.stdout); assert.equal(result.checks.owner_has_no_contract_code, 'BLOCKED');
     r = run({ mainnet: true }); assert.equal(r.status, 1); assert.match(r.stderr, /testnet/);
     requests = fs.readFileSync(log, 'utf8').trim().split('\n'); assert.deepEqual(requests, ['status']);
     assert.deepEqual(fs.readdirSync(dir).sort(), ['config.json', 'goal.json', 'requests.log', 'stub.wasm']);

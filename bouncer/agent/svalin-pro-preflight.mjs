@@ -13,6 +13,7 @@ import { validateSvalinProGoal } from './svalin-pro-session.mjs';
 import { probeSvalinProOffer, SVALIN_PAYEE } from './svalin-pro-readiness.mjs';
 import { CIRCLE_TESTNET_USDC } from '../scripts/circle-testnet-setup.mjs';
 import { assertFreshFinalBlock } from '../shared/fresh-final-block.mjs';
+import { hasPlainOwnerProfileAt } from '../shared/plain-owner-profile.mjs';
 import { ReadOnlyNearRpcProvider, readPinnedJsonView } from './read-only-near-rpc.mjs';
 
 // This deliberately narrow one-purchase profile covers the largest possible
@@ -142,6 +143,7 @@ export async function inspectSvalinProPreflight({ goal: rawGoal, agentPublicKey,
   put('max_checkout_allowed_by_contract', ['verdict'], () => Array.isArray(reads.verdict.value) && reads.verdict.value.length === 2 &&
     reads.verdict.value[0] === true && typeof reads.verdict.value[1] === 'string');
   put('owner_native_balance_nonzero', ['owner_account'], () => atBlock('owner_account') && positiveNative(reads.owner_account.value));
+  put('owner_has_no_contract_code', ['owner_account'], () => hasPlainOwnerProfileAt(reads.owner_account.value, blockHash));
   put('vault_native_balance_nonzero', ['vault_account'], () => atBlock('vault_account') && positiveNative(reads.vault_account.value));
   put('public_offer_matches_reviewed_testnet_profile', ['offer'], () => reads.offer.value?.status === 'PUBLIC_OFFER_ONLY');
   const completedMs = now();
@@ -158,14 +160,15 @@ export async function inspectSvalinProPreflight({ goal: rawGoal, agentPublicKey,
     max_agent_gas_allowance_yocto: SVALIN_TRIAL_MAX_GAS_ALLOWANCE, checks, blockers,
     reservation_created: false, intent_pinned: false, signature_created: false, transaction_sent: false,
     seller_attribution_verified: false, fulfillment_verified: false,
-    scope: 'point-in-time trusted-RPC views only; no code audit, sufficient gas, backups, consent, reservation, payment, attribution or delivery is established' };
+    scope: 'point-in-time trusted-RPC views only; owner code may change or calls may be queued; no code audit, sufficient gas, backups, consent, reservation, payment, attribution or delivery is established' };
 }
 
 const USAGE = `Read-only Svalin testnet preflight: no reservation, signing or transaction.
 Usage: node agent/svalin-pro-preflight.mjs --goal PUBLIC-GOAL.json --public-key ED25519_KEY [--rpc TESTNET_RPC]
 The public goal must pin the intended owner, fresh V11 vault, reviewed code hash and policy.
 The strict one-purchase profile checks the largest possible 5.009999 test-USDC checkout,
-exact trial caps, key and token registration at one FINAL block. It does not prove the
+exact trial caps, key, owner-code and token registration at one FINAL block. This is an
+advisory trusted-RPC snapshot, not proof of consent or future state. It does not prove the
 code was audited, enough gas or backups exist, or authorize any seller/payment action.`;
 function parse(argv) {
   if (argv.length === 1 && argv[0] === '--help') return { help: true };

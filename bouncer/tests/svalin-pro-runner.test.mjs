@@ -8,6 +8,7 @@ import nearApi from 'near-api-js';
 import { FileJournal } from '../agent/procurement.mjs';
 import { prepareSvalinProSession, reserveSvalinProOnce, prepareSvalinProExactFt } from '../agent/svalin-pro-session.mjs';
 import { paySvalinProExactFtOnce, recoverSvalinProPayment, activateSvalinProOnce, inspectSvalinProActivation, requestSvalinProRiskOnce } from '../agent/svalin-pro-runner.mjs';
+import { preflightExactFt } from '../agent/exact-ft-runtime.mjs';
 import { CIRCLE_TESTNET_USDC as TOKEN } from '../scripts/circle-testnet-setup.mjs';
 import { SVALIN_ORIGIN, SVALIN_PAYEE } from '../agent/svalin-pro-readiness.mjs';
 import { mockGuardedPayment, mockHash } from './mock-guarded-payment.mjs';
@@ -25,6 +26,8 @@ function fixture() {
   let lostSend = false, badCode = false, badKey = false, badIntent = false, unregistered = false, denied = false;
   let badOffer = false, badEvent = false, badActivation = false, lostActivation = false, sellerActive = false, badReport = false, lostReport = false, emptyFindings = false;
   const finalBlock = mockHash('final'), txBlock = mockHash('tx'), executionBlock = mockHash('execution');
+  const ownerAccount = { code_hash: '11111111111111111111111111111111' };
+  const keyPermission = { allowance: '100000000000000000000000' };
   const now = () => clock;
   const code = () => journal.get(`${goal.id}-svalin-pro`)?.svalin?.code;
   const offer = () => ({ plans: [{ id: 'month', usd: badOffer ? 6 : 5, days: 30 }, { id: 'year', usd: 48, days: 365 }],
@@ -37,11 +40,14 @@ function fixture() {
   const provider = {
     async viewNodeStatus() { return { chain_id: 'testnet' }; },
     async viewBlock() { return { header: { hash: finalBlock, timestamp_nanosec: (BigInt(clock) * 1_000_000n).toString() } }; },
-    async viewAccount(id, opts) { assert.equal(id, goal.vault); return { block_hash: opts.blockId, code_hash: badCode ? mockHash('wrong') : goal.vault_code_hash }; },
+    async viewAccount(id, opts) {
+      if (id === goal.owner) return { block_hash: opts.blockId, ...ownerAccount };
+      assert.equal(id, goal.vault); return { block_hash: opts.blockId, code_hash: badCode ? mockHash('wrong') : goal.vault_code_hash };
+    },
     async viewAccessKeyList(id, opts) { assert.equal(id, goal.vault); return { block_hash: opts.blockId, keys: [] }; },
     async viewAccessKey(id, pk, opts) { assert.equal(id, goal.owner); assert.equal(String(pk), String(publicKey));
       return { block_hash: opts.blockId, permission: { FunctionCall: { receiver_id: goal.vault,
-        method_names: badKey ? ['execute_exact_ft', 'execute'] : ['execute_exact_ft'] } } }; },
+        method_names: badKey ? ['execute_exact_ft', 'execute'] : ['execute_exact_ft'], ...keyPermission } } }; },
     async callFunction(_contract, method, args, opts) {
       if (method === 'get_owner') return goal.owner;
       if (method === 'contract_version') return 'bouncer-agent-v11-exact-ft-testnet';
@@ -136,7 +142,7 @@ function fixture() {
       memo: a.memo, review_hash: a.review_hash, expires_at_ms: a.expires_at_ms, agent_public_key: a.agent_public_key,
       policy_revision: 1, payee_revision: 2, agent_revision: 3, consumed: false, cancelled: false, active: true };
   }
-  return { file, provider, account, publicKey, fetchImpl, options, now, code, reserveAndPin,
+  return { file, provider, account, ownerAccount, keyPermission, publicKey, fetchImpl, options, now, code, reserveAndPin,
     get journal() { return journal; }, get prepared() { return prepared; }, get sends() { return sends; }, get fallback() { return fallback; },
     get offers() { return offers; }, get reservations() { return reservations; }, get activations() { return activations; },
     get statusChecks() { return statusChecks; }, get paidRequests() { return paidRequests; },
@@ -185,6 +191,96 @@ test('payment requires explicit approvals and fails closed for vault, key, inten
     await assert.rejects(paySvalinProExactFtOnce({ ...f.options(), execute: false }), /acknowledgments/);
     f.deny(); assert.equal((await pay(f)).status, 'BLOCKED'); assert.equal(f.sends, 0);
   } finally { f.close(); }
+});
+
+test('owner contract code or an unavailable pinned owner view blocks the Svalin payment before signing or seller recheck', async () => {
+  for (const mutate of [
+    f => { f.ownerAccount.code_hash = mockHash('local-owner-contract'); },
+    f => { delete f.ownerAccount.code_hash; },
+    f => { f.ownerAccount.global_contract_hash = mockHash('global-contract'); },
+    f => { f.ownerAccount.global_contract_account_id = 'shared.testnet'; },
+    f => { f.ownerAccount.state = 'uninitialized'; },
+    f => { f.ownerAccount.block_hash = mockHash('different-block'); },
+    f => { const read = f.provider.viewAccount; f.provider.viewAccount = async (...args) => {
+      if (args[0] === goal.owner) throw new Error('owner view unavailable'); return read(...args);
+    }; },
+  ]) {
+    const f = fixture();
+    try {
+      await f.reserveAndPin(); const previousOffers = f.offers; let signed = 0;
+      const create = f.account.createTransaction.bind(f.account);
+      f.account.createTransaction = async (...args) => { signed++; return create(...args); };
+      mutate(f);
+      await assert.rejects(pay(f));
+      assert.equal(f.offers, previousOffers, 'unsafe owner must stop before another seller request');
+      assert.equal(signed, 0); assert.equal(f.sends, 0); assert.equal(f.journal.get(goal.id), undefined);
+    } finally { f.close(); }
+  }
+});
+
+test('Svalin payment rejects missing, unlimited, invalid or excessive agent gas allowance before signing', async () => {
+  for (const allowance of [undefined, null, '0', '01', 1, '1000000000000000000000001', '9'.repeat(40)]) {
+    const f = fixture();
+    try {
+      await f.reserveAndPin(); const previousOffers = f.offers; let signed = 0;
+      f.keyPermission.allowance = allowance;
+      const create = f.account.createTransaction.bind(f.account);
+      f.account.createTransaction = async (...args) => { signed++; return create(...args); };
+      await assert.rejects(pay(f), /gas allowance/);
+      assert.equal(f.offers, previousOffers); assert.equal(signed, 0); assert.equal(f.sends, 0);
+      assert.equal(f.journal.get(goal.id), undefined);
+    } finally { f.close(); }
+  }
+});
+
+test('invalid optional shared preflight requirements fail before RPC without changing other adapters', async () => {
+  const f = fixture(); try {
+    await f.reserveAndPin();
+    const provider = { viewNodeStatus() { throw new Error('RPC must not be called'); } };
+    for (const extra of [{ requirePlainOwner: 'true' }, { maxAgentGasAllowanceYocto: '0' },
+      { maxAgentGasAllowanceYocto: '01' }, { maxAgentGasAllowanceYocto: 1 },
+      { maxAgentGasAllowanceYocto: '9'.repeat(39) }]) {
+      await assert.rejects(preflightExactFt({ prepared: f.prepared, publicKey: f.publicKey, provider, now: f.now, ...extra }), /invalid owner or agent profile/);
+    }
+  } finally { f.close(); }
+});
+
+test('owner profile drift or RPC failure after signing fences the original payment hash without a send or replacement', async () => {
+  for (const drift of [
+    f => { f.ownerAccount.code_hash = mockHash('owner-contract-after-signing'); },
+    f => { f.ownerAccount.global_contract_hash = mockHash('global-after-signing'); },
+    f => { f.ownerAccount.global_contract_account_id = 'shared.testnet'; },
+    f => { f.ownerAccount.block_hash = mockHash('wrong-final-block'); },
+    f => { const read = f.provider.viewAccount; f.provider.viewAccount = async (...args) => {
+      if (args[0] === goal.owner) throw new Error('owner view unavailable'); return read(...args);
+    }; },
+  ]) {
+    const f = fixture();
+    try {
+      await f.reserveAndPin(); let signed = 0, blockReads = 0, expectedHash;
+      const signer = f.account.signer;
+      f.account.signer = {
+        getPublicKey: (...args) => signer.getPublicKey(...args),
+        async signTransaction(tx) {
+          signed++; const result = await signer.signTransaction(tx);
+          expectedHash = nearApi.utils.serialize.base_encode(crypto.createHash('sha256').update(nearApi.transactions.encodeTransaction(tx)).digest());
+          drift(f); return result;
+        },
+      };
+      const viewBlock = f.provider.viewBlock;
+      f.provider.viewBlock = async (...args) => {
+        const result = await viewBlock(...args); blockReads++;
+        if (blockReads > 1) result.header.hash = mockHash('later-final-block');
+        return result;
+      };
+      await assert.rejects(pay(f), /unresolved/);
+      const pending = f.journal.get(goal.id);
+      assert.equal(signed, 1); assert.equal(f.sends, 0); assert.equal(pending.status, 'pending');
+      assert.equal(pending.tx_hash, expectedHash);
+      await assert.rejects(pay(f), /already recorded/);
+      assert.equal(signed, 1); assert.equal(f.sends, 0); assert.equal(f.journal.get(goal.id).tx_hash, pending.tx_hash);
+    } finally { f.close(); }
+  }
 });
 
 test('a stale or future FINAL block stops the Svalin payment before a seller recheck, signing or broadcast', async () => {
@@ -274,7 +370,9 @@ test('lost send is recovered by the original hash even after expiry, without sig
   const f = fixture(); try {
     await f.reserveAndPin(); f.loseSend(); await assert.rejects(pay(f), /unresolved.*never automatically resend/);
     const hash = f.journal.get(goal.id).tx_hash; assert.equal(f.journal.get(goal.id).status, 'pending');
-    f.reopen(); f.advance(48 * 60 * 60_000); const recovered = await recover(f);
+    f.reopen(); f.advance(48 * 60 * 60_000);
+    f.ownerAccount.global_contract_account_id = 'changed-after-original-send.testnet';
+    const recovered = await recover(f);
     assert.equal(recovered.settlement.tx_hash, hash); assert.equal(recovered.sends, 0); assert.equal(recovered.seller_requests, 0);
     await assert.rejects(pay(f)); assert.equal(f.sends, 1); assert.equal(f.reservations, 1); assert.equal(f.fallback, 0);
   } finally { f.close(); }

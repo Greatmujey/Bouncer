@@ -12,6 +12,8 @@ import { FileJournal } from './procurement.mjs';
 import { withExclusiveJournalOperation } from './journal-operation.mjs';
 import { isTestnetAccount } from '../shared/account-id.mjs';
 import { isTransactionHash } from '../shared/direct-payment-settlement.mjs';
+import { assertFreshFinalBlock } from '../shared/fresh-final-block.mjs';
+import { readSvalinPlainOwnerAtFinal } from './svalin-owner-snapshot.mjs';
 import { readBoundedJson } from '../shared/bounded-json.mjs';
 import { CIRCLE_TESTNET_USDC } from '../scripts/circle-testnet-setup.mjs';
 import { SVALIN_NETWORK, SVALIN_ORIGIN, SVALIN_PAYEE, summarizeSvalinProOffer,
@@ -131,23 +133,29 @@ function checkOptIn(execute, acknowledgeBackup) {
   }
 }
 
-/** Exactly one reservation POST after durable write-ahead state. A lost or
- * untrusted response remains unresolved: never repeat the POST automatically. */
-export async function reserveSvalinProOnce({ goal: rawGoal, journal, fetchImpl = globalThis.fetch,
+/** Exactly one reservation POST after a narrow owner snapshot and durable
+ * write-ahead state. A lost or untrusted response remains unresolved: never
+ * repeat the POST automatically. This does not prove consent or future state. */
+export async function reserveSvalinProOnce({ goal: rawGoal, journal, provider, fetchImpl = globalThis.fetch,
   now = Date.now, execute = false, acknowledgeBackup = false }) {
   const goal = validateSvalinProGoal(rawGoal); requireJournal(journal, goal); checkOptIn(execute, acknowledgeBackup);
   return withExclusiveJournalOperation(journal, async () => {
     const id = sessionKey(goal), entry = session(journal, goal);
     if (entry.svalin.phase === 'reserved') return summary(entry);
     if (entry.svalin.phase !== 'prepared') throw new Error('reservation outcome is unresolved; preserve the original journal and do not send another reservation');
+    let ownerSnapshot;
+    try { ownerSnapshot = await readSvalinPlainOwnerAtFinal({ provider, owner: goal.owner, now }); }
+    catch { throw new Error('fresh pinned testnet owner without local or global contract code is required; no reservation was sent'); }
     // GET is before the write-ahead reservation: failure cannot have sent POST.
     let offer;
     try { offer = await freshOffer(fetchImpl, now); }
     catch { throw new Error('fresh seller offer unavailable or untrusted; no reservation was sent'); }
+    assertFreshFinalBlock(ownerSnapshot, timestamp(now));
     const requested = { ...entry, svalin: { ...entry.svalin, phase: 'reservation_requested',
       reservation_requested_at: new Date(timestamp(now)).toISOString() } };
     journal.put(id, requested);
     try {
+      assertFreshFinalBlock(ownerSnapshot, timestamp(now));
       const raw = await requestJson(`${SVALIN_ORIGIN}/v1/pro/near`, { method: 'POST',
         body: { code: requested.svalin.code, plan: 'month' } }, fetchImpl);
       const checkout = validateSvalinProCheckout({ offer, checkout: raw, nowMs: timestamp(now) });

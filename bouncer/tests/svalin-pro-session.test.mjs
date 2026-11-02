@@ -28,6 +28,14 @@ function fixture() {
   const encryptionKey = crypto.randomBytes(32);
   let journal = new FileJournal(file, goal.vault, goal.owner, { encryptionKey });
   let gets = 0, posts = 0, recoveries = 0, failPost = false, failRecovery = false, response = checkout(), activation;
+  const ownerAccount = { code_hash: '11111111111111111111111111111111' };
+  const provider = {
+    async viewNodeStatus() { return { chain_id: 'testnet' }; },
+    async viewBlock(opts) { assert.deepEqual(opts, { finality: 'final' });
+      return { header: { hash, timestamp_nanosec: String(BigInt(nowMs) * 1_000_000n) } }; },
+    async viewAccount(id, opts) { assert.equal(id, goal.owner); assert.deepEqual(opts, { blockId: hash });
+      return { block_hash: opts.blockId, ...ownerAccount }; },
+  };
   const pubkey = String(nearApi.KeyPair.fromRandom('ed25519').getPublicKey());
   const originalCode = () => journal.get(`${goal.id}-svalin-pro`)?.svalin?.code;
   async function fetchImpl(url, options) {
@@ -52,8 +60,8 @@ function fixture() {
     if (failRecovery) throw new Error(`synthetic activation failure containing ${body.code}`);
     return new Response(JSON.stringify(activation ?? { status: null, found: 0, pending: [checkout()] }));
   }
-  const options = () => ({ goal, journal, fetchImpl, now, execute: true, acknowledgeBackup: true });
-  return { dir, file, encryptionKey, pubkey, options, originalCode,
+  const options = () => ({ goal, journal, provider, fetchImpl, now, execute: true, acknowledgeBackup: true });
+  return { dir, file, encryptionKey, pubkey, provider, ownerAccount, options, originalCode,
     get journal() { return journal; }, get gets() { return gets; }, get posts() { return posts; }, get recoveries() { return recoveries; },
     losePost() { failPost = true; }, loseRecovery() { failRecovery = true; },
     response(value) { response = value; }, activation(value) { activation = value; },
@@ -97,6 +105,56 @@ test('session and external POSTs fail closed without encrypted scope and explici
   } finally { plain.close(); f.close(); }
 });
 
+test('reservation checks a fresh, pinned plain owner before any seller contact or journal mutation', async () => {
+  for (const mutate of [
+    f => { f.ownerAccount.code_hash = hash; },
+    f => { delete f.ownerAccount.code_hash; },
+    f => { f.ownerAccount.global_contract_hash = hash; },
+    f => { f.ownerAccount.global_contract_account_id = 'shared.testnet'; },
+    f => { f.ownerAccount.state = 'uninitialized'; },
+    f => { f.ownerAccount.block_hash = nearApi.utils.serialize.base_encode(Buffer.alloc(32, 8)); },
+    f => { f.provider.viewNodeStatus = async () => ({ chain_id: 'mainnet' }); },
+    f => { f.provider.viewBlock = async () => ({ header: { hash, timestamp_nanosec: String(BigInt(nowMs - 121_000) * 1_000_000n) } }); },
+    f => { f.provider.viewAccount = async () => { throw new Error('untrusted RPC secret'); }; },
+  ]) {
+    const f = fixture(); try {
+      await prepare(f); const original = fs.readFileSync(f.file); mutate(f);
+      await assert.rejects(reserve(f), error => /no reservation was sent/.test(error.message) && !error.message.includes('secret'));
+      assert.equal(f.gets + f.posts + f.recoveries, 0); assert.deepEqual(fs.readFileSync(f.file), original);
+      assert.equal(f.journal.get(`${goal.id}-svalin-pro`).svalin.phase, 'prepared');
+    } finally { f.close(); }
+  }
+  const f = fixture(); try {
+    await prepare(f);
+    await assert.rejects(reserveSvalinProOnce({ ...f.options(), provider: undefined }), /no reservation was sent/);
+    assert.equal(f.gets + f.posts, 0);
+  } finally { f.close(); }
+});
+
+test('stale owner snapshot before or after the write-ahead reservation cannot trigger a POST or retry', async () => {
+  for (const staleAfterRecord of [false, true]) {
+    const f = fixture(); try {
+      await prepare(f); let clock = nowMs;
+      if (staleAfterRecord) {
+        const put = f.journal.put.bind(f.journal);
+        f.journal.put = (id, entry) => { put(id, entry); if (entry.svalin?.phase === 'reservation_requested') clock += 121_000; };
+      }
+      const options = { ...f.options(), now: () => clock };
+      if (!staleAfterRecord) {
+        const fetch = options.fetchImpl;
+        options.fetchImpl = async (...args) => { const result = await fetch(...args); clock += 121_000; return result; };
+      }
+      await assert.rejects(reserveSvalinProOnce(options));
+      assert.equal(f.gets, 1); assert.equal(f.posts, 0);
+      assert.equal(f.journal.get(`${goal.id}-svalin-pro`).svalin.phase, staleAfterRecord ? 'reservation_requested' : 'prepared');
+      if (staleAfterRecord) {
+        await assert.rejects(reserveSvalinProOnce(options), /do not send another reservation/);
+        assert.equal(f.posts, 0);
+      }
+    } finally { f.close(); }
+  }
+});
+
 test('one reservation POST follows durable write-ahead state and exposes only sanitized terms', async () => {
   const f = fixture(); try {
     await prepare(f); const code = f.originalCode();
@@ -105,6 +163,7 @@ test('one reservation POST follows durable write-ahead state and exposes only sa
     assert.equal(result.reservation.amount_atoms, '5004217'); assert.equal(result.reservation.authorization, 'NOT_APPROVED');
     assert.equal(JSON.stringify(result).includes(code), false); assert.equal(fs.readFileSync(f.file, 'utf8').includes(code), false);
     f.journal.get(`${goal.id}-svalin-pro`).svalin.checkout.untrusted_echo = code;
+    f.provider.viewNodeStatus = async () => { throw new Error('already reserved metadata must not need RPC'); };
     const repeated = await reserve(f);
     assert.equal(repeated.phase, 'reserved'); assert.equal(JSON.stringify(repeated).includes(code), false);
     assert.equal(repeated.payment_sent_by_this_library, false);

@@ -19,7 +19,7 @@ export function snapshot(f, index) {
     network: 'testnet', block: { header: { hash: BLOCK, timestamp_nanosec: String(BigInt(NOW) * 1_000_000n) } },
     protocol: { chain_id: 'testnet', protocol_version: 88, runtime_config: { storage_amount_per_byte: COST,
       wasm_config: { global_contract_host_fns: true, reftypes_bulk_memory: true, gas_key_host_fns: true, universal_accounts: true } } },
-    owner: { block_hash: BLOCK, amount: 20n * 10n ** 24n, storage_usage: 10_000 },
+    owner: { block_hash: BLOCK, code_hash: '11111111111111111111111111111111', amount: 20n * 10n ** 24n, storage_usage: 10_000 },
     ownerKey: { block_hash: BLOCK, nonce: 2n, permission: 'FullAccess' },
     ownerKeys: { block_hash: BLOCK, keys },
     vault: { block_hash: BLOCK, amount: 7n * 10n ** 24n, storage_usage: 10_000,

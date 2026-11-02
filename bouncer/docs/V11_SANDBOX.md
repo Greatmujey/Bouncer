@@ -1,19 +1,32 @@
 # V11 nearcore sandbox validation (opt-in)
 
-**Latest result: the actual owner setup runner and stage preflight passed on a
-disposable local chain.** On 2 November 2026, [run 41435563441](https://github.com/Greatmujey/Bouncer/actions/runs/41435563441)
+**Latest result: the actual restricted buyer and original-hash recovery passed
+on a disposable local chain.** On 2 November 2026, [run 41439528831](https://github.com/Greatmujey/Bouncer/actions/runs/41439528831)
+at commit `0ceb64ec48ea210f1e1ac42a960a7bdbfa8d0265` passed the existing
+contract and owner-runner checks and the new buyer scenario on nearcore 2.14.0 /
+protocol 88. With an in-process fake seller and the example mock FT, the test
+owner pinned an exact intent; the restricted buyer journaled its original hash
+in encrypted storage before one local send. The harness deliberately discarded
+the successful acknowledgement, reopened the journal, rejected a second send,
+and recovered the same hash with no seller request. It also checked the vault's
+on-chain and internal mock-token balances, seller balance, and rolling spend.
+The result is **payment evidence only**, not seller attribution or fulfillment.
+[Normal CI](https://github.com/Greatmujey/Bouncer/actions/runs/41439528559)
+passed for that commit.
+
+**Previous owner-runner result:** [run 41435563441](https://github.com/Greatmujey/Bouncer/actions/runs/41435563441)
 at commit `c22757d3e773a8862427c7ea7fd18298f5f5a050` passed both the prior
 contract scenario and a fresh five-stage owner-runner scenario on nearcore
-2.14.0 / protocol 88. The new scenario checked pinned FINAL prerequisites and
-post-funding state, the exact restricted-key allowance, original hashes in an
-encrypted journal before each one-shot transport call, and receipt/outcome
-reconciliation. It deliberately lost a successful local registration response,
-reopened the original journal, confirmed the pending attempt could not be sent
-again, and recovered the original hash without a second send. The AddKey result
-is still outcome-only, not root-receipt-body proof.
+2.14.0 / protocol 88. It checked pinned FINAL prerequisites and post-funding
+state, the exact restricted-key allowance, original hashes in an encrypted
+journal before each one-shot transport call, and receipt/outcome reconciliation.
+It deliberately lost a successful local registration response, reopened the
+original journal, confirmed the pending attempt could not be sent again, and
+recovered the original hash without a second send. The AddKey result is still
+outcome-only, not root-receipt-body proof.
 
-This run **simulated the testnet chain ID and approval assertions only in a
-test-only loopback adapter**; the actual state, transactions and receipts came
+Both runs **simulated the testnet chain ID and approval assertions only in
+test-only loopback adapters**; the actual state, transactions and receipts came
 from the disposable nearcore sandbox, not testnet. The checks do not establish
 production's real network identity check, the owner CLI against nearcore,
 Circle registration/funding, independent artifact review, user approval,
@@ -74,16 +87,14 @@ covered by synthetic adversarial tests and the earlier failed-run observation,
 not separately demonstrated in the successful rerun. Neither run authorizes
 testnet setup, funding or seller contact.
 
-**Prepared next check, not yet run against nearcore:** the current local harness
-adds the actual experimental buyer and payment-evidence recovery after the
-funded owner-runner scenario. An in-process fake seller supplies the reservation;
-the test owner pins the exact intent; the restricted buyer journals its original
-hash, sends once on the local mock chain, loses the acknowledgement, reopens the
-journal and tries to recover without a second send or seller request. A
-synthetic loopback test checks the wiring, but it cannot establish how the
-real nearcore receipts will behave. The existing passing run above predates this
-addition. This is not a testnet purchase, Circle transfer, seller contact,
-owner approval, or fulfillment proof.
+The buyer scenario uses the real experimental buyer and payment-evidence
+recovery code against nearcore, but its offer and reservation are fixtures and
+its owner key, approvals and seller are test-only. The sandbox-only adapter aliases the
+network ID and drops the acknowledgement **after** the local transaction has
+completed; it does not test every possible timing of a network failure. The
+separate synthetic loopback tests check harness wiring and the isolation fence.
+Neither kind of test is a testnet purchase, Circle transfer, seller contact,
+user approval, or fulfillment proof.
 
 The opt-in job starts a fresh, one-validator nearcore **2.14.0** sandbox on
 loopback, with protocol **88**, and destroys its temporary chain afterwards.
@@ -105,10 +116,15 @@ account ID or private key from its environment, and checks its own chain ID.
   run did **not** exercise the setup runner or stage preflight against nearcore.
 - The latest run exercised the actual setup runner and pinned stage preflight
   on a second sandbox owner/vault, including the exact restricted-key allowance
-  and a post-funding profile. It dropped one successful local send's
+  and a post-funding profile. It dropped one successful local registration
   acknowledgement, reopened the original encrypted journal, and checked that
   original-hash recovery and the pending-stage fence did not resend. The
   network identity and approvals were simulated as described above.
+- Against that same funded local vault, exercise the actual exact-FT buyer with
+  a synthetic reservation and an owner-pinned intent. Discard the local payment
+  acknowledgement after finality, reopen the encrypted buyer journal, reject
+  another send and recover the same hash. Check the mock-token balances and
+  rolling spend, with no real seller request or delivery verification.
 - Exercise the one-yocto guard with an owner-scoped function-call key that is
   allowed to attempt `set_policy`: zero deposit should reach the contract and
   fail; one yocto should be rejected by the protocol. Separately check a

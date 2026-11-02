@@ -26,7 +26,7 @@ function state() {
   return {
     chain: 'testnet', block: BLOCK, blockTimestamp: (BigInt(NOW - 2_000) * 1_000_000n).toString(),
     vault: { block_hash: BLOCK, code_hash: CODE, amount: 300000000000000000000000n },
-    ownerAccount: { block_hash: BLOCK, code_hash: mockHash('owner-code'), amount: 300000000000000000000000n },
+    ownerAccount: { block_hash: BLOCK, code_hash: '11111111111111111111111111111111', amount: 300000000000000000000000n },
     vaultKeys: { block_hash: BLOCK, keys: [] },
     agentKey: { block_hash: BLOCK, nonce: 1n, permission: { FunctionCall: { receiver_id: goal.vault,
       method_names: ['execute_exact_ft'], allowance: '100000000000000000000000' } } },
@@ -123,6 +123,12 @@ test('profile fails closed on wrong code, keys, owner, locks, agent grant, caps,
     ['seller_registered_for_token', s => { s.views.seller_storage = { total: '1', available: '2' }; }],
     ['max_checkout_allowed_by_contract', s => { s.views.check = [false, 'blocked']; }],
     ['owner_native_balance_nonzero', s => { s.ownerAccount.amount = 0n; }],
+    ['owner_has_no_contract_code', s => { s.ownerAccount.code_hash = mockHash('owner-contract'); }],
+    ['owner_has_no_contract_code', s => { delete s.ownerAccount.code_hash; }],
+    ['owner_has_no_contract_code', s => { s.ownerAccount.global_contract_hash = mockHash('global-contract'); }],
+    ['owner_has_no_contract_code', s => { s.ownerAccount.global_contract_account_id = 'contract.testnet'; }],
+    ['owner_has_no_contract_code', s => { s.ownerAccount.state = 'uninitialized'; }],
+    ['owner_has_no_contract_code', s => { s.ownerAccount.block_hash = mockHash('wrong'); }],
     ['vault_native_balance_nonzero', s => { s.vault.amount = 1n; }],
   ];
   for (const [check, mutate] of cases) {
@@ -136,7 +142,8 @@ test('profile fails closed on wrong code, keys, owner, locks, agent grant, caps,
 test('RPC and seller failures or malformed raw views are UNKNOWN, never proof of readiness or a secret leak', async () => {
   const cases = [
     ['vaultAccount', 'vault_code_matches_user_pin'], ['vaultKeys', 'vault_has_no_access_keys'],
-    ['agentKey', 'restricted_agent_key'], ['get_policy', 'strict_trial_caps'], ['vault_balance', 'vault_tracked_balance'],
+    ['agentKey', 'restricted_agent_key'], ['ownerAccount', 'owner_has_no_contract_code'],
+    ['get_policy', 'strict_trial_caps'], ['vault_balance', 'vault_tracked_balance'],
     ['ft_balance_of', 'vault_token_balance'], ['seller_storage', 'seller_registered_for_token'],
     ['seller', 'public_offer_matches_reviewed_testnet_profile'],
   ];
@@ -222,6 +229,13 @@ test('real near-api-js provider serializes every query against one final block a
     assert.deepEqual(new Set(requests.map(r => r.method)), new Set(['status', 'block', 'query']));
     assert.equal(requests.filter(r => r.method === 'query').length, 16);
     assert.ok(requests.every(r => !/broadcast|send|tx/i.test(r.method)));
+    for (const [field, value] of [['global_contract_hash', mockHash('global-code')],
+      ['global_contract_account_id', 'shared.testnet']]) {
+      s.ownerAccount[field] = value;
+      const blocked = await inspectSvalinProPreflight({ goal, agentPublicKey: AGENT, provider, fetchImpl: seller(s), now: () => NOW });
+      assert.equal(blocked.checks.owner_has_no_contract_code, 'BLOCKED', field);
+      delete s.ownerAccount[field];
+    }
   } finally { server.close(); await once(server, 'close'); }
 });
 
@@ -303,6 +317,8 @@ test('actual preflight CLI reports a match or blockers without signing, journal 
     assert.ok(requests.every(x => /^(status|block|seller-get|query:(view_account|view_access_key_list|view_access_key|call_function))$/.test(x)));
     got = run({ lowBalance: true }); assert.equal(got.status, 2, got.stderr);
     result = JSON.parse(got.stdout); assert.equal(result.status, 'BLOCKED_OR_UNKNOWN'); assert.equal(result.checks.vault_tracked_balance, 'BLOCKED');
+    got = run({ ownerContract: true }); assert.equal(got.status, 2, got.stderr);
+    result = JSON.parse(got.stdout); assert.equal(result.checks.owner_has_no_contract_code, 'BLOCKED');
     got = run({ mainnet: true }); assert.equal(got.status, 1); assert.match(got.stderr, /testnet/);
     requests = fs.readFileSync(log, 'utf8').trim().split('\n'); assert.deepEqual(requests, ['status']);
     assert.deepEqual(fs.readdirSync(dir).sort(), ['fixture.json', 'goal.json', 'requests.log']);
