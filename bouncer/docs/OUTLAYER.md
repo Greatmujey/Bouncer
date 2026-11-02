@@ -12,7 +12,7 @@ do not use real funds.
 
 ## What has been demonstrated
 
-The [guarded live job](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40682550107/job/122797278579)
+The [guarded live job](https://github.com/Greatmujey/Bouncer/actions/runs/40682550107/job/122797278579)
 created a fresh contract and a **different owner**. The owner pinned a WASM
 URL and SHA-256, WASI target, instruction/memory/time limits, a native policy,
 OutLayer payee and caps. A separate function-call key could call only
@@ -31,7 +31,7 @@ made no second payment. The
 full maximum remained charged against the rolling budget, and the owner
 withdrew the remaining tracked native vault balance.
 
-The [AI-planned mixed mission](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40682550107/job/122797278689)
+The [AI-planned mixed mission](https://github.com/Greatmujey/Bouncer/actions/runs/40682550107/job/122797278689)
 then combined an owner-selected [independent OutLayer payment](https://testnet.nearblocks.io/txns/5ShjrS8JiJ5yyQPKDvFGnwtobpL2vQUbXTFchPuGD53r)
 with model-proposed compute, storage, text API and GitHub-data tasks on the
 same separate-owner Bouncer deployment. The three FT assets were wNEAR and two
@@ -51,32 +51,32 @@ does not imply provider misconduct.
 
 V8 adds a pinned-input single-source price lookup and a mixed mission that can
 include the returned value in development-resource orders. The first
-[opt-in live test](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41069232857/job/124109266232)
+[opt-in live test](https://github.com/Greatmujey/Bouncer/actions/runs/41069232857/job/124109266232)
 proved that changing the pinned input and exceeding the native cap were rejected
 on chain, but [the requested lookup](https://testnet.nearblocks.io/txns/8hqLZGkuYAgB8EqMhjN58MeGcLNApHJ7EFi5jLNhk2Dy)
 returned `null`. Recovery did not accept it as delivery, and no subsequent
-resource purchases were sent. [Read-only receipt inspection](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41069934314/job/124111032227)
+resource purchases were sent. [Read-only receipt inspection](https://github.com/Greatmujey/Bouncer/actions/runs/41069934314/job/124111032227)
 found that the published WASM imports project storage, which is unavailable to
 an inline `WasmUrl` request. OutLayer reported charging
 `1123300000000000000000` yoctoNEAR and refunding `98876700000000000000000`
 to the owner. The hash must not be automatically retried; this was not a
 successful independent price-data purchase.
 
-The corrected [v9 Project-mode attempt](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41071182834/job/124116356927)
+The corrected [v9 Project-mode attempt](https://github.com/Greatmujey/Bouncer/actions/runs/41071182834/job/124116356927)
 reached the oracle WASM, but its requested CoinGecko API returned HTTP 403. The
 [final transaction](https://testnet.nearblocks.io/txns/HNPWAhuYaoctcCWd16E76rHcG2Amm3yKFGJYLEnhhJpx)
 returned `success: false`; recovery refused it and no downstream Circle resource
 payments were sent. OutLayer reported a completed WASM execution but an
 application-level HTTP error, charging `1120300000000000000000` yoctoNEAR and
-refunding `98879700000000000000000` to the owner. [Read-only reconciliation](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41072024180/job/124118338158)
+refunding `98879700000000000000000` to the owner. [Read-only reconciliation](https://github.com/Greatmujey/Bouncer/actions/runs/41072024180/job/124118338158)
 confirmed the project ID, UUID and resolved hash. Both the zero-deposit contract
 guard and the protocol's one-yocto restricted-key guard rejected escalation
 probes. This hash must not be resent.
 
-A [read-only research probe](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41072024180/job/124118338158)
+A [read-only research probe](https://github.com/Greatmujey/Bouncer/actions/runs/41072024180/job/124118338158)
 found Coinbase's public NEAR/USD endpoint reachable from the GitHub runner,
 which alone did not establish OutLayer worker reachability. An explicitly
-separate [successful v9 mission](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41073097919/job/124122803916)
+separate [successful v9 mission](https://github.com/Greatmujey/Bouncer/actions/runs/41073097919/job/124122803916)
 then pinned the exact GET URL and `data.amount` field in the owner's Project
 input, with no headers, body, secrets or agent-selected URL. The independently
 operated OutLayer [execution](https://testnet.nearblocks.io/txns/4MCH1jvtrz43trdnjvxQfkVuLXN4a9nhtyzPt8kM95yZ)
@@ -169,7 +169,7 @@ trustworthy and does not make raw Ref output a vault deposit.
 
 The strengthened verifier was checked read-only against an [existing finalized
 fake-token funding call](https://testnet.nearblocks.io/txns/3uMBAaenMBQzJyxPxEdH8tBg5M3rvAuoQy5oRpNx56MY/execution)
-using [archival testnet receipts](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41287377861/job/124791317765).
+using [archival testnet receipts](https://github.com/Greatmujey/Bouncer/actions/runs/41287377861/job/124791317765).
 It matched the independently pinned transaction, signing key, route and 10,000
 base-unit settlement and rejected substituted receipt links and payee. The
 check sent no payment and inspected neither the unresolved project transaction
@@ -177,7 +177,7 @@ nor a service result. It proves neither independent FT-paid delivery nor Circle
 USDC support. `node scripts/verify-ft-call-history.mjs` repeats only this fixed
 read-only check; old receipts may require an archival RPC.
 
-The [live paid-provider test](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40699116807/job/122854642930)
+The [live paid-provider test](https://github.com/Greatmujey/Bouncer/actions/runs/40699116807/job/122854642930)
 funded OutLayer with fake testnet USDC.e, then paid for a version-pinned
 connectivity probe using that prepaid balance and native NEAR. The probe
 returned HTTP **405**; it is not useful API data or a commercial API purchase.
@@ -194,18 +194,18 @@ a later **self-hosted** storage goal containing the verified result and
 transaction ID. The operation is a diagnostic
 benchmark, not arbitrary compute or a commercial resource. The `burn` path has
 passing offline tests, but live delivery has **not** been established. In the
-[30 October diagnostic](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41106347709/job/124237940287),
+[30 October diagnostic](https://github.com/Greatmujey/Bouncer/actions/runs/41106347709/job/124237940287),
 [funding](https://testnet.nearblocks.io/txns/3uMBAaenMBQzJyxPxEdH8tBg5M3rvAuoQy5oRpNx56MY)
 credited OutLayer with 10,000 fake-token micro-units; the subsequent project
 send remained unresolved. Its journaled hash is
 `DTJyQq7zMVtQFExeAtVSfKLSEkDSdmZerP3CJkWx8YUD` for
-`owner.bouncer-ft-69756b49.testnet`. A [read-only reconciliation](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41212677218/job/124570783704)
+`owner.bouncer-ft-69756b49.testnet`. A [read-only reconciliation](https://github.com/Greatmujey/Bouncer/actions/runs/41212677218/job/124570783704)
 could not retrieve FINAL receipts: one RPC timed out and the other returned HTTP
-408. A [later status-only recheck](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41290865530/job/124801658634)
+408. A [later status-only recheck](https://github.com/Greatmujey/Bouncer/actions/runs/41290865530/job/124801658634)
 received RPC errors or missing results from both configured endpoints and did
 not resolve the transaction; it submitted **zero** new payments. The explorer
 did not show the hash, but absence there is **not** proof of non-execution. The
-[public recovery evidence artifact](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41212677218)
+[public recovery evidence artifact](https://github.com/Greatmujey/Bouncer/actions/runs/41212677218)
 contains the original journal and goal and expires 29 January 2027. Preserve them
 and never automatically resend this transaction. The reconciliation script makes
 only bounded status reads: it first asks for the current status, then requests
@@ -230,14 +230,14 @@ must be rechecked before any new, explicitly approved order. Do not use this as
 a substitute for resolving or replaying the separate ambiguous burn transaction.
 
 An opt-in one-shot harness for this VRF diagnostic has not yet shown a live
-result. Its [first live attempt](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41301880679/job/124834811981)
+result. Its [first live attempt](https://github.com/Greatmujey/Bouncer/actions/runs/41301880679/job/124834811981)
 used a fresh testnet contract, account and fixed new seed—not the unresolved
 burn account or hash. It acquired and funded fake test tokens, then stopped
 before any OutLayer deposit or project payment when the separately journaled
 wNEAR refund-test funding returned `Expired`. Its original setup hash
 `HUW8m6dQjyhBEr1KihELt6qXA92cuWzjSJ84q7AbRy3D` and artifact `13081947040`
 must be retained and reconciled; do not resend it automatically. A later
-[key-free inspection](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41303152030/job/124838094977)
+[key-free inspection](https://github.com/Greatmujey/Bouncer/actions/runs/41303152030/job/124838094977)
 confirmed the first two original hashes FINAL and fake-token ledger/balance
 `10000`, but the third remained unavailable, with the observed wNEAR vault
 ledger and OutLayer prepaid balance both zero. These point-in-time balances
@@ -282,9 +282,9 @@ verification relies on an independently pinned key and trusted RPC; it does not
 prove key selection is unbiased or a TEE was used. Send counts are local
 instrumentation, not a chain-wide proof that nobody else submitted a payment.
 
-A [read-only readiness check](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41318158244/job/124882513959)
+A [read-only readiness check](https://github.com/Greatmujey/Bouncer/actions/runs/41318158244/job/124882513959)
 on November 1 observed the reviewed terms and a bounded test-token quote; it
-created no accounts and sent nothing. The [first fenced VRF2 job](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41318427551/job/124883910483)
+created no accounts and sent nothing. The [first fenced VRF2 job](https://github.com/Greatmujey/Bouncer/actions/runs/41318427551/job/124883910483)
 stopped at the WASM hash gate **before key generation, account creation or any
 send**: the newly compiled CI artifact did not equal the reviewed committed V9
 binary. It produced no VRF2 recovery artifact. The corrected fence used the
@@ -297,7 +297,7 @@ was restored, and CI now only uploads its new builds for review instead of
 pushing them into the branch. These observations are preserved under
 `evidence/outlayer-vrf2-preflight-20261101/` and do not establish delivery.
 
-The [fresh pinned attempt](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41318744634/job/124885009403)
+The [fresh pinned attempt](https://github.com/Greatmujey/Bouncer/actions/runs/41318744634/job/124885009403)
 created and locked vault `bouncer-vrf2-3a0af45958.testnet`, acquired fake test
 USDC.e in an owner-setup swap, and stopped on the **original** owner-to-vault
 funding hash `uhtVNNJewFmpTSVzZ7fr8ReZnvmVenjWcm92XafQRHn`: its one-shot
@@ -309,7 +309,7 @@ journal were retained in artifact `13088557059`. **Do not resend the original
 funding transaction**, even if a later view appears to show no balance. The
 read-only `inspect-vrf2-setup.mjs` examines only those original hashes on two
 RPC endpoints and a same-block vault/provider snapshot; an unavailable hash
-remains unresolved. A [subsequent read-only inspection](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41319333855/job/124886012566)
+remains unresolved. A [subsequent read-only inspection](https://github.com/Greatmujey/Bouncer/actions/runs/41319333855/job/124886012566)
 verified the first five setup hashes FINAL on both FastNear and archival RPCs,
 but the original funding hash was still unavailable on both. At FINAL block
 `5skusbW8qh6FXDYGqJcya2QWRtqQza4XbBtQ553YCYDF` the owner held 227,853 fake

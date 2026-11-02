@@ -20,6 +20,7 @@ that agent.
 | Shared direct-v3 buyer coordination | [Real PostgreSQL/process tests](SHARED_BUYER.md) reserve the signed hash and encrypted claim before a simulated send and recover the same hash; new owners can opt into stable intent IDs across journals. | Synthetic receipts only; one fenced primary, stable owner-assigned IDs and trusted workers. FT-call, x402, OutLayer and workflows are not covered. |
 | Owner-only Ref testnet setup | Owner acquired test tokens and separately funded the vault in the live runs. | This is **not** an agent-guarded swap. Plain outgoing Ref `ft_transfer` does not call Bouncer's deposit hook. |
 | Independent MultiAgency research candidate | [Read-only readiness, historical indexer control and report handoff](MULTIAGENCY_RESEARCH.md); experimental quote/payment/recovery verifier has synthetic tests. | No Bouncer quote, payment, job or independent fulfillment; current workers and refund terms remain unproven. |
+| Independent Svalin API candidate | [Public offer and free-route observation](SVALIN_PRO_READINESS.md); local buyer interoperability with pinned seller source, simulated chain/indexer and sample portfolio. | No real checkout, payment or paid response; the source can credit a different sender and does not identify the credited transaction to the buyer. |
 
 No independent FT-paid commercial compute, storage or API purchase is
 established. Testnet USDC has no real value. A FINAL receipt establishes the
@@ -27,6 +28,61 @@ verified on-chain actions under the trusted RPC/token/contract assumptions;
 it does not establish seller independence, correctness, availability, or a
 right to future service. A successful local SDK gate establishes compatibility
 with that SDK/configuration, not adoption by someone else.
+
+## Toward a marketplace with direct purchasing
+
+Discovery, checkout, payment authority and fulfillment are **different
+capabilities**. An integration can be listed as discoverable without being
+purchasable; a merchant is purchasable only after a compatible payment rail,
+identity/consent, terms, spend authority and delivery/recovery protocol have
+been verified. Never promote a search result or model-generated recommendation
+into an allowlist or payment authorization.
+
+Research checked on **1 November 2026**:
+
+- **Gloam** is a potential private-payment rail, not a resource provider or a
+  native NEAR payment integration. Its `gloam-private` x402 scheme requires a
+  compatible seller, and its off-chain limits do not automatically inherit
+  Bouncer's on-chain policy. Its Tempo access-key option can bound some
+  funding into the pool but not spending of already-shielded notes. See the
+  [research assessment](GLOAM_ASSESSMENT.md); no Gloam payment or integration
+  has been made. Continue the NEAR FT-provider work first.
+- **NEAR Agent Market** exposes a [public catalog](https://market.near.ai/llms.txt),
+  which Bouncer can already search read-only. Its [A2A/x402 caller flow](https://market.near.ai/skill/x402-caller/SKILL.md)
+  describes a task-bearing `SendMessage` POST to obtain a 402, followed by a
+  signed NEP-366 direct `ft_transfer`; the marketplace says it holds that
+  authorization until delivery. A GET of its [x402 recipients](https://market.near.ai/.well-known/x402)
+  advertised **NEAR mainnet only** at this observation, not testnet. A quote
+  POST would disclose the task and was not made. The canonical delegate and
+  current Bouncer nested transfer are different, so we cannot use this as a
+  guarded Bouncer checkout. Its [OAuth MCP buyer path](https://market.near.ai/skill/mcp-buyer/SKILL.md)
+  spends the user's marketplace balance after marketplace approval; it does not
+  inherit Bouncer's on-chain policy. We did not connect OAuth or hire anyone.
+- **UCP and ACP** address merchant catalog/checkout capability negotiation,
+  not automatic acceptance of NEAR payments. UCP's [checkout specification](https://ucp.dev/2026-08-25/specification/shopping/checkout/)
+  requires trusted-UI finalization unless the AP2 Mandates extension is
+  supported, and business payment handlers determine available instruments.
+  ACP's [well-known discovery RFC](https://github.com/agentic-commerce-protocol/agentic-commerce-protocol/blob/7fdd78df677a94dce04c770644b0fbbb1401272b/rfcs/rfc.discovery.md)
+  was an **unreleased proposal** in the inspected revision; its
+  [payment-handler RFC](https://github.com/agentic-commerce-protocol/agentic-commerce-protocol/blob/7fdd78df677a94dce04c770644b0fbbb1401272b/rfcs/rfc.payment_handlers.md)
+  describes separate merchant/PSP capability negotiation. Neither establishes a
+  Bouncer integration, merchant consent or permission to place an order.
+- **Amount and signature discipline matters across rails.** In a
+  [NEAR x402 implementation review](https://github.com/quebracho-digital/quebracho-x402-mcp/pull/1#issuecomment-6471072622),
+  the author reported an atomic-amount double conversion and an incorrect
+  signing discriminant despite self-consistent tests. Bouncer's Svalin
+  validator separately pins a decimal checkout to integer micro-USDC and
+  verifies the exact Circle event; any future x402 rail needs independent
+  known-answer serialization vectors, atomic units, expiry and key-authority
+  review—not only self-round-trip tests.
+
+A responsible marketplace build therefore needs: fixed-origin discovery and
+untrusted-data isolation; explicit per-provider capability and rail status;
+owner-reviewed complete terms including fees, data disclosure and refund rules;
+policy-enforced authorization; journaled, reconcilable settlement; and
+provider-specific fulfillment checks. Merchant onboarding, authenticated
+receipts, physical-product shipping/returns and cross-chain/card authority are
+future integrations, not capabilities of the present testnet buyer.
 
 ## The interoperability gap
 
@@ -133,10 +189,10 @@ consent, and no offers or payments were requested:
   same-block state layout, extracts the market's quote key, and checks the
   signature, vault/job/request binding, token, fee ceiling and expiry. The
   layout and RPC remain trusted; source/code equivalence is not established.
-  On November 1, [a quote-only test](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41303152030/job/124838094936)
+  On November 1, [a quote-only test](https://github.com/Greatmujey/Bouncer/actions/runs/41303152030/job/124838094936)
   verified one signed 600,000-micro-USDC offer for the Bouncer vault and a
   hypothetical 100,000-byte clip. The temporary upload key was discarded;
-  there was no payment or upload. A separate [read-only funding estimate](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41303749865/job/124839834431)
+  there was no payment or upload. A separate [read-only funding estimate](https://github.com/Greatmujey/Bouncer/actions/runs/41303749865/job/124839834431)
   observed pool 1845 quoting 647,955 micro testnet USDC for 1 testnet NEAR,
   with a 5% minimum of 615,557, and approximately 1.37 spendable testnet NEAR
   in the existing owner account. The current proven V1 router is capped at
@@ -175,7 +231,7 @@ consent, and no offers or payments were requested:
   read-only check found no such job, publication or entitlement. A separate
   token client journals one attempt and a bounded HLS byte probe protects bearer
   credentials; both have synthetic/loopback coverage only and cannot establish
-  playable content or independent fulfillment. A [fresh read-only check](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41316051699/job/124876224211)
+  playable content or independent fulfillment. A [fresh read-only check](https://github.com/Greatmujey/Bouncer/actions/runs/41316051699/job/124876224211)
   found the source-reviewed adaptive profile advertised on chain, but bridge
   health still did not identify its provider. This is not an independent
   FT-paid service or playback proof. Never assume merchant consent, delivery or

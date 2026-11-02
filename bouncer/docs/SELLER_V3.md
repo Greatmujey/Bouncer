@@ -13,17 +13,17 @@ and key-free workflow CLI. Offline tests alone are not live-chain evidence.
 
 ## First testnet attempt: stopped before v3 resource payments
 
-The first [one-shot testnet attempt](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41268548592/job/124736728081)
+The first [one-shot testnet attempt](https://github.com/Greatmujey/Bouncer/actions/runs/41268548592/job/124736728081)
 created a fresh deployment and started the native OutLayer oracle, but its RPC
 submission timed out. The workflow stopped **before any seller-v3 compute,
 storage or API payment**. The original restricted recovery artifact
-[13068257781](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41268548592/artifacts/13068257781)
+[13068257781](https://github.com/Greatmujey/Bouncer/actions/runs/41268548592/artifacts/13068257781)
 contains the original journal and expires 30 January 2027; preserve it. Do not
 rerun the paid job or resend the recorded hash. A public explorer later showed
 that [source transaction `CCbbcM73XZc1r8WcmyPMYHaudaR7qfjKKYhihZpHcuZ8`](https://testnet.nearblocks.io/txns/CCbbcM73XZc1r8WcmyPMYHaudaR7qfjKKYhihZpHcuZ8/execution)
 completed and returned a single-source price of `4.4301`, with a reported
 charge of `1121700000000000000000` yoctoNEAR and owner refund of
-`98878300000000000000000` yoctoNEAR. A separate [read-only recovery job](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41269062945/job/124738207055)
+`98878300000000000000000` yoctoNEAR. A separate [read-only recovery job](https://github.com/Greatmujey/Bouncer/actions/runs/41269062945/job/124738207055)
 verified the original journal, FINAL transaction, provider receipts, refund and
 completion block against a trusted archival RPC, and confirmed no resource
 payment was recorded. It did not change the original journal or send anything.
@@ -33,7 +33,7 @@ journal or transaction.
 
 ## Separate fresh seller-v3 testnet proof
 
-A [separately gated fresh run](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41270510338/job/124742560421)
+A [separately gated fresh run](https://github.com/Greatmujey/Bouncer/actions/runs/41270510338/job/124742560421)
 passed on 1 November 2026 using a new account, new deployment and new journals.
 It paid independently operated OutLayer in **native testnet NEAR** for a
 [single-source price](https://testnet.nearblocks.io/txns/8nyaDkKPN1VT87S5T7sKYD6oBRwzgdfSHoYpa5RgNqh/execution):
@@ -60,7 +60,7 @@ and [vault funding](https://testnet.nearblocks.io/txns/2y15D2wLxjwRxXegskCcRGMLM
 were setup operations, **not** guarded agent swaps. The price is a historical
 single-source observation, not authenticated market truth or freshness.
 
-The [repository-restricted recovery artifact](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41270510338/artifacts/13069540535)
+The [repository-restricted recovery artifact](https://github.com/Greatmujey/Bouncer/actions/runs/41270510338/artifacts/13069540535)
 expires 30 January 2027 and may contain replayable claim signatures and task
 data. Keep it private and preserve it for reconciliation; changing repository
 visibility may expose artifacts. The one-shot gate pins the branch and prior

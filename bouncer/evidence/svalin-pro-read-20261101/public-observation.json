@@ -1,0 +1,30 @@
+{
+  "observed_at_utc_approx": "2026-11-01T19:25:57Z",
+  "public_offer_url": "https://svalin-api.noobshole.workers.dev/v1/pro?observe=bouncer-20261101-1925",
+  "health_url": "https://svalin-api.noobshole.workers.dev/health?observe=bouncer-20261101-1925",
+  "health_ok": true,
+  "offer": {
+    "network": "near:testnet",
+    "environment": "testnet",
+    "payee": "svalin-agent.testnet",
+    "token": "3e2210e1184b45b64c8a434c0a7e7b23cc04ea7eb7b23cc04ea7eb7a6c3c32520d03d4afcb8af",
+    "monthly_base_test_usdc": "5",
+    "monthly_days": 30,
+    "advertised_calls_per_day": 100
+  },
+  "free_demo": {
+    "url": "https://svalin-api.noobshole.workers.dev/v1/demo/risk/root.near?observe=bouncer-20261101-1925",
+    "returned_json_for_public_account": true,
+    "provider_generated_at": "2026-11-01T19:25:57.323Z",
+    "paid": false,
+    "data_accuracy_verified": false
+  },
+  "reviewed_public_source": "https://github.com/noobshole/svalin-agent/tree/7ebfb14f35630dfc1665b04993e684b5444133fb",
+  "historical_nested_transfer_control": "../multiagency-read-20261101/readiness-corrected.json",
+  "checkout_reservations": 0,
+  "seller_code_creations": 0,
+  "new_transactions": 0,
+  "paid_requests": 0,
+  "independent_ft_fulfillment_verified": false,
+  "scope": "Anonymous provider GET observations and prior self-hosted FastNEAR compatibility control; not a Svalin payment, activation, purchase, acceptance, deployed-code attestation or paid delivery."
+}

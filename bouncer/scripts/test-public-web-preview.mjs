@@ -1,11 +1,13 @@
-// Run only in the opt-in guest-publication job. Chromium and playwright-core
+// Run only in the opt-in public-site smoke jobs. Chromium and playwright-core
 // are provided by the GitHub runner, not needed for normal development.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 const url = fs.readFileSync(process.env.BOUNCER_PREVIEW_URL_FILE, 'utf8').trim();
-if (!/^https:\/\/www\.madethis\.website\/s\/[a-z2-9]{6,16}\/$/.test(url)) throw new Error('Unexpected public preview URL');
+const isGuestPreview = /^https:\/\/www\.madethis\.website\/s\/[a-z2-9]{6,16}\/$/.test(url);
+const isReadOnlyProduction = url === 'https://bouncer-near.vercel.app/';
+if (!isGuestPreview && !isReadOnlyProduction) throw new Error('Unexpected public site URL');
 const playwright = await import(pathToFileURL(path.join(process.env.RUNNER_TEMP, 'bouncer-browser/node_modules/playwright-core/index.mjs')));
 const candidates = ['/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/usr/bin/chromium', '/usr/bin/chromium-browser'];
 const executablePath = candidates.find(candidate => fs.existsSync(candidate));
@@ -22,7 +24,7 @@ try {
   await page.locator('#tour-next').click();
   assert.match(await page.locator('#tour-title').innerText(), /need to a result/);
   await page.locator('#tour-skip').click();
-  assert.equal(await page.locator('#wallet-connect').isDisabled(), true, 'shared-origin guest previews must not enable wallets');
+  assert.equal(await page.locator('#wallet-connect').isDisabled(), true, 'public read-only deployments must not enable wallets');
   assert.match(await page.locator('#wallet-status').innerText(), /disabled here/);
   assert.equal(await page.locator('.resource-card').count(), 3);
   assert.deepEqual(await page.locator('.resource-amount').allInnerTexts(), ['0.1 wNEAR', '1.5 storage credits', '2 API credits']);
@@ -54,5 +56,5 @@ try {
   const status = await page.locator('#rpc-status').innerText();
   if (!/Current recorded vault balances loaded|Couldn’t reach the public testnet RPC/.test(status)) throw new Error(`Unexpected RPC status: ${status}`);
   console.log(`Mobile layout passed; browser RPC: ${status}`);
-  console.log(`::notice title=Bouncer mobile browser test::Tour, shared-host wallet safety and interactive recorded results work without overflow. ${status}`);
+  console.log(`::notice title=Bouncer mobile browser test::Tour, public-host wallet safety and interactive recorded results work without overflow. ${status}`);
 } finally { await browser.close(); }

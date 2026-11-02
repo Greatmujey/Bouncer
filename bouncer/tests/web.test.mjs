@@ -86,6 +86,46 @@ test('current balance read fails closed on HTTP, RPC, and malformed values', asy
   }
 });
 
+test('active website, package and documentation links use the renamed GitHub repository', () => {
+  const sources = [
+    new URL('../../README.md', import.meta.url),
+    new URL('../package.json', import.meta.url),
+    new URL('../packages/provider-sdk/README.md', import.meta.url),
+    new URL('../web/index.html', import.meta.url),
+    new URL('../web/evidence.mjs', import.meta.url),
+    ...fs.readdirSync(new URL('../docs/', import.meta.url))
+      .filter(name => name.endsWith('.md')).map(name => new URL(`../docs/${name}`, import.meta.url)),
+  ];
+  let count = 0;
+  for (const source of sources) {
+    const text = fs.readFileSync(source, 'utf8');
+    const links = text.matchAll(/https:\/\/github\.com\/([^/\s"')<>`]+)\/Bouncer(?=\/|[\s"')<>`]|$)/gi);
+    for (const link of links) {
+      assert.equal(link[1], 'Greatmujey', `stale Bouncer link in ${source}`);
+      count++;
+    }
+  }
+  assert.ok(count >= 50, 'expected the existing website and evidence links to be checked');
+  const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+  assert.equal(pkg.repository.url, 'https://github.com/Greatmujey/Bouncer');
+  assert.match(fs.readFileSync(new URL('../docs/WEB.md', import.meta.url), 'utf8'), /https:\/\/greatmujey\.github\.io\/Bouncer\//);
+});
+
+test('the public site documentation and smoke tests agree on the restored address', () => {
+  const current = 'https://bouncer-near.vercel.app/';
+  for (const source of [
+    new URL('../../README.md', import.meta.url),
+    new URL('../docs/WEB.md', import.meta.url),
+    new URL('../scripts/check-public-web-assets.mjs', import.meta.url),
+    new URL('../scripts/test-public-web-preview.mjs', import.meta.url),
+    new URL('../../.github/workflows/web-preview.yml', import.meta.url),
+  ]) {
+    const text = fs.readFileSync(source, 'utf8');
+    assert.ok(text.includes(current), `missing restored site URL in ${source}`);
+    assert.ok(!text.includes('https://bouncer-testnet.vercel.app/'), `stale site URL in ${source}`);
+  }
+});
+
 test('latest oracle-led mission links to the verified testnet data and three resource payments', () => {
   assert.equal(LATEST_MISSION.account, 'bouncer-oracle-6a42bf32.testnet');
   assert.equal(LATEST_MISSION.owner, 'owner.bouncer-oracle-6a42bf32.testnet');

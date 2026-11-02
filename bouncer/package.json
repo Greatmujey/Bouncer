@@ -7,11 +7,16 @@
   "scripts": {
     "test": "node --test packages/policy/policy.test.mjs tests/*.test.mjs",
     "test:all": "node --test packages/policy/policy.test.mjs tests/*.test.mjs",
+    "test:svalin-upstream": "node scripts/test-svalin-upstream.mjs",
     "build": "bash scripts/build.sh",
     "agent": "node agent/procurement.mjs",
     "recover-direct": "node agent/recover-direct-payment.mjs",
     "recover-direct-delivery": "node agent/recover-direct-delivery.mjs",
     "multiagency": "node agent/multiagency.mjs",
+    "svalin-pro": "node agent/svalin-pro.mjs",
+    "svalin-preflight": "node agent/svalin-pro-preflight.mjs",
+    "svalin-setup-plan": "node agent/svalin-setup-plan.mjs",
+    "svalin-setup-preflight": "node agent/svalin-setup-preflight.mjs",
     "recover-youtick-grant": "node agent/recover-youtick-grant.mjs",
     "encrypt-file-journal": "node scripts/encrypt-file-journal.mjs",
     "init-file-journal-key": "node scripts/init-file-journal-key.mjs",
@@ -46,7 +51,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/abdullahimujeeb0505-stack/Bouncer"
+    "url": "https://github.com/Greatmujey/Bouncer"
   },
   "dependencies": {
     "@hot-labs/near-connect": "0.12.0",

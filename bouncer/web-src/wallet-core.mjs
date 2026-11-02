@@ -5,6 +5,11 @@ export function walletOriginAllowed(location, isTopLevel, approvedOrigin = '') {
   if (!isTopLevel) return false;
   const { hostname, protocol, origin } = location;
   if (hostname === 'madethis.website' || hostname.endsWith('.madethis.website')) return false;
+  // Public GitHub Pages projects owned by the same account share one origin
+  // across repository paths, so approving an exact origin would also expose
+  // wallet storage to every other project on that origin. Use an isolated
+  // custom domain instead, after a separate security review.
+  if (hostname === 'github.io' || hostname.endsWith('.github.io')) return false;
   if (['localhost', '127.0.0.1', '[::1]'].includes(hostname)) return protocol === 'http:' || protocol === 'https:';
   if (protocol !== 'https:') return false;
   if (/^[a-z0-9-]+-\d+\.app\.github\.dev$/i.test(hostname)) return true;

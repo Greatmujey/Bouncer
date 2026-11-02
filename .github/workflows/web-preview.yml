@@ -44,3 +44,46 @@ jobs:
             node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-2000).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=Public browser test failed::"+s)' "$RUNNER_TEMP/web-browser.log"
           fi
           exit "$result"
+
+  github-pages-path-smoke:
+    # Offline path/origin simulation only: never contacts or publishes Pages.
+    if: contains(github.event.head_commit.message, '[test-github-pages]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Test the staged site at the GitHub Pages project path
+        run: |
+          npm install --prefix "$RUNNER_TEMP/bouncer-browser" --no-save --no-audit --no-fund playwright-core@1.64.1
+          node bouncer/scripts/test-github-pages-path.mjs
+
+  durable-site-smoke:
+    # Read-only verification; never publishes, signs, or spends.
+    if: contains(github.event.head_commit.message, '[test-durable-web]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify publicly served assets and private paths
+        run: node bouncer/scripts/check-public-web-assets.mjs
+      - name: Exercise the public site on a phone-sized browser
+        env:
+          BOUNCER_PREVIEW_URL_FILE: ${{ runner.temp }}/bouncer-production-url.txt
+        run: |
+          npm install --prefix "$RUNNER_TEMP/bouncer-browser" --no-save --no-audit --no-fund playwright-core@1.64.1
+          printf '%s\n' 'https://bouncer-near.vercel.app/' > "$BOUNCER_PREVIEW_URL_FILE"
+          node bouncer/scripts/test-public-web-preview.mjs

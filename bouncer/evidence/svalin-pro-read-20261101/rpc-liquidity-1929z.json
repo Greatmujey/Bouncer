@@ -1,0 +1,70 @@
+{
+  "run_id": 41341994197,
+  "job_id": 124953799547,
+  "observation": {
+    "offer": {
+      "status": "PUBLIC_OFFER_ONLY",
+      "observed_at": "2026-11-01T19:29:47.745Z",
+      "network": "near:testnet",
+      "environment": "testnet",
+      "token": "3e2210e1184b45b64c8a434c0a7e7b23cc04ea7eb7a6c3c32520d03d4afcb8af",
+      "payee": "svalin-agent.testnet",
+      "plan": "month",
+      "price_atoms": "5000000",
+      "checkout_amount_min_atoms": "5000001",
+      "checkout_amount_max_atoms": "5009999",
+      "duration_days": 30,
+      "advertised_calls_per_day": 100,
+      "signed_offer": false,
+      "reservation_created": false,
+      "payment_sent": false,
+      "fulfillment_verified": false
+    },
+    "liquidity": {
+      "chain": "testnet",
+      "seller_usdc_storage": "REGISTERED_AT_VIEW",
+      "pools": [
+        {
+          "pool_id": 1845,
+          "status": "READ_ONLY_INDICATION",
+          "quotes": [
+            {
+              "wrap_input_yocto": "1000000000000000000000000",
+              "usdc_output_atoms": "647955"
+            },
+            {
+              "wrap_input_yocto": "5000000000000000000000000",
+              "usdc_output_atoms": "2580128"
+            },
+            {
+              "wrap_input_yocto": "10000000000000000000000000",
+              "usdc_output_atoms": "4113357"
+            }
+          ]
+        },
+        {
+          "pool_id": 2206,
+          "status": "READ_ONLY_INDICATION",
+          "quotes": [
+            {
+              "wrap_input_yocto": "1000000000000000000000000",
+              "usdc_output_atoms": "466999"
+            },
+            {
+              "wrap_input_yocto": "5000000000000000000000000",
+              "usdc_output_atoms": "1848029"
+            },
+            {
+              "wrap_input_yocto": "10000000000000000000000000",
+              "usdc_output_atoms": "2931776"
+            }
+          ]
+        }
+      ],
+      "wallet_balance_checked": false,
+      "signed": false,
+      "sent": false,
+      "scope": "bounded, potentially stale views; not funding, a tradable quote, seller acceptance or delivery"
+    }
+  }
+}

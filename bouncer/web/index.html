@@ -6,7 +6,11 @@
   <meta name="theme-color" content="#f5f7f3">
   <!-- Set only to the exact HTTPS origin of a dedicated deployment you control. -->
   <meta name="bouncer-wallet-origin" content="">
-  <meta name="description" content="See how Bouncer helps an agent request compute, storage and API services while protecting its budget on NEAR testnet.">
+  <meta name="description" content="Explore recorded Bouncer compute, storage and API examples on NEAR testnet. This site is a read-only walkthrough, not a running agent.">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Bouncer — Resources for agents, with boundaries">
+  <meta property="og:description" content="A read-only walkthrough of recorded multi-resource tests on NEAR testnet.">
+  <meta name="twitter:card" content="summary">
   <title>Bouncer — An agent that can get what it needs</title>
   <link rel="icon" type="image/svg+xml" href="./favicon.svg">
   <link rel="stylesheet" href="./styles.css">
@@ -70,7 +74,7 @@
               <div><span>02</span><strong>Used it in compute</strong><p>The price was included in a development compute order. An intentionally corrupted result stopped later payments.</p><a href="https://testnet.nearblocks.io/txns/7XxeU466RVYvVN3wBrWqXHu2zeHHyFPcs4WhNuFX2GbJ" target="_blank" rel="noopener noreferrer">Compute transaction ↗</a></div>
               <div><span>03</span><strong>Recovered, then continued</strong><p>Recovery reused the first payment before the storage and API orders continued—1,000 micro-USDC per resource.</p><a href="https://testnet.nearblocks.io/txns/GJkJMWBF2CCh1H5uh9uAKJJciTsqcvcgKvNXvnJrEvjL" target="_blank" rel="noopener noreferrer">Storage transaction ↗</a></div>
             </div>
-            <div class="mission-footer"><div><span class="status-dot"></span> Three development resources verified after the price result</div><div class="mission-links"><a href="https://testnet.nearblocks.io/txns/7RxBwG4G6FRqG1o2shYRN2ES2WsxVFdEMd8NWp7zA5vy" target="_blank" rel="noopener noreferrer">API ↗</a><a href="https://testnet.nearblocks.io/txns/BaScmpZxC7tqAdQC515A3xoj8ev9exFxsN7T4KjHFppw" target="_blank" rel="noopener noreferrer">Vault funding ↗</a><a href="https://testnet.nearblocks.io/txns/CqXgcgZ5RuN4n5hTgkgZFx51EH5t1WeVU7SsiNyNeVwt" target="_blank" rel="noopener noreferrer">Owner setup swap ↗</a><a href="https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41073097919/job/124122803916" target="_blank" rel="noopener noreferrer">Test evidence ↗</a></div></div>
+            <div class="mission-footer"><div><span class="status-dot"></span> Three development resources verified after the price result</div><div class="mission-links"><a href="https://testnet.nearblocks.io/txns/7RxBwG4G6FRqG1o2shYRN2ES2WsxVFdEMd8NWp7zA5vy" target="_blank" rel="noopener noreferrer">API ↗</a><a href="https://testnet.nearblocks.io/txns/BaScmpZxC7tqAdQC515A3xoj8ev9exFxsN7T4KjHFppw" target="_blank" rel="noopener noreferrer">Vault funding ↗</a><a href="https://testnet.nearblocks.io/txns/CqXgcgZ5RuN4n5hTgkgZFx51EH5t1WeVU7SsiNyNeVwt" target="_blank" rel="noopener noreferrer">Owner setup swap ↗</a><a href="https://github.com/Greatmujey/Bouncer/actions/runs/41073097919/job/124122803916" target="_blank" rel="noopener noreferrer">Test evidence ↗</a></div></div>
           </div>
           <p class="latest-note">The owner’s setup swap was not a guarded agent trade. The price endpoint is public; the independent execution was not paid in USDC. This process is non-atomic and cannot undo earlier payments.</p>
         </section>
@@ -91,7 +95,7 @@
               <p class="connect-description">A compatible MCP client can inspect testnet policies and preview configured resource quotes. It cannot make payments or change your rules.</p>
               <div class="assistant-list"><span>Claude</span><span>Gemini</span><span>ChatGPT</span><span>+ others</span></div>
               <p class="security-note">Gemini CLI and Claude Code passed local connection checks. ChatGPT web and other hosted assistants need HTTPS and compatible authentication; that setup is not available yet. Model conversations have not been tested.</p>
-              <details class="setup-details"><summary>How to connect an MCP client</summary><p>Install the project dependencies and launch Gemini CLI or Claude Code from the repository root; review and approve the project server if prompted. Other local clients can run <code>node</code> with the absolute path to <code>bouncer/mcp/server.mjs</code>. See the <a href="https://github.com/abdullahimujeeb0505-stack/Bouncer/blob/main/bouncer/docs/MCP.md" target="_blank" rel="noopener noreferrer">MCP setup guide</a> (private repository access required). No wallet secret is needed.</p></details>
+              <details class="setup-details"><summary>How to connect an MCP client</summary><p>Install the project dependencies and launch Gemini CLI or Claude Code from the repository root; review and approve the project server if prompted. Other local clients can run <code>node</code> with the absolute path to <code>bouncer/mcp/server.mjs</code>. See the <a href="https://github.com/Greatmujey/Bouncer/blob/main/bouncer/docs/MCP.md" target="_blank" rel="noopener noreferrer">MCP setup guide</a> (private repository access required). No wallet secret is needed.</p></details>
             </article>
           </div>
         </section>
@@ -160,7 +164,7 @@
           <div class="vision-card"><div><span class="vision-label">THE FUTURE WE’RE BUILDING TOWARD · NOT AVAILABLE YET</span><h3>Imagine asking: “Prepare a market report.”</h3><p>One day, an agent could buy data from an API, use compute to analyze it, and store the report—all while Bouncer keeps its spending inside your rules. This is a goal, not a completed demo.</p></div><span class="vision-arrow" aria-hidden="true">↗</span></div>
         </section>
 
-        <section class="section" id="proof"><div class="proof-panel"><div class="proof-copy"><div class="proof-icon"><svg><use href="#i-shield"/></svg></div><div><div class="section-kicker">DON’T TAKE OUR WORD FOR IT</div><h2>Follow the receipts<span>.</span></h2><p>See the latest testnet contract and transaction links. CI evidence is in the private project repository (access required).</p></div></div><div class="proof-actions"><a class="button primary" href="https://testnet.nearblocks.io/address/bouncer-oracle-6a42bf32.testnet" target="_blank" rel="noopener noreferrer">Open contract <svg><use href="#i-external"/></svg></a><a class="button secondary" href="https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/40689705483/job/122821855839" target="_blank" rel="noopener noreferrer">View AI-planned run <svg><use href="#i-external"/></svg></a></div></div></section>
+        <section class="section" id="proof"><div class="proof-panel"><div class="proof-copy"><div class="proof-icon"><svg><use href="#i-shield"/></svg></div><div><div class="section-kicker">DON’T TAKE OUR WORD FOR IT</div><h2>Follow the receipts<span>.</span></h2><p>See the latest testnet contract and transaction links. CI evidence is in the private project repository (access required).</p></div></div><div class="proof-actions"><a class="button primary" href="https://testnet.nearblocks.io/address/bouncer-oracle-6a42bf32.testnet" target="_blank" rel="noopener noreferrer">Open contract <svg><use href="#i-external"/></svg></a><a class="button secondary" href="https://github.com/Greatmujey/Bouncer/actions/runs/40689705483/job/122821855839" target="_blank" rel="noopener noreferrer">View AI-planned run <svg><use href="#i-external"/></svg></a></div></div></section>
 
         <footer class="footer"><div><strong>bouncer<span>.</span></strong><span>Resources for agents, with boundaries.</span></div><p>Testnet prototype · Unaudited · Not for real funds</p></footer>
       </main>

@@ -1,0 +1,38 @@
+{
+  "observed_at": "2026-11-01T19:17:53Z",
+  "method": "public read-only HTTP GET via page retrieval; not a signed attestation",
+  "sources": [
+    "https://demo.multiagency.ai/api/config",
+    "https://demo.multiagency.ai/api/health",
+    "https://demo.multiagency.ai/api/tasks",
+    "https://demo.multiagency.ai/api/engagements",
+    "https://github.com/MultiAgency/kanban-sandbox/issues/79"
+  ],
+  "config": {
+    "network": "testnet",
+    "token": "3e2210e1184b45b64c8a434c0a7e7b23cc04ea7eb7b23cc04ea7eb7a6c3c32520d03d4afcb8af",
+    "treasury": "multiagency.sputnikv2.testnet",
+    "default_deposit_micro_usdc": "3000000"
+  },
+  "health_report": {
+    "ok": true,
+    "coordinator_last_completed_at": "2026-11-01T19:17:46.313Z",
+    "idle_ready_task": 79,
+    "idle_job": 78,
+    "reported_oldest_ready_seconds": 116701,
+    "reported_ready_seats": 1
+  },
+  "ready_task_public_issue": {
+    "number": 79,
+    "state": "open",
+    "assignee": null,
+    "amount": "0",
+    "last_public_comment_at": "2026-10-31T10:52:49Z",
+    "scope": "An internal zero-deposit code task, not a test of a new research buyer"
+  },
+  "last_listed_paid_job_created_at": "2026-10-03T19:19:50Z",
+  "worker_capacity": "UNPROVEN",
+  "quote_posts": 0,
+  "sends": 0,
+  "scope": "Public GET observations only; data may be cached or stale. A recent coordinator cycle and an idle task do not prove current worker capacity, merchant consent, deployed source, refundability or useful delivery."
+}

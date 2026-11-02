@@ -8,6 +8,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { FileJournal, requestFingerprint } from '../agent/procurement.mjs';
 import { multiAgencyPaymentPlan } from '../agent/multiagency-research.mjs';
+import { prepareMultiAgencyExactFt } from '../agent/multiagency-exact-ft.mjs';
 import { CIRCLE_TESTNET_USDC as TOKEN } from '../scripts/circle-testnet-setup.mjs';
 import { MULTIAGENCY_TREASURY as TREASURY } from '../agent/multiagency-readiness.mjs';
 import { mockGuardedPayment, mockHash, MOCK_PUBLIC_KEY } from './mock-guarded-payment.mjs';
@@ -105,5 +106,73 @@ test('real CLI recovers a synthetic original payment and inspects its published 
     const published = JSON.parse(result.stdout); assert.equal(published.status, 'PUBLISHED_TASK_AFTER_FINAL_PAYMENT');
     assert.equal(published.text, text); assert.equal(published.sends, 0); assert.equal(published.journal_writes, 0);
     assert.deepEqual(fs.readFileSync(f.state), before);
+  } finally { f.close(); }
+});
+
+test('real CLI prepares V11 owner calldata offline from an original encrypted quote, with no state write', () => {
+  const f = fixture(); try {
+    const quote = { code: 'ma-0123456789', title: goal.title, status: 'awaiting_deposit', channel: 'wallet',
+      expires_at: new Date(Date.now() + 48 * 60 * 60_000).toISOString(),
+      payment: { network: 'testnet', token: TOKEN, receiver: TREASURY, amount: goal.amount, memo: 'ma-0123456789' } };
+    const j = new FileJournal(f.state, goal.vault, goal.owner, { encryptionKey: f.secret });
+    j.put(`${goal.id}-ma-quote`, { status: 'pending', fingerprint: crypto.createHash('sha256').update(JSON.stringify(goal)).digest('hex'),
+      multiagency: { version: 1, phase: 'issued', goal, quote } }); j.close();
+    const offline = path.join(f.dir, 'offline.mjs');
+    fs.writeFileSync(offline, 'globalThis.fetch = async () => { throw new Error("offline preparation must not fetch"); };\n');
+    const before = fs.readFileSync(f.state);
+    let result = f.run([...f.base, '--prepare-exact', '--public-key', MOCK_PUBLIC_KEY], { NODE_OPTIONS: `--import=${offline}` });
+    assert.equal(result.status, 0, result.stderr);
+    const prepared = JSON.parse(result.stdout);
+    assert.equal(prepared.owner_call.method, 'set_exact_ft_intent'); assert.equal(prepared.owner_call.attached_yocto, '1');
+    assert.equal(prepared.agent_call.method, 'execute_exact_ft'); assert.equal(prepared.agent_call.attached_yocto, '0');
+    assert.deepEqual(fs.readFileSync(f.state), before);
+    for (const args of [
+      [...f.base, '--prepare-exact'], [...f.base, '--prepare-exact', '--public-key', MOCK_PUBLIC_KEY, '--execute'],
+      [...f.base, '--recover-exact', '--public-key', MOCK_PUBLIC_KEY], [...f.base, '--pay-exact', '--key', f.agent],
+      [...f.base, '--inspect-exact', '--task', '0'],
+    ]) { result = f.run(args); assert.equal(result.status, 1, result.stderr); }
+    assert.deepEqual(fs.readFileSync(f.state), before);
+  } finally { f.close(); }
+});
+
+test('real CLI recovers a synthetic V11 payment by its original hash without a signing key or send', () => {
+  const f = fixture(); try {
+    const quote = { code: 'ma-0123456789', title: goal.title, status: 'awaiting_deposit', channel: 'wallet',
+      expires_at: new Date(Date.now() + 48 * 60 * 60_000).toISOString(),
+      payment: { network: 'testnet', token: TOKEN, receiver: TREASURY, amount: goal.amount, memo: 'ma-0123456789' } };
+    const prepared = prepareMultiAgencyExactFt({ goal, quote, agentPublicKey: MOCK_PUBLIC_KEY });
+    const a = prepared.owner_call.args, hash = mockHash('synthetic-cli-exact-payment'), txBlock = mockHash('exact-cli-tx-block'), executionBlock = mockHash('exact-cli-execution-block');
+    const view = { intent_id: a.intent_id, policy_id: a.policy_id, token: TOKEN, payee: TREASURY, amount: goal.amount,
+      memo: a.memo, review_hash: a.review_hash, expires_at_ms: a.expires_at_ms, agent_public_key: MOCK_PUBLIC_KEY,
+      policy_revision: 1, payee_revision: 1, agent_revision: 1, consumed: false, cancelled: false, active: true };
+    const request = multiAgencyPaymentPlan(goal, quote, { allowExpired: true }).requests[0];
+    const chain = mockGuardedPayment({ hash, owner: goal.owner, contract: goal.vault, publicKey: MOCK_PUBLIC_KEY,
+      args: { policy_id: goal.policy_id, payee: TREASURY, amount: goal.amount, memo: quote.code, expected_token: TOKEN } });
+    const enc = value => Buffer.from(JSON.stringify(value)).toString('base64');
+    chain.transaction_outcome.block_hash = txBlock; chain.receipts_outcome[0].block_hash = executionBlock;
+    chain.transaction.actions[0].FunctionCall.method_name = 'execute_exact_ft';
+    chain.transaction.actions[0].FunctionCall.args = enc({ intent_id: a.intent_id });
+    chain.receipts_outcome[0].outcome.logs = ['BOUNCER exact FT intent consumed; transfer initiated'];
+    chain.receipts_outcome[1].outcome.logs = ['EVENT_JSON:' + JSON.stringify({ standard: 'nep141', version: '1.0.0', event: 'ft_transfer',
+      data: [{ old_owner_id: goal.vault, new_owner_id: TREASURY, amount: goal.amount, memo: quote.code }] })];
+    chain.receipts_outcome[2].outcome.logs = ['BOUNCER exact FT transfer succeeded; intent stays consumed'];
+    const callback = chain.receipts[1].receipt.Action.actions[0].FunctionCall;
+    callback.method_name = 'after_exact_ft_transfer';
+    callback.args = enc({ intent_id: a.intent_id, policy_id: goal.policy_id, token: TOKEN, amount: goal.amount, bucket: 24, policy_revision: 1 });
+    const j = new FileJournal(f.state, goal.vault, goal.owner, { encryptionKey: f.secret });
+    j.put(`${goal.id}-ma-quote`, { status: 'pending', fingerprint: crypto.createHash('sha256').update(JSON.stringify(goal)).digest('hex'),
+      multiagency: { version: 1, phase: 'issued', goal, quote } });
+    j.put(goal.id, { status: 'pending', fingerprint: requestFingerprint(request), request, payment_version: 'exact-ft-signed-v11',
+      tx_hash: hash, agent_public_key: MOCK_PUBLIC_KEY, exact_ft: { version: 1, prepared, pinned_view: view } }); j.close();
+    const evidence = { hash, owner: goal.owner, vault: goal.vault, codeHash: goal.vault_code_hash, txBlock, executionBlock, chain,
+      intentView: { ...view, consumed: true, active: false }, gets: {} };
+    const evidencePath = path.join(f.dir, 'synthetic.json'); fs.writeFileSync(evidencePath, JSON.stringify(evidence));
+    const preload = fileURLToPath(new URL('./fixtures/mock-multiagency-cli.mjs', import.meta.url));
+    const env = { NODE_OPTIONS: `--import=${preload}`, BOUNCER_MULTIAGENCY_SYNTHETIC: evidencePath };
+    const result = f.run([...f.base, '--recover-exact'], env); assert.equal(result.status, 0, result.stderr);
+    const recovered = JSON.parse(result.stdout); assert.equal(recovered.status, 'RECOVERED_PAYMENT_ONLY');
+    assert.equal(recovered.settlement.tx_hash, hash); assert.equal(recovered.sends, 0);
+    const persisted = new FileJournal(f.state, goal.vault, goal.owner, { encryptionKey: f.secret, requireExisting: true });
+    try { assert.equal(persisted.get(goal.id).status, 'completed'); } finally { persisted.close(); }
   } finally { f.close(); }
 });

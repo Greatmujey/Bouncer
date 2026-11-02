@@ -7,8 +7,9 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [features]
-# Experimental, separately built testnet artifact; default V9 is unchanged.
+# Experimental, separately built testnet artifacts; default V9 is unchanged.
 youtick-playback-v10 = []
+exact-ft-v11 = []
 
 [dependencies]
 near-sdk = "5.14"

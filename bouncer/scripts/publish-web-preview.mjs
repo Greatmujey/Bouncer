@@ -8,12 +8,13 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { PUBLIC_WEB_FILES, validatePublicWeb } from './stage-public-web.mjs';
 
 const web = fileURLToPath(new URL('../web/', import.meta.url));
 const host = 'https://www.madethis.website';
 let ttlSeconds = 604800; // Prefer seven days; older hosts support only 24 hours.
 const zip = path.join(os.tmpdir(), `bouncer-web-preview-${process.pid}.zip`);
-const files = ['index.html', 'styles.css', 'favicon.svg', 'evidence.mjs', 'app.mjs', 'tour.mjs', 'wallet.bundle.js'];
+const files = PUBLIC_WEB_FILES;
 
 async function postJson(route, body) {
   const response = await fetch(`${host}${route}`, {
@@ -27,10 +28,7 @@ async function postJson(route, body) {
 }
 
 async function main() {
-  for (const file of files) {
-    const stat = fs.lstatSync(path.join(web, file));
-    if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`Refusing unexpected website file ${file}`);
-  }
+  validatePublicWeb(web);
   execFileSync('zip', ['-q', zip, ...files], { cwd: web });
   const bytes = fs.readFileSync(zip);
   if (!bytes.length || bytes.length > 4 * 1024 * 1024) throw new Error('Invalid preview ZIP size');

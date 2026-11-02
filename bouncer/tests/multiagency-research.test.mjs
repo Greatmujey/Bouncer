@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import { CIRCLE_TESTNET_USDC as TOKEN } from '../scripts/circle-testnet-setup.mjs';
 import { MULTIAGENCY_BOARD as BOARD, MULTIAGENCY_TREASURY as TREASURY } from '../agent/multiagency-readiness.mjs';
 import { multiAgencyPaymentPlan, validateMultiAgencyGoal, validateMultiAgencyQuote, verifyMultiAgencyOpening,
-  verifyMultiAgencyPayment, verifyMultiAgencyPublishedHandoff, verifyMultiAgencyResearchDelivery } from '../agent/multiagency-research.mjs';
+  verifyMultiAgencyJobClaim, verifyMultiAgencyPayment, verifyMultiAgencyPublishedHandoff, verifyMultiAgencyResearchDelivery } from '../agent/multiagency-research.mjs';
 import { MOCK_PUBLIC_KEY, mockGuardedPayment, mockHash } from './mock-guarded-payment.mjs';
 const API = 'https://api.github.com/repos/MultiAgency/kanban-sandbox/issues';
 const nowMs = Date.parse('2026-11-01T15:00:00.000Z'), txHash = mockHash('multiagency-payment');
@@ -93,7 +93,10 @@ test('separate FINAL payment, seller attribution and GitHub handoff are each req
   ]) { const bad = fixture(); mutate(bad); assert.throws(() => verifyMultiAgencyResearchDelivery(bad)); }
 });
 
-test('publication by itself does not claim Bouncer purchased the historical work', () => {
+test('publication or a seller job claim alone does not claim Bouncer purchased the historical work', () => {
   const x = fixture(), result = verifyMultiAgencyPublishedHandoff(x);
   assert.equal(result.status, 'PUBLISHED'); assert.match(result.scope, /no payment/);
+  const claim = verifyMultiAgencyJobClaim(x);
+  assert.equal(claim.status, 'SELLER_CLAIMS_OPENED'); assert.match(claim.scope, /no chain settlement/);
+  assert.throws(() => verifyMultiAgencyJobClaim({ ...x, txHash: 'not-a-hash' }), /invalid claimed/);
 });

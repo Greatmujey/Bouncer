@@ -8,7 +8,7 @@ events and confirms FINAL receipts. It is not standard x402 `exact`. The
 source is not an attestation of the currently deployed service. Testnet USDC
 has **no financial value**.
 
-On 1 November, our [corrected read-only probe](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41330260928/job/124918667542)
+On 1 November, our [corrected read-only probe](https://github.com/Greatmujey/Bouncer/actions/runs/41330260928/job/124918667542)
 observed a 3,000,000-micro-USDC default deposit, Circle's NEAR testnet token,
 and treasury `multiagency.sputnikv2.testnet`. It reported a coordinator cycle
 completed 25 seconds before the observation. An earlier `coordinator_recent`
@@ -36,7 +36,13 @@ It matched the bot-authored job/team, completed task, assignee's handoff and
 SHA-256 of the unedited report comment. That historic work was bought by
 `agency.testnet`, **not Bouncer**; it does not demonstrate current capacity,
 prove the report's accuracy, or satisfy our independent-fulfillment goal.
-Public summaries are in `evidence/multiagency-read-20261101/`.
+Public summaries are in `evidence/multiagency-read-20261101/`. A further
+read-only public GET at approximately 19:17 UTC on 1 November reported the
+same token, treasury and deposit, a recent coordinator cycle, and one ready
+seat for job 78 idle for about 32 hours; the latest listed paid job was still
+from 3 October. This is a provider report, potentially stale or cached—not
+proof of current worker capacity or unavailability. No quote or payment was
+made in that follow-up.
 
 ## What is implemented
 
@@ -68,13 +74,16 @@ Public summaries are in `evidence/multiagency-read-20261101/`.
   does not fall back to another send after an ambiguous error. Injected legacy
   providers must enforce equivalent no-retry behavior themselves.
 
-- `agent/multiagency.mjs` exposes explicit `--quote`, `--pay`, `--recover`, and
-  `--inspect --task` actions. Read-only task inspection uses only the original
-  journal/hash, the pinned provider and GitHub public APIs; it neither writes
-  the journal nor signs or sends. Quote/payment require `--execute` and an
-  `--ack-provider-availability` operator assertion; a new journal also needs
-  `--new-journal --ack-key-backup`. These assertions do **not** establish that
-  the provider is available or that a backup actually exists.
+- `agent/multiagency.mjs` exposes explicit `--quote`, legacy V9 `--pay`,
+  `--recover`, and `--inspect --task` actions. The separate experimental V11
+  route adds `--prepare-exact`, `--pay-exact`, `--recover-exact`, and
+  `--inspect-exact --task`; see [exact FT intent boundaries](EXACT_FT_INTENTS.md).
+  V11 is a fresh-state, non-deployed variant, not an in-place V9 upgrade.
+  Preparation and task inspection do not sign, send or write the journal;
+  inspection uses only the original hash, pinned provider and GitHub public
+  APIs. Quote/payment require `--execute` and an `--ack-provider-availability`
+  operator assertion; a new journal also needs `--new-journal --ack-key-backup`.
+  These assertions do **not** establish provider availability or a real backup.
 
 The adapter is **experimental and synthetic-tested only**: no MultiAgency quote,
 payment, job, Bouncer report or refund has been observed. The public readiness
@@ -106,8 +115,8 @@ a stale backup cannot prove no intervening payment. The first quote may use
 `--new-journal --ack-key-backup`; all subsequent actions require that exact
 existing journal, goal and key. Payment requires an owner-only, non-symlink
 restricted agent-key file; `--recover` and `--inspect` need no signing key.
-`--inspect` returns one task's public text and digest, not an owner acceptance
-of the entire brief. `GH_TOKEN` or `GITHUB_TOKEN` is optional for GitHub API
+`--inspect` and `--inspect-exact` return one task's public text and digest,
+not an owner acceptance of the entire brief. `GH_TOKEN` or `GITHUB_TOKEN` is optional for GitHub API
 reads and is sent only to the pinned GitHub API. The old ephemeral-sandbox VRF
 and YouTick key loss demonstrates why a single local key copy is inadequate.
 

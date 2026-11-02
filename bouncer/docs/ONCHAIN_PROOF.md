@@ -136,7 +136,7 @@ the supplied clients.
   GET, negative substitutions, same-instance replay and replay after a fresh
   default gate. It proves SDK wire compatibility under these conditions, not
   blockchain activity.
-- A [read-only CI check](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41265215053/job/124726506415)
+- A [read-only CI check](https://github.com/Greatmujey/Bouncer/actions/runs/41265215053/job/124726506415)
   fetched the **previously completed** seller-v2 [testnet payment](https://testnet.nearblocks.io/txns/HwQB5RTFgascGDjPUmkCkiexF2WEHShHX69d6yGw7JMc)
   at FINAL, checked its Bouncer/token receipts, and passed the actual receipt to
   the installed SDK via a loopback RPC. It rejected substituted payee/nonce
@@ -147,7 +147,7 @@ the supplied clients.
   recency. It sends no payment or merchant request. The original payment was
   to our own development seller; using its receipt here does not create a new
   purchase or establish an independent seller's acceptance.
-- A separate [one-shot live testnet check](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41265514067/job/124727867996)
+- A separate [one-shot live testnet check](https://github.com/Greatmujey/Bouncer/actions/runs/41265514067/job/124727867996)
   obtained a fresh SDK-generated quote from a **self-hosted local gate**, then
   paid [0.001 Circle testnet USDC](https://testnet.nearblocks.io/txns/HX1p43ydbz2eJZCAXjUM3W5ajMFFFfqVjUB4gBpbeGiQ/execution)
   via a restricted `execute` key. The real SDK verified the fresh payment against
@@ -159,7 +159,7 @@ the supplied clients.
   of the 1-yocto escalation guard. The owner-only
   [Ref swap](https://testnet.nearblocks.io/txns/4cqwobHpkJP9ehTQJ5U1CWUWtaN7XhCRVoASyAR3SGWt/execution)
   and [vault funding](https://testnet.nearblocks.io/txns/EUHDQev6y98H4AFGKBGh6onBUUEGurE22Dyj1qh49o6m/execution)
-  were setup operations, not agent-guarded swaps. [Public evidence](https://github.com/abdullahimujeeb0505-stack/Bouncer/actions/runs/41265514067/artifacts/13067073513)
+  were setup operations, not agent-guarded swaps. [Public evidence](https://github.com/Greatmujey/Bouncer/actions/runs/41265514067/artifacts/13067073513)
   is retained until 30 January 2027 and contains public transaction details and
   the fixture response, not keys. The job is explicitly gated and skips Actions
   reruns. This test proves neither an independent merchant nor a valuable purchase.
