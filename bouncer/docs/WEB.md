@@ -57,9 +57,12 @@ security or CSP review is implied. The public repository is
 `https://github.com/Greatmujey/Bouncer`.
 
 The project’s production branch is `main`; working-branch previews and the
-production domain can therefore serve different commits. Verify deployed assets
-and wallet behavior after deployment rather than assuming a branch push updated
-the production domain. GitHub Pages could use
+production domain can therefore serve different commits. On 2 November 2026 UTC the
+redesigned site was deployed directly from working-branch commit `ab79db1` to
+`bouncer-near.vercel.app` without merging to `main`. A future production build
+from `main` could replace it. Verify deployed assets and wallet behavior after
+deployment rather than assuming a branch push updated the production domain.
+GitHub Pages could use
 `https://greatmujey.github.io/Bouncer/` if enabled and deployed, but it has not
 been reverified as live. Its shared origin is deliberately not wallet-enabled.
 
