@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "purpose": "user-requested-uncreated-testnet-account-recovery",
+  "network": "testnet",
+  "account_id": "greatmujey.testnet",
+  "public_key": "ed25519:76e7VsPsBxT7GWR7KqgzYrd3JzQyWyDT7qLZdHxdan23",
+  "circle_token": "3e2210e1184b45b64c8a434c0a7e7b23cc04ea7eb7a6c3c32520d03d4afcb8af",
+  "circle_code_hash": "EoAUFWELjD9gYzsjKDXYRmHDHf1RJ95jaKNSYE6v9b2z",
+  "observed_circle_atoms": "40000000"
+}
