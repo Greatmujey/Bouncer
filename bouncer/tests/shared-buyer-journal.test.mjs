@@ -174,6 +174,22 @@ function faultPool(pool, marker, afterCommit = true) {
   } };
 }
 
+// Model a discarded session whose server-side advisory lock outlives close().
+// This deliberately delays the actual pool release; PostgreSQL remains real.
+function delayedDestroyPool(pool) {
+  let pending = false, finished = Promise.resolve();
+  return { get pending() { return pending; }, async drain() { await finished; }, async connect() {
+    const c = await pool.connect();
+    return { on: c.on.bind(c), removeListener: c.removeListener.bind(c), query: c.query.bind(c), release(destroy) {
+      if (destroy !== true) return c.release(destroy);
+      pending = true;
+      finished = new Promise(resolve => setTimeout(() => {
+        try { c.release(true); } finally { pending = false; resolve(); }
+      }, 250));
+    } };
+  } };
+}
+
 test('shared buyer database URL and encryption key file fail closed without exposing secrets', () => {
   const good = 'postgresql://u:secret@db.example/buyer?sslmode=verify-full';
   assert.equal(validateBuyerDatabaseUrl(good), good);
@@ -839,6 +855,7 @@ dbtest('unsafe primary status or database failure stops the signed payment befor
       const runtime = syntheticRuntime(journal); sabotage = true;
       await assert.rejects(runtime.run(), error => !error.message.includes('secret-value') && /primary|reservation failed/.test(error.message));
       assert.equal(runtime.sends, 0); await journal.close();
+      await waitForJournalRelease(f.pool, f.journalId);
       const reopened = await f.open(); assert.deepEqual(reopened.list(), []);
     } finally { await f.cleanup(); }
   }
@@ -1011,6 +1028,7 @@ dbtest('lost verified-delivery COMMIT acknowledgment never rolls back the confir
     const runtime = syntheticRuntime(journal, { loseSend: false }); let deliveries = 0;
     await assert.rejects(runtime.run({ fulfill: async ({ input }) => { deliveries++; broken.enable(); return computeResult(input); } }), /update failed or its commit is uncertain/);
     assert.equal(deliveries, 1); assert.equal(runtime.sends, 1); await journal.close();
+    await waitForJournalRelease(f.pool, f.journalId);
     const reopened = await f.open(), entry = reopened.get(goal.id);
     assert.equal(entry.status, 'completed'); assert.equal(entry.delivery.status, 'verified');
     const checked = await recoverDirectResourcePayment({ config: { contract_id: contract, owner_account_id: owner, provider_url: origin, goals: [goal] },
@@ -1537,16 +1555,24 @@ dbtest('SIGKILL after a synced checkpoint but before broadcast leaves the hash a
 });
 
 dbtest('a corrupted pending row after checkpoint is caught by the final fence before broadcast', async () => {
-  const f = await fixture(), runtime = syntheticRuntime(f.journal, { loseSend: false });
+  const f = await fixture(), delayed = delayedDestroyPool(f.pool); let journal;
   try {
+    await f.journal.close();
+    journal = await openPostgresBuyerJournal({ pool: delayed, contractId: contract, ownerAccountId: owner,
+      journalId: f.journalId, key: f.key });
+    const runtime = syntheticRuntime(journal, { loseSend: false });
     await assert.rejects(runtime.run({ beforeBroadcastCheckpoint: async () => {
       await f.pool.query('UPDATE bouncer_buyer_v1.entries SET revision=revision+1 WHERE journal_id=$1', [f.journalId]);
     } }), /shared journal pre-broadcast check failed.*no payment was sent/);
     assert.equal(runtime.sends, 0);
     const rows = await f.pool.query('SELECT status, tx_hash FROM bouncer_buyer_v1.entries WHERE journal_id=$1', [f.journalId]);
     assert.equal(rows.rowCount, 1); assert.equal(rows.rows[0].status, 'pending');
-    await f.journal.close(); await assert.rejects(f.open(), error => error.code === 'CORRUPT');
-  } finally { await f.cleanup(); }
+    await journal.close();
+    assert.equal(delayed.pending, true, 'the discarded backend still holds the journal lock');
+    await waitForJournalRelease(f.pool, f.journalId);
+    assert.equal(delayed.pending, false);
+    await assert.rejects(f.open(), error => error.code === 'CORRUPT');
+  } finally { if (journal) await journal.close(); await delayed.drain(); await f.cleanup(); }
 });
 
 dbtest('the synchronous freshness guard remains after checkpointing and immediately before a broadcast', async () => {
