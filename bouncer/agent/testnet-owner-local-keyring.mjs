@@ -78,6 +78,52 @@ export function createTestnetOwnerKeyring(dir) {
   } finally { master.fill(0); credentials.private_key = undefined; }
 }
 
+/** Restore only an already-reviewed testnet owner from an existing private
+ * credentials file. This never generates a replacement account, signs or
+ * broadcasts. A partial/pre-existing keyring directory is never overwritten;
+ * preserve the user's independent backup separately. */
+export function restoreTestnetOwnerKeyring({ dir, plan: raw, credentialsFile }) {
+  const plan = validateOwnerBootstrapPlan(raw);
+  if (typeof dir !== 'string' || !path.isAbsolute(dir) || typeof credentialsFile !== 'string' ||
+      !path.isAbsolute(credentialsFile) || path.resolve(dir) === path.dirname(path.resolve(credentialsFile))) {
+    throw new Error('distinct absolute private restore and credential paths required');
+  }
+  const parent = path.dirname(path.resolve(dir)), recoveryParent = path.dirname(path.resolve(credentialsFile));
+  privateDir(parent); privateDir(recoveryParent);
+  if (fs.realpathSync(parent) !== parent || fs.realpathSync(recoveryParent) !== recoveryParent) {
+    throw new Error('private restore paths must not traverse symbolic links');
+  }
+  const credentialsBytes = secretFile(credentialsFile, 4096);
+  let credentials, master;
+  try {
+    try { credentials = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(credentialsBytes)); }
+    catch { throw new Error('invalid private testnet recovery file'); }
+    if (!credentials || typeof credentials !== 'object' || Array.isArray(credentials) ||
+        Object.keys(credentials).sort().join(',') !== 'account_id,network_id,private_key,public_key') {
+      throw new Error('invalid private testnet recovery fields');
+    }
+    let recovered;
+    try { recovered = keyFrom(plan, credentials); }
+    catch { throw new Error('recovery key does not match reviewed testnet owner'); }
+    if (String(recovered.getPublicKey()) !== plan.public_key) throw new Error('recovery key does not match reviewed owner');
+    fs.mkdirSync(dir, { mode: 0o700 });
+    privateDir(dir);
+    master = crypto.randomBytes(32);
+    syncWrite(path.join(dir, 'master.key'), master, 'wx', 0o600);
+    for (const name of ['primary.enc.json', 'backup.enc.json']) {
+      syncWrite(path.join(dir, name), JSON.stringify(seal(plan, credentials, master), null, 2) + '\n', 'wx', 0o600);
+    }
+    syncWrite(path.join(dir, 'public-plan.json'), JSON.stringify(plan, null, 2) + '\n', 'wx', 0o600);
+    const checked = readTestnetOwnerKeyring({ dir, plan });
+    if (String(checked.getPublicKey()) !== plan.public_key) throw new Error('restored encrypted keyring differs');
+    return { account_id: plan.account_id, public_key: plan.public_key, encrypted_copies_checked: 2,
+      original_owner_restored: true, replacement_owner_created: false, transaction_signed: false, transaction_sent: false };
+  } finally {
+    credentialsBytes.fill(0); master?.fill(0);
+    if (credentials && typeof credentials === 'object') credentials.private_key = undefined;
+  }
+}
+
 /** Both independently sealed copies must authenticate to the same public key.
  * The returned key pair is in-process only; callers must never log it. */
 export function readTestnetOwnerKeyring({ dir, plan: raw }) {

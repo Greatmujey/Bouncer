@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createTestnetOwnerKeyring, readTestnetOwnerKeyring, exportTemporaryTestnetOwner } from '../agent/testnet-owner-local-keyring.mjs';
+import { createTestnetOwnerKeyring, readTestnetOwnerKeyring, exportTemporaryTestnetOwner, restoreTestnetOwnerKeyring } from '../agent/testnet-owner-local-keyring.mjs';
 import { keyFrom, readBoundedPrivate } from '../agent/circle-owner-offline-journal.mjs';
 
 function temp() { const base = fs.mkdtempSync(path.join(os.tmpdir(), 'bouncer-private-test-')); fs.chmodSync(base, 0o700);
@@ -59,4 +59,43 @@ test('temporary private copies authenticate to the owner and conflicting files a
     assert.throws(() => exportTemporaryTestnetOwner({ dir: t.dir, plan, primary, backup }));
     assert.equal(fs.readFileSync(backup, 'utf8'), '{}');
   } finally { t.cleanup(); }
+});
+
+test('privately restores the same reviewed synthetic owner into two new encrypted copies', () => {
+  const t = temp();
+  try {
+    const { plan } = createTestnetOwnerKeyring(t.dir), original = readTestnetOwnerKeyring({ dir: t.dir, plan });
+    const primary = path.join(t.base, 'temporary', 'primary.json'), backup = path.join(t.base, 'temporary', 'backup.json');
+    exportTemporaryTestnetOwner({ dir: t.dir, plan, primary, backup });
+    const restoredDir = path.join(t.base, 'restored');
+    const result = restoreTestnetOwnerKeyring({ dir: restoredDir, plan, credentialsFile: primary });
+    assert.equal(result.original_owner_restored, true); assert.equal(result.replacement_owner_created, false);
+    assert.equal(result.transaction_signed, false); assert.equal(result.transaction_sent, false);
+    assert.equal(result.encrypted_copies_checked, 2); assert(!JSON.stringify(result).includes(original.toString()));
+    assert.equal(String(readTestnetOwnerKeyring({ dir: restoredDir, plan }).getPublicKey()), plan.public_key);
+    for (const file of ['master.key', 'primary.enc.json', 'backup.enc.json', 'public-plan.json']) {
+      assert.equal(fs.statSync(path.join(restoredDir, file)).mode & 0o777, 0o600);
+      assert(!fs.readFileSync(path.join(restoredDir, file)).includes(Buffer.from(original.toString())));
+    }
+    assert.throws(() => restoreTestnetOwnerKeyring({ dir: restoredDir, plan, credentialsFile: primary }), /EEXIST/);
+  } finally { t.cleanup(); }
+});
+
+test('restore rejects a changed key, unexpected fields, exposed file or symbolic link before creating a keyring', () => {
+  for (const scenario of ['key', 'fields', 'permissions', 'symlink']) {
+    const t = temp();
+    try {
+      const { plan } = createTestnetOwnerKeyring(t.dir), primary = path.join(t.base, 'temporary', 'primary.json'),
+        backup = path.join(t.base, 'temporary', 'backup.json');
+      exportTemporaryTestnetOwner({ dir: t.dir, plan, primary, backup });
+      let source = primary;
+      if (scenario === 'key') { const obj = JSON.parse(fs.readFileSync(primary)); obj.public_key = 'ed25519:changed'; fs.writeFileSync(primary, JSON.stringify(obj)); }
+      if (scenario === 'fields') { const obj = JSON.parse(fs.readFileSync(primary)); obj.extra = true; fs.writeFileSync(primary, JSON.stringify(obj)); }
+      if (scenario === 'permissions') fs.chmodSync(primary, 0o644);
+      if (scenario === 'symlink') { source = path.join(t.base, 'temporary', 'link.json'); fs.symlinkSync(primary, source); }
+      const dest = path.join(t.base, 'restored');
+      assert.throws(() => restoreTestnetOwnerKeyring({ dir: dest, plan, credentialsFile: source }));
+      assert.equal(fs.existsSync(dest), false);
+    } finally { t.cleanup(); }
+  }
 });
