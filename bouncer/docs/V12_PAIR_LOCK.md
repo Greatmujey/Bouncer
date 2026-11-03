@@ -67,7 +67,8 @@ synthetic exact-FT intent settled once with replay rejected. A [separate
 isolated run](https://github.com/Greatmujey/Bouncer/actions/runs/41639739950)
 exercised an ephemeral owner's deployment and simulated lost acknowledgment:
 one local send was recovered by its original hash. Its Circle snapshot fields
-were synthetic.
+were synthetic. The [canonical-reference-guard rerun](https://github.com/Greatmujey/Bouncer/actions/runs/41640196983)
+also passed with the same pinned artifact and simulated loss.
 These matching GitHub builds and synthetic tests are not independent review or
 an audit, and do not prove deployed-code identity. Independent provider
 compatibility and genuine delivery also remain necessary.
