@@ -54,6 +54,10 @@ rejected the stale project without a provider call or debit, and executed a
 one-shot exact transfer while rejecting replay. A [second run](https://github.com/Greatmujey/Bouncer/actions/runs/41631892731)
 also passed the zero-yocto and non-owner policy-escalation checks. This is not
 testnet, real Circle or OutLayer, independent provider delivery, or an audit.
-The V12 WASM marker only catches wrong inputs; the build is not yet reproducible.
-A durable owner recovery path, independent provider compatibility and genuine
-delivery also remain necessary.
+The V12 WASM marker only catches wrong inputs; it is not code attestation.
+A captured Cargo lock now fixes the resolved `near-sdk` 5.30.0 dependencies,
+and an opt-in workflow compares two clean Rust 1.99.1 builds from that lock.
+Until that comparison and the matching artifact's own runtime tests pass, the
+new artifact must not be treated as reproducible or deployable. Even matching
+GitHub builds are not independent review. A durable owner recovery path,
+independent provider compatibility and genuine delivery also remain necessary.
