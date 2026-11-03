@@ -104,7 +104,7 @@ export function verifyOutlayerAcquisitionReceipt(result,envelope,rawPlan,rawOwne
    // after the signed swap, linked successful ft_transfer and arguments match.
    // Reconciliation also checks the pinned token code and the owner's balance.
    const legacyLogs=o.logs.filter(log=>typeof log==='string'&&log.startsWith('Transfer '));
-   const legacy=events.length===0&&legacyLogs.length===1&&
+   const legacy=!o.logs.some(log=>typeof log==='string'&&log.startsWith('EVENT_JSON:'))&&legacyLogs.length===1&&
     legacyLogs[0]===`Transfer ${amount} from ${REF} to ${owner.account_id}`;
    if(nep141||legacy)transfers.push({receipt_id:r.receipt_id,amount_atoms:amount.toString(),
     transfer_event_verified:nep141,legacy_transfer_log_verified:legacy});
@@ -131,7 +131,19 @@ async function priorProof({plan,owner,original,control,registration,wrap,envelop
  }else throw new Error('unsupported acquisition stage');
  return {control:controlReceipt,registration:regReceipt,...(wrapReceipt?{wrap:wrapReceipt}:{})};
 }
-function validateState(s,stage,plan,owner,now){
+
+/** Verify the exact original chain through the fake-token swap, without making
+ * assumptions about the current balance. Callers must pin the token code and
+ * check relevant balances at a fresh FINAL block before using this evidence. */
+export async function verifyOutlayerAcquisitionLineage({plan:rawPlan,ownerPlan:rawOwner,original,control,registration,wrap,swap,provider}={}){
+ const owner=validateOwnerBootstrapPlan(rawOwner),plan=validateOutlayerBurnPlan(rawPlan,owner);
+ if(!provider||typeof provider.txStatusReceipts!=='function'||swap?.stage!=='swap-fake')throw new Error('original swap lineage required');
+ const prior=await priorProof({plan,owner,original,control,registration,wrap,envelope:swap,provider});
+ const receipt=verifyOutlayerAcquisitionReceipt(await provider.txStatusReceipts(swap.tx_hash,owner.account_id,'FINAL'),swap,plan,owner);
+ return {...prior,swap:receipt};
+}
+
+export function validateOutlayerAcquisitionState(s,stage,plan,owner,now){
  const n=pinnedAccessKeyNonce(s?.signer_key_nonce);
  if(!s||s.version!==1||s.stage!==stage||s.network!=='testnet'||s.owner!==owner.account_id||s.vault!==plan.vault||
   s.signer_public_key!==owner.public_key||s.eligible!==true||!Array.isArray(s.blockers)||s.blockers.length!==0||n===null||
@@ -145,7 +157,7 @@ export async function reconcileOutlayerAcquisition({plan:rawPlan,ownerPlan:rawOw
  const prior=await priorProof({plan,owner,original,control,registration,wrap,envelope,provider});
  const receipt=verifyOutlayerAcquisitionReceipt(await provider.txStatusReceipts(envelope.tx_hash,owner.account_id,'FINAL'),envelope,plan,owner);
  const nextStage=envelope.stage==='wrap'?'swap-fake':'fund-vault',next=await inspect({plan,ownerPlan:owner,stage:nextStage,provider,now});
- const nonce=validateState(next,nextStage,plan,owner,now);
+ const nonce=validateOutlayerAcquisitionState(next,nextStage,plan,owner,now);
  if(nonce!==BigInt(envelope.nonce))throw new Error('post-acquisition nonce differs');
  if(envelope.stage==='swap-fake'){
   const balance=await readView(provider,next.block_hash,TOKEN,'ft_balance_of',{account_id:owner.account_id});
@@ -157,6 +169,18 @@ export async function reconcileOutlayerAcquisition({plan:rawPlan,ownerPlan:rawOw
   seller_contacted:false,provider_paid:false,independent_fulfillment_verified:false,do_not_resend:true,
   scope:'original FINAL acquisition and pinned next state; fake test token only, no seller payment or fulfillment'};
 }
+/** Verify that the signed block reference is recent, canonical and within the
+ * network's configured transaction validity period. This does not broadcast. */
+export async function assertOutlayerOriginalReference({provider,state,envelope}){
+ const [head,reference,protocol]=await Promise.all([provider.viewBlock({blockId:state.block_hash}),provider.viewBlock({blockId:envelope.block_hash}),
+  provider.experimental_protocolConfig({blockId:state.block_hash})]);
+ const h=head?.header?.height,r=reference?.header?.height,v=protocol?.transaction_validity_period;
+ if(head?.header?.hash!==state.block_hash||reference?.header?.hash!==envelope.block_hash||!height(h)||!height(r)||!height(v)||v===0||
+  protocol?.chain_id!=='testnet'||h<r||h-r>=MAX_AGE||h-r>=v)throw new Error('acquisition reference too old or unknown');
+ const canonical=await provider.viewBlock({blockId:r});
+ if(canonical?.header?.height!==r||canonical.header.hash!==envelope.block_hash)throw new Error('acquisition reference not canonical');
+}
+
 export async function broadcastOutlayerAcquisitionOnce({plan:rawPlan,ownerPlan:rawOwner,original,control,registration,wrap,envelope,provider,persistAttempt,now=Date.now,
  inspect=inspectOutlayerBurnStage,readView=readPinnedJsonView}={}){
  const owner=validateOwnerBootstrapPlan(rawOwner),plan=validateOutlayerBurnPlan(rawPlan,owner),signed=verifySignedOutlayerBurnStage(envelope,plan,owner);
@@ -166,15 +190,9 @@ export async function broadcastOutlayerAcquisitionOnce({plan:rawPlan,ownerPlan:r
   throw new Error('guarded acquisition provider and durable original fence required');
  }
  await priorProof({plan,owner,original,control,registration,wrap,envelope,provider});
- const before=await inspect({plan,ownerPlan:owner,stage:envelope.stage,provider,now}),nonce=validateState(before,envelope.stage,plan,owner,now);
+ const before=await inspect({plan,ownerPlan:owner,stage:envelope.stage,provider,now}),nonce=validateOutlayerAcquisitionState(before,envelope.stage,plan,owner,now);
  if(nonce!==BigInt(envelope.nonce)-1n)throw new Error('acquisition owner nonce differs; reconcile original, never resend');
- const [head,reference,protocol]=await Promise.all([provider.viewBlock({blockId:before.block_hash}),provider.viewBlock({blockId:envelope.block_hash}),
-  provider.experimental_protocolConfig({blockId:before.block_hash})]);
- const h=head?.header?.height,r=reference?.header?.height,v=protocol?.transaction_validity_period;
- if(head?.header?.hash!==before.block_hash||reference?.header?.hash!==envelope.block_hash||!height(h)||!height(r)||!height(v)||v===0||
-  protocol?.chain_id!=='testnet'||h<r||h-r>=MAX_AGE||h-r>=v)throw new Error('acquisition reference too old or unknown');
- const canonical=await provider.viewBlock({blockId:r});
- if(canonical?.header?.height!==r||canonical.header.hash!==envelope.block_hash)throw new Error('acquisition reference not canonical');
+ await assertOutlayerOriginalReference({provider,state:before,envelope});
  if(await persistAttempt({stage:envelope.stage,tx_hash:envelope.tx_hash,owner:owner.account_id,vault:plan.vault})!==true){
   throw new Error('acquisition original-hash fence unavailable');
  }

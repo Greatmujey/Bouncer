@@ -7,6 +7,8 @@ import { verifySignedVaultCircle } from './keyless-vault-circle.mjs';
 import { assertFreshFinalBlock } from '../shared/fresh-final-block.mjs';
 import { isTransactionHash } from '../shared/direct-payment-settlement.mjs';
 import { CIRCLE_TESTNET_USDC as CIRCLE } from '../scripts/circle-testnet-setup.mjs';
+import { OUTLAYER_FAKE_USD as FAKE } from './outlayer-v11-readiness.mjs';
+import { newTestnetVaultId } from './keyless-vault-bootstrap-readiness.mjs';
 const record = x => x !== null && typeof x === 'object' && !Array.isArray(x);
 const number = x => typeof x === 'number' && Number.isSafeInteger(x) && x >= 0 ? BigInt(x) :
   typeof x === 'string' && /^(0|[1-9][0-9]{0,38})$/.test(x) ? BigInt(x) : null;
@@ -44,14 +46,32 @@ export function verifyVaultCircleReceipt(result, envelope, rawPlan) {
  * exact source, receiver, amount, key and nonce; this function verifies only
  * the matching FINAL transaction/receipt graph, not that prior authorization. */
 export function verifyCircleVaultReceiptGraph(result, envelope, plan, expected) {
+  return verifyFixedFtVaultReceiptGraph(result, envelope, plan, expected, CIRCLE, false);
+}
+
+/** Only the fixed OutLayer testnet funding transaction may use the old fake
+ * token's exact legacy transfer log. The caller must first verify the signed
+ * fixed action and must separately pin the fake token code and balances. */
+export function verifyFakeTestnetVaultReceiptGraph(result, envelope, rawPlan, expected) {
+  const plan = validateOwnerBootstrapPlan(rawPlan);
+  if (envelope?.kind !== 'fund' || envelope.stage !== 'fund-vault' || envelope.network !== 'testnet' ||
+      envelope.owner !== plan.account_id || envelope.signer_public_key !== plan.public_key ||
+      envelope.vault !== newTestnetVaultId(plan) || envelope.amount_atoms !== '10000') {
+    throw new Error('invalid fixed fake-token vault funding terms');
+  }
+  return verifyFixedFtVaultReceiptGraph(result, envelope, plan, expected, FAKE, true);
+}
+
+function verifyFixedFtVaultReceiptGraph(result, envelope, plan, expected, token, allowLegacy) {
   const t = result?.transaction, txo = result?.transaction_outcome, top = txo?.outcome;
-  if (result?.final_execution_status !== 'FINAL' || typeof result.status?.SuccessValue !== 'string' ||
-      t?.hash !== envelope.tx_hash || t.signer_id !== plan.account_id || t.public_key !== plan.public_key || t.receiver_id !== CIRCLE ||
+  if (result?.final_execution_status !== 'FINAL' || !record(result.status) || Object.keys(result.status).join(',') !== 'SuccessValue' ||
+      typeof result.status.SuccessValue !== 'string' ||
+      t?.hash !== envelope.tx_hash || t.signer_id !== plan.account_id || t.public_key !== plan.public_key || t.receiver_id !== token ||
       number(t.nonce) !== BigInt(envelope.nonce) || !Array.isArray(t.actions) || t.actions.length !== 1 || !sameCall(t.actions[0], expected) ||
       txo?.id !== envelope.tx_hash || top?.executor_id !== plan.account_id || !isTransactionHash(top?.status?.SuccessReceiptId) ||
       !Array.isArray(top.receipt_ids) || top.receipt_ids.length !== 1 || top.receipt_ids[0] !== top.status.SuccessReceiptId ||
       !Array.isArray(result.receipts) || !Array.isArray(result.receipts_outcome) || result.receipts.length > 128 ||
-      result.receipts_outcome.length < 1 || result.receipts_outcome.length > 128) throw new Error('original Circle vault transaction is not matching FINAL');
+      result.receipts_outcome.length < 1 || result.receipts_outcome.length > 128) throw new Error('original FT vault transaction is not matching FINAL');
   const receipts = new Map(), outcomes = new Map();
   for (const r of result.receipts) {
     if (!isTransactionHash(r?.receipt_id) || receipts.has(r.receipt_id)) throw new Error('missing or duplicate vault receipt');
@@ -66,10 +86,10 @@ export function verifyCircleVaultReceiptGraph(result, envelope, plan, expected) 
     outcomes.set(item.id, o);
   }
   const rootId = top.status.SuccessReceiptId, root = receipts.get(rootId), body = root?.receipt?.Action, rootOutcome = outcomes.get(rootId);
-  if (root?.predecessor_id !== plan.account_id || root.receiver_id !== CIRCLE || !record(root.receipt) ||
+  if (root?.predecessor_id !== plan.account_id || root.receiver_id !== token || !record(root.receipt) ||
       Object.keys(root.receipt).join(',') !== 'Action' || body?.signer_id !== plan.account_id || body.signer_public_key !== plan.public_key ||
-      !Array.isArray(body.actions) || body.actions.length !== 1 || !sameCall(body.actions[0], expected) || rootOutcome?.executor_id !== CIRCLE) {
-    throw new Error('original Circle vault root receipt is missing or mismatched');
+      !Array.isArray(body.actions) || body.actions.length !== 1 || !sameCall(body.actions[0], expected) || rootOutcome?.executor_id !== token) {
+    throw new Error('original FT vault root receipt is missing or mismatched');
   }
   const seen = new Set(), pending = [rootId];
   while (pending.length) {
@@ -84,17 +104,17 @@ export function verifyCircleVaultReceiptGraph(result, envelope, plan, expected) 
     if (!record(total) || Object.keys(total).sort().join(',') !== 'available,total' || total.total !== envelope.storage_min_yocto ||
         total.available !== '0' || result.status.SuccessValue !== rootOutcome.status.SuccessValue || rootOutcome.receipt_ids.length > 1 ||
         rootOutcome.receipt_ids.some(id => !onlySystemRefund(receipts.get(id), outcomes.get(id), plan))) {
-      throw new Error('fresh Circle vault registration result or refund differs');
+      throw new Error('fresh FT vault registration result or refund differs');
     }
   } else {
     const childCall = (receiver, method) => rootOutcome.receipt_ids.flatMap(id => {
       const r = receipts.get(id), a = r?.receipt?.Action?.actions, c = a?.[0]?.FunctionCall, o = outcomes.get(id);
-      return r?.predecessor_id === CIRCLE && r.receiver_id === receiver && Array.isArray(a) && a.length === 1 &&
+      return r?.predecessor_id === token && r.receiver_id === receiver && Array.isArray(a) && a.length === 1 &&
         record(a[0]) && Object.keys(a[0]).join(',') === 'FunctionCall' && c?.method_name === method && o?.executor_id === receiver ?
         [{ id, receipt: r, call: c, outcome: o }] : [];
     });
-    const hooks = childCall(envelope.vault, 'ft_on_transfer'), resolvers = childCall(CIRCLE, 'ft_resolve_transfer');
-    if (hooks.length !== 1 || resolvers.length !== 1) throw new Error('unique Circle vault hook/resolver not found');
+    const hooks = childCall(envelope.vault, 'ft_on_transfer'), resolvers = childCall(token, 'ft_resolve_transfer');
+    if (hooks.length !== 1 || resolvers.length !== 1) throw new Error('unique FT vault hook/resolver not found');
     const hook = hooks[0], resolver = resolvers[0], outputs = hook.receipt.receipt.Action.output_data_receivers,
       inputs = resolver.receipt.receipt.Action.input_data_ids;
     const hookArgs = json64(hook.call.args, 'vault hook arguments'), resolverArgs = json64(resolver.call.args, 'token resolver arguments');
@@ -103,22 +123,26 @@ export function verifyCircleVaultReceiptGraph(result, envelope, plan, expected) 
         hookArgs.sender_id !== plan.account_id || hookArgs.amount !== envelope.amount_atoms || hookArgs.msg !== '' ||
         !record(resolverArgs) || Object.keys(resolverArgs).sort().join(',') !== 'amount,receiver_id,sender_id' ||
         resolverArgs.sender_id !== plan.account_id || resolverArgs.receiver_id !== envelope.vault || resolverArgs.amount !== envelope.amount_atoms ||
-        !Array.isArray(outputs) || outputs.length !== 1 || outputs[0]?.receiver_id !== CIRCLE || !isTransactionHash(outputs[0]?.data_id) ||
+        !Array.isArray(outputs) || outputs.length !== 1 || outputs[0]?.receiver_id !== token || !isTransactionHash(outputs[0]?.data_id) ||
         !Array.isArray(inputs) || inputs.length !== 1 || inputs[0] !== outputs[0].data_id ||
         rootOutcome.status?.SuccessReceiptId !== resolver.id || json64(hook.outcome.status?.SuccessValue, 'vault unused amount') !== '0' ||
         !Array.isArray(hook.outcome.logs) || !hook.outcome.logs.includes('BOUNCER deposit received') ||
         json64(resolver.outcome.status?.SuccessValue, 'token resolved amount') !== envelope.amount_atoms ||
-        result.status.SuccessValue !== resolver.outcome.status.SuccessValue) throw new Error('Circle vault funding callback or dependent resolver differs');
+        result.status.SuccessValue !== resolver.outcome.status.SuccessValue) throw new Error('FT vault funding callback or dependent resolver differs');
     const events = (rootOutcome.logs || []).flatMap(log => {
       if (typeof log !== 'string' || log.length > 16_384 || !log.startsWith('EVENT_JSON:')) return [];
       try { const e = JSON.parse(log.slice(11)); return e.standard === 'nep141' && e.version === '1.0.0' && e.event === 'ft_transfer' ? [e] : []; }
       catch { return []; }
     });
-    if (events.length !== 1 || !Array.isArray(events[0].data) || events[0].data.length !== 1 ||
-        events[0].data[0]?.old_owner_id !== plan.account_id || events[0].data[0]?.new_owner_id !== envelope.vault ||
-        events[0].data[0]?.amount !== envelope.amount_atoms) throw new Error('matching owner-to-vault Circle transfer event is missing');
+    const nep141 = events.length === 1 && Array.isArray(events[0].data) && events[0].data.length === 1 &&
+        events[0].data[0]?.old_owner_id === plan.account_id && events[0].data[0]?.new_owner_id === envelope.vault &&
+        events[0].data[0]?.amount === envelope.amount_atoms;
+    const legacyLogs = (rootOutcome.logs || []).filter(log => typeof log === 'string' && log.startsWith('Transfer '));
+    const legacy = allowLegacy && !(rootOutcome.logs || []).some(log => typeof log === 'string' && log.startsWith('EVENT_JSON:')) &&
+        legacyLogs.length === 1 && legacyLogs[0] === `Transfer ${envelope.amount_atoms} from ${plan.account_id} to ${envelope.vault}`;
+    if (!nep141 && !legacy) throw new Error('matching owner-to-vault FT transfer log is missing');
     funding = { amount_atoms: envelope.amount_atoms, vault_hook_receipt: hook.id, token_resolver_receipt: resolver.id,
-      transfer_event_verified: true, full_amount_accepted: true };
+      transfer_event_verified: nep141, ...(allowLegacy ? { legacy_transfer_log_verified: legacy } : {}), full_amount_accepted: true };
   }
   return { tx_hash: envelope.tx_hash, root_receipt_id: rootId, linked_successful_outcomes: seen.size, funding,
     trusted_rpc_not_consensus_proof: true };

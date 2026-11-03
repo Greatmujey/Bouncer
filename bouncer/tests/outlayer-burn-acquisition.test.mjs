@@ -5,6 +5,7 @@ import {createOutlayerBurnPlan} from '../agent/outlayer-v11-burn-plan.mjs';
 import {signOutlayerBurnStage,verifySignedOutlayerBurnStage} from '../agent/outlayer-v11-burn-signed.mjs';
 import {signOutlayerRegistrationControl,verifySignedOutlayerRegistrationControl} from '../agent/outlayer-registration-control.mjs';
 import {verifyOutlayerAcquisitionReceipt,reconcileOutlayerAcquisition,broadcastOutlayerAcquisitionOnce} from '../agent/outlayer-burn-acquisition.mjs';
+import {inspectOutlayerFundingBefore,verifyOutlayerFundingReceipt,reconcileOutlayerFunding,broadcastOutlayerFundingOnce} from '../agent/outlayer-burn-funding.mjs';
 const key=()=>nearApi.KeyPair.fromRandom('ed25519'),ownerKey=key(),existing=key(),fund=key(),project=key();
 const owner={version:1,purpose:'new-bouncer-testnet-owner',network:'testnet',account_id:'bouncer-owner-0123456789abcdef01234567.testnet',public_key:String(ownerKey.getPublicKey())};
 const plan=createOutlayerBurnPlan({ownerPlan:owner,existingResourcePublicKey:String(existing.getPublicKey()),fundingPublicKey:String(fund.getPublicKey()),projectPublicKey:String(project.getPublicKey())});
@@ -54,7 +55,7 @@ async function fixture(stage='wrap'){
  };
  const inspect=async({stage:asked})=>structuredClone(asked===stage?state.before:state.after),readView=async()=>state.balance;
  const persistAttempt=async()=>{state.persisted=true;return state.fence};
- return {original,control,registration,wrap:previousWrap,envelope,wrapResult,swapResult,provider,state,inspect,readView,persistAttempt};
+ return {original,control,registration,wrap:previousWrap,envelope,wrapResult,swapResult,provider,state,inspect,readView,persistAttempt,all};
 }
 const args=f=>({plan,ownerPlan:owner,original:f.original,control:f.control,registration:f.registration,wrap:f.wrap,envelope:f.envelope,
  provider:f.provider,inspect:f.inspect,readView:f.readView,persistAttempt:f.persistAttempt,now:()=>now});
@@ -84,6 +85,7 @@ test('pinned legacy fake token transfer log is checked without claiming a NEP-14
   r=>{r.receipts_outcome[3].outcome.logs=[`Transfer 21645 from someone.testnet to ${owner.account_id}`]},
   r=>{r.receipts_outcome[3].outcome.logs.push(`Transfer 1 from x.testnet to ${owner.account_id}`)},
   r=>{r.receipts_outcome[3].outcome.logs.push('EVENT_JSON:'+JSON.stringify({standard:'nep141',version:'1.0.0',event:'ft_transfer',data:[]}))},
+  r=>{r.receipts_outcome[3].outcome.logs.push('EVENT_JSON:malformed')},
   r=>{r.receipts_outcome[3].outcome.status.SuccessValue=encode('not-unit')},
   r=>{r.receipts[3].receiver_id='different.testnet'},
  ]){
@@ -112,4 +114,72 @@ test('swap proof rejects changed actions, failures, unlinked hook, fake output o
   r=>{r.receipts_outcome[3].outcome.logs=[]},r=>{r.receipts.push(structuredClone(r.receipts[0]))}]){
   const changed=structuredClone(f.swapResult);mutate(changed);assert.throws(()=>verifyOutlayerAcquisitionReceipt(changed,f.envelope,plan,owner));
  }
+});
+
+async function fundingFixture(){
+ const f=await fixture('swap-fake'),swap=f.envelope;
+ const envelope=await signOutlayerBurnStage({plan,ownerPlan:owner,stage:'fund-vault',snapshot:snap('fund-vault',swap.nonce),keyPair:ownerKey,nowMs:now});
+ const root=hash(20),hook=hash(21),resolver=hash(22),data=hash(23),amount='10000',token='usdc.fakes.testnet';
+ const fundResult=result(envelope,verifySignedOutlayerBurnStage(envelope,plan,owner),token,{SuccessValue:encode(amount)},root);
+ const ro=fundResult.receipts_outcome[0].outcome;
+ ro.status={SuccessReceiptId:resolver};ro.receipt_ids=[hook,resolver];ro.logs=[`Transfer ${amount} from ${owner.account_id} to ${plan.vault}`];
+ const call=(name,args)=>({FunctionCall:{method_name:name,deposit:'0',gas:'70000000000000',args:encode(args)}});
+ fundResult.receipts.push({receipt_id:hook,predecessor_id:token,receiver_id:plan.vault,receipt:{Action:{signer_id:owner.account_id,signer_public_key:owner.public_key,
+  actions:[call('ft_on_transfer',{sender_id:owner.account_id,amount,msg:''})],input_data_ids:[],output_data_receivers:[{receiver_id:token,data_id:data}]}}},
+  {receipt_id:resolver,predecessor_id:token,receiver_id:token,receipt:{Action:{signer_id:owner.account_id,signer_public_key:owner.public_key,
+   actions:[call('ft_resolve_transfer',{sender_id:owner.account_id,receiver_id:plan.vault,amount})],input_data_ids:[data],output_data_receivers:[]}}});
+ fundResult.receipts_outcome.push({id:hook,outcome:{executor_id:plan.vault,status:{SuccessValue:encode('0')},receipt_ids:[],logs:['BOUNCER deposit received']}},
+  {id:resolver,outcome:{executor_id:token,status:{SuccessValue:encode(amount)},receipt_ids:[],logs:[]}});
+ f.all.set(envelope.tx_hash,fundResult);f.state.phase=0;f.state.before=snap('fund-vault',swap.nonce);f.state.after=snap('configure',envelope.nonce);
+ f.provider.sendTransactionOnce=async(signed,wait,{beforeSubmit})=>{
+  assert.equal(wait,'FINAL');assert.equal(f.state.persisted,true);assert.equal(signed.transaction.nonce,BigInt(envelope.nonce));
+  beforeSubmit();f.state.sends++;f.state.phase=1;if(f.state.loseResponse)throw Error('lost');
+  return {final_execution_status:'FINAL',transaction_outcome:{id:envelope.tx_hash}};
+ };
+ f.inspect=async({stage})=>structuredClone(stage==='fund-vault'?f.state.before:f.state.after);
+ f.readView=async(_p,_block,contract,method,a)=>{
+  if(contract===token&&method==='ft_balance_of'&&a.account_id===owner.account_id)return f.state.phase?'11645':'21645';
+  if(contract===token&&method==='ft_balance_of'&&a.account_id===plan.vault)return f.state.phase?'10000':'0';
+  if(contract===plan.vault&&method==='vault_balance'&&a.token===token)return f.state.phase?'10000':'0';
+  throw Error('unexpected pinned view');
+ };
+ return {...f,swap,envelope,fundResult};
+}
+const fundingArgs=f=>({plan,ownerPlan:owner,original:f.original,control:f.control,registration:f.registration,wrap:f.wrap,swap:f.swap,envelope:f.envelope,
+ provider:f.provider,inspect:f.inspect,readView:f.readView,persistAttempt:f.persistAttempt,now:()=>now});
+
+test('fixed fake-token vault funding requires the original lineage and a single fenced send',async()=>{
+ const f=await fundingFixture(),before=await inspectOutlayerFundingBefore(fundingArgs(f));
+ assert.equal(before.stage,'fund-vault');assert.equal(before.prior.swap.fake_token_output.amount_atoms,'21645');
+ assert.equal(before.balance.owner_fake_atoms,'21645');assert.equal(before.balance.vault_tracked_fake_atoms,'0');assert.equal(f.state.sends,0);
+ const r=await broadcastOutlayerFundingOnce(fundingArgs(f));
+ assert.equal(r.status,'OUTLAYER_FAKE_TOKEN_VAULT_FUNDED_AT_FINAL');assert.equal(r.receipt.funding.full_amount_accepted,true);
+ assert.equal(r.receipt.funding.transfer_event_verified,false);assert.equal(r.receipt.funding.legacy_transfer_log_verified,true);
+ assert.deepEqual(r.balance,{owner_fake_atoms:'11645',vault_actual_fake_atoms:'10000',vault_tracked_fake_atoms:'10000'});
+ assert.equal(r.provider_paid,false);assert.equal(r.independent_fulfillment_verified,false);assert.equal(f.state.sends,1);
+});
+
+test('vault funding rejects changed or incomplete fake-token receipts and unsafe preconditions',async()=>{
+ const f=await fundingFixture();assert.equal(verifyOutlayerFundingReceipt(f.fundResult,f.envelope,plan,owner,f.swap).funding.amount_atoms,'10000');
+ for(const mutate of [
+  r=>{r.transaction.nonce='999'},r=>{r.transaction.receiver_id='other.testnet'},r=>{r.receipts_outcome[0].outcome.logs=[]},
+  r=>{r.receipts_outcome[0].outcome.logs=[`Transfer 10001 from ${owner.account_id} to ${plan.vault}`]},
+  r=>{r.receipts_outcome[0].outcome.logs.push('EVENT_JSON:malformed')},r=>{r.status.Failure={}},
+  r=>{r.receipts[1].receipt.Action.output_data_receivers[0].data_id=hash(24)},
+  r=>{r.receipts_outcome[1].outcome.status.SuccessValue=encode('1')},r=>{r.receipts_outcome[1].outcome.logs=[]},
+  r=>{r.receipts_outcome[2].outcome.status.SuccessValue=encode('2')},r=>{r.receipts_outcome.pop()},
+  r=>{r.receipts_outcome[1].outcome.status={Failure:{}}},
+ ]){const bad=structuredClone(f.fundResult);mutate(bad);assert.throws(()=>verifyOutlayerFundingReceipt(bad,f.envelope,plan,owner,f.swap));}
+ for(const mutate of [
+  x=>{x.state.fence=false},x=>{x.state.before.signer_key_nonce='999'},x=>{x.state.before.eligible=false},
+  x=>{x.state.canonical=hash(24)},x=>{x.state.validity=0},x=>{x.provider.txStatusReceipts=async()=>{throw Error('missing original')}},
+  x=>{x.readView=async()=> 'unexpected'},
+ ]){const bad=await fundingFixture();mutate(bad);await assert.rejects(broadcastOutlayerFundingOnce(fundingArgs(bad)));assert.equal(bad.state.sends,0);}
+});
+
+test('lost fake-token funding acknowledgement reconciles only the original hash',async()=>{
+ const f=await fundingFixture();f.state.loseResponse=true;
+ await assert.rejects(broadcastOutlayerFundingOnce(fundingArgs(f)),/unconfirmed.*never resend/);assert.equal(f.state.sends,1);
+ const r=await reconcileOutlayerFunding(fundingArgs(f));assert.equal(r.tx_hash,f.envelope.tx_hash);assert.equal(r.reconciliation_only,true);assert.equal(f.state.sends,1);
+ f.readView=async()=> 'wrong';await assert.rejects(reconcileOutlayerFunding(fundingArgs(f)),/balance differs/);assert.equal(f.state.sends,1);
 });

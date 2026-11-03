@@ -21,14 +21,15 @@ jobs:
         with:
           node-version: '22'
       - run: npm ci --ignore-scripts --no-audit --no-fund
-      - run: node --test tests/outlayer-burn-acquisition.test.mjs tests/read-only-near-receipts.test.mjs
+      - run: node --test tests/outlayer-burn-acquisition.test.mjs tests/read-only-near-receipts.test.mjs tests/keyless-vault-circle.test.mjs
       - name: Verify original and current next-stage state
         env:
           COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
         run: |
           set -euo pipefail
-          stage="$(python3 -c 'import os,re; x=re.findall(r"\[outlayer-acquisition-reconcile:(wrap|swap-fake)\]",os.environ["COMMIT_MESSAGE"]); assert len(x)==1; print(x[0])')"
-          if ! node scripts/reconcile-outlayer-acquisition.mjs "$stage" > "$RUNNER_TEMP/outlayer-reconcile.json" 2> "$RUNNER_TEMP/outlayer-reconcile-error.log"; then
+          stage="$(python3 -c 'import os,re; x=re.findall(r"\[outlayer-acquisition-reconcile:(wrap|swap-fake|fund-vault)\]",os.environ["COMMIT_MESSAGE"]); assert len(x)==1; print(x[0])')"
+          if [ "$stage" = fund-vault ]; then script='scripts/reconcile-outlayer-funding.mjs'; else script='scripts/reconcile-outlayer-acquisition.mjs'; fi
+          if ! node "$script" "$stage" > "$RUNNER_TEMP/outlayer-reconcile.json" 2> "$RUNNER_TEMP/outlayer-reconcile-error.log"; then
             python3 -c 'import os; s=open(os.environ["RUNNER_TEMP"]+"/outlayer-reconcile-error.log").read()[-2500:]; print("::error title=Original acquisition unknown; never resend::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
             exit 1
           fi

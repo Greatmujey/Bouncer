@@ -1,0 +1,79 @@
+{
+  "status": "OUTLAYER_FAKE_TOKEN_ACQUIRED_AT_FINAL",
+  "network": "testnet",
+  "stage": "swap-fake",
+  "tx_hash": "E3aHp6n3n79vFnnThusXEuqZrmeCYLig75gJZZwLRw4p",
+  "receipt": {
+    "stage": "swap-fake",
+    "tx_hash": "E3aHp6n3n79vFnnThusXEuqZrmeCYLig75gJZZwLRw4p",
+    "root_receipt_id": "7o3WKV5ZwSCgLC11v5j5XmLzeDySRdGMxcqkeLtnEzci",
+    "linked_successful_outcomes": 10,
+    "fake_token_output": {
+      "receipt_id": "AGQm4oXooKG3UAnjZsHpStfHPcrwMvEExMLer6ayJmbY",
+      "amount_atoms": "21645",
+      "transfer_event_verified": false,
+      "legacy_transfer_log_verified": true
+    },
+    "trusted_rpc_not_consensus_proof": true
+  },
+  "prior": {
+    "control": {
+      "tx_hash": "Fegksi5b8KmqnHN3fHaH1Ak9vyLFA2JjgoqL5UAtjpu2",
+      "root_receipt_id": "EudcmBQH2HtyrNYc4M9qiafXVDtKS4TKweKjkx2gyy7b",
+      "guard_rejection_verified": true,
+      "original_tx_hash": "7Rce6FLjRJ18GtUWcVgReZkMGCaTvvisXB93WWvGTFkV",
+      "original_nonce": "275948535000011",
+      "control_nonce": "275948535000012",
+      "original_cannot_be_accepted_after_control": true,
+      "original_history_proven": false,
+      "trusted_rpc_not_consensus_proof": true
+    },
+    "registration": {
+      "tx_hash": "2xrD5cbvz2MgaThp3VdwbRZU8GAXoJHcbsHN4TispdjL",
+      "root_receipt_id": "7njnKYemi6XYa7kBEYjX4fS2fwmg6jpW9mvyLQMQF54W",
+      "linked_successful_outcomes": 2,
+      "registered_accounts": [
+        "bouncer-owner-3869c162b193fa1729515442.testnet",
+        "vault.bouncer-owner-3869c162b193fa1729515442.testnet"
+      ],
+      "asset": "usdc.fakes.testnet",
+      "trusted_rpc_not_consensus_proof": true
+    },
+    "wrap": {
+      "stage": "wrap",
+      "tx_hash": "DJRFCe9ArR9JKheqaRrbkLthDk8gyRrCxugaGWQYNwFS",
+      "root_receipt_id": "9Goyu44YWh4pv1vP1cuQ3ztUUqDw6jUt3fen76hzuLAa",
+      "linked_successful_outcomes": 2,
+      "fake_token_output": null,
+      "trusted_rpc_not_consensus_proof": true
+    }
+  },
+  "next_stage": {
+    "version": 1,
+    "stage": "fund-vault",
+    "network": "testnet",
+    "owner": "bouncer-owner-3869c162b193fa1729515442.testnet",
+    "vault": "vault.bouncer-owner-3869c162b193fa1729515442.testnet",
+    "block_hash": "FMccHS7mCi9ZYNi4CdxL6v8snHdC1jPp2PT1vk6CX7bS",
+    "block_timestamp_nanosec": "1793664563411147885",
+    "observed_at": "2026-11-03T00:09:27.029Z",
+    "signer_public_key": "ed25519:7GQ6BtmKSTT5XVnVAikGftXDZtfJYxoWXc61PE1H1tVr",
+    "signer_key_nonce": "275948535000015",
+    "gas_price_yocto_per_gas": "100000000",
+    "estimated_minimum_agent_allowance_yocto": "400000000000000000000000",
+    "eligible": true,
+    "blockers": [],
+    "signed": false,
+    "sent": false,
+    "seller_contacted": false,
+    "independent_fulfillment_verified": false,
+    "scope": "trusted-RPC state indication only; prior original receipts, durable journal, key custody and one-shot sender are separately required"
+  },
+  "reconciliation_only": true,
+  "seller_contacted": false,
+  "provider_paid": false,
+  "independent_fulfillment_verified": false,
+  "do_not_resend": true,
+  "scope": "original FINAL acquisition and pinned next state; fake test token only, no seller payment or fulfillment",
+  "rpc": "https://test.rpc.fastnear.com"
+}

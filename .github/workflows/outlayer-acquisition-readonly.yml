@@ -21,14 +21,15 @@ jobs:
         with:
           node-version: '22'
       - run: npm ci --ignore-scripts --no-audit --no-fund
-      - run: node --test tests/outlayer-burn-acquisition.test.mjs tests/outlayer-registration-after-control.test.mjs tests/outlayer-v11-burn-preflight.test.mjs tests/github-original-fence.test.mjs
+      - run: node --test tests/outlayer-burn-acquisition.test.mjs tests/outlayer-registration-after-control.test.mjs tests/outlayer-v11-burn-preflight.test.mjs tests/github-original-fence.test.mjs tests/keyless-vault-circle.test.mjs
       - name: Inspect one stage and its original parents
         env:
           COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
         run: |
           set -euo pipefail
-          stage="$(python3 -c 'import os,re; x=re.findall(r"\[outlayer-acquisition-readonly:(wrap|swap-fake)\]",os.environ["COMMIT_MESSAGE"]); assert len(x)==1; print(x[0])')"
-          if ! node scripts/inspect-outlayer-acquisition.mjs "$stage" > "$RUNNER_TEMP/outlayer-acquisition.json" 2> "$RUNNER_TEMP/outlayer-acquisition-error.log"; then
+          stage="$(python3 -c 'import os,re; x=re.findall(r"\[outlayer-acquisition-readonly:(wrap|swap-fake|fund-vault)\]",os.environ["COMMIT_MESSAGE"]); assert len(x)==1; print(x[0])')"
+          if [ "$stage" = fund-vault ]; then script='scripts/inspect-outlayer-funding.mjs'; else script='scripts/inspect-outlayer-acquisition.mjs'; fi
+          if ! node "$script" "$stage" > "$RUNNER_TEMP/outlayer-acquisition.json" 2> "$RUNNER_TEMP/outlayer-acquisition-error.log"; then
             python3 -c 'import os; s=open(os.environ["RUNNER_TEMP"]+"/outlayer-acquisition-error.log").read()[-2500:]; print("::error title=Acquisition state unknown::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
             exit 1
           fi
