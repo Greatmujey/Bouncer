@@ -102,6 +102,37 @@ jobs:
           fi
           exit "$result"
 
+  walletconnect-session-smoke:
+    # Approve only a synthetic testnet-account session over the real relay; no
+    # real wallet, signature, wallet RPC call, or NEAR transaction is involved.
+    if: contains(github.event.head_commit.message, '[test-walletconnect-session]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Pair a synthetic wallet over the real relay
+        shell: bash
+        run: |
+          set +e
+          set -o pipefail
+          {
+            npm install --prefix "$RUNNER_TEMP/bouncer-browser" --no-save --no-audit --no-fund playwright-core@1.64.1 &&
+            npm ci --prefix bouncer/walletconnect --no-audit --no-fund &&
+            node bouncer/scripts/test-walletconnect-real-session.mjs
+          } 2>&1 | tee "$RUNNER_TEMP/bouncer-session-smoke.log"
+          result=${PIPESTATUS[0]}
+          if [ "$result" -ne 0 ]; then
+            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-3500).replace(/wc:[^\s\x27\x22]+/g,"[redacted pairing URI]").replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=WalletConnect session probe failed::"+s)' "$RUNNER_TEMP/bouncer-session-smoke.log"
+          fi
+          exit "$result"
+
   durable-site-smoke:
     # Public asset checks; the optional relay probe creates and cancels a
     # proposal without approving a wallet, signing, or spending.
