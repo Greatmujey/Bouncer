@@ -10,6 +10,8 @@ crate-type = ["cdylib"]
 # Experimental, separately built testnet artifacts; default V9 is unchanged.
 youtick-playback-v10 = []
 exact-ft-v11 = []
+# Fresh-state-only hardening; does not change or upgrade deployed V11 vaults.
+exact-ft-v12 = ["exact-ft-v11"]
 
 [dependencies]
 near-sdk = "5.14"

@@ -65,8 +65,10 @@ confirmed the adaptive hash was advertised at FINAL block
 provider kind and remained **BLOCKED_OR_UNPROVEN**. Its bounded public summary
 is retained under `evidence/youtick-playback-read-20261101/`. Neither probe can
 prove that the bridge uses the pinned access account or that the inspected
-source equals deployed code. No grant or playback token was requested in those
-read-only probes.
+source equals deployed code. A [fresh read-only probe on 3 November](https://github.com/Greatmujey/Bouncer/actions/runs/41630235513/job/125897626938)
+reported `media_provider: studio` and the adaptive profile, but **did not report
+legacy playback readiness**; the route remains `BLOCKED_OR_UNPROVEN`. No grant
+or playback token was requested in those read-only probes.
 
 Experimental single-host code reserves a distinct playback key before an order
 in the encrypted journal; checks the original payment, publication and local

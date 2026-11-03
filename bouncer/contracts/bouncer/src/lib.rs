@@ -667,7 +667,9 @@ impl Bouncer {
     }
 
     pub fn contract_version(&self) -> &'static str {
-        #[cfg(feature = "exact-ft-v11")]
+        #[cfg(feature = "exact-ft-v12")]
+        { "bouncer-agent-v12-exact-ft-testnet" }
+        #[cfg(all(feature = "exact-ft-v11", not(feature = "exact-ft-v12")))]
         { "bouncer-agent-v11-exact-ft-testnet" }
         #[cfg(feature = "youtick-playback-v10")]
         { "bouncer-agent-v10-youtick-testnet" }
@@ -1107,6 +1109,11 @@ impl Bouncer {
             self.allow_revisions.get(&(project.usd_policy_id.clone(), payee.clone())) == Some(ua) &&
             self.allow.get(&allow_key(&native_policy_id, payee.as_str())) == Some(&true) &&
             self.allow.get(&allow_key(&project.usd_policy_id, payee.as_str())) == Some(&true);
+        // A later exact-intent reservation for this token/payee must also
+        // invalidate a previously approved prepaid project route. V11 did not
+        // enforce this pair lock for provider-held credit.
+        #[cfg(feature = "exact-ft-v12")]
+        let active = active && self.exact_ft_payees.get(&(project.token.clone(), payee)) != Some(&true);
         Some(OutlayerProjectRouteView { project, route_revision: *revision, native_policy_revision: *nr,
             usd_policy_revision: *ur, native_payee_revision: *na, usd_payee_revision: *ua, active })
     }
@@ -1132,6 +1139,9 @@ impl Bouncer {
             self.agents.get(&(project.usd_policy_id.clone(), signing_key)) == Some(&true),
             "BLOCKED: signing key needs both project policies");
         let payee: AccountId = OUTLAYER_TESTNET.parse().unwrap_or_else(|_| abort_with("invalid OutLayer account"));
+        #[cfg(feature = "exact-ft-v12")]
+        require(self.exact_ft_payees.get(&(project.token.clone(), payee.clone())) != Some(&true),
+            "BLOCKED: token and payee require exact FT intents");
         let (native, native_balance) = validate(self, &native_policy_id, &payee, amount.0).unwrap_or_else(|m| abort_with(&m));
         require(native.as_str() == NATIVE_ASSET, "BLOCKED: project native policy changed");
         let prepaid = self.outlayer_prepaid.get(&project.token).copied().unwrap_or(0);
