@@ -38,7 +38,7 @@ jobs:
           test "$(sha256sum Cargo.lock | cut -d' ' -f1)" = '263879a4574d1d5ed97dd0da097cdefff52b4f57017738ad291628a9c63e317f'
           RUSTFLAGS='-C link-arg=-s' cargo build --locked --target wasm32-unknown-unknown --release --no-default-features --features tollgate-native-v13
           cp target/wasm32-unknown-unknown/release/bouncer.wasm "$RUNNER_TEMP/v13.wasm"
-          echo 'dc1989ba241bef37f4a6f24c9df525a2348f5de16c752906ccb400c8e7704bbf  '"$RUNNER_TEMP/v13.wasm" | sha256sum -c -
+          echo '44d8c3280639785a06f9d34658a508e9709f755ac7f5a93c614d3c52e80fd385  '"$RUNNER_TEMP/v13.wasm" | sha256sum -c -
           gh api repos/Mattbusel/tollgate/git/blobs/da71fa08c368f7620bc4bd2e8512a57580a86e15 --jq .content | base64 --decode > "$RUNNER_TEMP/channel.wasm"
           echo '1142c2546565f70944d578cea15d03c58166797525cd40d863a3425b1afd6956  '"$RUNNER_TEMP/channel.wasm" | sha256sum -c -
           curl --fail --show-error --silent --location --proto '=https' --tlsv1.2 --max-time 180 --retry 2 --max-filesize 419430400 \
@@ -46,7 +46,7 @@ jobs:
             --output "$RUNNER_TEMP/near-sandbox.tar.gz"
           python3 ../../scripts/extract-pinned-near-sandbox.py "$RUNNER_TEMP/near-sandbox.tar.gz" "$RUNNER_TEMP/near-sandbox"
           echo "BOUNCER_V13_WASM_PATH=$RUNNER_TEMP/v13.wasm" >> "$GITHUB_ENV"
-          echo "BOUNCER_V13_WASM_SHA256=dc1989ba241bef37f4a6f24c9df525a2348f5de16c752906ccb400c8e7704bbf" >> "$GITHUB_ENV"
+          echo "BOUNCER_V13_WASM_SHA256=44d8c3280639785a06f9d34658a508e9709f755ac7f5a93c614d3c52e80fd385" >> "$GITHUB_ENV"
           echo "BOUNCER_TOLLGATE_WASM_PATH=$RUNNER_TEMP/channel.wasm" >> "$GITHUB_ENV"
           echo "BOUNCER_SANDBOX_BIN=$RUNNER_TEMP/near-sandbox" >> "$GITHUB_ENV"
       - name: Exercise open, local voucher, close and detached refund

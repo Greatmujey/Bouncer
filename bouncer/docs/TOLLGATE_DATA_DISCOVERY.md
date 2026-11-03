@@ -12,10 +12,12 @@ The live offer, source and chain state can change independently. In the
 the seller advertised 0.001 test NEAR for the quakes endpoint and the observed
 channel code hash matched its published deployment record. That request omitted
 `path=quakes`, which the offer appended, so its exact-resource check failed.
-The discovery now requests the provider's explicit rewritten URL and requires
-an exact match; an unpaid web read returned that same URL, but a fresh pinned
-runner result still needs verification. The [earlier public snapshot](../evidence/testnet-owner-v3/tollgate-readonly-20261103.json)
-is not an executable quote; an unrecognized value blocks use. The code-hash
+The discovery now requests the provider's explicit rewritten URL. In a [fresh
+read-only run](https://github.com/Greatmujey/Bouncer/actions/runs/41648461093),
+the advertised and requested URLs matched exactly at the observed instant;
+the [snapshot](../evidence/testnet-owner-v3/tollgate-exact-resource-20261103.json)
+is not an executable quote and the voucher still does not cryptographically
+bind the resource. Unrecognized values block use. The code-hash
 match does **not** establish source-to-build equivalence, API behavior, seller
 reliability or an independent audit. A provider response or contract receipt
 would still need to be tied to the **specific requested resource** before
@@ -55,8 +57,11 @@ A detached channel refund is not automatically credited: the owner must
 reconcile the actual transfer and may recover surplus with the existing owner
 path. This is an experimental
 contract, **not deployed or audited**; it cannot claim delivery, accept Circle
-as native NEAR, or solve resource-unbound voucher risk. Tests and a real
-isolated runtime exercise must precede any potential testnet deployment.
+as native NEAR, or solve resource-unbound voucher risk. The [unit/build run](https://github.com/Greatmujey/Bouncer/actions/runs/41648346175)
+passed for the current experimental contract, including conservative failed
+promise handling and owner-only recovery. A prior isolated run exercised a
+superseded binary; the current binary still requires its own isolated runtime
+exercise before any potential testnet deployment.
 
 References: [Tollgate repository](https://github.com/Mattbusel/tollgate),
 [public quakes endpoint](https://near-tollgate.vercel.app/v1/quakes?min_magnitude=5),
