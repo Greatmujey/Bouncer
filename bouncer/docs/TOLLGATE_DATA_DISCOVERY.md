@@ -113,8 +113,14 @@ NEAR to V3; its [FINAL original and cleanup](V3_NATIVE_FAUCET_RECOVERY.md) are
 verified, and an indexed view subsequently showed approximately 8.969798 test
 NEAR in the owner. The pre-transfer shortfall above is historical, not the
 current estimate. The transfer used a temporary faucet signer, not the V3
-owner key. A fresh pinned funding estimate is still required; the original V3
-owner bearers remain unresolved, and custody has not been restored.
+owner key. A subsequent [read-only FINAL recheck](https://github.com/Greatmujey/Bouncer/actions/runs/41661671133)
+at block `AJN8caCB5hYWK4K9xxWyLGeWfqUtUUFaFJjBXT6bY616` estimated owner
+liquid balance **8.967978252555469399999998 test NEAR**, so the conservative
+5-NEAR vault plan plus 0.2-NEAR owner reserve had **zero estimated shortfall**
+at that snapshot. Circle actual and tracked balances still matched at 6,898
+atoms. This is an estimate, not a transaction authorization or fee guarantee.
+The two original V3 owner bearers remained unresolved and within the observed
+validity window; custody has not been restored.
 
 `agent/tollgate-quakes-v13.mjs` prepares a deterministic owner review of one
 fixed quakes GET, 0.001 test-NEAR price and 0.02 test-NEAR channel budget. It
@@ -135,8 +141,8 @@ path requires GitHub label-create permission and trusted administrators who
 never delete or rename the reservation; it has **not** been exercised against
 GitHub or a live seller. Results explicitly distinguish `LOCAL_ONLY` from
 `GITHUB_LABEL_AND_LOCAL`; a local fence alone is not cross-session protection.
-An [isolated HTTP lifecycle](https://github.com/Greatmujey/Bouncer/actions/runs/41655193138)
-exercised this client against the pinned published seller SDK and a disposable
+An [isolated HTTP lifecycle](https://github.com/Greatmujey/Bouncer/actions/runs/41662141220)
+exercised the updated client against the pinned published seller SDK and a disposable
 nearcore: review, one voucher, synthetic returned data, replay refusal, local
 settlement, close and refund all passed. Its seller and data were fixtures; it
 was not a public-chain payment or independent fulfillment. A turnkey live

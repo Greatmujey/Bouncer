@@ -15,9 +15,11 @@ published before both sends, and encrypted pre-helper recovery artifact
 `13241327993` was retained. Never resend these originals or repeat the helper.
 
 At a subsequent public indexed view, the V3 owner held approximately
-8.969798252555469399999998 test NEAR. That view is not a pinned FINAL funding
-estimate. The previous ~1.232022 test-NEAR shortfall was computed before the
-transfer and is no longer current; recheck the conservative plan at FINAL.
+8.969798252555469399999998 test NEAR. A later [pinned FINAL funding estimate](https://github.com/Greatmujey/Bouncer/actions/runs/41661671133)
+found approximately 8.967978252555469399999998 test NEAR liquid and zero
+estimated shortfall for the conservative 5-NEAR vault plan plus a 0.2-NEAR
+owner reserve. The previous ~1.232022 shortfall was pre-transfer. The estimate
+is not an authorization or a guarantee of future storage prices and fees.
 The V3 owner key was not accessed, its saved backup was not machine-verified,
 and **no owner transaction was signed**. The earlier unresolved owner-signed
 bearers remain unresolved; this top-up does not authorize other owner signing.
