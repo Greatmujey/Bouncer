@@ -9,6 +9,17 @@ must remain private. This confirmation is the user's statement, not a machine
 check of the saved copy. Never paste or publish a private key, and never use it
 on mainnet.
 
+**Current workspace custody:** after the workspace was reconstructed, the
+local encrypted V3 keyrings, private journals and local recovery ZIP were no
+longer present. The unsent Gmail recovery draft was observed still present; it
+was not sent or downloaded into this workspace, and its saved copy was not
+machine-verified. The draft's pre-bootstrap statement that the account had not
+yet been created or funded is historical and is now outdated. Do not assume
+local custody, recreate missing journals, use either earlier owner, or resume
+owner signing without secure recovery and reconciliation. The statements below
+about local journals describe what was recorded at the time, not files still
+available in this reconstructed workspace.
+
 The public plan is `config/testnet-owner-v3-plan.json`. The dedicated one-shot
 [bootstrap run](https://github.com/Greatmujey/Bouncer/actions/runs/41636581624)
 retained public fence `13230412708`, made one helper request and observed the
@@ -123,8 +134,9 @@ and unused prepayment may be difficult to recover. The initial V12 diagnostic
 plan passed an [isolated nearcore rehearsal](https://github.com/Greatmujey/Bouncer/actions/runs/41643361478)
 with a mock token and local receiver; its deliberately failed project request
 left the conservative reservations in place. That was not a live provider test.
-Two new locally encrypted, single-method agent keys have been prepared but are
-not installed; their local copies are not an off-device backup.
+Two locally encrypted, single-method agent keys were previously prepared but
+not installed. Their local copies were not an off-device backup and are absent
+from the reconstructed workspace; do not assume these keys are recoverable.
 
 The V12 Circle registration and funding path [passed an isolated nearcore
 rehearsal](https://github.com/Greatmujey/Bouncer/actions/runs/41641922746),

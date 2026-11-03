@@ -57,8 +57,8 @@ A detached channel refund is not automatically credited: the owner must
 reconcile the actual transfer and may recover surplus with the existing owner
 path. This is an experimental
 contract, **not deployed or audited**; it cannot claim delivery, accept Circle
-as native NEAR, or solve resource-unbound voucher risk. The [unit/build run](https://github.com/Greatmujey/Bouncer/actions/runs/41648346175)
-passed for the current experimental contract, including conservative failed
+as native NEAR, or solve resource-unbound voucher risk. The earlier [unit/build run](https://github.com/Greatmujey/Bouncer/actions/runs/41648346175)
+passed for a previous experimental contract, including conservative failed
 promise handling and owner-only recovery. The hardened binary then passed the
 [isolated runtime exercise](https://github.com/Greatmujey/Bouncer/actions/runs/41649077636):
 a locally simulated channel opening, voucher settlement, close, refund and
@@ -71,6 +71,48 @@ The code alone requires approximately 3.8857 test NEAR at the last observed
 storage price; state, native reserves, channel budget and fees are additional.
 Matching builds and sandbox results are not independent security review or a
 live deployment. Any future deployment needs a fresh balance and safety preflight.
+
+## Voucher-aware candidate and one-shot data client
+
+The subsequent candidate adds `is_tollgate_voucher_authorized`, a read-only
+check for an owner-verified channel and the original, still-current policy,
+allowlist and agent revisions. It is only an **advisory check for a cooperative
+client**: a policy can change after the view, and a stolen key or previously
+signed voucher cannot be revoked by that view. The off-chain key can sign up
+to the channel deposit, not merely the advertised per-call price. The channel
+contract still has an observed full-access key and can be upgraded. The seller
+voucher itself does not bind the HTTP resource or response. Those limitations
+remain even when a review hash includes the exact URL.
+
+Two independently run optimized builds at commit `45a6706` matched at
+**389,988 bytes**, SHA-256
+`ed1bb4fb01313576f88c719d5c7283d2366a60c580295863a759f5f9ee699231`,
+public blob `f3ad44590b1d816bf0d4c6ceb29e6c917c01056c`. The
+[contract tests](https://github.com/Greatmujey/Bouncer/actions/runs/41653914337)
+and [isolated lifecycle](https://github.com/Greatmujey/Bouncer/actions/runs/41653914001)
+passed, including the new advisory view, restricted-agent opening, local voucher
+settlement and detached refund. That lifecycle used a local seller; the
+candidate is **not deployed, independently audited or evidence of live data**.
+At the last observed storage price the code alone needs 3.89988 test NEAR. The
+last separately observed owner balance was about 3.969798 test NEAR: code plus
+the 0.05-NEAR vault reserve and 0.02-NEAR channel budget already exceed that,
+even before state storage, owner storage and gas. A fresh funding preflight is
+required; do not assume the V12 balance is liquid or use an earlier owner.
+
+`agent/tollgate-quakes-v13.mjs` prepares a deterministic owner review of one
+fixed quakes GET, 0.001 test-NEAR price and 0.02 test-NEAR channel budget. It
+checks a single fresh trusted-RPC FINAL snapshot of the keyless vault, policy,
+code, intent, current authorization and unused channel. It validates the
+seller's 402 offer, signs only with a dedicated voucher key, persists an
+exclusive local no-retry fence before the paid request, and treats timeouts,
+402s, malformed responses and missing acknowledgements as **unknown**, not
+as refunds. A seller acknowledgment or shaped data remains a seller claim,
+not independent settlement or provenance proof. The entire channel deposit
+and storage fee remain at risk, including if the upstream request fails.
+The file fence must be backed up across workspace resets and machines; a lost
+fence is not permission to retry. A turnkey live runner, durable cross-session
+fencing, recovered V3 custody and fresh funding are still required. No payment
+or real provider data has been demonstrated.
 
 References: [Tollgate repository](https://github.com/Mattbusel/tollgate),
 [public quakes endpoint](https://near-tollgate.vercel.app/v1/quakes?min_magnitude=5),
