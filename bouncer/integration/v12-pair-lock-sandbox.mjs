@@ -65,6 +65,12 @@ async function exercise({ sandbox, wasm, mockFt, ownerKey, tokenKey }) {
     assert.equal(await view(VAULT, 'contract_version'), 'bouncer-agent-v12-exact-ft-testnet');
     assert.equal((await provider.query({ request_type: 'view_account', account_id: VAULT, finality: 'final' })).code_hash, codeHash(wasm));
     assert.deepEqual((await provider.viewAccessKeyList(VAULT, { finality: 'final' })).keys, []);
+    const probePolicy = { policy_id: 'unauthorized', token: TOKEN, per_tx_cap: '1', daily_cap: '1' };
+    const noDeposit = await send(owner, VAULT, [fn('set_policy', probePolicy)]);
+    failed(noDeposit, /owner-only method requires exactly 1 yoctoNEAR/, 'zero-yocto policy change');
+    const nonOwner = await send(root, VAULT, [fn('set_policy', probePolicy, 1n)]);
+    failed(nonOwner, /caller is not owner/, 'non-owner policy change');
+    assert.equal(await view(VAULT, 'get_policy', { policy_id: 'unauthorized' }), null);
     const storage = BigInt((await view(TOKEN, 'storage_balance_bounds')).min);
     assert.ok(storage > 0n && storage <= NEAR / 10n);
     for (const id of [VAULT, SELLER]) await call(root, TOKEN, 'storage_deposit', { account_id: id, registration_only: true }, storage, 50n * TGAS);
@@ -131,6 +137,7 @@ async function exercise({ sandbox, wasm, mockFt, ownerKey, tokenKey }) {
     failed(replay, /intent.*(consumed|inactive|used|stale)/i, 'exact-intent replay');
     return { scope: 'isolated nearcore only; synthetic FT, balances and receiver, not Circle, OutLayer, testnet, audit or delivery',
       v12_sha256: sha(wasm), mock_ft_sha256: MOCK_FT_SHA256, keys_ephemeral: true, live_seller_contacted: false,
+      owner_policy_guard_rejects_zero_yocto_and_non_owner: true,
       prepaid_before_lock: '300', stale_project_rejected: true, provider_call_emitted: false,
       native_and_prepaid_unchanged_on_rejection: true, exact_intent_settled_locally: true, replay_rejected: true };
   });

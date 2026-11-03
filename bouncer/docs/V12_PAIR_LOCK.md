@@ -47,12 +47,13 @@ independent security review or production-readiness evidence.
 
 The opt-in `V12 isolated pair-lock sandbox` workflow builds V12 from the branch
 and starts the existing hash-pinned nearcore sandbox with a synthetic example
-FT and local receiver stand-in. It is designed to check a prepaid route created
-before an exact token/payee reservation, rejection of the stale project with no
-provider call or debit, and successful one-shot exact transfer plus replay
-rejection. It uses ephemeral keys and a fenced loopback RPC. Its result must be
-checked separately; adding the workflow is not a passed test. A passing run is
-still not testnet, real Circle or OutLayer, independent provider delivery, or an
-audit. The V12 WASM marker only catches wrong inputs; the build is not yet
-reproducible. A durable owner recovery path, independent provider compatibility
-and genuine delivery also remain necessary.
+FT and local receiver stand-in, using ephemeral keys and a fenced loopback RPC.
+The [first run](https://github.com/Greatmujey/Bouncer/actions/runs/41631645132)
+passed: it created a prepaid route before an exact token/payee reservation,
+rejected the stale project without a provider call or debit, and executed a
+one-shot exact transfer while rejecting replay. The workflow also now includes
+zero-yocto and non-owner policy-escalation checks; check the run of that change
+separately. This is not testnet, real Circle or OutLayer, independent provider
+delivery, or an audit. The V12 WASM marker only catches wrong inputs; the build
+is not yet reproducible. A durable owner recovery path, independent provider
+compatibility and genuine delivery also remain necessary.
