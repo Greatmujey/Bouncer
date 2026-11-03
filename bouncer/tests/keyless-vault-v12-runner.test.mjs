@@ -53,7 +53,8 @@ function provider(e, opts = {}) {
   let after = false, sent = 0, lookups = 0, fenced = false;
   return { get enforcesSetupBeforeSubmitGuard() { return true; }, get sent() { return sent; }, get lookups() { return lookups; },
     async viewNodeStatus() { return { chain_id: 'testnet' }; },
-    async viewBlock() { return { header: { hash: BLOCK, timestamp_nanosec: (BigInt(NOW) * 1_000_000n).toString() } }; },
+    async viewBlock(reference) { return { header: { hash: opts.badCanonical && reference?.blockId === 100 ? mockHash('fork') : BLOCK,
+      height: 100, timestamp_nanosec: (BigInt(NOW) * 1_000_000n).toString() } }; },
     async query(q) {
       assert.equal(q.block_id, BLOCK);
       const access = { nonce: after ? 101 : opts.badNonce ? 101 : 100, permission: 'FullAccess' };
@@ -82,7 +83,8 @@ function provider(e, opts = {}) {
       return { block_hash: BLOCK, result: [...Buffer.from(JSON.stringify(value))] };
     },
     async viewTestnetAccountPresenceAt() { return { block_hash: BLOCK, exists: !!opts.exists }; },
-    async experimental_protocolConfig() { return { chain_id: 'testnet', protocol_version: 88, runtime_config: {
+    async experimental_protocolConfig() { return { chain_id: 'testnet', protocol_version: 88,
+      transaction_validity_period: opts.invalidValidity ? 0 : 86400, runtime_config: {
       storage_amount_per_byte: '10000000000000000000', wasm_config: features } }; },
     async sendTransactionOnce(signed, wait, { beforeSubmit }) {
       assert.equal(wait, 'FINAL'); assert.equal(fenced, true); beforeSubmit(); sent++; after = true;
@@ -128,7 +130,8 @@ test('one fenced send, original-hash lookup and fresh keyless V12 state are requ
 
 test('changed preflight or failed fence makes no send; ambiguous results never trigger a retry', { skip }, async () => {
   const e = await envelope();
-  for (const opts of [{ badNonce: true }, { badCircleCode: true }, { exists: true }, { fence: false }]) {
+  for (const opts of [{ badNonce: true }, { badCircleCode: true }, { exists: true },
+    { invalidValidity: true }, { badCanonical: true }, { fence: false }]) {
     const p = provider(e, opts);
     await assert.rejects(broadcastVaultBootstrapOnce({ plan, envelope: e, provider: p, now: () => NOW, persistAttempt: x => p.persist(x) }));
     assert.equal(p.sent, 0);

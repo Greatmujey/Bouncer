@@ -133,6 +133,25 @@ export async function reconcileVaultBootstrap({ plan: raw, envelope, provider, n
     scope: 'matching original FINAL receipt plus fresh trusted-RPC code and keyless state; not audit or independent provider delivery' };
 }
 
+/** Check the original signed reference against the current canonical chain
+ * and advertised validity window. This is read-only and cannot refresh or
+ * replace a signed bearer. */
+export async function assertV12OriginalReference({ provider, currentBlockHash, envelope }) {
+  const [head, reference, protocol] = await Promise.all([
+    provider.viewBlock({ blockId: currentBlockHash }), provider.viewBlock({ blockId: envelope.block_hash }),
+    provider.experimental_protocolConfig({ blockId: currentBlockHash }),
+  ]);
+  const h = head?.header?.height, r = reference?.header?.height, validity = protocol?.transaction_validity_period;
+  const height = x => Number.isSafeInteger(x) && x >= 0;
+  if (head?.header?.hash !== currentBlockHash || reference?.header?.hash !== envelope.block_hash ||
+      !height(h) || !height(r) || !height(validity) || validity === 0 || protocol?.chain_id !== 'testnet' ||
+      h < r || h - r >= validity || h - r >= 3600) throw new Error('original V12 reference is old or unknown; never resend');
+  const canonical = await provider.viewBlock({ blockId: r });
+  if (canonical?.header?.height !== r || canonical.header.hash !== envelope.block_hash) {
+    throw new Error('original V12 reference is not canonical; never resend');
+  }
+}
+
 /** Make one guarded send after the caller has durably fenced the exact
  * original hash. Uncertain outcomes must only use reconcileVaultBootstrap. */
 export async function broadcastVaultBootstrapOnce({ plan: raw, envelope, provider, persistAttempt, now = Date.now } = {}) {
@@ -147,6 +166,7 @@ export async function broadcastVaultBootstrapOnce({ plan: raw, envelope, provide
       before.owner_test_usdc_atoms !== envelope.expected_owner_circle_atoms) {
     throw new Error(`original vault deployment ${envelope.tx_hash} no longer matches fresh preflight; inspect it, do not resend`);
   }
+  await assertV12OriginalReference({ provider, currentBlockHash: before.block_hash, envelope });
   if (await persistAttempt({ tx_hash: envelope.tx_hash, owner: plan.account_id, vault: envelope.vault,
     preflight_block_hash: before.block_hash }) !== true) throw new Error('original vault deployment fence was not established');
   try {

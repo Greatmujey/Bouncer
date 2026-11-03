@@ -79,3 +79,11 @@ test('changed, expired, oversized, wrong-branch or unavailable fences prevent a 
   }
   await assert.rejects(githubOriginalFence({ ...args, fetchImpl: async () => new Response('{') }));
 });
+
+test('V3 V12 deployment fence is distinct from all earlier vault originals', async () => {
+  const v12 = metadata(); v12.name = `vault-v3-v12-bootstrap-fence-5678-${args.digest}`;
+  assert.equal(await githubOriginalFence({ ...args, prefix: 'vault-v3-v12-bootstrap-fence',
+    fetchImpl: async () => response(v12) }), true);
+  assert.equal(await githubOriginalFence({ ...args, prefix: 'vault-v2-bootstrap-fence',
+    fetchImpl: async () => response(v12) }), false);
+});
