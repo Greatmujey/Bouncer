@@ -146,7 +146,7 @@ lightened against the dark sidebar.
 npm ci --prefix bouncer
 npm ci --prefix bouncer/walletconnect
 npm run build:web --prefix bouncer
-node --test bouncer/tests/wallet.test.mjs bouncer/tests/walletconnect.test.mjs bouncer/tests/web.test.mjs bouncer/tests/public-web-staging.test.mjs
+node --test bouncer/tests/cli-login.test.mjs bouncer/tests/wallet.test.mjs bouncer/tests/walletconnect.test.mjs bouncer/tests/web.test.mjs bouncer/tests/public-web-staging.test.mjs
 ```
 
 Vercel’s `bouncer` project uses `bouncer/web` as its root and
@@ -162,11 +162,12 @@ security or CSP review is implied. The public repository is
 `https://github.com/Greatmujey/Bouncer`.
 
 The project’s production branch is `main`; working-branch previews and the
-production domain can therefore serve different commits. On 3 November 2026 UTC the
-WalletConnect-ready picker was deployed directly from working-branch commit
-`57b4bbc` to `bouncer-near.vercel.app` without merging to `main`. WalletConnect
-remains disabled until an owned project ID is configured. A future production
-build from `main` could replace it. The deployed Intear source ZIP has
+production domain can therefore serve different commits. On 3 November 2026 UTC,
+working-branch commit `2756f8a` was deployed to `bouncer-near.vercel.app`
+without merging to `main` (Vercel deployment `dpl_FnsMxG9MPLu4QDnpuWLK9cB7GW5y`).
+The owner-supplied public Reown project ID is configured for production; this
+alone does not prove that the relay or a particular wallet accepts a session.
+A future production build from `main` could replace the site. The deployed Intear source ZIP has
 SHA-256 `2fe277baae87ff16d7b1efee9853cba26a46b1f9813302bf507f5ca53d2e0291`.
 Verify deployed assets and wallet behavior after deployment rather than assuming
 a branch push updated production.
@@ -179,7 +180,10 @@ tour, historical data, origin restrictions, integrity-check rejection, and
 mocked wallet backends through the connector bridge and pinned Mobile, Intear,
 and CLI executors. The WalletConnect browser test uses a synthetic SignClient
 interface and the real QR renderer; unit tests check namespace limits and
-cancellation. If hosted headless Chromium does not deliver a nested-frame tap,
-the protocol test reports and uses programmatic activation; that fallback does
+cancellation. An opt-in CI probe can create and cancel a real Reown pairing
+without approving a wallet; another runs near-cli-rs against an ephemeral
+synthetic credential and mock RPC. Neither proves a real wallet session. If
+hosted headless Chromium does not deliver a nested-frame tap, the protocol test
+reports and uses programmatic activation; that fallback does
 not verify touch input. Tests do not demonstrate a real wallet login, an
 independent security review or provider delivery.
