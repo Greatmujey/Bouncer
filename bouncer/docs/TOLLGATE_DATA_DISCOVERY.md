@@ -185,13 +185,18 @@ HTTP request or a cooperative-close signature is not a safe workaround without
 reviewing seller state and the possibility of an immediate full refund without
 paying the seller; neither is automated here.
 
-An [isolated HTTP lifecycle](https://github.com/Greatmujey/Bouncer/actions/runs/41663649675)
-exercised the updated client against the pinned published seller SDK and a disposable
-nearcore: review, one voucher, synthetic returned data, replay refusal, local
-settlement, close and refund all passed. Its seller and data were fixtures; it
-was not a public-chain payment or independent fulfillment. A turnkey live
-runner, verified cross-session fencing, recovered V3 custody and fresh funding
-checks are still required. No payment or real provider data has been demonstrated.
+An [isolated HTTP lifecycle](https://github.com/Greatmujey/Bouncer/actions/runs/41667759080)
+exercised the pinned seller SDK and disposable nearcore in both `settle` and
+`cooperative_close` modes: one-yocto policy, restricted agent, one voucher,
+synthetic data, replay refusal, FINAL payout receipts and local refunds passed.
+The sellers and data were fixtures, not a public-chain payment or independent
+fulfillment. A separate [read-only USGS check](https://github.com/Greatmujey/Bouncer/actions/runs/41666639556)
+compared two real public USGS observations using a synthetic seller projection;
+it made no seller request or payment. The V3 owner was recovered privately,
+but its outstanding original transactions remain unresolved. A safe live
+runner, a real cross-session reservation, fresh funding checks and reliable
+seller settlement are still required. No Tollgate payment or paid seller data
+has been demonstrated.
 
 References: [Tollgate repository](https://github.com/Mattbusel/tollgate),
 [public quakes endpoint](https://near-tollgate.vercel.app/v1/quakes?min_magnitude=5),

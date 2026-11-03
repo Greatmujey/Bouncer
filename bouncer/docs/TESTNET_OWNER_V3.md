@@ -132,8 +132,13 @@ could not retrieve either receipt and observed the old nonce at one RPC; both
 references remained within the reported validity window. A [later read-only
 observation](https://github.com/Greatmujey/Bouncer/actions/runs/41655189868)
 still found neither receipt and reported both reference ages within the
-86,400-block validity period. This does not prove their history or authorize
-other V3 owner transactions. Never resend either original. Even if the control reaches FINAL,
+86,400-block validity period. The [latest two-RPC recheck](https://github.com/Greatmujey/Bouncer/actions/runs/41668385682)
+also found no verified receipts; the two references were approximately
+14,700 and 11,000 blocks old, respectively, and both still within the observed
+86,400-block validity window. One RPC observed the old signer nonce; this is
+not a receipt or proof of the full transaction history. Do not sign unrelated
+V3 owner transactions while either original remains unresolved, and never
+resend either original. Even if the control reaches FINAL,
 it cannot prove whether the registration executed first. The earlier original was a storage registration, not a
 provider payment or order. OutLayer can change its deployed
 contract, its plain-token refunds may not restore Bouncer's tracked allowance,
