@@ -3,8 +3,12 @@
  * never uploads keys, submits a transaction or authorizes a different action. */
 import { readBoundedJson } from '../shared/bounded-json.mjs';
 const id = x => typeof x === 'string' && /^[1-9][0-9]{0,15}$/.test(x) && Number.isSafeInteger(Number(x));
+// Both V3 bearers were publicly exported and their outcomes remain unknown.
+// They must never become eligible for a new send by adding a missing label.
+const RETIRED_BEARER_PREFIXES = new Set(['outlayer-v12-v3-register-fence', 'outlayer-v12-v3-control-fence']);
 export async function githubOriginalFence({ artifactId, runId, headSha, digest, token, maxArtifactBytes,
   prefix = 'vault-v2-bootstrap-fence', fetchImpl = globalThis.fetch } = {}) {
+  if (RETIRED_BEARER_PREFIXES.has(prefix)) throw new Error('retired original bearer; reconcile only, never resend');
   if (!id(artifactId) || !id(runId) || !/^[a-f0-9]{40}$/.test(headSha ?? '') || !/^[a-f0-9]{64}$/.test(digest ?? '') ||
       typeof token !== 'string' || token.length < 20 || !Number.isSafeInteger(maxArtifactBytes) ||
       maxArtifactBytes < 1 || maxArtifactBytes > 2_000_000 || !['vault-v2-bootstrap-fence', 'vault-v3-v12-bootstrap-fence',

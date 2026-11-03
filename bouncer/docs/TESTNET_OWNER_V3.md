@@ -106,9 +106,14 @@ validity window; that observation is not a receipt. A distinct zero-yocto
 owner-guard control was signed and [attempted once](https://github.com/Greatmujey/Bouncer/actions/runs/41649696899),
 with fence `13236079690`. Its original hash is
 `95vMwEkKJtbqRkPdovcgS7rQtWkav83VsVbB1VJ7Pkor`; the attempt did not confirm a
-result, so its outcome is also **unknown**. Never resend either original.
-Even if the control reaches FINAL, it cannot prove whether the registration
-executed first. The earlier original was a storage registration, not a
+result, so its outcome is also **unknown**. Review of each pinned job's code
+found both used fence prefixes absent from the allowlist. The corresponding
+sender requires that check before any send, so those two jobs could not have
+submitted their transactions through that path. The signed bytes were public,
+however, so that does not prove that nobody else relayed them. Both labels are
+now explicitly retired, and a test checks fixed fence labels to catch similar
+mismatches. Never resend either original. Even if the control reaches FINAL,
+it cannot prove whether the registration executed first. The earlier original was a storage registration, not a
 provider payment or order. OutLayer can change its deployed
 contract, its plain-token refunds may not restore Bouncer's tracked allowance,
 and unused prepayment may be difficult to recover. The initial V12 diagnostic

@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import { githubOriginalFence } from '../agent/github-original-fence.mjs';
 const args = { artifactId: '1234', runId: '5678', headSha: 'a'.repeat(40), digest: 'b'.repeat(64),
   token: 'not-a-real-token-for-a-test', maxArtifactBytes: 1_100_000 };
@@ -95,5 +96,26 @@ test('V3 V12 Circle register and fund fences cannot substitute for each other or
     assert.equal(await githubOriginalFence({ ...args, prefix: `vault-circle-v2-${kind}-fence`, fetchImpl: async () => response(v12) }), false);
     const other = kind === 'fund' ? 'register' : 'fund';
     assert.equal(await githubOriginalFence({ ...args, prefix: `vault-circle-v3-v12-${other}-fence`, fetchImpl: async () => response(v12) }), false);
+  }
+});
+
+test('literal one-shot fence labels are recognized or explicitly retired; old V3 bearers cannot be resent', async () => {
+  const scripts = new URL('../scripts/', import.meta.url), retired = new Set([
+    'outlayer-v12-v3-register-fence', 'outlayer-v12-v3-control-fence',
+  ]);
+  const found = new Set();
+  for (const file of fs.readdirSync(scripts).filter(x => x.endsWith('.mjs'))) {
+    const source = fs.readFileSync(new URL(file, scripts), 'utf8');
+    if (!source.includes('githubOriginalFence(')) continue;
+    for (const match of source.matchAll(/prefix:\s*['"]([a-z0-9-]+)['"]/g)) found.add(match[1]);
+  }
+  assert.ok(found.size >= 10, 'expected actual fixed one-shot fence labels');
+  for (const prefix of retired) assert.ok(found.has(prefix), `missing retired source ${prefix}`);
+  for (const prefix of found) {
+    const m = metadata(); m.name = `${prefix}-5678-${args.digest}`;
+    let calls = 0;
+    const attempt = githubOriginalFence({ ...args, prefix, fetchImpl: async () => { calls++; return response(m); } });
+    if (retired.has(prefix)) { await assert.rejects(attempt, /retired original bearer/); assert.equal(calls, 0); }
+    else { assert.equal(await attempt, true, `unrecognized fence label ${prefix}`); assert.equal(calls, 1); }
   }
 });
