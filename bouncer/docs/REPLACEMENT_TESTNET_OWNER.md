@@ -14,14 +14,13 @@ matching public key were checked, and a recovery file was opened privately for
 the user. No key was sent to GitHub or CI, and whether the user downloaded a
 backup is unverified.
 
-The encrypted keyring and its random wrapping key are stored together in the
-mode-0700, Git-ignored `.bouncer-private/replacement-owner/` workspace folder;
-each file is mode 0600. This prevents ordinary Git staging but **is not an
-off-device backup**: the wrapping key is alongside the ciphertext and anyone
-with access to the folder can recover the key. Ignored workspace files may
-also be lost or accidentally exposed by forced adds, archives or uploads. Never
-force-add, publish, log or upload this directory, and never use this testnet
-key on mainnet. The user should securely retain their own recovery copy.
+The encrypted keyring and wrapping key were stored together in the Git-ignored
+`.bouncer-private/replacement-owner/` folder, with a second local copy. On
+3 November 2026 those folders were **not present in the current workspace**.
+Public transaction and workflow artifacts are not private-key backups. Whether
+the user saved the previously presented recovery file is unconfirmed. Do not
+assume this owner can sign or that its testnet funds can be moved. Never paste,
+publish, upload or log its private key, and never use it on mainnet.
 
 The [one-shot helper run](https://github.com/Greatmujey/Bouncer/actions/runs/41519023912)
 verified the replacement owner at FINAL with 10 test NEAR and its sole expected
@@ -94,5 +93,6 @@ rejected a 300-Tgas call at admission with that allowance at the sandbox gas
 price. That rejection was local, not a live transaction; the exact testnet
 admission cost can change. Dedicated keys and seller routes have not been
 installed. The [isolated nearcore run](https://github.com/Greatmujey/Bouncer/actions/runs/41525285229)
-used a disposable mock-token chain, not live Circle or a seller. The agent's two
-local ciphertext copies and colocated wrapping key are not an off-device backup.
+used a disposable mock-token chain, not live Circle or a seller. The agent's
+previous local ciphertext copies and wrapping key are absent from the current
+workspace and were never an off-device backup.

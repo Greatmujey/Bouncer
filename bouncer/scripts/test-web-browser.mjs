@@ -108,21 +108,44 @@ async function testOtherWallets() {
       assert.equal(await page.locator('#route-breadcrumb').textContent(), 'Overview');
       assert.match(await page.locator(`${nav} a[href="#overview"]`).innerText(), /Overview/);
       assert.equal(await page.locator('[data-workspace-resource="compute"]').getAttribute('aria-selected'), 'true');
-      assert.equal(await page.locator('.orbit-carrier').evaluate(el => {
-        const animation = el.getAnimations().find(item => item.animationName === 'orbit-turn');
-        if (!animation) return false;
-        animation.pause(); animation.currentTime = 0;
-        const before = getComputedStyle(el).transform;
-        animation.currentTime = 6_000;
-        const after = getComputedStyle(el).transform;
-        animation.play();
-        return before !== after;
-      }), true, 'resource icons visibly orbit without changing the selected tab');
+      async function assertEvenOrbit() {
+        const orbit = await page.locator('.orbit-carrier').evaluate(el => {
+          const animation = el.getAnimations().find(item => item.animationName === 'orbit-turn');
+          if (!animation) return null;
+          animation.pause(); animation.currentTime = 0;
+          const before = getComputedStyle(el).transform;
+          const frames = [];
+          for (const time of [0, 6_000, 12_000]) {
+            animation.currentTime = time;
+            const center = el.getBoundingClientRect();
+            const points = [...el.querySelectorAll('.orbit-node')].map(node => {
+              const r = node.getBoundingClientRect();
+              return { x: r.left + r.width / 2 - (center.left + center.width / 2), y: r.top + r.height / 2 - (center.top + center.height / 2) };
+            });
+            const radii = points.map(p => Math.hypot(p.x, p.y));
+            const angles = points.map(p => (Math.atan2(p.y, p.x) + Math.PI * 2) % (Math.PI * 2)).sort((a, b) => a - b);
+            const gaps = angles.map((angle, i) => ((angles[(i + 1) % angles.length] - angle) + Math.PI * 2) % (Math.PI * 2));
+            frames.push({ radii, gaps });
+          }
+          const after = getComputedStyle(el).transform;
+          animation.play();
+          return { moved: before !== after, frames };
+        });
+        assert.equal(orbit?.moved, true, 'resource icons visibly orbit without changing the selected tab');
+        for (const { radii, gaps } of orbit.frames) {
+          assert.equal(radii.length, 3);
+          assert.ok(Math.max(...radii) - Math.min(...radii) < 0.1, `icons share a radius at ${width}px`);
+          assert.ok(gaps.every(gap => Math.abs(gap - 2 * Math.PI / 3) < 0.002), `icons are 120° apart at ${width}px`);
+        }
+      }
+      await assertEvenOrbit();
       await page.locator('[data-workspace-resource="storage"]').click();
       assert.match(await page.locator('[data-workspace-description]').innerText(), /Keep what your agent creates/);
       assert.equal(await page.locator('[data-workspace-visual]').getAttribute('data-resource'), 'storage');
+      await assertEvenOrbit();
       await page.locator('[data-workspace-resource="storage"]').press('End');
       assert.equal(await page.locator('[data-workspace-resource="api"]').getAttribute('aria-selected'), 'true');
+      await assertEvenOrbit();
       assert.equal(await page.locator('[data-workspace-resource="api"]').evaluate(el => el === document.activeElement), true);
       await page.locator('[data-workspace-example]').click();
       await route('resources').waitFor({ state: 'visible' });
