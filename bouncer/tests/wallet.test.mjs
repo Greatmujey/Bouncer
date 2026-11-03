@@ -535,3 +535,17 @@ test('a QR rendering failure preserves a valid open-or-copy pairing link', async
   resolveApproval({ accountId: 'alice.testnet', async disconnect() {} }); await attempt;
   assert.match(browser.nodes['wallet-status'].textContent, /Connected: alice\.testnet/);
 });
+
+test('Mobile sign-in events cannot bypass the verified message-only path', async () => {
+  const browser = fakeBrowser('https://bouncer-near.vercel.app/', { approved: 'https://bouncer-near.vercel.app' });
+  const config = {};
+  await initWallet({ window: browser.win, document: browser.doc, NearConnector: connectorClass(config) });
+  const wallet = config.instance.wallets.find(item => item.manifest.id === 'near-mobile');
+  config.instance.events['wallet:signIn']({ wallet, accounts: [{ accountId: 'mobile.testnet' }] });
+  assert.doesNotMatch(browser.nodes['wallet-status'].textContent, /^Connected:/);
+  assert.equal(browser.nodes['wallet-disconnect'].hidden, true);
+  await browser.nodes['wallet-connect'].click();
+  await browser.options.find(option => option.dataset.walletId === 'near-mobile').click();
+  assert.match(browser.nodes['wallet-status'].textContent, /Connected: mobile\.testnet \(NEAR Mobile login verified against testnet\)/);
+  assert.ok(browser.openers.every(button => button.dataset.walletState === 'connected'));
+});

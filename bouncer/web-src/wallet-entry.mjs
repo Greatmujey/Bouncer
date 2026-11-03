@@ -3,7 +3,7 @@ import { initWallet } from './wallet-core.mjs';
 
 // The connector is only constructed on an approved, isolated origin. The
 // separately licensed WalletConnect SDK is lazy-loaded after explicit choice.
-const walletConnectBundle = './walletconnect.bundle.js?v=2';
+const walletConnectBundle = './walletconnect.bundle.js?v=3';
 let loadedWalletConnect = null, loadingWalletConnect = null, importAttempt = 0;
 function loadWalletConnect({ signal } = {}) {
   if (signal?.aborted) return Promise.reject(new Error('cancelled'));

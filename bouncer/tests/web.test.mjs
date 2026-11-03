@@ -156,7 +156,7 @@ test('the same custom Bouncer mark appears in both navigation layouts, the tour 
   const html = fs.readFileSync(new URL('../web/index.html', import.meta.url), 'utf8');
   const logo = fs.readFileSync(new URL('../web/favicon.svg', import.meta.url), 'utf8');
   assert.equal((html.match(/class="brand-mark" aria-hidden="true"/g) || []).length, 3);
-  assert.equal((html.match(/<use href="#i-bouncer"\/>/g) || []).length, 3);
+  assert.equal((html.match(/<use href="#i-bouncer"\/>/g) || []).length, 4);
   assert.match(html, /rel="icon"[^>]*href="\.\/favicon\.svg\?v=3"/);
   assert.match(logo, /viewBox="16 17 300 300"/);
   const symbol = html.match(/<symbol id="i-bouncer"[^>]*>(.*?)<\/symbol>/s)?.[1];
@@ -198,7 +198,7 @@ test('workspace routes and the wallet picker are explicit, curated, and keyboard
   const html = fs.readFileSync(new URL('../web/index.html', import.meta.url), 'utf8');
   const css = fs.readFileSync(new URL('../web/styles.css', import.meta.url), 'utf8');
   const views = [...html.matchAll(/data-route-view="([^"]+)"/g)].map(match => match[1]);
-  assert.deepEqual(views, ['overview', 'resources', 'guardrails', 'proof', 'connect']);
+  assert.deepEqual(views, ['workspace', 'resources', 'guardrails', 'proof', 'connect']);
   const wallets = [...html.matchAll(/data-wallet-id="([^"]+)"/g)].map(match => match[1]);
   assert.deepEqual(wallets, ['near-mobile', 'meteor-wallet', 'intear-wallet', 'nightly-wallet', 'ledger', 'near-cli', 'wallet-connect']);
   assert.match(html, /id="walletconnect-caption">Not configured · Project ID required/);

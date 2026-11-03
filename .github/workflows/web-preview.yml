@@ -133,6 +133,55 @@ jobs:
           fi
           exit "$result"
 
+  walletconnect-candidate-smoke:
+    # Static candidate is served at the approved origin inside Playwright. The
+    # synthetic wallet uses real Reown relay traffic, never keys or payments.
+    if: contains(github.event.head_commit.message, '[test-walletconnect-candidate]')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            mode: primary
+            block: '0'
+          - os: ubuntu-latest
+            mode: fallback
+            block: '1'
+          - os: windows-latest
+            mode: primary
+            block: '0'
+          - os: windows-latest
+            mode: fallback
+            block: '1'
+    name: WalletConnect candidate (${{ matrix.os }}, ${{ matrix.mode }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 7
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Test retry, QR and synthetic approval over the real relay
+        shell: bash
+        env:
+          BOUNCER_CANDIDATE_SITE: '1'
+          BOUNCER_BLOCK_PRIMARY_WC: ${{ matrix.block }}
+        run: |
+          npm ci --prefix bouncer/walletconnect --no-audit --no-fund
+          npm install --prefix "$RUNNER_TEMP/bouncer-browser" --no-save --no-audit --no-fund playwright-core@1.64.1
+          set +e
+          set -o pipefail
+          node bouncer/scripts/test-walletconnect-real-session.mjs 2>&1 | tee "$RUNNER_TEMP/bouncer-wc-candidate.log"
+          result=${PIPESTATUS[0]}
+          if [ "$result" -ne 0 ]; then
+            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-2000).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=WalletConnect candidate probe failed::"+s)' "$RUNNER_TEMP/bouncer-wc-candidate.log"
+          fi
+          exit "$result"
+
   walletconnect-session-smoke:
     # Approve only a synthetic testnet-account session over the real relay; no
     # real wallet, signature, wallet RPC call, or NEAR transaction is involved.

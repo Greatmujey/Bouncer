@@ -11,6 +11,49 @@ export const WALLET_EXECUTOR_SHA256 = Object.freeze({
 
 const MAX_EXECUTOR_BYTES = 4 * 1024 * 1024;
 
+// Visual/instruction-only patch, appended *after* verifying the exact Mobile
+// executor. Its signed payload, backend, validation and wallet methods remain
+// upstream's. A standard dark-on-white QR is easier for phone cameras to scan.
+const MOBILE_PRESENTATION = String.raw`
+;(() => {
+  const style = document.createElement('style');
+  style.textContent = ` + JSON.stringify(`
+    .near-mobile-card{justify-content:flex-start;overflow:auto;background:radial-gradient(circle at 50% 0,#315b3f,#10251b 68%);padding:20px 20px 16px}
+    .near-mobile-card header{display:none}
+    .near-mobile-logo-section{flex:0 0 auto;padding:0 40px 15px}
+    .near-mobile-logo{max-width:8rem;height:2rem}
+    .near-mobile-layout{height:auto;min-height:0;flex:1;gap:15px;padding:18px 0 0}
+    .near-mobile-qr-section{gap:12px}
+    .near-mobile-qr-section>p:first-child{font-size:21px!important;line-height:1.25;letter-spacing:-.4px}
+    .bouncer-mobile-hint{max-width:300px;text-align:center;color:#c9dfce;font-size:12px;font-weight:500;line-height:1.5}
+    .near-mobile-qr-wrap{background:#fff;border-radius:12px;box-shadow:0 10px 25px #06160b60}
+    .near-mobile-qr{padding:10px;line-height:0}
+    .near-mobile-qr svg{display:block;width:min(180px,48vw);height:auto}
+    .near-mobile-qr svg path{fill:#10231a!important}
+    .near-mobile-responsive-layout{gap:6px}
+    .near-mobile-button{min-height:46px;height:auto;padding:12px 16px;background:#c4ef92;color:#17321e!important;font-size:14px}
+    .near-mobile-footer{gap:10px;margin-top:auto}
+    .near-mobile-links{gap:8px}.near-mobile-links a{background:#233e2b;max-height:none;border:1px solid #55725a}
+    .near-mobile-link{gap:6px;padding:9px 6px;font-size:11px}.near-mobile-link img{width:18px;height:18px}
+    .near-mobile-subtitle,.near-mobile-subtitle a{font-size:11px;color:#b6ceb9!important}
+    @media(max-height:550px){.near-mobile-card{padding-top:12px}.near-mobile-layout{padding-top:10px;gap:10px}.near-mobile-qr-section{gap:8px}.near-mobile-qr svg{width:min(150px,40vw)}.near-mobile-footer{gap:6px}}
+  `) + String.raw`;
+  document.head.appendChild(style);
+  const heading = document.querySelector('.near-mobile-qr-section>p');
+  if (heading) {
+    heading.textContent = 'Connect NEAR Mobile';
+    const hint = document.createElement('p');
+    hint.className = 'bouncer-mobile-hint';
+    hint.textContent = 'Use a testnet account. Approve the login message, then return to this tab. No payment or key is requested.';
+    heading.insertAdjacentElement('afterend', hint);
+  }
+  const logo = document.querySelector('.near-mobile-logo');
+  if (logo) logo.alt = 'NEAR Mobile';
+  const button = document.getElementById('approve-button');
+  if (button) button.textContent = 'Open NEAR Mobile';
+})();
+`;
+
 /** Fetch only the curated executor and verify its actual bytes before use.
  *  In particular, never execute NEAR Connect's shared IndexedDB cache.
  */
@@ -40,9 +83,9 @@ export async function loadVerifiedExecutor(manifest, { fetch, crypto, location }
     // Fastnear's Mobile SDK stores native fetch as a class method. Browsers
     // reject that call with "Illegal invocation" unless fetch retains Window
     // as its receiver. Bind it inside this wallet's sandbox, after verification.
-    // Its generic button says "Sign transaction" even in our message-only flow;
-    // relabel it without changing the signed payload or invoking wallet methods.
-    if (manifest.id === 'near-mobile') return `window.fetch = window.fetch.bind(window);\n${code}\n;{const button = document.getElementById("approve-button"); if (button) button.textContent = "Open NEAR Mobile";}\n`;
+    // Its generic UI is adapted for this message-only flow without changing
+    // the signed payload or invoking additional wallet methods.
+    if (manifest.id === 'near-mobile') return `window.fetch = window.fetch.bind(window);\n${code}\n${MOBILE_PRESENTATION}\n`;
     if (manifest.id === 'near-cli') {
       // The pinned CLI adapter offers only an OS keychain or Ledger. Many
       // headless/Codespaces users have the standard ~/.near-credentials file

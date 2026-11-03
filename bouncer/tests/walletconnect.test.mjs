@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { connectWalletConnect, createMemoryStorage, isTestnetAccount, isWalletConnectProjectId, pairingTopic, walletConnectAccount, WC_CHAIN, WC_METHOD } from '../web-src/walletconnect-core.mjs';
+import { connectWalletConnect, connectWalletConnectWithFallback, createMemoryStorage, isTestnetAccount, isWalletConnectProjectId, pairingTopic, walletConnectAccount, WC_CHAIN, WC_METHOD, WC_RELAY_URLS } from '../web-src/walletconnect-core.mjs';
 
 const PROJECT = '1234567890abcdef1234567890abcdef'; // synthetic; never contacts Reown
 const PAIRING = 'a'.repeat(64), SESSION = 'b'.repeat(64);
@@ -163,4 +163,74 @@ test('approval is armed before displaying the URI so an immediate wallet respons
   client.connect = async () => ({ uri: URI, approval() { armed = true; return Promise.resolve(session()); } });
   const handle = await connectWalletConnect(options(client, { onUri() { assert.equal(armed, true); } }));
   assert.equal(handle.accountId, 'alice.testnet'); await handle.disconnect();
+});
+
+test('each pairing uses isolated in-memory storage and a fresh SDK Core prefix', async () => {
+  const first = fakeClient(), second = fakeClient(), configs = [];
+  const one = await connectWalletConnect(options(first.client, { createClient: config => { configs.push(config); return first.client; } }));
+  await one.disconnect();
+  const two = await connectWalletConnect(options(second.client, { createClient: config => { configs.push(config); return second.client; } }));
+  await two.disconnect();
+  assert.notEqual(configs[0].storage, configs[1].storage);
+  assert.match(configs[0].customStoragePrefix, /^bouncer-[a-f0-9]{32}$/);
+  assert.notEqual(configs[0].customStoragePrefix, configs[1].customStoragePrefix);
+});
+
+test('a stalled primary relay is cancelled before an isolated alternate attempt', async () => {
+  const old = deferred(), primary = fakeClient(), alternate = fakeClient(), configs = [], progress = [];
+  const handle = await connectWalletConnectWithFallback({
+    projectId: PROJECT, origin: 'https://bouncer-near.vercel.app', relayStartTimeoutMs: 15,
+    createClient: config => { configs.push(config); return configs.length === 1 ? old.promise : alternate.client; },
+    onProgress: value => progress.push(value), onUri: () => {},
+  });
+  assert.deepEqual(configs.map(config => config.relayUrl), WC_RELAY_URLS);
+  assert.deepEqual(progress, ['primary', 'alternate']);
+  assert.notEqual(configs[0].customStoragePrefix, configs[1].customStoragePrefix);
+  assert.notEqual(configs[0].storage, configs[1].storage);
+  assert.equal(handle.accountId, 'alice.testnet');
+  old.resolve(primary.client); await tick();
+  assert.equal(primary.calls.close, 1, 'a late primary client is closed');
+  assert.equal(primary.calls.connect.length, 0, 'a late client cannot open a pairing');
+  assert.equal(alternate.calls.connect.length, 1);
+  await handle.disconnect();
+});
+
+test('primary success and failures after a visible QR never invoke the fallback relay', async () => {
+  for (const rejectApproval of [false, true]) {
+    const fixture = fakeClient(rejectApproval ? { approval: Promise.reject(new Error('wallet rejected')) } : {});
+    const urls = []; let shown = 0;
+    const pending = connectWalletConnectWithFallback({
+      projectId: PROJECT, origin: 'https://bouncer-near.vercel.app', relayStartTimeoutMs: 50,
+      createClient: config => { urls.push(config.relayUrl); return fixture.client; }, onUri: () => { shown++; },
+    });
+    if (rejectApproval) await assert.rejects(pending, /wallet rejected/);
+    else { const handle = await pending; await handle.disconnect(); }
+    assert.deepEqual(urls, [WC_RELAY_URLS[0]]);
+    assert.equal(shown, 1);
+  }
+});
+
+test('cancellation and rejected configuration do not start a fallback or expose arbitrary SDK errors', async () => {
+  const abort = new AbortController(), urls = [];
+  const pending = connectWalletConnectWithFallback({
+    projectId: PROJECT, origin: 'https://bouncer-near.vercel.app', signal: abort.signal,
+    createClient: config => { urls.push(config.relayUrl); return new Promise(() => {}); }, onUri() {},
+  });
+  await tick(); abort.abort(); await assert.rejects(pending, /cancelled/);
+  assert.deepEqual(urls, [WC_RELAY_URLS[0]]);
+  let attempts = 0;
+  await assert.rejects(connectWalletConnectWithFallback({
+    projectId: PROJECT, origin: 'https://bouncer-near.vercel.app',
+    createClient: () => { attempts++; throw new Error('403 forbidden with private SDK details'); }, onUri() {},
+  }), error => error.code === 'WC_CONFIGURATION' && !error.message.includes('private SDK details'));
+  assert.equal(attempts, 1);
+});
+
+test('failed relays return a bounded, sanitized error', async () => {
+  const urls = [];
+  await assert.rejects(connectWalletConnectWithFallback({
+    projectId: PROJECT, origin: 'https://bouncer-near.vercel.app',
+    createClient: config => { urls.push(config.relayUrl); throw new Error('sensitive internal error'); }, onUri() {},
+  }), error => error.code === 'WC_RELAY_UNAVAILABLE' && !error.message.includes('sensitive'));
+  assert.deepEqual(urls, WC_RELAY_URLS);
 });

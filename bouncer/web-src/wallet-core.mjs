@@ -28,7 +28,7 @@ export function walletOriginAllowed(location, isTopLevel, approvedOrigin = '') {
  * other accounts are wallet-reported, not proof of ownership. The picker is
  * our own accessible dialog; wallet executors remain sandboxed.
  */
-export async function initWallet({ window: win, document: doc, NearConnector, SandboxWallet, loadWalletConnect, walletConnectStartTimeoutMs = 20_000 }) {
+export async function initWallet({ window: win, document: doc, NearConnector, SandboxWallet, loadWalletConnect, walletConnectStartTimeoutMs = 30_000 }) {
   const dialog = doc.querySelector('#wallet-dialog');
   const closeButton = doc.querySelector('#wallet-close');
   const optionsBox = doc.querySelector('#wallet-options');
@@ -109,17 +109,19 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     if (wcHandle) { const handle = wcHandle; wcHandle = null; void Promise.resolve().then(() => handle.disconnect()).catch(() => {}); }
     setStatus(message); setWalletLabels('Connect wallet'); renderControls();
   }
-  function acceptAccounts(wallet, accounts, cliVerified = false) {
+  function acceptAccounts(wallet, accounts, verifiedBy = '') {
     const id = accounts?.[0]?.accountId;
     if (!wallet || !(wallet instanceof SandboxWallet) || !trusted.has(wallet.manifest) || !isTestnetAccount(id) ||
-        (wallet.manifest.id === 'near-cli' && !cliVerified)) {
+        (['near-cli', 'near-mobile'].includes(wallet.manifest.id) && verifiedBy !== wallet.manifest.id)) {
       showDisconnected('The wallet did not return a verified testnet account. No account was connected.');
       void storage.remove('selected-wallet').catch(() => {});
       return false;
     }
     selectedWallet = wallet; connected = true; connectedAccount = id;
     setWalletLabels('Connected');
-    setStatus(`Connected: ${id} (${cliVerified ? 'CLI login verified against testnet' : 'wallet-reported'}). No vault or spending access is granted.`);
+    const evidence = verifiedBy === 'near-cli' ? 'CLI login verified against testnet'
+      : verifiedBy === 'near-mobile' ? 'NEAR Mobile login verified against testnet' : 'wallet-reported';
+    setStatus(`Connected: ${id} (${evidence}). No vault or spending access is granted.`);
     renderControls();
     return true;
   }
@@ -322,7 +324,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     if (wcProgress) wcProgress.textContent = 'Connecting to WalletConnect. This may take a few seconds.';
     busy(true); setStatus('Preparing a private WalletConnect pairing…');
     if (dialog.open) wcCancel?.focus();
-    let startTimedOut = false, shown = false, abortListener;
+    let startTimedOut = false, shown = false, abortListener, phase = 'sdk';
     const cancelled = new Promise((_, reject) => {
       abortListener = () => reject(new Error('cancelled'));
       controller.signal.addEventListener('abort', abortListener, { once: true });
@@ -339,8 +341,16 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     try {
       const module = await Promise.race([Promise.resolve().then(() => loadWalletConnect({ signal: controller.signal })), cancelled]);
       if (controller.signal.aborted) throw new Error('cancelled');
+      phase = 'relay';
+      if (wcProgress) wcProgress.textContent = 'Connecting to the WalletConnect relay…';
       const connecting = Promise.resolve().then(() => module.connect({
         projectId: wcProjectId, origin: win.location.origin, signal: controller.signal,
+        onProgress: stage => {
+          if (!controller.signal.aborted && !shown && wcAbort === controller && stage === 'alternate') {
+            if (wcProgress) wcProgress.textContent = 'Trying WalletConnect’s alternate relay…';
+            setStatus('Trying the alternate WalletConnect relay…');
+          }
+        },
         onUri: async uri => {
           if (controller.signal.aborted || wcAbort !== controller) return;
           pairingTopic(uri); // Never put an unvalidated link in the DOM.
@@ -398,14 +408,18 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
       } else {
         clearWalletConnectPairing();
         const reason = error?.message || '';
-        const message = /401|403|unauthori[sz]ed|forbidden|project.?id|allowlist/i.test(reason)
+        const configurationRejected = error?.code === 'WC_CONFIGURATION' || /401|403|unauthori[sz]ed|forbidden|project.?id|allowlist/i.test(reason);
+        const message = configurationRejected
           ? 'WalletConnect rejected the site configuration. Please try another wallet.'
-          : startTimedOut || !shown
-            ? 'The QR could not be prepared. Check your connection or try another network, then retry.'
-            : /timed out/i.test(reason)
-              ? 'The pairing expired before approval. Generate a new QR and try again.'
-              : 'The wallet did not complete this NEAR testnet connection. Try again or choose another wallet.';
-        walletConnectStage('error', shown ? 'Connection not completed' : 'Couldn’t load the QR', message);
+          : phase === 'sdk'
+            ? 'The WalletConnect component could not load. Check your connection and retry, or choose another wallet.'
+            : startTimedOut || !shown
+              ? 'WalletConnect could not reach a relay to prepare a pairing. Check your connection or try another network, then retry.'
+              : /timed out/i.test(reason)
+                ? 'The pairing expired before approval. Generate a new QR and try again.'
+                : 'The wallet did not complete this NEAR testnet connection. Try again or choose another wallet.';
+        const title = shown ? 'Connection not completed' : phase === 'sdk' ? 'WalletConnect couldn’t load' : 'Couldn’t reach WalletConnect';
+        walletConnectStage('error', title, message);
         showDisconnected(message);
       }
     } finally {
@@ -416,6 +430,28 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
       busy(false);
       if (wcPairing && wcError && !wcError.hidden && dialog.open) wcRetry?.focus();
     }
+  }
+
+  // NEAR Connect's sandbox popup has no visible close control for this wallet.
+  // Add an accessible parent-side cancel button; the existing backdrop handler
+  // rejects the pending call rather than approving or signing anything.
+  function decorateMobilePopup() {
+    doc.body?.classList.add('near-mobile-active');
+    if (!win.MutationObserver || !doc.body) return () => doc.body?.classList.remove('near-mobile-active');
+    const observer = new win.MutationObserver(() => {
+      const root = [...doc.querySelectorAll('.hot-connector-popup')].find(node => node.style.display !== 'none' && node.querySelector('iframe'));
+      const content = root?.querySelector('.modal-content');
+      const backdrop = root?.querySelector('.modal-container');
+      if (!content || !backdrop || content.querySelector('.bouncer-mobile-close')) return;
+      const cancel = doc.createElement('button');
+      cancel.type = 'button'; cancel.className = 'bouncer-mobile-close';
+      cancel.setAttribute('aria-label', 'Cancel NEAR Mobile connection');
+      cancel.textContent = '×';
+      cancel.addEventListener('click', () => backdrop.click());
+      content.appendChild(cancel);
+    });
+    observer.observe(doc.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['style'] });
+    return () => { observer.disconnect(); doc.body?.classList.remove('near-mobile-active'); };
   }
 
   for (const button of options) {
@@ -434,10 +470,11 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
       // The NEAR Connect executor uses its own iframe overlay. A native dialog
       // is in the top layer, so close ours before opening the wallet UI.
       closePicker();
-      let reopen = false;
+      let reopen = false, stopMobilePresentation = () => {};
       try {
         trimUntrustedWallets();
         if (mobile) {
+          stopMobilePresentation = decorateMobilePopup();
           // Upstream NEAR Mobile signIn requests an AddKey transaction (and
           // can request FullAccess). Never call it or its key-deleting signOut.
           // A fresh NEP-413 signature identifies the account without an on-chain
@@ -451,7 +488,8 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
             message: `Connect to Bouncer on NEAR testnet.\n\nThis login message does not approve a transaction, transfer funds, or add an access key.\n\nSite: ${win.location.origin}`,
           });
           if (!result?.signature || !result?.publicKey) throw new Error('No signed login message returned');
-          acceptAccounts(wallet, [{ accountId: result.accountId }]);
+          if (!isTestnetAccount(result.accountId)) throw new Error('MOBILE_TESTNET_REQUIRED');
+          acceptAccounts(wallet, [{ accountId: result.accountId }], 'near-mobile');
         } else if (cli) {
           // CLI's ordinary signIn accepts any typed name. Ask for a fresh,
           // off-chain NEP-413 signature instead, with no AddKey parameters.
@@ -465,7 +503,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
           const accounts = await wallet.signInAndSignMessage({ network: 'testnet', messageParams: { message, nonce, recipient } });
           const account = accounts?.[0];
           await verifyCliLogin({ account, message, nonce, recipient, crypto: win.crypto, fetch: win.fetch.bind(win) });
-          acceptAccounts(wallet, [account], true);
+          acceptAccounts(wallet, [account], 'near-cli');
         } else {
           if (walletId === 'intear-wallet') {
             // Intear's app-session protocol needs native WebCrypto Ed25519.
@@ -480,10 +518,10 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
           await storage.remove('selected-wallet');
           if (!/did not return a verified testnet account/.test(status.textContent)) showDisconnected('No valid testnet account was returned.');
           reopen = true;
-        } else notify('Testnet account connected. No spending access was granted.');
+        } else notify(`Connected: ${connectedAccount}. No spending access was granted.`);
       } catch (error) {
         await storage.remove('selected-wallet');
-        const reason = error?.message;
+        const reason = typeof error === 'string' ? error : error?.message || '';
         showDisconnected(reason === 'INTEAR_ED25519_UNAVAILABLE'
           ? 'Intear needs a newer browser with Ed25519 support. No transaction was sent.'
           : reason === 'CLI_ED25519_UNAVAILABLE'
@@ -492,11 +530,20 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
               ? 'Could not check your CLI public key on testnet. Check your connection and try again.'
               : reason === 'CLI_KEY_NOT_FULL_ACCESS'
                 ? 'The CLI signing key is not a current Full Access key on this testnet account. No transaction was sent.'
-                : cli && /Invalid CLI/.test(reason || '')
+                : cli && /Invalid CLI/.test(reason)
                   ? 'Could not verify the CLI login message. Check the account and paste the complete signed output.'
-                  : 'Wallet connection was cancelled or unavailable. No transaction was sent.');
+                  : mobile && reason === 'MOBILE_TESTNET_REQUIRED'
+                    ? 'NEAR Mobile did not return a testnet account. Switch the wallet to testnet and try again.'
+                    : mobile && /invalid message signature|without a signature|No signed login message/i.test(reason)
+                      ? 'Could not verify the NEAR Mobile login message. No account was connected.'
+                      : mobile && /full access key/i.test(reason)
+                        ? 'The NEAR Mobile signing key could not be verified as a testnet Full Access key. No account was connected.'
+                        : mobile && /backend request (failed|timed out)|RPC request failed|RPC error/i.test(reason)
+                          ? 'NEAR Mobile or the testnet key check is unavailable. Check your connection and retry.'
+                          : 'Wallet connection was cancelled or unavailable. No transaction was sent.');
         reopen = true;
       } finally {
+        stopMobilePresentation();
         busy(false);
         if (reopen) { hideBanner(); openPicker(opener); }
       }

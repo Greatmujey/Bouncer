@@ -2,10 +2,10 @@
 // configured and the user selects it. No wallet transaction methods are used.
 import SignClient from '@walletconnect/sign-client';
 import QRCode from 'qrcode';
-import { connectWalletConnect } from '../web-src/walletconnect-core.mjs';
+import { connectWalletConnectWithFallback } from '../web-src/walletconnect-core.mjs';
 
 export async function connect(options) {
-  return connectWalletConnect({ ...options, createClient: config => SignClient.init(config) });
+  return connectWalletConnectWithFallback({ ...options, createClient: config => SignClient.init(config) });
 }
 
 export async function renderPairingCode(canvas, uri) {

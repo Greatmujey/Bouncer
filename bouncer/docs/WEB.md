@@ -7,12 +7,13 @@ and an independent vault audit remain open.
 
 ## Workspace and connecting a wallet
 
-Overview, Resources, Guardrails, On-chain proof, and Wallet & AI are separate
+Workspace, Resources, Guardrails, On-chain proof, and Wallet & AI are separate
 client-side views with linkable URL fragments and browser history. Existing
-`#connect`, `#proof`, `#how-it-works`, and recorded-resource links continue to
-work. With JavaScript disabled the document remains readable. The animated flow
-is conceptual; it is not a live activity feed. Decorative motion respects the
-browser's reduced-motion preference.
+`#overview`, `#connect`, `#proof`, `#how-it-works`, and recorded-resource links continue to
+work. The default Workspace has a keyboard-accessible resource selector and
+links to recorded examples; its animated network and flow are conceptual, not a
+live activity feed. With JavaScript disabled the document remains readable.
+Decorative motion respects the browser's reduced-motion preference.
 
 The Connect button opens a keyboard-accessible wallet picker (a bottom sheet on
 phones, a centered dialog on desktop). It uses pinned NEAR Connect on **testnet**
@@ -30,8 +31,12 @@ key, so Bouncer calls neither method; Mobile's session requires a new message
 after reload. The pinned Fastnear executor saves native `fetch` as a class
 method, which fails with “Illegal invocation” in browsers. After the executor
 bytes pass integrity checking, Bouncer binds `fetch` to the sandbox window
-before running them. The browser test covers the real executor with a synthetic
-signer and RPC; it is not a live phone login.
+before running them. Its message-only UI is adapted after verification with a
+high-contrast QR, testnet/return instructions, responsive sizing and a cancel
+button; the signed payload is unchanged. The browser test covers the real
+executor with a synthetic signer and RPC; it is not a live phone login. Live
+probe `41613171918` prepared an unsigned message request and QR through the
+actual Mobile backend; it did not use a real wallet or approve a signature.
 
 **NEAR CLI:** choose the CLI option, enter a testnet account ID, choose your
 OS keychain, local `~/.near-credentials` file, or Ledger, then run the displayed
@@ -69,8 +74,10 @@ to its corresponding source archive. Regenerate it with
 `python3 bouncer/scripts/build-intear-source.py` after updating the source.
 
 The Mobile adapter’s generic “Sign transaction” button is relabeled “Open NEAR
-Mobile” in Bouncer’s message-only flow, after the original executor bytes have
-passed their integrity check. The signed payload itself is unchanged.
+Mobile” in Bouncer’s message-only flow. Once the adapter verifies the signed
+message and checks the key on testnet, the header and wallet panel show the
+account as connected. On a phone, return to the same browser tab after approval;
+reloading intentionally clears the message-only session.
 
 WalletConnect uses a separately bundled SignClient and is available only when
 an owned Reown project ID is configured. It proposes **only** `near:testnet`
@@ -84,11 +91,15 @@ and the session stay in tab memory and are discarded on reload or disconnect.
 The pairing QR and mobile `wc:` link are bearer secrets: share them only with
 your chosen wallet. Cancellation is best effort on the remote wallet; check its
 own session list if in doubt. This is account display, **not proof of ownership**.
-The QR view shows its loading state and times out the initial download or relay
-setup after 20 seconds; Retry starts a fresh attempt. If a valid pairing is
-created but the browser cannot draw its QR, the same-device wallet link and
-copy button remain available. If the relay is blocked or unreachable, Bouncer
-cannot generate a working pairing code; use Retry, another network, or a
+The QR view distinguishes component loading, relay setup and wallet approval.
+The initial download plus relay setup has a 30-second outer deadline; before a
+QR is shown, Bouncer tries the documented `.org` relay and then `.com` with a
+bounded startup attempt for each. It never changes a visible pairing or replays
+a wallet request. Retry uses fresh in-memory storage and an isolated SDK core;
+a previous browser build did not reliably disable the SDK's shared global core.
+If a valid pairing is created but the browser cannot draw its QR, the same-device
+wallet link and copy button remain available. If neither relay is reachable,
+Bouncer cannot generate a working pairing code; use Retry, another network, or a
 different wallet. Not every WalletConnect wallet supports NEAR testnet or this
 minimal namespace; no real WalletConnect wallet session has been verified yet.
 Without an ID the picker says setup is required. Do not borrow another project's ID.

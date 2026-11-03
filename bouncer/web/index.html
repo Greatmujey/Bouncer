@@ -13,7 +13,7 @@
   <title>Bouncer — The resource layer for agents</title>
   <link rel="icon" type="image/svg+xml" href="./favicon.svg?v=3">
   <link rel="preload" href="./manrope-latin.woff2" as="font" type="font/woff2" crossorigin>
-  <link rel="stylesheet" href="./styles.css?v=8">
+  <link rel="stylesheet" href="./styles.css?v=9">
 </head>
 <body>
   <svg class="svg-defs" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
@@ -35,10 +35,10 @@
 
   <div class="shell">
     <aside class="sidebar" aria-label="Main navigation">
-      <a class="brand" href="#overview" aria-label="Bouncer overview"><span class="brand-mark" aria-hidden="true"><svg viewBox="16 17 300 300"><use href="#i-bouncer"/></svg></span><span>bouncer<span class="brand-dot">.</span></span></a>
+      <a class="brand" href="#workspace" aria-label="Bouncer workspace"><span class="brand-mark" aria-hidden="true"><svg viewBox="16 17 300 300"><use href="#i-bouncer"/></svg></span><span>bouncer<span class="brand-dot">.</span></span></a>
       <div class="side-label">YOUR WORKSPACE</div>
       <nav class="side-nav">
-        <a class="side-link active" href="#overview"><svg><use href="#i-grid"/></svg><span>Overview</span></a>
+        <a class="side-link active" href="#workspace"><svg><use href="#i-grid"/></svg><span>Workspace</span></a>
         <a class="side-link" href="#capabilities"><svg><use href="#i-cpu"/></svg><span>Resources</span></a>
         <a class="side-link" href="#guardrails"><svg><use href="#i-shield"/></svg><span>Guardrails</span></a>
         <a class="side-link" href="#proof"><svg><use href="#i-activity"/></svg><span>On-chain proof</span></a>
@@ -55,27 +55,53 @@
 
     <div class="content">
       <header class="topbar">
-        <a class="mobile-brand" href="#overview" aria-label="Bouncer overview"><span class="brand-mark" aria-hidden="true"><svg viewBox="16 17 300 300"><use href="#i-bouncer"/></svg></span><strong>bouncer<span>.</span></strong></a>
-        <div class="breadcrumb"><span>Workspace</span><span class="slash">/</span><strong id="route-breadcrumb">Overview</strong></div>
+        <a class="mobile-brand" href="#workspace" aria-label="Bouncer workspace"><span class="brand-mark" aria-hidden="true"><svg viewBox="16 17 300 300"><use href="#i-bouncer"/></svg></span><strong>bouncer<span>.</span></strong></a>
+        <div class="breadcrumb"><span>Workspace</span><span class="slash">/</span><strong id="route-breadcrumb">Workspace</strong></div>
         <div class="top-actions"><button class="tour-link" type="button" data-open-tour>Take a tour</button><span class="network"><span class="status-dot"></span> Testnet</span><button class="button top-connect" type="button" data-wallet-open><svg><use href="#i-wallet"/></svg><span data-wallet-label>Connect wallet</span></button></div>
       </header>
-      <nav class="mobile-nav" aria-label="Workspace navigation"><a class="active" href="#overview">Overview</a><a href="#capabilities">Resources</a><a href="#guardrails">Guardrails</a><a href="#proof">Proof</a><a href="#connect">Wallet</a></nav>
+      <nav class="mobile-nav" aria-label="Workspace navigation"><a class="active" href="#workspace">Workspace</a><a href="#capabilities">Resources</a><a href="#guardrails">Guardrails</a><a href="#proof">Proof</a><a href="#connect">Wallet</a></nav>
 
       <main class="main" id="main-content">
-        <div class="route-view" id="overview" data-route-view="overview" aria-label="Overview"><div class="page-heading"><div><div class="section-kicker"><span class="kicker-dot"></span> YOUR AGENT WORKSPACE</div><h1>Let’s get moving<span>.</span></h1><p>Big ideas need room to run. You’re in control.</p></div><span class="version-pill"><span class="status-dot"></span> TESTNET PROTOTYPE</span></div>
-<section class="hero" aria-labelledby="hero-title">
-  <div class="hero-noise" aria-hidden="true"></div>
-  <div class="hero-inner"><div class="hero-eyebrow"><span></span> THE RESOURCE LAYER FOR AGENTS</div><h2 id="hero-title">More power.<br><em>Your rules.</em></h2><p>Give your agent room to get compute, storage and data — within the boundaries you set.</p><div class="hero-actions"><a class="button hero-primary" href="#capabilities">Explore resources <svg><use href="#i-arrow"/></svg></a><button class="button hero-secondary" type="button" data-wallet-open><span data-wallet-label>Connect wallet</span><svg><use href="#i-wallet"/></svg></button></div><div class="hero-foot"><svg><use href="#i-shield"/></svg> On-chain guardrails. Human control.</div></div>
-  <div class="hero-art-label" aria-hidden="true"><span class="hero-art-dot"></span> BUILT ON NEAR</div>
-</section>
-<div class="snapshot-note"><span class="snapshot-icon"><svg><use href="#i-spark"/></svg></span><div><strong>Building in the open.</strong> This is an unaudited testnet prototype, not a live purchasing dashboard. <a href="#proof">Explore what’s verified <span>↗</span></a></div></div>
-<div class="signal-strip"><div><span class="signal-kicker">THE IDEA IN MOTION</span><strong>From intent to resource.</strong></div><div class="signal-steps" aria-label="The intended flow: agent request, policy check, resource"><span><i>01</i> Agent request</span><span class="signal-connector" aria-hidden="true"></span><span><i>02</i> Policy check</span><span class="signal-connector" aria-hidden="true"></span><span><i>03</i> Resource</span></div><a href="#how-it-works">How it works <svg><use href="#i-arrow"/></svg></a></div>
-<section class="launch-section" aria-labelledby="launch-title"><div class="section-heading"><div><div class="section-kicker">YOUR NEXT MOVE</div><h2 id="launch-title">Find your way around<span>.</span></h2><p>One workspace. A whole lot of possibility.</p></div><span class="launch-index">01 — 03</span></div>
-<div class="launch-grid">
-<a class="launch-card launch-resources" href="#capabilities"><span class="launch-card-top"><span class="launch-card-icon"><svg><use href="#i-cpu"/></svg></span><span class="launch-card-arrow"><svg><use href="#i-arrow"/></svg></span></span><span class="launch-label">01 / EXPLORE</span><strong>Resources</strong><small>Compute, storage &amp; data for the task ahead.</small><span class="launch-tag">GO TO RESOURCES ↗</span></a>
-<a class="launch-card launch-guard" href="#guardrails"><span class="launch-card-top"><span class="launch-card-icon"><svg><use href="#i-shield"/></svg></span><span class="launch-card-arrow"><svg><use href="#i-arrow"/></svg></span></span><span class="launch-label">02 / STAY IN CONTROL</span><strong>Guardrails</strong><small>See the owner rules that set the boundaries.</small><span class="launch-tag">EXPLORE THE GUARD ↗</span></a>
-<a class="launch-card launch-proof" href="#proof"><span class="launch-card-top"><span class="launch-card-icon"><svg><use href="#i-activity"/></svg></span><span class="launch-card-arrow"><svg><use href="#i-arrow"/></svg></span></span><span class="launch-label">03 / VERIFY</span><strong>On-chain proof</strong><small>Follow the real testnet transactions.</small><span class="launch-tag">VIEW THE EVIDENCE ↗</span></a>
-</div></section></div>
+        <div class="route-view workspace-view" id="workspace" data-route-view="workspace" aria-label="Workspace">
+          <div class="page-heading workspace-heading">
+            <div><div class="section-kicker"><span class="kicker-dot"></span> YOUR AGENT WORKSPACE</div><h1>Welcome to Bouncer<span>.</span></h1><p>A little more autonomy. A lot more control.</p></div>
+            <span class="version-pill"><span class="status-dot"></span> TESTNET PROTOTYPE</span>
+          </div>
+          <section class="hero workspace-hero" aria-labelledby="hero-title">
+            <div class="hero-noise" aria-hidden="true"></div>
+            <div class="hero-inner workspace-copy">
+              <div class="hero-eyebrow"><span></span> THE RESOURCE LAYER FOR AGENTS</div>
+              <h2 id="hero-title">Big ideas.<br><em>Better boundaries.</em></h2>
+              <p>Give your agent room to find compute, storage and data — while you define the rules it operates by.</p>
+              <div class="hero-actions"><a class="button hero-primary" href="#capabilities">Explore resources <svg><use href="#i-arrow"/></svg></a><button class="button hero-secondary" type="button" data-wallet-open><span data-wallet-label>Connect wallet</span><svg><use href="#i-wallet"/></svg></button></div>
+              <div class="workspace-hero-meta"><span><svg><use href="#i-shield"/></svg> OWNER CONTROLLED</span><span class="workspace-meta-separator"></span><span>BUILT ON NEAR</span></div>
+            </div>
+            <div class="workspace-visual" data-workspace-visual data-resource="compute">
+              <div class="workspace-visual-header"><span>THE RESOURCE NETWORK</span><span><i></i> CONCEPT</span></div>
+              <div class="workspace-orbit" aria-hidden="true">
+                <div class="orbit-grid"></div><div class="orbit-ring orbit-ring-outer"></div><div class="orbit-ring orbit-ring-inner"></div>
+                <div class="orbit-center"><span><svg viewBox="16 17 300 300"><use href="#i-bouncer"/></svg></span><small>YOUR AGENT</small></div>
+                <div class="orbit-node orbit-node-compute"><svg><use href="#i-cpu"/></svg></div><div class="orbit-node orbit-node-storage"><svg><use href="#i-storage"/></svg></div><div class="orbit-node orbit-node-api"><svg><use href="#i-api"/></svg></div>
+                <span class="orbit-star orbit-star-one">✳</span><span class="orbit-star orbit-star-two">✦</span>
+              </div>
+              <div class="workspace-switcher" role="tablist" aria-label="Explore resource types">
+                <button id="workspace-tab-compute" type="button" role="tab" aria-selected="true" aria-controls="workspace-detail" data-workspace-resource="compute"><svg><use href="#i-cpu"/></svg> Compute</button>
+                <button id="workspace-tab-storage" type="button" role="tab" aria-selected="false" aria-controls="workspace-detail" tabindex="-1" data-workspace-resource="storage"><svg><use href="#i-storage"/></svg> Storage</button>
+                <button id="workspace-tab-api" type="button" role="tab" aria-selected="false" aria-controls="workspace-detail" tabindex="-1" data-workspace-resource="api"><svg><use href="#i-api"/></svg> API &amp; data</button>
+              </div>
+              <div id="workspace-detail" class="workspace-detail" role="tabpanel" aria-labelledby="workspace-tab-compute" aria-live="polite"><div><span data-workspace-index>01 / COMPUTE</span><strong data-workspace-description>Run the heavy lifting.</strong></div><a href="#run-story" data-workspace-example aria-label="Explore the recorded compute example">Explore <svg><use href="#i-arrow"/></svg></a></div>
+            </div>
+          </section>
+          <div class="snapshot-note"><span class="snapshot-icon"><svg><use href="#i-spark"/></svg></span><div><strong>Building in the open.</strong> This is an unaudited testnet prototype, not a live purchasing dashboard. <a href="#proof">Explore what’s verified <span>↗</span></a></div></div>
+          <div class="signal-strip"><div><span class="signal-kicker">THE IDEA IN MOTION</span><strong>From intent to resource.</strong></div><div class="signal-steps" aria-label="The intended flow: agent request, policy check, resource"><span><i>01</i> Agent request</span><span class="signal-connector" aria-hidden="true"></span><span><i>02</i> Policy check</span><span class="signal-connector" aria-hidden="true"></span><span><i>03</i> Resource</span></div><a href="#how-it-works">How it works <svg><use href="#i-arrow"/></svg></a></div>
+          <section class="launch-section" aria-labelledby="launch-title"><div class="section-heading"><div><div class="section-kicker">YOUR NEXT MOVE</div><h2 id="launch-title">Make your next move<span>.</span></h2><p>One workspace. A whole lot of possibility.</p></div><span class="launch-index">01 — 03</span></div>
+            <div class="launch-grid">
+              <a class="launch-card launch-resources" href="#capabilities"><span class="launch-card-top"><span class="launch-card-icon"><svg><use href="#i-cpu"/></svg></span><span class="launch-card-arrow"><svg><use href="#i-arrow"/></svg></span></span><span class="launch-label">01 / EXPLORE</span><strong>Resources</strong><small>Compute, storage &amp; data for the task ahead.</small><span class="launch-tag">GO TO RESOURCES ↗</span></a>
+              <a class="launch-card launch-guard" href="#guardrails"><span class="launch-card-top"><span class="launch-card-icon"><svg><use href="#i-shield"/></svg></span><span class="launch-card-arrow"><svg><use href="#i-arrow"/></svg></span></span><span class="launch-label">02 / STAY IN CONTROL</span><strong>Guardrails</strong><small>See the owner rules that set the boundaries.</small><span class="launch-tag">EXPLORE THE GUARD ↗</span></a>
+              <a class="launch-card launch-proof" href="#proof"><span class="launch-card-top"><span class="launch-card-icon"><svg><use href="#i-activity"/></svg></span><span class="launch-card-arrow"><svg><use href="#i-arrow"/></svg></span></span><span class="launch-label">03 / VERIFY</span><strong>On-chain proof</strong><small>Follow the real testnet transactions.</small><span class="launch-tag">VIEW THE EVIDENCE ↗</span></a>
+            </div>
+          </section>
+        </div>
         <div class="route-view" data-route-view="resources" aria-label="Resources"><header class="route-header"><div><div class="section-kicker"><span class="kicker-dot"></span> 01 / RESOURCE HUB</div><h1>Go beyond the prompt<span>.</span></h1><p>Compute, storage and data: three resource types, one owner-controlled framework.</p></div><span class="route-tag">THREE RESOURCE TYPES</span></header>
 <section class="section" id="capabilities" aria-labelledby="capabilities-title">
           <div class="section-heading"><div><div class="section-kicker">THE BIG PICTURE</div><h2 id="capabilities-title">One agent. More possibilities<span>.</span></h2><p>Three kinds of resources, one set of rules. Independent FT-paid fulfillment is still being built.</p></div><a class="heading-link" href="#how-it-works">How it works <svg><use href="#i-arrow"/></svg></a></div>
@@ -169,7 +195,7 @@
   <div class="wallet-safety" id="wallet-safety"><svg><use href="#i-lock"/></svg><div><strong>Just your account, never your keys.</strong><p>No spending access or transaction is requested. Never share your seed phrase or private key.</p><details><summary>CLI help &amp; licenses</summary><p>For CLI, choose your key source, run the displayed command in your terminal and paste only its signed output. <a href="./intear-wallet-source.zip">Intear adapter source</a> (AGPL-3.0) · <a href="./walletconnect-NOTICES.txt">WalletConnect notices</a>. Portions © 2025 Reown, Inc. All Rights Reserved.</p></details></div></div>
 </dialog>
   <dialog class="tour-dialog" id="welcome-tour" aria-labelledby="tour-title" aria-describedby="tour-description"><div class="tour-topline"><span class="brand-mark" aria-hidden="true"><svg viewBox="16 17 300 300"><use href="#i-bouncer"/></svg></span><span class="tour-count" id="tour-count">STEP 1 OF 4</span><button type="button" class="tour-close" id="tour-skip" aria-label="Close the tour">×</button></div><div class="tour-progress" aria-hidden="true"><span></span><span></span><span></span><span></span></div><div class="tour-copy" aria-live="polite"><div class="section-kicker" id="tour-kicker">WELCOME TO BOUNCER</div><h2 id="tour-title">Meet your resource agent.</h2><p id="tour-description">Bouncer helps an agent get compute, storage and API services while your on-chain rules guard its spending.</p><div class="tour-callout" id="tour-callout">Bouncer is a testnet prototype, not an open marketplace.</div></div><div class="tour-actions"><button class="button tour-back" type="button" id="tour-back" disabled>Back</button><button class="button wallet-button" type="button" id="tour-next">Next →</button></div></dialog>
-  <script type="module" src="./app.mjs?v=4"></script>
-  <script type="module" src="./wallet.bundle.js?v=9"></script>
+  <script type="module" src="./app.mjs?v=5"></script>
+  <script type="module" src="./wallet.bundle.js?v=10"></script>
 </body>
 </html>

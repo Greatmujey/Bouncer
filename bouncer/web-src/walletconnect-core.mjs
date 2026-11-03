@@ -84,6 +84,11 @@ export async function connectWalletConnect({ projectId, origin, createClient, on
   if (typeof createClient !== 'function' || typeof onUri !== 'function') throw new Error('WalletConnect is unavailable');
   if (signal?.aborted) throw new Error('WalletConnect pairing cancelled');
   const storage = createMemoryStorage();
+  // Isolate each retry even if an SDK update unexpectedly enables its global
+  // Core cache. The prefix contains no pairing keys and is not persisted.
+  if (!globalThis.crypto?.getRandomValues) throw new Error('Secure randomness is unavailable');
+  const prefixBytes = globalThis.crypto.getRandomValues(new Uint8Array(16));
+  const customStoragePrefix = `bouncer-${Array.from(prefixBytes, byte => byte.toString(16).padStart(2, '0')).join('')}`;
   let client = null, topic = null, pendingTopic = null, stopped = false, active = false;
   let expiryListener, deleteListener, updateListener;
   let timer;
@@ -115,7 +120,7 @@ export async function connectWalletConnect({ projectId, origin, createClient, on
   };
   try {
     const creating = Promise.resolve().then(() => createClient({
-      projectId, storage, logger: 'error', telemetryEnabled: false,
+      projectId, storage, customStoragePrefix, logger: 'error', telemetryEnabled: false,
       metadata: { name: 'Bouncer', description: 'NEAR testnet account display', url: origin, icons: [`${origin}/favicon.svg`] },
     }));
     creating.then(late => {
@@ -178,5 +183,48 @@ export async function connectWalletConnect({ projectId, origin, createClient, on
   } finally {
     clearTimeout(timer);
     signal?.removeEventListener('abort', abortListener);
+  }
+}
+
+// Both addresses are documented Reown relays. Retry only before a pairing URI
+// is exposed: never replay a wallet request or silently replace a visible QR.
+export const WC_RELAY_URLS = Object.freeze(['wss://relay.walletconnect.org', 'wss://relay.walletconnect.com']);
+export async function connectWalletConnectWithFallback({ createClient, onUri, onProgress, signal, relayStartTimeoutMs = 8_000, ...options }) {
+  if (typeof createClient !== 'function' || typeof onUri !== 'function') throw new Error('WalletConnect is unavailable');
+  if (!isWalletConnectProjectId(options.projectId)) throw new Error('WalletConnect project ID is not configured');
+  for (const [index, relayUrl] of WC_RELAY_URLS.entries()) {
+    if (signal?.aborted) throw new Error('WalletConnect pairing cancelled');
+    const attempt = new AbortController();
+    let shown = false, timer;
+    const abort = () => attempt.abort();
+    signal?.addEventListener('abort', abort, { once: true });
+    try {
+      onProgress?.(index === 0 ? 'primary' : 'alternate');
+      timer = setTimeout(() => attempt.abort(), relayStartTimeoutMs);
+      return await connectWalletConnect({
+        ...options, signal: attempt.signal,
+        createClient: config => createClient({ ...config, relayUrl }),
+        onUri: uri => { shown = true; clearTimeout(timer); return onUri(uri); },
+      });
+    } catch (error) {
+      if (signal?.aborted || shown) throw error;
+      // Invalid site/project configuration is not a relay problem. Do not
+      // multiply requests or leak an arbitrary SDK error to the interface.
+      const reason = String(error?.message || '');
+      if (/Invalid site origin|project ID is not configured/i.test(reason)) throw error;
+      if (/\b401\b|\b403\b|unauthori[sz]ed|forbidden|allowlist/i.test(reason)) {
+        const rejected = new Error('WalletConnect site configuration was rejected');
+        rejected.code = 'WC_CONFIGURATION';
+        throw rejected;
+      }
+      if (index === WC_RELAY_URLS.length - 1) {
+        const unavailable = new Error('WalletConnect relays unavailable');
+        unavailable.code = 'WC_RELAY_UNAVAILABLE';
+        throw unavailable;
+      }
+    } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', abort);
+    }
   }
 }

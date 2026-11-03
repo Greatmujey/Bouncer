@@ -102,7 +102,22 @@ try {
       // history, and keep a single visible section at each viewport size.
       const nav = width < 650 ? '.mobile-nav' : '.side-nav';
       const route = name => page.locator(`[data-route-view="${name}"]`);
-      assert.equal(await route('overview').isVisible(), true);
+      assert.equal(await route('workspace').isVisible(), true);
+      assert.equal(await page.title(), 'Bouncer — A workspace for autonomous agents');
+      assert.equal(await page.locator('#route-breadcrumb').textContent(), 'Workspace');
+      assert.equal(await page.locator('[data-workspace-resource="compute"]').getAttribute('aria-selected'), 'true');
+      await page.locator('[data-workspace-resource="storage"]').click();
+      assert.match(await page.locator('[data-workspace-description]').innerText(), /Keep what your agent creates/);
+      assert.equal(await page.locator('[data-workspace-visual]').getAttribute('data-resource'), 'storage');
+      await page.locator('[data-workspace-resource="storage"]').press('End');
+      assert.equal(await page.locator('[data-workspace-resource="api"]').getAttribute('aria-selected'), 'true');
+      assert.equal(await page.locator('[data-workspace-resource="api"]').evaluate(el => el === document.activeElement), true);
+      await page.locator('[data-workspace-example]').click();
+      await route('resources').waitFor({ state: 'visible' });
+      assert.match(await page.locator('#story-result').innerText(), /4 words and 27 bytes/);
+      await page.goto(`${url}#overview`, { waitUntil: 'networkidle' });
+      assert.equal(await route('workspace').isVisible(), true, 'legacy overview link opens Workspace');
+      assert.equal(await page.title(), 'Bouncer — A workspace for autonomous agents');
       for (const [hash, name] of [['capabilities', 'resources'], ['guardrails', 'guardrails'], ['proof', 'proof'], ['connect', 'connect']]) {
         await page.locator(`${nav} a[href="#${hash}"]`).click();
         await route(name).waitFor({ state: 'visible' });
@@ -154,8 +169,8 @@ try {
       await route('resources').waitFor({ state: 'visible' });
       assert.equal(await page.locator('#resources').isVisible(), true, 'old recorded-resource links still work');
       await page.goto(`${url}#constructor`, { waitUntil: 'networkidle' });
-      await route('overview').waitFor({ state: 'visible' });
-      assert.equal(await page.locator('[data-route-view]:visible').count(), 1, 'unknown fragments safely fall back to overview');
+      await route('workspace').waitFor({ state: 'visible' });
+      assert.equal(await page.locator('[data-route-view]:visible').count(), 1, 'unknown fragments safely fall back to workspace');
       await page.emulateMedia({ reducedMotion: 'reduce' });
       assert.equal(await page.locator('.hero-noise').evaluate(el => getComputedStyle(el).animationName), 'none', 'reduced motion disables decorative animation');
       assert.deepEqual(writes, [], 'tour and historical story must not send write requests');
@@ -512,6 +527,13 @@ try {
       assert.equal(messageRequest.receiver, new URL(url).host);
       assert.equal(messageRequest.nonce.length, 32);
       assert.match(messageRequest.message, /login message does not approve a transaction, transfer funds, or add an access key/i);
+      assert.match(await mobileFrame.locator('.bouncer-mobile-hint').innerText(), /testnet account.*return to this tab/i);
+      assert.equal(await page.locator('.bouncer-mobile-close').getAttribute('aria-label'), 'Cancel NEAR Mobile connection');
+      // Decode the actual, dark-on-white, CSS-sized Mobile QR. The request is
+      // synthetic and the bearer link is kept only in process memory.
+      const mobileQr = PNG.sync.read(await mobileFrame.locator('.near-mobile-qr-wrap').screenshot());
+      const mobileDecoded = jsQR(new Uint8ClampedArray(mobileQr.data), mobileQr.width, mobileQr.height);
+      assert.equal(mobileDecoded?.data, 'near-mobile-wallet://sign/message/bouncer-synthetic-login');
       // The upstream generic label is misleading for this message-only flow.
       const mobileButton = mobileFrame.locator('#approve-button');
       assert.equal(await mobileButton.innerText(), 'Open NEAR Mobile');
@@ -534,6 +556,10 @@ try {
       await popup.close();
       approved = true;
       await page.waitForFunction(() => document.querySelector('#wallet-status').textContent.includes('synthetic.testnet'), null, { timeout: 20_000 });
+      assert.match(await page.locator('#wallet-status').textContent(), /NEAR Mobile login verified against testnet/);
+      assert.equal(await page.locator('.top-connect').getAttribute('data-wallet-state'), 'connected');
+      assert.equal(await page.locator('.top-connect [data-wallet-label]').innerText(), 'Connected');
+      assert.match(await page.locator('#wallet-banner').textContent(), /Connected: synthetic\.testnet/);
       assert.deepEqual(rpc.map(request => [request.method, request.params.request_type]), [['query', 'view_access_key']]);
       assert.equal(rpc[0].params.account_id, 'synthetic.testnet');
       assert.equal(rpc[0].params.public_key, publicKey);
@@ -546,12 +572,19 @@ try {
       await page.locator('[data-wallet-id="near-mobile"]').click();
       await page.frameLocator('iframe').first().locator('#qr-code svg').waitFor({ timeout: 20_000 });
       approved = true;
-      await page.waitForFunction(() => document.querySelector('#wallet-status').textContent.includes('cancelled or unavailable'), null, { timeout: 20_000 });
+      await page.waitForFunction(() => document.querySelector('#wallet-status').textContent.includes('Could not verify the NEAR Mobile login message'), null, { timeout: 20_000 });
       assert.equal(await page.locator('#wallet-disconnect').isVisible(), false);
       assert.equal(rpc.length, 1, 'invalid signature must not reach RPC verification');
       assert.deepEqual(calls.filter(call => call.method === 'POST').map(call => call.pathname), ['/api/signer-request/message', '/api/signer-request/message']);
+      approved = false; corruptSignature = false;
+      await page.locator('[data-wallet-id="near-mobile"]').click();
+      await page.frameLocator('iframe').first().locator('#qr-code svg').waitFor({ timeout: 20_000 });
+      await page.locator('.bouncer-mobile-close').click();
+      await page.waitForFunction(() => document.querySelector('#wallet-dialog').open, null, { timeout: 10_000 });
+      assert.match(await page.locator('#wallet-status').textContent(), /cancelled or unavailable/i);
+      assert.equal(calls.filter(call => call.method === 'POST').length, 3, 'only message requests were made');
       assert.deepEqual(errors, []);
-      console.log('Pinned NEAR Mobile executor verified a synthetic signed login and rejected a forgery; QR/deep-link and local disconnect passed. No real wallet or transaction tested.');
+      console.log('Pinned NEAR Mobile executor verified a synthetic signed login and rejected a forgery; QR/deep-link, visible connected state, cancel and local disconnect passed. No real wallet or transaction tested.');
     } finally { await mobileBrowser.close(); }
   }
 
