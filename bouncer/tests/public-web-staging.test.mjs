@@ -97,6 +97,7 @@ test('public staging approves only the dedicated Bouncer wallet origin', t => {
 
 test('the deployed HTML revalidates and references versioned wallet and UI assets', () => {
   const config = JSON.parse(fs.readFileSync(path.join(realSource, 'vercel.json'), 'utf8'));
+  assert.equal(config.git?.deploymentEnabled?.['arena/25a7aaf6-near-hub'], false, 'test-branch pushes must not consume the daily preview deployment quota');
   for (const source of ['/', '/index.html']) {
     const headers = config.headers.find(rule => rule.source === source)?.headers || [];
     assert.match(headers.find(header => header.key.toLowerCase() === 'cache-control')?.value || '', /no-cache.*must-revalidate/);

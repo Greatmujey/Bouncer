@@ -149,9 +149,11 @@ the user's Windows connection and Vercel's WebSocket deployment remain
 unverified. On 3 November 2026 Vercel rejected the isolated test deployment with
 `api-deployments-free-per-day` (100 Hobby deployments per day); the temporary
 empty test project was removed. The existing production deployment was not
-changed. Do not describe the candidate as live until the quota resets, the
-Vercel endpoint and edge protections are tested, and a suitable release is
-explicitly deployed.
+changed. `vercel.json` disables automatic preview deployments for this Arena
+branch only, to avoid consuming the daily deployment quota on test/docs pushes;
+`main` and explicit deployments are unaffected. Do not describe the candidate
+as live until the quota resets, the Vercel endpoint and edge protections are
+tested, and a suitable release is explicitly deployed.
 
 To enable the deployed site, the owner creates a project at
 `https://dashboard.reown.com/sign-up`, copies its public **Project ID**, and

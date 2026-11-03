@@ -1,4 +1,5 @@
 {
+  "git": { "deploymentEnabled": { "arena/25a7aaf6-near-hub": false } },
   "headers": [
     {
       "source": "/",

@@ -77,6 +77,23 @@ try {
       return route.fulfill({ status: 200, contentType: types[path.extname(name)], body: fs.readFileSync(path.join(root, 'web', name)) });
     });
   }
+  if (localBridge) {
+    // Recent Chrome versions may deny public HTTPS pages direct access to
+    // loopback (Local Network Access). Intercept the same-origin WebSocket in
+    // Playwright and forward its frames to the in-runner bridge in Node. This
+    // is a synthetic test transport; the bridge still reaches the real relay.
+    const { WebSocket: NodeSocket } = requireWalletConnect('ws');
+    await page.routeWebSocket('wss://bouncer-near.vercel.app/api/wc-relay', browserSocket => {
+      const relay = new NodeSocket(`ws://127.0.0.1:${bridgePort}/api/wc-relay`, { origin: 'https://bouncer-near.vercel.app' });
+      const queued = [];
+      browserSocket.onMessage(body => { if (relay.readyState === NodeSocket.OPEN) relay.send(body); else if (relay.readyState === NodeSocket.CONNECTING) queued.push(body); });
+      browserSocket.onClose(() => { if (relay.readyState === NodeSocket.OPEN || relay.readyState === NodeSocket.CONNECTING) relay.close(); });
+      relay.on('open', () => { for (const body of queued) relay.send(body); queued.length = 0; });
+      relay.on('message', (body, binary) => browserSocket.send(binary ? body : body.toString()));
+      relay.on('error', () => browserSocket.close());
+      relay.on('close', () => browserSocket.close());
+    });
+  }
   if (process.env.BOUNCER_BLOCK_PRIMARY_WC === '1' || process.env.BOUNCER_BLOCK_BOTH_WC === '1') {
     // Block relay addresses only in the dapp browser. The synthetic wallet
     // remains on .org, permitting a real cross-relay pairing test.
@@ -91,10 +108,9 @@ try {
           if (gateway) window.__bouncerRelayAttempts.push('bouncer-gateway');
           if (hostname === 'relay.walletconnect.org' || (blockBoth && hostname === 'relay.walletconnect.com') ||
               (gateway && blockBoth && !gatewayPort && !gatewayLive && !testHost)) throw new Error('Relay blocked by compatibility test');
-          // The candidate's browser origin remains the approved production
-          // origin; only the gateway socket is sent to the test server.
-          const destination = gateway && gatewayPort ? `ws://127.0.0.1:${gatewayPort}/api/wc-relay`
-            : gateway && testHost ? `wss://${testHost}/api/wc-relay` : url;
+          // For a deployed test gateway the browser keeps its approved origin;
+          // the in-runner gateway is intercepted by Playwright separately.
+          const destination = gateway && testHost ? `wss://${testHost}/api/wc-relay` : url;
           if (protocols === undefined) super(destination); else super(destination, protocols);
         }
       };
