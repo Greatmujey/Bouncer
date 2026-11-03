@@ -97,7 +97,9 @@ jobs:
               s = json.dumps(graph, separators=(',', ':'), ensure_ascii=True)
               if len(s) > 60000:
                   raise SystemExit('isolated receipt graph exceeds annotation limit')
-              print('::notice title=Isolated ' + name + ' receipt graph::' + s.replace('%','%25').replace('\n','%0A').replace('\r','%0D'))
+              chunks = [s[i:i+3000] for i in range(0, len(s), 3000)]
+              for i, chunk in enumerate(chunks, 1):
+                  print(f'::notice title=Isolated {name} receipt graph part {i} of {len(chunks)}::' + chunk.replace('%','%25').replace('\n','%0A').replace('\r','%0D'))
           PY
           {
             echo '## Source-built PayPerCall on isolated nearcore'
