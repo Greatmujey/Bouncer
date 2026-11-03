@@ -45,7 +45,7 @@ try {
   assert.deepEqual(Object.keys(event.params.requiredNamespaces || {}), []);
   assert.deepEqual(Object.keys(event.params.optionalNamespaces || {}), ['near']);
   assert.deepEqual(event.params.optionalNamespaces.near, { chains: ['near:testnet'], methods: ['near_getAccounts'], events: [] });
-  const approval = await wallet.aprove({ id: event.id, namespaces: {
+  const approval = await wallet.approve({ id: event.id, namespaces: {
     near: { accounts: ['near:testnet:wc-synthetic.testnet'], methods: ['near_getAccounts'], events: [] },
   } });
   activeTopic = approval.topic;
