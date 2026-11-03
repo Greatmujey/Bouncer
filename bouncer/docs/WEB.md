@@ -194,18 +194,27 @@ security or CSP review is implied. The public repository is
 
 The project’s production branch is `main`; working-branch previews and the
 production domain can therefore serve different commits. On 3 November 2026 UTC,
-working-branch commit `3debc92` was deployed to `bouncer-near.vercel.app`
-without merging to `main` (Vercel deployment `dpl_Cx85CWcnNBYGHxRb4crisaK5miWh`).
-The owner-supplied public Reown project ID is configured for production. Live
-smoke `41615256377` checked the Workspace and Mobile backend, then decoded,
-cancelled and regenerated QRs and paired a synthetic wallet on the actual
-production site. It passed in Windows and Linux Chrome with the primary relay,
-and with the primary deliberately blocked and the `.com` fallback used; the
-synthetic wallet stayed on `.org`. The same run exercised real near-cli-rs with
-an ephemeral synthetic key and mock RPC. No real wallet, transaction, or actual
-user's login was used; compatibility with an actual wallet remains unverified.
-Local tests passed 1,143 cases with 113 skipped, and the working-branch build
-workflow `41614698661` passed.
+working-branch commit `32f6519` was deployed to `bouncer-near.vercel.app`
+without merging to `main` (Vercel deployment `dpl_8bCrkP1Mq9qDaaCTz11YkFeNktKf`).
+The owner-supplied public Reown project ID is configured for production. The
+owner reported that WalletConnect still failed on their Windows browser after
+an earlier deployment; the cause has not been established or independently
+verified on that device. The new build addresses several possible startup and
+caching issues and provides sanitized failure codes, but does not establish
+that their original problem is fixed.
+
+Candidate run `41619985533` and live run `41620193010` passed the relay checks
+with synthetic wallets on Windows and Linux, including a deliberately blocked
+primary, an injected broken browser `Buffer`, short/high-zoom layout, and
+deliberate blockage of both relays. The successful relay cases decoded the real
+QR and approved/disconnected an identity-only synthetic session; the blocked
+case verified retry and an error without displaying a fake QR. The live run also
+checked public bytes/cache headers, an unsigned Mobile backend request,
+and real near-cli-rs with an ephemeral synthetic key and mock RPC. Local QR
+screenshots decoded at phone sizes and at 683×304 CSS pixels; local tests passed
+1,146 cases with 113 skipped before the last additional focused tests. These
+checks do not use a real wallet, transaction, or the user's browser, and they
+do not establish actual wallet compatibility.
 A future production build from `main` could replace the site. The deployed Intear source ZIP has
 SHA-256 `2fe277baae87ff16d7b1efee9853cba26a46b1f9813302bf507f5ca53d2e0291`.
 Verify deployed assets and wallet behavior after deployment rather than assuming
