@@ -7,6 +7,7 @@ import { ReadOnlyNearReceiptProvider } from '../agent/read-only-near-receipts.mj
 import { inspectOutlayerBurnStage } from '../agent/outlayer-v12-burn-preflight.mjs';
 import { verifyOutlayerBurnRegistration } from '../agent/outlayer-v12-burn-registration.mjs';
 import { readBoundedJson } from '../shared/bounded-json.mjs';
+import { observeOriginalReference } from '../agent/observe-original-reference.mjs';
 const owner=JSON.parse(fs.readFileSync(new URL('../config/testnet-owner-v3-plan.json',import.meta.url),'utf8'));
 const plan=JSON.parse(fs.readFileSync(new URL('../config/testnet-outlayer-burn-v3-plan.json',import.meta.url),'utf8'));
 const envelope=JSON.parse(fs.readFileSync(new URL('../evidence/testnet-owner-v3/outlayer-v12-register-original.json',import.meta.url),'utf8'));
@@ -30,6 +31,8 @@ for(const endpoint of ['https://rpc.testnet.near.org','https://test.rpc.fastnear
  }catch{/* timeout, network or invalid response remains unknown */}
  try{
   const provider=new ReadOnlyNearReceiptProvider(endpoint,{timeoutMs:10_000});
+  try{result.reference_age=await observeOriginalReference({provider,referenceHash:envelope.block_hash})}
+  catch{result.reference_age={status:'UNAVAILABLE',historical_execution_known:false,do_not_resend_original:true}}
   for(const stage of ['register-fake','wrap']){
    try{const s=await inspectOutlayerBurnStage({ownerPlan:owner,plan,stage,provider});
     result.stage_views[stage]={block_hash:s.block_hash,eligible:s.eligible,blockers:s.blockers,signer_key_nonce:s.signer_key_nonce};

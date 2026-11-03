@@ -21,7 +21,7 @@ jobs:
         with:
           node-version: '22'
       - run: npm ci --ignore-scripts --no-audit --no-fund
-      - run: node --test tests/outlayer-v12-burn-registration.test.mjs tests/read-only-near-receipts.test.mjs
+      - run: node --test tests/outlayer-v12-burn-registration.test.mjs tests/read-only-near-receipts.test.mjs tests/observe-original-reference.test.mjs
       - name: Inspect original hash and next-stage views without sending
         run: |
           set -euo pipefail
