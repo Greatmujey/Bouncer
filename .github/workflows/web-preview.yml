@@ -215,6 +215,16 @@ jobs:
           - os: windows-latest
             mode: fallback
             block: '1'
+          - os: windows-latest
+            mode: extension-and-zoom
+            block: '0'
+            poison: '1'
+            short: '1'
+          - os: windows-latest
+            mode: both-relays-blocked
+            block: '0'
+            block_both: '1'
+            short: '1'
     name: Live WalletConnect (${{ matrix.os }}, ${{ matrix.mode }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 7
@@ -232,6 +242,9 @@ jobs:
         env:
           BOUNCER_LIVE_RETRY: '1'
           BOUNCER_BLOCK_PRIMARY_WC: ${{ matrix.block }}
+          BOUNCER_BLOCK_BOTH_WC: ${{ matrix.block_both || '0' }}
+          BOUNCER_POISON_BUFFER: ${{ matrix.poison || '0' }}
+          BOUNCER_SHORT_VIEWPORT: ${{ matrix.short || '0' }}
         run: |
           set +e
           set -o pipefail
