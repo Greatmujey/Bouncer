@@ -38,6 +38,9 @@ try {
       page.on('pageerror', error => pageErrors.push(error.message));
       page.on('request', request => { if (!['GET', 'HEAD'].includes(request.method())) writes.push(request.url()); });
       await page.goto(url, { waitUntil: 'networkidle' });
+      const brand = page.locator(width < 650 ? '.mobile-brand .brand-mark img' : '.brand .brand-mark img');
+      assert.equal(await brand.isVisible(), true, `brand mark is visible at ${width}px`);
+      assert.equal(await brand.evaluate(el => el.complete && el.naturalWidth > 0), true, 'brand mark loads');
       const dialog = page.locator('#welcome-tour');
       assert.equal(await dialog.evaluate(el => el.open), false, 'first visit is not blocked by a modal');
       await page.locator('[data-open-tour]').click();

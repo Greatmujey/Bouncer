@@ -152,6 +152,16 @@ test('latest oracle-led mission links to the verified testnet data and three res
   assert.equal((html.match(/class="track-card"/g) || []).length, 6);
 });
 
+test('the same custom Bouncer mark appears in both navigation layouts, the tour and favicon', () => {
+  const html = fs.readFileSync(new URL('../web/index.html', import.meta.url), 'utf8');
+  const logo = fs.readFileSync(new URL('../web/favicon.svg', import.meta.url), 'utf8');
+  assert.equal((html.match(/class="brand-mark" aria-hidden="true"/g) || []).length, 3);
+  assert.equal((html.match(/src="\.\/favicon\.svg\?v=2"/g) || []).length, 3);
+  assert.match(html, /rel="icon"[^>]*href="\.\/favicon\.svg\?v=2"/);
+  assert.match(logo, /viewBox="0 0 64 64"/);
+  assert.doesNotMatch(logo, /<script|<foreignObject|\b(?:href|src)\s*=/i);
+});
+
 test('website discloses testnet limitations, historical examples and identity-only wallet connection', () => {
   const html = fs.readFileSync(new URL('../web/index.html', import.meta.url), 'utf8');
   assert.match(html, /unaudited testnet prototype/i);

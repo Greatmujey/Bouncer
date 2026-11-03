@@ -38,6 +38,12 @@ block the first visit. Compatible local MCP clients can inspect policies and
 preview quotes without receiving wallet secrets. Hosted MCP authentication and
 model conversations are not yet verified.
 
+## Brand mark
+
+The custom shield-and-B mark lives in `bouncer/web/favicon.svg`. The site uses
+the same scalable asset in desktop and mobile navigation, the welcome tour and
+the browser tab; it is decorative next to the accessible Bouncer wordmark.
+
 ## Build and deployment
 
 ```sh
