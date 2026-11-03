@@ -92,7 +92,12 @@ compute, a Circle-paid order, or evidence of delivery. The V12 diagnostic plan
 and read-only preflight are under test, but no fake-token registration, provider
 funding, or order has been sent from this owner. OutLayer can change its deployed
 contract, its plain-token refunds may not restore Bouncer's tracked allowance,
-and unused prepayment may be difficult to recover.
+and unused prepayment may be difficult to recover. The initial V12 diagnostic
+plan passed an [isolated nearcore rehearsal](https://github.com/Greatmujey/Bouncer/actions/runs/41643361478)
+with a mock token and local receiver; its deliberately failed project request
+left the conservative reservations in place. That was not a live provider test.
+Two new locally encrypted, single-method agent keys have been prepared but are
+not installed; their local copies are not an off-device backup.
 
 The V12 Circle registration and funding path [passed an isolated nearcore
 rehearsal](https://github.com/Greatmujey/Bouncer/actions/runs/41641922746),

@@ -13,6 +13,7 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import nearApi from 'near-api-js';
 import {createOutlayerBurnPlan,buildOutlayerBurnStage} from '../agent/outlayer-v12-burn-plan.mjs';
+import {verifyOutlayerBurnRegistration} from '../agent/outlayer-v12-burn-registration.mjs';
 import {verifyFtCallSettlement} from '../agent/ft-call.mjs';
 import {MOCK_FT_SHA256,assertSandboxStatus,requireFinalSuccess} from './v11-sandbox-support.mjs';
 import {loopbackSandboxUrl,withSandboxOnlyFetch} from './v11-sandbox-setup-rpc.mjs';
@@ -66,6 +67,15 @@ async function exercise({endpoint,root,wasm,mockFt,checkpoint}){
   const result=await provider.sendTransactionUntil(signed,'FINAL');assert.equal(result.transaction_outcome.id,original);
   const receipts=await provider.txStatusReceipts(original,OWNER,'FINAL');assert.equal(receipts.transaction_outcome.id,original);
   if(success)requireFinalSuccess(receipts,stage);else {assert.equal(receipts.final_execution_status,'FINAL');assert.ok(receipts.status?.Failure,'stand-in has no project method');}
+  if(stage==='register-fake'){
+   const envelope={version:1,purpose:'bounded-v12-outlayer-burn-stage',network:'testnet',stage,owner:OWNER,vault:VAULT,
+    signer_public_key:pub(ownerKey),receiver:built.receiver_id,nonce:signed.transaction.nonce.toString(),
+    block_hash:utils.serialize.base_encode(signed.transaction.blockHash),tx_hash:original,
+    signed_tx_base64:Buffer.from(tx.encodeTransaction(signed)).toString('base64'),do_not_blindly_resend:true,
+    scope:'PUBLIC BEARER; exact testnet action only; never blindly resend'};
+   const proof=verifyOutlayerBurnRegistration(receipts,envelope,plan,ownerPlan);
+   assert.deepEqual(proof.registered_accounts,[OWNER,VAULT]);assert.equal(proof.asset,TOKEN);
+  }
   evidence[stage]=original;return receipts;
  };
  await sendStage('register-fake',owner);
@@ -101,6 +111,7 @@ async function exercise({endpoint,root,wasm,mockFt,checkpoint}){
  return {scope:'isolated nearcore ONLY; example FT and V12 receiver stand-in, not Circle, Ref, wrap, OutLayer, an audit or fulfillment',
   exact_stages:['register-fake','fund-vault','configure','install-keys','fund-provider','run-project'],
   wrap_and_swap_tested:false,owner_fake_funding:'local fixture transfer',seller_is_v12_standin:true,project_failed_as_expected:true,
-  ft_settlement_verified:true,conservative_prepaid_and_native_reservations_checked:true,live_seller_contacted:false,independent_fulfillment_verified:false,
+  original_registration_receipt_verified:true,ft_settlement_verified:true,conservative_prepaid_and_native_reservations_checked:true,
+  live_seller_contacted:false,independent_fulfillment_verified:false,
   sandbox_transaction_hashes:evidence};
 }
