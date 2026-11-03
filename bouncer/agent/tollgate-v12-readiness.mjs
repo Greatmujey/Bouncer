@@ -10,7 +10,9 @@ import { readPinnedJsonView } from './read-only-near-rpc.mjs';
 import { assertFreshFinalBlock } from '../shared/fresh-final-block.mjs';
 import { isTransactionHash } from '../shared/direct-payment-settlement.mjs';
 
-export const TOLLGATE_RESOURCE='https://near-tollgate.vercel.app/v1/quakes?min_magnitude=5';
+// Include the provider's own Vercel rewrite parameter explicitly so the
+// requested URL can be compared byte-for-byte with the advertised resource.
+export const TOLLGATE_RESOURCE='https://near-tollgate.vercel.app/v1/quakes?min_magnitude=5&path=quakes';
 export const TOLLGATE_CONTRACT='channels.tollgate-busel.testnet';
 export const TOLLGATE_SELLER='seller.tollgate-busel.testnet';
 const PUBLISHED_CODE='2ANyRzxbZF3mXMpp5EqwDUWq6DoeuyPCDnYHcRKQmQqj';

@@ -10,9 +10,11 @@ unpaid GET only: no voucher signature, channel, payment or data delivery.
 The live offer, source and chain state can change independently. In the
 [3 November read-only run](https://github.com/Greatmujey/Bouncer/actions/runs/41644777424),
 the seller advertised 0.001 test NEAR for the quakes endpoint and the observed
-channel code hash matched its published deployment record. The offered resource
-added `path=quakes` to the requested URL, so the exact-resource check failed.
-The [public snapshot](../evidence/testnet-owner-v3/tollgate-readonly-20261103.json)
+channel code hash matched its published deployment record. That request omitted
+`path=quakes`, which the offer appended, so its exact-resource check failed.
+The discovery now requests the provider's explicit rewritten URL and requires
+an exact match; an unpaid web read returned that same URL, but a fresh pinned
+runner result still needs verification. The [earlier public snapshot](../evidence/testnet-owner-v3/tollgate-readonly-20261103.json)
 is not an executable quote; an unrecognized value blocks use. The code-hash
 match does **not** establish source-to-build equivalence, API behavior, seller
 reliability or an independent audit. A provider response or contract receipt
