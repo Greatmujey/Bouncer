@@ -55,10 +55,18 @@ snapshot, but did not select or deploy an artifact. V11 has a known
 cross-policy prepaid-route limitation; experimental V12 addresses that narrow
 gap but is not independently audited. Two GitHub runners produced matching
 locked V12 builds, and the exact artifact passed an isolated synthetic runtime
-test. A separate V3 setup path and fresh checks are required before any
-testnet deployment.
-A keyless vault can permanently lock its testnet storage stake.
+test. A fresh [V12 preflight](https://github.com/Greatmujey/Bouncer/actions/runs/41640570633)
+then preceded one fixed deployment. The original transaction
+[`3fc8FjEQpeKDgo7GoVHyUrFxNUyY8zmQFSXyYbx2ZuTq`](https://testnet.nearblocks.io/txns/3fc8FjEQpeKDgo7GoVHyUrFxNUyY8zmQFSXyYbx2ZuTq)
+was [verified at FINAL](https://github.com/Greatmujey/Bouncer/actions/runs/41640747753),
+with retained fence `13231459562`. A fresh view found
+`vault.bouncer-owner-12f343b795633e357ae5560d.testnet` running the pinned V12
+code with zero access keys and 6 test NEAR; the original is recorded in the
+private journal and must never be resent. A keyless vault can permanently lock
+its testnet storage stake. The user-confirmed recovery ZIP copy was not
+machine-verified, and V12 remains unaudited.
 
-A usable, funded, keyless vault and independent paid resource delivery are
-separate steps that require fresh checks and original-hash recovery at each
-stage.
+At that view the owner still held 6,898 Circle test-USDC atoms, but the vault
+was not registered for Circle and its tracked Circle balance was zero. Vault
+funding and independent paid compute, storage and data delivery remain separate
+steps requiring fresh checks and original-hash recovery.
