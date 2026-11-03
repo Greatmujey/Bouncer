@@ -186,8 +186,25 @@ jobs:
     # Approve only a synthetic testnet-account session over the real relay; no
     # real wallet, signature, wallet RPC call, or NEAR transaction is involved.
     if: contains(github.event.head_commit.message, '[test-walletconnect-session]')
-    runs-on: ubuntu-latest
-    timeout-minutes: 6
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            mode: primary
+            block: '0'
+          - os: ubuntu-latest
+            mode: fallback
+            block: '1'
+          - os: windows-latest
+            mode: primary
+            block: '0'
+          - os: windows-latest
+            mode: fallback
+            block: '1'
+    name: Live WalletConnect (${{ matrix.os }}, ${{ matrix.mode }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 7
     permissions:
       contents: read
     steps:
@@ -199,6 +216,9 @@ jobs:
           node-version: '22'
       - name: Pair a synthetic wallet over the real relay
         shell: bash
+        env:
+          BOUNCER_LIVE_RETRY: '1'
+          BOUNCER_BLOCK_PRIMARY_WC: ${{ matrix.block }}
         run: |
           set +e
           set -o pipefail

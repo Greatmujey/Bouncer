@@ -85,7 +85,7 @@ try {
     if (!await page.locator('#walletconnect-qr').isVisible()) throw new Error(`QR unavailable: ${await page.locator('#walletconnect-error-detail').innerText()}`);
   };
   await awaitQr();
-  if (process.env.BOUNCER_CANDIDATE_SITE === '1') {
+  if (process.env.BOUNCER_CANDIDATE_SITE === '1' || process.env.BOUNCER_LIVE_RETRY === '1') {
     phase = 'cancel and retry QR';
     const first = await page.locator('#walletconnect-open').getAttribute('href');
     await page.locator('#walletconnect-cancel').click();

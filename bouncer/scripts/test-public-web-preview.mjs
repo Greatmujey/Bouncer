@@ -21,6 +21,11 @@ try {
   page.on('pageerror', error => pageErrors.push(error.message));
   const response = await page.goto(url, { waitUntil: 'networkidle', timeout: 45_000 });
   assert.equal(response.status(), 200);
+  assert.equal(await page.title(), 'Bouncer — A workspace for autonomous agents');
+  assert.equal(await page.locator('[data-route-view="workspace"]').isVisible(), true);
+  await page.locator('[data-workspace-resource="storage"]').click();
+  assert.match(await page.locator('[data-workspace-description]').innerText(), /Keep what your agent creates/);
+  assert.equal(await page.locator('[data-workspace-visual]').getAttribute('data-resource'), 'storage');
   const brand = page.locator('.mobile-brand .brand-mark svg');
   assert.equal(await brand.isVisible(), true, 'mobile brand mark is visible');
   assert.equal(await brand.locator('use').getAttribute('href'), '#i-bouncer');
