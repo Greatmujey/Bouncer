@@ -92,9 +92,16 @@ compute, a Circle-paid order, or evidence of delivery. The V12 diagnostic plan
 and read-only preflight are under test. The V3 fake-token registration original
 [`9tsgJgUUqJsV9X8hpRABqPwcC7SZJ9uV64xc3bFoamPe`](https://testnet.nearblocks.io/txns/9tsgJgUUqJsV9X8hpRABqPwcC7SZJ9uV64xc3bFoamPe)
 was fenced in [run 41644157538](https://github.com/Greatmujey/Bouncer/actions/runs/41644157538),
-but that run could not confirm its outcome. Its status is **unknown**: reconcile
-this original only, never resend or sign a replacement. It was a storage
-registration, not a provider payment or order. OutLayer can change its deployed
+but that run could not confirm its outcome. Read-only [reconciliation run
+41644313388](https://github.com/Greatmujey/Bouncer/actions/runs/41644313388)
+could not retrieve and verify its FINAL receipts. A later [diagnostic run
+41644776458](https://github.com/Greatmujey/Bouncer/actions/runs/41644776458)
+observed the previous owner nonce and registration-stage state, but its
+original-hash lookups were unavailable or returned an HTTP error. Those views
+are not a receipt or proof that the original can no longer be accepted. Its
+status remains **unknown**: retain the fence, reconcile this original only,
+never resend or sign a replacement. It was a storage registration, not a
+provider payment or order. OutLayer can change its deployed
 contract, its plain-token refunds may not restore Bouncer's tracked allowance,
 and unused prepayment may be difficult to recover. The initial V12 diagnostic
 plan passed an [isolated nearcore rehearsal](https://github.com/Greatmujey/Bouncer/actions/runs/41643361478)

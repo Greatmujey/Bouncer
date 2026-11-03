@@ -1,0 +1,50 @@
+# Experimental fresh-state contract tests only. No keys, network transactions,
+# deploy or provider payment. Passing tests are not an audit.
+name: V13 native channel contract tests
+on:
+  push:
+    branches: ['arena/25a7aaf6-near-hub']
+permissions:
+  contents: read
+jobs:
+  test:
+    if: github.run_attempt == 1 && contains(github.event.head_commit.message, '[tollgate-v13-contract-tests]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: 1.99.1
+          targets: wasm32-unknown-unknown
+      - name: Test V13 one-shot native channel and existing FT policy
+        working-directory: bouncer/contracts/bouncer
+        run: |
+          set -euo pipefail
+          test "$(sha256sum Cargo.lock | cut -d' ' -f1)" = '263879a4574d1d5ed97dd0da097cdefff52b4f57017738ad291628a9c63e317f'
+          if ! cargo test --locked --no-default-features --features tollgate-native-v13 > "$RUNNER_TEMP/v13-test.log" 2>&1; then
+            python3 -c 'import os; s=open(os.environ["RUNNER_TEMP"]+"/v13-test.log").read()[-3500:]; print("::error title=V13 contract tests failed::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
+            exit 1
+          fi
+          tail -15 "$RUNNER_TEMP/v13-test.log"
+      - name: Build fresh-state experimental V13 WASM
+        working-directory: bouncer/contracts/bouncer
+        run: |
+          set -euo pipefail
+          if ! RUSTFLAGS='-C link-arg=-s' cargo build --locked --target wasm32-unknown-unknown --release --no-default-features --features tollgate-native-v13 > "$RUNNER_TEMP/v13-build.log" 2>&1; then
+            python3 -c 'import os; s=open(os.environ["RUNNER_TEMP"]+"/v13-build.log").read()[-3500:]; print("::error title=V13 contract build failed::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
+            exit 1
+          fi
+          python3 - <<'PY'
+          import hashlib,json,os,pathlib
+          b=pathlib.Path('target/wasm32-unknown-unknown/release/bouncer.wasm').read_bytes()
+          if not 100_000<len(b)<2_000_000 or b[:8]!=b'\0asm\1\0\0\0' or b'bouncer-agent-v13-tollgate-native-testnet' not in b:
+              raise ValueError('invalid experimental V13 WASM')
+          data={'commit':os.environ['GITHUB_SHA'],'sha256':hashlib.sha256(b).hexdigest(),'bytes':len(b),
+                'feature':'tollgate-native-v13','deployed':False,'audited':False,'provider_contacted':False}
+          print('::notice title=Experimental V13 contract build::'+json.dumps(data,separators=(',',':')))
+          with open(os.environ['GITHUB_STEP_SUMMARY'],'a') as f:
+              f.write('## Experimental V13 native channel contract\nFresh-state-only, testnet prototype. No deployment, provider contact, voucher, payment or delivery. Tests are not an audit.\n```json\n'+json.dumps(data,indent=2)+'\n```\n')
+          PY

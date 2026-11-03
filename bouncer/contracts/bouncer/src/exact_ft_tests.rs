@@ -45,8 +45,10 @@ fn pinned_intent_dispatches_only_reviewed_terms_once_and_reserves_budget() {
     let mut c = fixture();
     #[cfg(not(feature = "exact-ft-v12"))]
     assert_eq!(c.contract_version(), "bouncer-agent-v11-exact-ft-testnet");
-    #[cfg(feature = "exact-ft-v12")]
+    #[cfg(all(feature = "exact-ft-v12", not(feature = "tollgate-native-v13")))]
     assert_eq!(c.contract_version(), "bouncer-agent-v12-exact-ft-testnet");
+    #[cfg(feature = "tollgate-native-v13")]
+    assert_eq!(c.contract_version(), "bouncer-agent-v13-tollgate-native-testnet");
     assert!(c.is_exact_ft_policy_locked("research".into()));
     assert!(c.is_exact_ft_payee_locked(id("token.testnet"), id("vendor.testnet")));
     let before = c.get_exact_ft_intent(INTENT.into()).unwrap();

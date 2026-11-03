@@ -44,6 +44,10 @@ const WINDOW_HOURS: u64 = 24;
 #[cfg(test)]
 const NS_PER_DAY: u64 = WINDOW_HOURS * NS_PER_HOUR;
 
+// This fresh-state-only experiment is not an upgrade to any deployed vault.
+#[cfg(feature = "tollgate-native-v13")]
+mod tollgate_v13;
+
 // Preserve readable errors in optimized WASM; use a normal panic in native tests.
 #[cfg(target_arch = "wasm32")]
 #[link(wasm_import_module = "env")]
@@ -290,6 +294,11 @@ pub struct Bouncer {
     exact_ft_payees: LookupMap<(AccountId, AccountId), bool>,
     #[cfg(feature = "exact-ft-v11")]
     exact_agent_revisions: LookupMap<(String, PublicKey), u64>,
+    // Separate V13 state only; V12 cannot migrate or upgrade in place.
+    #[cfg(feature = "tollgate-native-v13")]
+    tollgate_intents: LookupMap<String, tollgate_v13::TollgateIntent>,
+    #[cfg(feature = "tollgate-native-v13")]
+    tollgate_voucher_keys: LookupMap<PublicKey, bool>,
 }
 
 #[cfg(feature = "exact-ft-v11")]
@@ -437,6 +446,10 @@ impl Bouncer {
             exact_ft_payees: LookupMap::new(&b"x4"[..]),
             #[cfg(feature = "exact-ft-v11")]
             exact_agent_revisions: LookupMap::new(&b"x5"[..]),
+            #[cfg(feature = "tollgate-native-v13")]
+            tollgate_intents: LookupMap::new(&b"tg1"[..]),
+            #[cfg(feature = "tollgate-native-v13")]
+            tollgate_voucher_keys: LookupMap::new(&b"tg2"[..]),
         }
     }
 
@@ -667,7 +680,9 @@ impl Bouncer {
     }
 
     pub fn contract_version(&self) -> &'static str {
-        #[cfg(feature = "exact-ft-v12")]
+        #[cfg(feature = "tollgate-native-v13")]
+        { "bouncer-agent-v13-tollgate-native-testnet" }
+        #[cfg(all(feature = "exact-ft-v12", not(feature = "tollgate-native-v13")))]
         { "bouncer-agent-v12-exact-ft-testnet" }
         #[cfg(all(feature = "exact-ft-v11", not(feature = "exact-ft-v12")))]
         { "bouncer-agent-v11-exact-ft-testnet" }

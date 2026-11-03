@@ -12,6 +12,8 @@ youtick-playback-v10 = []
 exact-ft-v11 = []
 # Fresh-state-only hardening; does not change or upgrade deployed V11 vaults.
 exact-ft-v12 = ["exact-ft-v11"]
+# Experimental native-channel support; fresh state only, never a V12 upgrade.
+tollgate-native-v13 = ["exact-ft-v12"]
 
 [dependencies]
 # Keep experimental testnet artifacts on the captured lockfile resolution.
