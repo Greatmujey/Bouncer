@@ -9,7 +9,18 @@ import { TollgateVoucherFence } from './tollgate-quakes-v13.mjs';
 import { readBoundedJson } from '../shared/bounded-json.mjs';
 
 const REPO = 'Greatmujey/Bouncer';
-const sha = value => crypto.createHash('sha256').update(value, 'utf8').digest('hex');
+// GitHub label names have a 50-character limit. Keep 230 bits of SHA-256 in
+// case-insensitive base32, with a four-character namespace (50 total).
+export function tollgateGithubVoucherLabelName(publicKey) {
+  if (typeof publicKey !== 'string' || !/^ed25519:[1-9A-HJ-NP-Za-km-z]{32,50}$/.test(publicKey)) {
+    throw new Error('canonical voucher public key required');
+  }
+  const digest = crypto.createHash('sha256').update(publicKey, 'utf8').digest('hex');
+  const n = BigInt(`0x${digest}`), alphabet = 'abcdefghijklmnopqrstuvwxyz234567';
+  let encoded = '';
+  for (let i = 0; i < 46; i++) encoded += alphabet[Number((n >> BigInt(256 - 5 * (i + 1))) & 31n)];
+  return `btg-${encoded}`;
+}
 
 export class GithubTollgateVoucherFence extends TollgateVoucherFence {
   #token;
@@ -34,7 +45,9 @@ export class GithubTollgateVoucherFence extends TollgateVoucherFence {
         if (Array.isArray(error?.errors) && error.errors.some(e => e?.resource === 'Label' && e?.field === 'name' && e?.code === 'already_exists')) {
           throw new Error('GitHub voucher reservation already exists; do not sign or retry');
         }
-        throw new Error('GitHub voucher reservation invalid; do not sign or retry');
+        const codes = Array.isArray(error?.errors) ? error.errors.map(e => [e?.resource, e?.field, e?.code]
+          .filter(x => typeof x === 'string' && /^[A-Za-z0-9_]{1,40}$/.test(x)).join(':')).filter(Boolean).slice(0, 3).join(',') : '';
+        throw new Error(`GitHub voucher reservation invalid${codes ? ` (${codes})` : ''}; do not sign or retry`);
       }
       if ((method === 'POST' && r.status !== 201) || (method === 'GET' && r.status !== 200)) {
         throw new Error('GitHub voucher reservation unavailable; do not sign or retry');
@@ -46,7 +59,7 @@ export class GithubTollgateVoucherFence extends TollgateVoucherFence {
     // First durably reserve locally; loss of a POST response cannot allow this
     // process to try the same key again. The label then fences other machines.
     const evidence = super.claim(review, snapshot);
-    const name = `bouncer-tollgate-voucher-${sha(evidence.voucher_public_key)}`;
+    const name = tollgateGithubVoucherLabelName(evidence.voucher_public_key);
     const description = `v13:${evidence.review_hash}:${evidence.channel_id}`;
     const created = await this.#api('POST', '/labels', { name, description, color: 'b60205' });
     if (!Number.isSafeInteger(created?.id) || created.name !== name || created.description !== description) {

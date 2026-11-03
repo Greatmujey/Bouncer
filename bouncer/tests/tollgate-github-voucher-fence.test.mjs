@@ -49,7 +49,7 @@ test('two separate machines race on a repository-unique voucher key: only one re
   assert.equal(results.filter(x => x.status === 'rejected').length, 1);
   assert.equal(g.labels.size, 1);
   const label = [...g.labels.values()][0];
-  assert.match(label.name, /^bouncer-tollgate-voucher-[a-f0-9]{64}$/);
+  assert.match(label.name, /^btg-[a-z2-7]{46}$/); assert.equal(label.name.length, 50);
   assert.equal(label.description, `v13:${f.snapshot.review_hash}:7`);
   assert(!JSON.stringify(label).includes('secret'));
   await assert.rejects(() => a.claim(f.review, f.snapshot));

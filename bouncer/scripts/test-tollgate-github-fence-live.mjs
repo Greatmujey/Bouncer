@@ -9,7 +9,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import nearApi from 'near-api-js';
 import { makeTollgateQuakesReview, tollgateQuakesReviewHash } from '../agent/tollgate-quakes-v13.mjs';
-import { GithubTollgateVoucherFence } from '../agent/tollgate-github-voucher-fence.mjs';
+import { GithubTollgateVoucherFence, tollgateGithubVoucherLabelName } from '../agent/tollgate-github-voucher-fence.mjs';
 
 const REPO = 'Greatmujey/Bouncer', BRANCH = 'arena/25a7aaf6-near-hub', token = process.env.GITHUB_TOKEN;
 if (process.env.GITHUB_REPOSITORY !== REPO || process.env.GITHUB_REF !== `refs/heads/${BRANCH}` ||
@@ -38,7 +38,7 @@ try {
     else throw new Error('synthetic duplicate check failed without an explicit name conflict');
   }
   if (!duplicateBlocked) throw new Error('GitHub allowed a second synthetic key reservation');
-  const expectedName = `bouncer-tollgate-voucher-${crypto.createHash('sha256').update(review.voucher_public_key).digest('hex')}`;
+  const expectedName = tollgateGithubVoucherLabelName(review.voucher_public_key);
   const expectedDescription = `v13:${snapshot.review_hash}:0`;
   if (result.github_label_name !== expectedName || !Number.isSafeInteger(result.github_label_id)) throw new Error('synthetic label identity differs');
   // Only this generated, unexposed, synthetic key is used in this program.
