@@ -1,0 +1,122 @@
+# Experimental isolated build and sandbox only. No keys or public-chain sends.
+name: Verify optimized V13 contract in sandbox
+on:
+  push:
+    branches: ['arena/25a7aaf6-near-hub']
+permissions:
+  contents: read
+jobs:
+  build:
+    if: github.run_attempt == 1 && contains(github.event.head_commit.message, '[v13-opt-verify]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        instance: [a, b]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: 1.99.1
+          targets: wasm32-unknown-unknown
+      - name: Build exact experimental artifact
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/v13-opt-result"
+          bash bouncer/scripts/build-optimized-v13.sh "$RUNNER_TEMP/v13-opt-result/bouncer.wasm"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: v13-optimized-${{ matrix.instance }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/v13-opt-result/bouncer.wasm
+          retention-days: 30
+          if-no-files-found: error
+  compare:
+    needs: build
+    if: needs.build.result == 'success'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write # publish only identical public WASM as a Git blob
+    timeout-minutes: 5
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: v13-optimized-a-${{ github.run_id }}
+          path: ${{ runner.temp }}/v13-opt-a
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: v13-optimized-b-${{ github.run_id }}
+          path: ${{ runner.temp }}/v13-opt-b
+      - name: Compare and retain matching public code
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64,hashlib,json,os,pathlib
+          r=pathlib.Path(os.environ['RUNNER_TEMP']); a=(r/'v13-opt-a/bouncer.wasm').read_bytes(); b=(r/'v13-opt-b/bouncer.wasm').read_bytes()
+          if a!=b or len(a)!=388570 or hashlib.sha256(a).hexdigest()!='783c7fc06f55868bff8e9f53d41dc896e9d6ac3056c37f6fd18de4f1d270a540': raise ValueError('optimized builds differ')
+          (r/'v13-opt-blob-request.json').write_text(json.dumps({'content':base64.b64encode(a).decode(),'encoding':'base64'}))
+          PY
+          gh api --method POST repos/Greatmujey/Bouncer/git/blobs --input "$RUNNER_TEMP/v13-opt-blob-request.json" > "$RUNNER_TEMP/v13-opt-blob.json"
+          python3 - <<'PY'
+          import json,os,pathlib,re
+          blob=json.loads((pathlib.Path(os.environ['RUNNER_TEMP'])/'v13-opt-blob.json').read_text())
+          if not re.fullmatch(r'[a-f0-9]{40}',blob.get('sha','')): raise ValueError('invalid public blob')
+          report={'commit':os.environ['GITHUB_SHA'],'sha256':'783c7fc06f55868bff8e9f53d41dc896e9d6ac3056c37f6fd18de4f1d270a540',
+           'bytes':388570,'git_blob':blob['sha'],'matching_github_builds':2,'independently_audited':False,'deployed':False}
+          print('::notice title=Optimized V13 matching builds::'+json.dumps(report,separators=(',',':')))
+          PY
+  sandbox:
+    needs: compare
+    if: needs.compare.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: bouncer
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: v13-optimized-a-${{ github.run_id }}
+          path: ${{ runner.temp }}/v13-opt
+      - name: Test local guards and retrieve pinned sandbox fixtures
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts --no-audit --no-fund
+          node --test tests/v13-sandbox-tollgate.test.mjs tests/v11-sandbox-setup-rpc.test.mjs
+          test "$(sha256sum "$RUNNER_TEMP/v13-opt/bouncer.wasm" | cut -d' ' -f1)" = '783c7fc06f55868bff8e9f53d41dc896e9d6ac3056c37f6fd18de4f1d270a540'
+          gh api repos/Mattbusel/tollgate/git/blobs/da71fa08c368f7620bc4bd2e8512a57580a86e15 --jq '.content' | tr -d '\n' | base64 -d > "$RUNNER_TEMP/tollgate.wasm"
+          test "$(sha256sum "$RUNNER_TEMP/tollgate.wasm" | cut -d' ' -f1)" = '1142c2546565f70944d578cea15d03c58166797525cd40d863a3425b1afd6956'
+          curl --fail --show-error --silent --location --proto '=https' --tlsv1.2 --max-time 180 --retry 2 --max-filesize 419430400 \
+            'https://s3-us-west-1.amazonaws.com/build.nearprotocol.com/nearcore/Linux-x86_64/2.14.0/near-sandbox.tar.gz' \
+            --output "$RUNNER_TEMP/near-sandbox.tar.gz"
+          python3 scripts/extract-pinned-near-sandbox.py "$RUNNER_TEMP/near-sandbox.tar.gz" "$RUNNER_TEMP/near-sandbox"
+      - name: Exercise optimized code in isolated nearcore
+        env:
+          BOUNCER_SANDBOX_BIN: ${{ runner.temp }}/near-sandbox
+          BOUNCER_V13_WASM_PATH: ${{ runner.temp }}/v13-opt/bouncer.wasm
+          BOUNCER_V13_WASM_SHA256: '783c7fc06f55868bff8e9f53d41dc896e9d6ac3056c37f6fd18de4f1d270a540'
+          BOUNCER_TOLLGATE_WASM_PATH: ${{ runner.temp }}/tollgate.wasm
+        run: |
+          set -euo pipefail
+          ulimit -Sn 65535
+          if ! node integration/v13-tollgate-sandbox-runner.mjs > "$RUNNER_TEMP/v13-opt-sandbox.json" 2> "$RUNNER_TEMP/v13-opt-sandbox-error.log"; then
+            python3 -c 'import os; s=open(os.environ["RUNNER_TEMP"]+"/v13-opt-sandbox-error.log").read()[-4000:]; print("::error title=Optimized V13 local sandbox failed::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
+            exit 1
+          fi
+          python3 -c 'import os,json; s=json.dumps(json.load(open(os.environ["RUNNER_TEMP"]+"/v13-opt-sandbox.json")),separators=(",",":")); print("::notice title=Optimized V13 local sandbox result::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
+          { echo '## Isolated optimized channel lifecycle'; echo 'Local seller and synthetic voucher only. Not an audit, Circle payment or real provider delivery.'; echo '```json'; cat "$RUNNER_TEMP/v13-opt-sandbox.json"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
