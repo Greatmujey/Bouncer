@@ -83,6 +83,26 @@ verification. `verifyPayPerCallForwarderEvidence` and the separate historical
 collector can also run on caller-supplied graphs, but those lower-level inputs
 are not authenticated and can be synthetic. Neither is a buying runner.
 
+Once an actual order exists, the same inspector can be run with its retained
+public review and the exact locally saved answer bytes:
+
+```sh
+npm run inspect-paypercall-evidence -- --rpc https://test.rpc.fastnear.com \
+  --review ./public-review.json --answer ./answer.bin
+```
+
+The review file contains exactly `format`, `terms`, `offer`, `funding_hash`,
+`opening_hash`, `fulfillment_hash` and `fulfillment_signer`. Its `format` is
+`bouncer-paypercall-forwarder-evidence-v1`; `terms` are the original public
+inputs to `buildExperimentalForwarder`, and `offer` contains `provider`,
+`operator`, `price`, `vault_code_hash`, `token_code_hash` and
+`escrow_code_hash`. Amounts and hashes must match the original retained review;
+`expires_at_ms` is a JSON integer. The CLI accepts regular files only, does not
+print or transmit the answer bytes, and does not create a review or order. Do
+not place credentials, bearer transactions, secrets or private requests in the
+review. The seller's answer may itself contain private or untrusted data: keep
+it private and inspect before publishing.
+
 This is **correlation under trust assumptions**, not a proof of independent
 delivery. The forwarder review currently fixes the service ID and maximum but
 **does not enforce the provider, operator or exact price on-chain**; checking a
@@ -97,10 +117,11 @@ late refund credit to the vault is a separate check and is not claimed here.
 The verifier never resends an original or makes a failed verification a retry
 signal.
 
-The receipt checker is also exercised on disposable nearcore with the
-source-built PayPerCall contract, a mock FT and a locally supplied fixture
-answer. That simulation is not Circle, a public-chain purchase, provider
-fulfillment or an independent audit.
+The receipt checker [passed on disposable nearcore](https://github.com/Greatmujey/Bouncer/actions/runs/41675139617)
+with the source-built PayPerCall contract, a mock FT, a locally supplied fixture
+answer, historical block views and the detached provider payout. That simulation
+is not Circle, a public-chain purchase, independent provider fulfillment or an
+audit.
 
 ## V11 compatibility boundary
 

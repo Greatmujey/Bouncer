@@ -28,7 +28,7 @@ jobs:
       - name: Install existing lockfile and exercise offline guards
         run: |
           npm ci --ignore-scripts --no-audit --no-fund
-          node --test tests/v11-upstream-paypercall-sandbox.test.mjs tests/v11-sandbox-harness.test.mjs tests/v11-sandbox-setup-rpc.test.mjs tests/paypercall-forwarder-evidence.test.mjs tests/multiagency-exact-ft.test.mjs
+          node --test tests/v11-upstream-paypercall-sandbox.test.mjs tests/v11-sandbox-harness.test.mjs tests/v11-sandbox-setup-rpc.test.mjs tests/paypercall-forwarder-evidence.test.mjs tests/paypercall-evidence-cli.test.mjs tests/multiagency-exact-ft.test.mjs
       - name: Recover and verify pinned source inputs, V11 and mock FT
         env:
           GH_TOKEN: ${{ github.token }}

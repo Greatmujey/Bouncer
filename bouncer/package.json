@@ -30,6 +30,7 @@
     "snapshot-shared-buyer": "node scripts/snapshot-shared-buyer.mjs",
     "onchain-proof": "node agent/onchain-proof.mjs",
     "inspect-x402": "node agent/inspect-x402.mjs",
+    "inspect-paypercall-evidence": "node scripts/inspect-paypercall-forwarder.mjs",
     "shared-provider": "node services/shared-resource-provider.mjs",
     "init-shared-seller-db": "node scripts/init-shared-seller-db.mjs",
     "inspect-shared-seller": "node scripts/inspect-shared-seller.mjs",
