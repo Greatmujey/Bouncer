@@ -10,11 +10,14 @@ const original=read('../evidence/testnet-owner-v2/outlayer-burn-register-origina
 const control=read('../evidence/testnet-owner-v2/outlayer-burn-register-control-original.json');
 const registration=read('../evidence/testnet-owner-v2/outlayer-burn-register-after-control-original.json');
 const wrap=stage==='swap-fake'?read('../evidence/testnet-owner-v2/outlayer-burn-wrap-original.json'):undefined;
-const envelope=read(`../evidence/testnet-owner-v2/outlayer-burn-${stage}-original.json`);
+const envelope=read(`../evidence/testnet-owner-v2/outlayer-burn-${stage === 'swap-fake' ? 'swap' : 'wrap'}-original.json`);
 for(const endpoint of ['https://test.rpc.fastnear.com','https://rpc.testnet.near.org']){
  try{const result=await reconcileOutlayerAcquisition({plan,ownerPlan,original,control,registration,wrap,envelope,
   provider:new ReadOnlyNearReceiptProvider(endpoint,{timeoutMs:15000})});
   console.log(JSON.stringify({...result,rpc:endpoint},null,2));process.exit(0);
- }catch{console.error(`Original ${stage} unavailable or mismatched at ${new URL(endpoint).hostname}; no send`)}
+ }catch(error){
+  const detail=typeof error?.message==='string'?error.message.replace(/[\r\n]/g,' ').slice(0,300):'unknown error';
+  console.error(`Original ${stage} unavailable or mismatched at ${new URL(endpoint).hostname}: ${detail}; no send`);
+ }
 }
 console.error(`Original ${stage} ${envelope.tx_hash} remains unresolved; retain and never resend.`);process.exitCode=1;
