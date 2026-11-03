@@ -130,6 +130,7 @@ try {
     await page.waitForFunction(() => document.querySelector('#wallet-status').textContent.includes('production-test.testnet'));
     assert.match(await page.locator('[data-wallet-label]').first().innerText(), /Account connected/);
     await page.locator('#wallet-disconnect').click();
+    await page.waitForFunction(() => document.querySelector('#wallet-status').textContent.includes('Wallet disconnected.'));
     assert.match(await page.locator('#wallet-status').innerText(), /disconnected/i);
     console.log('Exact Vercel origin passed with mocked wallet executor; not a real sign-in or deployed-site test.');
   } finally { await productionBrowser.close(); }
