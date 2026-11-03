@@ -34,12 +34,20 @@ async function exercise({endpoint,root,v13Wasm,channelWasm}){
  const owner=account(OWNER,provider,ownerKey),agent=account(OWNER,provider,agentKey),parent=account(PARENT,provider,parentKey),seller=account(SELLER,provider,sellerKey);
  const batch=async(signer,receiverId,actions,label)=>{
   const result=await signer.signAndSendTransaction({receiverId,actions,waitUntil:'FINAL',throwOnFailure:false});
-  requireFinalSuccess(result,label);return result;
+  try { requireFinalSuccess(result,label); }
+  catch {
+   const failures=(result.receipts_outcome??[]).filter(x=>x.outcome?.status?.Failure)
+    .map(x=>x.outcome.status.Failure);
+   throw Error(`${label} failed in isolated sandbox: ${JSON.stringify({status:result.status,failures}).slice(0,4000)}`);
+  }
+  return result;
  };
  const call=(signer,id,method,args={},deposit=0n,gas=100n*TGAS)=>batch(signer,id,[fn(method,args,deposit,gas)],method);
  const view=(id,method,args={})=>provider.callFunction(id,method,args,{finality:'final'});
  await batch(root,OWNER,[tx.createAccount(),tx.transfer(20n*NEAR),tx.addKey(ownerKey.getPublicKey(),tx.fullAccessKey())],'create local owner');
- await batch(owner,VAULT,[tx.createAccount(),tx.transfer(6n*NEAR),tx.deployContract(v13Wasm),fn('new',{owner:OWNER})],'create keyless V13');
+ // The hardened binary exceeds 600 kB, so six test NEAR no longer covers
+ // its storage stake. This is isolated sandbox funding, not a live transfer.
+ await batch(owner,VAULT,[tx.createAccount(),tx.transfer(8n*NEAR),tx.deployContract(v13Wasm),fn('new',{owner:OWNER})],'create keyless V13');
  await batch(root,PARENT,[tx.createAccount(),tx.transfer(20n*NEAR),tx.addKey(parentKey.getPublicKey(),tx.fullAccessKey())],'create local provider parent');
  await batch(parent,CHANNEL,[tx.createAccount(),tx.transfer(6n*NEAR),tx.deployContract(channelWasm),fn('new',{min_dispute_window_sec:'15',max_expiry_sec:'2592000'})],'deploy published channel WASM locally');
  await batch(parent,SELLER,[tx.createAccount(),tx.transfer(4n*NEAR),tx.addKey(sellerKey.getPublicKey(),tx.fullAccessKey())],'create local seller');
