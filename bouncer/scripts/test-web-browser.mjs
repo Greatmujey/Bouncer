@@ -278,7 +278,7 @@ try {
     // proxy a popup. Automated clicks can otherwise outrun initialization.
     await pickerDocument.waitForFunction(() => typeof hotConnector !== 'undefined' && !!hotConnector.origin && !!hotConnector.location, null, { timeout: 20_000 });
     const pickerFrame = page.frameLocator('iframe').first().frameLocator('iframe');
-    await pickerFrame.locator('.card-title').getByText('Web', { exact: true }).click({ timeout: 20_000 }).catch(async error => {
+    await pickerFrame.locator('.card-title').getByText('Web', { exact: true }).tap({ timeout: 20_000 }).catch(async error => {
       console.error('Intear browser diagnostic:', { calls, errors, consoleMessages, status: await page.locator('#wallet-status').textContent(), frames: page.frames().map(frame => frame.url()) });
       throw error;
     });
