@@ -175,10 +175,11 @@ working-branch commit `c3ff5d4` was deployed to `bouncer-near.vercel.app`
 without merging to `main` (Vercel deployment `dpl_D6YhhiwGncbviQe9xPTeTNQYSVa9`).
 The owner-supplied public Reown project ID is configured for production. On
 3 November 2026, GitHub browser smoke `41605658819` generated and cancelled a
-real relay QR and reached the testnet access-key RPC. In `41606756832`, a
-synthetic wallet approved an identity-only session over the real relay, reached
-Connected, and received the disconnect. No real wallet, signature, or NEAR
-transaction was used; compatibility with an actual wallet remains unverified.
+real relay QR and reached the testnet access-key RPC. After the QR redesign,
+`41610667413` decoded the live, rendered QR and a synthetic wallet approved an
+identity-only session over the relay, reached Connected, and received the
+disconnect. No real wallet, signature, or NEAR transaction was used;
+compatibility with an actual wallet remains unverified.
 A future production build from `main` could replace the site. The deployed Intear source ZIP has
 SHA-256 `2fe277baae87ff16d7b1efee9853cba26a46b1f9813302bf507f5ca53d2e0291`.
 Verify deployed assets and wallet behavior after deployment rather than assuming
