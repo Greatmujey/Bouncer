@@ -43,6 +43,26 @@ export async function loadVerifiedExecutor(manifest, { fetch, crypto, location }
     // Its generic button says "Sign transaction" even in our message-only flow;
     // relabel it without changing the signed payload or invoking wallet methods.
     if (manifest.id === 'near-mobile') return `window.fetch = window.fetch.bind(window);\n${code}\n;{const button = document.getElementById("approve-button"); if (button) button.textContent = "Open NEAR Mobile";}\n`;
+    if (manifest.id === 'near-cli') {
+      // The pinned CLI adapter offers only an OS keychain or Ledger. Many
+      // headless/Codespaces users have the standard ~/.near-credentials file
+      // instead. Add that *local signing method* to the already verified UI;
+      // the challenge and signature verification remain unchanged. Fail
+      // closed if upstream bytes ever change, rather than patching unknown code.
+      const replaceOnce = (source, from, to) => {
+        if (source.indexOf(from) === -1 || source.indexOf(from) !== source.lastIndexOf(from)) throw new Error('CLI adapter patch unavailable');
+        return source.replace(from, to);
+      };
+      let patched = replaceOnce(code,
+        'function Et(i,o){return i==="sign-with-ledger"?`sign-with-ledger --seed-phrase-hd-path \'${k(o||Dt)}\'`:"sign-with-keychain"}',
+        'function Et(i,o){return i==="sign-with-ledger"?`sign-with-ledger --seed-phrase-hd-path \'${k(o||Dt)}\'`:i==="sign-with-legacy-keychain"?"sign-with-legacy-keychain":"sign-with-keychain"}');
+      patched = replaceOnce(patched,
+        '<button type="button" class="signing-method-card" data-method="sign-with-ledger" aria-pressed="false">',
+        '<button type="button" class="signing-method-card" data-method="sign-with-legacy-keychain" aria-pressed="false"><div class="signing-method-card-icon">⌁</div><div class="signing-method-card-title">Credentials file</div><div class="signing-method-card-desc">Use your local ~/.near-credentials file</div></button>\n        <button type="button" class="signing-method-card" data-method="sign-with-ledger" aria-pressed="false">');
+      patched = replaceOnce(patched, '.signing-method-options {\n  display: flex;', '.signing-method-options {\n  display: flex;\n  flex-wrap: wrap;');
+      patched = replaceOnce(patched, '.signing-method-card {\n  flex: 1;', '.signing-method-card {\n  flex: 1 0 42%;');
+      return patched;
+    }
     return code;
   } finally {
     clearTimeout(timeout);

@@ -22,23 +22,42 @@ been independently verified. NEAR Mobile's testnet availability depends on the
 installed app and its configuration; its upstream manifests disagree about testnet.
 
 The normal connection path requests an account only: no access key, signature,
-or transaction. **NEAR Mobile is different**: Bouncer asks it to sign a fresh
-NEP-413 login message off-chain. The pinned Fastnear adapter verifies the
-signature and the signing key against testnet RPC. Its ordinary `signIn` may
-request a FullAccess AddKey transaction and `signOut` may delete a key, so
-Bouncer calls neither method; Mobile's session is memory-only and requires a
-new message after reload. The pinned Fastnear executor saves native `fetch` as
-a class method, which fails with “Illegal invocation” in browsers. After the
-executor bytes pass integrity checking, Bouncer binds `fetch` to the sandbox
-window before running them; the browser test covers the real executor with a
-synthetic signer and RPC. This is not a live phone login. Other returned accounts are wallet-reported rather
-than cryptographic proof of ownership. NEAR CLI specifically accepts a manually
-entered account ID at this stage; it does not prove that the user controls it.
-No connection creates a vault or grants spending access. Never enter a seed
-phrase or private key into Bouncer. Named `.testnet` accounts and 64-hex
-implicit accounts are accepted; the connector is
-fixed to testnet. If browser storage is unavailable, the connector keeps its
-selection in memory, though individual wallet executors may still need storage.
+or transaction. **NEAR Mobile and NEAR CLI are different**: Bouncer asks them
+to sign a fresh NEP-413 login message off-chain. The pinned Fastnear Mobile
+adapter verifies the signature and signing key against testnet RPC. Its ordinary
+`signIn` may request a FullAccess AddKey transaction and `signOut` may delete a
+key, so Bouncer calls neither method; Mobile's session requires a new message
+after reload. The pinned Fastnear executor saves native `fetch` as a class
+method, which fails with “Illegal invocation” in browsers. After the executor
+bytes pass integrity checking, Bouncer binds `fetch` to the sandbox window
+before running them. The browser test covers the real executor with a synthetic
+signer and RPC; it is not a live phone login.
+
+**NEAR CLI:** choose the CLI option, enter a testnet account ID, choose your
+OS keychain, local `~/.near-credentials` file, or Ledger, then run the displayed
+`near message sign-nep413` command in a terminal with `near-cli-rs` installed.
+The Credentials file option uses `sign-with-legacy-keychain`, which works for
+legacy CLI credential files without an OS keychain. Bouncer adds that choice
+to the pinned adapter after integrity verification. Paste the command's JSON
+output into the prompt, not your seed phrase or private key. Bouncer verifies
+the signature locally and checks via a read-only final-block testnet RPC query
+that the public key is a current Full Access key for the entered account. A
+limited key, invalid signature, unavailable RPC, or unsupported Ed25519 browser
+fails closed. This proves control of that key at the time of the RPC response,
+not an audit or a lasting authorization. An old manually typed CLI account is
+not restored as a verified login; a new challenge is required after reload.
+The pinned adapter, generated command, signature verification and disconnect
+are browser-tested with a synthetic signer and mock RPC, not an actual CLI
+wallet or live chain.
+
+The other returned accounts are wallet-reported rather than cryptographic proof
+of ownership. Once connected, all Connect controls show a green indicator and
+`Connected`; opening one shows the account and disconnect control. No connection
+creates a vault or grants spending access. Never enter a seed phrase or private
+key into Bouncer. Named `.testnet` accounts and 64-hex implicit accounts are
+accepted; the connector is fixed to testnet. If browser storage is unavailable,
+the connector keeps its selection in memory, though individual wallet executors
+may still need storage.
 
 Intear creates an off-chain application communication key in browser storage;
 this is not a NEAR account access key. It requires browser WebCrypto Ed25519

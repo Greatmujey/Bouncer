@@ -47,6 +47,38 @@ try {
     assert.equal(await page.locator('[data-wallet-id="wallet-connect"]').isEnabled(), configured);
     assert.match(await page.locator('#wallet-dialog-description').innerText(), /login message/);
     assert.match(await page.locator('#wallet-dialog-status').innerText(), /testnet wallet/i);
+    if (process.env.BOUNCER_TEST_WALLETCONNECT_RELAY === '1') {
+      assert.equal(configured, true, 'a configured project is required for the real relay probe');
+      // Generate and cancel one real pairing proposal. Never log the bearer
+      // URI, scan the QR, approve a session, or request a wallet transaction.
+      await page.locator('[data-wallet-id="wallet-connect"]').click();
+      await page.waitForFunction(() => {
+        const status = document.querySelector('#wallet-dialog-status').textContent;
+        return !document.querySelector('#walletconnect-qr').hidden || /could not connect|configuration was rejected|timed out/i.test(status);
+      }, null, { timeout: 135_000 });
+      const pairingReady = await page.locator('#walletconnect-qr').isVisible();
+      if (!pairingReady) throw new Error(`Real relay probe failed: ${await page.locator('#wallet-dialog-status').innerText()}`);
+      assert.equal(await page.locator('#walletconnect-open').isVisible(), true);
+      await page.locator('#walletconnect-cancel').click();
+      await page.locator('[data-wallet-id="wallet-connect"]').waitFor({ state: 'visible', timeout: 15_000 });
+      assert.equal(await page.locator('#walletconnect-open').getAttribute('href'), null, 'cancel removes the pairing URI');
+      assert.match(await page.locator('#wallet-dialog-status').innerText(), /cancelled/i);
+      console.log('Live Reown relay produced a QR and cancellation cleared it; no wallet was paired or approved.');
+      // Public known key, read-only request, to verify browser CORS and the
+      // exact RPC method used by CLI login. No key material or signing.
+      const rpc = await page.evaluate(async () => {
+        try {
+          const response = await fetch('https://test.rpc.fastnear.com', { method: 'POST', headers: { 'content-type': 'application/json' },
+            credentials: 'omit', signal: AbortSignal.timeout(15_000), body: JSON.stringify({ jsonrpc: '2.0', id: 'bouncer-readonly-check', method: 'query', params: {
+              request_type: 'view_access_key', finality: 'final', account_id: 'greatmujey.testnet', public_key: 'ed25519:76e7VsPsBxT7GWR7KqgzYrd3JzQyWyDT7qLZdHxdan23',
+            } }) });
+          const body = await response.json();
+          return { status: response.status, permission: body?.result?.permission, error: Boolean(body?.error) };
+        } catch { return { status: 0, error: true }; }
+      });
+      assert.deepEqual(rpc, { status: 200, permission: 'FullAccess', error: false }, 'testnet key lookup must work in the public browser');
+      console.log('Production-origin browser reached the read-only testnet access-key RPC.');
+    }
     // Exercise the exact URLs from the public origin, including CORS and bytes.
     // This only fetches public code; it never opens a wallet or signs anything.
     const results = await Promise.all(WALLET_MANIFEST.wallets.map(async ({ id, executor }) => {

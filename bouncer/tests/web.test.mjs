@@ -204,7 +204,9 @@ test('workspace routes and the wallet picker are explicit, curated, and keyboard
   assert.match(html, /id="walletconnect-caption">Not configured · Project ID required/);
   assert.match(html, /id="walletconnect-canvas"/);
   assert.match(html, /walletconnect-NOTICES\.txt/);
-  assert.match(html, /NEAR Mobile asks for a login message/);
+  assert.match(html, /NEAR Mobile and NEAR CLI use an off-chain login message/);
+  assert.match(html, /Terminal · Sign a testnet login message/);
+  assert.match(css, /data-wallet-state="connected"/);
   assert.match(html, /intear-wallet-source\.zip/);
   assert.match(html, /<dialog class="wallet-dialog" id="wallet-dialog" aria-labelledby="wallet-dialog-title"/);
   assert.match(html, /id="wallet-close" type="button" aria-label="Close wallet picker"/);

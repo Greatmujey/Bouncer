@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { webcrypto } from 'node:crypto';
+import { createHash, webcrypto } from 'node:crypto';
+import { KeyPair } from '@near-js/crypto';
+import { nep413Payload } from '../web-src/cli-login.mjs';
 import fs from 'node:fs';
 import { initWallet as bootWallet, walletOriginAllowed } from '../web-src/wallet-core.mjs';
 import { WALLET_MANIFEST } from '../web-src/wallet-manifest.mjs';
@@ -8,7 +10,17 @@ import { loadVerifiedExecutor, WALLET_EXECUTOR_SHA256 } from '../web-src/wallet-
 
 const location = url => { const u = new URL(url); return { hostname: u.hostname, host: u.host, protocol: u.protocol, origin: u.origin }; };
 class FakeSandboxWallet {
-  constructor(manifest, config) { this.manifest = manifest; this.config = config; this.executor = {}; }
+  constructor(manifest, config) { this.manifest = manifest; this.config = config; this.executor = { async clearStorage() { config.cliStorageCleared = true; } }; }
+  async signInAndSignMessage(params) {
+    this.config.cliParams = params;
+    if (this.config.fail) throw new Error('cancelled');
+    const pair = this.config.cliKey || KeyPair.fromRandom('ed25519');
+    const { message, nonce, recipient } = params.messageParams;
+    const hash = createHash('sha256').update(nep413Payload({ message, nonce, recipient })).digest();
+    const publicKey = pair.getPublicKey().toString(), accountId = this.config.account || 'cli.testnet';
+    const signature = Buffer.from(pair.sign(hash).signature).toString('base64');
+    return [{ accountId, publicKey, signedMessage: { accountId, publicKey, signature: this.config.badSignature ? 'bad' : signature } }];
+  }
   async signMessage(params) {
     this.config.messageRequests ??= [];
     this.config.messageRequests.push(params);
@@ -30,7 +42,7 @@ class Element {
   getBoundingClientRect() { return { left: 0, right: 100, top: 0, bottom: 100 }; }
 }
 function fakeBrowser(url, { top = true, storageFails = false, approved = '', walletConnectProjectId = '' } = {}) {
-  const ids = ['wallet-connect', 'wallet-disconnect', 'wallet-status', 'wallet-open-site', 'wallet-dialog', 'wallet-close', 'wallet-options', 'wallet-dialog-status', 'wallet-banner',
+  const ids = ['wallet-connect', 'wallet-disconnect', 'wallet-status', 'wallet-open-site', 'wallet-dialog', 'wallet-close', 'wallet-options', 'wallet-dialog-status', 'wallet-title-text', 'wallet-dialog-description', 'wallet-banner',
     'walletconnect-pairing', 'walletconnect-caption', 'walletconnect-badge', 'walletconnect-qr', 'walletconnect-canvas', 'walletconnect-open', 'walletconnect-copy', 'walletconnect-cancel'];
   const nodes = Object.fromEntries(ids.map(id => [id, new Element()]));
   nodes['wallet-open-site'].hidden = true;
@@ -40,6 +52,7 @@ function fakeBrowser(url, { top = true, storageFails = false, approved = '', wal
   const win = { location: { ...location(url), href: url }, crypto: webcrypto,
     fetch: async target => {
       if (String(target).endsWith('/walletconnect-config.json')) return { ok: true, text: async () => JSON.stringify({ projectId: walletConnectProjectId }) };
+      if (String(target) === 'https://test.rpc.fastnear.com') return { ok: true, text: async () => JSON.stringify({ result: { permission: win.cliKeyPermission || 'FullAccess' } }) };
       throw new Error('unexpected network');
     },
     navigator: { clipboard: { async writeText(value) { win.clipboard = value; } } }, localStorage: {
@@ -150,12 +163,64 @@ test('connects and disconnects a wallet-reported account without requesting a ke
   assert.match(browser.nodes['wallet-status'].textContent, /Connected: alice\.testnet \(wallet-reported\)/);
   assert.equal(browser.nodes['wallet-options'].hidden, true);
   assert.equal(browser.nodes['wallet-disconnect'].hidden, false);
-  assert.deepEqual(browser.labels.map(node => node.textContent), ['Account connected', 'Account connected', 'Account connected']);
+  assert.deepEqual(browser.labels.map(node => node.textContent), ['Connected', 'Connected', 'Connected']);
+  assert.ok(browser.openers.every(button => button.dataset.walletState === 'connected'));
+  assert.ok(browser.openers.every(button => button.attributes['aria-label'] === 'Connected: alice.testnet. Manage wallet'));
+  assert.equal(browser.nodes['wallet-title-text'].textContent, 'Wallet connected');
+  assert.match(browser.nodes['wallet-dialog-description'].textContent, /connected/);
   await browser.nodes['wallet-connect'].click();
   await browser.nodes['wallet-disconnect'].click();
   assert.equal(config.disconnected, 'meteor-wallet');
   assert.match(browser.nodes['wallet-status'].textContent, /disconnected/i);
   assert.deepEqual(browser.labels.map(node => node.textContent), ['Connect wallet', 'Connect wallet', 'Connect wallet']);
+  assert.ok(browser.openers.every(button => button.dataset.walletState === 'disconnected'));
+  assert.ok(browser.openers.every(button => button.attributes['aria-label'] === 'Connect wallet'));
+  assert.equal(browser.nodes['wallet-title-text'].textContent, 'Connect a wallet');
+  assert.match(browser.nodes['wallet-dialog-description'].textContent, /login message/);
+});
+
+test('CLI requires a fresh off-chain signature, verifies testnet Full Access, and disconnects locally', async () => {
+  const browser = fakeBrowser('http://127.0.0.1:4173/'), config = {};
+  await initWallet({ window: browser.win, document: browser.doc, NearConnector: connectorClass(config) });
+  await browser.nodes['wallet-connect'].click();
+  await browser.options.find(option => option.dataset.walletId === 'near-cli').click();
+  assert.equal(config.cliStorageCleared, true);
+  assert.equal(config.cliParams.network, 'testnet');
+  assert.equal(config.cliParams.addFunctionCallKey, undefined);
+  assert.equal(config.cliParams.messageParams.nonce.length, 32);
+  assert.match(config.cliParams.messageParams.message, /does not approve a transaction/);
+  assert.match(browser.nodes['wallet-status'].textContent, /Connected: cli\.testnet \(CLI login verified against testnet\)/);
+  assert.equal(browser.nodes['wallet-disconnect'].hidden, false);
+  assert.ok(browser.openers.every(button => button.dataset.walletState === 'connected'));
+  await browser.nodes['wallet-disconnect'].click();
+  assert.equal(config.disconnected, 'near-cli');
+  assert.ok(browser.openers.every(button => button.dataset.walletState === 'disconnected'));
+});
+
+test('CLI cannot show connected after a bad signature, a limited key, or a cancelled request', async () => {
+  for (const config of [{ badSignature: true }, {}, { fail: true }]) {
+    const browser = fakeBrowser('http://127.0.0.1:4173/');
+    if (Object.keys(config).length === 0) browser.win.cliKeyPermission = { FunctionCall: {} };
+    await initWallet({ window: browser.win, document: browser.doc, NearConnector: connectorClass(config) });
+    await browser.nodes['wallet-connect'].click();
+    await browser.options.find(option => option.dataset.walletId === 'near-cli').click();
+    assert.doesNotMatch(browser.nodes['wallet-status'].textContent, /^Connected:/);
+    assert.equal(browser.nodes['wallet-disconnect'].hidden, true);
+    assert.equal(browser.nodes['wallet-dialog'].open, true);
+    assert.ok(browser.openers.every(button => button.dataset.walletState === 'disconnected'));
+  }
+});
+
+test('a legacy manually entered CLI account is not restored or accepted as verified', async () => {
+  const browser = fakeBrowser('http://127.0.0.1:4173/'), config = {};
+  browser.data.set('bouncer:near-connect:selected-wallet', 'near-cli');
+  await initWallet({ window: browser.win, document: browser.doc, NearConnector: connectorClass(config) });
+  assert.match(browser.nodes['wallet-status'].textContent, /requires a new login message/);
+  assert.equal(browser.data.has('bouncer:near-connect:selected-wallet'), false);
+  const wallet = config.instance.wallets.find(candidate => candidate.manifest.id === 'near-cli');
+  config.instance.events['wallet:signIn']({ wallet, accounts: [{ accountId: 'anyone.testnet' }] });
+  assert.equal(browser.nodes['wallet-disconnect'].hidden, true);
+  assert.ok(browser.openers.every(button => button.dataset.walletState === 'disconnected'));
 });
 
 test('the dedicated Vercel origin can connect; implicit IDs use the fixed testnet network', async () => {
@@ -323,12 +388,15 @@ test('configured WalletConnect opens a private QR pairing and connects only the 
   resolveApproval({ accountId: 'alice.testnet', async disconnect() { disconnected++; } });
   await attempt;
   assert.match(browser.nodes['wallet-status'].textContent, /alice\.testnet \(wallet-reported\)/);
+  assert.ok(browser.openers.every(button => button.dataset.walletState === 'connected'));
+  assert.ok(browser.labels.every(node => node.textContent === 'Connected'));
   assert.equal(browser.nodes['wallet-dialog'].open, false);
   assert.equal(browser.nodes['walletconnect-open'].attributes.href, undefined);
   assert.equal(config.input, undefined, 'NEAR Connect is not asked to add a key or sign');
   await browser.nodes['wallet-disconnect'].click();
   assert.equal(disconnected, 1);
   assert.match(browser.nodes['wallet-status'].textContent, /disconnected/i);
+  assert.ok(browser.openers.every(button => button.dataset.walletState === 'disconnected'));
 });
 
 test('closing WalletConnect aborts an in-flight pairing and clears the QR/link', async () => {

@@ -4,7 +4,9 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
+import os from 'node:os';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { once } from 'node:events';
 import { createRequire } from 'node:module';
@@ -13,6 +15,7 @@ import { WALLET_EXECUTOR_SHA256 } from '../web-src/wallet-executor.mjs';
 
 const require = createRequire(import.meta.url);
 const { KeyPair } = require('@near-js/crypto');
+const { baseEncode } = require('@near-js/utils');
 
 const web = fileURLToPath(new URL('../web/', import.meta.url));
 const playwrightPath = process.env.BOUNCER_PLAYWRIGHT_PATH || path.join(process.env.RUNNER_TEMP || '', 'bouncer-browser/node_modules/playwright-core/index.mjs');
@@ -180,6 +183,7 @@ try {
     assert.match(calls[0], /53a8b39d1aaaf067502c11e49ebb050c75df019e/);
     await page.locator('.top-connect').click();
     assert.match(await page.locator('#wallet-dialog-status').innerText(), /browser-test\.testnet/);
+    assert.match(await page.locator('#wallet-dialog-title').innerText(), /Wallet connected/);
     await page.locator('#wallet-disconnect').click();
     await page.waitForFunction(() => document.querySelector('#wallet-status').textContent.includes('disconnected'));
     assert.deepEqual(errors, []);
@@ -204,7 +208,9 @@ try {
     await page.locator('.top-connect').click();
     await page.locator('[data-wallet-id="meteor-wallet"]').click();
     await page.waitForFunction(() => document.querySelector('#wallet-status').textContent.includes('production-test.testnet'));
-    assert.match(await page.locator('[data-wallet-label]').first().innerText(), /Account connected/);
+    assert.equal(await page.locator('[data-wallet-label]').first().innerText(), 'Connected');
+    assert.equal(await page.locator('.top-connect').getAttribute('data-wallet-state'), 'connected');
+    assert.match(await page.locator('.top-connect').getAttribute('aria-label'), /production-test\.testnet/);
     await page.locator('.top-connect').click();
     await page.locator('#wallet-disconnect').click();
     await page.waitForFunction(() => document.querySelector('#wallet-status').textContent.includes('Wallet disconnected.'));
@@ -341,23 +347,85 @@ try {
     const cliBrowser = await chromium.launch({ executablePath, args: browserArgs, headless: true });
     try {
       const page = await cliBrowser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
-      const errors = [], writes = [];
+      const errors = [], writes = [], rpc = [];
+      const pair = KeyPair.fromRandom('ed25519'); // synthetic key, never submitted to a real network
+      const publicKey = pair.getPublicKey().toString();
       page.on('pageerror', error => errors.push(error.message));
-      page.on('request', request => { if (!['GET', 'HEAD'].includes(request.method())) writes.push(request.url()); });
+      page.on('request', request => { if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method())) writes.push(request.url()); });
       await page.route('**/near-cli-connect/*/dist/near-cli.js*', route => route.fulfill({ status: 200, contentType: 'text/javascript', body: executor }));
+      const cors = { 'access-control-allow-origin': '*', 'access-control-allow-methods': 'GET, POST, OPTIONS', 'access-control-allow-headers': 'content-type' };
+      await page.route('https://test.rpc.fastnear.com/**', async route => {
+        if (route.request().method() === 'OPTIONS') return route.fulfill({ status: 204, headers: cors });
+        const body = route.request().postDataJSON(); rpc.push(body);
+        return route.fulfill({ status: 200, headers: cors, contentType: 'application/json', body: JSON.stringify({ jsonrpc: '2.0', id: body.id, result: { permission: 'FullAccess' } }) });
+      });
       await page.goto(url, { waitUntil: 'networkidle' });
       await page.waitForFunction(() => !document.querySelector('[data-wallet-id="near-cli"]').disabled);
-      await page.locator('.top-connect').click();
-      await page.locator('[data-wallet-id="near-cli"]').click();
-      const frame = page.frameLocator('iframe').first();
-      await frame.locator('#account-id').fill('cli-synthetic.testnet', { timeout: 20_000 });
-      await frame.locator('#account-id').press('Enter');
-      await frame.locator('.signing-method-card.selected').press('Enter');
+      async function submitCliSignature(corrupt = false) {
+        await page.locator('.top-connect').click();
+        await page.locator('[data-wallet-id="near-cli"]').click();
+        const frame = page.frameLocator('iframe').first();
+        await frame.locator('#account-id').fill('cli-synthetic.testnet', { timeout: 20_000 });
+        await frame.locator('#account-id').press('Enter');
+        const choice = frame.locator(corrupt ? '[data-method="sign-with-keychain"]' : '[data-method="sign-with-legacy-keychain"]');
+        await choice.click();
+        await choice.press('Enter');
+        const command = await frame.locator('.command-block code').textContent();
+        assert.match(command, /^near message sign-nep413/);
+        assert.match(command, /network-config testnet/);
+        assert.match(command, corrupt ? /sign-with-keychain/ : /sign-with-legacy-keychain/);
+        assert.doesNotMatch(command, /near (?:transaction|tokens)|near account add-key/i);
+        const message = /utf8 '([\s\S]*?)'/.exec(command)?.[1];
+        const nonce = /nonce '([^']+)'/.exec(command)?.[1];
+        const recipient = /recipient '([^']+)'/.exec(command)?.[1];
+        assert.ok(message && nonce && recipient, 'CLI exposes the exact login challenge');
+        const text = value => { const b = Buffer.from(value), len = Buffer.alloc(4); len.writeUInt32LE(b.length); return Buffer.concat([len, b]); };
+        const tag = Buffer.alloc(4); tag.writeUInt32LE(2 ** 31 + 413);
+        const payload = Buffer.concat([tag, text(message), Buffer.from(nonce, 'base64'), text(recipient), Buffer.from([0])]);
+        const signature = Buffer.from(pair.sign(crypto.createHash('sha256').update(payload).digest()).signature);
+        if (corrupt) signature[0] ^= 1;
+        let output = { accountId: 'cli-synthetic.testnet', publicKey, signature: `ed25519:${baseEncode(signature)}` };
+        if (!corrupt && process.env.BOUNCER_REAL_CLI_PATH) {
+          // An ephemeral, synthetic credential exercises the real CLI command
+          // offline. Never use, print, or copy a user's key in this test.
+          const home = fs.mkdtempSync(path.join(os.tmpdir(), 'bouncer-cli-fixture-'));
+          try {
+            const dir = path.join(home, '.near-credentials', 'testnet');
+            fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+            fs.writeFileSync(path.join(dir, 'cli-synthetic.testnet.json'), JSON.stringify({ account_id: 'cli-synthetic.testnet', public_key: publicKey, private_key: pair.toString() }), { mode: 0o600 });
+            const stdout = execFileSync(process.env.BOUNCER_REAL_CLI_PATH, [
+              'message', 'sign-nep413', 'utf8', message, 'nonce', nonce, 'recipient', recipient,
+              'sign-as', 'cli-synthetic.testnet', 'sign-with-legacy-keychain', 'network-config', 'testnet',
+            ], { env: { PATH: process.env.PATH, HOME: home, XDG_CONFIG_HOME: path.join(home, '.config'), NO_COLOR: '1' }, timeout: 30_000, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+            output = JSON.parse(stdout.slice(stdout.indexOf('{'), stdout.lastIndexOf('}') + 1));
+            assert.equal(output.accountId, 'cli-synthetic.testnet');
+            assert.equal(output.publicKey, publicKey);
+            assert.match(output.signature, /^ed25519:/);
+          } finally { fs.rmSync(home, { recursive: true, force: true }); }
+        }
+        await frame.locator('#sign-output').fill(JSON.stringify(output));
+        await frame.locator('#submit-sign-btn').click();
+      }
+      await submitCliSignature();
       await page.waitForFunction(() => document.querySelector('#wallet-status').textContent.includes('cli-synthetic.testnet'));
-      assert.match(await page.locator('#wallet-status').textContent(), /wallet-reported/);
-      assert.deepEqual(writes, [], 'CLI account entry must not send any transaction or write request');
+      assert.match(await page.locator('#wallet-status').textContent(), /CLI login verified against testnet/);
+      assert.equal(await page.locator('.top-connect').getAttribute('data-wallet-state'), 'connected');
+      assert.equal(await page.locator('.top-connect [data-wallet-label]').innerText(), 'Connected');
+      assert.equal(rpc.length, 1);
+      assert.equal(rpc[0].method, 'query');
+      assert.deepEqual(rpc[0].params, { request_type: 'view_access_key', finality: 'final', account_id: 'cli-synthetic.testnet', public_key: publicKey });
+      assert.deepEqual(writes, ['https://test.rpc.fastnear.com/'], 'the only POST must be a read-only access-key query');
+      await page.locator('.top-connect').click();
+      await page.locator('#wallet-disconnect').click();
+      await page.waitForFunction(() => document.querySelector('#wallet-status').textContent.includes('Wallet disconnected'));
+      assert.equal(await page.locator('.top-connect').getAttribute('data-wallet-state'), 'disconnected');
+      await page.locator('#wallet-close').click();
+      await submitCliSignature(true);
+      await page.waitForFunction(() => document.querySelector('#wallet-status').textContent.includes('Could not verify the CLI login message'));
+      assert.equal(await page.locator('.top-connect').getAttribute('data-wallet-state'), 'disconnected');
+      assert.equal(rpc.length, 1, 'bad signature fails before RPC');
       assert.deepEqual(errors, []);
-      console.log('Pinned NEAR CLI UI accepted a synthetic manually entered account without a transaction; ownership was not verified.');
+      console.log('Pinned NEAR CLI executor + synthetic signer and RPC: valid off-chain login accepted, forgery rejected; no real CLI wallet or transaction tested.');
     } finally { await cliBrowser.close(); }
   }
 
