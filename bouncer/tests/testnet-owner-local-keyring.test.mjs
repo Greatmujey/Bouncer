@@ -82,7 +82,7 @@ test('privately restores the same reviewed synthetic owner into two new encrypte
 });
 
 test('restore rejects a changed key, unexpected fields, exposed file or symbolic link before creating a keyring', () => {
-  for (const scenario of ['key', 'fields', 'permissions', 'symlink']) {
+  for (const scenario of ['key', 'fields', 'permissions', 'symlink', 'hardlink']) {
     const t = temp();
     try {
       const { plan } = createTestnetOwnerKeyring(t.dir), primary = path.join(t.base, 'temporary', 'primary.json'),
@@ -93,6 +93,7 @@ test('restore rejects a changed key, unexpected fields, exposed file or symbolic
       if (scenario === 'fields') { const obj = JSON.parse(fs.readFileSync(primary)); obj.extra = true; fs.writeFileSync(primary, JSON.stringify(obj)); }
       if (scenario === 'permissions') fs.chmodSync(primary, 0o644);
       if (scenario === 'symlink') { source = path.join(t.base, 'temporary', 'link.json'); fs.symlinkSync(primary, source); }
+      if (scenario === 'hardlink') { source = path.join(t.base, 'temporary', 'hardlink.json'); fs.linkSync(primary, source); }
       const dest = path.join(t.base, 'restored');
       assert.throws(() => restoreTestnetOwnerKeyring({ dir: dest, plan, credentialsFile: source }));
       assert.equal(fs.existsSync(dest), false);

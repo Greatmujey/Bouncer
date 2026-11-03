@@ -17,7 +17,7 @@ function secretFile(file, max) {
   try {
     fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
     const s = fs.fstatSync(fd);
-    if (!s.isFile() || s.size < 1 || s.size > max || (s.mode & 0o077) !== 0 ||
+    if (!s.isFile() || s.nlink !== 1 || s.size < 1 || s.size > max || (s.mode & 0o077) !== 0 ||
         (typeof process.getuid === 'function' && s.uid !== process.getuid())) throw Error();
     return fs.readFileSync(fd);
   } catch { throw new Error('local testnet keyring file is missing or exposed'); }
