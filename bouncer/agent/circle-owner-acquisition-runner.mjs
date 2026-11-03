@@ -104,6 +104,38 @@ export function verifyOwnerAcquisitionReceipt(result, envelope, rawPlan) {
     circle_transfer: circleTransfer, trusted_rpc_not_consensus_proof: true };
 }
 
+function verifyAcquisitionAfter(after, envelope, proof) {
+  if (BigInt(after.owner_key_nonce) < BigInt(envelope.nonce) || after.owner_wrap_registration !== 'REGISTERED_AT_VIEW' ||
+      after.wrap_code_hash !== envelope.expected_wrap_code_hash || after.circle_code_hash !== envelope.expected_circle_code_hash) {
+    throw new Error('post-action owner nonce, token code or wNEAR registration is not verified');
+  }
+  if (envelope.kind === 'wrap') {
+    if (BigInt(after.owner_wrap_balance_yocto) !== BigInt(envelope.expected_wrap_before) + BigInt(INPUT) ||
+        after.circle_balance_atoms !== envelope.expected_circle_before) throw new Error('wrapped test NEAR balance is not verified');
+  } else if (BigInt(after.owner_wrap_balance_yocto) !== BigInt(envelope.expected_wrap_before) - BigInt(INPUT) ||
+      BigInt(after.circle_balance_atoms) !== BigInt(envelope.expected_circle_before) + BigInt(proof.circle_transfer.amount_atoms)) {
+    throw new Error('post-swap Circle/wNEAR balances do not match the original output receipt');
+  }
+}
+
+/** Read the original receipt and fresh balances only. Never broadcast or make
+ * a replacement. Unknown receipts/state stay unknown, not inferred from balance. */
+export async function reconcileOwnerAcquisition({ plan: raw, envelope, provider, now = Date.now } = {}) {
+  const plan = validateOwnerBootstrapPlan(raw);
+  verifySignedOwnerAcquisition(envelope, plan);
+  if (!provider || ['viewNodeStatus', 'viewBlock', 'query', 'callFunctionRaw', 'txStatusReceipts']
+    .some(k => typeof provider[k] !== 'function') || typeof now !== 'function') throw new Error('read-only receipt and pinned views required');
+  const proof = verifyOwnerAcquisitionReceipt(await provider.txStatusReceipts(envelope.tx_hash, plan.account_id, 'FINAL'), envelope, plan);
+  const after = await inspectCircleOwnerAcquisition({ plan, provider, now });
+  verifyAcquisitionAfter(after, envelope, proof);
+  return { status: envelope.kind === 'wrap' ? 'OWNER_WRAPPED_TEST_NEAR_AT_FINAL' : 'OWNER_FUNDED_CIRCLE_TEST_USDC_AT_FINAL',
+    kind: envelope.kind, network: 'testnet', owner: plan.account_id, tx_hash: envelope.tx_hash, receipt: proof,
+    after_block_hash: after.block_hash, owner_wrap_balance_yocto: after.owner_wrap_balance_yocto,
+    owner_circle_balance_atoms: after.circle_balance_atoms, circle_funding_verified: envelope.kind === 'swap',
+    vault_deployed: false, seller_contacted: false, do_not_resend: true, reconciliation_only: true, next_snapshot: after,
+    scope: 'matching original FINAL transaction/receipt and fresh trusted-RPC balances; no send, not consensus proof or independent delivery' };
+}
+
 export async function broadcastOwnerAcquisitionOnce({ plan: raw, envelope, provider, persistAttempt, now = Date.now } = {}) {
   const plan = validateOwnerBootstrapPlan(raw), signed = verifySignedOwnerAcquisition(envelope, plan);
   if (!provider || provider.enforcesSetupBeforeSubmitGuard !== true ||
@@ -129,16 +161,7 @@ export async function broadcastOwnerAcquisitionOnce({ plan: raw, envelope, provi
     }
     const proof = verifyOwnerAcquisitionReceipt(await provider.txStatusReceipts(envelope.tx_hash, plan.account_id, 'FINAL'), envelope, plan);
     const after = await inspectCircleOwnerAcquisition({ plan, provider, now });
-    if (BigInt(after.owner_key_nonce) < BigInt(envelope.nonce) || after.owner_wrap_registration !== 'REGISTERED_AT_VIEW') {
-      throw new Error('post-action owner nonce or wNEAR registration is not verified');
-    }
-    if (envelope.kind === 'wrap') {
-      if (BigInt(after.owner_wrap_balance_yocto) !== BigInt(envelope.expected_wrap_before) + BigInt(INPUT) ||
-          after.circle_balance_atoms !== envelope.expected_circle_before) throw new Error('wrapped test NEAR balance is not verified');
-    } else if (BigInt(after.owner_wrap_balance_yocto) !== BigInt(envelope.expected_wrap_before) - BigInt(INPUT) ||
-        BigInt(after.circle_balance_atoms) !== BigInt(envelope.expected_circle_before) + BigInt(proof.circle_transfer.amount_atoms)) {
-      throw new Error('post-swap Circle/wNEAR balances do not match the original output receipt');
-    }
+    verifyAcquisitionAfter(after, envelope, proof);
     return { status: envelope.kind === 'wrap' ? 'OWNER_WRAPPED_TEST_NEAR_AT_FINAL' : 'OWNER_FUNDED_CIRCLE_TEST_USDC_AT_FINAL',
       kind: envelope.kind, network: 'testnet', owner: plan.account_id, tx_hash: envelope.tx_hash, receipt: proof,
       after_block_hash: after.block_hash, owner_wrap_balance_yocto: after.owner_wrap_balance_yocto,

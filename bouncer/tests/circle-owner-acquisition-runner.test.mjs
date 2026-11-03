@@ -6,7 +6,7 @@ import { mockHash } from './mock-guarded-payment.mjs';
 import { CIRCLE_TESTNET_USDC as CIRCLE, WRAP_TESTNET as WRAP, REF_TESTNET as REF } from '../scripts/circle-testnet-setup.mjs';
 import { inspectCircleOwnerAcquisition, ACQUISITION_INPUT_YOCTO as INPUT } from '../agent/circle-owner-acquisition-readiness.mjs';
 import { signOwnerAcquisition } from '../agent/circle-owner-acquisition.mjs';
-import { verifyOwnerAcquisitionReceipt, broadcastOwnerAcquisitionOnce } from '../agent/circle-owner-acquisition-runner.mjs';
+import { verifyOwnerAcquisitionReceipt, broadcastOwnerAcquisitionOnce, reconcileOwnerAcquisition } from '../agent/circle-owner-acquisition-runner.mjs';
 
 const NOW = Date.parse('2026-11-02T16:45:00Z'), BLOCK = mockHash('funding-block'), ROOT = mockHash('funding-root'),
   HOOK = mockHash('funding-hook'), OUTPUT = mockHash('funding-output');
@@ -16,7 +16,7 @@ const plan = { version: 1, purpose: 'new-bouncer-testnet-owner', network: 'testn
 const storage = { total: '1250000000000000000000', available: '0' };
 const code = account => mockHash(`test-code-${account}`);
 function fake(kind, opts = {}) {
-  let sent = 0, after = false, fenced = false, lookups = 0;
+  let sent = 0, after = Boolean(opts.recovered), fenced = false, lookups = 0;
   const wrapAt = () => kind === 'wrap' ? (after ? INPUT : '0') : (after ? '0' : INPUT);
   const circleAt = () => kind === 'swap' && after ? (opts.wrongBalance ? '2' : '6500') : '0';
   const registered = () => kind === 'swap' || after;
@@ -132,5 +132,22 @@ test('nonce, quote, code and fence drift stop before send; uncertain original tr
     const swap = opts.wrongBalance, e = swap ? await prepare('swap') : envelope, p = fake(swap ? 'swap' : 'wrap', opts); p.envelope = e;
     await assert.rejects(broadcastOwnerAcquisitionOnce({ plan, envelope: e, provider: p, now: () => NOW, persistAttempt: x => p.persist(x) }),
       /original .*never resend/); assert.equal(p.sent, 1);
+  }
+});
+
+test('read-only recovery checks the original receipt and fresh balances without sending', async () => {
+  for (const kind of ['wrap', 'swap']) {
+    const e = await prepare(kind), p = fake(kind, { recovered: true }); p.envelope = e;
+    const result = await reconcileOwnerAcquisition({ plan, envelope: e, provider: p, now: () => NOW });
+    assert.equal(result.tx_hash, e.tx_hash); assert.equal(result.reconciliation_only, true);
+    assert.equal(result.owner_wrap_balance_yocto, kind === 'wrap' ? INPUT : '0');
+    assert.equal(result.owner_circle_balance_atoms, kind === 'swap' ? '6500' : '0');
+    assert.equal(p.sent, 0); assert.equal(p.lookups, 1); assert.equal(result.do_not_resend, true);
+  }
+  for (const options of [{ noReceipt: true }, { badCode: true }, { wrongBalance: true }]) {
+    const kind = options.wrongBalance ? 'swap' : 'wrap', e = await prepare(kind), p = fake(kind, { ...options, recovered: true });
+    p.envelope = e;
+    await assert.rejects(reconcileOwnerAcquisition({ plan, envelope: e, provider: p, now: () => NOW }));
+    assert.equal(p.sent, 0);
   }
 });
