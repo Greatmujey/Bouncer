@@ -247,6 +247,15 @@ export async function purchaseTollgateQuakesOnce({review:raw,provider,voucherKey
    headers:{accept:'application/json','x-payment':header}});
   const ack=paymentAcknowledgement(res?.headers?.get('x-payment-response'),snapshot.channel_id);
   const bytes=await readBoundedBytes(res,{maxBytes:256*1024,label:'provider'}),bodyHash=sha(bytes);
+  // A seller can reflect the bearer it received. Do not return or persist the
+  // obvious representations; this is defense-in-depth, not a guarantee that
+  // an arbitrary provider response contains no sensitive data.
+  const bodyText=bytes.toString('utf8');
+  if([header,signature.toString('base64'),signature.toString('base64url'),signature.toString('hex')].some(x=>bodyText.includes(x))){
+   return {...result,status:'SELLER_RESPONSE_CONTAINED_VOUCHER',http_status:Number.isInteger(res?.status)?res.status:null,
+    seller_claimed_acceptance:!!ack,seller_claimed_settlement_tx:ack?.seller_claimed_settlement_tx??null,
+    response_sha256:bodyHash,response_locally_retained:false,note:'Response withheld; voucher was exposed and must never be retried.'};
+  }
   let body=null;try{body=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes))}catch{/* untrusted body */}
   const observedAt=now();
   if(res?.status===200&&!res.redirected&&/^application\/json(?:\s*;|$)/i.test(res.headers.get('content-type')??'')&&

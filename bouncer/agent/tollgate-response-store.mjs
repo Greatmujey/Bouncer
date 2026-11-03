@@ -1,8 +1,9 @@
 /** Durable local retention of the exact, already-received Tollgate response.
  * This is not a distributed backup, proof of the HTTP peer, settlement proof,
  * or permission to retry an exposed voucher. The caller must retain the file
- * across environments and keep it private. No voucher signature or key is
- * stored here. */
+ * across environments and keep it private. Signing material is not added by
+ * this store, but untrusted seller bytes could echo it; never publish the raw
+ * response or log it without inspecting it in a secure environment. */
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';

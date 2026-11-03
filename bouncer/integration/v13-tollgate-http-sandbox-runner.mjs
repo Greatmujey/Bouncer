@@ -23,6 +23,8 @@ import {corroborateTollgateQuakes} from '../agent/tollgate-quakes-corroboration.
 import {inspectTollgateSettlement} from '../agent/tollgate-settlement-verification.mjs';
 
 const fixture=process.env.BOUNCER_TOLLGATE_SELLER_FIXTURES;
+const closeMode=process.env.BOUNCER_SYNTHETIC_CLOSE_MODE??'settle';
+if(!['settle','cooperative'].includes(closeMode))throw Error('unknown synthetic close mode');
 if(!fixture||!path.isAbsolute(fixture))throw Error('absolute pinned seller fixture path required');
 for(const [name,digest] of [['src/core/voucher.mjs','51739a45a9a7e3a83fe411d2cf2f2e0d5ff3518fc4f0717225247181689f97b3'],
  ['src/seller/tollgate.mjs','c83c65bced260297bbd2188877e91f45f7ae70b936860dcd29c75e76dc60dd77'],
@@ -83,6 +85,9 @@ try{
   const gate=createTollgate({contract:CHANNEL,seller:SELLER,network:'near-testnet',
    channelSource:id=>view(CHANNEL,'get_channel',{channel_id:id}),
    settle:async v=>{const r=await call(seller,CHANNEL,'settle',{channel_id:v.channelId,cumulative_amount:v.cumulative,nonce:v.nonce,signature:v.signature});
+    return {ok:true,hash:r.transaction_outcome.id}},
+   cooperativeClose:async({channelId,voucher})=>{const r=await call(seller,CHANNEL,'cooperative_close',{
+    channel_id:channelId,cumulative_amount:voucher?.cumulative??null,nonce:voucher?.nonce??null,signature:voucher?.signature??null});
     return {ok:true,hash:r.transaction_outcome.id}}});
   const handler=gate.protect({price:'0.001',description:'Synthetic local quakes'},async(req,res,receipt)=>{
    const now=Date.now(),start=new Date(now-24*3_600_000).toISOString();
@@ -128,7 +133,16 @@ try{
   assert.equal((await view(CHANNEL,'get_channel',{channel_id:opened.channel_id})).settled,'0');
   await assert.rejects(purchaseTollgateQuakesOnce({review,provider,voucherKey,fence,fetchImpl:localFetch,executionMode:'synthetic'}),/EEXIST/);
   assert.equal(httpRequests,3); // second call discovers only; paid request is never repeated
-  const settlement=await gate.settleChannel(opened.channel_id);assert.equal(settlement.ok,true);
+  const before=await p.viewAccount(VAULT,{finality:'final'});
+  let settlement;
+  if(closeMode==='settle')settlement=await gate.settleChannel(opened.channel_id);
+  else{
+   // Synthetic only: the close signature never leaves this disposable local server.
+   const message=Buffer.from(`tollgate:v1:close:${CHANNEL}:${opened.channel_id}`);
+   const closeSignature=Buffer.from(voucherKey.sign(message).signature).toString('base64');
+   settlement=await gate.closeRequest({channel_id:opened.channel_id,signature:closeSignature});
+  }
+  assert.equal(settlement.ok,true);
   const proofProvider={...provider,txStatusReceipts:(...a)=>p.txStatusReceipts(...a)};
   let settlementProof;
   try{settlementProof=await inspectTollgateSettlement({review,purchase:result,txHash:settlement.hash,provider:proofProvider})}
@@ -141,15 +155,18 @@ try{
      actions:x.receipt?.Action?.actions?.map(a=>Object.keys(a)),methods:x.receipt?.Action?.actions?.map(a=>a.FunctionCall?.method_name??null)})),
     outcomes:r.receipts_outcome?.map(x=>({id:x.id,executor:x.outcome?.executor_id,status:Object.keys(x.outcome?.status??{}),
      children:x.outcome?.receipt_ids,logCount:x.outcome?.logs?.length,block:!!x.block_hash}))};
-   console.log('SANITIZED_SYNTHETIC_RECEIPT_SHAPE '+JSON.stringify(shape));throw error;
+   console.error('SANITIZED_SYNTHETIC_RECEIPT_SHAPE '+JSON.stringify(shape));throw error;
   }
   assert.equal(settlementProof.settlement_verified,true);
+  if(closeMode==='cooperative')assert.equal(settlementProof.detached_refund_verified,true);
   let channel=await view(CHANNEL,'get_channel',{channel_id:opened.channel_id});assert.equal(channel.settled,QUAKES_PRICE_YOCTO);
-  await call(owner,VAULT,'start_tollgate_close',{intent_id:review.intent_id},1n);
-  channel=await view(CHANNEL,'get_channel',{channel_id:opened.channel_id});let ready=false;
-  for(let i=0;i<40;i++){const b=await p.viewBlock({finality:'final'});if(BigInt(b.header.timestamp_nanosec)>=BigInt(channel.settle_deadline_ns)){ready=true;break}await delay(1000)}
-  assert.equal(ready,true);const before=await p.viewAccount(VAULT,{finality:'final'});
-  await call(owner,VAULT,'finalize_tollgate_close',{intent_id:review.intent_id},1n);
+  if(closeMode==='settle'){
+   await call(owner,VAULT,'start_tollgate_close',{intent_id:review.intent_id},1n);
+   channel=await view(CHANNEL,'get_channel',{channel_id:opened.channel_id});let ready=false;
+   for(let i=0;i<40;i++){const b=await p.viewBlock({finality:'final'});if(BigInt(b.header.timestamp_nanosec)>=BigInt(channel.settle_deadline_ns)){ready=true;break}await delay(1000)}
+   assert.equal(ready,true);
+   await call(owner,VAULT,'finalize_tollgate_close',{intent_id:review.intent_id},1n);
+  }
   channel=await view(CHANNEL,'get_channel',{channel_id:opened.channel_id});
   const after=await p.viewAccount(VAULT,{finality:'final'});
   assert.equal(channel.status,'Closed');assert.equal(BigInt(channel.refunded),BigInt(channel.deposit)-BigInt(QUAKES_PRICE_YOCTO));
@@ -161,7 +178,8 @@ try{
    one_fenced_http_voucher:true,replay_refused:true,local_seller_acknowledged:true,local_data_returned:true,
    exact_response_retained:true,synthetic_upstream_comparison_passed:true,
    no_false_settlement_claim_before_chain:true,local_seller_settled:true,final_receipt_graph_and_detached_payout_verified:true,
-   owner_close_and_detached_refund:true,
+   synthetic_close_mode:closeMode,owner_close_and_detached_refund:closeMode==='settle',
+   cooperative_refund_receipt_verified:closeMode==='cooperative'&&settlementProof.detached_refund_verified,
    rolling_budget_conservative:true,v13_sha256:V13_VOUCHER_SHA256,channel_sha256:PUBLISHED_CHANNEL_SHA256},null,2));
  });
 }finally{

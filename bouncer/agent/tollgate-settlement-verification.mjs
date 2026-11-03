@@ -1,7 +1,7 @@
-/** FINAL trusted-RPC verification of the first Tollgate `settle` transaction.
- * A seller acknowledgement is not a settlement. The on-chain `settle` method
- * updates accounting and schedules a DETACHED native transfer, whose separate
- * receipt must also succeed. No signing, transaction broadcast, seller HTTP
+/** FINAL trusted-RPC verification of a first Tollgate settlement, either
+ * `settle` or `cooperative_close`. A seller acknowledgement is not settlement.
+ * Both methods update accounting and schedule a DETACHED native transfer,
+ * whose separate receipt must also succeed. No signing, transaction broadcast, seller HTTP
  * request or voucher retry occurs here. Trust assumptions: the supplied RPC,
  * the reviewed pre-purchase snapshot and the pinned provider code; this is not
  * a light-client proof or an audit. Return only public summary fields, never
@@ -32,17 +32,17 @@ function oneAction(receipt) {
   const actions = receipt?.receipt?.Action?.actions;
   return Array.isArray(actions) && actions.length === 1 ? actions[0] : null;
 }
-function eventLog(logs) {
+function eventLog(logs, eventName) {
   if (!Array.isArray(logs) || logs.length > 100) throw new Error('settlement logs missing or excessive');
   const matches = [];
   for (const line of logs) {
     if (typeof line !== 'string' || line.length > 16_000) throw new Error('invalid settlement log');
     if (!line.startsWith('EVENT_JSON:')) continue;
     let event; try { event = JSON.parse(line.slice('EVENT_JSON:'.length)); } catch { throw new Error('invalid settlement event'); }
-    if (event?.standard === 'tollgate' && event?.event === 'channel_settled') matches.push(event);
+    if (event?.standard === 'tollgate' && event?.event === eventName) matches.push(event);
   }
   if (matches.length !== 1 || matches[0].version !== '1.0.0' || !Array.isArray(matches[0].data) || matches[0].data.length !== 1) {
-    throw new Error('unique Tollgate settlement event required');
+    throw new Error('unique Tollgate event required');
   }
   return matches[0].data[0];
 }
@@ -60,7 +60,7 @@ function context(raw, purchase, txHash) {
   return { review, reviewHash };
 }
 
-/** Pure receipt-graph check for the *first* reviewed settle, using caller-
+/** Pure receipt-graph check for the *first* reviewed settlement, using caller-
  * supplied RPC data. For a public-chain claim use inspectTollgateSettlement,
  * which also checks the RPC chain and contract code at the execution block. */
 export function verifyTollgateSettlementReceipts({ review: raw, purchase, txHash, result } = {}) {
@@ -76,19 +76,25 @@ export function verifyTollgateSettlementReceipts({ review: raw, purchase, txHash
       txOutcome.outcome.executor_id !== review.seller || !obj(txOutcome.outcome.status) ||
       !isTransactionHash(txOutcome.outcome.status.SuccessReceiptId)) throw new Error('settlement transaction identity differs');
   const action = tx.actions[0]?.FunctionCall;
-  if (!action || action.method_name !== 'settle' || String(action.deposit) !== '0') throw new Error('seller did not call the reviewed settle method');
+  if (!action || !['settle', 'cooperative_close'].includes(action.method_name) || String(action.deposit) !== '0') {
+    throw new Error('seller did not call a supported settlement method');
+  }
+  const cooperative = action.method_name === 'cooperative_close';
   const args = json64(action.args, 'settlement arguments');
   if (!keys(args, ['channel_id', 'cumulative_amount', 'nonce', 'signature']) || args.channel_id !== purchase.channel_id ||
       args.cumulative_amount !== review.price_yocto || args.nonce !== '1') throw new Error('settlement channel, amount or nonce differs');
   const sig = b64(args.signature, 64, 'voucher signature');
   const message = Buffer.from(`tollgate:v1:${review.channel_contract}:${purchase.channel_id}:${review.price_yocto}:1`, 'utf8');
   if (sig.length !== 64 || !nearApi.utils.PublicKey.fromString(review.voucher_public_key).verify(message, sig)) throw new Error('settlement voucher signature differs');
-  if (json64(result.status.SuccessValue, 'settlement return') !== review.price_yocto) throw new Error('settlement return amount differs');
+  const remaining = (BigInt(purchase.channel_deposit_yocto) - BigInt(review.price_yocto)).toString();
+  if (json64(result.status.SuccessValue, 'settlement return') !== (cooperative ? remaining : review.price_yocto)) {
+    throw new Error('settlement return amount differs');
+  }
   const ids = result.receipts.map(r => r?.receipt_id), outcomeIds = result.receipts_outcome.map(r => r?.id);
   if (ids.some(i => !isTransactionHash(i)) || outcomeIds.some(i => !isTransactionHash(i)) ||
       new Set(ids).size !== ids.length || new Set(outcomeIds).size !== outcomeIds.length) throw new Error('missing or duplicate settlement receipt IDs');
   const calls = result.receipts.filter(r => r?.predecessor_id === review.seller && r?.receiver_id === review.channel_contract &&
-    oneAction(r)?.FunctionCall?.method_name === 'settle');
+    oneAction(r)?.FunctionCall?.method_name === action.method_name);
   if (calls.length !== 1) throw new Error('unique settlement action receipt required');
   const callReceipt = calls[0], receiptAction = oneAction(callReceipt).FunctionCall;
   if (!same(receiptAction, action) || !txOutcome.outcome.receipt_ids.includes(callReceipt.receipt_id) ||
@@ -97,10 +103,17 @@ export function verifyTollgateSettlementReceipts({ review: raw, purchase, txHash
   if (callOut?.outcome?.executor_id !== review.channel_contract || !success(callOut.outcome.status) ||
       callOut.outcome.status.SuccessValue !== result.status.SuccessValue || !Array.isArray(callOut.outcome.receipt_ids) ||
       !isTransactionHash(callOut.block_hash)) throw new Error('successful settlement execution is missing');
-  const event = eventLog(callOut.outcome.logs), remaining = (BigInt(purchase.channel_deposit_yocto) - BigInt(review.price_yocto)).toString();
+  const event = eventLog(callOut.outcome.logs, 'channel_settled');
   if (!keys(event, ['channel_id', 'seller', 'paid', 'cumulative', 'nonce', 'remaining']) ||
       event.channel_id !== purchase.channel_id || event.seller !== review.seller || event.paid !== review.price_yocto ||
       event.cumulative !== review.price_yocto || event.nonce !== '1' || event.remaining !== remaining) throw new Error('settlement event differs from the reviewed channel');
+  if (cooperative) {
+    const closed = eventLog(callOut.outcome.logs, 'channel_closed');
+    if (!keys(closed, ['channel_id', 'how', 'settled', 'refunded', 'owner']) || closed.channel_id !== purchase.channel_id ||
+        closed.how !== 'cooperative' || closed.settled !== review.price_yocto || closed.refunded !== remaining || closed.owner !== review.vault) {
+      throw new Error('cooperative-close event differs from the reviewed channel');
+    }
+  }
   const payouts = result.receipts.filter(r => r?.predecessor_id === review.channel_contract && r?.receiver_id === review.seller &&
     oneAction(r)?.Transfer && String(oneAction(r).Transfer.deposit) === review.price_yocto);
   if (payouts.length !== 1 || !callOut.outcome.receipt_ids.includes(payouts[0].receipt_id)) throw new Error('matching detached native transfer is missing or unlinked');
@@ -109,10 +122,23 @@ export function verifyTollgateSettlementReceipts({ review: raw, purchase, txHash
       b64(payoutOut.outcome.status.SuccessValue, 100, 'transfer result').length !== 0 || !isTransactionHash(payoutOut.block_hash)) {
     throw new Error('detached native transfer did not succeed');
   }
+  let refundVerified = false, refundReceiptId = null;
+  if (cooperative && BigInt(remaining) > 0n) {
+    const refunds = result.receipts.filter(r => r?.predecessor_id === review.channel_contract && r?.receiver_id === review.vault &&
+      oneAction(r)?.Transfer && String(oneAction(r).Transfer.deposit) === remaining && callOut.outcome.receipt_ids.includes(r.receipt_id));
+    const refundOut = refunds.length === 1 ? result.receipts_outcome.find(r => r.id === refunds[0].receipt_id) : null;
+    try {
+      refundVerified = Boolean(refundOut?.outcome?.executor_id === review.vault && success(refundOut.outcome.status) &&
+        b64(refundOut.outcome.status.SuccessValue, 100, 'refund result').length === 0 && isTransactionHash(refundOut.block_hash));
+    } catch { refundVerified = false; }
+    if (refundVerified) refundReceiptId = refunds[0].receipt_id;
+  }
   return { tx_hash: txHash, review_hash: reviewHash, channel_id: purchase.channel_id, seller: review.seller,
-    channel_contract: review.channel_contract, amount_yocto: review.price_yocto, nonce: '1',
+    channel_contract: review.channel_contract, amount_yocto: review.price_yocto, nonce: '1', method: action.method_name,
     settlement_receipt_id: callReceipt.receipt_id, settlement_block_hash: callOut.block_hash,
     payout_receipt_id: payouts[0].receipt_id, payout_block_hash: payoutOut.block_hash,
+    detached_refund_verified: cooperative ? refundVerified : null, refund_amount_yocto: cooperative ? remaining : null,
+    refund_receipt_id: refundReceiptId, rolling_budget_refund_verified: false,
     scope: 'caller-supplied FINAL receipt graph only; no chain or contract-code check, no delivery proof' };
 }
 

@@ -96,3 +96,47 @@ test('RPC verifier requires testnet, FINAL, reviewed signer and pinned code at t
   await assert.rejects(inspectTollgateSettlement({ ...f, provider: { ...provider, query: async () => ({ block_hash: f.callBlock, code_hash: hash(6) }) } }), /code/);
   await assert.rejects(inspectTollgateSettlement({ ...f, provider: { ...provider, query: async () => ({ block_hash: hash(6), code_hash: TOLLGATE_CHANNEL_CODE_HASH }) } }), /code/);
 });
+
+function cooperativeFixture() {
+  const f = fixture(), remaining = (BigInt(f.purchase.channel_deposit_yocto) - BigInt(f.review.price_yocto)).toString();
+  const call = f.result.transaction.actions[0].FunctionCall;
+  call.method_name = 'cooperative_close'; f.result.receipts[0].receipt.Action.actions[0].FunctionCall.method_name = 'cooperative_close';
+  f.result.status.SuccessValue = enc(remaining); f.result.receipts_outcome[0].outcome.status.SuccessValue = enc(remaining);
+  const close = { standard: 'tollgate', version: '1.0.0', event: 'channel_closed', data: [{ channel_id: '7',
+    how: 'cooperative', settled: f.review.price_yocto, refunded: remaining, owner: f.review.vault }] };
+  f.result.receipts_outcome[0].outcome.logs.push(`EVENT_JSON:${JSON.stringify(close)}`);
+  const refundId = hash(10), refundBlock = hash(11);
+  f.result.receipts_outcome[0].outcome.receipt_ids.push(refundId);
+  f.result.receipts.push({ receipt_id: refundId, predecessor_id: f.review.channel_contract, receiver_id: f.review.vault,
+    receipt: { Action: { actions: [{ Transfer: { deposit: remaining } }] } } });
+  f.result.receipts_outcome.push({ id: refundId, block_hash: refundBlock, outcome: { executor_id: f.review.vault,
+    receipt_ids: [], logs: [], status: { SuccessValue: '' } } });
+  return { ...f, close, refundId, remaining };
+}
+
+test('cooperative settlement verifies seller payout and separately linked refund without crediting the rolling budget', () => {
+  const f = cooperativeFixture(), proof = verify(f);
+  assert.equal(proof.method, 'cooperative_close'); assert.equal(proof.detached_refund_verified, true);
+  assert.equal(proof.refund_amount_yocto, f.remaining); assert.equal(proof.refund_receipt_id, f.refundId);
+  assert.equal(proof.rolling_budget_refund_verified, false); assert(!JSON.stringify(proof).includes(f.signature));
+});
+
+test('a failed or borrowed detached refund never becomes a verified refund; a missing voucher cannot be a paid settlement', () => {
+  for (const mutate of [
+    f => { f.result.receipts_outcome[2].outcome.status = { Failure: { ActionError: {} } }; },
+    f => { f.result.receipts_outcome[0].outcome.receipt_ids = [f.transferId]; },
+    f => { f.result.receipts[2].receiver_id = f.review.owner; },
+    f => { f.result.receipts[2].receipt.Action.actions[0].Transfer.deposit = '1'; },
+    f => { f.result.receipts_outcome.pop(); },
+  ]) {
+    const f = cooperativeFixture(); mutate(f); const proof = verify(f);
+    assert.equal(proof.detached_refund_verified, false); assert.equal(proof.refund_receipt_id, null);
+    assert.equal(proof.payout_receipt_id, f.transferId);
+  }
+  const noVoucher = cooperativeFixture();
+  noVoucher.result.transaction.actions[0].FunctionCall.args = enc({ channel_id: '7', cumulative_amount: null, nonce: null, signature: null });
+  assert.throws(() => verify(noVoucher));
+  const wrongOwner = cooperativeFixture(); wrongOwner.close.data[0].owner = wrongOwner.review.owner;
+  wrongOwner.result.receipts_outcome[0].outcome.logs[1] = `EVENT_JSON:${JSON.stringify(wrongOwner.close)}`;
+  assert.throws(() => verify(wrongOwner), /cooperative-close event/);
+});

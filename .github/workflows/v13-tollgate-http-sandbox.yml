@@ -11,6 +11,10 @@ jobs:
     if: github.run_attempt == 1 && contains(github.event.head_commit.message, '[v13-http-sandbox]')
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        close_mode: [settle, cooperative]
     defaults:
       run:
         working-directory: bouncer
@@ -49,6 +53,7 @@ jobs:
           BOUNCER_V13_WASM_PATH: ${{ runner.temp }}/v13-voucher.wasm
           BOUNCER_TOLLGATE_WASM_PATH: ${{ runner.temp }}/tollgate.wasm
           BOUNCER_TOLLGATE_SELLER_FIXTURES: ${{ runner.temp }}/seller
+          BOUNCER_SYNTHETIC_CLOSE_MODE: ${{ matrix.close_mode }}
         run: |
           set -euo pipefail
           ulimit -Sn 65535

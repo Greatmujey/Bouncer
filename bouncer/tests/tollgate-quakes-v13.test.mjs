@@ -234,3 +234,20 @@ test('retains the exact seller response and stops without retry if evidence cann
  await assert.rejects(purchaseTollgateQuakesOnce({...args(g,second.fence),responseStore:blocked}),/EEXIST/);
  assert.equal(g.http.paid,1);
 });
+
+test('a seller response that echoes the voucher is withheld and is never retried',async t=>{
+ for(const kind of ['header','signature']){
+  const f=fixture(),{fence}=privateFence(t),{dir}=privateFence(t),responseStore=new TollgateResponseStore(dir);
+  const transport=async(url,options)=>{
+   if(options?.headers?.['x-payment']){
+    const h=options.headers['x-payment'],envelope=JSON.parse(Buffer.from(h,'base64').toString('utf8'));
+    f.data.reflected=kind==='header'?h:envelope.payload.signature;
+   }
+   return f.fetchImpl(url,options);
+  };
+  const out=await purchaseTollgateQuakesOnce({...args(f,fence),responseStore,fetchImpl:transport});
+  assert.equal(out.status,'SELLER_RESPONSE_CONTAINED_VOUCHER');assert.equal(out.do_not_retry,true);
+  assert.equal(out.response_locally_retained,false);assert.equal(out.data,undefined);
+  assert.deepEqual(fs.readdirSync(dir),[]);assert.equal(f.http.paid,1);
+ }
+});

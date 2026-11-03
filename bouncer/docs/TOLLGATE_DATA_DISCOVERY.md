@@ -152,7 +152,9 @@ for ensuring that transport cannot reach a real seller, so never use this mode
 for a real purchase. Live mode also requires a private `TollgateResponseStore`
 that fsyncs the exact received response bytes and a SHA-256 digest before the
 client reports retained data. It is a local file, not an off-device backup;
-if retention fails after voucher exposure, do not retry the paid request.
+if retention fails after voucher exposure, do not retry the paid request. The
+seller controls its response and could echo a voucher or other sensitive input,
+so treat the exact response as private and never publish or log it unreviewed.
 
 `corroborateTollgateQuakes` checks that retained bytes match the original
 purchase result, reconstructs the exact allowed USGS query, and makes one
@@ -165,13 +167,23 @@ seller actually fetched USGS at its claimed time. The response and fence must
 still be preserved across environments.
 
 `inspectTollgateSettlement` is a separate read-only check for the first
-seller `settle` transaction. It requires a FINAL receipt-inclusive RPC result,
-the reviewed channel, amount, nonce and voucher key, the pinned channel code
-at execution, and a successful, linked **detached native-transfer** receipt.
+seller `settle` or voucher-bearing `cooperative_close` transaction. It requires
+a FINAL receipt-inclusive RPC result, the reviewed channel, amount, nonce and
+voucher key, the pinned channel code at execution, and a successful, linked
+**detached native-transfer** receipt. For cooperative close it reports the
+separate vault refund receipt independently; even a verified refund does not
+mean the rolling-budget reservation was automatically released.
 A seller acknowledgement or settlement event alone is not enough. This check
 assumes the RPC is honest and does not prove provider delivery. If no
 transaction hash is available, settlement remains unconfirmed; it does not
-ask the seller to repeat a payment or force a close.
+ask the seller to repeat a payment or force a close. The seller's published
+Vercel configuration schedules settlement only once daily, while this reviewed
+channel expires after ten minutes. Its per-instance `/tmp` store can also
+lose a voucher or be absent on the cron instance. Therefore automatic seller
+settlement within this channel's lifetime is **not established**. A second
+HTTP request or a cooperative-close signature is not a safe workaround without
+reviewing seller state and the possibility of an immediate full refund without
+paying the seller; neither is automated here.
 
 An [isolated HTTP lifecycle](https://github.com/Greatmujey/Bouncer/actions/runs/41663649675)
 exercised the updated client against the pinned published seller SDK and a disposable
