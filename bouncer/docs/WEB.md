@@ -40,9 +40,11 @@ model conversations are not yet verified.
 
 ## Brand mark
 
-The custom shield-and-B mark lives in `bouncer/web/favicon.svg`. The site uses
-the same scalable asset in desktop and mobile navigation, the welcome tour and
-the browser tab; it is decorative next to the accessible Bouncer wordmark.
+The selected Bouncer mark—the lowercase b and upward arrow, without the
+outer arc—lives in `bouncer/web/favicon.svg`. The same vector paths appear in
+desktop and mobile navigation, the welcome tour and the browser tab. The mark
+is decorative next to the accessible Bouncer wordmark; its main color is
+lightened against the dark sidebar.
 
 ## Build and deployment
 

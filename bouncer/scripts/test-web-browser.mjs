@@ -38,9 +38,10 @@ try {
       page.on('pageerror', error => pageErrors.push(error.message));
       page.on('request', request => { if (!['GET', 'HEAD'].includes(request.method())) writes.push(request.url()); });
       await page.goto(url, { waitUntil: 'networkidle' });
-      const brand = page.locator(width < 650 ? '.mobile-brand .brand-mark img' : '.brand .brand-mark img');
+      const brand = page.locator(width < 650 ? '.mobile-brand .brand-mark svg' : '.brand .brand-mark svg');
       assert.equal(await brand.isVisible(), true, `brand mark is visible at ${width}px`);
-      assert.equal(await brand.evaluate(el => el.complete && el.naturalWidth > 0), true, 'brand mark loads');
+      assert.equal(await brand.locator('use').getAttribute('href'), '#i-bouncer', 'brand mark uses the shared symbol');
+      assert.ok(await brand.locator('use').evaluate(el => el.getBBox().width > 0), 'brand vector renders');
       const dialog = page.locator('#welcome-tour');
       assert.equal(await dialog.evaluate(el => el.open), false, 'first visit is not blocked by a modal');
       await page.locator('[data-open-tour]').click();

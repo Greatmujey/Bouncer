@@ -156,9 +156,14 @@ test('the same custom Bouncer mark appears in both navigation layouts, the tour 
   const html = fs.readFileSync(new URL('../web/index.html', import.meta.url), 'utf8');
   const logo = fs.readFileSync(new URL('../web/favicon.svg', import.meta.url), 'utf8');
   assert.equal((html.match(/class="brand-mark" aria-hidden="true"/g) || []).length, 3);
-  assert.equal((html.match(/src="\.\/favicon\.svg\?v=2"/g) || []).length, 3);
-  assert.match(html, /rel="icon"[^>]*href="\.\/favicon\.svg\?v=2"/);
-  assert.match(logo, /viewBox="0 0 64 64"/);
+  assert.equal((html.match(/<use href="#i-bouncer"\/>/g) || []).length, 3);
+  assert.match(html, /rel="icon"[^>]*href="\.\/favicon\.svg\?v=3"/);
+  assert.match(logo, /viewBox="16 17 300 300"/);
+  const symbol = html.match(/<symbol id="i-bouncer"[^>]*>(.*?)<\/symbol>/s)?.[1];
+  assert.ok(symbol, 'brand symbol is present');
+  const pathData = source => [...source.matchAll(/<path d="([^"]+)"/g)].map(match => match[1]);
+  assert.equal(pathData(logo).length, 3);
+  assert.deepEqual(pathData(symbol), pathData(logo), 'favicon and website use the same mark');
   assert.doesNotMatch(logo, /<script|<foreignObject|\b(?:href|src)\s*=/i);
 });
 
