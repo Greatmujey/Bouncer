@@ -8,4 +8,6 @@ The original fake-token registration [workflow](https://github.com/Greatmujey/Bo
 
 After independently rechecking the **original control's FINAL receipt**, its hash binding and fresh absence, one new registration [`2xrD5cbvz2MgaThp3VdwbRZU8GAXoJHcbsHN4TispdjL`](https://testnet.nearblocks.io/txns/2xrD5cbvz2MgaThp3VdwbRZU8GAXoJHcbsHN4TispdjL) registered both owner and vault for the fake FT. The [one-shot workflow](https://github.com/Greatmujey/Bouncer/actions/runs/41544149272) verified the new original receipt, current registrations and an eligible next-stage state. Its fence is artifact `13186549409`. The earlier registration's historical receipt is still unknown; its nonce is fenced. **Do not resend any of these transactions.**
 
+The next acquisition stage is a tiny, fixed test-NEAR wrap for the fake-token pool. Before any signature or send, a fresh read-only preflight must recheck the original control and registration receipts, the exact owner-key nonce and current testnet state. Any signed transaction is a public bearer and an uncertain original must be reconciled, never resent.
+
 No OutLayer prepayment, order or paid execution has been made through this path. Do not interpret a test failure, a current balance or this documentation as a paid-provider result.
