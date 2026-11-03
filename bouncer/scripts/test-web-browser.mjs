@@ -267,6 +267,12 @@ try {
     await page.waitForFunction(() => !document.querySelector('[data-wallet-id="intear-wallet"]').disabled);
     await page.locator('.top-connect').click();
     await page.locator('[data-wallet-id="intear-wallet"]').click();
+    const pickerHandle = await page.frameLocator('iframe').first().locator('iframe').elementHandle({ timeout: 20_000 });
+    const pickerDocument = await pickerHandle.contentFrame();
+    assert.ok(pickerDocument, 'Intear picker document exists');
+    // The upstream picker must receive its connector origin before it can
+    // proxy a popup. Automated clicks can otherwise outrun initialization.
+    await pickerDocument.waitForFunction(() => typeof hotConnector !== 'undefined' && !!hotConnector.origin && !!hotConnector.location, null, { timeout: 20_000 });
     const pickerFrame = page.frameLocator('iframe').first().frameLocator('iframe');
     await pickerFrame.locator('.card-title').getByText('Web', { exact: true }).click({ timeout: 20_000 }).catch(async error => {
       console.error('Intear browser diagnostic:', { calls, errors, consoleMessages, status: await page.locator('#wallet-status').textContent(), frames: page.frames().map(frame => frame.url()) });
