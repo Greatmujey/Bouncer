@@ -114,7 +114,7 @@ security or CSP review is implied. The public repository is
 The project’s production branch is `main`; working-branch previews and the
 production domain can therefore serve different commits. On 3 November 2026 UTC the
 expanded testnet wallet picker was deployed directly from working-branch commit
-`101a1a1` to `bouncer-near.vercel.app` without merging to `main`. A future
+`6989a99` to `bouncer-near.vercel.app` without merging to `main`. A future
 production build from `main` could replace it. The deployed Intear source ZIP has
 SHA-256 `2fe277baae87ff16d7b1efee9853cba26a46b1f9813302bf507f5ca53d2e0291`.
 Verify deployed assets and wallet behavior after deployment rather than assuming
