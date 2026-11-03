@@ -4,6 +4,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { WALLET_MANIFEST } from '../web-src/wallet-manifest.mjs';
+import { WALLET_EXECUTOR_SHA256 } from '../web-src/wallet-executor.mjs';
 const url = fs.readFileSync(process.env.BOUNCER_PREVIEW_URL_FILE, 'utf8').trim();
 const isGuestPreview = /^https:\/\/www\.madethis\.website\/s\/[a-z2-9]{6,16}\/$/.test(url);
 const isProduction = url === 'https://bouncer-near.vercel.app/';
@@ -40,6 +42,25 @@ try {
     assert.equal(await page.getByRole('button', { name: 'WalletConnect, setup required' }).isDisabled(), true);
     assert.match(await page.locator('#wallet-dialog-description').innerText(), /login message/);
     assert.match(await page.locator('#wallet-dialog-status').innerText(), /testnet wallet/i);
+    // Exercise the exact URLs from the public origin, including CORS and bytes.
+    // This only fetches public code; it never opens a wallet or signs anything.
+    const results = await Promise.all(WALLET_MANIFEST.wallets.map(async ({ id, executor }) => {
+      const result = await page.evaluate(async target => {
+        try {
+          const response = await fetch(target, { credentials: 'omit', redirect: 'error', cache: 'no-store', signal: AbortSignal.timeout(20_000) });
+          const bytes = await response.arrayBuffer();
+          const hash = await crypto.subtle.digest('SHA-256', bytes);
+          return { status: response.status, size: bytes.byteLength, hash: Array.from(new Uint8Array(hash), byte => byte.toString(16).padStart(2, '0')).join('') };
+        } catch (error) { return { error: String(error) }; }
+      }, new URL(executor, url).href);
+      return { id, ...result };
+    }));
+    for (const result of results) {
+      assert.equal(result.error, undefined, `${result.id} executor fetch failed: ${result.error}`);
+      assert.equal(result.status, 200, `${result.id} executor response`);
+      assert.ok(result.size > 0 && result.size <= 4 * 1024 * 1024, `${result.id} executor size`);
+      assert.equal(result.hash, WALLET_EXECUTOR_SHA256[result.id], `${result.id} executor integrity`);
+    }
   } else {
     assert.equal(await page.locator('[data-wallet-id="meteor-wallet"]').isDisabled(), true, 'shared guest origin must not enable wallets');
     assert.match(await page.locator('#wallet-dialog-status').innerText(), /new tab/);
