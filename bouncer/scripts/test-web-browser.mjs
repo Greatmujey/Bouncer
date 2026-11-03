@@ -284,10 +284,26 @@ try {
       }
     });
     const pickerFrame = page.frameLocator('iframe').first().frameLocator('iframe');
-    await pickerFrame.locator('.card-title').getByText('Web', { exact: true }).locator('..').tap({ timeout: 20_000 }).catch(async error => {
-      console.error('Intear browser diagnostic:', { calls, errors, consoleMessages, status: await page.locator('#wallet-status').textContent(), frames: page.frames().map(frame => frame.url()) });
-      throw error;
-    });
+    const webCard = pickerFrame.locator('.card-title').getByText('Web', { exact: true }).locator('..');
+    if (process.env.BOUNCER_INTEAR_PROGRAMMATIC_TEST !== '1') {
+      await webCard.tap({ timeout: 20_000 }).catch(async error => {
+        console.error('Intear browser diagnostic:', { calls, errors, consoleMessages, status: await page.locator('#wallet-status').textContent(), frames: page.frames().map(frame => frame.url()) });
+        throw error;
+      });
+      // Some hosted headless Chromium versions report a successful nested-frame
+      // tap without delivering any input events. Preserve the protocol test,
+      // but say explicitly when it needed programmatic activation.
+      if (!pickerDocument.isDetached()) {
+        const delivered = await pickerDocument.waitForFunction(() => window.__pickerInputTrace.some(event => event.type === 'click'), null, { timeout: 1000 }).then(() => true, () => false);
+        if (!delivered && !pickerDocument.isDetached()) {
+          console.warn('Intear nested-frame touch was not delivered; using DOM activation for the synthetic protocol check. Touch input was not verified in this run.');
+          await webCard.evaluate(element => element.click());
+        }
+      }
+    } else {
+      console.warn('Using DOM activation for the synthetic Intear protocol check.');
+      await webCard.evaluate(element => element.click());
+    }
     await page.waitForFunction(() => document.querySelector('#wallet-status').textContent.includes('intear-synthetic.testnet'), null, { timeout: 20_000 }).catch(async error => {
       console.error('Intear connection diagnostic:', {
         calls, errors, consoleMessages,
@@ -335,8 +351,8 @@ try {
       await page.locator('[data-wallet-id="near-cli"]').click();
       const frame = page.frameLocator('iframe').first();
       await frame.locator('#account-id').fill('cli-synthetic.testnet', { timeout: 20_000 });
-      await frame.locator('#submit-btn').tap();
-      await frame.locator('#submit-signing-method-btn').tap();
+      await frame.locator('#account-id').press('Enter');
+      await frame.locator('.signing-method-card.selected').press('Enter');
       await page.waitForFunction(() => document.querySelector('#wallet-status').textContent.includes('cli-synthetic.testnet'));
       assert.match(await page.locator('#wallet-status').textContent(), /wallet-reported/);
       assert.deepEqual(writes, [], 'CLI account entry must not send any transaction or write request');
