@@ -18,7 +18,9 @@ const navigation = [...document.querySelectorAll('.side-link, .mobile-nav a')];
 const routeViews = [...document.querySelectorAll('[data-route-view]')];
 function showRoute(initial = false) {
   const hash = location.hash.slice(1);
-  const route = routeByHash[hash] || 'overview';
+  // Only our own keys are routes; built-in object properties such as
+  // "constructor" must not turn a malformed fragment into a blank view.
+  const route = Object.prototype.hasOwnProperty.call(routeByHash, hash) ? routeByHash[hash] : 'overview';
   for (const view of routeViews) view.hidden = view.dataset.routeView !== route;
   for (const link of navigation) {
     const active = routeByHash[link.getAttribute('href').slice(1)] === route;

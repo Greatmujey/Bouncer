@@ -122,6 +122,9 @@ try {
       await page.goto(`${url}#resources`, { waitUntil: 'networkidle' });
       await route('resources').waitFor({ state: 'visible' });
       assert.equal(await page.locator('#resources').isVisible(), true, 'old recorded-resource links still work');
+      await page.goto(`${url}#constructor`, { waitUntil: 'networkidle' });
+      await route('overview').waitFor({ state: 'visible' });
+      assert.equal(await page.locator('[data-route-view]:visible').count(), 1, 'unknown fragments safely fall back to overview');
       await page.emulateMedia({ reducedMotion: 'reduce' });
       assert.equal(await page.locator('.hero-noise').evaluate(el => getComputedStyle(el).animationName), 'none', 'reduced motion disables decorative animation');
       assert.deepEqual(writes, [], 'tour and historical story must not send write requests');

@@ -13,7 +13,7 @@
   <title>Bouncer — The resource layer for agents</title>
   <link rel="icon" type="image/svg+xml" href="./favicon.svg?v=3">
   <link rel="preload" href="./manrope-latin.woff2" as="font" type="font/woff2" crossorigin>
-  <link rel="stylesheet" href="./styles.css">
+  <link rel="stylesheet" href="./styles.css?v=4">
 </head>
 <body>
   <svg class="svg-defs" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
@@ -137,7 +137,7 @@
   <div class="wallet-safety"><svg><use href="#i-lock"/></svg><span>Account display only. Connecting doesn’t create a vault, grant spending access, or send a transaction. Never share your seed phrase.</span></div>
 </dialog>
   <dialog class="tour-dialog" id="welcome-tour" aria-labelledby="tour-title" aria-describedby="tour-description"><div class="tour-topline"><span class="brand-mark" aria-hidden="true"><svg viewBox="16 17 300 300"><use href="#i-bouncer"/></svg></span><span class="tour-count" id="tour-count">STEP 1 OF 4</span><button type="button" class="tour-close" id="tour-skip" aria-label="Close the tour">×</button></div><div class="tour-progress" aria-hidden="true"><span></span><span></span><span></span><span></span></div><div class="tour-copy" aria-live="polite"><div class="section-kicker" id="tour-kicker">WELCOME TO BOUNCER</div><h2 id="tour-title">Meet your resource agent.</h2><p id="tour-description">Bouncer helps an agent get compute, storage and API services while your on-chain rules guard its spending.</p><div class="tour-callout" id="tour-callout">Bouncer is a testnet prototype, not an open marketplace.</div></div><div class="tour-actions"><button class="button tour-back" type="button" id="tour-back" disabled>Back</button><button class="button wallet-button" type="button" id="tour-next">Next →</button></div></dialog>
-  <script type="module" src="./app.mjs"></script>
-  <script type="module" src="./wallet.bundle.js"></script>
+  <script type="module" src="./app.mjs?v=4"></script>
+  <script type="module" src="./wallet.bundle.js?v=4"></script>
 </body>
 </html>
