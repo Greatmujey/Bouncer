@@ -43,6 +43,16 @@ upgrade authorization have not been designed.
 The contract tests include the V11 limitation, a V12 lock-after-route race,
 stale/inactive route rejection and an unrelated-payee control. CI builds a
 separate V12 WASM for review; source tests and an artifact hash are not an
-independent security review or production-readiness evidence. An isolated-chain
-exercise, reproducible toolchain/dependencies, a durable owner recovery path,
-independent provider compatibility and genuine delivery remain necessary.
+independent security review or production-readiness evidence.
+
+The opt-in `V12 isolated pair-lock sandbox` workflow builds V12 from the branch
+and starts the existing hash-pinned nearcore sandbox with a synthetic example
+FT and local receiver stand-in. It is designed to check a prepaid route created
+before an exact token/payee reservation, rejection of the stale project with no
+provider call or debit, and successful one-shot exact transfer plus replay
+rejection. It uses ephemeral keys and a fenced loopback RPC. Its result must be
+checked separately; adding the workflow is not a passed test. A passing run is
+still not testnet, real Circle or OutLayer, independent provider delivery, or an
+audit. The V12 WASM marker only catches wrong inputs; the build is not yet
+reproducible. A durable owner recovery path, independent provider compatibility
+and genuine delivery also remain necessary.
