@@ -1,0 +1,208 @@
+# Independent data discovery: Tollgate on NEAR testnet
+
+Bouncer's current V12 vault is funded with Circle test-USDC. Tollgate is a
+separate, independently operated public testnet data API, but its published
+`near-channel` offer is denominated in **native test NEAR**, not Circle USDC.
+The read-only V12 discovery checks the public 402 terms and a single FINAL
+trusted-RPC block for the keyless vault and channel contract. It makes one
+unpaid GET only: no voucher signature, channel, payment or data delivery.
+
+The live offer, source and chain state can change independently. In the
+[3 November read-only run](https://github.com/Greatmujey/Bouncer/actions/runs/41644777424),
+the seller advertised 0.001 test NEAR for the quakes endpoint and the observed
+channel code hash matched its published deployment record. That request omitted
+`path=quakes`, which the offer appended, so its exact-resource check failed.
+The discovery now requests the provider's explicit rewritten URL. In a [fresh
+read-only run](https://github.com/Greatmujey/Bouncer/actions/runs/41648461093),
+the advertised and requested URLs matched exactly at the observed instant;
+the [snapshot](../evidence/testnet-owner-v3/tollgate-exact-resource-20261103.json)
+is not an executable quote and the voucher still does not cryptographically
+bind the resource. Unrecognized values block use. The code-hash
+match does **not** establish source-to-build equivalence, API behavior, seller
+reliability or an independent audit. A provider response or contract receipt
+would still need to be tied to the **specific requested resource** before
+claiming fulfillment.
+
+## Why V12 must not pay it
+
+- V12 has no owner-configured Tollgate channel-opening method. Opening from an
+  unrestricted external owner would bypass the vault and isn't a Bouncer
+  policy-enforced purchase.
+- Tollgate's published voucher signs the channel, cumulative amount and nonce,
+  but not the HTTP resource or response. Consequently an HTTP 200 or an
+  unrelated voucher alone would not prove the data requested was delivered.
+- The public seller's published Vercel implementation stores voucher state in
+  per-instance ephemeral storage and accepts the voucher before fetching the
+  upstream data, so its source indicates an upstream failure can still cost the
+  buyer. Durability and deployed-source equivalence are unverified. The channel
+  minimum excludes channel storage and transaction gas; unused money and refund
+  timing must be established before any payment.
+- Circle and native NEAR use different token budgets. A native-NEAR channel is
+  not a Circle-USDC purchase, nor a substitute for one.
+
+The discovery source is `agent/tollgate-v12-readiness.mjs`; the script and
+workflow use read-only interfaces. Tests use synthetic responses and do not
+show live fulfillment. An experimental **fresh-state-only**, separately built
+V13 contract feature (`contracts/bouncer/src/tollgate_v13.rs`) starts a possible
+channel path without modifying the deployed V12 vault. It consumes an
+owner-pinned intent once, requires both seller and channel allowlists, uses a
+separate voucher key and reserves the whole native budget under the existing
+cap and rolling spend rules. Its owner-only setup and close methods use the
+1-yocto guard. A failed callback can come from a downstream promise after a
+provider accepted funds, so **every failed or ambiguous open retains the full
+reservation** and never reopens the intent. Before a close, an owner-only
+verification checks the channel's reported owner, seller, voucher key, budget
+and ID; it can also recover a lost callback. The provider's view can still lie.
+A detached channel refund is not automatically credited: the owner must
+reconcile the actual transfer and may recover surplus with the existing owner
+path. This is an experimental
+contract, **not deployed or audited**; it cannot claim delivery, accept Circle
+as native NEAR, or solve resource-unbound voucher risk. The earlier [unit/build run](https://github.com/Greatmujey/Bouncer/actions/runs/41648346175)
+passed for a previous experimental contract, including conservative failed
+promise handling and owner-only recovery. The hardened binary then passed the
+[isolated runtime exercise](https://github.com/Greatmujey/Bouncer/actions/runs/41649077636):
+a locally simulated channel opening, voucher settlement, close, refund and
+failed-open conservative accounting. This used a local seller and is neither
+live fulfillment nor an audit. The original binary was 602,587 bytes. A
+size-optimized 388,570-byte build was reproduced on two GitHub runners and
+[passed the same isolated lifecycle](https://github.com/Greatmujey/Bouncer/actions/runs/41652177986);
+its SHA-256 is `783c7fc06f55868bff8e9f53d41dc896e9d6ac3056c37f6fd18de4f1d270a540`.
+The code alone requires approximately 3.8857 test NEAR at the last observed
+storage price; state, native reserves, channel budget and fees are additional.
+Matching builds and sandbox results are not independent security review or a
+live deployment. Any future deployment needs a fresh balance and safety preflight.
+
+## Voucher-aware candidate and one-shot data client
+
+The subsequent candidate adds `is_tollgate_voucher_authorized`, a read-only
+check for an owner-verified channel and the original, still-current policy,
+allowlist and agent revisions. It is only an **advisory check for a cooperative
+client**: a policy can change after the view, and a stolen key or previously
+signed voucher cannot be revoked by that view. The off-chain key can sign up
+to the channel deposit, not merely the advertised per-call price. The channel
+contract still has an observed full-access key and can be upgraded. The seller
+voucher itself does not bind the HTTP resource or response. Those limitations
+remain even when a review hash includes the exact URL.
+
+Two independently run optimized builds at commit `45a6706` matched at
+**389,988 bytes**, SHA-256
+`ed1bb4fb01313576f88c719d5c7283d2366a60c580295863a759f5f9ee699231`,
+public blob `f3ad44590b1d816bf0d4c6ceb29e6c917c01056c`. The
+[contract tests](https://github.com/Greatmujey/Bouncer/actions/runs/41653914337)
+and [isolated lifecycle](https://github.com/Greatmujey/Bouncer/actions/runs/41653914001)
+passed, including the new advisory view, restricted-agent opening, local voucher
+settlement and detached refund. That lifecycle used a local seller; the
+candidate is **not deployed, independently audited or evidence of live data**.
+At the last observed storage price the code alone needs 3.89988 test NEAR. The
+last separately observed owner balance was about 3.969798 test NEAR: code plus
+the 0.05-NEAR vault reserve and 0.02-NEAR channel budget already exceed that,
+even before state storage, owner storage and gas. A [read-only funding
+snapshot](https://github.com/Greatmujey/Bouncer/actions/runs/41656376800) at
+FINAL block `CmSXM6eCCjnDRJXYUskrMmU8Hanja2ao6Rfo77CYTF3z` found about
+3.967978 test NEAR after estimated owner storage. The conservative plan uses
+5 test NEAR for the new vault plus a 0.2 test-NEAR owner fee reserve, leaving
+an estimated **1.232022 test-NEAR shortfall**. V12's calculated native surplus
+was at most 0.57903 test NEAR at that snapshot; even recovering all of that
+hypothetically leaves roughly 0.652992 test NEAR short of the plan. This is an
+upper bound, not a withdrawal authorization or a fee guarantee. Circle actual
+and tracked balances remained 6,898 atoms. That snapshot itself moved no
+funds. Do not assume the V12 balance is liquid or use an earlier owner.
+
+**Update:** a later, separately fenced testnet faucet transfer added 5 test
+NEAR to V3; its [FINAL original and cleanup](V3_NATIVE_FAUCET_RECOVERY.md) are
+verified, and an indexed view subsequently showed approximately 8.969798 test
+NEAR in the owner. The pre-transfer shortfall above is historical, not the
+current estimate. The transfer used a temporary faucet signer, not the V3
+owner key. A subsequent [read-only FINAL recheck](https://github.com/Greatmujey/Bouncer/actions/runs/41661671133)
+at block `AJN8caCB5hYWK4K9xxWyLGeWfqUtUUFaFJjBXT6bY616` estimated owner
+liquid balance **8.967978252555469399999998 test NEAR**, so the conservative
+5-NEAR vault plan plus 0.2-NEAR owner reserve had **zero estimated shortfall**
+at that snapshot. Circle actual and tracked balances still matched at 6,898
+atoms. This is an estimate, not a transaction authorization or fee guarantee.
+The two original V3 owner bearers remained unresolved and within the observed
+validity window; custody has not been restored.
+
+`agent/tollgate-quakes-v13.mjs` prepares a deterministic owner review of one
+fixed quakes GET, 0.001 test-NEAR price and 0.02 test-NEAR channel budget. It
+checks a single fresh trusted-RPC FINAL snapshot of the keyless vault, policy,
+code, intent, current authorization and unused channel. It validates the
+seller's 402 offer, signs only with a dedicated voucher key, persists an
+exclusive local no-retry fence before the paid request, and treats timeouts,
+402s, malformed responses and missing acknowledgements as **unknown**, not
+as refunds. A seller acknowledgment or shaped data remains a seller claim,
+not independent settlement or provenance proof. The entire channel deposit
+and storage fee remain at risk, including if the upstream request fails.
+The file fence must be backed up across workspace resets and machines; a lost
+fence is not permission to retry. An optional `GithubTollgateVoucherFence` also
+reserves the voucher key in a repository-unique GitHub label and reads it back
+before signing. Two simulated machines, a lost acknowledgment, permission
+failure and a changed read-back all failed closed in local tests. This optional
+path requires GitHub label-create permission and trusted administrators who
+never delete or rename a real reservation. A [GitHub Actions smoke test](https://github.com/Greatmujey/Bouncer/actions/runs/41662909506)
+created and read back a label for a randomly generated **synthetic** voucher
+key, confirmed an explicit duplicate-name conflict from a separate directory,
+and deleted only that synthetic label; it signed no voucher, made no chain
+transaction, and contacted no provider. This verifies that GitHub permission
+and uniqueness worked in that run, not a live reservation or purchase. Results
+explicitly distinguish `LOCAL_ONLY` from `GITHUB_LABEL_AND_LOCAL`; a local
+fence alone is not cross-session protection. The client now defaults to live
+mode and refuses a local-only fence before contacting the seller. Its explicit
+`synthetic` mode allows an injected test transport; the caller is responsible
+for ensuring that transport cannot reach a real seller, so never use this mode
+for a real purchase. `tollgate-testnet-keys.mjs` can prepare distinct agent
+and voucher keys offline, encrypted locally with a wrapping key stored beside
+them. Preparation does not install an access key, grant policy authority, sign
+a transaction or contact the seller; those files are not an independent
+backup. Live mode also requires a private `TollgateResponseStore`
+that fsyncs the exact received response bytes and a SHA-256 digest before the
+client reports retained data. It is a local file, not an off-device backup;
+if retention fails after voucher exposure, do not retry the paid request. The
+seller controls its response and could echo a voucher or other sensitive input,
+so treat the exact response as private and never publish or log it unreviewed.
+
+`corroborateTollgateQuakes` checks that retained bytes match the original
+purchase result, reconstructs the exact allowed USGS query, and makes one
+separate unpaid request to USGS. It compares every field in the seller's
+published event projection: ID, magnitude, place, time, depth, tsunami flag and
+URL. It rejects URL substitution and treats changed or unavailable data
+as unconfirmed. An empty result is not called independently returned event
+data. This comparison is not proof of payment, seller identity, or that the
+seller actually fetched USGS at its claimed time. The response and fence must
+still be preserved across environments.
+
+`inspectTollgateSettlement` is a separate read-only check for the first
+seller `settle` or voucher-bearing `cooperative_close` transaction. It requires
+a FINAL receipt-inclusive RPC result, the reviewed channel, amount, nonce and
+voucher key, the pinned channel code at execution, and a successful, linked
+**detached native-transfer** receipt. For cooperative close it reports the
+separate vault refund receipt independently; even a verified refund does not
+mean the rolling-budget reservation was automatically released.
+A seller acknowledgement or settlement event alone is not enough. This check
+assumes the RPC is honest and does not prove provider delivery. If no
+transaction hash is available, settlement remains unconfirmed; it does not
+ask the seller to repeat a payment or force a close. The seller's published
+Vercel configuration schedules settlement only once daily, while this reviewed
+channel expires after ten minutes. Its per-instance `/tmp` store can also
+lose a voucher or be absent on the cron instance. Therefore automatic seller
+settlement within this channel's lifetime is **not established**. A second
+HTTP request or a cooperative-close signature is not a safe workaround without
+reviewing seller state and the possibility of an immediate full refund without
+paying the seller; neither is automated here.
+
+An [isolated HTTP lifecycle](https://github.com/Greatmujey/Bouncer/actions/runs/41669496393)
+exercised the pinned seller SDK and disposable nearcore in both `settle` and
+`cooperative_close` modes: one-yocto policy, locally encrypted synthetic agent
+and voucher keys, restricted agent, one voucher, synthetic data, replay refusal,
+FINAL payout receipts and local refunds passed.
+The sellers and data were fixtures, not a public-chain payment or independent
+fulfillment. A separate [read-only USGS check](https://github.com/Greatmujey/Bouncer/actions/runs/41666639556)
+compared two real public USGS observations using a synthetic seller projection;
+it made no seller request or payment. The V3 owner was recovered privately,
+but its outstanding original transactions remain unresolved. A safe live
+runner, a real cross-session reservation, fresh funding checks and reliable
+seller settlement are still required. No Tollgate payment or paid seller data
+has been demonstrated.
+
+References: [Tollgate repository](https://github.com/Mattbusel/tollgate),
+[public quakes endpoint](https://near-tollgate.vercel.app/v1/quakes?min_magnitude=5),
+[published reference deployment](https://github.com/Mattbusel/tollgate/blob/ab9c13fbd9efea70ac27c6e35623925ecd0b9a6f/deployments/testnet.json).

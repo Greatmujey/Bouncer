@@ -1,0 +1,49 @@
+# Read-only original-hash receipt recovery; never signs or sends.
+name: Reconcile replacement resource-agent original (read only)
+on:
+  push:
+    branches: ['arena/25a7aaf6-near-hub']
+permissions:
+  contents: read
+jobs:
+  reconcile:
+    if: contains(github.event.head_commit.message, '[resource-agent-v2-reconcile-guard-probe]') || contains(github.event.head_commit.message, '[resource-agent-v2-reconcile-guard-control]') || contains(github.event.head_commit.message, '[resource-agent-v2-reconcile-configure]') || contains(github.event.head_commit.message, '[resource-agent-v2-reconcile-install]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: bouncer
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Test original-hash and state verification
+        run: node --test tests/testnet-resource-agent-*.test.mjs
+      - name: Reconcile the one original hash and pinned state
+        env:
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+        run: |
+          set -euo pipefail
+          case "$COMMIT_MESSAGE" in
+            *'[resource-agent-v2-reconcile-guard-probe]'*) stage=guard-probe ;;
+            *'[resource-agent-v2-reconcile-guard-control]'*) stage=guard-control ;;
+            *'[resource-agent-v2-reconcile-configure]'*) stage=configure ;;
+            *'[resource-agent-v2-reconcile-install]'*) stage=install ;;
+            *) echo 'No fixed stage'; exit 1 ;;
+          esac
+          if ! BOUNCER_RESOURCE_AGENT_STAGE="$stage" node scripts/reconcile-resource-agent-v2.mjs > "$RUNNER_TEMP/resource-agent-reconciled.json" 2> "$RUNNER_TEMP/resource-agent-reconcile-error.log"; then
+            python3 -c 'import os; s=open(os.environ["RUNNER_TEMP"]+"/resource-agent-reconcile-error.log").read()[-4000:]; print("::error title=Original resource-agent unconfirmed; do not resend::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
+            exit 1
+          fi
+          {
+            echo '## Original resource-agent read-only reconciliation'
+            echo 'Only the recorded original hash and fresh pinned testnet views were queried; nothing was resent.'
+            echo '```json'
+            cat "$RUNNER_TEMP/resource-agent-reconciled.json"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          python3 -c 'import os,json; s=json.dumps(json.load(open(os.environ["RUNNER_TEMP"]+"/resource-agent-reconciled.json")),separators=(",",":")); print("::notice title=Replacement resource-agent original reconciliation::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'

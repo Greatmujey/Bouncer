@@ -5,15 +5,19 @@
  * that hash without signing. Activation and the first paid risk request are
  * separate, explicitly approved, write-ahead-fenced seller operations.
  *
- * All behavior is synthetic-tested only. Svalin's deployed code and seller
- * attribution are not attested; its amount matcher is not sender-bound. Never
- * use real funds, fall back to a full-access key, or repeat ambiguous actions.
+ * Payment and same-hash recovery have also been exercised on an isolated
+ * nearcore chain with a mock token and fake seller; activation and delivery
+ * remain simulated. Svalin's deployed code and seller attribution are not
+ * attested; its amount matcher is not sender-bound. Never use real funds,
+ * fall back to a full-access key, or repeat ambiguous actions.
  */
 import { isDeepStrictEqual } from 'node:util';
 import { FileJournal, requestFingerprint, validatePlan } from './procurement.mjs';
 import { withExclusiveJournalOperation } from './journal-operation.mjs';
 import { signReviewedCall } from './reviewed-transaction.mjs';
 import { preflightExactFt, readExactFtEvidence } from './exact-ft-runtime.mjs';
+import { readSvalinPlainOwnerAtFinal } from './svalin-owner-snapshot.mjs';
+import { SVALIN_TRIAL_MAX_GAS_ALLOWANCE } from './svalin-pro-preflight.mjs';
 import { assertMultiAgencyExactFtView } from './multiagency-exact-ft.mjs';
 import { validateSvalinProGoal, reconstructSvalinProExactFt } from './svalin-pro-session.mjs';
 import { probeSvalinProOffer, SVALIN_ORIGIN } from './svalin-pro-readiness.mjs';
@@ -88,7 +92,8 @@ export async function paySvalinProExactFtOnce({ goal: rawGoal, journal, provider
     const prepared = reconstructSvalinProExactFt({ goal, journal, agentPublicKey: agentKey, now });
     const request = paymentRequest(goal, prepared), a = prepared.owner_call.args;
     assertNoPriorPayment(journal, goal, request);
-    const preflight = await preflightExactFt({ prepared, publicKey, provider, now });
+    const preflight = await preflightExactFt({ prepared, publicKey, provider, now, requirePlainOwner: true,
+      maxAgentGasAllowanceYocto: SVALIN_TRIAL_MAX_GAS_ALLOWANCE });
     if (!preflight.allowed) return { status: 'BLOCKED', reason: preflight.reason, sends: 0 };
     await offerStillReviewed(fetchImpl, now);
     assertFreshFinalBlock(preflight.finalBlock, timestamp(now));
@@ -107,7 +112,12 @@ export async function paySvalinProExactFtOnce({ goal: rawGoal, journal, provider
       started_at: new Date(timestamp(now)).toISOString() };
     journal.put(goal.id, pending); // fsync BEFORE the only broadcast
     try {
+      // Detect an owner-code change in a newer FINAL snapshot. Once signed and
+      // recorded, any failure remains fenced under this original hash; this
+      // cannot rule out later changes, in-flight receipts or a dishonest RPC.
+      const currentOwner = await readSvalinPlainOwnerAtFinal({ provider, owner: goal.owner, now });
       if (timestamp(now) >= Number(a.expires_at_ms) - 60_000) throw new Error('exact FT cutoff passed after reservation');
+      assertFreshFinalBlock(currentOwner, timestamp(now));
       assertFreshFinalBlock(preflight.finalBlock, timestamp(now));
       const sent = await provider.sendTransactionOnce(signed.signed, 'FINAL');
       if (sent?.transaction_outcome?.id !== signed.txHash) throw new Error('RPC returned a different or missing transaction hash');

@@ -18,8 +18,9 @@ that agent.
 | Authenticated Bouncer seller-v3 | A [fresh testnet proof](SELLER_V3.md#separate-fresh-seller-v3-testnet-proof) ran native OutLayer → authenticated compute, storage and API with key-free FT recovery. | This is a custom testnet protocol with a self-hosted seller, not independent adoption. Claim signatures remain bearer credentials. |
 | Shared seller-v3 replay coordination | [Real PostgreSQL tests](SHARED_SELLER.md) exercise multiple worker processes, crashes and uncertain commits. | Synthetic payments only; one trusted, durable primary, with no automatic pending-work takeover. |
 | Shared direct-v3 buyer coordination | [Real PostgreSQL/process tests](SHARED_BUYER.md) reserve the signed hash and encrypted claim before a simulated send and recover the same hash; new owners can opt into stable intent IDs across journals. | Synthetic receipts only; one fenced primary, stable owner-assigned IDs and trusted workers. FT-call, x402, OutLayer and workflows are not covered. |
+| V11 restricted buyer recovery | An [isolated nearcore run](https://github.com/Greatmujey/Bouncer/actions/runs/41439528831) journaled before one mock-FT payment, dropped its acknowledgement and recovered the original hash without resending. | Disposable local chain, fake seller and simulated approvals/chain identity; not Circle, testnet, independent attribution or resource delivery. |
 | Owner-only Ref testnet setup | Owner acquired test tokens and separately funded the vault in the live runs. | This is **not** an agent-guarded swap. Plain outgoing Ref `ft_transfer` does not call Bouncer's deposit hook. |
-| Independent MultiAgency research candidate | [Read-only readiness, historical indexer control and report handoff](MULTIAGENCY_RESEARCH.md); experimental quote/payment/recovery verifier has synthetic tests. | No Bouncer quote, payment, job or independent fulfillment; current workers and refund terms remain unproven. |
+| Independent MultiAgency research candidate | [Read-only readiness, historical indexer control and report handoff](MULTIAGENCY_RESEARCH.md); experimental quote/payment/recovery verifier has synthetic tests. | No Bouncer quote, payment, job or independent fulfillment. The operator's later plan says no client deposits through the board; the historical route is not a current offer. |
 | Independent Svalin API candidate | [Public offer and free-route observation](SVALIN_PRO_READINESS.md); local buyer interoperability with pinned seller source, simulated chain/indexer and sample portfolio. | No real checkout, payment or paid response; the source can credit a different sender and does not identify the credited transaction to the buyer. |
 
 No independent FT-paid commercial compute, storage or API purchase is
@@ -254,6 +255,87 @@ consent, and no offers or payments were requested:
   spending policies. Bridging the two would require a separately designed and
   audited authority, accounting and recovery model; it is not implemented here.
   No API request, signature or payment was sent.
+
+### YouTick V2 historical provider evidence (checked 2 November 2026)
+
+YouTick separately [reports a 13 October testnet acceptance](https://github.com/4rmus/youtick/blob/410dd180f42d25f77c2317b9659923f6a4149245/docs/v2-testnet-runbook.md#e5b-acceptance-2026-10-13-provider-testnet):
+a creator paid a 0.5 test-USDC upload fee, a 17 MB video was processed and
+published, and a second account bought a 5 test-USDC ticket and played it.
+These are the provider's historical observations, not independently verified
+Bouncer receipts or a Bouncer purchase. The report did not cover refunds or
+upload recovery; it also describes an earlier stranded job.
+
+That V2 setup is not the V1 route researched above. Its [documented testnet
+Bridge](https://github.com/4rmus/youtick/blob/410dd180f42d25f77c2317b9659923f6a4149245/docs/v2-testnet-runbook.md#bridge)
+was configured for allowlisted creators, and its [NEAR Auth upload relayer](https://github.com/4rmus/youtick/blob/410dd180f42d25f77c2317b9659923f6a4149245/workers/relayer/src/upload.ts)
+requires an exact signed delegate for a direct USDC `ft_transfer_call`.
+The V2 contract source also has an FT receiver, but that does not establish
+that its current Bridge will admit a Bouncer vault, that our nested payment is
+accepted end to end, or that the current deployed versions match this source.
+No V2 quote, upload, payment or provider contact was made. Keep it a research
+lead, not a verified independent Bouncer purchase.
+
+### OutLayer connector leads: historical chain evidence (checked 2 November 2026)
+
+NearBlocks records an OutLayer operator's successful 30 September testnet
+[pricing transaction](https://testnet.nearblocks.io/txns/DhF1hvqbGihY2eBQ54WWDgjoL5vfuzNQKNonUQ9VLipt)
+for `connectors.outlayer.testnet/github`: GitHub read operations including
+`repo_get` were priced at 1,000 six-decimal units. The provider's
+[connector README](https://github.com/out-layer/outlayer/blob/aaf60a26855e30bc3318126382903df92dea7d3d/connectors/github-connector/README.md)
+independently describes $0.001 reads, but requires the owner's GitHub App
+credential and a policy stored with OutLayer; without a policy only the free
+`status` operation runs. A separate [5 October version activation](https://testnet.nearblocks.io/txns/EVbLWcxgxwf167mxatTvrHAbvYULPw5qUWpDaLjssTyK)
+identifies version `b8ae4fd3a60ef8f8fb9eab77f2f9a65f6bbfdd4b1ff6024e086f1fdd72e8379b`
+as active **at that time**. Neither transaction proves the currently active
+version, current prices, seller fulfillment, or that the published source
+matches the historical WASM. No GitHub credential was supplied, seller contacted,
+checkout initiated, or code executed for this lead.
+
+A [historical token-configuration transaction](https://testnet.nearblocks.io/txns/ECxfaEipVep1Z8UcC2vLvL3E2dGuhUc26W99NZzBWpxi)
+set OutLayer's testnet payment token to `usdc.fakes.testnet`, **not Circle**;
+that is not a fresh view of the token configuration. Historical operator pricing
+also included a [`markets` operation](https://testnet.nearblocks.io/txns/B9ZGB5f8fkANE2e1t6tYVYAYg1JESqoNmsDENjPZ6B6e)
+on the Hyperliquid connector, but the inspected connector submodule was not
+publicly accessible and whether that operation needs credentials, exposes the
+right data, or can safely serve Bouncer is unknown. No trading, orders, deposits
+or requests were made.
+
+These are stronger historical leads, **not** a compatible independent
+purchase. The existing Bouncer OutLayer project path requires a separately
+owner-pinned native policy and a prepaid-token policy; V11 explicitly rejects
+an exact-FT-locked token policy on this route. Its narrow buyer currently
+supports only the connector-probe's synthetic operations. An earlier guarded
+FT-funded probe returned HTTP 405, and a separate burn transaction remains
+unresolved: do not resend it. OutLayer's HTTPS payment keys spend a separate
+provider-held balance and do not, by themselves, enforce Bouncer's per-call
+policy. A real route needs fresh trusted on-chain registry, token, price,
+version and custody checks, explicit credential/data consent, a reviewed
+adapter and a useful, independently verified result. A historical transaction
+or provider README is not permission to use anyone's GitHub credentials.
+
+### Nearchant: another source-level lead (checked 2 November 2026)
+
+The separate [Nearchant project at `8208f5b`](https://github.com/vlmoon99/nearchant/tree/8208f5b7d1af443b6693d5a0bfac1d57c992fba8)
+reports a historical testnet deck order and a 0.5 **nUSD** fact-check hire in
+its [progress log](https://github.com/vlmoon99/nearchant/blob/8208f5b7d1af443b6693d5a0bfac1d57c992fba8/docs/PROGRESS.md#2026-11-01-0110-utc--flow-3-live-agent-hires-agent-over-a2a-paid-through-escrow).
+Those are its own observations, not Bouncer purchases; nUSD is its own test
+token, not Circle USDC. The project later pivoted its main product from decks
+to a content-store workflow, so availability and current service terms must not
+be inferred from the historical log.
+
+Its [A2A handler](https://github.com/vlmoon99/nearchant/blob/8208f5b7d1af443b6693d5a0bfac1d57c992fba8/apps/gateway/src/app.tsx)
+offers the custom `nearchant-escrow` scheme and looks up a payment ID in its
+own escrow contract. It checks the paid state, seller, amount and task memo and
+claims the ID; a Bouncer plain-FT transaction does not create that escrow
+payment. The payment ID and task are also not, by themselves, authenticated
+claimant identity. Its separate [orders contract](https://github.com/vlmoon99/nearchant/blob/8208f5b7d1af443b6693d5a0bfac1d57c992fba8/contracts/orders/src/lib.rs)
+creates orders with `ft_transfer_call`, but buyer-only actions require the
+order's buyer account and later refunds use plain `ft_transfer`. Bouncer's
+keyless V11 cannot call those buyer-only methods, and a later plain refund
+would bypass its internal token ledger. V11's exact-FT-locked policy also
+cannot use its generic `execute_ft_call` route. Neither route is a safe,
+verified Bouncer integration today. We did not contact the seller, request a
+quote, disclose a task, create an order or send payment.
 
 The right next step is seller cooperation or a compatible deployed protocol,
 not weakening the owner guard or claiming a self-hosted adapter is independent.

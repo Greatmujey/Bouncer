@@ -1,0 +1,29 @@
+{
+  "status": "ORIGINAL_PROBE_PUBLIC_CI_STOPPED_BEFORE_SUBMIT_RECONCILIATION_PENDING",
+  "network": "testnet",
+  "owner": "bouncer-owner-3869c162b193fa1729515442.testnet",
+  "vault": "vault.bouncer-owner-3869c162b193fa1729515442.testnet",
+  "tx_hash": "26UZubW2JR1Yo75UyaqW4Q11AsoWgWfLBWHjUriQS4qL",
+  "nonce": "275948535000007",
+  "signed_envelope_sha256": "64c1ea8876c8be98aebdd00abd243b8cf7736f7de1046e14ceb8e4bd4741af0f",
+  "fence_artifact_id": "13179014107",
+  "run_id": "41526501947",
+  "commit": "7a19fd4d82d7debf97d120c7f51228bb249fd9e9",
+  "reason": "CI fence helper rejected the new artifact prefix before its send call",
+  "public_bearer_may_have_been_relayed_elsewhere": true,
+  "original_hash_reconciliation_run": "41526802629",
+  "original_hash_reconciliation_result": "RPC_TIMEOUT_RECEIPT_UNKNOWN",
+  "validity_diagnostics_run": "41527217405",
+  "validity_diagnostics": {
+    "original_block_height": 275953369,
+    "final_block_height": 275954201,
+    "transaction_validity_period_blocks": 86400,
+    "validity_window_passed_at_final": false,
+    "owner_nonce_at_final": "275948535000006",
+    "receipt_status": "UNKNOWN_UNLESS_SEPARATELY_VERIFIED"
+  },
+  "distinct_higher_nonce_control_sandbox_run": "41528285890",
+  "sandbox_scope": "disposable nearcore and mock FT only; not live guard verification",
+  "do_not_resend": true,
+  "scope": "zero-yocto policy probe only; no FT transfer; original-hash reconciliation required"
+}

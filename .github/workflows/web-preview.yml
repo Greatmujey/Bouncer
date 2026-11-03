@@ -3,6 +3,13 @@ name: One-shot public website preview
 on:
   push:
     branches: [main, 'arena/**']
+  workflow_dispatch:
+    inputs:
+      gateway_test_host:
+        description: 'Temporary Vercel gateway host for synthetic-only relay smoke'
+        required: false
+        type: string
+        default: ''
 
 # This job only runs on an explicit marker. The guest upload is public and
 # temporary; it never changes the visibility of the private repository.
@@ -64,8 +71,259 @@ jobs:
           npm install --prefix "$RUNNER_TEMP/bouncer-browser" --no-save --no-audit --no-fund playwright-core@1.64.1
           node bouncer/scripts/test-github-pages-path.mjs
 
+  near-cli-offline-smoke:
+    # Real near-cli-rs signs only a random throwaway off-chain message with a
+    # synthetic local credential. The RPC and wallet are mocked; no spending.
+    if: contains(github.event.head_commit.message, '[test-near-cli]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      - run: npm ci --prefix bouncer/walletconnect --no-audit --no-fund
+      - name: Exercise real CLI with a synthetic local credential
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BOUNCER_PLAYWRIGHT_PATH: ${{ runner.temp }}/bouncer-browser/node_modules/playwright-core/index.mjs
+          BOUNCER_CLI_EXECUTOR: ${{ runner.temp }}/near-cli-executor.js
+          BOUNCER_REAL_CLI_PATH: ${{ runner.temp }}/near-cli/node_modules/.bin/near
+        shell: bash
+        run: |
+          set +e
+          set -o pipefail
+          {
+            npm install --prefix "$RUNNER_TEMP/bouncer-browser" --no-save --no-audit --no-fund playwright-core@1.64.1 &&
+            npm install --prefix "$RUNNER_TEMP/near-cli" --no-save --no-audit --no-fund near-cli-rs@0.30.1 &&
+            gh api repos/near/near-cli-connect/git/blobs/32f1a33250370b5250a72d68ce24459628069fd7 --jq .content | base64 -d > "$BOUNCER_CLI_EXECUTOR" &&
+            node bouncer/scripts/test-web-browser.mjs
+          } 2>&1 | tee "$RUNNER_TEMP/bouncer-cli-smoke.log"
+          result=${PIPESTATUS[0]}
+          if [ "$result" -ne 0 ]; then
+            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-5500).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=Offline CLI smoke failed::"+s)' "$RUNNER_TEMP/bouncer-cli-smoke.log"
+          fi
+          exit "$result"
+
+  near-mobile-live-smoke:
+    # One unsigned synthetic message request, then best-effort rejection; never
+    # logs its bearer link or signs, creates keys, or sends a NEAR transaction.
+    if: contains(github.event.head_commit.message, '[test-live-mobile]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Check live NEAR Mobile message backend
+        shell: bash
+        run: |
+          set +e
+          set -o pipefail
+          {
+            npm install --prefix "$RUNNER_TEMP/bouncer-browser" --no-save --no-audit --no-fund playwright-core@1.64.1 &&
+            node bouncer/scripts/test-near-mobile-live.mjs
+          } 2>&1 | tee "$RUNNER_TEMP/bouncer-mobile-live.log"
+          result=${PIPESTATUS[0]}
+          if [ "$result" -ne 0 ]; then
+            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-3000).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=Live NEAR Mobile probe failed::"+s)' "$RUNNER_TEMP/bouncer-mobile-live.log"
+          fi
+          exit "$result"
+
+  walletconnect-candidate-smoke:
+    # Static candidate is served at the approved origin inside Playwright. The
+    # synthetic wallet uses real Reown relay traffic, never keys or payments.
+    if: contains(github.event.head_commit.message, '[test-walletconnect-candidate]')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            mode: primary
+            block: '0'
+          - os: ubuntu-latest
+            mode: fallback
+            block: '1'
+          - os: windows-latest
+            mode: primary
+            block: '0'
+          - os: windows-latest
+            mode: fallback
+            block: '1'
+          - os: windows-latest
+            mode: extension-and-zoom
+            block: '0'
+            poison: '1'
+            short: '1'
+          - os: windows-latest
+            mode: all-transports-blocked
+            block: '0'
+            block_both: '1'
+            short: '1'
+          - os: ubuntu-latest
+            mode: local-gateway
+            block: '0'
+            block_both: '1'
+            gateway_local: '1'
+          - os: windows-latest
+            mode: local-gateway
+            block: '0'
+            block_both: '1'
+            gateway_local: '1'
+            short: '1'
+    name: WalletConnect candidate (${{ matrix.os }}, ${{ matrix.mode }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 7
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Test retry, QR and synthetic approval over the real relay
+        shell: bash
+        env:
+          BOUNCER_CANDIDATE_SITE: '1'
+          BOUNCER_BLOCK_PRIMARY_WC: ${{ matrix.block }}
+          BOUNCER_BLOCK_BOTH_WC: ${{ matrix.block_both || '0' }}
+          BOUNCER_GATEWAY_LOCAL: ${{ matrix.gateway_local || '0' }}
+          BOUNCER_POISON_BUFFER: ${{ matrix.poison || '0' }}
+          BOUNCER_SHORT_VIEWPORT: ${{ matrix.short || '0' }}
+        run: |
+          npm ci --prefix bouncer/walletconnect --no-audit --no-fund
+          npm install --prefix "$RUNNER_TEMP/bouncer-browser" --no-save --no-audit --no-fund playwright-core@1.64.1
+          set +e
+          set -o pipefail
+          node bouncer/scripts/test-walletconnect-real-session.mjs 2>&1 | tee "$RUNNER_TEMP/bouncer-wc-candidate.log"
+          result=${PIPESTATUS[0]}
+          if [ "$result" -ne 0 ]; then
+            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-2000).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=WalletConnect candidate probe failed::"+s)' "$RUNNER_TEMP/bouncer-wc-candidate.log"
+          fi
+          exit "$result"
+
+  walletconnect-vercel-gateway-smoke:
+    # Manually target an isolated test deployment with throwaway synthetic
+    # sessions only. The approved production site is not changed by this job.
+    if: github.event_name == 'workflow_dispatch' && inputs.gateway_test_host != ''
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    name: Test Vercel gateway (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 7
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Pair and disconnect with both direct relay hosts blocked
+        shell: bash
+        env:
+          BOUNCER_CANDIDATE_SITE: '1'
+          BOUNCER_BLOCK_BOTH_WC: '1'
+          BOUNCER_GATEWAY_TEST_HOST: ${{ inputs.gateway_test_host }}
+        run: |
+          npm ci --prefix bouncer/walletconnect --no-audit --no-fund
+          npm install --prefix "$RUNNER_TEMP/bouncer-browser" --no-save --no-audit --no-fund playwright-core@1.64.1
+          node bouncer/scripts/test-walletconnect-real-session.mjs
+
+  walletconnect-session-smoke:
+    # Approve only a synthetic testnet-account session over the real relay; no
+    # real wallet, signature, wallet RPC call, or NEAR transaction is involved.
+    if: contains(github.event.head_commit.message, '[test-walletconnect-session]')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            mode: primary
+            block: '0'
+          - os: ubuntu-latest
+            mode: fallback
+            block: '1'
+          - os: windows-latest
+            mode: primary
+            block: '0'
+          - os: windows-latest
+            mode: fallback
+            block: '1'
+          - os: windows-latest
+            mode: extension-and-zoom
+            block: '0'
+            poison: '1'
+            short: '1'
+          - os: windows-latest
+            mode: all-transports-blocked
+            block: '0'
+            block_both: '1'
+            short: '1'
+          - os: ubuntu-latest
+            mode: deployed-gateway
+            block: '0'
+            block_both: '1'
+            gateway_live: '1'
+          - os: windows-latest
+            mode: deployed-gateway
+            block: '0'
+            block_both: '1'
+            gateway_live: '1'
+            short: '1'
+    name: Live WalletConnect (${{ matrix.os }}, ${{ matrix.mode }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 7
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Pair a synthetic wallet over the real relay
+        shell: bash
+        env:
+          BOUNCER_LIVE_RETRY: '1'
+          BOUNCER_BLOCK_PRIMARY_WC: ${{ matrix.block }}
+          BOUNCER_BLOCK_BOTH_WC: ${{ matrix.block_both || '0' }}
+          BOUNCER_GATEWAY_LIVE: ${{ matrix.gateway_live || '0' }}
+          BOUNCER_POISON_BUFFER: ${{ matrix.poison || '0' }}
+          BOUNCER_SHORT_VIEWPORT: ${{ matrix.short || '0' }}
+        run: |
+          set +e
+          set -o pipefail
+          {
+            npm install --prefix "$RUNNER_TEMP/bouncer-browser" --no-save --no-audit --no-fund playwright-core@1.64.1 &&
+            npm ci --prefix bouncer/walletconnect --no-audit --no-fund &&
+            node bouncer/scripts/test-walletconnect-real-session.mjs
+          } 2>&1 | tee "$RUNNER_TEMP/bouncer-session-smoke.log"
+          result=${PIPESTATUS[0]}
+          if [ "$result" -ne 0 ]; then
+            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-3500).replace(/wc:[^\s\x27\x22]+/g,"[redacted pairing URI]").replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=WalletConnect session probe failed::"+s)' "$RUNNER_TEMP/bouncer-session-smoke.log"
+          fi
+          exit "$result"
+
   durable-site-smoke:
-    # Read-only verification; never publishes, signs, or spends.
+    # Public asset checks; the optional relay probe creates and cancels a
+    # proposal without approving a wallet, signing, or spending.
     if: contains(github.event.head_commit.message, '[test-durable-web]')
     runs-on: ubuntu-latest
     timeout-minutes: 8
@@ -83,7 +341,18 @@ jobs:
       - name: Exercise the public site on a phone-sized browser
         env:
           BOUNCER_PREVIEW_URL_FILE: ${{ runner.temp }}/bouncer-production-url.txt
+          BOUNCER_TEST_WALLETCONNECT_RELAY: ${{ contains(github.event.head_commit.message, '[test-walletconnect-relay]') && '1' || '0' }}
+        shell: bash
         run: |
-          npm install --prefix "$RUNNER_TEMP/bouncer-browser" --no-save --no-audit --no-fund playwright-core@1.64.1
-          printf '%s\n' 'https://bouncer-near.vercel.app/' > "$BOUNCER_PREVIEW_URL_FILE"
-          node bouncer/scripts/test-public-web-preview.mjs
+          set +e
+          set -o pipefail
+          {
+            npm install --prefix "$RUNNER_TEMP/bouncer-browser" --no-save --no-audit --no-fund playwright-core@1.64.1 &&
+            printf '%s\n' 'https://bouncer-near.vercel.app/' > "$BOUNCER_PREVIEW_URL_FILE" &&
+            node bouncer/scripts/test-public-web-preview.mjs
+          } 2>&1 | tee "$RUNNER_TEMP/bouncer-durable-smoke.log"
+          result=${PIPESTATUS[0]}
+          if [ "$result" -ne 0 ]; then
+            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-5500).replace(/wc:[^\s\x27\x22]+/g,"[redacted pairing URI]").replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=Live wallet smoke failed::"+s)' "$RUNNER_TEMP/bouncer-durable-smoke.log"
+          fi
+          exit "$result"

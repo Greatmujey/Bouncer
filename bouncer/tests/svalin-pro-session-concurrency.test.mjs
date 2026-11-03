@@ -18,6 +18,11 @@ const offer = () => ({ plans: [{ id: 'month', usd: 5, days: 30 }], callsPerDay: 
   near: { network: 'near:testnet', environment: 'testnet', payTo: SVALIN_PAYEE, token: TOKEN } });
 const checkout = () => ({ plan: 'month', network: 'near:testnet', payTo: SVALIN_PAYEE, token: TOKEN,
   amount: '5.000001', expiresAt: new Date(nowMs + 60 * 60_000).toISOString() });
+const provider = {
+  async viewNodeStatus() { return { chain_id: 'testnet' }; },
+  async viewBlock() { return { header: { hash: goal.vault_code_hash, timestamp_nanosec: String(BigInt(nowMs) * 1_000_000n) } }; },
+  async viewAccount(id, opts) { assert.equal(id, goal.owner); return { block_hash: opts.blockId, code_hash: '11111111111111111111111111111111' }; },
+};
 
 function fixture() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'svalin-race-')), key = crypto.randomBytes(32);
@@ -36,7 +41,7 @@ test('concurrent callers sharing the original journal cannot both issue a reserv
       assert.equal(url, `${SVALIN_ORIGIN}/v1/pro/near`); posts++; entered(); await gate;
       return new Response(JSON.stringify(checkout()));
     };
-    const options = { goal, journal: f.journal, now, fetchImpl, execute: true, acknowledgeBackup: true };
+    const options = { goal, journal: f.journal, provider, now, fetchImpl, execute: true, acknowledgeBackup: true };
     const first = reserveSvalinProOnce(options); await started;
     await assert.rejects(reserveSvalinProOnce(options), /another payment operation/);
     release(); const result = await first;
@@ -50,7 +55,7 @@ test('a changed public offer blocks before reservation state or any provider POS
     let calls = 0;
     const changed = offer(); changed.near.environment = 'mainnet';
     const fetchImpl = async (_url, opts) => { calls++; assert.equal(opts.method, 'GET'); return new Response(JSON.stringify(changed)); };
-    await assert.rejects(reserveSvalinProOnce({ goal, journal: f.journal, now, fetchImpl, execute: true, acknowledgeBackup: true }), /no reservation was sent/);
+    await assert.rejects(reserveSvalinProOnce({ goal, journal: f.journal, provider, now, fetchImpl, execute: true, acknowledgeBackup: true }), /no reservation was sent/);
     assert.equal(calls, 1); assert.equal(f.journal.get(`${goal.id}-svalin-pro`).svalin.phase, 'prepared');
   } finally { f.close(); }
 });

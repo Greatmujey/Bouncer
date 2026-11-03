@@ -1,0 +1,33 @@
+# Read-only original control proof and fresh registration preflight.
+name: Inspect registration after nonce control (read only)
+on:
+  push:
+    branches: ['arena/**']
+permissions:
+  contents: read
+jobs:
+  inspect:
+    if: contains(github.event.head_commit.message, '[outlayer-after-control-readonly]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    defaults:
+      run:
+        working-directory: bouncer
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: node --test tests/outlayer-registration-after-control.test.mjs tests/outlayer-registration-control-runner.test.mjs tests/outlayer-burn-registration.test.mjs tests/github-original-fence.test.mjs
+      - name: Verify prior fence and new public state
+        run: |
+          set -euo pipefail
+          if ! node scripts/inspect-outlayer-after-control.mjs > "$RUNNER_TEMP/outlayer-after-control.json" 2> "$RUNNER_TEMP/outlayer-after-error.log"; then
+            python3 -c 'import os; s=open(os.environ["RUNNER_TEMP"]+"/outlayer-after-error.log").read()[-2500:]; print("::error title=Post-control state unknown::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
+            exit 1
+          fi
+          python3 -c 'import os,json; s=json.dumps(json.load(open(os.environ["RUNNER_TEMP"]+"/outlayer-after-control.json")),separators=(",",":")); print("::notice title=OutLayer post-control registration preflight::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
+          { echo '## Read-only post-control preflight'; echo 'No signing, send or seller payment; prior original is never resent.'; echo '```json'; cat "$RUNNER_TEMP/outlayer-after-control.json"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"

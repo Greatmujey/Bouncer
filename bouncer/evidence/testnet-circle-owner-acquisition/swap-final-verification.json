@@ -1,0 +1,30 @@
+{
+  "status": "OWNER_FUNDED_CIRCLE_TEST_USDC_AT_FINAL",
+  "kind": "swap",
+  "network": "testnet",
+  "owner": "bouncer-owner-160217b55c7400c0810c0e49.testnet",
+  "tx_hash": "ENLCEW8R2DDtxeQL72hzyZrKaRkvepH5GDvfUoQvhQtW",
+  "receipt": {
+    "tx_hash": "ENLCEW8R2DDtxeQL72hzyZrKaRkvepH5GDvfUoQvhQtW",
+    "root_receipt_id": "AprWwCpdv7SV4f93nh7LXLKSybi4HMAif7JAem77EFHw",
+    "linked_successful_outcomes": 10,
+    "circle_transfer": {
+      "receipt_id": "VjWUAvy8zYC5fR82J3ggM6wLQj2BKUae61fJtqedHai",
+      "amount_atoms": "6917",
+      "transfer_event_verified": true
+    },
+    "trusted_rpc_not_consensus_proof": true
+  },
+  "after_block_hash": "4e1ZD9Z5zXtpbomqPyk1327D1G3E3eAQyZgbJYSvtmao",
+  "owner_wrap_balance_yocto": "0",
+  "owner_circle_balance_atoms": "6917",
+  "circle_funding_verified": true,
+  "vault_deployed": false,
+  "seller_contacted": false,
+  "do_not_resend": true,
+  "scope": "matching original FINAL transaction/receipt and fresh trusted-RPC balances, not consensus proof or independent provider delivery",
+  "signed_envelope_sha256": "13c4e195b66771239c0693e677936f9a7ee63ac0e828073134f6cc94937aa45d",
+  "fence_artifact_id": "13159557307",
+  "run_id": "41481206186",
+  "commit": "3a2ffb8784329e79bfb254adb6ca6a5eefdde05a"
+}

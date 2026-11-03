@@ -1,6 +1,12 @@
 # Local preview/browser tooling and screenshots; not application source.
 /.arena/
 
+# Local testnet-only owner keystores and recovery journals. Never commit them.
+/.bouncer-private/
+
+# Connector-staged private attachments must never enter the repository.
+/gmail/
+
 # Per-user AI-client settings are not project configuration.
 /.claude/settings.local.json
 /.gemini/settings.local.json

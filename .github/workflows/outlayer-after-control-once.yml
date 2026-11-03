@@ -1,0 +1,61 @@
+# ONE-SHOT TESTNET fake-token registration after a verified original nonce
+# control. Public bearer can be relayed independently; never retry originals.
+name: Register fake token after nonce fence once
+on:
+  push:
+    branches: ['arena/25a7aaf6-near-hub']
+permissions:
+  contents: read
+  actions: read
+jobs:
+  register:
+    if: github.event.before == '6227d3e87b692a024e0e59182dcdb955443a81e5' && github.run_attempt == 1 && contains(github.event.head_commit.message, '[outlayer-after-control-once]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: bouncer
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+      - name: Test original control, new signature, receipt and fences
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          node --test tests/outlayer-registration-after-control.test.mjs tests/outlayer-registration-control-runner.test.mjs tests/outlayer-burn-registration.test.mjs tests/outlayer-v11-burn-signed.test.mjs tests/github-original-fence.test.mjs
+      - name: Prepare new original-hash fence
+        id: plan
+        run: |
+          set -euo pipefail
+          file='evidence/testnet-owner-v2/outlayer-burn-register-after-control-original.json'
+          digest="$(sha256sum "$file" | cut -d' ' -f1)"
+          echo "sha=$digest" >> "$GITHUB_OUTPUT"
+          mkdir -p "$RUNNER_TEMP/outlayer-burn-register-after-control-fence"
+          cp "$file" "$RUNNER_TEMP/outlayer-burn-register-after-control-fence/new-registration.json"
+          cp 'evidence/testnet-owner-v2/outlayer-burn-register-control-original.json' "$RUNNER_TEMP/outlayer-burn-register-after-control-fence/control.json"
+          cp 'evidence/testnet-owner-v2/outlayer-burn-register-original.json' "$RUNNER_TEMP/outlayer-burn-register-after-control-fence/previous-registration.json"
+          printf 'network=testnet\nrun_id=%s\ncommit=%s\nnew_envelope_sha256=%s\nrequest=one new registration after verified nonce fence; reconcile, never resend\n' \
+            "$GITHUB_RUN_ID" "$GITHUB_SHA" "$digest" > "$RUNNER_TEMP/outlayer-burn-register-after-control-fence/attempt.txt"
+      - name: Retain new original before the one send
+        id: fence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: outlayer-burn-register-after-control-fence-${{ github.run_id }}-${{ steps.plan.outputs.sha }}
+          path: ${{ runner.temp }}/outlayer-burn-register-after-control-fence/
+          retention-days: 30
+          if-no-files-found: error
+      - name: Reverify control, recheck state and send once
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          BOUNCER_FENCE_ARTIFACT_ID: ${{ steps.fence.outputs.artifact-id }}
+        run: |
+          set -euo pipefail
+          if ! node scripts/broadcast-outlayer-after-control-once.mjs > "$RUNNER_TEMP/outlayer-new-registration.json" 2> "$RUNNER_TEMP/outlayer-new-error.log"; then
+            python3 -c 'import os; s=open(os.environ["RUNNER_TEMP"]+"/outlayer-new-error.log").read()[-2500:]; print("::error title=New registration unknown; never resend::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
+            exit 1
+          fi
+          python3 -c 'import os,json; s=json.dumps(json.load(open(os.environ["RUNNER_TEMP"]+"/outlayer-new-registration.json")),separators=(",",":")); print("::notice title=OutLayer registration after control result::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
+          { echo '## New testnet fake-token registration'; echo 'The previous original was fenced first. No seller payment or compute delivery.'; echo '```json'; cat "$RUNNER_TEMP/outlayer-new-registration.json"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"

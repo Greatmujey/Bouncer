@@ -7,14 +7,22 @@ import { isDeepStrictEqual } from 'node:util';
 import { isTransactionHash } from '../shared/direct-payment-settlement.mjs';
 import { assertFreshFinalBlock } from '../shared/fresh-final-block.mjs';
 import { readPinnedJsonView } from './read-only-near-rpc.mjs';
+import { hasPlainOwnerProfileAt } from '../shared/plain-owner-profile.mjs';
 import { assertPreparedExactFt, assertMultiAgencyExactFtView, multiAgencyExactExecutionBlock,
   verifyPreparedExactFtPayment } from './multiagency-exact-ft.mjs';
 
 /** A single FINAL snapshot, with the execute-only function-call key, keyless
  * reviewed vault, owner-pinned intent, policy revisions and payee registration.
- * A passing view is advisory; the contract enforces the policy again. */
-export async function preflightExactFt({ prepared, publicKey, provider, now = Date.now }) {
+ * The narrow Svalin trial also requires a code-free owner at this snapshot;
+ * other adapters must assess their own owner-contract trust boundary. Callers
+ * may also require a positive bounded gas allowance. A passing view is
+ * advisory, not protection against later or already queued owner calls. */
+export async function preflightExactFt({ prepared, publicKey, provider, now = Date.now, requirePlainOwner = false,
+  maxAgentGasAllowanceYocto = null }) {
   assertPreparedExactFt(prepared);
+  if (typeof requirePlainOwner !== 'boolean' || (maxAgentGasAllowanceYocto !== null &&
+      (typeof maxAgentGasAllowanceYocto !== 'string' || !/^[1-9][0-9]{0,38}$/.test(maxAgentGasAllowanceYocto) ||
+       BigInt(maxAgentGasAllowanceYocto) > (1n << 128n) - 1n))) throw new Error('invalid owner or agent profile requirement');
   const goal = prepared.review.goal, a = prepared.owner_call.args, agentKey = String(publicKey);
   if (agentKey !== prepared.review.agent_public_key || agentKey !== a.agent_public_key) {
     throw new Error('agent key differs from the owner-reviewed exact intent');
@@ -25,7 +33,7 @@ export async function preflightExactFt({ prepared, publicKey, provider, now = Da
   assertFreshFinalBlock(block, now());
   const final = { blockId: block.header.hash };
   const pinnedQuery = (contract, method, args) => readPinnedJsonView(provider, block.header.hash, contract, method, args);
-  const [vault, vaultKeys, owner, version, access, registration, locked, pairLocked, policy, granted, view, verdict] = await Promise.all([
+  const [vault, vaultKeys, owner, version, access, registration, locked, pairLocked, policy, granted, view, verdict, ownerAccount] = await Promise.all([
     provider.viewAccount(goal.vault, final), provider.viewAccessKeyList(goal.vault, final),
     pinnedQuery(goal.vault, 'get_owner', {}), pinnedQuery(goal.vault, 'contract_version', {}),
     provider.viewAccessKey(goal.owner, publicKey, final),
@@ -36,8 +44,16 @@ export async function preflightExactFt({ prepared, publicKey, provider, now = Da
     pinnedQuery(goal.vault, 'is_agent_key_allowed', { policy_id: goal.policy_id, public_key: agentKey }),
     pinnedQuery(goal.vault, 'get_exact_ft_intent', { intent_id: prepared.intent_id }),
     pinnedQuery(goal.vault, 'check', { policy_id: goal.policy_id, payee: a.payee, amount: a.amount }),
+    requirePlainOwner ? provider.viewAccount(goal.owner, final) : Promise.resolve(null),
   ]);
+  if (requirePlainOwner && !hasPlainOwnerProfileAt(ownerAccount, block.header.hash)) {
+    throw new Error('owner must have no local or global contract at the pinned block; no payment sent');
+  }
   const permission = access?.permission?.FunctionCall;
+  if (maxAgentGasAllowanceYocto !== null && (typeof permission?.allowance !== 'string' ||
+      !/^[1-9][0-9]{0,38}$/.test(permission.allowance) || BigInt(permission.allowance) > BigInt(maxAgentGasAllowanceYocto))) {
+    throw new Error('agent gas allowance must be positive and within the reviewed trial bound; no payment sent');
+  }
   if (vault?.block_hash !== block.header.hash || vault?.code_hash !== goal.vault_code_hash ||
       vaultKeys?.block_hash !== block.header.hash || !Array.isArray(vaultKeys?.keys) || vaultKeys.keys.length !== 0 ||
       access?.block_hash !== block.header.hash || owner !== goal.owner || version !== 'bouncer-agent-v11-exact-ft-testnet' ||

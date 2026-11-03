@@ -20,7 +20,8 @@ globalThis.fetch = async (url, options) => {
       if (config.occupied) result = { block_hash: config.block, amount: '1', locked: '0', storage_usage: 0 };
       else error = { cause: { name: 'UNKNOWN_ACCOUNT', info: { requested_account_id: config.goal.vault, block_hash: config.block, block_height: 99 } } };
     } else if (p.request_type === 'view_account' && p.account_id === config.goal.owner) {
-      result = { block_hash: config.block, amount: '20000000000000000000000000', locked: '0', storage_usage: 10000 };
+      result = { block_hash: config.block, code_hash: config.ownerContract ? config.goal.vault_code_hash : '11111111111111111111111111111111',
+        amount: '20000000000000000000000000', locked: '0', storage_usage: 10000 };
     } else if (p.request_type === 'view_access_key' && p.account_id === config.goal.owner && p.public_key === config.ownerKey) {
       result = { block_hash: config.block, nonce: 1, permission: 'FullAccess' };
     } else if (p.request_type === 'view_access_key_list' && p.account_id === config.goal.owner) {

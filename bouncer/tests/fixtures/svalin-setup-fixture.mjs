@@ -48,13 +48,14 @@ const receipt = (id, from, to, action) => ({ receipt_id: id, predecessor_id: fro
 const outcome = (id, executor, status, receipt_ids = [], logs = []) => ({ id, outcome: { executor_id: executor, status, receipt_ids, logs } });
 const call = (method, args) => ({ FunctionCall: { method_name: method, args: enc(args), deposit: '0', gas: 70000000000000 } });
 export function resultFor(f, index, txHash) {
+  const owner = f.inputs.goal.owner, vault = f.inputs.goal.vault;
   const batch = f.plan.batches[index], actions = batch.actions.map(rpcAction);
   const root = hash(80 + index * 4), hook = hash(81 + index * 4), resolver = hash(82 + index * 4), data = hash(83 + index * 4);
   const result = { final_execution_status: 'FINAL', status: { SuccessValue: '' },
-    transaction: { hash: txHash, signer_id: OWNER, public_key: f.ownerKey, receiver_id: batch.receiverId,
+    transaction: { hash: txHash, signer_id: owner, public_key: f.ownerKey, receiver_id: batch.receiverId,
       actions: structuredClone(actions), signature: 'untrusted-signature-not-for-the-journal' },
-    transaction_outcome: { id: txHash, outcome: { executor_id: OWNER, receipt_ids: [root], status: { SuccessReceiptId: root } } },
-    receipts: [receipt(root, OWNER, batch.receiverId, { signer_id: OWNER, signer_public_key: f.ownerKey, actions: structuredClone(actions),
+    transaction_outcome: { id: txHash, outcome: { executor_id: owner, receipt_ids: [root], status: { SuccessReceiptId: root } } },
+    receipts: [receipt(root, owner, batch.receiverId, { signer_id: owner, signer_public_key: f.ownerKey, actions: structuredClone(actions),
       input_data_ids: [], output_data_receivers: [] })],
     receipts_outcome: [outcome(root, batch.receiverId, { SuccessValue: '' })] };
   if (index === 3) {
@@ -66,18 +67,39 @@ export function resultFor(f, index, txHash) {
     result.receipts_outcome[0].outcome.status = { SuccessReceiptId: resolver };
     result.receipts_outcome[0].outcome.receipt_ids = [hook, resolver];
     result.receipts_outcome[0].outcome.logs = ['EVENT_JSON:' + JSON.stringify({ standard: 'nep141', version: '1.0.0', event: 'ft_transfer',
-      data: [{ old_owner_id: OWNER, new_owner_id: VAULT, amount: MAX }] })];
-    result.receipts.push(receipt(hook, TOKEN, VAULT, { signer_id: OWNER, signer_public_key: f.ownerKey,
-      actions: [call('ft_on_transfer', { sender_id: OWNER, amount: MAX, msg: '' })], input_data_ids: [],
+      data: [{ old_owner_id: owner, new_owner_id: vault, amount: MAX }] })];
+    result.receipts.push(receipt(hook, TOKEN, vault, { signer_id: owner, signer_public_key: f.ownerKey,
+      actions: [call('ft_on_transfer', { sender_id: owner, amount: MAX, msg: '' })], input_data_ids: [],
       output_data_receivers: [{ data_id: data, receiver_id: TOKEN }] }));
-    result.receipts.push(receipt(resolver, TOKEN, TOKEN, { signer_id: OWNER, signer_public_key: f.ownerKey,
-      actions: [call('ft_resolve_transfer', { sender_id: OWNER, receiver_id: VAULT, amount: MAX })], input_data_ids: [data],
+    result.receipts.push(receipt(resolver, TOKEN, TOKEN, { signer_id: owner, signer_public_key: f.ownerKey,
+      actions: [call('ft_resolve_transfer', { sender_id: owner, receiver_id: vault, amount: MAX })], input_data_ids: [data],
       output_data_receivers: [] }));
-    result.receipts_outcome.push(outcome(hook, VAULT, { SuccessValue: enc('0') }, [], ['BOUNCER deposit received']));
+    result.receipts_outcome.push(outcome(hook, vault, { SuccessValue: enc('0') }, [], ['BOUNCER deposit received']));
     result.receipts_outcome.push(outcome(resolver, TOKEN, { SuccessValue: enc(MAX) }));
   }
   return result;
 }
+/** Synthetic nearcore-shaped variants. They retain no live keys or receipts. */
+export function addSyntheticSystemGasRefund(f, result) {
+  const rootId = result.transaction_outcome.outcome.status.SuccessReceiptId;
+  const root = result.receipts_outcome.find(item => item.id === rootId);
+  if (!root || root.outcome.receipt_ids.length !== 0) throw new Error('unexpected synthetic root');
+  const id = hash(241), owner = f.inputs.goal.owner;
+  root.outcome.receipt_ids.push(id);
+  result.receipts.push(receipt(id, 'system', owner, { signer_id: owner, signer_public_key: f.ownerKey,
+    gas_price: '0', input_data_ids: [], output_data_receivers: [], is_promise_yield: false,
+    actions: [{ Transfer: { deposit: '12345' } }] }));
+  result.receipts_outcome.push(outcome(id, owner, { SuccessValue: '' }));
+  return result;
+}
+export function omitSyntheticLocalAddKeyReceipt(f, result) {
+  if (result.transaction.signer_id !== result.transaction.receiver_id ||
+      !result.transaction.actions?.[0]?.AddKey) throw new Error('expected synthetic local AddKey');
+  const id = result.transaction_outcome.outcome.status.SuccessReceiptId;
+  result.receipts = result.receipts.filter(item => item.receipt_id !== id);
+  return addSyntheticSystemGasRefund(f, result);
+}
+
 export function fixture({ wasmBytes = stubWasm() } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'svalin-setup-journal-'));
   const file = path.join(dir, 'journal.json'), key = crypto.randomBytes(32);

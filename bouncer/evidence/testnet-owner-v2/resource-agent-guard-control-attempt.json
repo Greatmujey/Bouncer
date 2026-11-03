@@ -1,0 +1,17 @@
+{
+  "status": "ORIGINAL_CONTROL_SUBMISSION_OR_VERIFICATION_UNCERTAIN_RECONCILE_ONLY",
+  "network": "testnet",
+  "owner": "bouncer-owner-3869c162b193fa1729515442.testnet",
+  "vault": "vault.bouncer-owner-3869c162b193fa1729515442.testnet",
+  "tx_hash": "2oECAQZt97rBUkHWuXuY7wMBqEVAuhH3ekeFxR2BWXyK",
+  "nonce": "275948535000008",
+  "signed_envelope_sha256": "ba5cf73e999ebaacee71ecc06a573d71ce934a9b3a2e52d6f5127792dc417121",
+  "supersedes_original_probe_hash": "26UZubW2JR1Yo75UyaqW4Q11AsoWgWfLBWHjUriQS4qL",
+  "fence_artifact_id": "13180084451",
+  "run_id": "41528984191",
+  "commit": "ccae2c9d935f3a7e5e8e7c1f33f50e0dc706d5b7",
+  "reason": "one-shot run reported read-only RPC unavailable during submission or verification",
+  "explorer_observation": "NearBlocks displayed the exact transaction as failed at the 1-yocto guard; indexed observation is not the verified FINAL receipt",
+  "do_not_resend": true,
+  "scope": "distinct zero-yocto one-atom policy control; no FT transfer; reconcile only this original hash"
+}

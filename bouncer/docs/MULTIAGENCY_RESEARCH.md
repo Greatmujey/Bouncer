@@ -20,6 +20,24 @@ worker or an operator willing to assemble and approve a new job. It reported nei
 service-level commitment nor a general refund for stalled work. **No quote was
 created and no funds were sent to MultiAgency.**
 
+**Do not use that historical deposit route as a current offer.** The operator's
+[7 October plan](https://github.com/MultiAgency/near-agencies/blob/b4c550c9fee90688176cd77495fcfeaeeb3c0f36/docs/plans/remove-payments.md)
+records an owner decision that the board should take **no client deposits or
+contributor payouts**; its key-removal phase is marked done, while the wider
+removal is described as proposed. The 1 November endpoint response may be
+stale and does not override that decision. The adapter below is retained for
+research, not permission to create a quote or deposit. A different route would
+need fresh operator consent, terms, compatibility and separate owner approval.
+
+A historical [provider-run job](https://github.com/MultiAgency/kanban-sandbox/issues/1)
+reported a completed research brief; its [testnet explorer record](https://testnet.nearblocks.io/txns/3ppdvTz5dmsw4ot7GePdT39oKPDjGyiUByK2RMZ6pD18)
+shows a 3-test-USDC transfer from `acme.agency.testnet` to the provider treasury
+via a delegated x402 relayer, and the provider published the
+[brief](https://github.com/MultiAgency/kanban-sandbox/blob/1f445b887a08a0ba90c8c4fd96117178bfec8b54/briefs/agent-payments.md).
+That was their example, not a Bouncer purchase or proof of an independent
+arm's-length buyer, current availability, guarded nested-transfer compatibility,
+or willingness to accept new deposits.
+
 The source-reviewed watcher queries FastNear's transaction index. Our probe used
 its **read-only** account/transaction APIs to locate a previously completed
 nested Bouncer Circle transfer to **our own development seller**, then verified

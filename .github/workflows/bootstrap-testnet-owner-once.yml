@@ -1,0 +1,71 @@
+# ONE-SHOT, TESTNET ONLY. Creates only the generated public-key identity from
+# the committed plan. The matching private key remains outside GitHub. A public
+# attempt fence is uploaded before the single helper request; uncertainty is
+# reconciled by views, never by a rerun. This workflow is intentionally bound
+# to this one push parent and cannot be dispatched or rerun.
+name: Bootstrap one testnet owner
+
+on:
+  push:
+    branches: ['arena/25a7aaf6-near-hub']
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  owner:
+    if: github.event.before == 'ef6f2f0d3d4af7733493093b093f62d20b4c707b' && github.run_attempt == 1 && contains(github.event.head_commit.message, '[bootstrap-one-testnet-owner]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: bouncer
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+      - name: Install lockfile and test the one-shot safety guards
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          node --test tests/testnet-owner-bootstrap.test.mjs tests/native-testnet-faucet.test.mjs
+      - name: Prepare public intent fence
+        id: plan
+        run: |
+          set -euo pipefail
+          test -f config/testnet-owner-bootstrap-plan.json
+          digest="$(sha256sum config/testnet-owner-bootstrap-plan.json | cut -d' ' -f1)"
+          echo "sha=$digest" >> "$GITHUB_OUTPUT"
+          mkdir -p "$RUNNER_TEMP/owner-attempt-fence"
+          cp config/testnet-owner-bootstrap-plan.json "$RUNNER_TEMP/owner-attempt-fence/public-plan.json"
+          printf 'network=testnet\nrun_id=%s\ncommit=%s\nplan_sha256=%s\nrequest=at-most-once; reconcile, do not repeat\n' \
+            "$GITHUB_RUN_ID" "$GITHUB_SHA" "$digest" > "$RUNNER_TEMP/owner-attempt-fence/attempt.txt"
+      - name: Durably retain the public intent before any helper request
+        id: fence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: owner-fence-${{ github.run_id }}-${{ steps.plan.outputs.sha }}
+          path: ${{ runner.temp }}/owner-attempt-fence/
+          retention-days: 30
+          if-no-files-found: error
+      - name: Request once and verify the public owner profile
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          BOUNCER_FENCE_ARTIFACT_ID: ${{ steps.fence.outputs.artifact-id }}
+        run: |
+          set -euo pipefail
+          if ! node scripts/bootstrap-testnet-owner-once.mjs > "$RUNNER_TEMP/owner-result.json" 2> "$RUNNER_TEMP/owner-error.log"; then
+            python3 -c 'import os; s=open(os.environ["RUNNER_TEMP"]+"/owner-error.log").read()[-3000:]; print("::error title=Owner bootstrap stopped; do not retry::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
+            exit 1
+          fi
+          {
+            echo '## One testnet owner, public views only'
+            echo 'A single helper request was attempted after a public fence was retained. The runner never received the private key and cannot verify its backup. No Circle funding, vault deployment, signed transaction or seller contact occurred.'
+            echo '```json'
+            cat "$RUNNER_TEMP/owner-result.json"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          python3 -c 'import os,json; p=os.environ["RUNNER_TEMP"]+"/owner-result.json"; s=json.dumps(json.load(open(p)),separators=(",",":")); print("::notice title=Testnet owner public result::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'

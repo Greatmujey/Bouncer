@@ -1,0 +1,67 @@
+# ONE DISTINCT TESTNET ZERO-YOCTO GUARD CONTROL. Expected vault guard failure.
+# Its higher nonce fences the older published probe; that original is never resent.
+# The public signature is a bearer; never resend an unresolved original hash.
+name: Probe distinct guard control and nonce fence once
+on:
+  push:
+    branches: ['arena/25a7aaf6-near-hub']
+permissions:
+  contents: read
+  actions: read
+jobs:
+  probe:
+    if: github.event.before == '90f28a74a53d6f326f45bcfaffeff336737322b4' && github.run_attempt == 1 && contains(github.event.head_commit.message, '[resource-agent-v2-guard-control-once]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: bouncer
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Test fixed actions, journals, fence and receipts
+        run: node --test tests/testnet-resource-agent-*.test.mjs tests/github-original-fence.test.mjs tests/read-only-near-receipts.test.mjs
+      - name: Prepare original-hash fence
+        id: fence_info
+        run: |
+          set -euo pipefail
+          file='evidence/testnet-owner-v2/resource-agent-guard-control-original.json'
+          test -f "$file"
+          digest="$(sha256sum "$file" | cut -d' ' -f1)"
+          echo "sha=$digest" >> "$GITHUB_OUTPUT"
+          mkdir -p "$RUNNER_TEMP/resource-agent-guard-control-fence"
+          cp "$file" "$RUNNER_TEMP/resource-agent-guard-control-fence/original.json"
+          printf 'network=testnet\nrun_id=%s\ncommit=%s\nenvelope_sha256=%s\nrequest=one distinct zero-yocto control; higher nonce fences prior public probe; reconcile originals, never blindly resend\n' \
+            "$GITHUB_RUN_ID" "$GITHUB_SHA" "$digest" > "$RUNNER_TEMP/resource-agent-guard-control-fence/attempt.txt"
+      - name: Retain original-hash fence before CI send
+        id: fence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: resource-agent-v2-guard-control-fence-${{ github.run_id }}-${{ steps.fence_info.outputs.sha }}
+          path: ${{ runner.temp }}/resource-agent-guard-control-fence/
+          retention-days: 30
+          if-no-files-found: error
+      - name: Recheck state, submit once and verify expected guard failure
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          BOUNCER_FENCE_ARTIFACT_ID: ${{ steps.fence.outputs.artifact-id }}
+          BOUNCER_RESOURCE_AGENT_STAGE: guard-control
+        run: |
+          set -euo pipefail
+          if ! node scripts/broadcast-resource-agent-v2-once.mjs > "$RUNNER_TEMP/resource-agent-guard-control-result.json" 2> "$RUNNER_TEMP/resource-agent-guard-control-error.log"; then
+            python3 -c 'import os; s=open(os.environ["RUNNER_TEMP"]+"/resource-agent-guard-control-error.log").read()[-4000:]; print("::error title=Original resource-agent probe unconfirmed; do not resend::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
+            exit 1
+          fi
+          {
+            echo '## One distinct zero-yocto policy guard control'
+            echo 'The owner key attempts a different zero-deposit one-atom policy. A FINAL guard failure and higher nonce fence the earlier public probe; that probe is not resent, and its receipt is not claimed. No key or payee is installed and no FT is moved.'
+            echo '```json'
+            cat "$RUNNER_TEMP/resource-agent-guard-control-result.json"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          python3 -c 'import os,json; s=json.dumps(json.load(open(os.environ["RUNNER_TEMP"]+"/resource-agent-guard-control-result.json")),separators=(",",":")); print("::notice title=Replacement resource-agent guard control result::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'

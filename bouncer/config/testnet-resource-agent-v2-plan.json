@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "purpose": "restricted-testnet-resource-agent",
+  "network": "testnet",
+  "owner": "bouncer-owner-3869c162b193fa1729515442.testnet",
+  "owner_public_key": "ed25519:7GQ6BtmKSTT5XVnVAikGftXDZtfJYxoWXc61PE1H1tVr",
+  "vault": "vault.bouncer-owner-3869c162b193fa1729515442.testnet",
+  "public_key": "ed25519:6Xhp4mi3kmwoVAKSvgxfuJJfNZf98645hcxfPjHXJGJz",
+  "policy_id": "circle-resources",
+  "token": "3e2210e1184b45b64c8a434c0a7e7b23cc04ea7eb7a6c3c32520d03d4afcb8af",
+  "per_tx_cap_atoms": "3000",
+  "daily_cap_atoms": "6907",
+  "methods": [
+    "execute",
+    "execute_ft_call"
+  ],
+  "gas_allowance_yocto": "100000000000000000000000"
+}

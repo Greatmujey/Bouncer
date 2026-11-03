@@ -1,0 +1,30 @@
+# Read-only, original-hash recovery; no signing or sending.
+name: Diagnose both V3 registration originals (read only)
+on:
+  push:
+    branches: ['arena/25a7aaf6-near-hub']
+permissions:
+  contents: read
+jobs:
+  diagnose:
+    if: github.run_attempt == 1 && contains(github.event.head_commit.message, '[outlayer-v12-v3-control-diagnose]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    defaults:
+      run:
+        working-directory: bouncer
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: node --test tests/outlayer-v12-registration-control.test.mjs tests/outlayer-v12-registration-control-runner.test.mjs tests/read-only-near-receipts.test.mjs tests/observe-original-reference.test.mjs tests/github-original-fence.test.mjs
+      - name: Inspect both original hashes without sending
+        run: |
+          set -euo pipefail
+          node scripts/diagnose-outlayer-v12-v3-control.mjs > "$RUNNER_TEMP/control-diagnosis.json"
+          python3 -c 'import os,json; s=json.dumps(json.load(open(os.environ["RUNNER_TEMP"]+"/control-diagnosis.json")),separators=(",",":")); print("::notice title=Both V3 originals diagnosis::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
+          { echo '## Both original hashes, read only'; echo 'Unavailable or missing data is not proof of historical absence. Never resend.'; echo '```json'; cat "$RUNNER_TEMP/control-diagnosis.json"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,16 @@
+{
+  "status": "ORIGINAL_CONFIGURE_SUBMISSION_OR_VERIFICATION_UNCERTAIN_RECONCILE_ONLY",
+  "network": "testnet",
+  "owner": "bouncer-owner-3869c162b193fa1729515442.testnet",
+  "vault": "vault.bouncer-owner-3869c162b193fa1729515442.testnet",
+  "tx_hash": "F4NJaYVwafsLAtmvVe1c7k9LQQswR9cou3JZPicw7knZ",
+  "nonce": "275948535000009",
+  "signed_envelope_sha256": "62f17bd7ce26b7222e07d5fe987eb528f44a44b854a47bc9d77688b18f149dd5",
+  "fence_artifact_id": "13181011990",
+  "run_id": "41529500357",
+  "commit": "6c4ae56dea1f1ce8973c67496ddae3fe4ec4b71f",
+  "reason": "one-shot run reported view unavailable after entering submission/verification",
+  "explorer_observation": "NearBlocks displayed the exact set_policy and grant_agent_key transaction as successful; indexed observation is not the verified FINAL receipt or pinned policy state",
+  "do_not_resend": true,
+  "scope": "one exact owner policy and agent grant, no payee or FT transfer; reconcile only this original hash"
+}

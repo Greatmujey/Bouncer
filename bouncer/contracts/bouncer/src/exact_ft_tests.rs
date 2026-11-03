@@ -43,7 +43,12 @@ fn execute(c: &mut Bouncer) { drop(c.execute_exact_ft(INTENT.into())); }
 #[test]
 fn pinned_intent_dispatches_only_reviewed_terms_once_and_reserves_budget() {
     let mut c = fixture();
+    #[cfg(not(feature = "exact-ft-v12"))]
     assert_eq!(c.contract_version(), "bouncer-agent-v11-exact-ft-testnet");
+    #[cfg(all(feature = "exact-ft-v12", not(feature = "tollgate-native-v13")))]
+    assert_eq!(c.contract_version(), "bouncer-agent-v12-exact-ft-testnet");
+    #[cfg(feature = "tollgate-native-v13")]
+    assert_eq!(c.contract_version(), "bouncer-agent-v13-tollgate-native-testnet");
     assert!(c.is_exact_ft_policy_locked("research".into()));
     assert!(c.is_exact_ft_payee_locked(id("token.testnet"), id("vendor.testnet")));
     let before = c.get_exact_ft_intent(INTENT.into()).unwrap();
@@ -332,4 +337,98 @@ fn a_locked_ft_policy_cannot_be_used_for_an_outlayer_prepaid_project() {
     assert!(route.active);
     testing_env!(agent());
     drop(c.execute_outlayer_project("native-project".into(), U128(100), route));
+}
+
+// This setup deliberately grants the same signer an unrestricted prepaid
+// policy alongside a separate exact-intent policy. The pair lock must apply
+// across policies, including to provider credit funded before the lock.
+fn prepaid_project_fixture() -> (Bouncer, OutlayerProjectRouteView) {
+    let mut c = fixture();
+    c.set_policy("project-usd".into(), id("token.testnet"), U128(200), Some(U128(300)));
+    c.set_policy("project-native".into(), id(NATIVE_ASSET), U128(200), Some(U128(300)));
+    for policy in ["project-usd", "project-native"] {
+        c.allow_payee(policy.into(), id(OUTLAYER_TESTNET));
+        c.grant_agent_key(policy.into(), key(2));
+    }
+    c.native_balance = 500;
+    c.outlayer_prepaid.insert(id("token.testnet"), 100);
+    let project = OutlayerProject { project_id: "connectors.outlayer.testnet/connector-probe".into(),
+        version_key: "a".repeat(64), usd_policy_id: "project-usd".into(), token: id("token.testnet"),
+        attached_usd: U128(30), input_data: r#"{"operation":"burn"}"#.into(),
+        max_instructions: 100_000_000, max_memory_mb: 256, max_execution_seconds: 60 };
+    c.set_outlayer_project("project-native".into(), project);
+    let route = c.get_outlayer_project("project-native".into()).unwrap();
+    assert!(route.active);
+    (c, route)
+}
+
+fn reserve_outlayer_pair(c: &mut Bouncer) {
+    c.allow_payee("research".into(), id(OUTLAYER_TESTNET));
+    c.set_exact_ft_intent("outlayer-reservation".into(), "research".into(), id("token.testnet"),
+        id(OUTLAYER_TESTNET), U128(100), "outlayer-quote-1".into(), "b".repeat(64), expiry(), key(2));
+    assert!(c.is_exact_ft_payee_locked(id("token.testnet"), id(OUTLAYER_TESTNET)));
+}
+
+#[cfg(feature = "exact-ft-v12")]
+#[test]
+fn v12_later_pair_lock_makes_previously_approved_project_inactive() {
+    let (mut c, reviewed) = prepaid_project_fixture();
+    reserve_outlayer_pair(&mut c);
+    let current = c.get_outlayer_project("project-native".into()).unwrap();
+    assert!(!current.active);
+    assert_ne!(reviewed, current);
+    assert_eq!(c.outlayer_prepaid.get(&id("token.testnet")), Some(&100));
+    assert_eq!(c.native_balance, 500);
+    assert_eq!(c.daily_spent("project-usd".into()).0, 0);
+    assert_eq!(c.daily_spent("project-native".into()).0, 0);
+}
+
+#[cfg(feature = "exact-ft-v12")]
+#[test]
+#[should_panic(expected = "BLOCKED: OutLayer project route changed since review")]
+fn v12_rejects_stale_project_signature_after_pair_lock() {
+    let (mut c, reviewed) = prepaid_project_fixture();
+    reserve_outlayer_pair(&mut c);
+    testing_env!(agent());
+    drop(c.execute_outlayer_project("project-native".into(), U128(100), reviewed));
+}
+
+#[cfg(feature = "exact-ft-v12")]
+#[test]
+#[should_panic(expected = "BLOCKED: OutLayer project route changed since review")]
+fn v12_rejects_project_even_if_caller_supplies_inactive_route() {
+    let (mut c, _) = prepaid_project_fixture();
+    reserve_outlayer_pair(&mut c);
+    let current = c.get_outlayer_project("project-native".into()).unwrap();
+    assert!(!current.active);
+    testing_env!(agent());
+    drop(c.execute_outlayer_project("project-native".into(), U128(100), current));
+}
+
+#[cfg(feature = "exact-ft-v12")]
+#[test]
+fn v12_does_not_block_a_different_locked_payee() {
+    let (mut c, reviewed) = prepaid_project_fixture();
+    // fixture() locked (token.testnet, vendor.testnet), not OutLayer.
+    assert!(c.is_exact_ft_payee_locked(id("token.testnet"), id("vendor.testnet")));
+    assert!(!c.is_exact_ft_payee_locked(id("token.testnet"), id(OUTLAYER_TESTNET)));
+    testing_env!(agent());
+    drop(c.execute_outlayer_project("project-native".into(), U128(100), reviewed));
+    assert_eq!(c.outlayer_prepaid.get(&id("token.testnet")), Some(&70));
+    assert_eq!(c.native_balance, 400);
+    assert_eq!(c.daily_spent("project-usd".into()).0, 30);
+    assert_eq!(c.daily_spent("project-native".into()).0, 100);
+}
+
+#[cfg(not(feature = "exact-ft-v12"))]
+#[test]
+fn v11_documents_that_a_pair_lock_does_not_block_prepaid_projects() {
+    let (mut c, reviewed) = prepaid_project_fixture();
+    reserve_outlayer_pair(&mut c);
+    // This intentionally records the existing deployed V11 limitation; the
+    // separate V12 feature must not be represented as upgrading this vault.
+    assert!(c.get_outlayer_project("project-native".into()).unwrap().active);
+    testing_env!(agent());
+    drop(c.execute_outlayer_project("project-native".into(), U128(100), reviewed));
+    assert_eq!(c.outlayer_prepaid.get(&id("token.testnet")), Some(&70));
 }

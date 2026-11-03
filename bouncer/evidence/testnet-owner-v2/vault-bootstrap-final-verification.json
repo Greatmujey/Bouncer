@@ -1,0 +1,42 @@
+{
+  "status": "ORIGINAL_VAULT_FINAL_VERIFIED",
+  "network": "testnet",
+  "owner": "bouncer-owner-3869c162b193fa1729515442.testnet",
+  "vault": "vault.bouncer-owner-3869c162b193fa1729515442.testnet",
+  "tx_hash": "4pDEbSxgShBSmeTXGWKTi1nsaAkxzcE5m8SdHfJsuFyV",
+  "receipt": {
+    "tx_hash": "4pDEbSxgShBSmeTXGWKTi1nsaAkxzcE5m8SdHfJsuFyV",
+    "root_receipt_id": "9RKqaJ9cJTLo4mgavi5iFFPR7ZrzgAPDXgKCocdWK9wy",
+    "code_hash": "2ofBTEQTwUtrYAye4NPH2r9ccQkgfGgRZ3yRS9aP97aG",
+    "protocol_gas_refund_receipts": 1,
+    "trusted_rpc_not_consensus_proof": true
+  },
+  "state": {
+    "status": "KEYLESS_V11_VAULT_AT_FINAL",
+    "network": "testnet",
+    "owner": "bouncer-owner-3869c162b193fa1729515442.testnet",
+    "vault": "vault.bouncer-owner-3869c162b193fa1729515442.testnet",
+    "code_hash": "2ofBTEQTwUtrYAye4NPH2r9ccQkgfGgRZ3yRS9aP97aG",
+    "block_hash": "9KzsTxF4Bz2K9FsftNJHN951CuvXaTqb13tmv6PgqeWo",
+    "owner_key_nonce": "275948535000004",
+    "owner_circle_balance_atoms": "6907",
+    "circle_code_hash": "EoAUFWELjD9gYzsjKDXYRmHDHf1RJ95jaKNSYE6v9b2z",
+    "vault_native_balance_yocto": "6000000000000000000000000",
+    "vault_key_count": 0,
+    "vault_circle_registration": null,
+    "vault_tracked_circle_atoms": "0",
+    "seller_contacted": false,
+    "independently_audited": false,
+    "backup_export_verified": false,
+    "scope": "fresh trusted-RPC state for a newly deployed vault; not consensus proof, audit or independent delivery"
+  },
+  "vault_deployed": true,
+  "circle_funding_verified": false,
+  "seller_contacted": false,
+  "do_not_resend": true,
+  "scope": "matching original FINAL receipt plus fresh trusted-RPC code and keyless state; not audit or independent provider delivery",
+  "signed_envelope_sha256": "d980335e89db769f38301894330ece8cd57a549e20a437ac029d88d647e4150b",
+  "fence_artifact_id": "13176289157",
+  "run_id": "41520563526",
+  "commit": "929e41ed41e03189635e56e823fd8f7359fdfcc5"
+}

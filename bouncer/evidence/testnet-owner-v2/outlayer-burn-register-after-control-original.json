@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "purpose": "bounded-outlayer-burn-stage",
+  "network": "testnet",
+  "stage": "register-fake",
+  "owner": "bouncer-owner-3869c162b193fa1729515442.testnet",
+  "vault": "vault.bouncer-owner-3869c162b193fa1729515442.testnet",
+  "signer_public_key": "ed25519:7GQ6BtmKSTT5XVnVAikGftXDZtfJYxoWXc61PE1H1tVr",
+  "receiver": "usdc.fakes.testnet",
+  "nonce": "275948535000013",
+  "block_hash": "83MG8VFKehnPkPxnEnwmESyPoTBYSRkJS5aXHJFiTsyL",
+  "tx_hash": "2xrD5cbvz2MgaThp3VdwbRZU8GAXoJHcbsHN4TispdjL",
+  "signed_tx_base64": "LgAAAGJvdW5jZXItb3duZXItMzg2OWMxNjJiMTkzZmExNzI5NTE1NDQyLnRlc3RuZXQAXRfw5jZweYT2FAPCrjfGxDpcJcASg9/8VqLJzvz+W/XNq2dG+foAABIAAAB1c2RjLmZha2VzLnRlc3RuZXRom+ENp0UiRt5b5MfLGtCv+jc/jUx/kxocevWH0z1eawIAAAACDwAAAHN0b3JhZ2VfZGVwb3NpdFgAAAB7ImFjY291bnRfaWQiOiJib3VuY2VyLW93bmVyLTM4NjljMTYyYjE5M2ZhMTcyOTUxNTQ0Mi50ZXN0bmV0IiwicmVnaXN0cmF0aW9uX29ubHkiOnRydWV9ACA9iHktAAAAAEhWNxk8w0MAAAAAAAAAAg8AAABzdG9yYWdlX2RlcG9zaXReAAAAeyJhY2NvdW50X2lkIjoidmF1bHQuYm91bmNlci1vd25lci0zODY5YzE2MmIxOTNmYTE3Mjk1MTU0NDIudGVzdG5ldCIsInJlZ2lzdHJhdGlvbl9vbmx5Ijp0cnVlfQAgPYh5LQAAAABIVjcZPMNDAAAAAAAAAABngIf2dYIKJBL0TkDFutw1kG/fzH2REMzGjV6l/2dsYllSqAiX99pTnJpXRXefX8lxK9Ugh8NzwAxuerTMVoEM",
+  "do_not_blindly_resend": true,
+  "scope": "PUBLIC BEARER; exact testnet action only; never blindly resend"
+}

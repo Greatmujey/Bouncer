@@ -1,0 +1,33 @@
+# Read-only lookup of the already-signed original fake-token registration.
+name: Reconcile V3 V12 OutLayer fake-token registration (read only)
+on:
+  push:
+    branches: ['arena/25a7aaf6-near-hub']
+permissions:
+  contents: read
+jobs:
+  reconcile:
+    if: contains(github.event.head_commit.message, '[outlayer-v12-v3-register-reconcile]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    defaults:
+      run:
+        working-directory: bouncer
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: node --test tests/outlayer-v12-burn-registration.test.mjs tests/read-only-near-receipts.test.mjs
+      - name: Verify original hash and fresh next-stage views
+        run: |
+          set -euo pipefail
+          if ! node scripts/reconcile-outlayer-v12-v3-registration.mjs > "$RUNNER_TEMP/outlayer-register-reconcile.json" 2> "$RUNNER_TEMP/outlayer-register-error.log"; then
+            python3 -c 'import os; s=open(os.environ["RUNNER_TEMP"]+"/outlayer-register-error.log").read()[-2500:]; print("::error title=Original registration unknown; never resend::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
+            exit 1
+          fi
+          python3 -c 'import os,json; s=json.dumps(json.load(open(os.environ["RUNNER_TEMP"]+"/outlayer-register-reconcile.json")),separators=(",",":")); print("::notice title=V3 V12 OutLayer registration reconciliation::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
+          { echo '## Read-only original registration'; echo 'No signing, send, seller payment or delivery.'; echo '```json'; cat "$RUNNER_TEMP/outlayer-register-reconcile.json"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"

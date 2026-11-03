@@ -176,11 +176,18 @@ test('an expired recovered price cannot authorize later resource payments', asyn
 });
 
 test('a future price or failed independent result cannot trigger FT execution', async () => {
-  const f = oracleFixture(Math.floor(Date.now() / 1000) + 31);
-  await assert.rejects(runMixedMission({ ...f.options, execute: true }), /future/);
-  assert.deepEqual(f.calls, ['oracle-preview', 'ft-preview', 'oracle-send']);
-  const g = oracleFixture();
-  g.runners.outlayer = async ({ execute }) => execute ? Promise.reject(new Error('unverified oracle result')) : { status: 'READY' };
-  await assert.rejects(runMixedMission({ ...g.options, execute: true }), /unverified oracle/);
-  assert.deepEqual(g.calls, ['ft-preview']);
+  // Freeze the clock at the 31-second rejection boundary. With the real clock,
+  // a second tick between fixture creation and validation turns +31 into the
+  // allowed +30 and makes this safety assertion nondeterministic under load.
+  const now = 1_700_000_000, realNow = Date.now;
+  try {
+    Date.now = () => now * 1000;
+    const f = oracleFixture(now + 31);
+    await assert.rejects(runMixedMission({ ...f.options, execute: true }), /future/);
+    assert.deepEqual(f.calls, ['oracle-preview', 'ft-preview', 'oracle-send']);
+    const g = oracleFixture(now);
+    g.runners.outlayer = async ({ execute }) => execute ? Promise.reject(new Error('unverified oracle result')) : { status: 'READY' };
+    await assert.rejects(runMixedMission({ ...g.options, execute: true }), /unverified oracle/);
+    assert.deepEqual(g.calls, ['ft-preview']);
+  } finally { Date.now = realNow; }
 });

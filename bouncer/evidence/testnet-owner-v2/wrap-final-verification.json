@@ -1,0 +1,26 @@
+{
+  "status": "OWNER_WRAPPED_TEST_NEAR_AT_FINAL",
+  "kind": "wrap",
+  "network": "testnet",
+  "owner": "bouncer-owner-3869c162b193fa1729515442.testnet",
+  "tx_hash": "DUNFS2E7ethB8iRnH7DNeah68EfmV6r25uwPSzXwDZDJ",
+  "receipt": {
+    "tx_hash": "DUNFS2E7ethB8iRnH7DNeah68EfmV6r25uwPSzXwDZDJ",
+    "root_receipt_id": "B3wBtsKKHz1uqGWfPs5YpAyq79v2dCmT6HKe8Yet5zFr",
+    "linked_successful_outcomes": 2,
+    "circle_transfer": null,
+    "trusted_rpc_not_consensus_proof": true
+  },
+  "after_block_hash": "DubdW6hEadKXhQAFvEP27b9em7AggXsEDVnpu8cpoTEd",
+  "owner_wrap_balance_yocto": "10000000000000000000000",
+  "owner_circle_balance_atoms": "0",
+  "circle_funding_verified": false,
+  "vault_deployed": false,
+  "seller_contacted": false,
+  "do_not_resend": true,
+  "scope": "matching original FINAL transaction/receipt and fresh trusted-RPC balances, not consensus proof or independent provider delivery",
+  "signed_envelope_sha256": "5c9591f2c686364c8d96a4f2148db3e2c5c78ba179da10dbb4900c0bb71ccd03",
+  "fence_artifact_id": "13177386416",
+  "run_id": "41519649858",
+  "commit": "dc4c7be26e486f560322352644afbd9779134adc"
+}

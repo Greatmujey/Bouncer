@@ -86,11 +86,15 @@ function fixture() {
   const provider = {
     async viewNodeStatus() { return { chain_id: 'testnet' }; },
     async viewBlock() { return { header: { hash: finalBlock, timestamp_nanosec: (BigInt(clock) * 1_000_000n).toString() } }; },
-    async viewAccount(id, opts) { assert.equal(id, goal.vault); return { block_hash: opts.blockId, code_hash: goal.vault_code_hash }; },
+    async viewAccount(id, opts) {
+      if (id === goal.owner) return { block_hash: opts.blockId, code_hash: '11111111111111111111111111111111' };
+      assert.equal(id, goal.vault); return { block_hash: opts.blockId, code_hash: goal.vault_code_hash };
+    },
     async viewAccessKeyList(id, opts) { assert.equal(id, goal.vault); return { block_hash: opts.blockId, keys: [] }; },
     async viewAccessKey(id, pk, opts) {
       assert.equal(id, goal.owner); assert.equal(String(pk), String(publicKey));
-      return { block_hash: opts.blockId, permission: { FunctionCall: { receiver_id: goal.vault, method_names: ['execute_exact_ft'] } } };
+      return { block_hash: opts.blockId, permission: { FunctionCall: { receiver_id: goal.vault,
+        method_names: ['execute_exact_ft'], allowance: '100000000000000000000000' } } };
     },
     async callFunction(_contract, method, args, opts) {
       if (method === 'get_owner') return goal.owner;

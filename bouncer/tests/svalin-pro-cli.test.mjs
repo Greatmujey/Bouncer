@@ -55,6 +55,19 @@ test('CLI requires separate explicit action, risk and backup flags and refuses m
   } finally { f.close(); }
 });
 
+test('actual CLI blocks local and global owner contract code before any seller request or reservation write', () => {
+  for (const flag of ['ownerContract', 'ownerGlobal']) {
+    const f = fixture(); try {
+      assert.equal(f.run([...f.base, '--init', '--new-journal', '--ack-key-backup']).status, 0);
+      const original = fs.readFileSync(f.state);
+      fs.writeFileSync(f.config, JSON.stringify({ goal, [flag]: true }), { mode: 0o600 });
+      const got = f.run([...f.base, '--reserve', '--execute', '--ack-key-backup', '--rpc', 'http://127.0.0.1:9999']);
+      assert.equal(got.status, 1); assert.match(got.stderr, /no reservation was sent/);
+      assert.deepEqual(f.calls(), []); assert.deepEqual(fs.readFileSync(f.state), original);
+    } finally { f.close(); }
+  }
+});
+
 test('actual CLI runs a complete synthetic flow and recovers a lost payment response without a second send', () => {
   const f = fixture(); try {
     let got = f.run([...f.base, '--init', '--new-journal', '--ack-key-backup']);

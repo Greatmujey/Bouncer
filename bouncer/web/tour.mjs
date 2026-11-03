@@ -12,7 +12,7 @@ const steps = [
   },
   {
     kicker: 'YOU STAY IN CONTROL', title: 'Your wallet, your rules.',
-    description: 'Optionally connect a testnet wallet on an isolated site. Connection displays an account; it does not approve spending or set up a vault.',
+    description: 'Connect a testnet wallet to display your account. Connection does not approve spending or set up a vault.',
     callout: 'The contract requires exactly 1 yoctoNEAR for owner-only policy changes. Never share a private key or seed phrase.',
   },
   {
@@ -63,7 +63,6 @@ export function setupTour(doc = document, storage) {
   });
   back.addEventListener('click', () => { if (index > 0) { index--; render(); } });
   next.addEventListener('click', () => { if (index === steps.length - 1) close(); else { index++; render(); } });
-  let seen = false;
-  try { seen = storage?.getItem('bouncer:tour:v1') === 'seen'; } catch { /* tour still works without storage */ }
-  if (!seen) open();
+  // Orientation is available on demand, without interrupting the first visit
+  // or blocking the wallet form behind a modal.
 }

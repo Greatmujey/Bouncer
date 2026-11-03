@@ -38,6 +38,38 @@ jobs:
         with:
           node-version: '22'
       - run: npm ci --no-audit --no-fund
+      - run: npm ci --prefix walletconnect --no-audit --no-fund
+      # Fail quickly on browser or asset regressions before the broader suite.
+      - name: Check committed wallet bundles and source archive
+        run: |
+          npm run build:web
+          python3 scripts/build-intear-source.py
+          git diff --exit-code -- web/wallet.bundle.js web/walletconnect.bundle.js web/api/wc-relay.mjs web/walletconnect-NOTICES.txt web/intear-wallet.executor.js web/intear-wallet-source.zip
+      - name: Test onboarding, mobile layout and testnet wallet UI
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BOUNCER_PLAYWRIGHT_PATH: ${{ runner.temp }}/bouncer-browser/node_modules/playwright-core/index.mjs
+          BOUNCER_METEOR_EXECUTOR: ${{ runner.temp }}/meteor-executor.js
+          BOUNCER_MOBILE_EXECUTOR: ${{ runner.temp }}/near-mobile-executor.js
+          BOUNCER_CLI_EXECUTOR: ${{ runner.temp }}/near-cli-executor.js
+        shell: bash
+        run: |
+          set +e
+          set -o pipefail
+          {
+            npm install --prefix "$RUNNER_TEMP/bouncer-browser" --no-save --no-audit --no-fund playwright-core@1.64.1 &&
+            # Public, pinned vendor executors; the test verifies each SHA-256.
+            gh api repos/Meteor-Wallet/meteor_wallet_sdk/git/blobs/b76fb93ff5d47064845d09313173b6eddbfa64e3 --jq .content | base64 -d > "$BOUNCER_METEOR_EXECUTOR" &&
+            gh api repos/fastnear/near-connect/git/blobs/19a9d9513c6a240e1fe228b820b9aebccbf66dcd --jq .content | base64 -d > "$BOUNCER_MOBILE_EXECUTOR" &&
+            gh api repos/near/near-cli-connect/git/blobs/32f1a33250370b5250a72d68ce24459628069fd7 --jq .content | base64 -d > "$BOUNCER_CLI_EXECUTOR" &&
+            node scripts/test-web-browser.mjs
+          } 2>&1 | tee "$RUNNER_TEMP/bouncer-web-browser.log"
+          result=${PIPESTATUS[0]}
+          if [ "$result" -ne 0 ]; then
+            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-5500).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=Website browser test failed::"+s)' "$RUNNER_TEMP/bouncer-web-browser.log"
+          fi
+          exit "$result"
+
       # Isolated, lockfile-pinned third-party seller SDK. Its NEAR driver is
       # wrapped only in tests because the published preset is mainnet-only.
       - run: npm ci --prefix interop/piprail --ignore-scripts --legacy-peer-deps --no-audit --no-fund
@@ -59,18 +91,6 @@ jobs:
         # Python tests use synthetic data; the exact-artifact case skips unless
         # its local inputs are explicitly supplied. No chain or seller access.
         run: python3 -m unittest discover -s tests -p 'v11*_test.py'
-      - name: Check the committed wallet bundle matches its source
-        run: npm run build:web && git diff --exit-code -- web/wallet.bundle.js
-      - name: Test onboarding, mobile layout and testnet wallet UI
-        env:
-          GH_TOKEN: ${{ github.token }}
-          BOUNCER_PLAYWRIGHT_PATH: ${{ runner.temp }}/bouncer-browser/node_modules/playwright-core/index.mjs
-          BOUNCER_METEOR_EXECUTOR: ${{ runner.temp }}/meteor-executor.js
-        run: |
-          npm install --prefix "$RUNNER_TEMP/bouncer-browser" --no-save --no-audit --no-fund playwright-core@1.64.1
-          # Public, pinned vendor executor; test verifies its SHA-256 before use.
-          gh api repos/Meteor-Wallet/meteor_wallet_sdk/git/blobs/b76fb93ff5d47064845d09313173b6eddbfa64e3 --jq .content | base64 -d > "$BOUNCER_METEOR_EXECUTOR"
-          node scripts/test-web-browser.mjs
 
   contract-tests:
     name: Rust contract tests
@@ -111,6 +131,18 @@ jobs:
           result=${PIPESTATUS[0]}
           if [ "$result" -ne 0 ]; then
             node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-3500).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=Exact FT variant tests failed::"+s)' "$RUNNER_TEMP/rust-exact-ft-tests.log"
+          fi
+          exit "$result"
+
+      - name: Test separate V12 prepaid pair-lock hardening
+        working-directory: bouncer/contracts/bouncer
+        shell: bash
+        run: |
+          set +e
+          CARGO_TERM_COLOR=never CARGO_PROFILE_DEV_DEBUG=0 cargo test --lib --features exact-ft-v12 2>&1 | tee "$RUNNER_TEMP/rust-v12-tests.log"
+          result=${PIPESTATUS[0]}
+          if [ "$result" -ne 0 ]; then
+            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-3500).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=V12 pair-lock tests failed::"+s)' "$RUNNER_TEMP/rust-v12-tests.log"
           fi
           exit "$result"
 
@@ -316,6 +348,18 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: bouncer-exact-ft-v11-wasm
+          path: bouncer/contracts/bouncer/target/wasm32-unknown-unknown/release/bouncer.wasm
+          if-no-files-found: error
+      - name: Build separate V12 pair-lock hardening WASM
+        working-directory: bouncer/contracts/bouncer
+        run: RUSTFLAGS="-C link-arg=-s" cargo build --target wasm32-unknown-unknown --release --features exact-ft-v12
+      - name: Check V12 marker and record artifact hash
+        run: |
+          node -e 'const fs=require("fs"),c=require("crypto"),p="bouncer/contracts/bouncer/target/wasm32-unknown-unknown/release/bouncer.wasm",b=fs.readFileSync(p);if(!b.subarray(0,8).equals(Buffer.from([0,97,115,109,1,0,0,0]))||!b.includes(Buffer.from("bouncer-agent-v12-exact-ft-testnet")))throw Error("invalid V12 artifact");console.log("Experimental V12 SHA-256",c.createHash("sha256").update(b).digest("hex"))'
+      - name: Save non-deployed V12 artifact for review
+        uses: actions/upload-artifact@v4
+        with:
+          name: bouncer-exact-ft-v12-wasm
           path: bouncer/contracts/bouncer/target/wasm32-unknown-unknown/release/bouncer.wasm
           if-no-files-found: error
       # Builds are uploaded for review, never auto-committed over the pinned
@@ -1797,6 +1841,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           BOUNCER_PLAYWRIGHT_PATH: ${{ runner.temp }}/bouncer-browser/node_modules/playwright-core/index.mjs
           BOUNCER_METEOR_EXECUTOR: ${{ runner.temp }}/meteor-executor.js
+          BOUNCER_WALLET_PROBE_ORIGIN: https://bouncer-near.vercel.app/
         run: |
           npm install --prefix "$RUNNER_TEMP/bouncer-browser" --no-save --no-audit --no-fund playwright-core@1.64.1
           gh api repos/Meteor-Wallet/meteor_wallet_sdk/git/blobs/b76fb93ff5d47064845d09313173b6eddbfa64e3 --jq .content | base64 -d > "$BOUNCER_METEOR_EXECUTOR"

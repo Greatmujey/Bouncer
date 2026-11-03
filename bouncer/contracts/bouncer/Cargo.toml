@@ -10,9 +10,14 @@ crate-type = ["cdylib"]
 # Experimental, separately built testnet artifacts; default V9 is unchanged.
 youtick-playback-v10 = []
 exact-ft-v11 = []
+# Fresh-state-only hardening; does not change or upgrade deployed V11 vaults.
+exact-ft-v12 = ["exact-ft-v11"]
+# Experimental native-channel support; fresh state only, never a V12 upgrade.
+tollgate-native-v13 = ["exact-ft-v12"]
 
 [dependencies]
-near-sdk = "5.14"
+# Keep experimental testnet artifacts on the captured lockfile resolution.
+near-sdk = "=5.30.0"
 
 [profile.release]
 panic = "abort"
@@ -24,4 +29,4 @@ debug = false
 strip = "debuginfo"
 
 [dev-dependencies]
-near-sdk = { version = "5.14", features = ["unit-testing"] }
+near-sdk = { version = "=5.30.0", features = ["unit-testing"] }

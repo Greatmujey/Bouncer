@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "purpose": "bounded-testnet-resource-agent-setup",
+  "network": "testnet",
+  "stage": "guard-control",
+  "owner": "bouncer-owner-3869c162b193fa1729515442.testnet",
+  "owner_public_key": "ed25519:7GQ6BtmKSTT5XVnVAikGftXDZtfJYxoWXc61PE1H1tVr",
+  "vault": "vault.bouncer-owner-3869c162b193fa1729515442.testnet",
+  "agent_public_key": "ed25519:6Xhp4mi3kmwoVAKSvgxfuJJfNZf98645hcxfPjHXJGJz",
+  "policy_id": "guard-control-nonce-fence",
+  "nonce": "275948535000008",
+  "block_hash": "5a61irS19Sb4Bj2rToAHe7JEgxsjscpqY6Q53kd3VcNo",
+  "do_not_blindly_resend": true,
+  "supersedes_probe_hash": "26UZubW2JR1Yo75UyaqW4Q11AsoWgWfLBWHjUriQS4qL",
+  "supersedes_probe_nonce": "275948535000007",
+  "tx_hash": "2oECAQZt97rBUkHWuXuY7wMBqEVAuhH3ekeFxR2BWXyK",
+  "signed_tx_base64": "LgAAAGJvdW5jZXItb3duZXItMzg2OWMxNjJiMTkzZmExNzI5NTE1NDQyLnRlc3RuZXQAXRfw5jZweYT2FAPCrjfGxDpcJcASg9/8VqLJzvz+W/XIq2dG+foAADQAAAB2YXVsdC5ib3VuY2VyLW93bmVyLTM4NjljMTYyYjE5M2ZhMTcyOTUxNTQ0Mi50ZXN0bmV0Q+iU/U/5dyp+vM5x+hr5Jtn7S8z0tF+MRvXn2fNCeZwBAAAAAgoAAABzZXRfcG9saWN5lQAAAHsicG9saWN5X2lkIjoiZ3VhcmQtY29udHJvbC1ub25jZS1mZW5jZSIsInRva2VuIjoiM2UyMjEwZTExODRiNDViNjRjOGE0MzRjMGE3ZTdiMjNjYzA0ZWE3ZWI3YTZjM2MzMjUyMGQwM2Q0YWZjYjhhZiIsInBlcl90eF9jYXAiOiIxIiwiZGFpbHlfY2FwIjoiMSJ9AOBX60gbAAAAAAAAAAAAAAAAAAAAAAAAAOFeivdfp5oUTzZojtKzfwz2iO6G7vZ98/GCiAVO2rIzEbm4qmzfFDi4IYq9r3X9qpZ+ZPcUbofeGIAPhhq7AwU=",
+  "scope": "public bearer, NOT journaled or broadcast; never blindly resend"
+}

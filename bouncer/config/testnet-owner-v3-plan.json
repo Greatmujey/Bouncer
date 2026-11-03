@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "purpose": "new-bouncer-testnet-owner",
+  "network": "testnet",
+  "account_id": "bouncer-owner-12f343b795633e357ae5560d.testnet",
+  "public_key": "ed25519:3FQ4vfUxvrWpfBgsxsiu9ER8jx71GeUHff5rUJx4zVog"
+}

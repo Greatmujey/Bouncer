@@ -1,8 +1,11 @@
 # Experimental exact, one-shot FT intents (V11)
 
-**Fresh testnet state only; not deployed, audited, migrated, or an independent
-purchase.** This is a separately compiled `exact-ft-v11` feature, not a change
-to the pinned V9 `bouncer.wasm` or the separate YouTick V10 variant. V11 adds
+**Testnet prototype only; not audited, migrated, production-ready, or proof of an
+independent purchase.** A fresh keyless V11 testnet vault has been deployed and
+funded with Circle test USDC; its recorded deployment and funding evidence is in
+`evidence/testnet-owner-v2/`. This is a separately compiled `exact-ft-v11`
+feature, not a change to the pinned V9 `bouncer.wasm` or the separate YouTick
+V10 variant. V11 adds
 state fields and **must not be installed over any V9/V10 vault**: no migration
 or source-to-binary reproducibility is established. The two experimental
 features must not be enabled together. CI tests and uploads a build for review;
@@ -15,7 +18,15 @@ code hash, access keys and reviewed deployment before using a fresh vault.
 V9's unrestricted `execute` lets a granted key choose a transfer memo. A
 public MultiAgency code is payment-routing information, and its reviewed
 watcher matches a memo *containing* that code. V11 adds an owner-approved,
-one-shot direct FT intent. The owner explicitly:
+one-shot direct FT intent. Its 1-yocto guard checks the immediate predecessor
+and attached deposit; **it does not prove a human approved the call**. A
+contract acting as the owner can itself forward a privileged call with one
+yocto, and the vault deliberately trusts that owner contract's authorization.
+A function-call key restricted to the vault cannot attach that yocto directly,
+but this is not a substitute for understanding any owner-contract forwarding
+path. Contract wallets can be legitimate; their authorization and code need
+separate review. See `owner_contract_forwarding_is_trusted_not_a_proof_of_human_approval`
+in the V11 contract tests. The owner explicitly:
 
 1. Configures an FT policy, caps, payee and agent key under the existing
    **exactly 1 yoctoNEAR** owner guard.

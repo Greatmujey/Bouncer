@@ -1,7 +1,7 @@
 /** Synthetic pinned RPC/state fixtures; none represent a deployed chain. */
 import { CIRCLE_TESTNET_USDC as TOKEN } from '../../scripts/circle-testnet-setup.mjs';
 import { SVALIN_PAYEE } from '../../agent/svalin-pro-readiness.mjs';
-import { STAGES, OWNER, VAULT, hash, resultFor } from './svalin-setup-fixture.mjs';
+import { STAGES, hash, resultFor } from './svalin-setup-fixture.mjs';
 
 export const BLOCK = hash(30), OTHER = hash(31), NOW = 1_800_000_000_000;
 export const REG = '1250000000000000000000', COST = '10000000000000000000';
@@ -10,22 +10,23 @@ export const UNFUNDED = 'BLOCKED: insufficient vault balance (fund first)';
 export const stageName = i => i < STAGES.length ? STAGES[i] : 'verify_funded_vault';
 
 export function snapshot(f, index) {
+  const { owner, vault } = f.inputs.goal;
   const agentKey = f.inputs.agentPublicKey, installed = index >= 3, configured = index >= 2, funded = index === 5;
   const keys = [{ public_key: f.ownerKey, access_key: { permission: 'FullAccess' } }];
   if (installed) keys.push({ public_key: agentKey, access_key: { permission: { FunctionCall: {
-    receiver_id: VAULT, method_names: ['execute_exact_ft'], allowance: ALLOWANCE } } } });
+    receiver_id: vault, method_names: ['execute_exact_ft'], allowance: f.inputs.agentGasAllowanceYocto } } } });
   return {
     network: 'testnet', block: { header: { hash: BLOCK, timestamp_nanosec: String(BigInt(NOW) * 1_000_000n) } },
     protocol: { chain_id: 'testnet', protocol_version: 88, runtime_config: { storage_amount_per_byte: COST,
       wasm_config: { global_contract_host_fns: true, reftypes_bulk_memory: true, gas_key_host_fns: true, universal_accounts: true } } },
-    owner: { block_hash: BLOCK, amount: 20n * 10n ** 24n, storage_usage: 10_000 },
+    owner: { block_hash: BLOCK, code_hash: '11111111111111111111111111111111', amount: 20n * 10n ** 24n, storage_usage: 10_000 },
     ownerKey: { block_hash: BLOCK, nonce: 2n, permission: 'FullAccess' },
     ownerKeys: { block_hash: BLOCK, keys },
     vault: { block_hash: BLOCK, amount: 7n * 10n ** 24n, storage_usage: 10_000,
       code_hash: f.inputs.goal.vault_code_hash },
     vaultKeys: { block_hash: BLOCK, keys: [] },
     presence: { exists: false, block_hash: BLOCK },
-    contractOwner: OWNER, version: 'bouncer-agent-v11-exact-ft-testnet',
+    contractOwner: owner, version: 'bouncer-agent-v11-exact-ft-testnet',
     policy: configured ? { token: TOKEN, per_tx_cap: MAX, daily_cap: MAX } : null,
     policyLocked: configured, pairLocked: false, agentGranted: configured, daily: '0',
     tracked: funded ? MAX : '0', vaultUsdc: funded ? MAX : '0',
@@ -44,7 +45,8 @@ export function providerFor(f, s) {
     if (s.failures.has(name)) throw Error('untrusted-rpc-secret-should-not-leak');
     if (!ranHook && s.hook) { ranHook = true; await s.hook(name); }
   }
-  const registration = { [OWNER]: 'ownerRegistration', [VAULT]: 'vaultRegistration', [SVALIN_PAYEE]: 'sellerRegistration' };
+  const { owner, vault } = f.inputs.goal;
+  const registration = { [owner]: 'ownerRegistration', [vault]: 'vaultRegistration', [SVALIN_PAYEE]: 'sellerRegistration' };
   const names = { get_owner: 'contractOwner', contract_version: 'version', get_policy: 'policy',
     is_exact_ft_policy_locked: 'policyLocked', is_exact_ft_payee_locked: 'pairLocked',
     is_agent_key_allowed: 'agentGranted', daily_spent: 'daily', vault_balance: 'tracked',
@@ -54,19 +56,19 @@ export function providerFor(f, s) {
     async viewBlock(ref) { await note('block', [ref]); return s.block; },
     async experimental_protocolConfig(ref) { await note('protocol', [ref]); return s.protocol; },
     async viewAccount(account, ref) {
-      const name = account === OWNER ? 'owner' : 'vault'; await note(name, [account, ref]); return s[name];
+      const name = account === owner ? 'owner' : 'vault'; await note(name, [account, ref]); return s[name];
     },
     async viewAccessKey(account, key, ref) { await note('ownerKey', [account, key, ref]); return s.ownerKey; },
     async viewAccessKeyList(account, ref) {
-      const name = account === OWNER ? 'ownerKeys' : 'vaultKeys'; await note(name, [account, ref]); return s[name];
+      const name = account === owner ? 'ownerKeys' : 'vaultKeys'; await note(name, [account, ref]); return s[name];
     },
     async viewTestnetAccountPresenceAt(account, block) { await note('presence', [account, block]); return s.presence; },
     async callFunctionRaw(contract, method, args, ref) {
       const name = method === 'storage_balance_of' ? registration[args.account_id] : method === 'ft_balance_of' ?
-        (args.account_id === OWNER ? 'ownerUsdc' : 'vaultUsdc') : names[method];
+        (args.account_id === owner ? 'ownerUsdc' : 'vaultUsdc') : names[method];
       await note(name, [contract, method, args, ref]);
       if (!name || (['ownerRegistration', 'vaultRegistration', 'sellerRegistration', 'ownerUsdc', 'vaultUsdc', 'bounds'].includes(name)
-        ? contract !== TOKEN : contract !== VAULT)) throw Error('unexpected synthetic view');
+        ? contract !== TOKEN : contract !== vault)) throw Error('unexpected synthetic view');
       if (Object.hasOwn(s.raw, name)) return s.raw[name];
       return { block_hash: BLOCK, result: [...Buffer.from(JSON.stringify(s[name]))] };
     },

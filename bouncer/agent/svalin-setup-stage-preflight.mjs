@@ -21,6 +21,7 @@ import { CIRCLE_TESTNET_USDC } from '../scripts/circle-testnet-setup.mjs';
 import { readPinnedJsonView } from './read-only-near-rpc.mjs';
 import { assertFreshFinalBlock } from '../shared/fresh-final-block.mjs';
 import { pinnedAccessKeyNonce } from '../shared/pinned-access-key-nonce.mjs';
+import { hasPlainOwnerProfileAt } from '../shared/plain-owner-profile.mjs';
 import { isTransactionHash } from '../shared/direct-payment-settlement.mjs';
 
 const STAGES = Object.freeze(['create_keyless_vault', 'configure_locked_policy', 'install_restricted_agent_key',
@@ -63,7 +64,8 @@ function safeTime(now) {
 }
 function nextStage(state, index, pendingHash) {
   return state?.status === 'LOCAL_SETUP_JOURNAL_ONLY' && Array.isArray(state.stages) && state.stages.length === 5 &&
-    state.stages.every((entry, i) => entry.stage_id === STAGES[i] && (i < index ? entry.state === 'FINAL_RECEIPTS_MATCH' :
+    state.stages.every((entry, i) => entry.stage_id === STAGES[i] && (i < index ?
+      (entry.state === 'FINAL_RECEIPTS_MATCH' || (i === 2 && entry.state === 'FINAL_LOCAL_ADD_KEY_OUTCOME_MATCH')) :
       i === index && pendingHash !== null ? entry.state === 'ORIGINAL_HASH_PENDING' && entry.tx_hash === pendingHash && entry.do_not_resend === true :
         entry.state === 'NOT_RECORDED'));
 }
@@ -92,7 +94,8 @@ function summarized(checks) {
 
 /**
  * By default the requested stage must be the journal's first unrecorded stage;
- * verify_funded_vault requires all five original receipts reconciled. An
+ * verify_funded_vault requires all five original stages reconciled, including
+ * a separately labeled local AddKey outcome if its receipt body was omitted. An
  * optional exact pendingOriginalHash permits ONLY a read-only recheck of a
  * recorded original, never permission to broadcast or retry it. The journal is
  * checked before and after RPC, but later races and deleted, rolled-back,
@@ -185,6 +188,7 @@ export async function inspectSvalinSetupStage({ plan, trustedReviewHash, ownerPu
   put('v11_selected_wasm_features_enabled', ['protocol'], () => selectedV11WasmFeaturesEnabled(reads.protocol.value));
   const cost = amount(reads.protocol.value?.runtime_config?.storage_amount_per_byte);
   put('owner_full_access_key', ['owner_key'], () => atBlock('owner_key') && reads.owner_key.value.permission === 'FullAccess');
+  put('owner_has_no_contract_code', ['owner_account'], () => hasPlainOwnerProfileAt(reads.owner_account.value, hash));
   put('owner_nonce_safely_represented', ['owner_key'], () => atBlock('owner_key') && pinnedAccessKeyNonce(reads.owner_key.value.nonce) !== null);
   put('agent_key_state', ['owner_keys'], () => keyList(reads.owner_keys.value, hash, identity, index >= 3, allowance));
   put('vault_code_matches_review', ['vault_account'], () => atBlock('vault_account') && reads.vault_account.value.code_hash === goal.vault_code_hash);

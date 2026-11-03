@@ -1,0 +1,64 @@
+# Opt-in V12 runtime test on a disposable loopback chain. No project secrets,
+# live NEAR accounts, provider endpoints, wallets, or real/testnet tokens.
+name: V12 isolated pair-lock sandbox
+
+on:
+  push:
+    branches: ['arena/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sandbox:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[v12-pair-lock-sandbox]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: bouncer
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - name: Install the lockfile and validate sandbox guards
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          node --test tests/v12-pair-lock-sandbox.test.mjs tests/v11-sandbox-harness.test.mjs tests/v11-sandbox-setup-rpc.test.mjs
+      - name: Build the separate V12 test artifact
+        run: |
+          cd contracts/bouncer
+          RUSTFLAGS='-C link-arg=-s' cargo build --target wasm32-unknown-unknown --release --no-default-features --features exact-ft-v12
+          echo "BOUNCER_V12_WASM_PATH=$PWD/target/wasm32-unknown-unknown/release/bouncer.wasm" >> "$GITHUB_ENV"
+      - name: Fetch and verify the existing pinned sandbox and synthetic example FT
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api repos/near/nearcore/git/blobs/3ab410d723c8029e70993b0829a17ddd52d8b135 --jq .content | base64 --decode > "$RUNNER_TEMP/mock-ft.wasm"
+          echo 'b10ed11ac6d60698c6809ef7e96b578f2e5768354fe4b15d044843c2b6ab8a04  '"$RUNNER_TEMP/mock-ft.wasm" | sha256sum -c -
+          curl --fail --show-error --silent --location --proto '=https' --tlsv1.2 --max-time 180 --retry 2 --max-filesize 419430400 \
+            'https://s3-us-west-1.amazonaws.com/build.nearprotocol.com/nearcore/Linux-x86_64/2.14.0/near-sandbox.tar.gz' \
+            --output "$RUNNER_TEMP/near-sandbox.tar.gz"
+          python3 scripts/extract-pinned-near-sandbox.py "$RUNNER_TEMP/near-sandbox.tar.gz" "$RUNNER_TEMP/near-sandbox"
+          echo "BOUNCER_SANDBOX_BIN=$RUNNER_TEMP/near-sandbox" >> "$GITHUB_ENV"
+          echo "BOUNCER_MOCK_FT_WASM_PATH=$RUNNER_TEMP/mock-ft.wasm" >> "$GITHUB_ENV"
+      - name: Prove cross-policy lock behavior on the local chain
+        run: |
+          set -euo pipefail
+          ulimit -Sn 65535
+          node integration/v12-pair-lock-sandbox.mjs | tee "$RUNNER_TEMP/v12-pair-lock-result.json"
+          {
+            echo '## V12 isolated sandbox result'
+            echo 'Synthetic FT and receiver on a disposable local chain only; not testnet, Circle, OutLayer, audit, or independent delivery.'
+            echo '```json'
+            cat "$RUNNER_TEMP/v12-pair-lock-result.json"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

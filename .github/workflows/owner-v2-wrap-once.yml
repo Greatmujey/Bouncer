@@ -1,0 +1,70 @@
+# ONE-SHOT TESTNET OWNER SETUP. Public signed bytes may be relayed by anyone
+# before CI; the locally journaled original hash must never be replaced.
+name: Wrap testnet NEAR for replacement owner once
+
+on:
+  push:
+    branches: ['arena/25a7aaf6-near-hub']
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  wrap:
+    if: github.event.before == 'f5cc89a6aa98d007704a470d056ef09b487f6269' && github.run_attempt == 1 && contains(github.event.head_commit.message, '[testnet-owner-v2-wrap-once]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: bouncer
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+      - name: Install lockfile and test fixed-action safeguards
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          node --test tests/circle-owner-acquisition*.test.mjs tests/circle-owner-registration.test.mjs tests/circle-owner-offline-journal.test.mjs
+      - name: Prepare original-hash fence
+        id: fence_info
+        run: |
+          set -euo pipefail
+          file='evidence/testnet-owner-v2/wrap-original.json'
+          test -f "$file"
+          digest="$(sha256sum "$file" | cut -d' ' -f1)"
+          echo "sha=$digest" >> "$GITHUB_OUTPUT"
+          mkdir -p "$RUNNER_TEMP/wrap-fence"
+          cp "$file" "$RUNNER_TEMP/wrap-fence/wrap-original.json"
+          printf 'network=testnet\nrun_id=%s\ncommit=%s\nenvelope_sha256=%s\nrequest=one original testnet wrap; reconcile, never blindly resend\n' \
+            "$GITHUB_RUN_ID" "$GITHUB_SHA" "$digest" > "$RUNNER_TEMP/wrap-fence/attempt.txt"
+      - name: Retain the public original-hash fence before the CI send
+        id: fence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: acquisition-v2-wrap-fence-${{ github.run_id }}-${{ steps.fence_info.outputs.sha }}
+          path: ${{ runner.temp }}/wrap-fence/
+          retention-days: 30
+          if-no-files-found: error
+      - name: Recheck fresh state, submit once, and verify original receipts
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          BOUNCER_FENCE_ARTIFACT_ID: ${{ steps.fence.outputs.artifact-id }}
+          BOUNCER_ACQUISITION_KIND: wrap
+        run: |
+          set -euo pipefail
+          if ! node scripts/broadcast-owner-acquisition-v2-once.mjs > "$RUNNER_TEMP/wrap-result.json" 2> "$RUNNER_TEMP/wrap-error.log"; then
+            python3 -c 'import os; s=open(os.environ["RUNNER_TEMP"]+"/wrap-error.log").read()[-4000:]; print("::error title=Original testnet wrap unconfirmed; do not retry::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
+            exit 1
+          fi
+          {
+            echo '## One bounded testnet owner wrap'
+            echo 'The owner signed locally; these public bearer bytes could be relayed before CI. This is not Circle-USDC funding, vault deployment or seller delivery.'
+            echo '```json'
+            cat "$RUNNER_TEMP/wrap-result.json"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          python3 -c 'import os,json; p=os.environ["RUNNER_TEMP"]+"/wrap-result.json"; s=json.dumps(json.load(open(p)),separators=(",",":")); print("::notice title=Replacement testnet owner wrap result::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'

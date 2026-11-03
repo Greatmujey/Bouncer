@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "purpose": "outlayer-registration-nonce-control",
+  "network": "testnet",
+  "owner": "bouncer-owner-3869c162b193fa1729515442.testnet",
+  "vault": "vault.bouncer-owner-3869c162b193fa1729515442.testnet",
+  "public_key": "ed25519:7GQ6BtmKSTT5XVnVAikGftXDZtfJYxoWXc61PE1H1tVr",
+  "policy_id": "ol-register-nonce-control",
+  "nonce": "275948535000012",
+  "block_hash": "Guy1bZyZbcux2uDqfCGDPSJ2SysZoB33RvA67dSH3RfS",
+  "original_tx_hash": "7Rce6FLjRJ18GtUWcVgReZkMGCaTvvisXB93WWvGTFkV",
+  "original_nonce": "275948535000011",
+  "tx_hash": "Fegksi5b8KmqnHN3fHaH1Ak9vyLFA2JjgoqL5UAtjpu2",
+  "signed_tx_base64": "LgAAAGJvdW5jZXItb3duZXItMzg2OWMxNjJiMTkzZmExNzI5NTE1NDQyLnRlc3RuZXQAXRfw5jZweYT2FAPCrjfGxDpcJcASg9/8VqLJzvz+W/XMq2dG+foAADQAAAB2YXVsdC5ib3VuY2VyLW93bmVyLTM4NjljMTYyYjE5M2ZhMTcyOTUxNTQ0Mi50ZXN0bmV07HDWRNugkku7vzlqvO7Znd0/WoApx86OFsbKbc7IqQUBAAAAAgoAAABzZXRfcG9saWN5lQAAAHsicG9saWN5X2lkIjoib2wtcmVnaXN0ZXItbm9uY2UtY29udHJvbCIsInRva2VuIjoiM2UyMjEwZTExODRiNDViNjRjOGE0MzRjMGE3ZTdiMjNjYzA0ZWE3ZWI3YTZjM2MzMjUyMGQwM2Q0YWZjYjhhZiIsInBlcl90eF9jYXAiOiIxIiwiZGFpbHlfY2FwIjoiMSJ9AOBX60gbAAAAAAAAAAAAAAAAAAAAAAAAAOjxnmi3BTXJlguGfQzovG5OkbeZ5MnoQ/7rv9ca9m8y6CSPQ0gaaTlC4JlaQjk5gQ9CQgoVyUStvMQIiv23dQo=",
+  "do_not_blindly_resend": true,
+  "scope": "PUBLIC BEARER; zero-yocto guard control, not a token registration; never blindly resend"
+}

@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "purpose": "bounded-outlayer-burn-stage",
+  "network": "testnet",
+  "stage": "wrap",
+  "owner": "bouncer-owner-3869c162b193fa1729515442.testnet",
+  "vault": "vault.bouncer-owner-3869c162b193fa1729515442.testnet",
+  "signer_public_key": "ed25519:7GQ6BtmKSTT5XVnVAikGftXDZtfJYxoWXc61PE1H1tVr",
+  "receiver": "wrap.testnet",
+  "nonce": "275948535000014",
+  "block_hash": "3S454CQ68W3DAWhjwXBQcwKJLh4PGwuVStkLPVJWRf2K",
+  "tx_hash": "DJRFCe9ArR9JKheqaRrbkLthDk8gyRrCxugaGWQYNwFS",
+  "signed_tx_base64": "LgAAAGJvdW5jZXItb3duZXItMzg2OWMxNjJiMTkzZmExNzI5NTE1NDQyLnRlc3RuZXQAXRfw5jZweYT2FAPCrjfGxDpcJcASg9/8VqLJzvz+W/XOq2dG+foAAAwAAAB3cmFwLnRlc3RuZXQkIl2Ap5X7X27srnUAO6ScOnlnviGDUiPdfpX+sK6s1AEAAAACDAAAAG5lYXJfZGVwb3NpdAIAAAB7fQAgPYh5LQAAAEB6EPNaAAAAAAAAAAAAAAD8ZooynBk+tmeNhUVnnUO6iKkL2KpIZybCnbLEt37DqHSXY9gZriiqrlHcisxO/ec8Ux+jrCe1S0zEpUiILTAN",
+  "do_not_blindly_resend": true,
+  "scope": "PUBLIC BEARER; exact testnet action only; never blindly resend"
+}

@@ -1,0 +1,160 @@
+/**
+ * Helpers for the opt-in nearcore sandbox test. These operate on local files or
+ * already-received data; they do not connect to a chain or approve a payment.
+ */
+import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import nearApi from 'near-api-js';
+
+// V11 was recovered from the original public Git blob, not rebuilt here.
+export const V11_SHA256 = '1acf931c07a530257999478c121193863ecf7201d357812a44b4d61c16a77921';
+// nearcore 2.14.0's own test FT (NOT Circle's deployed contract).
+export const MOCK_FT_SHA256 = 'b10ed11ac6d60698c6809ef7e96b578f2e5768354fe4b15d044843c2b6ab8a04';
+// Independently reported by the pinned third-party source in V11_SANDBOX.md;
+// a digest pin is not a NEAR Foundation signature or a reproducible build.
+export const SANDBOX_SHA256 = '797b9d7a9a23907048d68a427e86a55c94f1de232dbfb8b8a1eec09ecef3bf13';
+export const SANDBOX_CHAIN_ID = 'bouncer-v11-isolated-sandbox';
+export const MOCK_TOKEN_GENESIS_BALANCE = 100n * 10n ** 24n;
+
+export function readVerifiedFile(path, expectedHash, { maxBytes = 400 * 1024 * 1024 } = {}) {
+  if (typeof path !== 'string' || path.length === 0 || !/^[a-f0-9]{64}$/.test(expectedHash)) {
+    throw new Error('an explicit file and SHA-256 pin are required');
+  }
+  const stat = fs.statSync(path);
+  if (!stat.isFile() || stat.size === 0 || stat.size > maxBytes) throw new Error('invalid or oversized sandbox input');
+  const data = fs.readFileSync(path);
+  const actual = crypto.createHash('sha256').update(data).digest('hex');
+  if (actual !== expectedHash) throw new Error(`sandbox input SHA-256 mismatch: expected ${expectedHash}, got ${actual}`);
+  return data;
+}
+
+/** Add a deliberately artificial FT account to a disposable sandbox genesis.
+ * This permits the production setup planner's hard-coded Circle address to be
+ * exercised against the upstream test FT. It must NOT be confused with Circle
+ * registration, code or balance on NEAR testnet. No secret key is serialized. */
+export function withMockTokenInGenesis(genesis, accountId, publicKey) {
+  if (!genesis || typeof genesis !== 'object' || Array.isArray(genesis) ||
+      genesis.chain_id !== SANDBOX_CHAIN_ID || !Array.isArray(genesis.records) ||
+      typeof genesis.total_supply !== 'string' || !/^(0|[1-9][0-9]*)$/.test(genesis.total_supply) ||
+      typeof accountId !== 'string' || !/^[a-f0-9]{64}$/.test(accountId)) {
+    throw new Error('expected a fresh, named local sandbox genesis and implicit test-token account');
+  }
+  let canonicalKey;
+  try { canonicalKey = String(nearApi.utils.PublicKey.from(publicKey)); } catch { throw new Error('invalid mock-token public key'); }
+  if (canonicalKey !== publicKey || !publicKey.startsWith('ed25519:')) throw new Error('invalid mock-token public key');
+  if (genesis.records.some(record => record?.Account?.account_id === accountId || record?.AccessKey?.account_id === accountId)) {
+    throw new Error('mock-token account already exists in sandbox genesis');
+  }
+  const result = structuredClone(genesis);
+  result.total_supply = (BigInt(result.total_supply) + MOCK_TOKEN_GENESIS_BALANCE).toString();
+  result.records.push({ Account: { account_id: accountId, account: {
+    amount: MOCK_TOKEN_GENESIS_BALANCE.toString(), locked: '0',
+    code_hash: '11111111111111111111111111111111', storage_usage: 182,
+  } } });
+  result.records.push({ AccessKey: { account_id: accountId, public_key: publicKey,
+    access_key: { nonce: 0, permission: 'FullAccess' } } });
+  return result;
+}
+
+export function assertSandboxStatus(status) {
+  if (!status || status.chain_id !== SANDBOX_CHAIN_ID || status.sync_info?.syncing !== false) {
+    throw new Error('refusing to use an RPC that is not the ready, named local sandbox');
+  }
+}
+
+export function requireFinalSuccess(result, label, { allowReceiptFailure = false } = {}) {
+  assert.equal(result?.final_execution_status, 'FINAL', `${label}: result must be FINAL`);
+  assert.ok(result?.status && typeof result.status.SuccessValue === 'string', `${label}: transaction must resolve successfully`);
+  assert.ok(Array.isArray(result.receipts_outcome) && result.receipts_outcome.length > 0, `${label}: missing receipt outcomes`);
+  let failures = 0;
+  for (const item of result.receipts_outcome) {
+    const status = item?.outcome?.status;
+    assert.ok(status && typeof status === 'object', `${label}: missing receipt status`);
+    if (status.Failure) failures++;
+    else assert.ok(typeof status.SuccessValue === 'string' || typeof status.SuccessReceiptId === 'string',
+      `${label}: receipt not terminal`);
+  }
+  if (!allowReceiptFailure) assert.equal(failures, 0, `${label}: a receipt failed`);
+  return failures;
+}
+
+/** Diagnose, but DO NOT accept as verified setup, nearcore's omitted local
+ * transaction receipt for the same-account AddKey stage. This is only used by
+ * the disposable-chain harness to finish other tests after recording a known
+ * verifier blocker. It does not build a replacement receipt or alter evidence.
+ * The production verifier must already have rejected at its root-receipt check,
+ * after matching the original transaction and its reviewed actions. */
+export function assertOmittedLocalAddKeyReceipt(result, attempt, verifierError) {
+  assert.equal(attempt?.stage_id, 'install_restricted_agent_key', 'diagnostic is restricted to the AddKey stage');
+  assert.equal(attempt.signer_id, attempt.receiver_id, 'diagnostic requires a same-account transaction');
+  assert.equal(verifierError?.message, 'original action receipt is missing or differs from the reviewed batch');
+  assert.equal(result?.final_execution_status, 'FINAL');
+  assert.equal(result?.transaction?.hash, attempt.tx_hash);
+  assert.equal(result?.transaction?.signer_id, attempt.signer_id);
+  assert.equal(result?.transaction?.receiver_id, attempt.receiver_id);
+  assert.equal(result?.transaction?.public_key, attempt.signer_public_key);
+  assert.equal(result?.transaction_outcome?.id, attempt.tx_hash);
+  const txOutcome = result?.transaction_outcome?.outcome;
+  const rootId = txOutcome?.status?.SuccessReceiptId;
+  assert.equal(txOutcome?.executor_id, attempt.signer_id);
+  assert.equal(typeof rootId, 'string');
+  assert.ok(Array.isArray(txOutcome.receipt_ids) && txOutcome.receipt_ids.includes(rootId));
+  assert.ok(Array.isArray(result.receipts) && !result.receipts.some(receipt => receipt?.receipt_id === rootId),
+    'the actual local root receipt must be absent, not merely mismatched');
+  assert.ok(Array.isArray(result.receipts_outcome));
+  const roots = result.receipts_outcome.filter(item => item?.id === rootId);
+  assert.equal(roots.length, 1, 'exactly one local root outcome is required');
+  assert.equal(roots[0].outcome?.executor_id, attempt.receiver_id);
+  assert.deepEqual(roots[0].outcome?.status, { SuccessValue: '' });
+  assert.deepEqual(result.status, { SuccessValue: '' });
+  return rootId;
+}
+
+/** Diagnose a fresh mock-FT registration that the production verifier rejects
+ * solely because a linked protocol gas-refund receipt is present. This is NOT
+ * production verification. The harness still fails the job for this blocker. */
+export function assertRegistrationWithOnlyGasRefund(result, attempt, verifierError, minimum, freshBalance) {
+  assert.equal(attempt?.stage_id, 'register_vault_for_test_usdc');
+  assert.equal(verifierError?.message, 'token registration result does not match the reviewed fresh registration');
+  assert.equal(result?.final_execution_status, 'FINAL');
+  assert.equal(result?.transaction?.hash, attempt.tx_hash);
+  const rootId = result?.transaction_outcome?.outcome?.status?.SuccessReceiptId;
+  const roots = (result?.receipts_outcome ?? []).filter(item => item?.id === rootId);
+  assert.equal(roots.length, 1);
+  const root = roots[0].outcome;
+  assert.equal(root.executor_id, attempt.receiver_id);
+  assert.equal(root.status?.SuccessValue, result?.status?.SuccessValue);
+  const expectedBalance = { total: minimum, available: '0' };
+  assert.deepEqual(JSON.parse(Buffer.from(root.status.SuccessValue, 'base64').toString('utf8')), expectedBalance);
+  assert.deepEqual(freshBalance, expectedBalance);
+  assert.ok(Array.isArray(root.receipt_ids));
+  assert.equal(root.receipt_ids.length, 1, 'expected exactly one protocol gas refund');
+  const childId = root.receipt_ids[0];
+  const children = (result.receipts ?? []).filter(item => item?.receipt_id === childId);
+  const childOutcomes = (result.receipts_outcome ?? []).filter(item => item?.id === childId);
+  assert.equal(children.length, 1);
+  assert.equal(childOutcomes.length, 1);
+  const child = children[0], action = child.receipt?.Action, out = childOutcomes[0].outcome;
+  assert.equal(child.predecessor_id, 'system');
+  assert.equal(child.receiver_id, attempt.signer_id);
+  assert.equal(action?.signer_id, attempt.signer_id);
+  assert.equal(action?.signer_public_key, attempt.signer_public_key);
+  assert.equal(String(action?.gas_price), '0');
+  assert.deepEqual(action?.input_data_ids, []);
+  assert.deepEqual(action?.output_data_receivers, []);
+  assert.equal(action?.actions?.length, 1);
+  assert.deepEqual(Object.keys(action.actions[0]), ['Transfer']);
+  assert.deepEqual(Object.keys(action.actions[0].Transfer), ['deposit']);
+  assert.match(String(action.actions[0].Transfer.deposit), /^[1-9][0-9]*$/);
+  assert.equal(out?.executor_id, attempt.signer_id);
+  assert.deepEqual(out?.status, { SuccessValue: '' });
+  assert.deepEqual(out?.receipt_ids, []);
+}
+
+export function requireReceiptLog(result, executorId, text) {
+  const matches = (result?.receipts_outcome ?? []).filter(item => item?.outcome?.executor_id === executorId &&
+    Array.isArray(item.outcome.logs) && item.outcome.logs.some(log => typeof log === 'string' && log.includes(text)));
+  assert.equal(matches.length, 1, `expected one ${executorId} receipt containing ${text}`);
+  return matches[0];
+}

@@ -1,0 +1,175 @@
+{
+  "version": 1,
+  "chain": "testnet",
+  "block_hash": "9TVs2W1SMb9b2ZF9XfXY3EWM79iMwdh6hHa1W1x9j5W5",
+  "block_timestamp_nanosec": "1793656299417886108",
+  "observed_at": "2026-11-02T21:51:42.696Z",
+  "owner": "bouncer-owner-3869c162b193fa1729515442.testnet",
+  "vault": "vault.bouncer-owner-3869c162b193fa1729515442.testnet",
+  "project_id": "connectors.outlayer.testnet/connector-probe",
+  "diagnostic_input": "{\"operation\":\"burn\",\"rounds\":50}",
+  "resource_limits": {
+    "max_instructions": 1000000000,
+    "max_memory_mb": 256,
+    "max_execution_seconds": 60
+  },
+  "provider_terms_recognized": true,
+  "observations": {
+    "provider_account": {
+      "status": "OBSERVED",
+      "value": {
+        "code_hash": "5waWVnt6g3FZfjR6vfYXZzpAi3sZdFy8cK2sLz4EJQDt",
+        "key_count": 1,
+        "full_access_keys": 1
+      }
+    },
+    "fake_token_account": {
+      "status": "OBSERVED",
+      "value": {
+        "code_hash": "E1E1CJYxT5FjzVSF55QoEWzv6dbqTe2yB6Hpmjks7JJ7",
+        "key_count": 1,
+        "full_access_keys": 1
+      }
+    },
+    "configured_token": {
+      "status": "OBSERVED",
+      "value": "usdc.fakes.testnet"
+    },
+    "fake_token_metadata": {
+      "status": "OBSERVED",
+      "value": {
+        "name": "Bridged USDC",
+        "symbol": "USDC.e",
+        "decimals": 6
+      }
+    },
+    "fake_storage_bounds": {
+      "status": "OBSERVED",
+      "value": {
+        "min": "1250000000000000000000",
+        "max": "1250000000000000000000"
+      }
+    },
+    "owner_fake_registration": {
+      "status": "OBSERVED",
+      "value": null
+    },
+    "vault_fake_registration": {
+      "status": "OBSERVED",
+      "value": null
+    },
+    "outlayer_fake_registration": {
+      "status": "OBSERVED",
+      "value": {
+        "total": "1250000000000000000000",
+        "available": "0"
+      }
+    },
+    "owner_fake_balance": {
+      "status": "OBSERVED",
+      "value": "0"
+    },
+    "vault_fake_balance": {
+      "status": "OBSERVED",
+      "value": "0"
+    },
+    "vault_tracked_fake": {
+      "status": "OBSERVED",
+      "value": "0"
+    },
+    "vault_tracked_native": {
+      "status": "OBSERVED",
+      "value": "0"
+    },
+    "vault_prepaid_allowance": {
+      "status": "OBSERVED",
+      "value": "0"
+    },
+    "provider_vault_credit": {
+      "status": "OBSERVED",
+      "value": "0"
+    },
+    "project": {
+      "status": "OBSERVED",
+      "value": {
+        "uuid": "p0000000000000020",
+        "owner": "connectors.outlayer.testnet",
+        "name": "connector-probe",
+        "project_id": "connectors.outlayer.testnet/connector-probe",
+        "active_version": "2d406ed8005a422c38aec0616990989970e2c444c1386d4f09d54cce59468fb9",
+        "created_at": 1786860345026187800,
+        "storage_deposit": "2840000000000000000000"
+      }
+    },
+    "pricing": {
+      "status": "OBSERVED",
+      "value": {
+        "author_account_id": "zavodil.testnet",
+        "operation": {
+          "operation": "burn",
+          "price_usd": "10000",
+          "developer_share_bp": 3333
+        }
+      }
+    },
+    "native_estimate": {
+      "status": "OBSERVED",
+      "value": "7000100000000000000000"
+    },
+    "pool": {
+      "status": "OBSERVED",
+      "value": {
+        "pool_kind": "SIMPLE_POOL",
+        "token_account_ids": [
+          "usdc.fakes.testnet",
+          "wrap.testnet"
+        ],
+        "amounts": [
+          "2139511690571416",
+          "9854618893755773692853079"
+        ],
+        "total_fee": 30,
+        "shares_total_supply": "11795536995052774651064739",
+        "amp": 0
+      }
+    },
+    "project_version": {
+      "status": "OBSERVED",
+      "value": {
+        "wasm_hash": "2d406ed8005a422c38aec0616990989970e2c444c1386d4f09d54cce59468fb9",
+        "source": {
+          "WasmUrl": {
+            "url": "https://test.fastfs.io/outlayer-alice.testnet/outlayer.testnet/2d406ed8005a422c38aec0616990989970e2c444c1386d4f09d54cce59468fb9.wasm",
+            "hash": "2d406ed8005a422c38aec0616990989970e2c444c1386d4f09d54cce59468fb9",
+            "build_target": "wasm32-wasip2"
+          }
+        },
+        "added_at": 1790967033852000000,
+        "is_active": true
+      }
+    },
+    "quotes": [
+      {
+        "wnear_input_yocto": "100000000000000",
+        "status": "OBSERVED",
+        "value": "21645"
+      },
+      {
+        "wnear_input_yocto": "1000000000000000",
+        "status": "OBSERVED",
+        "value": "216456"
+      },
+      {
+        "wnear_input_yocto": "10000000000000000",
+        "status": "OBSERVED",
+        "value": "2164561"
+      }
+    ]
+  },
+  "signed": false,
+  "sent": false,
+  "seller_contacted": false,
+  "independent_fulfillment_verified": false,
+  "scope": "single trusted-RPC FINAL snapshot only; USDC.e is fake, quotes can change, refund recovery and deployed source are unverified; burn is a diagnostic, not a commercial service",
+  "rpc": "https://test.rpc.fastnear.com"
+}

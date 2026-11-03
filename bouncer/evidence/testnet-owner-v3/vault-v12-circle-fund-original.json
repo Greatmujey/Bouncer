@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "kind": "fund",
+  "network": "testnet",
+  "owner": "bouncer-owner-12f343b795633e357ae5560d.testnet",
+  "public_key": "ed25519:3FQ4vfUxvrWpfBgsxsiu9ER8jx71GeUHff5rUJx4zVog",
+  "vault": "vault.bouncer-owner-12f343b795633e357ae5560d.testnet",
+  "token": "3e2210e1184b45b64c8a434c0a7e7b23cc04ea7eb7a6c3c32520d03d4afcb8af",
+  "expected_circle_code_hash": "EoAUFWELjD9gYzsjKDXYRmHDHf1RJ95jaKNSYE6v9b2z",
+  "expected_vault_code_hash": "Dg53QzTrw3cDWdgYTptmpkqvoeUpSXQsxL5HLcoF6Cq",
+  "storage_min_yocto": "1250000000000000000000",
+  "amount_atoms": "6898",
+  "expected_owner_atoms": "6898",
+  "expected_vault_atoms": "0",
+  "expected_tracked_atoms": "0",
+  "expected_registration": "REGISTERED_AT_VIEW",
+  "nonce": "276049352000006",
+  "block_hash": "216vPkSyC3EYbzQ2MUt1X4PdZHjjroWunSmmb8G3VV4X",
+  "do_not_blindly_resend": true,
+  "tx_hash": "CUSSFm9M4sdrUvfphkzbyDxzsZXiDYRrmjdRmDn3jGzw",
+  "signed_tx_base64": "LgAAAGJvdW5jZXItb3duZXItMTJmMzQzYjc5NTYzM2UzNTdhZTU1NjBkLnRlc3RuZXQAIWeWf5uTYw546RidLIIRGURs/Io4ueUkalhp4x0K4LsGApG/EPsAAEAAAAAzZTIyMTBlMTE4NGI0NWI2NGM4YTQzNGMwYTdlN2IyM2NjMDRlYTdlYjdhNmMzYzMyNTIwZDAzZDRhZmNiOGFmDuJhni7cCYtUKQF9njaSrGu2qSXrgK041KGxbavwDFwBAAAAAhAAAABmdF90cmFuc2Zlcl9jYWxsXwAAAHsicmVjZWl2ZXJfaWQiOiJ2YXVsdC5ib3VuY2VyLW93bmVyLTEyZjM0M2I3OTU2MzNlMzU3YWU1NTYwZC50ZXN0bmV0IiwiYW1vdW50IjoiNjg5OCIsIm1zZyI6IiJ9AID0IOa1AAABAAAAAAAAAAAAAAAAAAAAAAj0mj4VrFL3MOtLSfTAtgKn35o1vzDCDNizSIVTlV+uKOOuipvN2ZAj9eLiUURgAK4myzvdmRD/TwQOzem5aAs=",
+  "scope": "public fixed-action bearer; no private key; retain original hash and never blindly resend"
+}

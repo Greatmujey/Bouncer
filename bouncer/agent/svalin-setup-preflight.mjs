@@ -14,6 +14,7 @@ import { SVALIN_PAYEE } from './svalin-pro-readiness.mjs';
 import { CIRCLE_TESTNET_USDC } from '../scripts/circle-testnet-setup.mjs';
 import { assertFreshFinalBlock } from '../shared/fresh-final-block.mjs';
 import { pinnedAccessKeyNonce } from '../shared/pinned-access-key-nonce.mjs';
+import { hasPlainOwnerProfileAt } from '../shared/plain-owner-profile.mjs';
 import { ReadOnlyNearRpcProvider, readPinnedJsonView } from './read-only-near-rpc.mjs';
 
 const U128_MAX = (1n << 128n) - 1n;
@@ -115,6 +116,10 @@ export async function inspectSvalinSetupPrerequisites({ plan, trustedReviewHash,
   put('v11_selected_wasm_features_enabled', ['protocol'], () => selectedV11WasmFeaturesEnabled(reads.protocol.value));
   const cost = amount(reads.protocol.value?.runtime_config?.storage_amount_per_byte);
   put('owner_full_access_key', ['owner_key'], () => atBlock('owner_key') && reads.owner_key.value.permission === 'FullAccess');
+  // The contract's 1-yocto guard trusts owner-contract forwarding. This narrow
+  // trial accepts only a code-free owner at the same pinned block; it is an
+  // advisory snapshot, not a guarantee about future or already queued actions.
+  put('owner_has_no_contract_code', ['owner'], () => hasPlainOwnerProfileAt(reads.owner.value, hash));
   put('owner_nonce_safely_represented', ['owner_key'], () => atBlock('owner_key') && pinnedAccessKeyNonce(reads.owner_key.value.nonce) !== null);
   put('agent_key_not_already_on_owner', ['owner_keys'], () => {
     const keys = reads.owner_keys.value?.keys;

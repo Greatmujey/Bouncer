@@ -1,0 +1,60 @@
+# Experimental size measurement only. No keys, chain access or deployment.
+# A smaller build is not an audit or a validated live artifact.
+name: Measure optimized V13 contract size
+on:
+  push:
+    branches: ['arena/25a7aaf6-near-hub']
+permissions:
+  contents: read
+jobs:
+  build:
+    if: github.run_attempt == 1 && contains(github.event.head_commit.message, '[v13-opt-build]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: 1.99.1
+          targets: wasm32-unknown-unknown
+      - name: Measure size-optimized locked build
+        working-directory: bouncer/contracts/bouncer
+        env:
+          CARGO_PROFILE_RELEASE_LTO: 'true'
+          CARGO_PROFILE_RELEASE_OPT_LEVEL: z
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: '1'
+          RUSTFLAGS: '-C link-arg=-s'
+        run: |
+          set -euo pipefail
+          test "$(sha256sum Cargo.lock | cut -d' ' -f1)" = '263879a4574d1d5ed97dd0da097cdefff52b4f57017738ad291628a9c63e317f'
+          cargo build --locked --target wasm32-unknown-unknown --release --no-default-features --features tollgate-native-v13
+          test "$(sha256sum target/wasm32-unknown-unknown/release/bouncer.wasm | cut -d' ' -f1)" = '425c4e3ea19923ef2c46a41a2e5c59628f093ff1abdb8eb6cdf121d7d0f88c6b'
+          # Package integrity is pinned; no install hooks or mutable npm tag.
+          curl --fail --silent --show-error --location 'https://registry.npmjs.org/binaryen/-/binaryen-119.0.0.tgz' -o "$RUNNER_TEMP/binaryen.tgz"
+          python3 - <<'PY'
+          import base64,hashlib,os,pathlib
+          b=(pathlib.Path(os.environ['RUNNER_TEMP'])/'binaryen.tgz').read_bytes()
+          if base64.b64encode(hashlib.sha512(b).digest()).decode()!='DTdcs8ijrj2OIEftWVPVkYsgJ8MzlYH+uSsC8156g88E7CNaG8kEfWNGSXxb3tPlzadrm6sD3mgSEKKZJu4Q3g==':
+              raise ValueError('Binaryen package integrity mismatch')
+          PY
+          mkdir "$RUNNER_TEMP/binaryen"
+          tar -xzf "$RUNNER_TEMP/binaryen.tgz" -C "$RUNNER_TEMP/binaryen"
+          node "$RUNNER_TEMP/binaryen/package/bin/wasm-opt" target/wasm32-unknown-unknown/release/bouncer.wasm -Oz --enable-bulk-memory --enable-reference-types -o "$RUNNER_TEMP/optimized.wasm"
+          python3 - <<'PY'
+          import hashlib,json,os,pathlib
+          b=(pathlib.Path(os.environ['RUNNER_TEMP'])/'optimized.wasm').read_bytes()
+          if not 100_000<len(b)<2_000_000 or b[:8]!=b'\0asm\1\0\0\0' or b'bouncer-agent-v13-tollgate-native-testnet' not in b:
+              raise ValueError('unexpected experimental V13 artifact')
+          report={'commit':os.environ['GITHUB_SHA'],'sha256':hashlib.sha256(b).hexdigest(),'bytes':len(b),
+                  'profile':'release lto=true opt-level=z codegen-units=1; pinned Binaryen 119 -Oz','original_bytes':602587,
+                  'code_storage_lower_bound_yocto_at_1e19_per_byte':str(len(b)*10**19),
+                  'excludes_state_and_fees':True,'sandbox_tested':False,'independently_audited':False,'deployed':False}
+          print('::notice title=Optimized V13 size only::'+json.dumps(report,separators=(',',':')))
+          with open(os.environ['GITHUB_STEP_SUMMARY'],'a') as f:
+              f.write('## Experimental size measurement only\nA different compiler profile needs its own reproducibility and isolated-runtime checks. No transaction was made.\n```json\n'+json.dumps(report,indent=2)+'\n```\n')
+          PY

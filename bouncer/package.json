@@ -18,6 +18,7 @@
     "svalin-setup-plan": "node agent/svalin-setup-plan.mjs",
     "svalin-setup-preflight": "node agent/svalin-setup-preflight.mjs",
     "svalin-setup": "node agent/svalin-setup.mjs",
+    "testnet-faucet": "node agent/native-testnet-faucet.mjs",
     "recover-youtick-grant": "node agent/recover-youtick-grant.mjs",
     "encrypt-file-journal": "node scripts/encrypt-file-journal.mjs",
     "init-file-journal-key": "node scripts/init-file-journal-key.mjs",
@@ -57,6 +58,7 @@
   "dependencies": {
     "@hot-labs/near-connect": "0.12.0",
     "@modelcontextprotocol/sdk": "1.32.2",
+    "@noble/curves": "1.8.1",
     "express": "5.2.1",
     "near-api-js": "6.5.1",
     "pg": "8.23.1",

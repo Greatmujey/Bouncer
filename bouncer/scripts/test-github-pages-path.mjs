@@ -12,7 +12,7 @@ const site = path.join(tempRoot, 'site');
 const origin = 'https://greatmujey.github.io';
 const prefix = '/Bouncer/';
 const target = `${origin}${prefix}?page=overview`;
-const types = { '.html': 'text/html', '.css': 'text/css', '.mjs': 'text/javascript', '.js': 'text/javascript', '.svg': 'image/svg+xml' };
+const types = { '.html': 'text/html', '.css': 'text/css', '.mjs': 'text/javascript', '.js': 'text/javascript', '.svg': 'image/svg+xml', '.jpg': 'image/jpeg', '.woff2': 'font/woff2', '.txt': 'text/plain' };
 const staged = new Set(PUBLIC_WEB_FILES);
 const playwrightPath = process.env.BOUNCER_PLAYWRIGHT_PATH || path.join(process.env.RUNNER_TEMP || '', 'bouncer-browser/node_modules/playwright-core/index.mjs');
 let browser;
@@ -41,13 +41,20 @@ try {
   assert.equal(response.status(), 200);
   assert.equal(await page.evaluate(() => location.origin + location.pathname), `${origin}${prefix}`);
   assert.equal(await page.evaluate(() => document.styleSheets.length > 0), true, 'nested-path stylesheet did not load');
-  for (const asset of ['index.html', 'styles.css', 'app.mjs', 'evidence.mjs', 'tour.mjs', 'wallet.bundle.js']) {
+  for (const asset of ['index.html', 'styles.css', 'app.mjs', 'evidence.mjs', 'tour.mjs', 'wallet.bundle.js', 'hero-orbit.jpg', 'manrope-latin.woff2']) {
     assert.ok(served.includes(asset), `nested-path asset did not load: ${asset}`);
   }
-  assert.equal(await page.locator('#welcome-tour').evaluate(el => el.open), true);
+  assert.equal(await page.locator('#welcome-tour').evaluate(el => el.open), false);
+  await page.locator('[data-open-tour]').click();
   await page.locator('#tour-skip').click();
-  assert.equal(await page.locator('#wallet-connect').isDisabled(), true, 'GitHub Pages shared origins must not enable wallet sign-in');
-  assert.match(await page.locator('#wallet-status').innerText(), /disabled here/);
+  await page.locator('.top-connect').click();
+  assert.equal(await page.locator('[data-wallet-id="meteor-wallet"]').isDisabled(), true, 'GitHub Pages shared origins must not enable wallet sign-in');
+  assert.match(await page.locator('#wallet-dialog-status').innerText(), /new tab/);
+  assert.equal(await page.locator('#wallet-open-site').isVisible(), true);
+  await page.locator('#wallet-close').click();
+  await page.locator('.mobile-nav a[href="#capabilities"]').click();
+  await page.locator('[data-route-view="resources"]').waitFor({ state: 'visible' });
+  assert.equal(await page.locator('[data-route-view="resources"]').isVisible(), true);
   assert.equal(await page.locator('.resource-card').count(), 3);
   await page.locator('[data-story-tab="storage"]').click();
   assert.match(await page.locator('#story-result').innerText(), /stored and retrieved \(42 bytes\)/);

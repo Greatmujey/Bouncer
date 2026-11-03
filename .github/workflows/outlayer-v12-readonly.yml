@@ -1,0 +1,35 @@
+# Public pinned testnet views only; no private key, transaction or seller call.
+name: Backed-up V12 OutLayer readiness (read only)
+on:
+  push:
+    branches: ['arena/25a7aaf6-near-hub']
+permissions:
+  contents: read
+jobs:
+  snapshot:
+    if: github.run_attempt == 1 && contains(github.event.head_commit.message, '[outlayer-v12-readonly]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    defaults:
+      run:
+        working-directory: bouncer
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+      - name: Install locked dependencies and test read-only isolation
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          node --test tests/outlayer-v12-readiness.test.mjs
+      - name: Inspect V12 vault and public provider terms without funding or orders
+        run: |
+          set -euo pipefail
+          if ! node scripts/inspect-outlayer-v12-readiness.mjs > "$RUNNER_TEMP/outlayer-v12.json" 2> "$RUNNER_TEMP/outlayer-v12-error.log"; then
+            python3 -c 'import os; s=open(os.environ["RUNNER_TEMP"]+"/outlayer-v12-error.log").read()[-3000:]; print("::error title=V12 OutLayer snapshot unavailable::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
+            exit 1
+          fi
+          python3 -c 'import os,json; s=json.dumps(json.load(open(os.environ["RUNNER_TEMP"]+"/outlayer-v12.json")),separators=(",",":")); print("::notice title=V12 OutLayer public snapshot::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
+          { echo '## Read-only, single-block V12 and OutLayer testnet snapshot'; echo 'No key, payment, seller request or fulfillment. USDC.e is fake test currency; quotes and state can change.'; echo '```json'; cat "$RUNNER_TEMP/outlayer-v12.json"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"

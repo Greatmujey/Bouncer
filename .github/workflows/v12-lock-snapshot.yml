@@ -1,0 +1,37 @@
+# Capture a public dependency lock for the experimental testnet V12 build.
+# No keys, transactions, providers, deployment, or branch writes.
+name: Capture V12 dependency lock (no deployment)
+on:
+  push:
+    branches: ['arena/25a7aaf6-near-hub']
+permissions:
+  contents: read
+jobs:
+  lock:
+    if: github.run_attempt == 1 && contains(github.event.head_commit.message, '[v12-lock-recover]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: 1.99.1
+      - name: Resolve and export the public lock, with a digest
+        working-directory: bouncer/contracts/bouncer
+        run: |
+          set -euo pipefail
+          test ! -f Cargo.lock
+          cargo generate-lockfile
+          python3 - <<'PY'
+          import base64,hashlib,pathlib,zlib
+          b=pathlib.Path('Cargo.lock').read_bytes()
+          expected='263879a4574d1d5ed97dd0da097cdefff52b4f57017738ad291628a9c63e317f'
+          if len(b)!=68925 or hashlib.sha256(b).hexdigest()!=expected: raise ValueError('resolved lock differs from the initial capture')
+          packed=zlib.compress(b,9); data=base64.b64encode(packed).decode('ascii')
+          chunks=[data[i:i+3500] for i in range(0,len(data),3500)]
+          if len(chunks)>8: raise ValueError('compressed lock exceeds the annotation limit')
+          print('::notice title=V12 compressed lock digest::'+expected+' '+str(len(b))+' '+str(len(chunks)))
+          for i,c in enumerate(chunks,1): print('::notice title=V12 compressed lock chunk '+str(i).zfill(3)+'::'+c)
+          PY

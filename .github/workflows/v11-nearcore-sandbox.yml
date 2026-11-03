@@ -1,0 +1,79 @@
+# Opt-in local-chain runtime validation. Never contacts testnet, a seller or a
+# wallet, and never reads project secrets. A tagged branch push requests this
+# check; ordinary pushes skip the job. A manual dispatch is also supported once
+# the workflow exists on the default branch.
+name: V11 isolated nearcore sandbox
+
+on:
+  push:
+    branches: ['arena/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sandbox:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[v11-nearcore-sandbox]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: bouncer
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+      - name: Install the existing lockfile only
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Exercise sandbox-harness guards offline
+        run: |
+          node --test tests/v11-sandbox-harness.test.mjs tests/v11-sandbox-setup-rpc.test.mjs tests/v11-sandbox-owner-runner.test.mjs tests/v11-sandbox-buyer-runner.test.mjs tests/native-testnet-faucet*.test.mjs tests/v11-sandbox-native-faucet.test.mjs tests/v11-sandbox-outlayer-burn.test.mjs tests/outlayer-v11-burn-plan.test.mjs tests/outlayer-v11-burn-preflight.test.mjs
+          python3 -m unittest discover -s tests -p 'v11_sandbox_extract_test.py'
+      - name: Recover pinned V11 and the nearcore example FT
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api repos/Greatmujey/Bouncer/git/blobs/c67c70401dc733a0905e79258cc8169c2e6b5210 --jq .content | base64 --decode > "$RUNNER_TEMP/bouncer-v11.wasm"
+          gh api repos/near/nearcore/git/blobs/3ab410d723c8029e70993b0829a17ddd52d8b135 --jq .content | base64 --decode > "$RUNNER_TEMP/mock-ft.wasm"
+          echo '1acf931c07a530257999478c121193863ecf7201d357812a44b4d61c16a77921  '"$RUNNER_TEMP/bouncer-v11.wasm" | sha256sum -c -
+          echo 'b10ed11ac6d60698c6809ef7e96b578f2e5768354fe4b15d044843c2b6ab8a04  '"$RUNNER_TEMP/mock-ft.wasm" | sha256sum -c -
+      - name: Exercise the pinned bytecode and escrow-harness guards offline
+        env:
+          BOUNCER_V11_WASM_PATH: ${{ runner.temp }}/bouncer-v11.wasm
+        run: |
+          node --test tests/v11-bytecode-offline.test.mjs tests/paypercall-v11-bytecode.test.mjs \
+            tests/v11-sandbox-escrow-boundary.test.mjs tests/v11-sandbox-escrow-boundary-model.test.mjs \
+            tests/paypercall-forwarder-experimental.test.mjs tests/v11-sandbox-forwarder.test.mjs
+      - name: Download and verify the isolated nearcore executable
+        run: |
+          set -euo pipefail
+          curl --fail --show-error --silent --location --proto '=https' --tlsv1.2 --max-time 180 --retry 2 --max-filesize 419430400 \
+            'https://s3-us-west-1.amazonaws.com/build.nearprotocol.com/nearcore/Linux-x86_64/2.14.0/near-sandbox.tar.gz' \
+            --output "$RUNNER_TEMP/near-sandbox.tar.gz"
+          python3 scripts/extract-pinned-near-sandbox.py "$RUNNER_TEMP/near-sandbox.tar.gz" "$RUNNER_TEMP/near-sandbox"
+      - name: Run V11 against a fresh loopback-only chain and mock FT
+        env:
+          BOUNCER_V11_WASM_PATH: ${{ runner.temp }}/bouncer-v11.wasm
+          BOUNCER_MOCK_FT_WASM_PATH: ${{ runner.temp }}/mock-ft.wasm
+          BOUNCER_SANDBOX_BIN: ${{ runner.temp }}/near-sandbox
+        run: |
+          set -euo pipefail
+          ulimit -Sn 65535
+          if ! node integration/v11-nearcore-sandbox.mjs > "$RUNNER_TEMP/v11-sandbox-result.json" 2> "$RUNNER_TEMP/v11-sandbox-error.log"; then
+            python3 -c 'import os; s=open(os.environ["RUNNER_TEMP"]+"/v11-sandbox-error.log").read()[-5000:]; print("::error title=Isolated V11 scenario failed::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
+            exit 1
+          fi
+          cat "$RUNNER_TEMP/v11-sandbox-result.json"
+          python3 -c 'import os,json; r=json.load(open(os.environ["RUNNER_TEMP"]+"/v11-sandbox-result.json"))["outlayer_burn_plan_with_local_receiver_standin"]; s=json.dumps(r,separators=(",",":")); print("::notice title=Local burn-plan stand-in result::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
+          {
+            echo '## V11 isolated sandbox result'
+            echo 'Only an ephemeral local chain and an upstream example FT were used. This is not testnet, Circle, an audit, or independent seller fulfillment.'
+            echo '```json'
+            cat "$RUNNER_TEMP/v11-sandbox-result.json"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

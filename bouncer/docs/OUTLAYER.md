@@ -155,6 +155,76 @@ See [Coinbase's public endpoint documentation](https://docs.cdp.coinbase.com/coi
 
 ## Separate prepaid FT and priced connector path
 
+### V11 compatibility and present limits
+
+The FT-call and project runners now recognize the pinned V11 code only after a
+fresh, single-FINAL-block check of its owner, code hash, zero vault keys, a
+finite-allowance **one-method** owner access key, a conservative pinned-price
+gas estimate, and the relevant exact-intent policy and token/payee locks. Gas
+prices and transaction overhead may change; the estimate cannot guarantee
+admission. The funding route, policy, grants and (for a
+project) provider price, version and credit are read from that same block. A
+V11 project preflight also checks that OutLayer reports at least the vault's
+tracked prepaid allowance for the **vault account**, the actual predecessor;
+a deficit blocks spending for reconciliation. Excess provider credit is not
+made spendable automatically. The runners still require the exact owner-pinned terms and original-hash journal;
+settlement is not provider delivery. Older versions keep their existing checks.
+The current replacement Circle agent's two-method key does **not** satisfy
+these runner requirements; provider-specific keys have not been installed.
+
+V11 enforces the exact-policy lock on-chain for both methods, and the
+exact-token/payee lock for direct FT calls. **Its prepaid project method does
+not enforce the token/payee lock on-chain.** The runner's additional pair-lock
+check is only a snapshot: it can race, and a signer calling the contract directly
+can bypass it. Do not treat that off-chain check as an on-chain isolation
+primitive. Provider-held credit and refunds also need explicit recovery review:
+a later plain-FT return to the keyless vault does not restore its tracked FT
+ledger. No new OutLayer funding or execution is authorized merely by adding
+runner compatibility; live prices, configured token, deployed code/behavior,
+terms and a safe recovery path still need verification. OutLayer currently uses
+fake `usdc.fakes.testnet`, **not Circle test USDC**.
+
+The [2 November read-only snapshot](../evidence/testnet-owner-v2/outlayer-readonly-20261102.json)
+observed that fake token, a 10,000-atom `burn` price, an indicated pool-54
+quote and zero provider/vault prepaid credit. The provider and token each had a
+full-access key, so their code can change. The `burn` operation is a diagnostic,
+not useful commercial compute. `agent/outlayer-v11-burn-plan.mjs` describes
+one **unsigned, offline** attempt using two dedicated one-method keys, fixed
+receiver/message, separate native/FT caps, two 0.5 test-NEAR key gas
+allowances, and a maximum 0.02 test-NEAR native request. The allowances are gas
+budgets, not deposits to the provider. The first [isolated nearcore attempt](https://github.com/Greatmujey/Bouncer/actions/runs/41534163762)
+rejected the funding call at admission with the earlier 0.1 test-NEAR
+allowance: at that sandbox gas price the 300-Tgas transaction cost about 0.301
+test NEAR upfront. The offline plan now uses 0.5 per key and a pinned-price
+estimate with margin; actual admission cost may change. It cannot sign or
+broadcast. `agent/outlayer-v11-burn-preflight.mjs`
+adds stage-specific, fresh single-block preliminary checks for account/key
+identity, balances, policies, code hashes, registration, price, quote, locks
+and rolling spend. Its `eligible` result is **necessary state information, not
+authorization**: it cannot prove earlier original receipts, custody, future
+state, seller uptime or deployed-source equivalence. For the funding stage it
+also checks V11's `check` verdict for the selected payee; this is not a
+reservation, and the contract checks the allowlist again during execution.
+A [read-only workflow](https://github.com/Greatmujey/Bouncer/actions/runs/41534925775)
+observed its initial state checks passing on 2 November with byte-pattern
+placeholder public keys without private keys; never install or fund those
+placeholders. Its [snapshot](../evidence/testnet-owner-v2/outlayer-burn-gas-preflight-20261102.json)
+is not a transaction authorization. A later [isolated nearcore run](https://github.com/Greatmujey/Bouncer/actions/runs/41534926018)
+passed six exact plan stages with an example mock FT and a local V11 receiver;
+the receiver deliberately has no OutLayer project method, whose failure left
+prepaid and native accounting conservatively reserved. The wrap and Ref swap
+stages were **not** tested there. This was not a live seller or delivery.
+Actual execution still needs verified key custody, durable one-shot journals,
+original-hash reconciliation, rechecks immediately before each send and
+isolated-chain tests of the remaining stages. No coordinator exists yet. The fake-token storage
+registrations can lock test NEAR, and a failed project may leave fake provider
+credit inaccessible to this immutable vault. Neither the snapshot nor the plan
+establishes a payment, provider uptime, Circle support or fulfillment. A
+[separate isolated nearcore run](https://github.com/Greatmujey/Bouncer/actions/runs/41531879599)
+executed the V11 FT runner, verified its original receipt and recovered the same
+hash against a mock token and another local V11 receiver; it was not a live
+OutLayer transaction.
+
 V7 can fund an owner-pinned OutLayer prepaid balance using `execute_ft_call`,
 then call an owner-pinned project under **separate** native and prepaid-token
 policies. The FT route fixes the token, receiver and exact message, with policy

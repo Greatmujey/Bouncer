@@ -17,7 +17,7 @@ const USAGE = `Experimental Svalin Pro adapter: Circle testnet USDC ONLY; not a 
 Usage: node agent/svalin-pro.mjs --goal PUBLIC-GOAL.json --state ORIGINAL-ENCRYPTED-JOURNAL ACTION [options]
 Actions (choose one; back up the journal AND its separate key before any seller contact):
   --init --new-journal --ack-key-backup              Create a local encrypted session; no network
-  --reserve --execute --ack-key-backup               One reservation POST, existing journal only
+  --reserve --execute --ack-key-backup               One reservation POST after a pinned owner-code check
   --recover-reservation --execute --ack-key-backup --ack-seller-mutation
                                                       One mutating lookup after a lost reservation
   --prepare-exact --public-key ED25519_KEY            Return unsigned owner/agent calldata; no network
@@ -30,7 +30,7 @@ Actions (choose one; back up the journal AND its separate key before any seller 
                                                       Status GET after an ambiguous activation
   --risk --target PUBLIC-NEAR-ACCOUNT --execute --ack-key-backup --ack-bearer-disclosure --ack-quota-use
                                                       One separately authorized paid API GET
-Options: --rpc TESTNET_RPC (payment/recovery/activation/status/risk), --help
+Options: --rpc TESTNET_RPC (reservation/payment/recovery/activation/status/risk), --help
 BOUNCER_FILE_JOURNAL_KEY_FILE must identify the ORIGINAL owner-only encryption key.
 Owner approval, V11 deployment, token funding and backups are separate tasks; this CLI does none of them.
 Acknowledgments are operator assertions, not evidence. Seller terms are unsigned and its exact-amount
@@ -54,7 +54,7 @@ function parse(args) {
   const external = Boolean(out.reserve || out['recover-reservation'] || out['pay-exact'] || out.activate || out['inspect-activation'] || out.risk);
   const mutation = Boolean(out['recover-reservation'] || out.activate);
   const disclosure = Boolean(out['inspect-activation'] || out.risk);
-  const needsRpc = Boolean(out['pay-exact'] || out['recover-payment'] || out.activate || out['inspect-activation'] || out.risk);
+  const needsRpc = Boolean(out.reserve || out['pay-exact'] || out['recover-payment'] || out.activate || out['inspect-activation'] || out.risk);
   if (external !== Boolean(out.execute)) throw new Error('seller contact and payment require --execute; offline/recovery actions must not use it');
   if (Boolean(out.init) !== Boolean(out['new-journal'])) throw new Error('--new-journal is required only for the first --init');
   if (Boolean(out.init || external) !== Boolean(out['ack-key-backup'])) throw new Error('--ack-key-backup is required only for initialization and external operations');
@@ -107,7 +107,9 @@ export async function main(argv = process.argv.slice(2)) {
     const common = { goal, journal };
     let result;
     if (opts.init) result = await prepareSvalinProSession(common);
-    else if (opts.reserve) result = await reserveSvalinProOnce({ ...common, execute: true, acknowledgeBackup: true });
+    else if (opts.reserve) result = await reserveSvalinProOnce({ ...common,
+      provider: new PaymentRpcProvider(opts.rpc || process.env.NEAR_TESTNET_RPC || 'https://test.rpc.fastnear.com'),
+      execute: true, acknowledgeBackup: true });
     else if (opts['recover-reservation']) result = await recoverSvalinProReservationOnce({ ...common, execute: true, acknowledgeBackup: true, acknowledgeMutation: true });
     else if (opts['prepare-exact']) result = await prepareSvalinProExactFt({ ...common, agentPublicKey: opts['public-key'] });
     else {

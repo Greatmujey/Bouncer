@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * A single owner-pinned NEP-141 transfer-call under Bouncer v6 or v7. This reports
+ * A single owner-pinned NEP-141 transfer-call under a supported Bouncer vault. This reports
  * token settlement ONLY: a receiver retaining tokens is not proof that it
  * delivered a storage/API/compute service. The exact action/message, receiver,
  * token and revisions must already have been approved on chain by the owner.
@@ -21,10 +21,12 @@ import { isTestnetAccount, isTestnetToken } from '../shared/account-id.mjs';
 import { signReviewedCall } from './reviewed-transaction.mjs';
 import { isTransactionHash } from '../shared/direct-payment-settlement.mjs';
 import { withExclusiveJournalOperation } from './journal-operation.mjs';
+import { inspectV11ResourceBoundary, V11_RESOURCE_VERSION } from './v11-resource-preflight.mjs';
+import { assertFreshFinalBlock } from '../shared/fresh-final-block.mjs';
+import { V11_RESOURCE_GAS as GAS } from '../shared/access-key-gas.mjs';
 
 const { KeyPair, KeyPairSigner } = nearApi;
 const MAX = (1n << 128n) - 1n;
-const GAS = 300n * 10n ** 12n;
 const FIELDS = ['id', 'contract_id', 'owner_account_id', 'policy_id', 'payee', 'token', 'amount', 'msg', 'policy_revision', 'route_revision'];
 const equal = isDeepStrictEqual;
 const owns = (obj, keys) => obj && typeof obj === 'object' && !Array.isArray(obj) &&
@@ -176,23 +178,27 @@ async function runFtCallGoalUnlocked({ goal: rawGoal, provider, account, publicK
     provider.callFunction(goal.contract_id, 'contract_version', {}, final), provider.callFunction(goal.contract_id, 'get_owner', {}, final),
     provider.viewAccessKey(goal.owner_account_id, publicKey, final),
   ]);
-  if (!['bouncer-agent-v6', 'bouncer-agent-v7', 'bouncer-agent-v8', 'bouncer-agent-v9', 'bouncer-agent-v10-youtick-testnet'].includes(version) || owner !== goal.owner_account_id) throw new Error('unsupported Bouncer version or unexpected owner');
+  if (!['bouncer-agent-v6', 'bouncer-agent-v7', 'bouncer-agent-v8', 'bouncer-agent-v9', 'bouncer-agent-v10-youtick-testnet', V11_RESOURCE_VERSION].includes(version) || owner !== goal.owner_account_id) throw new Error('unsupported Bouncer version or unexpected owner');
   const permission = access?.permission?.FunctionCall;
   if (!permission || permission.receiver_id !== goal.contract_id || !equal(permission.method_names, ['execute_ft_call'])) throw new Error('agent key must be scoped ONLY to execute_ft_call on this contract');
   const previous = journal?.get(goal.id), hash = fingerprint(goal);
   if (previous && previous.fingerprint !== hash) throw new Error(`${goal.id}: journal does not match the reviewed goal`);
   if (previous) return recoverFtCallGoalUnlocked({ goal, provider, journal, publicKey, update: execute, log });
+  const boundary=version===V11_RESOURCE_VERSION?await inspectV11ResourceBoundary({provider,contract:goal.contract_id,owner:goal.owner_account_id,
+    publicKey:String(publicKey),method:'execute_ft_call',policyId:goal.policy_id,token:goal.token,payee:goal.payee}):null;
+  const view=(account,method,args)=>boundary?boundary.view(account,method,args):provider.callFunction(account,method,args,final);
   const [policy, route, granted, verdict] = await Promise.all([
-    provider.callFunction(goal.contract_id, 'get_policy', { policy_id: goal.policy_id }, final),
-    provider.callFunction(goal.contract_id, 'get_ft_call_route', { policy_id: goal.policy_id, payee: goal.payee }, final),
-    provider.callFunction(goal.contract_id, 'is_agent_key_allowed', { policy_id: goal.policy_id, public_key: String(publicKey) }, final),
-    provider.callFunction(goal.contract_id, 'check', { policy_id: goal.policy_id, payee: goal.payee, amount: goal.amount }, final),
+    view(goal.contract_id, 'get_policy', { policy_id: goal.policy_id }),
+    view(goal.contract_id, 'get_ft_call_route', { policy_id: goal.policy_id, payee: goal.payee }),
+    view(goal.contract_id, 'is_agent_key_allowed', { policy_id: goal.policy_id, public_key: String(publicKey) }),
+    view(goal.contract_id, 'check', { policy_id: goal.policy_id, payee: goal.payee, amount: goal.amount }),
   ]);
   const expectedRoute = { token: goal.token, msg: goal.msg, policy_revision: goal.policy_revision, route_revision: goal.route_revision, active: true };
   if (!policy || policy.token !== goal.token || !equal(route, expectedRoute) || granted !== true) throw new Error('policy, owner-pinned route or key grant does not match the goal');
   if (!Array.isArray(verdict) || verdict.length !== 2 || typeof verdict[0] !== 'boolean') throw new Error('invalid policy verdict');
   if (!verdict[0]) { log(`[ft-call] BLOCKED ${goal.id}: ${String(verdict[1]).slice(0, 200)}`); return { status: 'BLOCKED' }; }
   if (!execute) { log(`[ft-call] READY ${goal.id}: at most ${goal.amount} ${goal.token} to ${goal.payee} (dry run)`); return { status: 'READY' }; }
+  if(boundary)assertFreshFinalBlock({header:{hash:boundary.block_hash,timestamp_nanosec:boundary.block_timestamp_nanosec}},Date.now());
   const { txHash, signed } = await signReviewedCall({ account, publicKey, ownerId: goal.owner_account_id, contractId: goal.contract_id,
     method: 'execute_ft_call', args: expectedArgs(goal), gas: GAS });
   if (!validHash(txHash)) throw new Error('invalid transaction hash');

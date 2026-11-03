@@ -1,0 +1,59 @@
+# ONE-SHOT TESTNET registration for OutLayer's fake FT. Signed bytes are
+# public bearer data and can be relayed before CI. Never upload a private key.
+name: Register OutLayer fake token for V3 V12 once
+on:
+  push:
+    branches: ['arena/25a7aaf6-near-hub']
+permissions:
+  contents: read
+  actions: read
+jobs:
+  register:
+    if: github.event.before == '1b83009b24acb514be1f1f41fd33056c3619ea38' && github.run_attempt == 1 && contains(github.event.head_commit.message, '[outlayer-v12-v3-register-once]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: bouncer
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+      - name: Test fixed action, signature, receipt and fence safeguards
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          node --test tests/outlayer-v12-burn-registration.test.mjs tests/outlayer-v12-burn-register-journal.test.mjs tests/outlayer-v12-burn-signed.test.mjs tests/outlayer-v12-burn-preflight.test.mjs tests/github-original-fence.test.mjs tests/read-only-near-receipts.test.mjs
+      - name: Prepare original-hash fence
+        id: plan
+        run: |
+          set -euo pipefail
+          file='evidence/testnet-owner-v3/outlayer-v12-register-original.json'
+          digest="$(sha256sum "$file" | cut -d' ' -f1)"
+          echo "sha=$digest" >> "$GITHUB_OUTPUT"
+          mkdir -p "$RUNNER_TEMP/outlayer-v12-v3-register-fence"
+          cp "$file" "$RUNNER_TEMP/outlayer-v12-v3-register-fence/original.json"
+          printf 'network=testnet\nrun_id=%s\ncommit=%s\nenvelope_sha256=%s\nrequest=one fake-token registration; reconcile, never resend\n' \
+            "$GITHUB_RUN_ID" "$GITHUB_SHA" "$digest" > "$RUNNER_TEMP/outlayer-v12-v3-register-fence/attempt.txt"
+      - name: Retain the original fence before sending
+        id: fence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: outlayer-v12-v3-register-fence-${{ github.run_id }}-${{ steps.plan.outputs.sha }}
+          path: ${{ runner.temp }}/outlayer-v12-v3-register-fence/
+          retention-days: 30
+          if-no-files-found: error
+      - name: Recheck pinned state, send once and verify original
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          BOUNCER_FENCE_ARTIFACT_ID: ${{ steps.fence.outputs.artifact-id }}
+        run: |
+          set -euo pipefail
+          if ! node scripts/broadcast-outlayer-v12-v3-register-once.mjs > "$RUNNER_TEMP/outlayer-register-result.json" 2> "$RUNNER_TEMP/outlayer-register-error.log"; then
+            python3 -c 'import os; s=open(os.environ["RUNNER_TEMP"]+"/outlayer-register-error.log").read()[-3000:]; print("::error title=Original registration unknown; never resend::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
+            exit 1
+          fi
+          python3 -c 'import os,json; s=json.dumps(json.load(open(os.environ["RUNNER_TEMP"]+"/outlayer-register-result.json")),separators=(",",":")); print("::notice title=V3 V12 OutLayer registration result::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
+          { echo '## Fake-token registration only'; echo 'No seller was paid and no compute delivery is claimed. No private key entered CI.'; echo '```json'; cat "$RUNNER_TEMP/outlayer-register-result.json"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"

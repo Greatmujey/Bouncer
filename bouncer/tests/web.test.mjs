@@ -152,24 +152,65 @@ test('latest oracle-led mission links to the verified testnet data and three res
   assert.equal((html.match(/class="track-card"/g) || []).length, 6);
 });
 
-test('website discloses snapshot, synthetic credits, self-hosted services, and testnet limitations', () => {
+test('the same custom Bouncer mark appears in both navigation layouts, the tour and favicon', () => {
   const html = fs.readFileSync(new URL('../web/index.html', import.meta.url), 'utf8');
-  assert.match(html, /Verified testnet snapshot/);
-  assert.match(html, /not a running agent/);
+  const logo = fs.readFileSync(new URL('../web/favicon.svg', import.meta.url), 'utf8');
+  assert.equal((html.match(/class="brand-mark" aria-hidden="true"/g) || []).length, 3);
+  assert.equal((html.match(/<use href="#i-bouncer"\/>/g) || []).length, 4);
+  assert.match(html, /rel="icon"[^>]*href="\.\/favicon\.svg\?v=3"/);
+  assert.match(logo, /viewBox="16 17 300 300"/);
+  const symbol = html.match(/<symbol id="i-bouncer"[^>]*>(.*?)<\/symbol>/s)?.[1];
+  assert.ok(symbol, 'brand symbol is present');
+  const pathData = source => [...source.matchAll(/<path d="([^"]+)"/g)].map(match => match[1]);
+  assert.equal(pathData(logo).length, 3);
+  assert.deepEqual(pathData(symbol), pathData(logo), 'favicon and website use the same mark');
+  assert.doesNotMatch(logo, /<script|<foreignObject|\b(?:href|src)\s*=/i);
+});
+
+test('website discloses testnet limitations, historical examples and identity-only wallet connection', () => {
+  const html = fs.readFileSync(new URL('../web/index.html', import.meta.url), 'utf8');
+  assert.match(html, /unaudited testnet prototype/i);
+  assert.match(html, /not a live purchasing dashboard/i);
   assert.match(html, /self-hosted development examples, not commercial vendors/);
   assert.match(html, /newly created testnet tokens/);
-  assert.match(html, /Unaudited/);
-  assert.match(html, /separate refund test/);
+  assert.match(html, /Separate earlier refund test/);
+  assert.match(html, /Refund recovery and the vault’s independent audit remain open/);
+  assert.match(html, /not proof of independent provider payment or delivery/);
   assert.doesNotMatch(html, /Start buying/i);
   assert.match(html, /Connect a testnet wallet/i);
-  assert.match(html, /does not create a vault, grant an agent access, sign a transaction, or spend funds/i);
+  assert.match(html, /does not create a vault, grant spending access or send a transaction/i);
+  assert.match(html, /Never enter a seed phrase or private key into Bouncer/i);
   assert.match(html, /Gemini CLI and Claude Code passed local connection checks/i);
   assert.match(html, /ChatGPT web and other hosted assistants need HTTPS/i);
   assert.match(html, /Model conversations have not been tested/i);
   assert.match(html, /id="welcome-tour"/);
   assert.match(html, /local AI model to propose resource tasks/i);
   assert.match(html, /not yet an open marketplace/i);
-  assert.match(html, /FUTURE WE’RE BUILDING TOWARD · NOT AVAILABLE YET/);
-  assert.match(html, /goal, not a completed demo/i);
   assert.equal((html.match(/data-story-tab=/g) || []).length, 3);
+  for (const tx of [
+    'Ep5vWogSd2nqitJFdLxR8J9CnZaqUjn6wnbRCaXVq2fM',
+    'Fegksi5b8KmqnHN3fHaH1Ak9vyLFA2JjgoqL5UAtjpu2',
+    '2xrD5cbvz2MgaThp3VdwbRZU8GAXoJHcbsHN4TispdjL',
+  ]) assert.ok(html.includes(explorerTx(tx)), `missing current transaction ${tx}`);
+});
+
+test('workspace routes and the wallet picker are explicit, curated, and keyboard-accessible', () => {
+  const html = fs.readFileSync(new URL('../web/index.html', import.meta.url), 'utf8');
+  const css = fs.readFileSync(new URL('../web/styles.css', import.meta.url), 'utf8');
+  const views = [...html.matchAll(/data-route-view="([^"]+)"/g)].map(match => match[1]);
+  assert.deepEqual(views, ['workspace', 'resources', 'guardrails', 'proof', 'connect']);
+  const wallets = [...html.matchAll(/data-wallet-id="([^"]+)"/g)].map(match => match[1]);
+  assert.deepEqual(wallets, ['near-mobile', 'meteor-wallet', 'intear-wallet', 'nightly-wallet', 'ledger', 'near-cli', 'wallet-connect']);
+  assert.match(html, /id="walletconnect-caption">Not configured · Project ID required/);
+  assert.match(html, /id="walletconnect-canvas"/);
+  assert.match(html, /walletconnect-NOTICES\.txt/);
+  assert.match(html, /NEAR Mobile and NEAR CLI use an off-chain login message/);
+  assert.match(html, /Terminal · Sign a testnet login message/);
+  assert.match(css, /data-wallet-state="connected"/);
+  assert.match(html, /intear-wallet-source\.zip/);
+  assert.match(html, /<dialog class="wallet-dialog" id="wallet-dialog" aria-labelledby="wallet-dialog-title"/);
+  assert.match(html, /id="wallet-close" type="button" aria-label="Close wallet picker"/);
+  assert.doesNotMatch(html, /id="wallet-choice"/);
+  assert.match(html, /THE IDEA IN MOTION/);
+  assert.match(css, /prefers-reduced-motion:reduce/);
 });

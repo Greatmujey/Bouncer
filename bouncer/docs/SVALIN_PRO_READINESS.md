@@ -1,12 +1,13 @@
 # Independent Svalin Pro: testnet discovery and experimental buyer
 
-**Status: the public offer and free route have been observed. The buyer,
-receipt recovery, activation and report path have synthetic tests and an
-optional local test against the pinned independent seller source. That source
-test uses a simulated chain/indexer and a labelled sample portfolio. No real
-checkout has been reserved, no provider-linked bearer code created, no token
-transferred, and no independent FT-paid fulfillment verified. The adapter is
-experimental, unaudited, and not ready for consequential use.**
+**Status: the public offer and free route have been observed. The buyer and
+original-hash recovery passed on a disposable nearcore chain with a fake seller
+and mock FT. Activation and report paths have synthetic tests and an optional
+local test against the pinned independent seller source; that source test uses
+a simulated chain/indexer and a labelled sample portfolio. No real checkout has
+been reserved, no provider-linked bearer code created, no live testnet token
+sent to Svalin, and no independent FT-paid fulfillment verified. The adapter
+is experimental, unaudited, and not ready for consequential use.**
 
 On 1 November 2026 at about 19:25 UTC, the independent Svalin service's
 [public offer](https://svalin-api.noobshole.workers.dev/v1/pro) advertised a
@@ -48,6 +49,36 @@ amount and the seller credited that different transaction even while Bouncer's
 separate simulated receipt showed its own transfer. Bouncer correctly kept
 `seller_attribution_verified: false`. This demonstrates the source-level
 ambiguity, not a real payment or an observation of the deployed seller.
+
+## Owner authority and the narrow trial profile
+
+The on-chain 1-yocto guard authenticates the **immediate owner account** and
+attached deposit, not a human decision. If that owner is a contract, it may
+forward a 1-yocto call and the vault intentionally trusts the contract's own
+authorization. This is an existing, tested trust boundary, **not a demonstrated
+live exploit** and not a judgment that all contract wallets are unsafe.
+
+For this Svalin trial only, setup preflights, the separate pre-reservation
+preflight, the reservation function and the payment runner require the trusted
+RPC's owner account view at the pinned FINAL block to indicate an initialized
+account with the empty local code hash and no global-contract hash or account
+reference. Missing, malformed, wrong-block or unavailable data blocks the
+relevant check. The reservation function enforces this **narrow owner check**
+before seller contact; the full balance/policy preflight is still a separate
+operator-run check, not automatically enforced by reservation. The payment
+runner checks before signing and again at a fresh FINAL snapshot after writing
+the signed hash but before sending. If the recheck fails, the original hash
+remains fenced and must not be automatically replaced or resent. Other adapters,
+including MultiAgency, retain their existing owner-contract behavior and need a
+separate assessment.
+
+This is a point-in-time, off-chain risk reduction, **not an on-chain fix**.
+The owner may deploy or adopt code later; already queued receipts may execute
+later; a trusted RPC can lie; full-access keys can be compromised; and a
+code-free view does not prove owner consent or rule out other privileged
+transactions. Independent artifact/owner-path review and explicit approvals are
+still required. Original-hash recovery must not be blocked or replaced merely
+because the owner's current state has changed.
 
 ## What Bouncer can do today
 
@@ -131,9 +162,12 @@ ambiguity, not a real payment or an observation of the deployed seller.
 - `agent/svalin-setup-stage-preflight.mjs` adds a **read-only library** for each
   next setup stage and the post-funding profile. It checks the original encrypted
   journal before and after one fresh pinned FINAL snapshot: all prior original
-  receipt records must match, and the requested stage must normally be
-  unrecorded. An exact pending hash may be supplied **only for a read-only
-  recheck**; this never grants permission to send or retry it. Later snapshots
+  stage evidence must match, and the requested stage must normally be
+  unrecorded. The specific self-addressed restricted AddKey stage can instead
+  use a separately labeled trusted-RPC local outcome if nearcore omits its root
+  receipt body; the following fresh snapshot must still verify key permissions.
+  An exact pending hash may be supplied **only for a read-only recheck**; this
+  never grants permission to send or retry it. Later snapshots
   check the owner's full-access key and safely represented nonce, reported
   selected WASM feature gates, reviewed keyless vault/code/owner, policy lock
   and agent grant, exact restricted-key permission, token registration and
@@ -167,10 +201,13 @@ ambiguity, not a real payment or an observation of the deployed seller.
   actually reached the network; an injected transport must independently honor
   the before-submit guard and one-attempt contract.
 
-  **Not ready for live use:** all coordinator/transport tests use ephemeral keys,
-  fabricated RPC and receipts (including an optional test that signs the exact
-  recovered artifact); no V11 stage has been submitted or independently audited.
-  The explicit per-stage booleans are caller assertions—not evidence of human
+  **Not ready for live use:** synthetic coordinator/transport tests use
+  fabricated RPC and receipts, including an optional test that signs the exact
+  recovered artifact. A separate [nearcore sandbox run](V11_SANDBOX.md) exercised
+  the coordinator and one-shot transport with ephemeral keys, a mock FT and
+  simulated chain identity and approvals. No V11 stage has been submitted on
+  live testnet or independently audited. The explicit per-stage booleans are
+  caller assertions—not evidence of human
   consent, independent artifact review or a usable backup. Deleted, stale,
   bypassed or separate journals, concurrent owner-key users, mutable chain state
   and a dishonest RPC remain outside the guarantee. The original journal and
@@ -178,7 +215,7 @@ ambiguity, not a real payment or an observation of the deployed seller.
   after updates. A keyless V11 vault currently has **no upgrade, account delete
   or Circle `storage_unregister` method**: the initial storage stake and token
   registration deposit may remain permanently locked. Independent artifact and
-  execution-path review, real-chain compatibility, a funded owner and explicit
+  execution-path review, live-testnet compatibility, a funded owner and explicit
   authorization are still required.
 - `agent/svalin-setup.mjs` is the **experimental owner CLI** over those
   components. It reconstructs every stage from the unchanged canonical planner
@@ -208,10 +245,12 @@ ambiguity, not a real payment or an observation of the deployed seller.
   creates a 256-bit random Pro bearer code locally and
   fsyncs it inside the original encrypted owner/vault-scoped journal before
   any reservation. With separate explicit execution and journal/key-backup
-  acknowledgments it can make one bounded reservation POST; an ambiguous
-  response is never automatically reposted. A separately approved
-  `/v1/pro/activate` POST can attempt to recover the original pending amount
-  using the same code, but activation may **mutate seller state**. An unknown,
+  acknowledgments it checks the owner code at a fresh pinned testnet block,
+  then can make one bounded reservation POST; an ambiguous response is never
+  automatically reposted. The rest of the full preflight is separate. A
+  separately approved `/v1/pro/activate` POST can attempt to recover the
+  original pending amount using the same code, but activation may **mutate
+  seller state**. An unknown,
   active, absent, multiple or ambiguous response remains unresolved and is
   never automatically retried. It can prepare unsigned V11 owner/agent calldata
   with the exact amount and a commitment to the high-entropy code; neither the
@@ -226,11 +265,13 @@ ambiguity, not a real payment or an observation of the deployed seller.
   experimental payment path. For the **already owner-pinned** V11 intent,
   they check a FINAL snapshot for the reviewed keyless vault, code hash,
   owner, policy and payee locks, Circle token, recipient registration and
-  restricted agent key. A policy denial stops without a send. The runner
-  rechecks the public offer and original encrypted reservation, signs only
-  `execute_exact_ft` with zero attached NEAR, fsyncs the signed transaction
-  hash, and broadcasts at most once. It verifies the original FINAL receipt
-  graph, historic vault/consumed intent, Circle event and callback. It rejects
+  restricted agent key. At payment time it also requires the key's remaining
+  gas allowance to be positive and no greater than one testnet NEAR; this is
+  not a guarantee that the allowance suffices. A policy denial stops without
+  a send. The runner rechecks the public offer and original encrypted
+  reservation, signs only `execute_exact_ft` with zero attached NEAR, fsyncs
+  the signed transaction hash, and broadcasts at most once. It verifies the
+  original FINAL receipt graph, historic vault/consumed intent, Circle event and callback. It rejects
   a FINAL block more than 120 seconds old or more than 30 seconds in the future
   relative to the local clock and rechecks that same snapshot during review
   and before broadcast. The exact-FT runner and recovery reject contract-view
@@ -279,14 +320,24 @@ ambiguity, not a real payment or an observation of the deployed seller.
   probe also checks 15 and 20 test wNEAR inputs against a single fresh FINAL
   snapshot, but has not been run live with those inputs. All results are
   stale-able indications, **not** funding or executable swap quotes.
+  A separate public NearBlocks page on 2 November around 12:21 UTC displayed
+  approximately 2.87376 test NEAR and 0.003936 Circle test USDC for the
+  [historical self-hosted trial owner](https://testnet.nearblocks.io/address/owner.bouncer-oracle-1ab0b52f.testnet/assets).
+  The displayed USDC alone is 5.006063 below this profile's maximum funding
+  amount of 5.009999. This is an indexed indication, not a pinned FINAL RPC
+  balance, a selected V11 owner, proof of usable keys, or proof that other
+  funding sources do not exist. Both values can change.
 - `scripts/probe-svalin-pro.mjs` runs those anonymous GET/RPC reads; use a
   network environment that can reach the provider and NEAR testnet. It does
   not create a reservation, pay, activate, or call a paid endpoint.
-- V11 is a separate experimental fresh-state contract; it has **not** been
-  deployed or tested on chain. Independent review, reviewed owner setup and
-  deployment, securely verified operational backups, sufficient test-token
-  funding, a consenting available seller and real end-to-end testing are still
-  missing. A local mock does not prove any of those.
+- V11 is a separate experimental fresh-state contract; it has been exercised
+  on an isolated nearcore chain but **not** deployed on live testnet.
+  Independent review, an owner-approved deployment, securely verified operational
+  backups, sufficient test-token funding, an available seller and real
+  end-to-end testing are still missing. The local sandbox and its mock token do
+  not prove any of those. Independent review remains recommended, but the
+  testnet-only setup path can proceed with explicit unaudited-risk acceptance;
+  that acceptance does not constitute an audit or make the artifact safe.
 
 ## Smallest testnet trial: before making a reservation
 
@@ -296,14 +347,15 @@ permission is not a prerequisite to inspect or use its publicly offered API;
 its amount-only attribution remains a known limitation. No setup, reservation,
 intent, payment, activation or paid call is authorized by this plan.
 
-1. Independently review and build the separate V11 artifact, confirm its NEAR
-   code hash, then obtain explicit owner approval for a **new testnet vault**
-   and setup. V11 is not deployed; the offline planner prepares actions and
-   the experimental owner CLI has not been independently reviewed or live-tested.
-   Do not upgrade
-   an old V9/V10 vault or use an unreviewed artifact. The owner must control
-   its own key; the deployed vault must have **no access keys**. The current
-   contract exposes no upgrade/delete or Circle `storage_unregister` method:
+1. Verify the exact separate V11 artifact and its NEAR code hash, then obtain
+   explicit owner approval for a **new testnet vault** and each setup stage.
+   V11 is not deployed; the artifact and experimental owner CLI have not been
+   independently reviewed or live-tested. Independent review is recommended;
+   a testnet operator who chooses to proceed without it must explicitly accept
+   the unaudited-artifact risk. A hash is not an audit or a reproducible-build
+   proof. Do not upgrade an old V9/V10 vault. The owner must control its own
+   key; the deployed vault must have **no access keys**. The current contract
+   exposes no upgrade/delete or Circle `storage_unregister` method:
    a keyless vault can leave its storage stake and token-registration deposit
    locked. Its owner can withdraw tracked tokens and eligible native surplus,
    subject to the contract and token rules.
@@ -409,16 +461,42 @@ or consent. Signed bytes must be protected. `svalin-setup-journal.mjs` can
 initialize an explicitly new original manifest and record that verified hash in
 an encrypted `FileJournal`, but this alone does not authorize or send anything.
 The separate experimental coordinator rechecks signed bytes and fresh
-prerequisites, but has only synthetic tests and is not yet approved for live
-use. To inspect a supplied result later, `inspectSvalinSetupAttempt` takes
+prerequisites. It has synthetic tests and a test-only nearcore sandbox run,
+but is not yet approved for live use. To inspect a supplied result later,
+`inspectSvalinSetupAttempt` takes
 `plan`, `trustedReviewHash`,
 `trustedOriginalHash`, `trustedOwnerPublicKey`, `attempt` and `result`. These
 anchors must come from the protected original record, not from an untrusted
 replacement result. The library reconstructs the constrained plan and matches
-its actions in the transaction and root receipt. The resolver/callback graph
-check is stricter than a successful `ft_transfer_call` alone. It has not been
-exercised against a real V11 deployment or funding transaction; independent
-review and a future authorized live workflow remain necessary.
+its actions in the transaction and, when supplied, the root receipt. Only the
+same-account single-AddKey stage permits an omitted local root body; it reports
+`FINAL_LOCAL_ADD_KEY_OUTCOME_MATCH`, not a receipt match. The trusted-RPC
+transaction, root outcome and any strictly shaped system gas-refund child must
+match, and a fresh state check must separately verify the key. Registration
+accepts a linked protocol gas refund, but still rejects a token-created refund.
+The resolver/callback graph check is stricter than a successful
+`ft_transfer_call` alone. An earlier disposable nearcore run of the verifier found
+both incompatibilities and intentionally failed. The [isolated rerun of commit
+`b820ce9`](https://github.com/Greatmujey/Bouncer/actions/runs/41430287526)
+passed with the example mock FT and reconciled five stages in an encrypted journal;
+the AddKey root body remained omitted. A [later isolated run](https://github.com/Greatmujey/Bouncer/actions/runs/41435563441)
+also passed the actual setup runner, pinned stage preflights, post-funding check
+and same-hash recovery on nearcore, with a test-only simulated network identity
+and approval flags. A [subsequent isolated run](https://github.com/Greatmujey/Bouncer/actions/runs/41439528831)
+exercised the actual restricted buyer against the same kind of disposable chain:
+it journaled before one mock-FT payment, lost the acknowledgement after finality,
+reopened the journal and recovered that original hash without a second send.
+The offer and reservation were from an in-process fake seller; no Svalin
+activation, attribution or delivery was verified. A [fresh isolated run of
+`bee6160`](https://github.com/Greatmujey/Bouncer/actions/runs/41444752557)
+passed after the plain-owner and capped-gas-allowance checks were added; the
+sandbox owner and key satisfied those checks. Synthetic tests cover hostile or
+unavailable owner views and post-sign drift; this nearcore run did not exercise
+an adversarial global-code owner. Its [normal CI build](https://github.com/Greatmujey/Bouncer/actions/runs/41444752580)
+reported the same V11 SHA-256 as the sandbox input, but did not independently
+attest reproducibility. There has been no V11 testnet deployment or Circle
+funding transaction. A future live workflow requires authorization and must
+explicitly disclose that independent review has not occurred.
 On 1 November 2026, the approved private push build `41361570652` and its PR
 build `41361575492` succeeded and independently reported the same 536,325-byte
 V11 artifact SHA-256,
@@ -505,19 +583,22 @@ blocks an already-registered vault: this version does not silently skip the
 registration or assume a refund. Registering an unregistered owner and acquiring
 its test USDC are not part of these batches. NEAR's [batched-action
 rules](https://docs.near.org/smart-contracts/anatomy/actions) describe actions
-in one receipt as atomic; this has not yet been exercised with the V11 artifact
-on chain. The later FT deposit invokes asynchronous token/receiver receipts and
+in one receipt as atomic; there has been no V11 testnet deployment. The later
+FT deposit invokes asynchronous token/receiver receipts and
 must be reconciled along with the vault's tracked and actual balances. Never
 repeat an unresolved setup transaction simply because a response was lost.
 
 ## Experimental owner setup CLI
 
-**Do not use this to deploy yet:** the artifact and execution path still need
-independent review, real-chain compatibility checks, secure verified backups,
-a funded testnet owner and explicit approval for each intended transaction.
-The command is capable of sending testnet transactions; merely invoking `--help`
-never does. It is not a wallet, faucet, token acquisition route, seller call or
-proof of independent fulfillment.
+**Experimental testnet only:** the artifact and execution path are unaudited
+and have not been live-tested. Independent review is recommended; the CLI does
+not require a claim that one happened, but requires explicit acceptance of that
+risk for each stage. Real-chain compatibility, secure verified backups, a
+funded testnet owner and explicit approval for each intended transaction remain
+necessary. The command is capable of sending testnet transactions; merely
+invoking `--help` never does. It is not a wallet, faucet, Circle acquisition
+route, seller call or proof of independent fulfillment. A separate, not-yet-live-
+verified native-NEAR helper is documented in [TESTNET_NATIVE_FAUCET.md](TESTNET_NATIVE_FAUCET.md).
 
 1. Keep the planner's complete JSON output **unchanged**, including its trailing
    newline. To save it as JSON, invoke `node agent/svalin-setup-plan.mjs` directly
@@ -545,15 +626,17 @@ proof of independent fulfillment.
    the selected WASM feature flags in its protocol configuration. A match is
    neither consent nor proof that balances, storage, runtime linkage or gas
    will remain sufficient. A blocked/unknown check exits 2; invalid input exits 1.
-4. Only after review, backups and **separate approval for one exact stage**,
+4. Only after inspecting the exact artifact and plan, backing up recovery
+   material and obtaining **separate approval for one exact stage**,
    `--execute-stage STAGE --rpc TRUSTED_TESTNET_RPC --owner-key OWNER.json`
-   additionally requires `--execute --ack-backups --ack-reviewed-artifact
-   --accept-keyless-lock`. The owner-key JSON must contain `account_id` and
-   `private_key`, match the retained public key, and be an owner-only regular
+   additionally requires `--execute --ack-backups --accept-unaudited-artifact
+   --accept-keyless-lock`. The unaudited flag accepts risk; it does not attest
+   that anyone reviewed the binary. The owner-key JSON must contain `account_id`
+   and `private_key`, match the retained public key, and be an owner-only regular
    file, not a symlink or hard link. The signer file is opened only after an
    initial matching read-only check. JavaScript cannot guarantee that secret
    strings have been erased from memory. All flags are **operator assertions**;
-   the program cannot establish that review, backup or human consent occurred.
+   the program cannot establish risk comprehension, backup or human consent.
    Each invocation attempts at most one transaction and never contacts the
    seller. It cannot automatically execute subsequent stages.
 5. The order is `create_keyless_vault`, `configure_locked_policy`,
@@ -572,9 +655,10 @@ proof of independent fulfillment.
    blocked for manual reconciliation. Retain the latest original journal and
    separately protected key; stale backups, bypassing the journal, another
    process, a dishonest RPC or compromised local machine defeat the fence.
-7. After all five original receipt graphs are recorded, `--check-stage
-   verify_funded_vault --rpc TRUSTED_TESTNET_RPC` checks the current reported
-   keyless vault, policy, restricted agent key, Circle registrations and both
+7. After all five original stages are reconciled—including the separately
+   labeled outcome-only AddKey evidence if its root receipt was omitted—
+   `--check-stage verify_funded_vault --rpc TRUSTED_TESTNET_RPC` checks the
+   current reported keyless vault, policy, restricted agent key, Circle registrations and both
    tracked and on-token balances. `READ_ONLY_FUNDED_VAULT_PROFILE_MATCH` is a
    trusted-RPC indication, not a consensus proof, code audit, consent or seller
    delivery. Buyer-side checks do **not** fix Svalin's payer-attribution issue.
@@ -668,8 +752,10 @@ any separately approved retry; do not automatically repeat the request.
 ## Required before a consequential test
 
 1. Verify the current testnet offer, seller registration, test-token funding,
-   provider terms and independently reviewed V11 deployment. Do not reuse or
-   resend any prior ambiguous funding/payment operation.
+   provider terms and the exact V11 deployment. Independent review remains
+   recommended; a decision to test an unaudited artifact must be explicit and
+   must never be described as an audit. Do not reuse or resend any prior
+   ambiguous funding/payment operation.
 2. Get explicit owner approval for the provider, monthly testnet amount range,
    desired public-account data, timing, side effects and risks **before** a
    two-day checkout reservation. Persist and independently back up the bearer

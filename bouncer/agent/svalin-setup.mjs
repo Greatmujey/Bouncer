@@ -25,8 +25,9 @@ const INSPECTION_STAGES = [...TX_STAGES, 'verify_funded_vault'];
 const VALUE_OPTIONS = ['review', 'wasm', 'review-sha256', 'owner-public-key', 'state', 'rpc', 'owner-key',
   'check-stage', 'execute-stage', 'recover-stage'];
 const FLAGS = ['init-journal', 'journal-status', 'confirm-new-journal', 'ack-key-backup',
-  'execute', 'ack-backups', 'ack-reviewed-artifact', 'accept-keyless-lock', 'record-evidence'];
-const USAGE = `EXPERIMENTAL V11 TESTNET owner setup; synthetic-tested only. No live setup is implied.
+  'execute', 'ack-backups', 'accept-unaudited-artifact', 'accept-keyless-lock', 'record-evidence'];
+const USAGE = `EXPERIMENTAL V11 TESTNET owner setup. No live V11 setup is implied.
+The artifact and runner are unaudited; accepting this risk is not an independent review.
 A keyless V11 vault currently cannot be upgraded/deleted or unregister its Circle storage;
 native storage stake and the token-registration deposit may remain locked.
 
@@ -45,16 +46,17 @@ Choose exactly one action:
   --check-stage STAGE --rpc TRUSTED-TESTNET-RPC
       Read-only pinned-state and journal check. Use verify_funded_vault after all five receipts.
   --execute-stage STAGE --rpc TRUSTED-TESTNET-RPC --owner-key OWNER-KEY.json
-      --execute --ack-backups --ack-reviewed-artifact --accept-keyless-lock
+      --execute --ack-backups --accept-unaudited-artifact --accept-keyless-lock
       Separately approve at most ONE signed transaction. Never automatically retry it.
   --recover-stage STAGE --rpc TRUSTED-TESTNET-RPC [--record-evidence --ack-backups]
       Look up ONLY the original recorded hash; --record-evidence updates the local journal.
 
 Stages: ${TX_STAGES.join(', ')}.
 An owner-key JSON has account_id and private_key and must be an owner-only regular file, not a symlink.
-Acknowledgments assert, but cannot prove, consent, review or backups. Independently review the exact
-binary and current deployed token, back up keys and EACH updated journal, and verify fresh state and
-all FINAL receipts before proceeding. A lost/rolled-back journal or dishonest RPC defeats these guards.
+Acknowledgments assert, but cannot prove, consent, risk acceptance or backups. Verify the exact binary
+and current deployed token; independent security review remains recommended but is not asserted by
+this testnet flag. Back up keys and EACH updated journal, and verify fresh state and all FINAL receipts
+before proceeding. A lost/rolled-back journal or dishonest RPC defeats these guards.
 Unknown results must be reconciled by the original hash, never resent or replaced. No seller is contacted;
 FT settlement is not seller delivery. Testnet USDC has no real-world value.`;
 const expand = file => path.resolve(file.startsWith('~/') ? path.join(os.homedir(), file.slice(2)) : file);
@@ -84,8 +86,8 @@ function parse(argv) {
     throw new Error('initialization alone requires --confirm-new-journal and --ack-key-backup');
   }
   if (execution !== Boolean(out.execute) || execution !== Boolean(out['owner-key']) ||
-      execution !== Boolean(out['ack-reviewed-artifact']) || execution !== Boolean(out['accept-keyless-lock'])) {
-    throw new Error('one-stage execution alone requires --execute, --owner-key and both artifact/keyless acknowledgments');
+      execution !== Boolean(out['accept-unaudited-artifact']) || execution !== Boolean(out['accept-keyless-lock'])) {
+    throw new Error('one-stage execution alone requires --execute, --owner-key and both unaudited-artifact/keyless risk acknowledgments');
   }
   if ((execution || record) !== Boolean(out['ack-backups']) || (record && !recovery)) {
     throw new Error('--ack-backups is required only for execution or explicitly recorded recovery');
@@ -209,7 +211,7 @@ export async function main(argv = process.argv.slice(2)) {
         result = await runSvalinSetupStageOnce({ ...args, stageId, provider, signer,
           approval: { network: 'testnet', stage_id: stageId, review_sha256: opts['review-sha256'],
             artifact_sha256: plan.review.artifact.sha256, one_broadcast_approved: true,
-            independent_artifact_review_attested: true, journal_and_key_backups_attested: true,
+            unaudited_artifact_risk_accepted: true, journal_and_key_backups_attested: true,
             keyless_vault_storage_risk_accepted: true } });
       }
     }
