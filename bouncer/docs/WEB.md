@@ -93,10 +93,11 @@ The pairing QR and mobile `wc:` link are bearer secrets: share them only with
 your chosen wallet. Cancellation is best effort on the remote wallet; check its
 own session list if in doubt. This is account display, **not proof of ownership**.
 The QR view distinguishes component loading, pairing setup and wallet approval.
-The initial download plus setup has a 50-second outer deadline; before a QR is
-shown, Bouncer tries the documented `.org` relay and then `.com`, allowing up
-to 18 seconds per attempt (the SDK's own connection timeout is 15 seconds).
-It never changes a visible pairing or replays a wallet request. Retry uses fresh
+The initial download plus setup has a 50-second outer deadline. Before a QR is
+shown, Bouncer tries the documented `.org` and `.com` relays for up to 10
+seconds each, followed at the dedicated production origin by an 18-second
+same-origin gateway attempt. It never changes a visible pairing or replays a
+wallet request. Retry uses fresh
 in-memory storage and an isolated SDK core; a previous browser build did not
 reliably disable the SDK's shared global core. The browser bundle also uses
 standard Uint8Array APIs rather than an extension-injected Node `Buffer`.
@@ -108,8 +109,8 @@ updates to Connected automatically; scanning alone is not approval. Mobile
 layout adapts to short screens/high zoom. A synthetic QR decoded at 500×304
 and 683×304 CSS pixels with the controls and disclosure fully visible in local
 Chromium, but the actual user's camera and app have not been tested. If the browser cannot draw a valid QR, the link remains
-available. If neither relay works, Bouncer cannot generate a working pairing:
-retry, switch networks or use another listed wallet. Diagnostics show only
+available. If all available transports fail, Bouncer cannot generate a working
+pairing: retry, switch networks or use another listed wallet. Diagnostics show only
 bounded `WC-…` stage codes, not raw SDK errors or pairing secrets. If a
 same-origin HTTP Date suggests a large clock discrepancy, the interface offers
 that as a possible explanation, not a confirmed cause. Not every wallet
@@ -117,10 +118,10 @@ supports NEAR testnet and this minimal namespace; no real WalletConnect wallet
 session has been verified yet. Without an ID the picker says setup is required.
 Do not borrow another project's ID.
 
-### Candidate relay fallback (not yet deployed)
+### Same-origin relay fallback (experimental)
 
-The working branch also contains an experimental third transport for the
-approved origin only. Before a QR is shown it tries `.org` and `.com` directly
+Production also contains an experimental third transport for the approved
+origin only. Before a QR is shown it tries `.org` and `.com` directly
 for up to 10 seconds each, then a Bouncer same-origin gateway for up to 18
 seconds, within the existing 50-second outer deadline. It never switches an
 already displayed QR. The gateway's only upstream is the fixed official
@@ -137,7 +138,7 @@ expiry, and fixed upstream; it bounds payload size, traffic, handshake duration,
 connection lifetime, and per-IP/per-instance concurrency/rate. Those counters
 are **not global**: instances can scale independently, an Origin header is not
 proof of a trustworthy client, and distributed abuse could exhaust the team's
-Vercel quota. Before enabling the public endpoint, configure and verify a
+Vercel quota. Because the endpoint is now public, configure and verify a
 Vercel WAF rate limit for `/api/wc-relay`, consider a globally shared quota and
 monitor Function usage. The current connector does not expose WAF configuration;
 no such rule has been installed or verified here. The team's Hobby plan is
@@ -155,20 +156,24 @@ user-device tests. A real wallet, the user's Windows connection and Vercel's
 WebSocket deployment remain unverified. On 3 November 2026 Vercel rejected the isolated test deployment with
 `api-deployments-free-per-day` (100 Hobby deployments per day); the temporary
 empty test project was removed. The existing production deployment was not
-changed. `vercel.json` disables automatic preview deployments for this Arena
-branch only, to avoid consuming the daily deployment quota on test/docs pushes;
-`main` and explicit deployments are unaffected. Do not describe the candidate
-as live until the quota resets, the Vercel endpoint and edge protections are
-tested, and a suitable release is explicitly deployed. The earlier protected
-preview at `a306135` used a `.cjs` entry, which Vercel's zero-config API detector
-does not match. The candidate now builds `api/wc-relay.mjs`; local tests verify
-its export, but only a new deployed test can verify Vercel discovers and runs it.
+changed at that time. The gateway subsequently shipped in the main-branch
+production deployment `dpl_3Wd2ygmnz34gvTmNkpGBidYsNGAJ`. A plain HTTP request
+to `/api/wc-relay` now receives `WebSocket upgrade required`, which establishes
+that a handler is reachable, **not** that an actual upgraded WebSocket or a
+wallet session works. No Vercel WAF rule or global quota has been verified;
+the public endpoint's resource-exhaustion risk remains. `vercel.json` disables
+automatic preview deployments for this Arena branch only, to avoid consuming
+the daily deployment quota on test/docs pushes; `main` and explicit deployments
+are unaffected. The earlier protected preview at `a306135` used a `.cjs`
+entry, which Vercel's zero-config API detector does not match. The deployed
+build uses `api/wc-relay.mjs`.
 
-To enable the deployed site, the owner creates a project at
+For a new deployment, the owner creates a project at
 `https://dashboard.reown.com/sign-up`, copies its public **Project ID**, and
-allowlists `https://bouncer-near.vercel.app` in the dashboard. Allowlist changes
-can take up to 15 minutes. Set `BOUNCER_WALLETCONNECT_PROJECT_ID` as a Vercel
-production build environment variable and redeploy. Staging validates the
+allowlists the dedicated origin in the dashboard. Allowlist changes can take up
+to 15 minutes. Set `BOUNCER_WALLETCONNECT_PROJECT_ID` as a Vercel production
+build environment variable and redeploy. The current production site already
+has the owner's public Project ID configured. Staging validates the
 32-hex identifier and generates `walletconnect-config.json`; it is public in
 the browser and is not a wallet credential. Never put a password, seed phrase,
 private key or dashboard API key there. The source template stays blank.
@@ -242,14 +247,13 @@ security or CSP review is implied. The public repository is
 
 The project’s production branch is `main`; working-branch previews and the
 production domain can therefore serve different commits. On 3 November 2026 UTC,
-working-branch commit `32f6519` was deployed to `bouncer-near.vercel.app`
-without merging to `main` (Vercel deployment `dpl_8bCrkP1Mq9qDaaCTz11YkFeNktKf`).
-The owner-supplied public Reown project ID is configured for production. The
-owner reported that WalletConnect still failed on their Windows browser after
-an earlier deployment; the cause has not been established or independently
-verified on that device. The new build addresses several possible startup and
-caching issues and provides sanitized failure codes, but does not establish
-that their original problem is fixed.
+PR #13 was merged as `5d8467be` and Vercel deployment
+`dpl_3Wd2ygmnz34gvTmNkpGBidYsNGAJ` was reported READY and promoted to
+`bouncer-near.vercel.app`. The owner-supplied public Reown project ID is
+configured for production. The owner previously reported that WalletConnect
+still failed on their Windows browser; the cause has not been established or
+independently verified on that device. Startup and caching changes and sanitized
+failure codes do not establish that the original problem is fixed.
 
 Candidate run `41619985533` and live run `41620193010` passed the relay checks
 with synthetic wallets on Windows and Linux, including a deliberately blocked

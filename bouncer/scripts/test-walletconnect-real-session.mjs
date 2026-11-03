@@ -212,13 +212,19 @@ try {
   // public CI log records only a bounded phase and a safe error category.
   const kind = /^[A-Za-z][A-Za-z0-9]{0,40}$/.test(error?.name || '') ? error.name : 'Error';
   console.error(`WalletConnect probe failed during ${phase} (${kind}); no session data logged.`);
-  if (localBridge) {
-    const state = await page?.evaluate(() => ({
-      attempted: (window.__bouncerRelayAttempts || []).filter(item => ['relay.walletconnect.org', 'relay.walletconnect.com', 'bouncer-gateway'].includes(item)),
-      code: (document.querySelector('#walletconnect-error-detail')?.textContent || '').match(/WC-[A-Z]+/)?.[0] || 'none',
-      qrShown: !document.querySelector('#walletconnect-qr')?.hidden,
-    })).catch(() => null);
-    console.error('Synthetic bridge diagnostic:', JSON.stringify({ state, events: bridgeDiagnostics }));
+  if (localBridge || liveBridge || testBridge || process.env.BOUNCER_BLOCK_BOTH_WC === '1') {
+    const state = await page?.evaluate(() => {
+      const qr = document.querySelector('#walletconnect-qr');
+      const detail = document.querySelector('#walletconnect-error-detail')?.textContent || '';
+      return {
+        attempted: (window.__bouncerRelayAttempts || []).filter(item => ['relay.walletconnect.org', 'relay.walletconnect.com', 'bouncer-gateway'].includes(item)),
+        code: detail.match(/\bWC-(?:INIT|PAIR|START|TIMEOUT|CONFIG)\b/)?.[0] || 'none',
+        qrShown: Boolean(qr && !qr.hidden && getComputedStyle(qr).display !== 'none'),
+      };
+    }).catch(() => null);
+    // Diagnostic fields are allowlisted; never log the QR, URI, topic, wallet
+    // identifiers, raw SDK exception, authorization header or relay payload.
+    console.error('Synthetic transport diagnostic:', JSON.stringify({ state, events: bridgeDiagnostics }));
   }
   process.exitCode = 1;
 } finally {
