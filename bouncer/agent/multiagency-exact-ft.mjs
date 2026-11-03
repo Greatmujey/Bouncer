@@ -169,39 +169,62 @@ export function assertPreparedExactFt(prepared) {
  * checkout belongs to the buyer, or establish fulfillment. */
 export function verifyPreparedExactFtPayment({ prepared, txHash, result, vaultState, intentState }) {
   assertPreparedExactFt(prepared);
-  const a = prepared.owner_call.args, publicKey = prepared.review.agent_public_key;
+  return verifyReviewedExactFtReceipts({ owner: prepared.review.goal.owner, vault: prepared.review.goal.vault,
+    vaultCodeHash: prepared.review.goal.vault_code_hash, publicKey: prepared.review.agent_public_key,
+    terms: prepared.owner_call.args, txHash, result, vaultState, intentState });
+}
+
+/** Verify the shared exact-FT receipt graph against caller-supplied, already
+ * validated terms and historical views. This low-level function does not prove
+ * those terms were approved or the claimed code is trusted; adapters MUST
+ * independently reconstruct their original review and pin the intended code.
+ * It has no transaction, signing or network capability. */
+export function verifyReviewedExactFtReceipts({ owner, vault, vaultCodeHash, publicKey, terms: a,
+  txHash, result, vaultState, intentState }) {
+  if (!isTestnetAccount(owner) || !isTestnetAccount(vault) || owner === vault || !isTransactionHash(vaultCodeHash) ||
+      !fields(a, ['intent_id', 'policy_id', 'expected_token', 'payee', 'amount', 'memo', 'review_hash', 'expires_at_ms', 'agent_public_key']) ||
+      a.expected_token !== CIRCLE_TESTNET_USDC || !isTestnetAccount(a.payee) ||
+      typeof a.intent_id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(a.intent_id) ||
+      typeof a.policy_id !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(a.policy_id) ||
+      typeof a.amount !== 'string' || !/^[1-9][0-9]{0,38}$/.test(a.amount) || BigInt(a.amount) > (1n << 128n) - 1n ||
+      typeof a.memo !== 'string' || !/^[\x20-\x7e]{1,256}$/.test(a.memo) ||
+      a.memo === 'bouncer:withdraw' || a.memo === 'bouncer:guarded-ft-call' ||
+      typeof a.review_hash !== 'string' || !/^[a-f0-9]{64}$/.test(a.review_hash) ||
+      typeof a.expires_at_ms !== 'string' || !/^[1-9][0-9]{0,19}$/.test(a.expires_at_ms) || BigInt(a.expires_at_ms) > (1n << 64n) - 1n ||
+      a.agent_public_key !== publicKey) throw new Error('invalid reviewed exact FT terms');
+  normalizeAgentKey(publicKey);
   if (!isTransactionHash(txHash)) throw new Error('invalid original exact FT transaction hash');
   assertFinalPaymentReceipts(result, a.expected_token);
   const tx = result.transaction;
-  if (result.transaction_outcome?.id !== txHash || tx?.hash !== txHash || tx.signer_id !== prepared.review.goal.owner ||
-      tx.receiver_id !== prepared.review.goal.vault || tx.public_key !== publicKey || !Array.isArray(tx.actions) || tx.actions.length !== 1) {
+  if (result.transaction_outcome?.id !== txHash || tx?.hash !== txHash || tx.signer_id !== owner ||
+      tx.receiver_id !== vault || tx.public_key !== publicKey || !Array.isArray(tx.actions) || tx.actions.length !== 1) {
     throw new Error('exact FT transaction hash, owner, vault or key differs from review');
   }
   const call = tx.actions[0]?.FunctionCall;
   if (!call || call.method_name !== 'execute_exact_ft' || String(call.deposit) !== '0' || String(call.gas) !== GAS ||
-      !equals(json(call.args, 'signed exact FT arguments'), { intent_id: prepared.intent_id })) {
+      !equals(json(call.args, 'signed exact FT arguments'), { intent_id: a.intent_id })) {
     throw new Error('signed exact FT call differs from the reviewed intent');
   }
-  const executionBlock = multiAgencyExactExecutionBlock(result, prepared.review.goal.vault);
+  const executionBlock = multiAgencyExactExecutionBlock(result, vault);
   const txBlock = result.transaction_outcome?.block_hash;
-  const reviewedState = (state, block) => record(state) && state.block_hash === block && state.code_hash === prepared.review.goal.vault_code_hash &&
+  const reviewedState = (state, block) => record(state) && state.block_hash === block && state.code_hash === vaultCodeHash &&
     Array.isArray(state.keys) && state.keys.length === 0;
   if (!isTransactionHash(txBlock) || !reviewedState(vaultState, txBlock) || !reviewedState(vaultState.execution, executionBlock)) {
     throw new Error('transaction/execution block vault code or access keys differ from the reviewed keyless deployment');
   }
   if (!record(intentState) || intentState.block_hash !== executionBlock) throw new Error('historic intent view is not bound to the execution block');
-  const pinned = assertMultiAgencyExactFtView(prepared, intentState.view, { consumed: true });
+  const pinned = assertMultiAgencyExactFtView({ owner_call: { args: a } }, intentState.view, { consumed: true });
   if (!Array.isArray(result.receipts) || !Array.isArray(result.receipts_outcome)) throw new Error('receipt-inclusive FINAL result required');
   const receiptIds = result.receipts.map(r => r?.receipt_id), outcomeIds = result.receipts_outcome.map(r => r?.id);
   if (receiptIds.some(id => typeof id !== 'string' || !id) || new Set(receiptIds).size !== receiptIds.length ||
       outcomeIds.some(id => typeof id !== 'string' || !id) || new Set(outcomeIds).size !== outcomeIds.length) {
     throw new Error('missing or duplicate exact FT receipt IDs');
   }
-  const init = result.receipts_outcome.filter(o => o.block_hash === executionBlock && o.outcome?.executor_id === prepared.review.goal.vault &&
+  const init = result.receipts_outcome.filter(o => o.block_hash === executionBlock && o.outcome?.executor_id === vault &&
     o.outcome.logs?.includes(INIT_LOG));
   if (init.length !== 1 || !result.transaction_outcome.outcome.receipt_ids.includes(init[0].id)) throw new Error('missing unique bound exact FT initiation');
   const transfer = result.receipts.flatMap(receipt => {
-    const method = receiptCall(receipt, prepared.review.goal.vault, a.expected_token, 'ft_transfer');
+    const method = receiptCall(receipt, vault, a.expected_token, 'ft_transfer');
     return method ? [{ receipt, method }] : [];
   });
   if (transfer.length !== 1 || String(transfer[0].method.deposit) !== '1' ||
@@ -216,12 +239,12 @@ export function verifyPreparedExactFtPayment({ prepared, txHash, result, vaultSt
     if (typeof line !== 'string' || !line.startsWith('EVENT_JSON:') || Buffer.byteLength(line) > 16_384) continue;
     let event; try { event = JSON.parse(line.slice(11)); } catch { continue; }
     if (event?.standard !== 'nep141' || event.version !== '1.0.0' || event.event !== 'ft_transfer' || !Array.isArray(event.data)) continue;
-    matches += event.data.filter(e => e?.old_owner_id === prepared.review.goal.vault && e.new_owner_id === a.payee &&
+    matches += event.data.filter(e => e?.old_owner_id === vault && e.new_owner_id === a.payee &&
       e.amount === a.amount && e.memo === a.memo).length;
   }
   if (matches !== 1) throw new Error('missing unique Circle event for the exact transfer memo; do not repay');
   const callback = result.receipts.flatMap(receipt => {
-    const method = receiptCall(receipt, prepared.review.goal.vault, prepared.review.goal.vault, 'after_exact_ft_transfer');
+    const method = receiptCall(receipt, vault, vault, 'after_exact_ft_transfer');
     return method ? [{ receipt, method }] : [];
   });
   if (callback.length !== 1 || String(callback[0].method.deposit) !== '0') throw new Error('missing exact FT callback');
@@ -230,7 +253,7 @@ export function verifyPreparedExactFtPayment({ prepared, txHash, result, vaultSt
       cb.policy_id !== a.policy_id || cb.token !== a.expected_token || cb.amount !== a.amount || cb.policy_revision !== pinned.policy_revision ||
       !Number.isSafeInteger(cb.bucket) || cb.bucket < 0) throw new Error('exact FT callback arguments differ from review');
   const callbackOutcome = result.receipts_outcome.filter(o => o.id === callback[0].receipt.receipt_id &&
-    o.outcome?.executor_id === prepared.review.goal.vault && success(o.outcome.status) &&
+    o.outcome?.executor_id === vault && success(o.outcome.status) &&
     o.outcome.status.SuccessValue === result.status.SuccessValue && o.outcome.logs?.includes(SUCCESS_LOG));
   const children = init[0].outcome.receipt_ids;
   if (callbackOutcome.length !== 1 || !Array.isArray(children) || !children.includes(transfer[0].receipt.receipt_id) ||

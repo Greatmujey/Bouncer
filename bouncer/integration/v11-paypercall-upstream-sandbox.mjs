@@ -22,6 +22,7 @@ import nearApi from 'near-api-js';
 import { buildExperimentalForwarder } from '../experiments/paypercall-forwarder/build.mjs';
 import { CIRCLE_TESTNET_USDC as TOKEN } from '../scripts/circle-testnet-setup.mjs';
 import { PAYPERCALL_TESTNET_ESCROW as ESCROW } from '../agent/paypercall-inspect.mjs';
+import { collectPayPerCallHistoricalSnapshots, verifyPayPerCallForwarderEvidence } from '../agent/paypercall-forwarder-evidence.mjs';
 import { loopbackSandboxUrl, withSandboxOnlyFetch } from './v11-sandbox-setup-rpc.mjs';
 import { V11_SHA256, MOCK_FT_SHA256, SANDBOX_SHA256, SANDBOX_CHAIN_ID, readVerifiedFile,
   assertSandboxStatus, requireFinalSuccess } from './v11-sandbox-support.mjs';
@@ -208,10 +209,11 @@ async function exercise({ endpoint, root, tokenOwner, wasm, escrowWasm, upstream
   // local fixture bytes, not an independently retrieved seller response.
   const secondBlock = await provider.viewBlock({ finality: 'final' });
   const secondNow = Number(BigInt(secondBlock.header.timestamp_nanosec) / 1_000_000n);
-  const answerArtifact = await buildExperimentalForwarder({ owner: BUYER, vault: VAULT, adapter: FULFILLED_ADAPTER,
+  const answerTerms = { owner: BUYER, vault: VAULT, adapter: FULFILLED_ADAPTER,
     vault_agent_public_key: pub(vaultKey), forwarder_agent_public_key: pub(answerBridgeKey), policy_id: 'fulfilled', intent_id: 'pc-2',
     amount: '100', service_id: 0, request: 'wrap.testnet', expires_at_ms: secondNow + 60 * 60 * 1000,
-    native_return_cap: NEAR.toString(), native_reserve: NEAR.toString() }, { nowMs: secondNow });
+    native_return_cap: NEAR.toString(), native_reserve: NEAR.toString() };
+  const answerArtifact = await buildExperimentalForwarder(answerTerms, { nowMs: secondNow });
   await batch(buyer, FULFILLED_ADAPTER, [tx.createAccount(), tx.transfer(3n * NEAR), tx.deployContract(answerArtifact.wasm)],
     'create separate keyless answer forwarder');
   assert.equal((await provider.viewAccount(FULFILLED_ADAPTER, { finality: 'final' })).code_hash, codeHash(answerArtifact.wasm));
@@ -248,14 +250,31 @@ async function exercise({ endpoint, root, tokenOwner, wasm, escrowWasm, upstream
   const fundingReceipts = await provider.txStatusReceipts(answerFunding.transaction_outcome.id, BUYER, 'FINAL');
   const openingReceipts = await provider.txStatusReceipts(answerOpened.transaction_outcome.id, BUYER, 'FINAL');
   const fulfillmentReceipts = await provider.txStatusReceipts(fulfilled.transaction_outcome.id, PROVIDER, 'FINAL');
+  const fundingEvidence = { txHash: answerFunding.transaction_outcome.id, result: fundingReceipts };
+  const openingEvidence = { txHash: answerOpened.transaction_outcome.id, result: openingReceipts };
+  const fulfillmentEvidence = { txHash: fulfilled.transaction_outcome.id, result: fulfillmentReceipts };
+  const offer = { provider: PROVIDER, operator: PROVIDER, price: '60', vault_code_hash: codeHash(wasm),
+    token_code_hash: (await provider.viewAccount(TOKEN, { finality: 'final' })).code_hash, escrow_code_hash: codeHash(escrowWasm) };
+  const evidenceArgs = { terms: answerTerms, offer, funding: fundingEvidence, opening: openingEvidence,
+    fulfillment: fulfillmentEvidence, answerBytes: answer };
+  // The collector has no network identity override. It is intentionally used
+  // here only inside the already-fenced loopback sandbox with the mock token.
+  const snapshots = await collectPayPerCallHistoricalSnapshots({ ...evidenceArgs, provider });
+  const correlated = await verifyPayPerCallForwarderEvidence({ ...evidenceArgs, snapshots });
+  assert.equal(correlated.guarded_forwarder_funding_verified, true);
+  assert.equal(correlated.provider_token_payout_verified, true);
+  assert.equal(correlated.answer_hash_matches_onchain_commitment, true);
+  assert.equal(correlated.independent_fulfillment_verified, false);
+  checkpoint('independent receipt verifier correlated the isolated graphs, pinned views and fixture answer');
+  const compactOutcome = o => ({ executor_id: o?.executor_id, status: o?.status, receipt_ids: o?.receipt_ids, logs: o?.logs });
   const graph = result => ({ final_execution_status: result.final_execution_status, status: result.status,
     transaction: { hash: result.transaction?.hash, signer_id: result.transaction?.signer_id,
       receiver_id: result.transaction?.receiver_id, public_key: result.transaction?.public_key, actions: result.transaction?.actions },
     transaction_outcome: { id: result.transaction_outcome?.id, block_hash: result.transaction_outcome?.block_hash,
-      outcome: result.transaction_outcome?.outcome },
+      outcome: compactOutcome(result.transaction_outcome?.outcome) },
     receipts: result.receipts?.map(r => ({ receipt_id: r.receipt_id, predecessor_id: r.predecessor_id,
       receiver_id: r.receiver_id, actions: r.receipt?.Action?.actions })),
-    receipts_outcome: result.receipts_outcome?.map(o => ({ id: o.id, block_hash: o.block_hash, outcome: o.outcome })) });
+    receipts_outcome: result.receipts_outcome?.map(o => ({ id: o.id, block_hash: o.block_hash, outcome: compactOutcome(o.outcome) })) });
   return { scope: 'ISOLATED nearcore with PayPerCall compiled from pinned source and an example mock FT; NOT Circle, deployed escrow or seller delivery',
     source_revision: '9159811bc6443ce29ae3c32482d0808f094caa87', source_built_escrow_sha256: upstream.sha256,
     forwarder_sha256: artifact.wasm_sha256, keyless_after_deliberate_fault: true,
@@ -266,7 +285,8 @@ async function exercise({ endpoint, root, tokenOwner, wasm, escrowWasm, upstream
     refund_scenario_conservative_spend: '100',
     partial_refund: '40', claimed_late_refund: '60', owner_native_storage_return_checked: true,
     isolated_fulfillment: { funding_final: true, escrow_open: true, locally_supplied_answer_hash_matched: true,
-      detached_mock_token_payout: '60', unused_at_forwarder: '40', answer_sha256: hash(answer) },
+      detached_mock_token_payout: '60', unused_at_forwarder: '40', answer_sha256: hash(answer),
+      independent_receipt_verifier_passed: true, independent_provider_delivery: false },
     seller_contacted: false, independent_fulfillment_verified: false,
     local_hashes: { to_forwarder: toAdapter.transaction_outcome.id, opened: opened.transaction_outcome.id,
       partial_return: partial.transaction_outcome.id, rejection: rejected.transaction_outcome.id,

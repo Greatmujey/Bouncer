@@ -54,6 +54,54 @@ availability, a Bouncer payment, provider payout nor independent delivery.
 or that the vault credited it. Unresolved operations must not be retried
 blindly. Requests may be public in chain events; never put secrets in them.
 
+## Correlating a forwarder-funded call (experimental)
+
+`agent/paypercall-forwarder-evidence.mjs` adds a separate, **read-only**
+verification API for the experimental one-shot forwarder. Given its original
+public build terms, a separately retained provider/operator/price and code-hash
+pin, three original transaction hashes, and the exact answer bytes, it checks:
+
+1. The FINAL restricted-key `execute_exact_ft` transaction, owner-pinned intent,
+   keyless reviewed vault, token event and successful callback for the transfer
+   to the specific generated forwarder.
+2. The forwarder's own FINAL `open` transaction, fixed transfer-call message,
+   token resolver and matching PayPerCall `call_requested` event. The generated
+   forwarder bytecode and keylessness must match at the relevant historical
+   blocks. Earlier and later block-pinned token balances must also be consistent
+   with an initially empty forwarder, and funding must precede opening.
+3. The operator/provider's FINAL `fulfill` call, exact answer-byte hash and
+   matching on-chain call view, followed by the **separately linked successful
+   FT payout receipt and token event** to the expected provider. A successful
+   `fulfill` status alone is not a payout.
+
+`inspectPayPerCallForwarderEvidence` requests only those original receipts and
+historical views, insists that the RPC reports `testnet`, and requires the
+reviewed Circle testnet token code hash. It has no signer, seller HTTP client,
+transaction-submission or automatic retry. Missing receipts, pruned historical
+state, changed code, wrong balances, a failed payout or mismatched terms stop
+verification. `verifyPayPerCallForwarderEvidence` and the separate historical
+collector can also run on caller-supplied graphs, but those lower-level inputs
+are not authenticated and can be synthetic. Neither is a buying runner.
+
+This is **correlation under trust assumptions**, not a proof of independent
+delivery. The forwarder review currently fixes the service ID and maximum but
+**does not enforce the provider, operator or exact price on-chain**; checking a
+separately retained offer after execution cannot prevent a change in flight.
+The escrow and token code hashes are pins, not proof that deployed bytecode
+matches the reviewed source or cannot change between observations. An RPC can
+lie; block-level balances do not attribute fungible token units or exclude
+intervening same-block transfers. An answer hash does not authenticate the
+HTTP peer or establish correctness. A successful payout and matching bytes
+still do not show that the seller returned those bytes to the buyer. Unused or
+late refund credit to the vault is a separate check and is not claimed here.
+The verifier never resends an original or makes a failed verification a retry
+signal.
+
+The receipt checker is also exercised on disposable nearcore with the
+source-built PayPerCall contract, a mock FT and a locally supplied fixture
+answer. That simulation is not Circle, a public-chain purchase, provider
+fulfillment or an independent audit.
+
 ## V11 compatibility boundary
 
 The [reviewed PayPerCall source](https://github.com/devx-agent/near-paypercall/blob/9159811bc6443ce29ae3c32482d0808f094caa87/contract/src/lib.rs)
