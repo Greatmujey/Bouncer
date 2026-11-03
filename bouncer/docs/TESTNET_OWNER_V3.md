@@ -100,7 +100,12 @@ observed the previous owner nonce and registration-stage state, but its
 original-hash lookups were unavailable or returned an HTTP error. Those views
 are not a receipt or proof that the original can no longer be accepted. Its
 status remains **unknown**: retain the fence, reconcile this original only,
-never resend or sign a replacement. It was a storage registration, not a
+never resend or sign a replacement. A [later read-only observation](https://github.com/Greatmujey/Bouncer/actions/runs/41648937501)
+found the canonical reference was still within the observed 86,400-block
+validity window; that observation is not a receipt. A distinct zero-yocto
+owner-guard control is being prepared to fence the earlier nonce, without
+resending the registration. Even if the control reaches FINAL, it cannot prove
+whether the registration executed first. It was a storage registration, not a
 provider payment or order. OutLayer can change its deployed
 contract, its plain-token refunds may not restore Bouncer's tracked allowance,
 and unused prepayment may be difficult to recover. The initial V12 diagnostic

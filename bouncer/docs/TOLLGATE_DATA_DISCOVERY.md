@@ -59,9 +59,12 @@ path. This is an experimental
 contract, **not deployed or audited**; it cannot claim delivery, accept Circle
 as native NEAR, or solve resource-unbound voucher risk. The [unit/build run](https://github.com/Greatmujey/Bouncer/actions/runs/41648346175)
 passed for the current experimental contract, including conservative failed
-promise handling and owner-only recovery. A prior isolated run exercised a
-superseded binary; the current binary still requires its own isolated runtime
-exercise before any potential testnet deployment.
+promise handling and owner-only recovery. The hardened binary then passed the
+[isolated runtime exercise](https://github.com/Greatmujey/Bouncer/actions/runs/41649077636):
+a locally simulated channel opening, voucher settlement, close, refund and
+failed-open conservative accounting. This used a local seller and is neither
+live fulfillment nor an audit. Its 602,587-byte binary required increasing the
+sandbox storage stake; a live deployment needs a fresh balance preflight.
 
 References: [Tollgate repository](https://github.com/Mattbusel/tollgate),
 [public quakes endpoint](https://near-tollgate.vercel.app/v1/quakes?min_magnitude=5),
