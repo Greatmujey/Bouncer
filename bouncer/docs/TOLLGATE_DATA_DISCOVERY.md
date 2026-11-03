@@ -138,9 +138,14 @@ reserves the voucher key in a repository-unique GitHub label and reads it back
 before signing. Two simulated machines, a lost acknowledgment, permission
 failure and a changed read-back all failed closed in local tests. This optional
 path requires GitHub label-create permission and trusted administrators who
-never delete or rename the reservation; it has **not** been exercised against
-GitHub or a live seller. Results explicitly distinguish `LOCAL_ONLY` from
-`GITHUB_LABEL_AND_LOCAL`; a local fence alone is not cross-session protection.
+never delete or rename a real reservation. A [GitHub Actions smoke test](https://github.com/Greatmujey/Bouncer/actions/runs/41662909506)
+created and read back a label for a randomly generated **synthetic** voucher
+key, confirmed an explicit duplicate-name conflict from a separate directory,
+and deleted only that synthetic label; it signed no voucher, made no chain
+transaction, and contacted no provider. This verifies that GitHub permission
+and uniqueness worked in that run, not a live reservation or purchase. Results
+explicitly distinguish `LOCAL_ONLY` from `GITHUB_LABEL_AND_LOCAL`; a local
+fence alone is not cross-session protection.
 An [isolated HTTP lifecycle](https://github.com/Greatmujey/Bouncer/actions/runs/41662141220)
 exercised the updated client against the pinned published seller SDK and a disposable
 nearcore: review, one voucher, synthetic returned data, replay refusal, local
