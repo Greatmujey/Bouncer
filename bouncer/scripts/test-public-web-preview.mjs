@@ -36,10 +36,15 @@ try {
   assert.equal(await page.locator('#wallet-dialog').evaluate(el => el.open), true, 'wallet picker opens');
   if (isProduction) {
     await page.waitForFunction(() => !document.querySelector('[data-wallet-id="meteor-wallet"]').disabled);
-    assert.equal(await page.locator('[data-wallet-id]').count(), 6);
+    assert.equal(await page.locator('[data-wallet-id]').count(), 7);
     assert.equal(await page.locator('[data-wallet-id="near-mobile"]').isEnabled(), true);
     assert.equal(await page.locator('[data-wallet-id="intear-wallet"]').isEnabled(), true);
-    assert.equal(await page.getByRole('button', { name: 'WalletConnect, setup required' }).isDisabled(), true);
+    const configured = await page.evaluate(async () => {
+      const config = await (await fetch('./walletconnect-config.json', { cache: 'no-store' })).json();
+      return typeof config.projectId === 'string' && /^[a-f0-9]{32}$/i.test(config.projectId);
+    });
+    if (configured) await page.waitForFunction(() => !document.querySelector('[data-wallet-id="wallet-connect"]').disabled);
+    assert.equal(await page.locator('[data-wallet-id="wallet-connect"]').isEnabled(), configured);
     assert.match(await page.locator('#wallet-dialog-description').innerText(), /login message/);
     assert.match(await page.locator('#wallet-dialog-status').innerText(), /testnet wallet/i);
     // Exercise the exact URLs from the public origin, including CORS and bytes.

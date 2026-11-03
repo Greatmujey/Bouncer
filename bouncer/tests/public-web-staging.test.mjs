@@ -23,7 +23,10 @@ test('public staging copies exactly the reviewed assets, not other files', t => 
   fs.writeFileSync(path.join(source, 'credentials.txt'), 'private');
   fs.mkdirSync(path.join(source, 'journals'));
   fs.writeFileSync(path.join(source, 'journals', 'recovery.json'), 'private');
-  assert.equal(PUBLIC_WEB_FILES.length, 12);
+  assert.equal(PUBLIC_WEB_FILES.length, 15);
+  assert.ok(PUBLIC_WEB_FILES.includes('walletconnect.bundle.js'));
+  assert.ok(PUBLIC_WEB_FILES.includes('walletconnect-config.json'));
+  assert.ok(PUBLIC_WEB_FILES.includes('walletconnect-NOTICES.txt'));
   assert.ok(PUBLIC_WEB_FILES.includes('intear-wallet.executor.js'));
   assert.ok(PUBLIC_WEB_FILES.includes('intear-wallet-source.zip'));
   assert.ok(PUBLIC_WEB_FILES.includes('hero-orbit.jpg'));
@@ -32,6 +35,20 @@ test('public staging copies exactly the reviewed assets, not other files', t => 
   assert.deepEqual(stagePublicWeb(dest, source), [...PUBLIC_WEB_FILES]);
   assert.deepEqual(fs.readdirSync(dest).sort(), [...PUBLIC_WEB_FILES].sort());
   for (const file of PUBLIC_WEB_FILES) assert.deepEqual(fs.readFileSync(path.join(dest, file)), fs.readFileSync(path.join(source, file)));
+});
+
+test('public staging generates only a validated WalletConnect project ID from deployment configuration', t => {
+  const { source, dest } = fixture(t);
+  const projectId = '1234567890abcdef1234567890abcdef'; // synthetic, never used with the network
+  for (const invalid of ['abc', 'z'.repeat(32), `${projectId}\n`, { projectId }, '../x']) {
+    assert.throws(() => stagePublicWeb(dest, source, { walletConnectProjectId: invalid }), /Invalid WalletConnect/);
+    assert.equal(fs.existsSync(dest), false);
+  }
+  stagePublicWeb(dest, source, { walletConnectProjectId: projectId });
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dest, 'walletconnect-config.json'))), { projectId });
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(source, 'walletconnect-config.json'))), { projectId: '' });
+  fs.writeFileSync(path.join(source, 'walletconnect-config.json'), JSON.stringify({ projectId }));
+  assert.throws(() => validatePublicWeb(source), /must not contain a project ID/);
 });
 
 test('public staging refuses reused destinations and leaves their contents untouched', t => {
@@ -81,7 +98,7 @@ test('public staging approves only the dedicated Bouncer wallet origin', t => {
 test('staging CLI runs from the web root and publishes only allowlisted files', t => {
   const { dest } = fixture(t);
   const output = execFileSync(process.execPath, [script, dest], { cwd: realSource, encoding: 'utf8' });
-  assert.match(output, /Staged 12 reviewed public website files/);
+  assert.match(output, /Staged 15 reviewed public website files/);
   assert.deepEqual(fs.readdirSync(dest).sort(), [...PUBLIC_WEB_FILES].sort());
 });
 

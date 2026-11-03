@@ -13,7 +13,7 @@
   <title>Bouncer — The resource layer for agents</title>
   <link rel="icon" type="image/svg+xml" href="./favicon.svg?v=3">
   <link rel="preload" href="./manrope-latin.woff2" as="font" type="font/woff2" crossorigin>
-  <link rel="stylesheet" href="./styles.css?v=5">
+  <link rel="stylesheet" href="./styles.css?v=6">
 </head>
 <body>
   <svg class="svg-defs" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
@@ -133,15 +133,26 @@
     <button class="wallet-option" type="button" data-wallet-id="nightly-wallet" disabled><span class="wallet-logo nightly-logo" aria-hidden="true"><svg viewBox="0 0 48 48"><path d="M31 10a16 16 0 1 0 7 25 14 14 0 0 1-7-25Z"/><path d="M34 11v6M31 14h6"/></svg></span><span class="wallet-option-name"><strong>Nightly Wallet</strong><small>nightly.app · Browser extension</small></span><svg class="wallet-option-arrow"><use href="#i-arrow"/></svg></button>
     <button class="wallet-option" type="button" data-wallet-id="ledger" disabled><span class="wallet-logo ledger-logo" aria-hidden="true"><svg viewBox="0 0 48 48"><path d="M8 18v-8h10M30 10h10v8M8 30v8h10M30 38h10v-8M20 16v16h10"/></svg></span><span class="wallet-option-name"><strong>Ledger</strong><small>ledger.com · Hardware wallet</small></span><svg class="wallet-option-arrow"><use href="#i-arrow"/></svg></button>
     <button class="wallet-option" type="button" data-wallet-id="near-cli" disabled><span class="wallet-logo cli-logo" aria-hidden="true"><svg viewBox="0 0 48 48"><path d="m12 15 10 9-10 9M25 34h11"/></svg></span><span class="wallet-option-name"><strong>NEAR CLI</strong><small>Advanced · Manual account entry</small></span><svg class="wallet-option-arrow"><use href="#i-arrow"/></svg></button>
-    <button class="wallet-option wallet-unavailable" type="button" disabled aria-label="WalletConnect, setup required"><span class="wallet-logo walletconnect-logo" aria-hidden="true"><svg viewBox="0 0 48 48"><path d="M8 19c9-9 23-9 32 0M13 24l4 4 7-7 7 7 4-4"/></svg></span><span class="wallet-option-name"><strong>WalletConnect</strong><small>Not configured · Project ID required</small></span><span class="wallet-soon">SETUP</span></button>
+    <button class="wallet-option wallet-unavailable" type="button" data-wallet-id="wallet-connect" disabled><span class="wallet-logo walletconnect-logo" aria-hidden="true"><svg viewBox="0 0 400 400"><circle cx="200" cy="200" fill="#3396ff" r="199.5" stroke="#66b1ff"/><path d="m122.519 148.965c42.791-41.729 112.171-41.729 154.962 0l5.15 5.022c2.14 2.086 2.14 5.469 0 7.555l-17.617 17.18c-1.07 1.043-2.804 1.043-3.874 0l-7.087-6.911c-29.853-29.111-78.253-29.111-108.106 0l-7.59 7.401c-1.07 1.043-2.804 1.043-3.874 0l-17.617-17.18c-2.14-2.086-2.14-5.469 0-7.555zm191.397 35.529 15.679 15.29c2.14 2.086 2.14 5.469 0 7.555l-70.7 68.944c-2.139 2.087-5.608 2.087-7.748 0l-50.178-48.931c-.535-.522-1.402-.522-1.937 0l-50.178 48.931c-2.139 2.087-5.608 2.087-7.748 0l-70.7015-68.945c-2.1396-2.086-2.1396-5.469 0-7.555l15.6795-15.29c2.1396-2.087 5.6085-2.087 7.7481 0l50.1789 48.932c.535.522 1.402.522 1.937 0l50.177-48.932c2.139-2.087 5.608-2.087 7.748 0l50.179 48.932c.535.522 1.402.522 1.937 0l50.179-48.931c2.139-2.087 5.608-2.087 7.748 0z" fill="#fff" stroke="none"/></svg></span><span class="wallet-option-name"><strong>WalletConnect</strong><small id="walletconnect-caption">Not configured · Project ID required</small></span><span class="wallet-soon" id="walletconnect-badge">SETUP</span></button>
   </div>
+  <section class="walletconnect-pairing" id="walletconnect-pairing" aria-label="WalletConnect pairing" hidden>
+    <h3>Connect your wallet</h3>
+    <p>Scan with a NEAR testnet-compatible wallet, or open your wallet app on this phone.</p>
+    <div class="walletconnect-qr" id="walletconnect-qr" hidden><canvas id="walletconnect-canvas" role="img" aria-label="WalletConnect pairing QR code"></canvas></div>
+    <div class="walletconnect-actions">
+      <a class="walletconnect-action primary" id="walletconnect-open" hidden>Open wallet app</a>
+      <button class="walletconnect-action" id="walletconnect-copy" type="button" hidden>Copy pairing code</button>
+      <button class="walletconnect-action" id="walletconnect-cancel" type="button">Back to wallets</button>
+    </div>
+    <p class="walletconnect-warning">Keep the pairing code private. This connection only requests your testnet account, not a transaction or access key.</p>
+  </section>
   <p id="wallet-dialog-status" class="wallet-dialog-status" role="status" aria-live="polite">Getting your wallet options ready…</p>
   <a id="wallet-open-site" class="wallet-open-site" href="https://bouncer-near.vercel.app/#connect" target="_blank" rel="noopener noreferrer" hidden>Open Bouncer in a new tab <svg><use href="#i-external"/></svg></a>
   <button id="wallet-disconnect" class="button wallet-disconnect" type="button" hidden>Disconnect wallet</button>
-  <div class="wallet-safety"><svg><use href="#i-lock"/></svg><span>Account display only. No vault, spending access, or transaction. NEAR Mobile uses an off-chain login message. Never share your seed phrase. <a href="./intear-wallet-source.zip">Intear adapter source</a> (AGPL-3.0).</span></div>
+  <div class="wallet-safety"><svg><use href="#i-lock"/></svg><span>Account display only. No vault, spending access, or transaction. NEAR Mobile uses an off-chain login message. Never share your seed phrase. <a href="./intear-wallet-source.zip">Intear adapter source</a> (AGPL-3.0) · <a href="./walletconnect-NOTICES.txt">WalletConnect notices</a>. Portions © 2025 Reown, Inc. All Rights Reserved.</span></div>
 </dialog>
   <dialog class="tour-dialog" id="welcome-tour" aria-labelledby="tour-title" aria-describedby="tour-description"><div class="tour-topline"><span class="brand-mark" aria-hidden="true"><svg viewBox="16 17 300 300"><use href="#i-bouncer"/></svg></span><span class="tour-count" id="tour-count">STEP 1 OF 4</span><button type="button" class="tour-close" id="tour-skip" aria-label="Close the tour">×</button></div><div class="tour-progress" aria-hidden="true"><span></span><span></span><span></span><span></span></div><div class="tour-copy" aria-live="polite"><div class="section-kicker" id="tour-kicker">WELCOME TO BOUNCER</div><h2 id="tour-title">Meet your resource agent.</h2><p id="tour-description">Bouncer helps an agent get compute, storage and API services while your on-chain rules guard its spending.</p><div class="tour-callout" id="tour-callout">Bouncer is a testnet prototype, not an open marketplace.</div></div><div class="tour-actions"><button class="button tour-back" type="button" id="tour-back" disabled>Back</button><button class="button wallet-button" type="button" id="tour-next">Next →</button></div></dialog>
   <script type="module" src="./app.mjs?v=4"></script>
-  <script type="module" src="./wallet.bundle.js?v=6"></script>
+  <script type="module" src="./wallet.bundle.js?v=7"></script>
 </body>
 </html>

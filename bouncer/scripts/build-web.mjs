@@ -1,8 +1,67 @@
 // Bundle the exact pinned NEAR Connect package for the dependency-free static site.
 import { build } from 'esbuild';
+import fs from 'node:fs';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = fileURLToPath(new URL('../', import.meta.url));
+// WalletConnect is loaded separately and only when configured. Build from its
+// own lockfile so unrelated agent/research dependencies stay independent.
+const walletConnect = await build({
+  absWorkingDir: here,
+  entryPoints: ['walletconnect/entry.mjs'],
+  outfile: 'web/walletconnect.bundle.js',
+  bundle: true,
+  format: 'esm',
+  platform: 'browser',
+  target: ['es2020'],
+  minify: true,
+  metafile: true,
+  legalComments: 'inline',
+  define: { 'process.env.DISABLE_GLOBAL_CORE': '"true"' },
+  banner: { js: '/* Bouncer WalletConnect component. Portions © 2025 Reown, Inc. All Rights Reserved. See walletconnect-NOTICES.txt. */' },
+});
+// Collect the exact licenses of bundled npm inputs, including Reown's
+// community license and the required attribution. Keep this deterministic.
+const packages = new Map();
+for (const input of Object.keys(walletConnect.metafile.inputs)) {
+  let dir = path.dirname(path.resolve(here, input));
+  while (dir.includes(`${path.sep}node_modules${path.sep}`)) {
+    const manifest = path.join(dir, 'package.json');
+    if (fs.existsSync(manifest)) {
+      const metadata = JSON.parse(fs.readFileSync(manifest, 'utf8'));
+      if (metadata.name && metadata.version) {
+        const licenseFiles = fs.readdirSync(dir).sort().filter(name => /^(?:licen[sc]e|copying)(?:[-._].*)?$/i.test(name));
+        // The published uint8arrays 3.1.1 tarball omits its MIT text. The
+        // vendored override is upstream's LICENSE-MIT blob 72dc60d8.
+        if (!licenseFiles.length && metadata.name === 'uint8arrays' && metadata.version === '3.1.1') {
+          packages.set(`${metadata.name}@${metadata.version}`, fs.readFileSync(path.join(here, 'walletconnect/license-overrides/uint8arrays-3.1.1.txt'), 'utf8').trim());
+        } else {
+          if (!licenseFiles.length) throw new Error(`No license file for ${metadata.name}`);
+          const license = licenseFiles.map(name => fs.readFileSync(path.join(dir, name), 'utf8').replace(/\r\n/g, '\n').trim()).join('\n\n');
+          packages.set(`${metadata.name}@${metadata.version}`, license);
+        }
+        break;
+      }
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+}
+const groups = new Map();
+for (const [name, license] of [...packages.entries()].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) {
+  if (!groups.has(license)) groups.set(license, []);
+  groups.get(license).push(name);
+}
+const notices = [
+  'WalletConnect component third-party notices',
+  'Portions © 2025 Reown, Inc. All Rights Reserved.',
+  '',
+  ...[...groups.entries()].map(([license, names]) => `${names.join(', ')}\n${'-'.repeat(72)}\n${license}\n`),
+].join('\n');
+fs.writeFileSync(path.join(here, 'web/walletconnect-NOTICES.txt'), notices.trimEnd() + '\n');
+
 // Intear is a separately loaded AGPL-3.0 component, built from its vendored,
 // pinned upstream sources. Its corresponding source is offered on the site.
 await build({

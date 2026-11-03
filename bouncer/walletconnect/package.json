@@ -1,0 +1,10 @@
+{
+  "name": "bouncer-walletconnect-client",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@walletconnect/sign-client": "2.26.0",
+    "qrcode": "1.5.4"
+  }
+}

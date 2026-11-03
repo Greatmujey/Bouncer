@@ -52,13 +52,42 @@ The Mobile adapter’s generic “Sign transaction” button is relabeled “Ope
 Mobile” in Bouncer’s message-only flow, after the original executor bytes have
 passed their integrity check. The signed payload itself is unchanged.
 
-WalletConnect is explicitly shown as unavailable: the site does not yet have a
-WalletConnect/Reown project ID or client integration. A project ID alone would
-not enable it. In particular, do not borrow another project's ID or use the
-upstream adapter's transaction-capable namespace without reviewing permissions.
-The Ethereum-wallet bridge is also omitted because its current sign-in may
-onboard an account with an AddKey transaction, contrary to this identity-only
-connection policy.
+WalletConnect uses a separately bundled SignClient and is available only when
+an owned Reown project ID is configured. It proposes **only** `near:testnet`
+and `near_getAccounts`, displays the approved wallet-reported CAIP account, and
+never sends a wallet RPC request or asks for transaction signing, `near_signIn`,
+`near_signOut`, or an access key. A wallet granting extra methods or networks
+is rejected; a broader session update closes the connection. Pairing material
+and the session stay in tab memory and are discarded on reload or disconnect.
+The pairing QR and mobile `wc:` link are bearer secrets: share them only with
+your chosen wallet. Cancellation is best effort on the remote wallet; check its
+own session list if in doubt. This is account display, **not proof of ownership**.
+Not every WalletConnect wallet supports NEAR testnet or this minimal namespace;
+no real WalletConnect wallet session has been verified yet. Without an ID the
+picker accurately says setup is required. Do not borrow another project's ID.
+
+To enable the deployed site, the owner creates a project at
+`https://dashboard.reown.com/sign-up`, copies its public **Project ID**, and
+allowlists `https://bouncer-near.vercel.app` in the dashboard. Allowlist changes
+can take up to 15 minutes. Set `BOUNCER_WALLETCONNECT_PROJECT_ID` as a Vercel
+production build environment variable and redeploy. Staging validates the
+32-hex identifier and generates `walletconnect-config.json`; it is public in
+the browser and is not a wallet credential. Never put a password, seed phrase,
+private key or dashboard API key there. The source template stays blank.
+
+The separately pinned `@walletconnect/sign-client` 2.26.0 includes Reown's
+**WalletConnect Community License**, not Apache-2.0. Its redistribution notice
+and complete license are included in `walletconnect-NOTICES.txt` and linked in
+the picker. The license includes network, usage, commercial-threshold and
+dispute-resolution terms; the project owner should review it and Reown's terms
+before enabling. The WalletConnect icon comes from its official brand toolkit
+(Git blob `d90457adfdfffa9394fbacfd9632ff650ffe5396`); it does not imply an
+endorsement. No payment has been made. `npm audit` found no reported
+vulnerabilities in the locked WalletConnect dependency tree on 3 November 2026;
+that is not an independent security audit.
+
+The Ethereum-wallet bridge is omitted because its current sign-in may onboard
+an account with an AddKey transaction, contrary to this identity-only policy.
 
 The dedicated `https://bouncer-near.vercel.app/` origin is explicitly approved
 for wallet connection. Hosting on Vercel is not itself a security audit: the
@@ -96,15 +125,17 @@ lightened against the dark sidebar.
 
 ```sh
 npm ci --prefix bouncer
+npm ci --prefix bouncer/walletconnect
 npm run build:web --prefix bouncer
-node --test bouncer/tests/wallet.test.mjs bouncer/tests/web.test.mjs bouncer/tests/public-web-staging.test.mjs
+node --test bouncer/tests/wallet.test.mjs bouncer/tests/walletconnect.test.mjs bouncer/tests/web.test.mjs bouncer/tests/public-web-staging.test.mjs
 ```
 
 Vercel’s `bouncer` project uses `bouncer/web` as its root and
 `node ../scripts/stage-public-web.mjs public-site` as its build command. Staging
-copies only twelve explicit public assets, including the bundled connector, local
-font and its OFL license, and the Intear executor and corresponding source. It
-rejects symlinks, existing output directories and any wallet-origin override
+copies only fifteen explicit public assets, including the bundled connectors,
+WalletConnect notices and public configuration, local font and its OFL license,
+and the Intear executor and corresponding source. It rejects symlinks, existing
+output directories, invalid project IDs and any wallet-origin override
 other than the exact dedicated origin. It does not publish checkout files,
 credentials, journals or private evidence.
 `bouncer/web/vercel.json` sets basic response headers; no production-ready

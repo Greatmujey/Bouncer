@@ -38,12 +38,13 @@ jobs:
         with:
           node-version: '22'
       - run: npm ci --no-audit --no-fund
+      - run: npm ci --prefix walletconnect --no-audit --no-fund
       # Fail quickly on browser or asset regressions before the broader suite.
       - name: Check committed wallet bundles and source archive
         run: |
           npm run build:web
           python3 scripts/build-intear-source.py
-          git diff --exit-code -- web/wallet.bundle.js web/intear-wallet.executor.js web/intear-wallet-source.zip
+          git diff --exit-code -- web/wallet.bundle.js web/walletconnect.bundle.js web/walletconnect-NOTICES.txt web/intear-wallet.executor.js web/intear-wallet-source.zip
       - name: Test onboarding, mobile layout and testnet wallet UI
         env:
           GH_TOKEN: ${{ github.token }}

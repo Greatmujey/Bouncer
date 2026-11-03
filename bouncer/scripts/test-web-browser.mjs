@@ -19,7 +19,7 @@ const playwrightPath = process.env.BOUNCER_PLAYWRIGHT_PATH || path.join(process.
 const { chromium } = await import(pathToFileURL(path.resolve(playwrightPath)));
 const executablePath = process.env.CHROMIUM_PATH || ['/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/usr/bin/chromium', '/usr/bin/chromium-browser'].find(fs.existsSync);
 if (!executablePath) throw new Error('No Chromium executable found');
-const types = { '.html': 'text/html', '.css': 'text/css', '.mjs': 'text/javascript', '.js': 'text/javascript', '.svg': 'image/svg+xml', '.jpg': 'image/jpeg', '.woff2': 'font/woff2', '.txt': 'text/plain', '.zip': 'application/zip' };
+const types = { '.html': 'text/html', '.css': 'text/css', '.mjs': 'text/javascript', '.js': 'text/javascript', '.json': 'application/json', '.svg': 'image/svg+xml', '.jpg': 'image/jpeg', '.woff2': 'font/woff2', '.txt': 'text/plain', '.zip': 'application/zip' };
 const allowed = new Set(PUBLIC_WEB_FILES);
 const httpServer = http.createServer((req, res) => {
   const filename = new URL(req.url, 'http://localhost').pathname.slice(1) || 'index.html';
@@ -114,10 +114,10 @@ try {
       await page.locator('.top-connect').click();
       const picker = page.locator('#wallet-dialog');
       assert.equal(await picker.evaluate(el => el.open), true);
-      assert.equal(await page.locator('[data-wallet-id]').count(), 6);
+      assert.equal(await page.locator('[data-wallet-id]').count(), 7);
       assert.equal(await page.locator('[data-wallet-id="near-mobile"]').isEnabled(), true);
       assert.equal(await page.locator('[data-wallet-id="meteor-wallet"]').isEnabled(), true);
-      assert.equal(await page.getByRole('button', { name: 'WalletConnect, setup required' }).isDisabled(), true);
+      assert.equal(await page.locator('[data-wallet-id="wallet-connect"]').isDisabled(), true, 'blank configuration must not connect');
       assert.match(await page.locator('#wallet-dialog-description').innerText(), /login message/);
       if (process.env.BOUNCER_SCREENSHOTS) await page.screenshot({ path: path.join(process.env.BOUNCER_SCREENSHOTS, `wallet-picker-${width}.png`) });
       for (let i = 0; i < 5; i++) {
@@ -501,6 +501,63 @@ try {
     }
     console.log('Wallet executor outage and tampered response fail closed; poisoned IndexedDB is ignored.');
   } finally { await browserError.close(); }
+
+  // Render the actual bundled QR library with a synthetic WalletConnect
+  // client. No Reown relay or real wallet is contacted by this browser test.
+  const wcBrowser = await chromium.launch({ executablePath, args: browserArgs, headless: true });
+  try {
+    const page = await wcBrowser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+    const errors = [], writes = []; let bundleLoads = 0;
+    page.on('pageerror', error => errors.push(error.message));
+    page.on('request', request => { if (!['GET', 'HEAD'].includes(request.method())) writes.push(request.url()); });
+    await page.route('**/walletconnect-config.json', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ projectId: '1234567890abcdef1234567890abcdef' }) }));
+    await page.route('**/walletconnect.bundle.js?*', route => {
+      if (route.request().url().includes('?real-fixture')) return route.continue();
+      bundleLoads++;
+      const body = `import { renderPairingCode } from './walletconnect.bundle.js?real-fixture';
+        export { renderPairingCode };
+        export async function connect(options) {
+          window.__wcApprove = null;
+          window.__wcInputs = { projectId: options.projectId, origin: options.origin };
+          await options.onUri('wc:' + 'a'.repeat(64) + '@2?relay-protocol=irn&symKey=' + 'b'.repeat(64));
+          return new Promise((resolve, reject) => {
+            options.signal.addEventListener('abort', () => reject(new Error('cancelled')), { once: true });
+            window.__wcApprove = () => resolve({ accountId: 'synthetic.testnet', async disconnect() { window.__wcDisconnected = true; } });
+          });
+        }`;
+      return route.fulfill({ status: 200, contentType: 'text/javascript', body });
+    });
+    await page.goto(url, { waitUntil: 'networkidle' });
+    await page.waitForFunction(() => !document.querySelector('[data-wallet-id="wallet-connect"]').disabled);
+    assert.equal(bundleLoads, 0, 'WalletConnect code is lazy-loaded');
+    await page.locator('.top-connect').click();
+    await page.locator('[data-wallet-id="wallet-connect"]').click();
+    await page.locator('#walletconnect-qr').waitFor({ state: 'visible' });
+    assert.equal(bundleLoads, 1);
+    assert.match(await page.locator('#walletconnect-open').getAttribute('href'), /^wc:[a-f0-9]{64}@2\?/);
+    assert.equal(await page.evaluate(() => {
+      const canvas = document.querySelector('#walletconnect-canvas');
+      const rgba = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data;
+      let dark = 0, light = 0;
+      for (let i = 0; i < rgba.length; i += 4) { if (rgba[i] < 80) dark++; if (rgba[i] > 230) light++; }
+      return dark > 500 && light > 500;
+    }), true, 'real QR library renders visible dark and light modules');
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'pairing view does not overflow');
+    await page.locator('#walletconnect-cancel').click();
+    await page.locator('[data-wallet-id="wallet-connect"]').waitFor({ state: 'visible' });
+    assert.match(await page.locator('#wallet-dialog-status').innerText(), /cancelled/i);
+    assert.equal(await page.locator('#walletconnect-open').getAttribute('href'), null, 'pairing secret is removed on cancel');
+    await page.locator('[data-wallet-id="wallet-connect"]').click();
+    await page.locator('#walletconnect-qr').waitFor({ state: 'visible' });
+    await page.waitForFunction(() => typeof window.__wcApprove === 'function');
+    await page.evaluate(() => window.__wcApprove());
+    await page.waitForFunction(() => document.querySelector('#wallet-status').textContent.includes('synthetic.testnet'));
+    await page.locator('.top-connect').click();
+    await page.locator('#wallet-disconnect').click();
+    assert.equal(await page.evaluate(() => window.__wcDisconnected), true);
+    assert.deepEqual(errors, []); assert.deepEqual(writes, []);
+    console.log('Synthetic WalletConnect pairing rendered the real QR library, cancelled and disconnected; no live relay or wallet was tested.');
+  } finally { await wcBrowser.close(); }
 
   const browser2 = await chromium.launch({ executablePath, args: browserArgs, headless: true });
   try {
