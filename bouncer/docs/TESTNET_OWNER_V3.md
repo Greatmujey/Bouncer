@@ -66,10 +66,14 @@ private journal and must never be resent. A keyless vault can permanently lock
 its testnet storage stake. The user-confirmed recovery ZIP copy was not
 machine-verified, and V12 remains unaudited.
 
-At that view the owner still held 6,898 Circle test-USDC atoms, but the vault
-was not registered for Circle and its tracked Circle balance was zero. Vault
-funding and independent paid compute, storage and data delivery remain separate
-steps requiring fresh checks and original-hash recovery.
+The vault's subsequent Circle storage registration original
+[`Aob1vuBzJ8iMp2JvvzqpJ4dTS2bbbbGp1jUgBqYma5k1`](https://testnet.nearblocks.io/txns/Aob1vuBzJ8iMp2JvvzqpJ4dTS2bbbbGp1jUgBqYma5k1)
+was [verified at FINAL](https://github.com/Greatmujey/Bouncer/actions/runs/41642256912)
+with fence `13233651211`. Never resend it. At that view the owner still held
+6,898 Circle test-USDC atoms and the vault's actual and tracked Circle
+balances were zero. Registration alone is not funding or delivery; the
+0.00125 test-NEAR Circle storage deposit may remain locked. Vault funding and
+independent paid compute, storage and data delivery remain separate steps.
 
 The V12 Circle registration and funding path [passed an isolated nearcore
 rehearsal](https://github.com/Greatmujey/Bouncer/actions/runs/41641922746),
