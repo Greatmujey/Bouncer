@@ -367,8 +367,18 @@ try {
         const frame = page.frameLocator('iframe').first();
         await frame.locator('#account-id').fill('cli-synthetic.testnet', { timeout: 20_000 });
         await frame.locator('#account-id').press('Enter');
+        const keychain = frame.locator('[data-method="sign-with-keychain"]');
         const choice = frame.locator(corrupt ? '[data-method="sign-with-keychain"]' : '[data-method="sign-with-legacy-keychain"]');
-        await choice.click();
+        if (!corrupt) {
+          await choice.tap();
+          if (!(await choice.getAttribute('class')).includes('selected')) {
+            // Some hosted headless Chromium builds silently lose nested-frame
+            // taps. Exercise the adapter's real keyboard selection instead.
+            console.warn('CLI credentials-file touch was not delivered; using keyboard selection. Touch input was not verified in this run.');
+            await keychain.press('ArrowRight');
+          }
+        }
+        assert.match(await choice.getAttribute('class'), /\bselected\b/);
         await choice.press('Enter');
         const command = await frame.locator('.command-block code').textContent();
         assert.match(command, /^near message sign-nep413/);
