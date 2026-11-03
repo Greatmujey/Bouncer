@@ -51,9 +51,9 @@ FT and local receiver stand-in, using ephemeral keys and a fenced loopback RPC.
 The [first run](https://github.com/Greatmujey/Bouncer/actions/runs/41631645132)
 passed: it created a prepaid route before an exact token/payee reservation,
 rejected the stale project without a provider call or debit, and executed a
-one-shot exact transfer while rejecting replay. The workflow also now includes
-zero-yocto and non-owner policy-escalation checks; check the run of that change
-separately. This is not testnet, real Circle or OutLayer, independent provider
-delivery, or an audit. The V12 WASM marker only catches wrong inputs; the build
-is not yet reproducible. A durable owner recovery path, independent provider
-compatibility and genuine delivery also remain necessary.
+one-shot exact transfer while rejecting replay. A [second run](https://github.com/Greatmujey/Bouncer/actions/runs/41631892731)
+also passed the zero-yocto and non-owner policy-escalation checks. This is not
+testnet, real Circle or OutLayer, independent provider delivery, or an audit.
+The V12 WASM marker only catches wrong inputs; the build is not yet reproducible.
+A durable owner recovery path, independent provider compatibility and genuine
+delivery also remain necessary.
