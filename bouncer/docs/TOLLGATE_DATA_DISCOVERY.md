@@ -105,8 +105,16 @@ an estimated **1.232022 test-NEAR shortfall**. V12's calculated native surplus
 was at most 0.57903 test NEAR at that snapshot; even recovering all of that
 hypothetically leaves roughly 0.652992 test NEAR short of the plan. This is an
 upper bound, not a withdrawal authorization or a fee guarantee. Circle actual
-and tracked balances remained 6,898 atoms. No money was moved. Do not assume
-the V12 balance is liquid or use an earlier owner.
+and tracked balances remained 6,898 atoms. That snapshot itself moved no
+funds. Do not assume the V12 balance is liquid or use an earlier owner.
+
+**Update:** a later, separately fenced testnet faucet transfer added 5 test
+NEAR to V3; its [FINAL original and cleanup](V3_NATIVE_FAUCET_RECOVERY.md) are
+verified, and an indexed view subsequently showed approximately 8.969798 test
+NEAR in the owner. The pre-transfer shortfall above is historical, not the
+current estimate. The transfer used a temporary faucet signer, not the V3
+owner key. A fresh pinned funding estimate is still required; the original V3
+owner bearers remain unresolved, and custody has not been restored.
 
 `agent/tollgate-quakes-v13.mjs` prepares a deterministic owner review of one
 fixed quakes GET, 0.001 test-NEAR price and 0.02 test-NEAR channel budget. It

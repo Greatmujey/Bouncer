@@ -1,5 +1,30 @@
 # One-shot V3 native testnet faucet
 
+## Verified result — 3 November 2026
+
+The [one-shot run](https://github.com/Greatmujey/Bouncer/actions/runs/41660453785)
+verified a **5 test-NEAR** transfer to the existing V3 owner at FINAL:
+[`258oxSL3Ckh86mD8ttz3xSBvuKJhiQwstWX8wvKhvwG1`](https://testnet.nearblocks.io/txns/258oxSL3Ckh86mD8ttz3xSBvuKJhiQwstWX8wvKhvwG1).
+The temporary faucet account was then deleted and its remainder returned to
+the faucet in the separately verified original
+[`9Tz7qx9eBqmmXZSq7s44T3HGjGRdGbT6Z7HWs2f4QRYo`](https://testnet.nearblocks.io/txns/9Tz7qx9eBqmmXZSq7s44T3HGjGRdGbT6Z7HWs2f4QRYo).
+The linked faucet payout was 4.9996742601375 test NEAR. A separate system gas
+refund to the already-deleted temporary account failed and was burned; the
+run did not hide that failed receipt. Public original-hash checks were
+published before both sends, and encrypted pre-helper recovery artifact
+`13241327993` was retained. Never resend these originals or repeat the helper.
+
+At a subsequent public indexed view, the V3 owner held approximately
+8.969798252555469399999998 test NEAR. That view is not a pinned FINAL funding
+estimate. The previous ~1.232022 test-NEAR shortfall was computed before the
+transfer and is no longer current; recheck the conservative plan at FINAL.
+The V3 owner key was not accessed, its saved backup was not machine-verified,
+and **no owner transaction was signed**. The earlier unresolved owner-signed
+bearers remain unresolved; this top-up does not authorize other owner signing.
+It did not fund Circle, deploy V13, contact a seller or demonstrate delivery.
+
+## Recovery and safety design
+
 This is **only a testnet-native funding attempt**, not Circle USDC, vault
 creation, a provider purchase or delivery. The recipient is the existing V3
 owner. The caller never receives or uses its owner private key and does not
