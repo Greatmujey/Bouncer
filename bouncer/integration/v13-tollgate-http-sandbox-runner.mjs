@@ -21,6 +21,7 @@ import {TOLLGATE_RESOURCE} from '../agent/tollgate-v12-readiness.mjs';
 import {TollgateResponseStore} from '../agent/tollgate-response-store.mjs';
 import {corroborateTollgateQuakes} from '../agent/tollgate-quakes-corroboration.mjs';
 import {inspectTollgateSettlement} from '../agent/tollgate-settlement-verification.mjs';
+import {createTollgateTestnetKeys,readTollgateTestnetKeys} from '../agent/tollgate-testnet-keys.mjs';
 
 const fixture=process.env.BOUNCER_TOLLGATE_SELLER_FIXTURES;
 const closeMode=process.env.BOUNCER_SYNTHETIC_CLOSE_MODE??'settle';
@@ -47,7 +48,11 @@ try{
    PARENT='tollgate-busel.testnet',CHANNEL=`channels.${PARENT}`,SELLER=`seller.${PARENT}`;
   const {transactions:tx,KeyPair,Account,KeyPairSigner}=nearApi,TGAS=10n**12n,NEAR=10n**24n;
   const key=()=>KeyPair.fromRandom('ed25519'),pub=k=>String(k.getPublicKey());
-  const ownerKey=key(),agentKey=key(),voucherKey=key(),parentKey=key(),sellerKey=key();
+  const ownerKey=key(),parentKey=key(),sellerKey=key();
+  const ownerPlan={version:1,purpose:'new-bouncer-testnet-owner',network:'testnet',account_id:OWNER,public_key:pub(ownerKey)};
+  const keyDirectory=path.join(rootDir,'synthetic-tollgate-keys');
+  const keyPlan=createTollgateTestnetKeys({directory:keyDirectory,ownerPlan}).plan;
+  const {agentKey,voucherKey}=readTollgateTestnetKeys({directory:keyDirectory,ownerPlan,plan:keyPlan});
   const account=(id,k)=>new Account(id,p,new KeyPairSigner(k));
   const root=new Account(ROOT,p,new KeyPairSigner(sandbox.rootKey)),owner=account(OWNER,ownerKey),agent=account(OWNER,agentKey),
    parent=account(PARENT,parentKey),seller=account(SELLER,sellerKey);
@@ -68,7 +73,6 @@ try{
   await call(owner,VAULT,'allow_payee',{policy_id:'data',payee:SELLER},1n);
   await call(owner,VAULT,'grant_agent_key',{policy_id:'data',public_key:pub(agentKey)},1n);
   const block=await p.viewBlock({finality:'final'}),expiry=(BigInt(block.header.timestamp_nanosec)/1_000_000n+120_000n).toString();
-  const ownerPlan={version:1,purpose:'new-bouncer-testnet-owner',network:'testnet',account_id:OWNER,public_key:pub(ownerKey)};
   const review=makeTollgateQuakesReview({ownerPlan,intentId:'local-quakes-http',agentPublicKey:pub(agentKey),voucherPublicKey:pub(voucherKey),expiresAtMs:expiry});
   await call(owner,VAULT,'set_tollgate_intent',{intent_id:review.intent_id,policy_id:review.policy_id,amount:CHANNEL_BUDGET_YOCTO,
    agent_public_key:review.agent_public_key,voucher_public_key:review.voucher_public_key,review_hash:tollgateQuakesReviewHash(review),
@@ -174,7 +178,8 @@ try{
   assert.equal(await view(VAULT,'daily_spent',{policy_id:'data'}),CHANNEL_BUDGET_YOCTO);
   console.log(JSON.stringify({scope:'disposable local nearcore, pinned published seller SDK and synthetic response only',
    live_provider_contacted:false,public_chain_transaction:false,independent_data_verified:false,circle_payment:false,
-   owner_review_hash_pinned:true,one_yocto_owner_policy:true,restricted_agent:true,channel_verified:true,
+   owner_review_hash_pinned:true,one_yocto_owner_policy:true,synthetic_encrypted_agent_and_voucher_keys:true,
+   restricted_agent:true,channel_verified:true,
    one_fenced_http_voucher:true,replay_refused:true,local_seller_acknowledged:true,local_data_returned:true,
    exact_response_retained:true,synthetic_upstream_comparison_passed:true,
    no_false_settlement_claim_before_chain:true,local_seller_settled:true,final_receipt_graph_and_detached_payout_verified:true,

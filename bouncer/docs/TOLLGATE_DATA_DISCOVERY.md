@@ -149,7 +149,11 @@ fence alone is not cross-session protection. The client now defaults to live
 mode and refuses a local-only fence before contacting the seller. Its explicit
 `synthetic` mode allows an injected test transport; the caller is responsible
 for ensuring that transport cannot reach a real seller, so never use this mode
-for a real purchase. Live mode also requires a private `TollgateResponseStore`
+for a real purchase. `tollgate-testnet-keys.mjs` can prepare distinct agent
+and voucher keys offline, encrypted locally with a wrapping key stored beside
+them. Preparation does not install an access key, grant policy authority, sign
+a transaction or contact the seller; those files are not an independent
+backup. Live mode also requires a private `TollgateResponseStore`
 that fsyncs the exact received response bytes and a SHA-256 digest before the
 client reports retained data. It is a local file, not an off-device backup;
 if retention fails after voucher exposure, do not retry the paid request. The
