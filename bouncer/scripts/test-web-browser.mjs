@@ -669,6 +669,7 @@ try {
     await page.locator('[data-wallet-id="wallet-connect"]').click();
     await page.locator('#walletconnect-qr').waitFor({ state: 'visible' });
     assert.equal(bundleLoads, 1);
+    assert.match(await page.locator('.walletconnect-warning').innerText(), /encrypted messages pass through Bouncer’s server.*pairing keys stay in your browser/i, 'gateway trust is disclosed');
     assert.match(await page.locator('#walletconnect-open').getAttribute('href'), /^wc:[a-f0-9]{64}@2\?/);
     assert.equal(await page.evaluate(() => {
       const canvas = document.querySelector('#walletconnect-canvas');

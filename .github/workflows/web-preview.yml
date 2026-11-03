@@ -3,6 +3,13 @@ name: One-shot public website preview
 on:
   push:
     branches: [main, 'arena/**']
+  workflow_dispatch:
+    inputs:
+      gateway_test_host:
+        description: 'Temporary Vercel gateway host for synthetic-only relay smoke'
+        required: false
+        type: string
+        default: ''
 
 # This job only runs on an explicit marker. The guest upload is public and
 # temporary; it never changes the visibility of the private repository.
@@ -159,9 +166,20 @@ jobs:
             poison: '1'
             short: '1'
           - os: windows-latest
-            mode: both-relays-blocked
+            mode: all-transports-blocked
             block: '0'
             block_both: '1'
+            short: '1'
+          - os: ubuntu-latest
+            mode: local-gateway
+            block: '0'
+            block_both: '1'
+            gateway_local: '1'
+          - os: windows-latest
+            mode: local-gateway
+            block: '0'
+            block_both: '1'
+            gateway_local: '1'
             short: '1'
     name: WalletConnect candidate (${{ matrix.os }}, ${{ matrix.mode }})
     runs-on: ${{ matrix.os }}
@@ -181,6 +199,7 @@ jobs:
           BOUNCER_CANDIDATE_SITE: '1'
           BOUNCER_BLOCK_PRIMARY_WC: ${{ matrix.block }}
           BOUNCER_BLOCK_BOTH_WC: ${{ matrix.block_both || '0' }}
+          BOUNCER_GATEWAY_LOCAL: ${{ matrix.gateway_local || '0' }}
           BOUNCER_POISON_BUFFER: ${{ matrix.poison || '0' }}
           BOUNCER_SHORT_VIEWPORT: ${{ matrix.short || '0' }}
         run: |
@@ -194,6 +213,37 @@ jobs:
             node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-2000).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=WalletConnect candidate probe failed::"+s)' "$RUNNER_TEMP/bouncer-wc-candidate.log"
           fi
           exit "$result"
+
+  walletconnect-vercel-gateway-smoke:
+    # Manually target an isolated test deployment with throwaway synthetic
+    # sessions only. The approved production site is not changed by this job.
+    if: github.event_name == 'workflow_dispatch' && inputs.gateway_test_host != ''
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    name: Test Vercel gateway (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 7
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Pair and disconnect with both direct relay hosts blocked
+        shell: bash
+        env:
+          BOUNCER_CANDIDATE_SITE: '1'
+          BOUNCER_BLOCK_BOTH_WC: '1'
+          BOUNCER_GATEWAY_TEST_HOST: ${{ inputs.gateway_test_host }}
+        run: |
+          npm ci --prefix bouncer/walletconnect --no-audit --no-fund
+          npm install --prefix "$RUNNER_TEMP/bouncer-browser" --no-save --no-audit --no-fund playwright-core@1.64.1
+          node bouncer/scripts/test-walletconnect-real-session.mjs
 
   walletconnect-session-smoke:
     # Approve only a synthetic testnet-account session over the real relay; no
@@ -221,9 +271,20 @@ jobs:
             poison: '1'
             short: '1'
           - os: windows-latest
-            mode: both-relays-blocked
+            mode: all-transports-blocked
             block: '0'
             block_both: '1'
+            short: '1'
+          - os: ubuntu-latest
+            mode: deployed-gateway
+            block: '0'
+            block_both: '1'
+            gateway_live: '1'
+          - os: windows-latest
+            mode: deployed-gateway
+            block: '0'
+            block_both: '1'
+            gateway_live: '1'
             short: '1'
     name: Live WalletConnect (${{ matrix.os }}, ${{ matrix.mode }})
     runs-on: ${{ matrix.os }}
@@ -243,6 +304,7 @@ jobs:
           BOUNCER_LIVE_RETRY: '1'
           BOUNCER_BLOCK_PRIMARY_WC: ${{ matrix.block }}
           BOUNCER_BLOCK_BOTH_WC: ${{ matrix.block_both || '0' }}
+          BOUNCER_GATEWAY_LIVE: ${{ matrix.gateway_live || '0' }}
           BOUNCER_POISON_BUFFER: ${{ matrix.poison || '0' }}
           BOUNCER_SHORT_VIEWPORT: ${{ matrix.short || '0' }}
         run: |

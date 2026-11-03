@@ -232,7 +232,7 @@ test('failed relays return a bounded, sanitized error', async () => {
     projectId: PROJECT, origin: 'https://bouncer-near.vercel.app',
     createClient: config => { urls.push(config.relayUrl); throw new Error('sensitive internal error'); }, onUri() {},
   }), error => error.code === 'WC_CLIENT_INIT' && !error.message.includes('sensitive'));
-  assert.deepEqual(urls, WC_RELAY_URLS);
+  assert.deepEqual(urls, [...WC_RELAY_URLS, WC_RELAY_URLS[0]]);
 });
 
 test('pairing-creation errors are distinguished from client initialization without leaking SDK details', async () => {
@@ -244,9 +244,35 @@ test('pairing-creation errors are distinguished from client initialization witho
   }), error => error.code === 'WC_PROPOSAL_INIT' && !error.message.includes('secret'));
 });
 
-test('two stalled startup attempts report a bounded timeout, not a claimed cause', async () => {
+test('stalled direct and bridge startups report a bounded timeout, not a claimed cause', async () => {
   await assert.rejects(connectWalletConnectWithFallback({
-    projectId: PROJECT, origin: 'https://bouncer-near.vercel.app', relayStartTimeoutMs: 10,
+    projectId: PROJECT, origin: 'https://bouncer-near.vercel.app', relayStartTimeoutMs: 10, bridgeStartTimeoutMs: 10,
     createClient: () => new Promise(() => {}), onUri() {},
   }), error => error.code === 'WC_START_TIMEOUT' && !error.message.includes('relay unavailable'));
+});
+
+test('the same-origin bridge is tried only after both direct relays fail and only before showing a QR', async () => {
+  const attemptConfigs = [], progress = [], bridge = fakeClient();
+  const handle = await connectWalletConnectWithFallback({
+    projectId: PROJECT, origin: 'https://bouncer-near.vercel.app',
+    createClient: config => { attemptConfigs.push(config); if (!config.useBridge) throw new Error('blocked'); return bridge.client; },
+    onProgress: value => progress.push(value), onUri() {},
+  });
+  assert.deepEqual(progress, ['primary', 'alternate', 'bridge']);
+  assert.deepEqual(attemptConfigs.map(({ relayUrl, useBridge }) => [relayUrl, useBridge]), [
+    [WC_RELAY_URLS[0], false], [WC_RELAY_URLS[1], false], [WC_RELAY_URLS[0], true],
+  ]);
+  assert.equal(attemptConfigs[0].attemptSignal.aborted, false, 'an immediately failed direct attempt never becomes a bridge');
+  assert.notEqual(attemptConfigs[2].storage, attemptConfigs[0].storage);
+  assert.equal(handle.accountId, 'alice.testnet');
+  await handle.disconnect();
+});
+
+test('a non-production development origin never uses the same-origin bridge', async () => {
+  const attempts = [];
+  await assert.rejects(connectWalletConnectWithFallback({
+    projectId: PROJECT, origin: 'http://localhost:3000',
+    createClient: config => { attempts.push(config); throw new Error('blocked'); }, onUri() {},
+  }));
+  assert.deepEqual(attempts.map(config => config.useBridge), [false, false]);
 });

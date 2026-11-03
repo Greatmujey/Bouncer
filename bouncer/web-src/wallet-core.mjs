@@ -101,7 +101,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
       button.disabled = !ready || busyState || connected || !allowedIds.has(button.dataset.walletId) ||
         (isWc && (!wcProjectId || typeof loadWalletConnect !== 'function' || !wcPanel || !wcQr || !wcCanvas || !wcOpen || !wcCopy || !wcCancel || !wcRetry || !wcLoading || !wcError || !wcReady));
     });
-    if (wcCaption) wcCaption.textContent = wcProjectId ? 'QR or wallet app · NEAR testnet' : 'Not configured · Project ID required';
+    if (wcCaption) wcCaption.textContent = wcProjectId ? 'NEAR testnet · encrypted fallback' : 'Not configured · Project ID required';
     if (wcBadge) wcBadge.textContent = wcProjectId ? 'CONNECT' : 'SETUP';
     disconnect.hidden = !connected; disconnect.disabled = busyState;
     if (walletTitle) walletTitle.textContent = connected ? 'Wallet connected' : wcPairing ? 'Connect your wallet' : 'Connect a wallet';
@@ -361,9 +361,14 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
       const connecting = Promise.resolve().then(() => module.connect({
         projectId: wcProjectId, origin: win.location.origin, signal: controller.signal,
         onProgress: stage => {
-          if (!controller.signal.aborted && !shown && wcAbort === controller && stage === 'alternate') {
-            if (wcProgress) wcProgress.textContent = 'Trying WalletConnect’s alternate relay…';
-            setStatus('Trying the alternate WalletConnect relay…');
+          if (!controller.signal.aborted && !shown && wcAbort === controller) {
+            if (stage === 'alternate') {
+              if (wcProgress) wcProgress.textContent = 'Trying WalletConnect’s alternate relay…';
+              setStatus('Trying the alternate WalletConnect relay…');
+            } else if (stage === 'bridge') {
+              if (wcProgress) wcProgress.textContent = 'Trying Bouncer’s encrypted relay fallback…';
+              setStatus('Trying Bouncer’s encrypted relay fallback…');
+            }
           }
         },
         onUri: async uri => {
@@ -439,7 +444,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
           title = 'WalletConnect couldn’t load';
           message = 'The WalletConnect component could not load. Check your connection and retry, or choose another wallet. Code WC-LOAD.';
         } else if (configurationRejected) {
-          message = 'WalletConnect rejected this site’s configuration. Choose another wallet while we investigate. Code WC-CONFIG.';
+          message = 'WalletConnect rejected the connection. Check your device’s date and time, or choose another wallet. Code WC-CONFIG.';
         } else if (win.navigator?.onLine === false) {
           message = 'Your browser reports that it is offline. Reconnect and retry. Code WC-OFFLINE.';
         } else if (!win.crypto?.getRandomValues || !win.crypto?.subtle) {

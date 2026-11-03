@@ -24,8 +24,26 @@ const withTimeout = (promise, ms, label) => {
   let timer;
   return Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`${label} timed out`)), ms); })]).finally(() => clearTimeout(timer));
 };
-let browser, wallet, activeTopic, pairingTopic, phase = 'browser startup';
+let browser, wallet, activeTopic, pairingTopic, bridgeServer, phase = 'browser startup';
+let bridgePort = 0;
+const localBridge = process.env.BOUNCER_GATEWAY_LOCAL === '1';
+const liveBridge = process.env.BOUNCER_GATEWAY_LIVE === '1';
+const testBridgeHost = process.env.BOUNCER_GATEWAY_TEST_HOST || '';
+const testBridge = Boolean(testBridgeHost);
 try {
+  // A dispatch-only test target receives only a throwaway synthetic session,
+  // never a real user pairing or wallet. No arbitrary protocol/path is allowed.
+  if (testBridge && (!/^[a-z0-9-]{1,63}\.vercel\.app$/.test(testBridgeHost) || process.env.BOUNCER_CANDIDATE_SITE !== '1' || process.env.BOUNCER_BLOCK_BOTH_WC !== '1')) throw new Error('Invalid test gateway');
+  if (localBridge) {
+    if (process.env.BOUNCER_CANDIDATE_SITE !== '1' || process.env.BOUNCER_BLOCK_BOTH_WC !== '1') throw new Error('Invalid bridge test mode');
+    const response = await fetch('https://bouncer-near.vercel.app/walletconnect-config.json', { signal: AbortSignal.timeout(15_000) });
+    if (!response.ok) throw new Error('Public WalletConnect configuration unavailable');
+    const { projectId } = await response.json();
+    const { createRelayBridge } = await import('../walletconnect/relay-bridge.mjs');
+    bridgeServer = createRelayBridge({ projectId });
+    await new Promise((resolve, reject) => { bridgeServer.once('error', reject); bridgeServer.listen(0, '127.0.0.1', resolve); });
+    bridgePort = bridgeServer.address().port;
+  }
   browser = await playwright.chromium.launch({ executablePath, args: ['--no-sandbox'], headless: true });
   const page = await browser.newPage(process.env.BOUNCER_SHORT_VIEWPORT === '1'
     ? { viewport: { width: 683, height: 304 }, deviceScaleFactor: 2 }
@@ -61,18 +79,25 @@ try {
   if (process.env.BOUNCER_BLOCK_PRIMARY_WC === '1' || process.env.BOUNCER_BLOCK_BOTH_WC === '1') {
     // Block relay addresses only in the dapp browser. The synthetic wallet
     // remains on .org, permitting a real cross-relay pairing test.
-    await page.addInitScript(({ blockBoth }) => {
+    await page.addInitScript(({ blockBoth, gatewayPort, gatewayLive, testHost }) => {
       const NativeWebSocket = window.WebSocket;
       window.__bouncerRelayAttempts = [];
       window.WebSocket = class extends NativeWebSocket {
         constructor(url, protocols) {
-          const hostname = new URL(url).hostname;
+          const parsed = new URL(url), hostname = parsed.hostname;
+          const gateway = hostname === 'bouncer-near.vercel.app' && parsed.pathname === '/api/wc-relay';
           if (hostname === 'relay.walletconnect.org' || hostname === 'relay.walletconnect.com') window.__bouncerRelayAttempts.push(hostname);
-          if (hostname === 'relay.walletconnect.org' || (blockBoth && hostname === 'relay.walletconnect.com')) throw new Error('Relay blocked by compatibility test');
-          if (protocols === undefined) super(url); else super(url, protocols);
+          if (gateway) window.__bouncerRelayAttempts.push('bouncer-gateway');
+          if (hostname === 'relay.walletconnect.org' || (blockBoth && hostname === 'relay.walletconnect.com') ||
+              (gateway && blockBoth && !gatewayPort && !gatewayLive && !testHost)) throw new Error('Relay blocked by compatibility test');
+          // The candidate's browser origin remains the approved production
+          // origin; only the gateway socket is sent to the test server.
+          const destination = gateway && gatewayPort ? `ws://127.0.0.1:${gatewayPort}/api/wc-relay`
+            : gateway && testHost ? `wss://${testHost}/api/wc-relay` : url;
+          if (protocols === undefined) super(destination); else super(destination, protocols);
         }
       };
-    }, { blockBoth: process.env.BOUNCER_BLOCK_BOTH_WC === '1' });
+    }, { blockBoth: process.env.BOUNCER_BLOCK_BOTH_WC === '1', gatewayPort: bridgePort, gatewayLive: liveBridge, testHost: testBridgeHost });
   }
   phase = 'site load';
   await page.goto('https://bouncer-near.vercel.app/', { waitUntil: 'networkidle', timeout: 45_000 });
@@ -95,8 +120,8 @@ try {
       !document.querySelector('#walletconnect-error').hidden, null, { timeout: 60_000 });
     if (!await page.locator('#walletconnect-qr').isVisible()) throw new Error('QR unavailable');
   };
-  if (process.env.BOUNCER_BLOCK_BOTH_WC === '1') {
-    phase = 'both-relays-blocked diagnostic and retry';
+  if (process.env.BOUNCER_BLOCK_BOTH_WC === '1' && !localBridge && !liveBridge && !testBridge) {
+    phase = 'all-transports-blocked diagnostic and retry';
     for (let attempt = 0; attempt < 2; attempt++) {
       await page.locator('#walletconnect-error').waitFor({ state: 'visible', timeout: 60_000 });
       const detail = await page.locator('#walletconnect-error-detail').innerText();
@@ -108,7 +133,7 @@ try {
     }
     await page.locator('#walletconnect-cancel').click();
     assert.equal(await page.locator('[data-wallet-id="near-mobile"]').isVisible(), true, 'other wallet options remain available');
-    console.log('Both relays were deliberately blocked: a sanitized diagnostic and retry were shown, no QR or connected state was faked.');
+    console.log('Both direct relays and the gateway were deliberately blocked: a sanitized diagnostic and retry were shown, no QR or connected state was faked.');
   } else {
   await awaitQr();
   if (process.env.BOUNCER_CANDIDATE_SITE === '1' || process.env.BOUNCER_LIVE_RETRY === '1') {
@@ -121,9 +146,10 @@ try {
     const second = await page.locator('#walletconnect-open').getAttribute('href');
     assert.ok(first && second && first !== second, 'retry must create a fresh private pairing');
     assert.deepEqual(await page.evaluate(() => Object.keys(window).filter(key => key.startsWith('_walletConnectCore_'))), [], 'SDK Core must not be cached on the browser global');
-    if (process.env.BOUNCER_BLOCK_PRIMARY_WC === '1') {
+    if (process.env.BOUNCER_BLOCK_PRIMARY_WC === '1' || localBridge || liveBridge || testBridge) {
       const attempts = await page.evaluate(() => window.__bouncerRelayAttempts);
       assert.ok(attempts.includes('relay.walletconnect.org') && attempts.includes('relay.walletconnect.com'), 'fallback tried both documented relays');
+      if (localBridge || liveBridge || testBridge) assert.ok(attempts.includes('bouncer-gateway'), 'both blocked direct relays used the disclosed gateway');
     }
   }
   const uri = await page.locator('#walletconnect-open').getAttribute('href');
@@ -161,7 +187,8 @@ try {
   activeTopic = null;
   assert.equal(await page.locator('.top-connect').getAttribute('data-wallet-state'), 'disconnected');
   assert.equal(walletRequests, 0, 'Bouncer must not invoke wallet RPC methods');
-  console.log(`${process.env.BOUNCER_CANDIDATE_SITE === '1' ? 'Candidate site' : 'Live site'} connected and disconnected a synthetic wallet over the real Reown relay${process.env.BOUNCER_BLOCK_PRIMARY_WC === '1' ? ' (primary blocked, alternate used)' : ''}; no real wallet, signature, or NEAR transaction was used.`);
+  const route = localBridge ? ' (both direct relays blocked; in-runner gateway)' : testBridge ? ' (both direct relays blocked; test Vercel gateway)' : liveBridge ? ' (both direct relays blocked; deployed gateway)' : process.env.BOUNCER_BLOCK_PRIMARY_WC === '1' ? ' (primary blocked; alternate relay)' : '';
+  console.log(`${process.env.BOUNCER_CANDIDATE_SITE === '1' ? 'Candidate site' : 'Live site'} connected and disconnected a synthetic wallet over the real Reown relay${route}; no real wallet, signature, or NEAR transaction was used.`);
   }
 } catch (error) {
   // SDK/Playwright errors can contain bearer links, auth tokens or topics. The
@@ -177,4 +204,5 @@ try {
     await withTimeout(Promise.resolve().then(() => wallet.core?.relayer?.transportClose?.()).catch(() => {}), 3000, 'Relay close').catch(() => {});
   }
   if (browser) await browser.close();
+  if (bridgeServer) await withTimeout(new Promise(resolve => bridgeServer.close(resolve)), 3000, 'Bridge close').catch(() => {});
 }

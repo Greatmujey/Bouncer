@@ -200,27 +200,31 @@ export async function connectWalletConnect({ projectId, origin, createClient, on
   }
 }
 
-// Both addresses are documented Reown relays. Retry only before a pairing URI
-// is exposed: never replay a wallet request or silently replace a visible QR.
+// Both addresses are documented Reown relays. The last resort retains the
+// canonical .org JWT audience but carries its encrypted frames via Bouncer's
+// dedicated same-origin gateway. Retry only before a pairing URI is exposed:
+// never replay a wallet request or silently replace a visible QR.
 export const WC_RELAY_URLS = Object.freeze(['wss://relay.walletconnect.org', 'wss://relay.walletconnect.com']);
-export async function connectWalletConnectWithFallback({ createClient, onUri, onProgress, signal, relayStartTimeoutMs = 18_000, ...options }) {
+export async function connectWalletConnectWithFallback({ createClient, onUri, onProgress, signal, relayStartTimeoutMs = 10_000, bridgeStartTimeoutMs = 18_000, ...options }) {
   if (typeof createClient !== 'function' || typeof onUri !== 'function') throw new Error('WalletConnect is unavailable');
   if (!isWalletConnectProjectId(options.projectId)) throw new Error('WalletConnect project ID is not configured');
   const failures = [];
-  for (const [index, relayUrl] of WC_RELAY_URLS.entries()) {
+  const attempts = WC_RELAY_URLS.map(relayUrl => ({ relayUrl, useBridge: false }));
+  if (options.origin === 'https://bouncer-near.vercel.app') attempts.push({ relayUrl: WC_RELAY_URLS[0], useBridge: true });
+  for (const [index, { relayUrl, useBridge }] of attempts.entries()) {
     if (signal?.aborted) throw new Error('WalletConnect pairing cancelled');
     const attempt = new AbortController();
     let shown = false, timedOut = false, timer;
     const abort = () => attempt.abort();
     signal?.addEventListener('abort', abort, { once: true });
     try {
-      onProgress?.(index === 0 ? 'primary' : 'alternate');
-      // Reown's own WebSocket connection timeout is 15 seconds. Do not cut a
-      // viable connection short before the SDK has had a chance to finish.
-      timer = setTimeout(() => { timedOut = true; attempt.abort(); }, relayStartTimeoutMs);
+      onProgress?.(useBridge ? 'bridge' : index === 0 ? 'primary' : 'alternate');
+      // Keep both direct tries responsive, then allow the gateway enough time
+      // for its own upstream handshake. All attempts use isolated storage.
+      timer = setTimeout(() => { timedOut = true; attempt.abort(); }, useBridge ? bridgeStartTimeoutMs : relayStartTimeoutMs);
       return await connectWalletConnect({
         ...options, signal: attempt.signal,
-        createClient: config => createClient({ ...config, relayUrl }),
+        createClient: config => createClient({ ...config, relayUrl, useBridge, attemptSignal: attempt.signal }),
         onUri: uri => { shown = true; clearTimeout(timer); return onUri(uri); },
       });
     } catch (error) {
@@ -235,7 +239,7 @@ export async function connectWalletConnectWithFallback({ createClient, onUri, on
         throw rejected;
       }
       failures.push(timedOut ? 'WC_START_TIMEOUT' : error?.code || 'WC_START_FAILED');
-      if (index === WC_RELAY_URLS.length - 1) {
+      if (index === attempts.length - 1) {
         const unavailable = new Error('WalletConnect could not prepare a pairing');
         // Expose only an allowlisted phase code, never raw SDK error text.
         unavailable.code = failures.every(value => value === 'WC_CLIENT_INIT') ? 'WC_CLIENT_INIT'

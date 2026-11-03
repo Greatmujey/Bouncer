@@ -18,6 +18,9 @@ const walletConnect = await build({
   minify: true,
   metafile: true,
   legalComments: 'inline',
+  // Lexically intercept only the SDK's WebSocket calls; the shim falls through
+  // to the native socket unless this exact Core registered a gateway JWT.
+  inject: ['walletconnect/relay-transport.mjs'],
   // The SDK also checks `typeof process`; replacing the env field alone is
   // insufficient in a browser and silently reuses a stopped global Core.
   // Keep this module-scoped shim browser-like (no Node `versions`).
@@ -32,10 +35,22 @@ const walletConnect = await build({
   },
   banner: { js: '/* Bouncer WalletConnect component. Portions © 2025 Reown, Inc. All Rights Reserved. See walletconnect-NOTICES.txt. */' },
 });
-// Collect the exact licenses of bundled npm inputs, including Reown's
+// The API function is bundled too, so Vercel's static-site project needs no
+// server-side npm install and never exposes the source tree as static files.
+const wsLicense = fs.readFileSync(path.join(here, 'walletconnect/node_modules/ws/LICENSE'), 'utf8').trim();
+const relayBridge = await build({
+  absWorkingDir: here,
+  entryPoints: ['walletconnect/relay-entry.mjs'],
+  outfile: 'web/api/wc-relay.cjs',
+  bundle: true, format: 'cjs', platform: 'node', target: ['node22'],
+  minify: true, metafile: true, legalComments: 'inline',
+  external: ['bufferutil', 'utf-8-validate'],
+  banner: { js: `/* Bouncer WalletConnect gateway; third-party notices: walletconnect-NOTICES.txt.\n${wsLicense}\n*/` },
+});
+// Collect the exact licenses of both bundled components, including Reown's
 // community license and the required attribution. Keep this deterministic.
 const packages = new Map();
-for (const input of Object.keys(walletConnect.metafile.inputs)) {
+for (const input of new Set([...Object.keys(walletConnect.metafile.inputs), ...Object.keys(relayBridge.metafile.inputs)])) {
   let dir = path.dirname(path.resolve(here, input));
   while (dir.includes(`${path.sep}node_modules${path.sep}`)) {
     const manifest = path.join(dir, 'package.json');
