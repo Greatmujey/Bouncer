@@ -18,6 +18,8 @@ import {PUBLISHED_CHANNEL_SHA256} from './v13-sandbox-tollgate.mjs';
 import {makeTollgateQuakesReview,tollgateQuakesReviewHash,purchaseTollgateQuakesOnce,TollgateVoucherFence,
  V13_VOUCHER_SHA256,CHANNEL_BUDGET_YOCTO,QUAKES_PRICE_YOCTO} from '../agent/tollgate-quakes-v13.mjs';
 import {TOLLGATE_RESOURCE} from '../agent/tollgate-v12-readiness.mjs';
+import {TollgateResponseStore} from '../agent/tollgate-response-store.mjs';
+import {corroborateTollgateQuakes} from '../agent/tollgate-quakes-corroboration.mjs';
 
 const fixture=process.env.BOUNCER_TOLLGATE_SELLER_FIXTURES;
 if(!fixture||!path.isAbsolute(fixture))throw Error('absolute pinned seller fixture path required');
@@ -106,10 +108,20 @@ try{
    });
   };
   const fenceDir=path.join(rootDir,'voucher-fence');fs.mkdirSync(fenceDir,{mode:0o700});
-  const fence=new TollgateVoucherFence(fenceDir);
-  const result=await purchaseTollgateQuakesOnce({review,provider,voucherKey,fence,fetchImpl:localFetch,executionMode:'synthetic'});
+  const evidenceDir=path.join(rootDir,'response-evidence');fs.mkdirSync(evidenceDir,{mode:0o700});
+  const fence=new TollgateVoucherFence(fenceDir),responseStore=new TollgateResponseStore(evidenceDir);
+  const result=await purchaseTollgateQuakesOnce({review,provider,voucherKey,fence,responseStore,fetchImpl:localFetch,executionMode:'synthetic'});
   assert.equal(result.status,'PROVIDER_RETURNED_DATA');assert.equal(result.settlement_verified,false);
+  assert.equal(result.response_locally_retained,true);
   assert.equal(result.data.quakes[0].id,'sandbox-synthetic-event');assert.equal(httpRequests,2);
+  // This is a synthetic comparison transport, not real USGS or live delivery.
+  const q=result.data.quakes[0],fakeSource=async(url,options)=>{
+   assert.equal(new URL(url).hostname,'earthquake.usgs.gov');assert.equal(options.method,'GET');
+   return Response.json({type:'FeatureCollection',features:[{type:'Feature',id:q.id,
+    properties:{mag:q.magnitude,place:q.place,time:Date.parse(q.time)}}]});
+  };
+  const comparison=await corroborateTollgateQuakes({review,purchase:result,responseStore,fetchImpl:fakeSource});
+  assert.equal(comparison.status,'UPSTREAM_DATA_CORROBORATED');assert.equal(comparison.settlement_verified,false);
   assert.equal((await view(CHANNEL,'get_channel',{channel_id:opened.channel_id})).settled,'0');
   await assert.rejects(purchaseTollgateQuakesOnce({review,provider,voucherKey,fence,fetchImpl:localFetch,executionMode:'synthetic'}),/EEXIST/);
   assert.equal(httpRequests,3); // second call discovers only; paid request is never repeated
@@ -129,6 +141,7 @@ try{
    live_provider_contacted:false,public_chain_transaction:false,independent_data_verified:false,circle_payment:false,
    owner_review_hash_pinned:true,one_yocto_owner_policy:true,restricted_agent:true,channel_verified:true,
    one_fenced_http_voucher:true,replay_refused:true,local_seller_acknowledged:true,local_data_returned:true,
+   exact_response_retained:true,synthetic_upstream_comparison_passed:true,
    no_false_settlement_claim_before_chain:true,local_seller_settled:true,owner_close_and_detached_refund:true,
    rolling_budget_conservative:true,v13_sha256:V13_VOUCHER_SHA256,channel_sha256:PUBLISHED_CHANNEL_SHA256},null,2));
  });

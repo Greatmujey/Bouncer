@@ -16,6 +16,7 @@ import { readPinnedJsonView } from './read-only-near-rpc.mjs';
 import { assertFreshFinalBlock } from '../shared/fresh-final-block.mjs';
 import { readBoundedBytes } from '../shared/bounded-json.mjs';
 import { isTransactionHash } from '../shared/direct-payment-settlement.mjs';
+import { TollgateResponseStore } from './tollgate-response-store.mjs';
 
 // Two matching builds from 45a6706 and an isolated local-seller lifecycle in
 // run 41653914001. This is experimental testnet code, not an audit or a live
@@ -184,7 +185,7 @@ function paymentAcknowledgement(header,channelId){
   return {seller_claimed_acceptance:true,seller_claimed_settlement_tx:claimed};
  }catch{return null}
 }
-function validQuakes(body,channelId,now){
+export function validTollgateQuakesBody(body,channelId,now){
  if(!obj(body)||body.source!=='USGS Earthquake Hazards Program, FDSN event API'||typeof body.source_url!=='string'||
   typeof body.fetched_at!=='string'||typeof body.cached!=='boolean'||!obj(body.query)||body.query.min_magnitude!==5||
   body.query.hours!==24||body.query.limit!==10||!Number.isInteger(body.count)||body.count<0||body.count>10||
@@ -207,16 +208,17 @@ function validQuakes(body,channelId,now){
  * FINAL snapshot and an exclusive durable local fence. No automatic retry,
  * account key, NEAR transaction, channel top-up or voucher rollback. The
  * caller must preserve the fence across environments, including lost replies. */
-export async function purchaseTollgateQuakesOnce({review:raw,provider,voucherKey,fence,fetchImpl=globalThis.fetch,now=Date.now,
+export async function purchaseTollgateQuakesOnce({review:raw,provider,voucherKey,fence,responseStore,fetchImpl=globalThis.fetch,now=Date.now,
  executionMode='live'}={}){
  const review=validateTollgateQuakesReview(raw);
  if(!(fence instanceof TollgateVoucherFence)||typeof fetchImpl!=='function'||typeof now!=='function'||
   !voucherKey||typeof voucherKey.getPublicKey!=='function'||typeof voucherKey.sign!=='function'||
   String(voucherKey.getPublicKey())!==review.voucher_public_key)throw Error('matching dedicated key and durable fence required');
  if(!['live','synthetic'].includes(executionMode)||
-  (executionMode==='live'&&fence.fenceScope!=='GITHUB_LABEL_AND_LOCAL')||
+  (responseStore!==undefined&&!(responseStore instanceof TollgateResponseStore))||
+  (executionMode==='live'&&(fence.fenceScope!=='GITHUB_LABEL_AND_LOCAL'||!(responseStore instanceof TollgateResponseStore)))||
   (executionMode==='synthetic'&&fetchImpl===globalThis.fetch)){
-  throw Error('live purchase requires a cross-environment fence; synthetic mode requires an injected test transport');
+  throw Error('live purchase requires a cross-environment fence and response store; synthetic mode requires an injected test transport');
  }
  const offer=await inspectTollgateOffer({fetchImpl});
  if(!offer.offer_recognized||!offer.exact_resource_match)throw Error('reviewed seller offer no longer matches');
@@ -245,9 +247,17 @@ export async function purchaseTollgateQuakesOnce({review:raw,provider,voucherKey
   const ack=paymentAcknowledgement(res?.headers?.get('x-payment-response'),snapshot.channel_id);
   const bytes=await readBoundedBytes(res,{maxBytes:256*1024,label:'provider'}),bodyHash=sha(bytes);
   let body=null;try{body=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes))}catch{/* untrusted body */}
+  const observedAt=now();
   if(res?.status===200&&!res.redirected&&/^application\/json(?:\s*;|$)/i.test(res.headers.get('content-type')??'')&&
-    ack&&validQuakes(body,snapshot.channel_id,now())){
-   return {...result,status:'PROVIDER_RETURNED_DATA',http_status:200,...ack,response_sha256:bodyHash,data:body};
+    ack&&validTollgateQuakesBody(body,snapshot.channel_id,observedAt)){
+   let retained=null;
+   if(responseStore){
+    try{retained=responseStore.save({reviewHash:snapshot.review_hash,channelId:snapshot.channel_id,observedAtMs:observedAt,rawBytes:bytes})}
+    catch{return {...result,status:'DATA_RECEIVED_EVIDENCE_WRITE_FAILED',http_status:200,...ack,response_sha256:bodyHash,
+     data:body,response_locally_retained:false,note:'The voucher was exposed; never retry even though response retention failed.'}}
+   }
+   return {...result,status:'PROVIDER_RETURNED_DATA',http_status:200,...ack,response_sha256:bodyHash,data:body,
+    response_locally_retained:!!retained,response_evidence_file:retained?.filename??null};
   }
   return {...result,status:ack?'SELLER_CLAIMS_ACCEPTANCE_DELIVERY_UNCONFIRMED':'PAYMENT_AND_DELIVERY_UNKNOWN',
    http_status:Number.isInteger(res?.status)?res.status:null,seller_claimed_acceptance:!!ack,

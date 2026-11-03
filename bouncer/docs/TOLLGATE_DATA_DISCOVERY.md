@@ -149,7 +149,20 @@ fence alone is not cross-session protection. The client now defaults to live
 mode and refuses a local-only fence before contacting the seller. Its explicit
 `synthetic` mode allows an injected test transport; the caller is responsible
 for ensuring that transport cannot reach a real seller, so never use this mode
-for a real purchase.
+for a real purchase. Live mode also requires a private `TollgateResponseStore`
+that fsyncs the exact received response bytes and a SHA-256 digest before the
+client reports retained data. It is a local file, not an off-device backup;
+if retention fails after voucher exposure, do not retry the paid request.
+
+`corroborateTollgateQuakes` checks that retained bytes match the original
+purchase result, reconstructs the exact allowed USGS query, and makes one
+separate unpaid request to USGS. It compares event IDs, magnitudes, places and
+times, rejecting URL substitution and treating changed or unavailable data
+as unconfirmed. An empty result is not called independently returned event
+data. This comparison is not proof of payment, seller identity, or that the
+seller actually fetched USGS at its claimed time. The response and fence must
+still be preserved across environments.
+
 An [isolated HTTP lifecycle](https://github.com/Greatmujey/Bouncer/actions/runs/41663649675)
 exercised the updated client against the pinned published seller SDK and a disposable
 nearcore: review, one voucher, synthetic returned data, replay refusal, local

@@ -27,7 +27,7 @@ jobs:
         run: |
           set -euo pipefail
           npm ci --ignore-scripts --no-audit --no-fund
-          node --test tests/tollgate-quakes-v13.test.mjs tests/tollgate-v12-readiness.test.mjs tests/v11-sandbox-setup-rpc.test.mjs
+          node --test tests/tollgate-quakes-v13.test.mjs tests/tollgate-v12-readiness.test.mjs tests/v11-sandbox-setup-rpc.test.mjs tests/tollgate-response-store.test.mjs tests/tollgate-quakes-corroboration.test.mjs
           gh api repos/Greatmujey/Bouncer/git/blobs/f3ad44590b1d816bf0d4c6ceb29e6c917c01056c --jq '.content' | tr -d '\n' | base64 -d > "$RUNNER_TEMP/v13-voucher.wasm"
           test "$(sha256sum "$RUNNER_TEMP/v13-voucher.wasm" | cut -d' ' -f1)" = 'ed1bb4fb01313576f88c719d5c7283d2366a60c580295863a759f5f9ee699231'
           gh api repos/Mattbusel/tollgate/git/blobs/da71fa08c368f7620bc4bd2e8512a57580a86e15 --jq '.content' | tr -d '\n' | base64 -d > "$RUNNER_TEMP/tollgate.wasm"

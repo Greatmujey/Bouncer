@@ -7,6 +7,7 @@ import path from 'node:path';
 import nearApi from 'near-api-js';
 import { TOLLGATE_CONTRACT,TOLLGATE_RESOURCE,TOLLGATE_SELLER } from '../agent/tollgate-v12-readiness.mjs';
 import { GithubTollgateVoucherFence } from '../agent/tollgate-github-voucher-fence.mjs';
+import { TollgateResponseStore } from '../agent/tollgate-response-store.mjs';
 import { makeTollgateQuakesReview,validateTollgateQuakesReview,tollgateQuakesReviewHash,inspectTollgateQuakesChannel,
  purchaseTollgateQuakesOnce,TollgateVoucherFence,V13_VOUCHER_SHA256,V13_VOUCHER_CODE_HASH,TOLLGATE_CHANNEL_CODE_HASH,
  CHANNEL_BUDGET_YOCTO,QUAKES_PRICE_YOCTO } from '../agent/tollgate-quakes-v13.mjs';
@@ -206,10 +207,30 @@ test('paid request waits for a cross-environment GitHub fence, and failure sends
  assert.equal(rejected.http.paid,0);
 });
 
-test('live mode fails closed with a local-only fence before contacting the seller',async t=>{
+test('live mode fails closed without both remote fence and response store before contacting the seller',async t=>{
  const f=fixture(),{dir,fence}=privateFence(t),live={...args(f,fence),executionMode:'live'};
  await assert.rejects(purchaseTollgateQuakesOnce(live),/cross-environment fence/);
  assert.equal(f.http.free,0);assert.equal(f.http.paid,0);assert.deepEqual(fs.readdirSync(dir),[]);
+ const remote=new GithubTollgateVoucherFence(dir,{token:'x'.repeat(30),fetchImpl:async()=>{throw Error('not reached')}});
+ await assert.rejects(purchaseTollgateQuakesOnce({...live,fence:remote}),/response store/);
+ assert.equal(f.http.free,0);assert.equal(f.http.paid,0);assert.deepEqual(fs.readdirSync(dir),[]);
  await assert.rejects(purchaseTollgateQuakesOnce({...args(f,fence),fetchImpl:globalThis.fetch}),/injected test transport/);
  assert.equal(f.http.free,0);assert.deepEqual(fs.readdirSync(dir),[]);
+});
+
+test('retains the exact seller response and stops without retry if evidence cannot be written',async t=>{
+ const f=fixture(),{fence}=privateFence(t),{dir}=privateFence(t),store=new TollgateResponseStore(dir);
+ const out=await purchaseTollgateQuakesOnce({...args(f,fence),responseStore:store});
+ assert.equal(out.status,'PROVIDER_RETURNED_DATA');assert.equal(out.response_locally_retained,true);
+ const saved=store.load({reviewHash:out.review_hash,channelId:out.channel_id});
+ assert.equal(saved.record.response_sha256,out.response_sha256);
+ assert.deepEqual(JSON.parse(saved.rawBytes.toString('utf8')),out.data);
+ assert(!saved.rawBytes.toString('utf8').includes('signature'));
+ const g=fixture(),second=privateFence(t),third=privateFence(t),blocked=new TollgateResponseStore(third.dir);
+ blocked.save({reviewHash:tollgateQuakesReviewHash(g.review),channelId:'7',observedAtMs:g.now,rawBytes:Buffer.from('preexisting')});
+ const failed=await purchaseTollgateQuakesOnce({...args(g,second.fence),responseStore:blocked});
+ assert.equal(failed.status,'DATA_RECEIVED_EVIDENCE_WRITE_FAILED');assert.equal(failed.do_not_retry,true);
+ assert.equal(g.http.paid,1);assert.equal(failed.response_locally_retained,false);
+ await assert.rejects(purchaseTollgateQuakesOnce({...args(g,second.fence),responseStore:blocked}),/EEXIST/);
+ assert.equal(g.http.paid,1);
 });
