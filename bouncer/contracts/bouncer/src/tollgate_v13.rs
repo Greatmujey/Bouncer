@@ -12,7 +12,8 @@ const GAS_CLOSE: Gas = Gas::from_tgas(30);
 
 #[ext_contract(ext_tollgate_self)]
 trait ExtTollgateSelf {
-    fn after_tollgate_open(&mut self, intent_id: String, bucket: U64) -> Option<U64>;
+    fn after_tollgate_open(&mut self, intent_id: String) -> Option<U64>;
+    fn after_tollgate_recovery(&mut self, intent_id: String, candidate_id: U64, generation: U64) -> Option<U64>;
 }
 
 #[near(serializers = [borsh])]
@@ -33,8 +34,23 @@ pub(super) struct TollgateIntent {
     consumed: bool,
     cancelled: bool,
     callback_recorded: bool,
-    failed: bool,
+    promise_failed: bool,
+    recovering: bool,
+    recovery_generation: u64,
+    channel_verified: bool,
     channel_id: Option<u64>,
+}
+
+#[derive(near_sdk::serde::Deserialize)]
+#[serde(crate = "near_sdk::serde")]
+struct ChannelRecoveryView {
+    channel_id: U64,
+    owner: AccountId,
+    seller: AccountId,
+    agent_pubkey: PublicKey,
+    deposit: U128,
+    storage_fee: U128,
+    status: String,
 }
 
 #[derive(near_sdk::serde::Serialize)]
@@ -58,7 +74,10 @@ pub struct TollgateIntentView {
     pub consumed: bool,
     pub cancelled: bool,
     pub callback_recorded: bool,
-    pub failed: bool,
+    pub promise_failed: bool,
+    pub recovering: bool,
+    pub recovery_generation: U64,
+    pub channel_verified: bool,
     pub channel_id: Option<U64>,
     pub active: bool,
 }
@@ -119,7 +138,7 @@ impl Bouncer {
         self.tollgate_intents.insert(intent_id, TollgateIntent { policy_id, amount: amount.0, agent_public_key,
             voucher_public_key, review_hash, expires_at_ms: expires_at_ms.0, channel_lifetime_sec: channel_lifetime_sec.0,
             dispute_window_sec: dispute_window_sec.0, policy_revision, contract_revision, seller_revision,
-            agent_revision, consumed: false, cancelled: false, callback_recorded: false, failed: false, channel_id: None });
+            agent_revision, consumed: false, cancelled: false, callback_recorded: false, promise_failed: false, recovering: false, recovery_generation: 0, channel_verified: false, channel_id: None });
         env::log_str("BOUNCER testnet native channel intent pinned; no payment or voucher");
     }
 
@@ -138,7 +157,7 @@ impl Bouncer {
             review_hash: i.review_hash.clone(), expires_at_ms: U64(i.expires_at_ms), channel_lifetime_sec: U64(i.channel_lifetime_sec),
             dispute_window_sec: U64(i.dispute_window_sec), policy_revision: i.policy_revision, contract_revision: i.contract_revision,
             seller_revision: i.seller_revision, agent_revision: i.agent_revision, consumed: i.consumed, cancelled: i.cancelled,
-            callback_recorded: i.callback_recorded, failed: i.failed, channel_id: i.channel_id.map(U64), active: active(self, i) })
+            callback_recorded: i.callback_recorded, promise_failed: i.promise_failed, recovering: i.recovering, recovery_generation: U64(i.recovery_generation), channel_verified: i.channel_verified, channel_id: i.channel_id.map(U64), active: active(self, i) })
     }
 
     /// Consume once before dispatch. The agent cannot choose destination,
@@ -172,43 +191,98 @@ impl Bouncer {
         Promise::new(channel_id()).function_call("open_channel", args.to_string().into_bytes(),
             NearToken::from_yoctonear(i.amount), GAS_OPEN)
             .then(ext_tollgate_self::ext(env::current_account_id()).with_static_gas(GAS_FOR_RESOLVE)
-                .after_tollgate_open(intent_id, U64(bucket)))
+                .after_tollgate_open(intent_id))
     }
 
-    /// Only a failed target receipt recredits the native ledger. A successful
-    /// but malformed return is UNKNOWN and conservatively keeps the full lock.
-    /// In every case the original intent and voucher key stay consumed.
+    /// A failed promise can be a downstream failure after the provider has
+    /// accepted funds, so it is NOT proof of a refund. Failed or malformed
+    /// results keep the full reservation; the intent and key remain consumed.
     #[private]
-    pub fn after_tollgate_open(&mut self, intent_id: String, bucket: U64) -> Option<U64> {
+    pub fn after_tollgate_open(&mut self, intent_id: String) -> Option<U64> {
         let mut i = self.tollgate_intents.get(&intent_id).cloned().unwrap_or_else(|| abort_with("unknown Tollgate intent"));
         require(i.consumed && !i.callback_recorded, "Tollgate callback already recorded or not pending");
         i.callback_recorded = true;
         match env::promise_result(0) {
             near_sdk::PromiseResult::Failed => {
-                i.failed = true;
-                self.native_balance = self.native_balance.checked_add(i.amount).unwrap_or_else(|| abort_with("native refund overflow"));
-                if self.ft_policy_revisions.get(&i.policy_id) == Some(&i.policy_revision) {
-                    let dk = daily_key(&i.policy_id, bucket.0);
-                    if let Some(spent) = self.daily_spent.get(&dk).copied() { self.daily_spent.insert(dk, spent.saturating_sub(i.amount)); }
-                }
-                env::log_str("BOUNCER channel open failed; ledger refunded, intent remains consumed");
+                i.promise_failed = true;
+                env::log_str("BOUNCER channel promise failed; full reservation retained, reconcile actual refund");
             }
             near_sdk::PromiseResult::Successful(bytes) => {
-                if bytes.len() <= 128 {
-                    i.channel_id = near_sdk::serde_json::from_slice::<U64>(&bytes).ok().map(|v| v.0).filter(|v| *v <= u32::MAX as u64);
-                }
+                let reported = if bytes.len() <= 128 {
+                    near_sdk::serde_json::from_slice::<U64>(&bytes).ok().map(|v| v.0).filter(|v| *v <= u32::MAX as u64)
+                } else { None };
+                // A recovery callback can win the race; never overwrite its
+                // already verified channel ID with a late or malformed return.
+                if !i.channel_verified { i.channel_id = reported; }
                 if i.channel_id.is_none() { env::log_str("BOUNCER channel result unknown; full reservation retained"); }
             }
         }
         let result = i.channel_id.map(U64); self.tollgate_intents.insert(intent_id, i); result
     }
 
-    /// Owner may start a unilateral close only for the recorded channel ID.
+    /// Check a candidate channel against the provider's current view before
+    /// allowing close. This also recovers an ID after a missing/failed callback.
+    /// Only the owner can request it; retrying this zero-value view moves no
+    /// funds. A provider that can upgrade can still lie, so this is not proof.
+    #[payable]
+    pub fn verify_tollgate_channel(&mut self, intent_id: String, candidate_id: U64) -> Promise {
+        require_owner(self, env::attached_deposit()).unwrap_or_else(|m| abort_with(&m));
+        require(candidate_id.0 <= u32::MAX as u64, "invalid Tollgate channel ID");
+        let mut i = self.tollgate_intents.get(&intent_id).cloned().unwrap_or_else(|| abort_with("unknown Tollgate intent"));
+        require(i.consumed && !i.recovering && !i.channel_verified, "Tollgate channel already verified or recovery pending");
+        i.recovery_generation = i.recovery_generation.checked_add(1).unwrap_or_else(|| abort_with("recovery generation overflow"));
+        let generation = i.recovery_generation;
+        i.recovering = true;
+        self.tollgate_intents.insert(intent_id.clone(), i);
+        let args = near_sdk::serde_json::json!({"channel_id": candidate_id});
+        Promise::new(channel_id()).function_call("get_channel", args.to_string().into_bytes(), ZERO_NEAR, GAS_CLOSE)
+            .then(ext_tollgate_self::ext(env::current_account_id()).with_static_gas(GAS_FOR_RESOLVE)
+                .after_tollgate_recovery(intent_id, candidate_id, U64(generation)))
+    }
+
+    /// Owner can recover from a lost view callback without moving funds. The
+    /// generation invalidates a late callback from the previous attempt.
+    #[payable]
+    pub fn reset_tollgate_verification(&mut self, intent_id: String) {
+        require_owner(self, env::attached_deposit()).unwrap_or_else(|m| abort_with(&m));
+        let mut i = self.tollgate_intents.get(&intent_id).cloned().unwrap_or_else(|| abort_with("unknown Tollgate intent"));
+        require(i.consumed && i.recovering && !i.channel_verified, "Tollgate verification is not pending");
+        i.recovery_generation = i.recovery_generation.checked_add(1).unwrap_or_else(|| abort_with("recovery generation overflow"));
+        i.recovering = false;
+        self.tollgate_intents.insert(intent_id, i);
+    }
+
+    #[private]
+    pub fn after_tollgate_recovery(&mut self, intent_id: String, candidate_id: U64, generation: U64) -> Option<U64> {
+        let mut i = self.tollgate_intents.get(&intent_id).cloned().unwrap_or_else(|| abort_with("unknown Tollgate intent"));
+        // Ignore a callback from a reset or completed verification, never let
+        // it clear or overwrite a newer recovery attempt.
+        if !i.consumed || !i.recovering || i.channel_verified || i.recovery_generation != generation.0 { return None; }
+        i.recovering = false;
+        let recovered = match env::promise_result(0) {
+            near_sdk::PromiseResult::Successful(bytes) if bytes.len() <= 4096 =>
+                near_sdk::serde_json::from_slice::<Option<ChannelRecoveryView>>(&bytes).ok().flatten(),
+            _ => None,
+        };
+        if let Some(c) = recovered {
+            if c.channel_id.0 == candidate_id.0 && c.owner == env::current_account_id() && c.seller == seller_id() &&
+                c.agent_pubkey == i.voucher_public_key && c.deposit.0.checked_add(c.storage_fee.0) == Some(i.amount) &&
+                matches!(c.status.as_str(), "Open" | "Closing" | "Closed") {
+                i.channel_id = Some(candidate_id.0);
+                i.channel_verified = true;
+            }
+        }
+        let result = if i.channel_verified { i.channel_id.map(U64) } else { None };
+        self.tollgate_intents.insert(intent_id, i); result
+    }
+
+    /// Owner may start a unilateral close only after validating the channel.
     /// The provider may be upgraded and is trusted; this is not a refund proof.
     #[payable]
     pub fn start_tollgate_close(&mut self, intent_id: String) -> Promise {
         require_owner(self, env::attached_deposit()).unwrap_or_else(|m| abort_with(&m));
         let i = self.tollgate_intents.get(&intent_id).unwrap_or_else(|| abort_with("unknown Tollgate intent"));
+        require(i.channel_verified, "channel not verified; reconcile first");
         let id = i.channel_id.unwrap_or_else(|| abort_with("channel ID not recorded; reconcile externally"));
         let args = near_sdk::serde_json::json!({"channel_id": U64(id)});
         Promise::new(channel_id()).function_call("start_close", args.to_string().into_bytes(), ZERO_NEAR, GAS_CLOSE)
@@ -222,6 +296,7 @@ impl Bouncer {
     pub fn finalize_tollgate_close(&mut self, intent_id: String) -> Promise {
         require_owner(self, env::attached_deposit()).unwrap_or_else(|m| abort_with(&m));
         let i = self.tollgate_intents.get(&intent_id).unwrap_or_else(|| abort_with("unknown Tollgate intent"));
+        require(i.channel_verified, "channel not verified; reconcile first");
         let id = i.channel_id.unwrap_or_else(|| abort_with("channel ID not recorded; reconcile externally"));
         let args = near_sdk::serde_json::json!({"channel_id": U64(id)});
         Promise::new(channel_id()).function_call("finalize", args.to_string().into_bytes(), ZERO_NEAR, GAS_CLOSE)
@@ -264,6 +339,10 @@ mod tests {
     }
     fn fixture() -> Bouncer { let mut c = empty(); pin(&mut c, "one", key(3)); c }
     fn execute(c: &mut Bouncer) { drop(c.execute_tollgate_intent("one".into())); }
+    fn recovery_view(seller: &str, voucher: &PublicKey) -> Vec<u8> {
+        near_sdk::serde_json::to_vec(&near_sdk::serde_json::json!({"channel_id":"7", "owner":"vault.testnet",
+            "seller":seller, "agent_pubkey":voucher, "deposit":"350", "storage_fee":"50", "status":"Open"})).unwrap()
+    }
 
     #[test]
     fn one_shot_dispatch_pins_contract_seller_amount_and_voucher_key() {
@@ -335,12 +414,12 @@ mod tests {
 
     #[test]
     #[allow(deprecated)]
-    fn failed_open_recredits_original_bucket_but_never_reopens_intent() {
+    fn failed_open_retains_full_reservation_and_never_reopens_intent() {
         let mut c = fixture(); testing_env!(agent()); execute(&mut c);
         testing_env_with_promise_results(context("vault.testnet", "owner.testnet", &key(2), 0, NOW + NS_PER_HOUR), PromiseResult::Failed);
-        assert!(c.after_tollgate_open("one".into(), U64(25)).is_none());
-        assert_eq!(c.vault_balance(id("native")).0, 1_000); assert_eq!(c.daily_spent("data".into()).0, 0);
-        let i = c.get_tollgate_intent("one".into()).unwrap(); assert!(i.consumed && i.failed && i.callback_recorded && !i.active);
+        assert!(c.after_tollgate_open("one".into()).is_none());
+        assert_eq!(c.vault_balance(id("native")).0, 600); assert_eq!(c.daily_spent("data".into()).0, 400);
+        let i = c.get_tollgate_intent("one".into()).unwrap(); assert!(i.consumed && i.promise_failed && i.callback_recorded && !i.active);
     }
 
     #[test]
@@ -349,8 +428,8 @@ mod tests {
         let mut c = fixture(); testing_env!(agent()); execute(&mut c); testing_env!(owner(1));
         c.set_policy("data".into(), id("native"), U128(500), Some(U128(700)));
         testing_env_with_promise_results(context("vault.testnet", "owner.testnet", &key(2), 0, NOW), PromiseResult::Failed);
-        c.after_tollgate_open("one".into(), U64(25));
-        assert_eq!(c.vault_balance(id("native")).0, 1_000); assert_eq!(c.daily_spent("data".into()).0, 400);
+        c.after_tollgate_open("one".into());
+        assert_eq!(c.vault_balance(id("native")).0, 600); assert_eq!(c.daily_spent("data".into()).0, 400);
     }
 
     #[test]
@@ -358,15 +437,15 @@ mod tests {
     fn success_records_channel_and_unknown_result_never_recredits() {
         let mut c = fixture(); testing_env!(agent()); execute(&mut c);
         testing_env_with_promise_results(context("vault.testnet", "owner.testnet", &key(2), 0, NOW), PromiseResult::Successful(b"\"7\"".to_vec()));
-        assert_eq!(c.after_tollgate_open("one".into(), U64(25)).unwrap().0, 7);
+        assert_eq!(c.after_tollgate_open("one".into()).unwrap().0, 7);
         assert_eq!(c.vault_balance(id("native")).0, 600); assert_eq!(c.daily_spent("data".into()).0, 400);
         testing_env!(owner(1)); pin(&mut c, "two", key(4)); testing_env!(agent());
         // Top up the rolling cap for this independent unknown-result case.
         testing_env!(owner(1)); c.set_policy("data".into(), id("native"), U128(500), Some(U128(1000)));
         pin(&mut c, "three", key(5)); testing_env!(agent()); drop(c.execute_tollgate_intent("three".into()));
         testing_env_with_promise_results(context("vault.testnet", "owner.testnet", &key(2), 0, NOW), PromiseResult::Successful(b"not-json".to_vec()));
-        assert!(c.after_tollgate_open("three".into(), U64(25)).is_none());
-        let i = c.get_tollgate_intent("three".into()).unwrap(); assert!(i.consumed && i.callback_recorded && !i.failed && i.channel_id.is_none());
+        assert!(c.after_tollgate_open("three".into()).is_none());
+        let i = c.get_tollgate_intent("three".into()).unwrap(); assert!(i.consumed && i.callback_recorded && !i.promise_failed && i.channel_id.is_none());
         assert_eq!(c.vault_balance(id("native")).0, 200); assert_eq!(c.daily_spent("data".into()).0, 800);
     }
 
@@ -376,7 +455,7 @@ mod tests {
     fn callback_cannot_credit_twice() {
         let mut c = fixture(); testing_env!(agent()); execute(&mut c);
         testing_env_with_promise_results(context("vault.testnet", "owner.testnet", &key(2), 0, NOW), PromiseResult::Failed);
-        c.after_tollgate_open("one".into(), U64(25)); c.after_tollgate_open("one".into(), U64(25));
+        c.after_tollgate_open("one".into()); c.after_tollgate_open("one".into());
     }
 
     #[test]
@@ -384,7 +463,11 @@ mod tests {
     fn owner_close_uses_recorded_channel_and_zero_outgoing_deposit() {
         let mut c = fixture(); testing_env!(agent()); execute(&mut c);
         testing_env_with_promise_results(context("vault.testnet", "owner.testnet", &key(2), 0, NOW), PromiseResult::Successful(b"\"7\"".to_vec()));
-        c.after_tollgate_open("one".into(), U64(25)); testing_env!(owner(1)); drop(c.start_tollgate_close("one".into()));
+        c.after_tollgate_open("one".into()); testing_env!(owner(1)); drop(c.verify_tollgate_channel("one".into(), U64(7)));
+        testing_env_with_promise_results(context("vault.testnet", "owner.testnet", &key(2), 0, NOW),
+            PromiseResult::Successful(recovery_view(SELLER, &key(3))));
+        assert_eq!(c.after_tollgate_recovery("one".into(), U64(7), U64(1)).unwrap().0, 7);
+        testing_env!(owner(1)); drop(c.start_tollgate_close("one".into()));
         let receipts = get_created_receipts();
         let r = receipts.iter().find(|r| r.receiver_id == channel_id()).unwrap();
         let (args, deposit) = r.actions.iter().find_map(|a| match a {
@@ -400,5 +483,68 @@ mod tests {
     #[should_panic(expected = "owner-only method requires exactly 1 yoctoNEAR")]
     fn agent_cannot_start_close_without_owner_authority() {
         let mut c = fixture(); testing_env!(agent()); drop(c.start_tollgate_close("one".into()));
+    }
+
+    #[test]
+    #[should_panic(expected = "channel not verified; reconcile first")]
+    #[allow(deprecated)]
+    fn returned_id_alone_does_not_authorize_close() {
+        let mut c = fixture(); testing_env!(agent()); execute(&mut c);
+        testing_env_with_promise_results(context("vault.testnet", "owner.testnet", &key(2), 0, NOW), PromiseResult::Successful(b"\"7\"".to_vec()));
+        c.after_tollgate_open("one".into()); testing_env!(owner(1)); drop(c.start_tollgate_close("one".into()));
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn recovery_refuses_wrong_owner_key_budget_status_and_id() {
+        let mut c = fixture(); testing_env!(agent()); execute(&mut c);
+        for (field, wrong) in [("owner", near_sdk::serde_json::json!("attacker.testnet")),
+            ("agent_pubkey", near_sdk::serde_json::json!(String::from(&key(4)))),
+            ("deposit", near_sdk::serde_json::json!("349")), ("status", near_sdk::serde_json::json!("Unknown")),
+            ("channel_id", near_sdk::serde_json::json!("8"))] {
+            let mut payload: near_sdk::serde_json::Value = near_sdk::serde_json::from_slice(&recovery_view(SELLER, &key(3))).unwrap();
+            payload[field] = wrong;
+            testing_env!(owner(1)); drop(c.verify_tollgate_channel("one".into(), U64(7)));
+            let generation = c.get_tollgate_intent("one".into()).unwrap().recovery_generation;
+            testing_env_with_promise_results(context("vault.testnet", "owner.testnet", &key(2), 0, NOW),
+                PromiseResult::Successful(near_sdk::serde_json::to_vec(&payload).unwrap()));
+            assert!(c.after_tollgate_recovery("one".into(), U64(7), generation).is_none());
+            let i = c.get_tollgate_intent("one".into()).unwrap(); assert!(!i.channel_verified && !i.recovering);
+        }
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn lost_recovery_can_be_reset_and_old_callback_cannot_override_new_attempt() {
+        let mut c = fixture(); testing_env!(agent()); execute(&mut c);
+        testing_env!(owner(1)); drop(c.verify_tollgate_channel("one".into(), U64(7)));
+        c.reset_tollgate_verification("one".into());
+        drop(c.verify_tollgate_channel("one".into(), U64(7)));
+        testing_env_with_promise_results(context("vault.testnet", "owner.testnet", &key(2), 0, NOW),
+            PromiseResult::Successful(recovery_view(SELLER, &key(3))));
+        assert!(c.after_tollgate_recovery("one".into(), U64(7), U64(1)).is_none());
+        assert!(c.get_tollgate_intent("one".into()).unwrap().recovering);
+        assert_eq!(c.after_tollgate_recovery("one".into(), U64(7), U64(3)).unwrap().0, 7);
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn owner_recovery_checks_seller_voucher_and_amount_and_handles_late_callback() {
+        let mut c = fixture(); testing_env!(agent()); execute(&mut c);
+        testing_env!(owner(1)); drop(c.verify_tollgate_channel("one".into(), U64(7)));
+        testing_env_with_promise_results(context("vault.testnet", "owner.testnet", &key(2), 0, NOW),
+            PromiseResult::Successful(recovery_view("attacker.testnet", &key(3))));
+        assert!(c.after_tollgate_recovery("one".into(), U64(7), U64(1)).is_none());
+        assert!(!c.get_tollgate_intent("one".into()).unwrap().channel_verified);
+        testing_env!(owner(1)); drop(c.verify_tollgate_channel("one".into(), U64(7)));
+        testing_env_with_promise_results(context("vault.testnet", "owner.testnet", &key(2), 0, NOW),
+            PromiseResult::Successful(recovery_view(SELLER, &key(3))));
+        assert_eq!(c.after_tollgate_recovery("one".into(), U64(7), U64(2)).unwrap().0, 7);
+        // A late original callback cannot overwrite the verified recovery ID.
+        testing_env_with_promise_results(context("vault.testnet", "owner.testnet", &key(2), 0, NOW), PromiseResult::Successful(b"\"8\"".to_vec()));
+        assert_eq!(c.after_tollgate_open("one".into()).unwrap().0, 7);
+        let i = c.get_tollgate_intent("one".into()).unwrap();
+        assert!(i.channel_verified && i.channel_id.unwrap().0 == 7 && !i.recovering);
+        assert_eq!(c.vault_balance(id("native")).0, 600); assert_eq!(c.daily_spent("data".into()).0, 400);
     }
 }

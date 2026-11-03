@@ -62,7 +62,10 @@ async function exercise({endpoint,root,v13Wasm,channelWasm}){
  assert.ok(guard.status?.Failure);assert.match(JSON.stringify(guard.status.Failure),/exactly 1 yoctoNEAR/);
  const opened=await call(agent,VAULT,'execute_tollgate_intent',{intent_id:'local-data-1'},0n,150n*TGAS);
  const intent=await view(VAULT,'get_tollgate_intent',{intent_id:'local-data-1'});
- assert.equal(intent.consumed,true);assert.equal(intent.callback_recorded,true);assert.equal(intent.failed,false);assert.equal(intent.channel_id,'0');
+ assert.equal(intent.consumed,true);assert.equal(intent.callback_recorded,true);assert.equal(intent.promise_failed,false);assert.equal(intent.channel_id,'0');
+ assert.equal(intent.channel_verified,false);
+ await call(owner,VAULT,'verify_tollgate_channel',{intent_id:'local-data-1',candidate_id:intent.channel_id},1n);
+ assert.equal((await view(VAULT,'get_tollgate_intent',{intent_id:'local-data-1'})).channel_verified,true);
  let channel=await view(CHANNEL,'get_channel',{channel_id:intent.channel_id});
  assert.equal(channel.owner,VAULT);assert.equal(channel.seller,SELLER);assert.equal(channel.agent_pubkey,pub(voucherKey));
  assert.equal(BigInt(channel.deposit)+BigInt(channel.storage_fee),AMOUNT);assert.ok(BigInt(channel.deposit)>=NEAR/100n);
@@ -93,10 +96,28 @@ async function exercise({endpoint,root,v13Wasm,channelWasm}){
  // native balance nor the rolling charge is optimistically credited.
  assert.equal(await view(VAULT,'vault_balance',{token:'native'}),'0');assert.equal(await view(VAULT,'daily_spent',{policy_id:'data'}),AMOUNT.toString());
  await call(owner,VAULT,'withdraw_native_surplus',{amount:channel.refunded},1n);
+ // A too-small second opening must fail in the channel contract. Even when
+ // the native deposit is returned, the callback must not automatically free
+ // budget: a different provider could fail a downstream promise after taking it.
+ const bad=NEAR/10_000n,voucherFail=key();
+ await call(owner,VAULT,'set_policy',{policy_id:'data',token:'native',per_tx_cap:AMOUNT.toString(),daily_cap:(AMOUNT+bad).toString()},1n);
+ await call(owner,VAULT,'deposit_native',{},bad);
+ const b2=await provider.viewBlock({finality:'final'}),expiry2=(BigInt(b2.header.timestamp_nanosec)/1_000_000n+120_000n).toString();
+ await call(owner,VAULT,'set_tollgate_intent',{intent_id:'local-data-failed',policy_id:'data',amount:bad.toString(),
+  agent_public_key:pub(agentKey),voucher_public_key:pub(voucherFail),review_hash:'b'.repeat(64),expires_at_ms:expiry2,
+  channel_lifetime_sec:'600',dispute_window_sec:'15'},1n);
+ const beforeFail=await provider.viewAccount(VAULT,{finality:'final'});
+ const failed=await agent.signAndSendTransaction({receiverId:VAULT,actions:[fn('execute_tollgate_intent',{intent_id:'local-data-failed'},0n,150n*TGAS)],waitUntil:'FINAL',throwOnFailure:false});
+ assert.equal(failed.final_execution_status,'FINAL');assert.ok(failed.receipts_outcome.some(r=>r.outcome.status?.Failure));
+ const failedIntent=await view(VAULT,'get_tollgate_intent',{intent_id:'local-data-failed'});
+ assert.equal(failedIntent.consumed,true);assert.equal(failedIntent.promise_failed,true);assert.equal(failedIntent.channel_verified,false);
+ assert.equal(await view(VAULT,'vault_balance',{token:'native'}),'0');
+ assert.equal(await view(VAULT,'daily_spent',{policy_id:'data'}),(AMOUNT+bad).toString());
+ const afterFail=await provider.viewAccount(VAULT,{finality:'final'});assert.ok(BigInt(afterFail.amount)>=BigInt(beforeFail.amount));
  return {scope:'isolated nearcore only; local seller, synthetic voucher and published channel binary, no HTTP or real provider delivery',
   v13_sha256:sha(v13Wasm),channel_sha256:sha(channelWasm),one_yocto_guard_verified:true,restricted_agent_key:true,
   open_once_and_replay_rejected:true,local_voucher_settled:true,unilateral_close:true,detached_refund_arrived:true,
-  native_ledger_and_rolling_budget_conservative:true,owner_surplus_recovery:true,
+  native_ledger_and_rolling_budget_conservative:true,owner_surplus_recovery:true,failed_open_does_not_recredit:true,
   local_open_tx:opened.transaction_outcome.id,local_finalize_tx:finalization.transaction_outcome.id,
   live_seller_contacted:false,circle_payment:false,independent_fulfillment_verified:false};
 }

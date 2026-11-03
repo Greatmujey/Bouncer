@@ -44,10 +44,14 @@ channel path without modifying the deployed V12 vault. It consumes an
 owner-pinned intent once, requires both seller and channel allowlists, uses a
 separate voucher key and reserves the whole native budget under the existing
 cap and rolling spend rules. Its owner-only setup and close methods use the
-1-yocto guard. Failed opens can restore the ledger but never reopen an intent;
-ambiguous callbacks keep the full reservation. A detached channel refund is
-not automatically credited: the owner must reconcile the actual transfer and
-may recover surplus with the existing owner path. This is an experimental
+1-yocto guard. A failed callback can come from a downstream promise after a
+provider accepted funds, so **every failed or ambiguous open retains the full
+reservation** and never reopens the intent. Before a close, an owner-only
+verification checks the channel's reported owner, seller, voucher key, budget
+and ID; it can also recover a lost callback. The provider's view can still lie.
+A detached channel refund is not automatically credited: the owner must
+reconcile the actual transfer and may recover surplus with the existing owner
+path. This is an experimental
 contract, **not deployed or audited**; it cannot claim delivery, accept Circle
 as native NEAR, or solve resource-unbound voucher risk. Tests and a real
 isolated runtime exercise must precede any potential testnet deployment.
