@@ -105,8 +105,9 @@ A working QR and the `Open wallet app`/copy link represent the same private
 pairing. After a compatible wallet approves the account-only proposal, Bouncer
 updates to Connected automatically; scanning alone is not approval. Mobile
 `wc:` link handling depends on the installed wallet and browser. The pairing
-layout adapts to short screens/high zoom, but the actual user's camera and app
-have not been tested. If the browser cannot draw a valid QR, the link remains
+layout adapts to short screens/high zoom. A synthetic QR decoded at 500×304
+and 683×304 CSS pixels with the controls and disclosure fully visible in local
+Chromium, but the actual user's camera and app have not been tested. If the browser cannot draw a valid QR, the link remains
 available. If neither relay works, Bouncer cannot generate a working pairing:
 retry, switch networks or use another listed wallet. Diagnostics show only
 bounded `WC-…` stage codes, not raw SDK errors or pairing secrets. If a
@@ -143,13 +144,13 @@ no such rule has been installed or verified here. The team's Hobby plan is
 non-commercial and may suspend features after usage limits are reached. Confirm
 plan and Reown terms for any commercial deployment.
 
-Unit tests use mock sockets. Candidate run `41625060310` passed all eight
-Windows/Linux browser scenarios, including synthetic wallet approval and
+Unit tests use mock sockets. Candidate runs `41625060310` and `41625945318`
+passed all eight Windows/Linux browser scenarios, including synthetic wallet approval and
 remote disconnect over the real Reown relay with both direct browser relay
 hosts blocked. In those gateway cases Playwright forwards the browser socket to
 an in-runner gateway; it does **not** test Vercel WebSockets. The all-transports
 blocked case returned a truthful error without a QR or Connected state. The
-regression workflow `41625060278` also passed. These are not real-wallet or
+regression workflows `41625060278` and `41625945287` also passed. These are not real-wallet or
 user-device tests. A real wallet, the user's Windows connection and Vercel's
 WebSocket deployment remain unverified. On 3 November 2026 Vercel rejected the isolated test deployment with
 `api-deployments-free-per-day` (100 Hobby deployments per day); the temporary

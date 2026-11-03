@@ -56,7 +56,8 @@ async function allowMockMeteor(page, body) {
   await page.route('**/wallet.bundle.js?*', route => route.fulfill({ status: 200, contentType: 'text/javascript', body: bundle.replace(upstream, digest) }));
 }
 
-try {
+const walletConnectOnly = process.argv.includes('--walletconnect-only');
+async function testOtherWallets() {
   for (const width of [320, 390, 1440]) {
     const browser = await chromium.launch({ executablePath, args: browserArgs, headless: true });
     try {
@@ -636,7 +637,10 @@ try {
     }
     console.log('Wallet executor outage and tampered response fail closed; poisoned IndexedDB is ignored.');
   } finally { await browserError.close(); }
+}
 
+try {
+  if (!walletConnectOnly) await testOtherWallets();
   // Render the actual bundled QR library with a synthetic WalletConnect
   // client. No Reown relay or real wallet is contacted by this browser test.
   const wcBrowser = await chromium.launch({ executablePath, args: browserArgs, headless: true });
@@ -691,19 +695,23 @@ try {
         return qr.width >= 180 && qr.top >= 0 && qr.bottom <= innerHeight && back.bottom <= innerHeight;
       }), true, `QR and navigation fit the ${viewport.width}px viewport`);
     }
-    // A short CSS viewport also models a desktop browser at high zoom. Verify
-    // the real rendered QR still decodes and the controls remain on screen.
-    await page.setViewportSize({ width: 683, height: 304 });
-    const compactImage = PNG.sync.read(await page.locator('#walletconnect-qr').screenshot());
-    assert.equal(jsQR(new Uint8ClampedArray(compactImage.data), compactImage.width, compactImage.height)?.data, expectedUri, 'compact QR screenshot must decode');
-    assert.equal(await page.evaluate(() => {
-      const qr = document.querySelector('#walletconnect-qr').getBoundingClientRect();
-      const back = document.querySelector('#walletconnect-cancel').getBoundingClientRect();
-      const title = document.querySelector('#wallet-dialog-title').getBoundingClientRect();
-      const close = document.querySelector('#wallet-close').getBoundingClientRect();
-      return qr.width >= 130 && qr.top >= 0 && qr.bottom <= innerHeight && back.bottom <= innerHeight &&
-        title.top >= 0 && close.top >= 0 && close.bottom <= innerHeight;
-    }), true, 'compact QR, title and controls fit without scrolling');
+    // Short CSS viewports also model a desktop browser at high zoom. Verify
+    // the QR, controls and privacy disclosure fit without being clipped.
+    for (const viewport of [{ width: 683, height: 304 }, { width: 500, height: 304 }]) {
+      await page.setViewportSize(viewport);
+      const compactImage = PNG.sync.read(await page.locator('#walletconnect-qr').screenshot());
+      assert.equal(jsQR(new Uint8ClampedArray(compactImage.data), compactImage.width, compactImage.height)?.data, expectedUri, `compact QR must decode at ${viewport.width}px`);
+      assert.equal(await page.evaluate(() => {
+        const dialog = document.querySelector('#wallet-dialog');
+        const bounds = dialog.getBoundingClientRect();
+        const inside = selector => {
+          const rect = document.querySelector(selector).getBoundingClientRect();
+          return rect.top >= bounds.top && rect.bottom <= bounds.bottom && rect.left >= bounds.left && rect.right <= bounds.right;
+        };
+        return dialog.scrollHeight <= dialog.clientHeight + 1 && document.querySelector('#walletconnect-qr').getBoundingClientRect().width >= 130 &&
+          ['#walletconnect-qr', '#walletconnect-cancel', '#wallet-dialog-title', '#wallet-close', '.walletconnect-warning'].every(inside);
+      }), true, `compact QR, controls and disclosure fit without scrolling at ${viewport.width}px`);
+    }
     if (process.env.BOUNCER_SCREENSHOTS) await page.screenshot({ path: path.join(process.env.BOUNCER_SCREENSHOTS, 'wallet-compact.png') });
     await page.setViewportSize({ width: 390, height: 844 });
     await page.locator('#walletconnect-cancel').click();
@@ -767,15 +775,17 @@ try {
     }
   } finally { await wcBrowser.close(); }
 
-  const browser2 = await chromium.launch({ executablePath, args: browserArgs, headless: true });
-  try {
-    const page = await browser2.newPage();
-    await page.goto(url + 'embed.html', { waitUntil: 'networkidle' });
-    const frame = page.frameLocator('iframe');
-    await frame.locator('.top-connect').click();
-    assert.equal(await frame.locator('[data-wallet-id="meteor-wallet"]').isDisabled(), true);
-    assert.match(await frame.locator('#wallet-dialog-status').innerText(), /new tab/);
-    assert.equal(await frame.locator('#wallet-open-site').isVisible(), true);
-    console.log('Embedded preview offers a direct top-level link instead of a wallet session.');
-  } finally { await browser2.close(); }
+  if (!walletConnectOnly) {
+    const browser2 = await chromium.launch({ executablePath, args: browserArgs, headless: true });
+    try {
+      const page = await browser2.newPage();
+      await page.goto(url + 'embed.html', { waitUntil: 'networkidle' });
+      const frame = page.frameLocator('iframe');
+      await frame.locator('.top-connect').click();
+      assert.equal(await frame.locator('[data-wallet-id="meteor-wallet"]').isDisabled(), true);
+      assert.match(await frame.locator('#wallet-dialog-status').innerText(), /new tab/);
+      assert.equal(await frame.locator('#wallet-open-site').isVisible(), true);
+      console.log('Embedded preview offers a direct top-level link instead of a wallet session.');
+    } finally { await browser2.close(); }
+  }
 } finally { await new Promise(resolve => httpServer.close(resolve)); }
