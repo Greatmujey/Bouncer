@@ -70,3 +70,10 @@ At that view the owner still held 6,898 Circle test-USDC atoms, but the vault
 was not registered for Circle and its tracked Circle balance was zero. Vault
 funding and independent paid compute, storage and data delivery remain separate
 steps requiring fresh checks and original-hash recovery.
+
+The V12 Circle registration and funding path [passed an isolated nearcore
+rehearsal](https://github.com/Greatmujey/Bouncer/actions/runs/41641922746),
+including recovery of one simulated lost funding acknowledgment by original
+hash without resending. The example FT's Circle-looking code-hash and metadata
+views were deliberately aliased in the disposable sandbox. This is not real
+Circle, a testnet transaction, independent delivery or an audit.

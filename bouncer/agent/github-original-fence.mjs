@@ -9,6 +9,7 @@ export async function githubOriginalFence({ artifactId, runId, headSha, digest, 
       typeof token !== 'string' || token.length < 20 || !Number.isSafeInteger(maxArtifactBytes) ||
       maxArtifactBytes < 1 || maxArtifactBytes > 2_000_000 || !['vault-v2-bootstrap-fence', 'vault-v3-v12-bootstrap-fence',
         'vault-circle-v2-register-fence', 'vault-circle-v2-fund-fence',
+        'vault-circle-v3-v12-register-fence', 'vault-circle-v3-v12-fund-fence',
         'resource-agent-v2-guard-probe-fence', 'resource-agent-v2-guard-control-fence', 'resource-agent-v2-configure-fence',
         'resource-agent-v2-install-fence', 'named-testnet-recovery-fence', 'named-vault-topup-fence',
         'outlayer-burn-register-fence', 'outlayer-burn-control-fence',

@@ -87,3 +87,13 @@ test('V3 V12 deployment fence is distinct from all earlier vault originals', asy
   assert.equal(await githubOriginalFence({ ...args, prefix: 'vault-v2-bootstrap-fence',
     fetchImpl: async () => response(v12) }), false);
 });
+
+test('V3 V12 Circle register and fund fences cannot substitute for each other or V2', async () => {
+  for (const kind of ['register', 'fund']) {
+    const v12 = metadata(); v12.name = `vault-circle-v3-v12-${kind}-fence-5678-${args.digest}`;
+    assert.equal(await githubOriginalFence({ ...args, prefix: `vault-circle-v3-v12-${kind}-fence`, fetchImpl: async () => response(v12) }), true);
+    assert.equal(await githubOriginalFence({ ...args, prefix: `vault-circle-v2-${kind}-fence`, fetchImpl: async () => response(v12) }), false);
+    const other = kind === 'fund' ? 'register' : 'fund';
+    assert.equal(await githubOriginalFence({ ...args, prefix: `vault-circle-v3-v12-${other}-fence`, fetchImpl: async () => response(v12) }), false);
+  }
+});
