@@ -69,11 +69,18 @@ machine-verified, and V12 remains unaudited.
 The vault's subsequent Circle storage registration original
 [`Aob1vuBzJ8iMp2JvvzqpJ4dTS2bbbbGp1jUgBqYma5k1`](https://testnet.nearblocks.io/txns/Aob1vuBzJ8iMp2JvvzqpJ4dTS2bbbbGp1jUgBqYma5k1)
 was [verified at FINAL](https://github.com/Greatmujey/Bouncer/actions/runs/41642256912)
-with fence `13233651211`. Never resend it. At that view the owner still held
-6,898 Circle test-USDC atoms and the vault's actual and tracked Circle
-balances were zero. Registration alone is not funding or delivery; the
-0.00125 test-NEAR Circle storage deposit may remain locked. Vault funding and
-independent paid compute, storage and data delivery remain separate steps.
+with fence `13233651211`. Never resend it. The 0.00125 test-NEAR Circle storage
+deposit may remain locked.
+
+The subsequent owner-to-vault funding original
+[`CUSSFm9M4sdrUvfphkzbyDxzsZXiDYRrmjdRmDn3jGzw`](https://testnet.nearblocks.io/txns/CUSSFm9M4sdrUvfphkzbyDxzsZXiDYRrmjdRmDn3jGzw)
+was [verified at FINAL](https://github.com/Greatmujey/Bouncer/actions/runs/41642503448)
+with fence `13233363224`; the token transfer event, vault callback and resolver
+were verified, and fresh token-contract and Bouncer-ledger views both showed
+**6,898 Circle test-USDC atoms** (0.006898 test USDC) in the keyless vault.
+The owner held zero Circle atoms at that view. Never resend the original.
+This is testnet vault funding, not an independent provider payment or delivery.
+Independent paid compute, storage and data remain separate steps.
 
 The V12 Circle registration and funding path [passed an isolated nearcore
 rehearsal](https://github.com/Greatmujey/Bouncer/actions/runs/41641922746),
