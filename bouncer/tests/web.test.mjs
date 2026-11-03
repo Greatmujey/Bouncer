@@ -200,7 +200,10 @@ test('workspace routes and the wallet picker are explicit, curated, and keyboard
   const views = [...html.matchAll(/data-route-view="([^"]+)"/g)].map(match => match[1]);
   assert.deepEqual(views, ['overview', 'resources', 'guardrails', 'proof', 'connect']);
   const wallets = [...html.matchAll(/data-wallet-id="([^"]+)"/g)].map(match => match[1]);
-  assert.deepEqual(wallets, ['meteor-wallet', 'nightly-wallet', 'ledger']);
+  assert.deepEqual(wallets, ['near-mobile', 'meteor-wallet', 'intear-wallet', 'nightly-wallet', 'ledger', 'near-cli']);
+  assert.match(html, /WalletConnect<\/strong><small>Not configured · Project ID required/);
+  assert.match(html, /NEAR Mobile asks for a login message/);
+  assert.match(html, /intear-wallet-source\.zip/);
   assert.match(html, /<dialog class="wallet-dialog" id="wallet-dialog" aria-labelledby="wallet-dialog-title"/);
   assert.match(html, /id="wallet-close" type="button" aria-label="Close wallet picker"/);
   assert.doesNotMatch(html, /id="wallet-choice"/);

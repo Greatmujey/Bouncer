@@ -1,4 +1,5 @@
 import { WALLET_MANIFEST } from './wallet-manifest.mjs';
+import { loadVerifiedExecutor } from './wallet-executor.mjs';
 
 /** A temporary host with many projects under one origin must never hold a wallet session. */
 export function walletOriginAllowed(location, isTopLevel, approvedOrigin = '') {
@@ -29,11 +30,12 @@ function testnetAccount(value) {
 }
 
 /**
- * Identity-only NEAR Connect integration. No add-key/sign/send methods are
- * called. The returned account is wallet-reported, not proof of ownership.
- * The picker is our own accessible dialog; wallet executors remain sandboxed.
+ * Identity-only NEAR Connect integration. No add-key or transaction methods
+ * are called. NEAR Mobile requires an off-chain login message signature;
+ * other accounts are wallet-reported, not proof of ownership. The picker is
+ * our own accessible dialog; wallet executors remain sandboxed.
  */
-export async function initWallet({ window: win, document: doc, NearConnector }) {
+export async function initWallet({ window: win, document: doc, NearConnector, SandboxWallet }) {
   const dialog = doc.querySelector('#wallet-dialog');
   const closeButton = doc.querySelector('#wallet-close');
   const optionsBox = doc.querySelector('#wallet-options');
@@ -78,7 +80,7 @@ export async function initWallet({ window: win, document: doc, NearConnector }) 
   }
   function acceptAccounts(wallet, accounts) {
     const id = accounts?.[0]?.accountId;
-    if (!wallet || !trusted.has(wallet.manifest) || !testnetAccount(id)) {
+    if (!wallet || !(wallet instanceof SandboxWallet) || !trusted.has(wallet.manifest) || !testnetAccount(id)) {
       showDisconnected('The wallet did not return a testnet account. No account was connected.');
       void storage.remove('selected-wallet').catch(() => {});
       return false;
@@ -169,13 +171,20 @@ export async function initWallet({ window: win, document: doc, NearConnector }) 
   };
   function trimUntrustedWallets() {
     // NEAR Connect also discovers injected/debug/parent-frame wallets. Keep
-    // only the exact curated manifest objects; never trust injected overrides.
-    connector.wallets = connector.wallets.filter(wallet => trusted.has(wallet.manifest));
+    // only curated sandbox instances and replace their loader BEFORE any
+    // account restoration or sign-in can execute code. This also avoids the
+    // shared IndexedDB executor cache and its background fetch race entirely.
+    connector.wallets = connector.wallets.filter(wallet => wallet instanceof SandboxWallet && trusted.has(wallet.manifest));
+    for (const wallet of connector.wallets) {
+      wallet.executor.loadCode = () => loadVerifiedExecutor(wallet.manifest, {
+        fetch: win.fetch.bind(win), crypto: win.crypto, location: win.location,
+      });
+    }
   }
   try {
-    connector = new NearConnector({ network: 'testnet', features: { testnet: true, signInWithoutAddKey: true },
+    connector = new NearConnector({ network: 'testnet', features: { testnet: true },
       autoConnect: false, manifest: WALLET_MANIFEST, storage, providers: { testnet: ['https://test.rpc.fastnear.com'] } });
-    // Avoid executing stale code cached by another app/version on this origin.
+    // Defense in depth if the connector ever tries its default loader.
     connector.db.getItem = async () => null;
     connector.db.setItem = async () => {};
     connector.on('selector:walletsChanged', trimUntrustedWallets);
@@ -185,7 +194,12 @@ export async function initWallet({ window: win, document: doc, NearConnector }) 
     trimUntrustedWallets();
     ready = true;
     // Only attempt restoration if this app had a previously selected wallet.
-    if (await storage.get('selected-wallet')) {
+    // Mobile is message-only and must never restore an old AddKey session.
+    const previousWallet = await storage.get('selected-wallet');
+    if (previousWallet === 'near-mobile') {
+      await storage.remove('selected-wallet');
+      showDisconnected('NEAR Mobile requires a new login message.');
+    } else if (previousWallet) {
       try {
         const { wallet, accounts } = await connector.getConnectedWallet();
         acceptAccounts(wallet, accounts);
@@ -203,23 +217,53 @@ export async function initWallet({ window: win, document: doc, NearConnector }) 
       const walletId = button.dataset.walletId;
       if (!ready || busyState || connected || !allowedIds.has(walletId)) return;
       const name = WALLET_MANIFEST.wallets.find(wallet => wallet.id === walletId).name;
-      busy(true); setStatus(`Opening ${name} on testnet…`); notify(`Opening ${name}…`, true);
+      const mobile = walletId === 'near-mobile';
+      busy(true);
+      const opening = mobile
+        ? 'NEAR Mobile: approve a login message only. No access key or payment is requested.'
+        : `Opening ${name} on testnet…`;
+      setStatus(opening); notify(opening, true);
       // The NEAR Connect executor uses its own iframe overlay. A native dialog
       // is in the top layer, so close ours before opening the wallet UI.
       closePicker();
       let reopen = false;
       try {
         trimUntrustedWallets();
-        // Explicit choice; no addFunctionCallKey, message signing or transaction.
-        await connector.connect({ walletId });
+        if (mobile) {
+          // Upstream NEAR Mobile signIn requests an AddKey transaction (and
+          // can request FullAccess). Never call it or its key-deleting signOut.
+          // A fresh NEP-413 signature identifies the account without an on-chain
+          // action. The pinned adapter verifies the signature and testnet key.
+          const wallet = connector.wallets.find(candidate => candidate.manifest.id === walletId);
+          if (!wallet || !win.crypto?.getRandomValues) throw new Error('NEAR Mobile unavailable');
+          const nonce = win.crypto.getRandomValues(new Uint8Array(32));
+          const result = await wallet.signMessage({
+            network: 'testnet', nonce,
+            recipient: win.location.host,
+            message: `Connect to Bouncer on NEAR testnet.\n\nThis login message does not approve a transaction, transfer funds, or add an access key.\n\nSite: ${win.location.origin}`,
+          });
+          if (!result?.signature || !result?.publicKey) throw new Error('No signed login message returned');
+          acceptAccounts(wallet, [{ accountId: result.accountId }]);
+        } else {
+          if (walletId === 'intear-wallet') {
+            // Intear's app-session protocol needs native WebCrypto Ed25519.
+            // Fail clearly on older browsers rather than opening a broken UI.
+            try { await win.crypto.subtle.generateKey({ name: 'Ed25519' }, false, ['sign', 'verify']); }
+            catch { throw new Error('INTEAR_ED25519_UNAVAILABLE'); }
+          }
+          // Explicit choice; no addFunctionCallKey, signing or transaction.
+          await connector.connect({ walletId });
+        }
         if (!connected) {
           await storage.remove('selected-wallet');
           if (!/did not return a testnet account/.test(status.textContent)) showDisconnected('No valid testnet account was returned.');
           reopen = true;
         } else notify('Testnet account connected. No spending access was granted.');
-      } catch {
+      } catch (error) {
         await storage.remove('selected-wallet');
-        showDisconnected('Wallet connection was cancelled or unavailable. No transaction was sent.');
+        showDisconnected(error?.message === 'INTEAR_ED25519_UNAVAILABLE'
+          ? 'Intear needs a newer browser with Ed25519 support. No transaction was sent.'
+          : 'Wallet connection was cancelled or unavailable. No transaction was sent.');
         reopen = true;
       } finally {
         busy(false);
@@ -230,8 +274,14 @@ export async function initWallet({ window: win, document: doc, NearConnector }) 
   disconnect.addEventListener('click', async () => {
     if (!selectedWallet || busyState) return;
     busy(true); setStatus('Disconnecting your wallet…');
-    try { await connector.disconnect(selectedWallet); showDisconnected('Wallet disconnected.'); }
-    catch { setStatus('Could not disconnect. Please try again in your wallet.'); }
+    try {
+      if (selectedWallet.manifest.id === 'near-mobile') {
+        // Message-only sessions are intentionally not persisted and must not
+        // call the adapter's signOut, which can request a DeleteKey transaction.
+        await storage.remove('selected-wallet');
+      } else await connector.disconnect(selectedWallet);
+      showDisconnected('Wallet disconnected.');
+    } catch { setStatus('Could not disconnect. Please try again in your wallet.'); }
     finally { busy(false); }
   });
 }

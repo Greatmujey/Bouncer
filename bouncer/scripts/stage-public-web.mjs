@@ -8,6 +8,7 @@ export const PUBLIC_WEB_FILES = Object.freeze([
   'index.html', 'styles.css', 'favicon.svg', 'hero-orbit.jpg',
   'manrope-latin.woff2', 'manrope-OFL.txt', 'evidence.mjs',
   'app.mjs', 'tour.mjs', 'wallet.bundle.js',
+  'intear-wallet.executor.js', 'intear-wallet-source.zip',
 ]);
 const DEFAULT_SOURCE = fileURLToPath(new URL('../web/', import.meta.url));
 

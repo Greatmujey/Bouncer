@@ -7,14 +7,19 @@ import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { once } from 'node:events';
+import { createRequire } from 'node:module';
 import { PUBLIC_WEB_FILES } from './stage-public-web.mjs';
+import { WALLET_EXECUTOR_SHA256 } from '../web-src/wallet-executor.mjs';
+
+const require = createRequire(import.meta.url);
+const { KeyPair } = require('@near-js/crypto');
 
 const web = fileURLToPath(new URL('../web/', import.meta.url));
 const playwrightPath = process.env.BOUNCER_PLAYWRIGHT_PATH || path.join(process.env.RUNNER_TEMP || '', 'bouncer-browser/node_modules/playwright-core/index.mjs');
 const { chromium } = await import(pathToFileURL(path.resolve(playwrightPath)));
 const executablePath = process.env.CHROMIUM_PATH || ['/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/usr/bin/chromium', '/usr/bin/chromium-browser'].find(fs.existsSync);
 if (!executablePath) throw new Error('No Chromium executable found');
-const types = { '.html': 'text/html', '.css': 'text/css', '.mjs': 'text/javascript', '.js': 'text/javascript', '.svg': 'image/svg+xml', '.jpg': 'image/jpeg', '.woff2': 'font/woff2', '.txt': 'text/plain' };
+const types = { '.html': 'text/html', '.css': 'text/css', '.mjs': 'text/javascript', '.js': 'text/javascript', '.svg': 'image/svg+xml', '.jpg': 'image/jpeg', '.woff2': 'font/woff2', '.txt': 'text/plain', '.zip': 'application/zip' };
 const allowed = new Set(PUBLIC_WEB_FILES);
 const httpServer = http.createServer((req, res) => {
   const filename = new URL(req.url, 'http://localhost').pathname.slice(1) || 'index.html';
@@ -28,6 +33,20 @@ await once(httpServer, 'listening');
 const url = `http://127.0.0.1:${httpServer.address().port}/`;
 const browserArgs = ['--no-sandbox', '--disable-gpu'];
 if (process.env.BOUNCER_SINGLE_PROCESS === '1') browserArgs.push('--single-process', '--no-zygote');
+const mockMeteor = accountId => `window.selector.ready({
+  async signIn(params) { if (params.network !== 'testnet' || params.addFunctionCallKey) throw new Error('unsafe request'); return [{ accountId: '${accountId}' }]; },
+  async signOut(params) { if (params.network !== 'testnet') throw new Error('wrong network'); },
+  async getAccounts() { return [{ accountId: '${accountId}' }]; }
+});`;
+// Mocks are deliberately not the pinned upstream bytes. Replace only the
+// expected digest in a test-only copy of the bundle; production is untouched.
+async function allowMockMeteor(page, body) {
+  const bundle = fs.readFileSync(path.join(web, 'wallet.bundle.js'), 'utf8');
+  const upstream = WALLET_EXECUTOR_SHA256['meteor-wallet'];
+  assert.ok(bundle.includes(upstream));
+  const digest = crypto.createHash('sha256').update(body).digest('hex');
+  await page.route('**/wallet.bundle.js?*', route => route.fulfill({ status: 200, contentType: 'text/javascript', body: bundle.replace(upstream, digest) }));
+}
 
 try {
   for (const width of [320, 390, 1440]) {
@@ -95,8 +114,12 @@ try {
       await page.locator('.top-connect').click();
       const picker = page.locator('#wallet-dialog');
       assert.equal(await picker.evaluate(el => el.open), true);
-      assert.equal(await page.locator('[data-wallet-id]').count(), 3);
+      assert.equal(await page.locator('[data-wallet-id]').count(), 6);
+      assert.equal(await page.locator('[data-wallet-id="near-mobile"]').isEnabled(), true);
       assert.equal(await page.locator('[data-wallet-id="meteor-wallet"]').isEnabled(), true);
+      assert.equal(await page.getByRole('button', { name: 'WalletConnect, setup required' }).isDisabled(), true);
+      assert.match(await page.locator('#wallet-dialog-description').innerText(), /login message/);
+      if (process.env.BOUNCER_SCREENSHOTS) await page.screenshot({ path: path.join(process.env.BOUNCER_SCREENSHOTS, `wallet-picker-${width}.png`) });
       for (let i = 0; i < 5; i++) {
         await page.keyboard.press('Tab');
         assert.equal(await picker.evaluate(el => el.contains(document.activeElement)), true, 'focus stays in the wallet picker');
@@ -141,13 +164,11 @@ try {
     page.on('pageerror', error => errors.push(error.message));
     // Mock ONLY the wallet executor, while exercising the real bundled NEAR
     // Connect, sandbox iframe, events, UI and no-add-key parameters.
-    await page.route('**/meteor-near-connect-latest.js?*', async route => {
+    const body = mockMeteor('browser-test.testnet');
+    await allowMockMeteor(page, body);
+    await page.route('**/meteor-near-connect-latest.js*', async route => {
       calls.push(route.request().url());
-      await route.fulfill({ status: 200, contentType: 'text/javascript', body: `window.selector.ready({
-        async signIn(params) { if (params.network !== 'testnet' || params.addFunctionCallKey) throw new Error('unsafe request'); return [{ accountId: 'browser-test.testnet' }]; },
-        async signOut(params) { if (params.network !== 'testnet') throw new Error('wrong network'); },
-        async getAccounts() { return [{ accountId: 'browser-test.testnet' }]; }
-      });` });
+      await route.fulfill({ status: 200, contentType: 'text/javascript', body });
     });
     await page.goto(url, { waitUntil: 'networkidle' });
     await page.waitForFunction(() => !document.querySelector('[data-wallet-id="meteor-wallet"]').disabled);
@@ -175,10 +196,9 @@ try {
       if (!allowed.has(name)) return route.abort();
       return route.fulfill({ status: 200, contentType: types[path.extname(name)], body: fs.readFileSync(path.join(web, name)) });
     });
-    await page.route('**/meteor-near-connect-latest.js?*', route => route.fulfill({ status: 200, contentType: 'text/javascript', body: `window.selector.ready({
-      async signIn(params) { if (params.network !== 'testnet' || params.addFunctionCallKey) throw new Error('unsafe request'); return [{ accountId: 'production-test.testnet' }]; },
-      async signOut() {}, async getAccounts() { return [{ accountId: 'production-test.testnet' }]; }
-    });` }));
+    const body = mockMeteor('production-test.testnet');
+    await allowMockMeteor(page, body);
+    await page.route('**/meteor-near-connect-latest.js*', route => route.fulfill({ status: 200, contentType: 'text/javascript', body }));
     await page.goto('https://bouncer-near.vercel.app/', { waitUntil: 'networkidle' });
     await page.waitForFunction(() => !document.querySelector('[data-wallet-id="meteor-wallet"]').disabled);
     await page.locator('.top-connect').click();
@@ -202,7 +222,7 @@ try {
       const page = await browserReal.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
       const errors = [];
       page.on('pageerror', error => errors.push(error.message));
-      await page.route('**/meteor-near-connect-latest.js?*', route => route.fulfill({ status: 200, contentType: 'text/javascript', body: executor }));
+      await page.route('**/meteor-near-connect-latest.js*', route => route.fulfill({ status: 200, contentType: 'text/javascript', body: executor }));
       await page.route('https://mc.meteorwallet.app/**', route => route.fulfill({ status: 503, body: 'blocked in browser test' }));
       await page.goto(url, { waitUntil: 'networkidle' });
       await page.waitForFunction(() => !document.querySelector('[data-wallet-id="meteor-wallet"]').disabled);
@@ -217,18 +237,209 @@ try {
     } finally { await browserReal.close(); }
   }
 
+  // The actual separately built Intear adapter plus its pinned upstream picker
+  // fixture, with a synthetic web wallet. This checks sandbox nesting and
+  // permissions without opening or signing in to the provider's live service.
+  const intearBrowser = await chromium.launch({ executablePath, args: browserArgs, headless: true });
+  try {
+    const page = await intearBrowser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+    const errors = [], calls = [], consoleMessages = [];
+    page.on('pageerror', error => errors.push(error.message));
+    page.on('console', message => consoleMessages.push(`${message.type()}: ${message.text()}`));
+    await page.addInitScript(() => window.addEventListener('message', event => {
+      if (event.data?.type === 'bouncer-test-intear-payload') window.__intearTestPayload = event.data.payload;
+    }));
+    const picker = fs.readFileSync(new URL('../web-src/vendor/intear/web/public/hot-wallet-connector-iframe.html', import.meta.url));
+    await page.context().route('https://wallet.intear.tech/**', route => {
+      const url = new URL(route.request().url()); calls.push(url.pathname);
+      if (url.pathname === '/hot-wallet-connector-iframe.html') return route.fulfill({ status: 200, contentType: 'text/html', body: picker });
+      if (url.pathname === '/connect') return route.fulfill({ status: 200, contentType: 'text/html', body: `<script>
+        window.opener.postMessage({type:'ready'}, '*');
+        window.addEventListener('message', event => {
+          if (event.data.type !== 'signIn') return;
+          window.opener.postMessage({type:'bouncer-test-intear-payload',payload:event.data.data}, '*');
+          window.opener.postMessage({type:'connected',accountId:'intear-synthetic.testnet',walletUrl:'https://wallet.intear.tech'}, '*');
+        });
+      </script>` });
+      throw new Error(`Unexpected Intear call: ${url.pathname}`);
+    });
+    await page.goto(url, { waitUntil: 'networkidle' });
+    await page.waitForFunction(() => !document.querySelector('[data-wallet-id="intear-wallet"]').disabled);
+    await page.locator('.top-connect').click();
+    await page.locator('[data-wallet-id="intear-wallet"]').click();
+    const pickerFrame = page.frameLocator('iframe').first().frameLocator('iframe');
+    await pickerFrame.locator('.card-title').getByText('Web', { exact: true }).click({ timeout: 20_000 }).catch(async error => {
+      console.error('Intear browser diagnostic:', { calls, errors, consoleMessages, status: await page.locator('#wallet-status').textContent(), frames: page.frames().map(frame => frame.url()) });
+      throw error;
+    });
+    await page.waitForFunction(() => document.querySelector('#wallet-status').textContent.includes('intear-synthetic.testnet'), null, { timeout: 20_000 });
+    const request = await page.evaluate(() => window.__intearTestPayload);
+    assert.equal(request.networkId, 'testnet');
+    assert.equal(request.contractId, undefined);
+    assert.equal(JSON.parse(request.message).functionCallPublicKey, undefined);
+    assert.ok(calls.includes('/connect'));
+    await page.locator('.top-connect').click();
+    await page.locator('#wallet-disconnect').click();
+    await page.waitForFunction(() => document.querySelector('#wallet-status').textContent.includes('Wallet disconnected.'));
+    assert.match(await page.locator('#wallet-status').textContent(), /disconnected/i);
+    assert.deepEqual(errors, []);
+    console.log('Vendored Intear executor and pinned picker fixture connected to a MOCK web wallet without AddKey; no real wallet was tested.');
+  } finally { await intearBrowser.close(); }
+
+  if (process.env.BOUNCER_CLI_EXECUTOR) {
+    const executor = fs.readFileSync(process.env.BOUNCER_CLI_EXECUTOR);
+    assert.equal(crypto.createHash('sha256').update(executor).digest('hex'), WALLET_EXECUTOR_SHA256['near-cli']);
+    const cliBrowser = await chromium.launch({ executablePath, args: browserArgs, headless: true });
+    try {
+      const page = await cliBrowser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+      const errors = [], writes = [];
+      page.on('pageerror', error => errors.push(error.message));
+      page.on('request', request => { if (!['GET', 'HEAD'].includes(request.method())) writes.push(request.url()); });
+      await page.route('**/near-cli-connect/*/dist/near-cli.js*', route => route.fulfill({ status: 200, contentType: 'text/javascript', body: executor }));
+      await page.goto(url, { waitUntil: 'networkidle' });
+      await page.waitForFunction(() => !document.querySelector('[data-wallet-id="near-cli"]').disabled);
+      await page.locator('.top-connect').click();
+      await page.locator('[data-wallet-id="near-cli"]').click();
+      const frame = page.frameLocator('iframe').first();
+      await frame.locator('#account-id').fill('cli-synthetic.testnet', { timeout: 20_000 });
+      await frame.locator('#submit-btn').click();
+      await frame.locator('#submit-signing-method-btn').click();
+      await page.waitForFunction(() => document.querySelector('#wallet-status').textContent.includes('cli-synthetic.testnet'));
+      assert.match(await page.locator('#wallet-status').textContent(), /wallet-reported/);
+      assert.deepEqual(writes, [], 'CLI account entry must not send any transaction or write request');
+      assert.deepEqual(errors, []);
+      console.log('Pinned NEAR CLI UI accepted a synthetic manually entered account without a transaction; ownership was not verified.');
+    } finally { await cliBrowser.close(); }
+  }
+
+  if (process.env.BOUNCER_MOBILE_EXECUTOR) {
+    // Run the exact Fastnear NEAR Mobile executor with a *synthetic* signer and
+    // testnet RPC. Verify the real NEP-413 path: no AddKey/DeleteKey request is
+    // made, the login signature and returned access key are actually checked.
+    // Nothing here contacts a real wallet or submits a NEAR transaction.
+    const executor = fs.readFileSync(process.env.BOUNCER_MOBILE_EXECUTOR);
+    assert.equal(crypto.createHash('sha256').update(executor).digest('hex'), WALLET_EXECUTOR_SHA256['near-mobile']);
+    const mobileBrowser = await chromium.launch({ executablePath, args: browserArgs, headless: true });
+    try {
+      const page = await mobileBrowser.newPage({
+        viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true,
+        userAgent: 'Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 Chrome/133.0.0.0 Mobile Safari/537.36',
+      });
+      const errors = [], calls = [], rpc = [], consoleMessages = [], failures = [];
+      page.on('pageerror', error => errors.push(error.message));
+      page.on('console', message => consoleMessages.push(`${message.type()}: ${message.text()}`));
+      page.on('requestfailed', request => failures.push(`${request.method()} ${request.url()}: ${request.failure()?.errorText}`));
+      const pair = KeyPair.fromRandom('ed25519'); // ephemeral synthetic test key only
+      const publicKey = pair.getPublicKey().toString();
+      let messageRequest, approved = false, corruptSignature = false;
+      const cors = { 'access-control-allow-origin': '*', 'access-control-allow-methods': 'GET, POST, OPTIONS', 'access-control-allow-headers': 'content-type' };
+      const respond = (route, data) => route.fulfill({ status: 200, headers: cors, contentType: 'application/json', body: JSON.stringify(data) });
+      await page.route('**/fastnear/near-connect/*/repository/near-mobile.js*', route => route.fulfill({ status: 200, headers: cors, contentType: 'text/javascript', body: executor }));
+      await page.context().route('https://near-mobile-signer-backend_production.peersyst.tech/**', async route => {
+        const req = route.request(), pathname = new URL(req.url()).pathname;
+        if (req.method() === 'OPTIONS') return route.fulfill({ status: 204, headers: cors });
+        calls.push({ method: req.method(), pathname });
+        if (pathname.startsWith('/assets/')) return route.fulfill({ status: 200, headers: cors, contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg"/>' });
+        if (pathname === '/api/deep-link') return route.fulfill({ status: 200, headers: cors, contentType: 'text/html', body: 'Synthetic deep link' });
+        if (pathname === '/api/signer-request/message' && req.method() === 'POST') {
+          messageRequest = req.postDataJSON();
+          return respond(route, { id: 'bouncer-synthetic-login', network: 'testnet', status: 'pending' });
+        }
+        if (pathname === '/api/signer-request/message/bouncer-synthetic-login' && req.method() === 'GET') {
+          if (!approved) return respond(route, { id: 'bouncer-synthetic-login', network: 'testnet', status: 'pending' });
+          const string = value => { const text = Buffer.from(value); const length = Buffer.alloc(4); length.writeUInt32LE(text.length); return Buffer.concat([length, text]); };
+          const tag = Buffer.alloc(4); tag.writeUInt32LE(2 ** 31 + 413);
+          const payload = Buffer.concat([tag, string(messageRequest.message), Buffer.from(messageRequest.nonce), string(messageRequest.receiver), Buffer.from([0])]);
+          const hash = crypto.createHash('sha256').update(payload).digest();
+          const signatureBytes = Buffer.from(pair.sign(hash).signature);
+          if (corruptSignature) signatureBytes[0] ^= 1;
+          return respond(route, { id: 'bouncer-synthetic-login', network: 'testnet', status: 'approved', response: { accountId: 'synthetic.testnet', publicKey, signature: signatureBytes.toString('base64') } });
+        }
+        throw new Error(`Unexpected Mobile signer call: ${req.method()} ${pathname}`);
+      });
+      await page.route('https://test.rpc.fastnear.com/**', async route => {
+        const req = route.request();
+        if (req.method() === 'OPTIONS') return route.fulfill({ status: 204, headers: cors });
+        const body = req.postDataJSON(); rpc.push(body);
+        return respond(route, { jsonrpc: '2.0', id: body.id, result: { permission: 'FullAccess' } });
+      });
+      await page.goto(url, { waitUntil: 'networkidle' });
+      await page.waitForFunction(() => !document.querySelector('[data-wallet-id="near-mobile"]').disabled);
+      await page.locator('.top-connect').click();
+      await page.locator('[data-wallet-id="near-mobile"]').click();
+      const mobileFrame = page.frameLocator('iframe').first();
+      await mobileFrame.locator('#qr-code svg').waitFor({ timeout: 20_000 }).catch(async error => {
+        console.error('Mobile browser diagnostic:', { calls, errors, consoleMessages, failures, status: await page.locator('#wallet-status').textContent(), frames: page.frames().map(frame => frame.url()) });
+        throw error;
+      });
+      assert.equal(messageRequest.network, 'testnet');
+      assert.equal(messageRequest.receiver, new URL(url).host);
+      assert.equal(messageRequest.nonce.length, 32);
+      assert.match(messageRequest.message, /login message does not approve a transaction, transfer funds, or add an access key/i);
+      // The phone button must be permitted to open the exact signer deep-link.
+      const popupPromise = page.waitForEvent('popup', { timeout: 10_000 });
+      await mobileFrame.locator('#approve-button').click();
+      const popup = await popupPromise;
+      await popup.waitForURL(url => url.hostname === 'near-mobile-signer-backend_production.peersyst.tech', { timeout: 10_000 }).catch(error => {
+        console.error('Mobile deep-link diagnostic:', { popupUrl: popup.url(), calls, errors, consoleMessages, failures });
+        throw error;
+      });
+      await popup.close();
+      approved = true;
+      await page.waitForFunction(() => document.querySelector('#wallet-status').textContent.includes('synthetic.testnet'), null, { timeout: 20_000 });
+      assert.deepEqual(rpc.map(request => [request.method, request.params.request_type]), [['query', 'view_access_key']]);
+      assert.equal(rpc[0].params.account_id, 'synthetic.testnet');
+      assert.equal(rpc[0].params.public_key, publicKey);
+      await page.locator('.top-connect').click();
+      await page.locator('#wallet-disconnect').click();
+      assert.equal(calls.filter(call => call.method === 'POST').length, 1);
+      assert.deepEqual(calls.filter(call => call.method === 'POST').map(call => call.pathname), ['/api/signer-request/message']);
+      // A forged signature must be rejected before any access-key RPC lookup.
+      approved = false; corruptSignature = true;
+      await page.locator('[data-wallet-id="near-mobile"]').click();
+      await page.frameLocator('iframe').first().locator('#qr-code svg').waitFor({ timeout: 20_000 });
+      approved = true;
+      await page.waitForFunction(() => document.querySelector('#wallet-status').textContent.includes('cancelled or unavailable'), null, { timeout: 20_000 });
+      assert.equal(await page.locator('#wallet-disconnect').isVisible(), false);
+      assert.equal(rpc.length, 1, 'invalid signature must not reach RPC verification');
+      assert.deepEqual(calls.filter(call => call.method === 'POST').map(call => call.pathname), ['/api/signer-request/message', '/api/signer-request/message']);
+      assert.deepEqual(errors, []);
+      console.log('Pinned NEAR Mobile executor verified a synthetic signed login and rejected a forgery; QR/deep-link and local disconnect passed. No real wallet or transaction tested.');
+    } finally { await mobileBrowser.close(); }
+  }
+
   const browserError = await chromium.launch({ executablePath, args: browserArgs, headless: true });
   try {
-    const page = await browserError.newPage();
-    await page.route('**/meteor-near-connect-latest.js?*', route => route.fulfill({ status: 503, body: 'unavailable' }));
-    await page.goto(url, { waitUntil: 'networkidle' });
-    await page.waitForFunction(() => !document.querySelector('[data-wallet-id="meteor-wallet"]').disabled);
-    await page.locator('.top-connect').click();
-    await page.locator('[data-wallet-id="meteor-wallet"]').click();
-    await page.waitForFunction(() => document.querySelector('#wallet-dialog-status').textContent.includes('cancelled or unavailable'));
-    assert.equal(await page.locator('#wallet-dialog').evaluate(el => el.open), true);
-    assert.equal(await page.locator('#wallet-disconnect').isVisible(), false);
-    console.log('Wallet executor outage fails closed without a fake connection.');
+    for (const tampered of [false, true]) {
+      const page = await browserError.newPage();
+      const errors = [];
+      page.on('pageerror', error => errors.push(error.message));
+      const poison = `window.parent.postMessage({ type: 'bouncer-test-poison' }, '*'); window.selector.ready({});`;
+      await page.addInitScript(() => window.addEventListener('message', event => { if (event.data?.type === 'bouncer-test-poison') window.__untrustedExecuted = true; }));
+      await page.route('**/meteor-near-connect-latest.js*', route => route.fulfill(tampered
+        ? { status: 200, contentType: 'text/javascript', body: poison }
+        : { status: 503, body: 'unavailable' }));
+      await page.goto(url, { waitUntil: 'networkidle' });
+      await page.evaluate(async poison => {
+        const open = indexedDB.open('hot-connector', 1);
+        open.onupgradeneeded = () => open.result.createObjectStore('wallets');
+        const db = await new Promise((resolve, reject) => { open.onsuccess = () => resolve(open.result); open.onerror = () => reject(open.error); });
+        const tx = db.transaction('wallets', 'readwrite');
+        tx.objectStore('wallets').put(poison, 'meteor-wallet:1.1.1');
+        await new Promise((resolve, reject) => { tx.oncomplete = resolve; tx.onerror = () => reject(tx.error); });
+        db.close();
+      }, poison);
+      await page.waitForFunction(() => !document.querySelector('[data-wallet-id="meteor-wallet"]').disabled);
+      await page.locator('.top-connect').click();
+      await page.locator('[data-wallet-id="meteor-wallet"]').click();
+      await page.waitForFunction(() => document.querySelector('#wallet-dialog-status').textContent.includes('cancelled or unavailable'));
+      assert.equal(await page.locator('#wallet-dialog').evaluate(el => el.open), true);
+      assert.equal(await page.locator('#wallet-disconnect').isVisible(), false);
+      assert.equal(await page.evaluate(() => window.__untrustedExecuted === true), false, 'stale or tampered executor must not run');
+      assert.deepEqual(errors, [], 'executor failure must not leave an unhandled background fetch');
+      await page.close();
+    }
+    console.log('Wallet executor outage and tampered response fail closed; poisoned IndexedDB is ignored.');
   } finally { await browserError.close(); }
 
   const browser2 = await chromium.launch({ executablePath, args: browserArgs, headless: true });

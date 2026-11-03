@@ -26,7 +26,7 @@ const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PAT
 try {
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
   const page = await context.newPage();
-  await page.route('**/meteor-near-connect-latest.js?*', route => route.fulfill({ status: 200, contentType: 'text/javascript', body: executor }));
+  await page.route('**/meteor-near-connect-latest.js*', route => route.fulfill({ status: 200, contentType: 'text/javascript', body: executor }));
   const requested = process.env.BOUNCER_WALLET_PROBE_ORIGIN;
   if (requested && requested !== 'https://bouncer-near.vercel.app/') throw new Error('unexpected wallet probe origin');
   const target = requested || `http://127.0.0.1:${server.address().port}/`;

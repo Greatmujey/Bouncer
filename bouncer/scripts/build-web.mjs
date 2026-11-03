@@ -3,6 +3,19 @@ import { build } from 'esbuild';
 import { fileURLToPath } from 'node:url';
 
 const here = fileURLToPath(new URL('../', import.meta.url));
+// Intear is a separately loaded AGPL-3.0 component, built from its vendored,
+// pinned upstream sources. Its corresponding source is offered on the site.
+await build({
+  absWorkingDir: here,
+  entryPoints: ['web-src/vendor/intear/web/src/js/near-selector.js'],
+  outfile: 'web/intear-wallet.executor.js',
+  bundle: true,
+  format: 'esm',
+  platform: 'browser',
+  target: ['es2020'],
+  minify: true,
+  define: { __NEARCONNECT__: 'true' },
+});
 await build({
   absWorkingDir: here,
   entryPoints: ['web-src/wallet-entry.mjs'],

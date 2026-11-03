@@ -23,7 +23,9 @@ test('public staging copies exactly the reviewed assets, not other files', t => 
   fs.writeFileSync(path.join(source, 'credentials.txt'), 'private');
   fs.mkdirSync(path.join(source, 'journals'));
   fs.writeFileSync(path.join(source, 'journals', 'recovery.json'), 'private');
-  assert.equal(PUBLIC_WEB_FILES.length, 10);
+  assert.equal(PUBLIC_WEB_FILES.length, 12);
+  assert.ok(PUBLIC_WEB_FILES.includes('intear-wallet.executor.js'));
+  assert.ok(PUBLIC_WEB_FILES.includes('intear-wallet-source.zip'));
   assert.ok(PUBLIC_WEB_FILES.includes('hero-orbit.jpg'));
   assert.ok(PUBLIC_WEB_FILES.includes('manrope-latin.woff2'));
   assert.ok(PUBLIC_WEB_FILES.includes('manrope-OFL.txt'));
@@ -79,6 +81,16 @@ test('public staging approves only the dedicated Bouncer wallet origin', t => {
 test('staging CLI runs from the web root and publishes only allowlisted files', t => {
   const { dest } = fixture(t);
   const output = execFileSync(process.execPath, [script, dest], { cwd: realSource, encoding: 'utf8' });
-  assert.match(output, /Staged 10 reviewed public website files/);
+  assert.match(output, /Staged 12 reviewed public website files/);
   assert.deepEqual(fs.readdirSync(dest).sort(), [...PUBLIC_WEB_FILES].sort());
+});
+
+test('Intear source offer contains exactly the vendored corresponding source and license', () => {
+  const archive = path.join(realSource, 'intear-wallet-source.zip');
+  const names = execFileSync('python3', ['-c', 'import sys,zipfile; print("\\n".join(zipfile.ZipFile(sys.argv[1]).namelist()))', archive], { encoding: 'utf8' }).trim().split('\n');
+  assert.deepEqual(names, ['README.txt', 'LICENSE', 'web/src/js/near-selector.js', 'intearwallet-connect/src/index.ts', 'web/public/hot-wallet-connector-iframe.html']);
+  for (const name of names) {
+    const bytes = execFileSync('python3', ['-c', 'import sys,zipfile; sys.stdout.buffer.write(zipfile.ZipFile(sys.argv[1]).read(sys.argv[2]))', archive, name]);
+    assert.deepEqual(bytes, fs.readFileSync(new URL(`../web-src/vendor/intear/${name}`, import.meta.url)));
+  }
 });

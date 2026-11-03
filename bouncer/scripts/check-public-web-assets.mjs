@@ -15,7 +15,8 @@ const typeFor = file => file.endsWith('.html') ? 'text/html'
     : file.endsWith('.svg') ? 'image/svg+xml'
       : file.endsWith('.jpg') ? 'image/jpeg'
         : file.endsWith('.woff2') ? 'font/woff2'
-          : file.endsWith('.txt') ? 'text/plain' : 'javascript';
+          : file.endsWith('.txt') ? 'text/plain'
+            : file.endsWith('.zip') ? 'application/zip' : 'javascript';
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 validatePublicWeb(web);
 

@@ -1,9 +1,22 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { initWallet, walletOriginAllowed } from '../web-src/wallet-core.mjs';
+import { webcrypto } from 'node:crypto';
+import fs from 'node:fs';
+import { initWallet as bootWallet, walletOriginAllowed } from '../web-src/wallet-core.mjs';
 import { WALLET_MANIFEST } from '../web-src/wallet-manifest.mjs';
+import { loadVerifiedExecutor, WALLET_EXECUTOR_SHA256 } from '../web-src/wallet-executor.mjs';
 
-const location = url => { const u = new URL(url); return { hostname: u.hostname, protocol: u.protocol, origin: u.origin }; };
+const location = url => { const u = new URL(url); return { hostname: u.hostname, host: u.host, protocol: u.protocol, origin: u.origin }; };
+class FakeSandboxWallet {
+  constructor(manifest, config) { this.manifest = manifest; this.config = config; this.executor = {}; }
+  async signMessage(params) {
+    this.config.messageRequests ??= [];
+    this.config.messageRequests.push(params);
+    if (this.config.fail) throw new Error('cancelled');
+    return this.config.messageResult || { accountId: 'mobile.testnet', publicKey: 'ed25519:public', signature: 'test-signature' };
+  }
+}
+const initWallet = params => bootWallet({ ...params, SandboxWallet: FakeSandboxWallet });
 class Element {
   constructor(dataset = {}) { this.listeners = {}; this.dataset = dataset; this.hidden = false; this.disabled = false; this.textContent = ''; this.open = false; this.attributes = {}; this.focused = false; }
   addEventListener(event, callback) { this.listeners[event] = callback; }
@@ -18,10 +31,10 @@ function fakeBrowser(url, { top = true, storageFails = false, approved = '' } = 
   const ids = ['wallet-connect', 'wallet-disconnect', 'wallet-status', 'wallet-open-site', 'wallet-dialog', 'wallet-close', 'wallet-options', 'wallet-dialog-status', 'wallet-banner'];
   const nodes = Object.fromEntries(ids.map(id => [id, new Element()]));
   nodes['wallet-open-site'].hidden = true;
-  const options = ['meteor-wallet', 'nightly-wallet', 'ledger'].map(walletId => new Element({ walletId }));
+  const options = ['meteor-wallet', 'nightly-wallet', 'ledger', 'near-mobile', 'intear-wallet', 'near-cli'].map(walletId => new Element({ walletId }));
   const openers = [nodes['wallet-connect'], new Element(), new Element()];
   const data = new Map(), labels = [new Element(), new Element(), new Element()];
-  const win = { location: { ...location(url), href: url }, localStorage: {
+  const win = { location: { ...location(url), href: url }, crypto: webcrypto, fetch: async () => { throw new Error('unexpected network'); }, localStorage: {
     getItem(key) { if (storageFails) throw new Error('storage disabled'); return data.get(key) ?? null; },
     setItem(key, value) { if (storageFails) throw new Error('storage disabled'); data.set(key, value); },
     removeItem(key) { if (storageFails) throw new Error('storage disabled'); data.delete(key); },
@@ -37,7 +50,7 @@ function connectorClass(config = {}) {
   return class FakeConnector {
     constructor(options) {
       config.options = options; config.instance = this;
-      this.events = {}; this.wallets = options.manifest.wallets.map(manifest => ({ manifest }));
+      this.events = {}; this.wallets = options.manifest.wallets.map(manifest => new FakeSandboxWallet(manifest, config));
       this.db = {}; this.whenManifestLoaded = Promise.resolve();
     }
     on(event, fn) { this.events[event] = fn; }
@@ -72,12 +85,17 @@ test('wallet origin policy blocks shared origins, unapproved sites, HTTP and ifr
   assert.equal(walletOriginAllowed(location('http://127.0.0.1:4173/'), true), true);
 });
 
-test('wallet manifests are curated testnet, no-add-key choices with immutable executor URLs', () => {
-  assert.deepEqual(WALLET_MANIFEST.wallets.map(w => w.id).sort(), ['ledger', 'meteor-wallet', 'nightly-wallet']);
+test('wallet manifests are curated testnet choices with pinned, integrity-checked executors', () => {
+  assert.deepEqual(WALLET_MANIFEST.wallets.map(w => w.id).sort(), ['intear-wallet', 'ledger', 'meteor-wallet', 'near-cli', 'near-mobile', 'nightly-wallet']);
   for (const wallet of WALLET_MANIFEST.wallets) {
     assert.equal(wallet.features.testnet, true);
-    assert.equal(wallet.features.signInWithoutAddKey, true);
-    assert.match(wallet.executor, /^https:\/\/raw\.githubusercontent\.com\/[^/]+\/[^/]+\/[0-9a-f]{40}\//);
+    assert.match(WALLET_EXECUTOR_SHA256[wallet.id], /^[a-f0-9]{64}$/);
+    if (wallet.id === 'near-mobile') {
+      assert.equal(wallet.features.signInWithoutAddKey, false, 'ordinary Mobile signIn is not safe');
+      assert.equal(wallet.features.signMessage, true);
+    } else assert.equal(wallet.features.signInWithoutAddKey, true);
+    if (wallet.id === 'intear-wallet') assert.equal(wallet.executor, '/intear-wallet.executor.js');
+    else assert.match(wallet.executor, /^https:\/\/raw\.githubusercontent\.com\/[^/]+\/[^/]+\/[0-9a-f]{40}\//);
   }
 });
 
@@ -104,13 +122,15 @@ test('connects and disconnects a wallet-reported account without requesting a ke
   const browser = fakeBrowser('http://127.0.0.1:4173/'), config = { browser };
   await initWallet({ window: browser.win, document: browser.doc, NearConnector: connectorClass(config) });
   assert.equal(config.options.network, 'testnet');
-  assert.equal(config.options.features.signInWithoutAddKey, true);
+  assert.equal(config.options.features.testnet, true);
+  assert.equal(config.options.features.signInWithoutAddKey, undefined, 'Mobile uses a separate message-only flow');
   assert.equal(config.options.autoConnect, false);
   assert.equal(browser.nodes['wallet-connect'].disabled, false);
   // An injected wallet replacing a trusted ID is filtered rather than selected.
   config.instance.wallets.unshift({ manifest: { ...WALLET_MANIFEST.wallets.find(w => w.id === 'meteor-wallet') } });
+  config.instance.wallets.unshift({ manifest: WALLET_MANIFEST.wallets.find(w => w.id === 'meteor-wallet') });
   config.instance.events['selector:walletsChanged']();
-  assert.equal(config.instance.wallets.length, 3);
+  assert.equal(config.instance.wallets.length, 6, 'even a forged object using a curated manifest is rejected');
   await browser.nodes['wallet-connect'].click();
   assert.equal(browser.nodes['wallet-dialog'].open, true);
   assert.equal(config.input, undefined, 'opening the picker does not connect');
@@ -183,4 +203,84 @@ test('picker opens from every entry point, returns focus, and only accepts curat
   await browser.options[0].click();
   assert.equal(config.input, undefined);
   assert.equal(browser.nodes['wallet-dialog'].open, true);
+});
+
+test('NEAR Mobile uses fresh off-chain testnet messages and never signs in or deletes a key', async () => {
+  const browser = fakeBrowser('https://bouncer-near.vercel.app/', { approved: 'https://bouncer-near.vercel.app' });
+  const config = { browser };
+  await initWallet({ window: browser.win, document: browser.doc, NearConnector: connectorClass(config) });
+  const mobile = browser.options.find(option => option.dataset.walletId === 'near-mobile');
+  for (let index = 0; index < 2; index++) {
+    await browser.nodes['wallet-connect'].click();
+    await mobile.click();
+    const params = config.messageRequests[index];
+    assert.equal(config.input, undefined, 'ordinary Mobile signIn is forbidden');
+    assert.equal(params.network, 'testnet');
+    assert.equal(params.recipient, 'bouncer-near.vercel.app');
+    assert.equal(params.nonce.length, 32);
+    assert.match(params.message, /login message does not approve a transaction, transfer funds, or add an access key/i);
+    assert.match(browser.nodes['wallet-status'].textContent, /Connected: mobile\.testnet/);
+    assert.equal(browser.data.get('bouncer:near-connect:selected-wallet'), undefined, 'Mobile session is not persisted');
+    await browser.nodes['wallet-connect'].click();
+    await browser.nodes['wallet-disconnect'].click();
+    assert.equal(config.disconnected, undefined, 'Mobile adapter signOut must never be called');
+    assert.match(browser.nodes['wallet-status'].textContent, /disconnected/i);
+  }
+  assert.notDeepEqual([...config.messageRequests[0].nonce], [...config.messageRequests[1].nonce]);
+});
+
+test('NEAR Mobile rejects missing signed data and named mainnet accounts', async () => {
+  for (const messageResult of [
+    { accountId: 'mobile.testnet', publicKey: '', signature: '' },
+    { accountId: 'alice.near', publicKey: 'ed25519:public', signature: 'test-signature' },
+  ]) {
+    const browser = fakeBrowser('https://bouncer-near.vercel.app/', { approved: 'https://bouncer-near.vercel.app' });
+    const config = { messageResult };
+    await initWallet({ window: browser.win, document: browser.doc, NearConnector: connectorClass(config) });
+    await browser.nodes['wallet-connect'].click();
+    await browser.options.find(option => option.dataset.walletId === 'near-mobile').click();
+    assert.equal(browser.nodes['wallet-disconnect'].hidden, true);
+    assert.equal(browser.nodes['wallet-dialog'].open, true);
+    assert.doesNotMatch(browser.nodes['wallet-status'].textContent, /^Connected:/);
+    assert.equal(config.input, undefined);
+  }
+});
+
+test('executor loader verifies bytes, rejects tampering and ignores the shared cached executor', async () => {
+  const wallet = WALLET_MANIFEST.wallets.find(entry => entry.id === 'intear-wallet');
+  const good = fs.readFileSync(new URL('../web/intear-wallet.executor.js', import.meta.url));
+  let request;
+  const fetch = async (url, options) => {
+    request = { url, options };
+    return new Response(good, { status: 200, headers: { 'content-length': String(good.length) } });
+  };
+  const context = { fetch, crypto: webcrypto, location: { origin: 'https://bouncer-near.vercel.app' } };
+  assert.equal(await loadVerifiedExecutor(wallet, context), good.toString('utf8'));
+  assert.equal(request.url, 'https://bouncer-near.vercel.app/intear-wallet.executor.js');
+  assert.equal(request.options.credentials, 'omit');
+  assert.equal(request.options.redirect, 'error');
+  await assert.rejects(loadVerifiedExecutor(wallet, { ...context, fetch: async () => new Response('malicious cached code') }), /integrity check failed/);
+  await assert.rejects(loadVerifiedExecutor(wallet, { ...context, fetch: async () => new Response('x', { headers: { 'content-length': '5000000' } }) }), /too large/);
+  await assert.rejects(loadVerifiedExecutor({ ...wallet, executor: 'https://evil.example/executor.js' }, context), /Unapproved/);
+  await assert.rejects(loadVerifiedExecutor(wallet, { ...context, fetch: async () => { throw new Error('offline'); } }), /offline/);
+
+  const browser = fakeBrowser('https://bouncer-near.vercel.app/', { approved: 'https://bouncer-near.vercel.app' }), config = {};
+  browser.win.fetch = fetch;
+  await initWallet({ window: browser.win, document: browser.doc, NearConnector: connectorClass(config) });
+  const protectedWallet = config.instance.wallets.find(entry => entry.manifest.id === 'intear-wallet');
+  config.instance.db.getItem = async () => 'malicious cached code';
+  assert.equal(await protectedWallet.executor.loadCode(), good.toString('utf8'), 'custom loader never asks the connector cache');
+  browser.win.fetch = async () => new Response('malicious cached code');
+  await assert.rejects(protectedWallet.executor.loadCode(), /integrity check failed/);
+});
+
+test('Intear fails clearly on browsers without native Ed25519 support', async () => {
+  const browser = fakeBrowser('http://127.0.0.1:4173/'), config = {};
+  browser.win.crypto = { subtle: { generateKey: async () => { throw new Error('unsupported algorithm'); } } };
+  await initWallet({ window: browser.win, document: browser.doc, NearConnector: connectorClass(config) });
+  await browser.nodes['wallet-connect'].click();
+  await browser.options.find(option => option.dataset.walletId === 'intear-wallet').click();
+  assert.match(browser.nodes['wallet-status'].textContent, /newer browser.*Ed25519/);
+  assert.equal(browser.nodes['wallet-disconnect'].hidden, true);
+  assert.equal(config.input, undefined);
 });
