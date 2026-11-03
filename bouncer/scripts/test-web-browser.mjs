@@ -414,7 +414,9 @@ try {
           } finally { fs.rmSync(home, { recursive: true, force: true }); }
         }
         await frame.locator('#sign-output').fill(JSON.stringify(output));
-        await frame.locator('#submit-sign-btn').click();
+        // Keyboard activation also avoids hosted Chromium's intermittent loss
+        // of synthetic pointer events in a nested sandbox iframe.
+        await frame.locator('#submit-sign-btn').press('Enter');
       }
       await submitCliSignature();
       await page.waitForFunction(() => document.querySelector('#wallet-status').textContent.includes('cli-synthetic.testnet'));
