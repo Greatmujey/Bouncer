@@ -11,16 +11,17 @@ The replacement plan in `config/testnet-owner-v2-plan.json` identifies a
 **different**, newly generated testnet-only owner and public key. Before any
 helper request, two independently encrypted local keyring copies and the
 matching public key were checked, and a recovery file was opened privately for
-the user. No key was sent to GitHub or CI, and whether the user downloaded a
-backup is unverified.
+the user. No key was sent to GitHub or CI. On 3 November the user said they did
+not save that replacement-owner recovery file or were unsure.
 
 The encrypted keyring and wrapping key were stored together in the Git-ignored
 `.bouncer-private/replacement-owner/` folder, with a second local copy. On
 3 November 2026 those folders were **not present in the current workspace**.
-Public transaction and workflow artifacts are not private-key backups. Whether
-the user saved the previously presented recovery file is unconfirmed. Do not
-assume this owner can sign or that its testnet funds can be moved. Never paste,
-publish, upload or log its private key, and never use it on mainnet.
+Public transaction and workflow artifacts are not private-key backups. The
+user could not confirm having saved the previously presented replacement-owner
+file. Treat this owner's signing and testnet funds as inaccessible unless the
+matching private key is securely recovered. Never paste, publish, upload or log
+its private key, and never use it on mainnet.
 
 The [one-shot helper run](https://github.com/Greatmujey/Bouncer/actions/runs/41519023912)
 verified the replacement owner at FINAL with 10 test NEAR and its sole expected
