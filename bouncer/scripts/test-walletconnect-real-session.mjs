@@ -24,8 +24,9 @@ const withTimeout = (promise, ms, label) => {
   let timer;
   return Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`${label} timed out`)), ms); })]).finally(() => clearTimeout(timer));
 };
-let browser, wallet, activeTopic, pairingTopic, bridgeServer, phase = 'browser startup';
+let browser, page, wallet, activeTopic, pairingTopic, bridgeServer, phase = 'browser startup';
 let bridgePort = 0;
+const bridgeDiagnostics = Object.create(null);
 const localBridge = process.env.BOUNCER_GATEWAY_LOCAL === '1';
 const liveBridge = process.env.BOUNCER_GATEWAY_LIVE === '1';
 const testBridgeHost = process.env.BOUNCER_GATEWAY_TEST_HOST || '';
@@ -40,12 +41,12 @@ try {
     if (!response.ok) throw new Error('Public WalletConnect configuration unavailable');
     const { projectId } = await response.json();
     const { createRelayBridge } = await import('../walletconnect/relay-bridge.mjs');
-    bridgeServer = createRelayBridge({ projectId });
+    bridgeServer = createRelayBridge({ projectId, onDiagnostic: name => { bridgeDiagnostics[name] = (bridgeDiagnostics[name] || 0) + 1; } });
     await new Promise((resolve, reject) => { bridgeServer.once('error', reject); bridgeServer.listen(0, '127.0.0.1', resolve); });
     bridgePort = bridgeServer.address().port;
   }
   browser = await playwright.chromium.launch({ executablePath, args: ['--no-sandbox'], headless: true });
-  const page = await browser.newPage(process.env.BOUNCER_SHORT_VIEWPORT === '1'
+  page = await browser.newPage(process.env.BOUNCER_SHORT_VIEWPORT === '1'
     ? { viewport: { width: 683, height: 304 }, deviceScaleFactor: 2 }
     : process.platform === 'win32'
       ? { viewport: { width: 1365, height: 768 } }
@@ -195,6 +196,14 @@ try {
   // public CI log records only a bounded phase and a safe error category.
   const kind = /^[A-Za-z][A-Za-z0-9]{0,40}$/.test(error?.name || '') ? error.name : 'Error';
   console.error(`WalletConnect probe failed during ${phase} (${kind}); no session data logged.`);
+  if (localBridge) {
+    const state = await page?.evaluate(() => ({
+      attempted: (window.__bouncerRelayAttempts || []).filter(item => ['relay.walletconnect.org', 'relay.walletconnect.com', 'bouncer-gateway'].includes(item)),
+      code: (document.querySelector('#walletconnect-error-detail')?.textContent || '').match(/WC-[A-Z]+/)?.[0] || 'none',
+      qrShown: !document.querySelector('#walletconnect-qr')?.hidden,
+    })).catch(() => null);
+    console.error('Synthetic bridge diagnostic:', JSON.stringify({ state, events: bridgeDiagnostics }));
+  }
   process.exitCode = 1;
 } finally {
   if (wallet) {

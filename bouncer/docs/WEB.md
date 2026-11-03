@@ -116,6 +116,43 @@ supports NEAR testnet and this minimal namespace; no real WalletConnect wallet
 session has been verified yet. Without an ID the picker says setup is required.
 Do not borrow another project's ID.
 
+### Candidate relay fallback (not yet deployed)
+
+The working branch also contains an experimental third transport for the
+approved origin only. Before a QR is shown it tries `.org` and `.com` directly
+for up to 10 seconds each, then a Bouncer same-origin gateway for up to 18
+seconds, within the existing 50-second outer deadline. It never switches an
+already displayed QR. The gateway's only upstream is the fixed official
+`wss://relay.walletconnect.org` endpoint. The browser signs the relay JWT for
+that canonical audience and sends it to the gateway in its first TLS-protected
+WebSocket frame, **not** in the gateway URL. Pairing URIs and symmetric keys
+stay in tab memory; the gateway does see relay authentication, the public
+project ID, connection/IP information, routing topics/metadata, and encrypted
+relay payloads. The interface discloses this fallback. This is not a privacy or
+security audit, and a compromised client/server still presents risks.
+
+The candidate validates the site origin, project ID, JWT signature/audience and
+expiry, and fixed upstream; it bounds payload size, traffic, handshake duration,
+connection lifetime, and per-IP/per-instance concurrency/rate. Those counters
+are **not global**: instances can scale independently, an Origin header is not
+proof of a trustworthy client, and distributed abuse could exhaust the team's
+Vercel quota. Before enabling the public endpoint, configure and verify a
+Vercel WAF rate limit for `/api/wc-relay`, consider a globally shared quota and
+monitor Function usage. The current connector does not expose WAF configuration;
+no such rule has been installed or verified here. The team's Hobby plan is
+non-commercial and may suspend features after usage limits are reached. Confirm
+plan and Reown terms for any commercial deployment.
+
+Unit tests use mock sockets; candidate CI separately tests synthetic wallet
+sessions over Reown with the browser's two direct relays blocked. A real wallet,
+the user's Windows connection and Vercel's WebSocket deployment remain
+unverified. On 3 November 2026 Vercel rejected the isolated test deployment with
+`api-deployments-free-per-day` (100 Hobby deployments per day); the temporary
+empty test project was removed. The existing production deployment was not
+changed. Do not describe the candidate as live until the quota resets, the
+Vercel endpoint and edge protections are tested, and a suitable release is
+explicitly deployed.
+
 To enable the deployed site, the owner creates a project at
 `https://dashboard.reown.com/sign-up`, copies its public **Project ID**, and
 allowlists `https://bouncer-near.vercel.app` in the dashboard. Allowlist changes

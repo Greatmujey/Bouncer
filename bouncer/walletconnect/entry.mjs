@@ -8,16 +8,22 @@ import { connectWalletConnectWithFallback, WC_RELAY_URLS } from '../web-src/wall
 
 export async function connect(options) {
   return connectWalletConnectWithFallback({ ...options, createClient: ({ useBridge, attemptSignal, ...config }) => {
-    if (!useBridge) return SignClient.init(config);
-    // Do not change relayUrl: the relay JWT must be signed for the canonical
-    // upstream audience. Only this Core instance's freshly signed socket is
-    // routed by the bundle-local transport shim to the same-origin gateway.
+    // Hold the Core while SignClient.init is pending, so a timed-out attempt
+    // can stop its internal retry loop instead of continuing in the background.
     const core = new Core(config);
+    const stop = () => {
+      try { core.heartbeat?.stop?.(); } catch { /* best effort */ }
+      try { void Promise.resolve(core.relayer?.transportClose?.()).catch(() => {}); } catch { /* not started */ }
+    };
+    attemptSignal?.addEventListener('abort', stop, { once: true });
     const sign = core.crypto.signJWT.bind(core.crypto);
     core.crypto.signJWT = async audience => {
-      if (audience !== WC_RELAY_URLS[0] || attemptSignal?.aborted) throw new Error('WalletConnect pairing cancelled');
+      if (attemptSignal?.aborted || (useBridge && audience !== WC_RELAY_URLS[0])) throw new Error('WalletConnect pairing cancelled');
       const jwt = await sign(audience);
-      registerBridgeToken(jwt, attemptSignal);
+      if (attemptSignal?.aborted) throw new Error('WalletConnect pairing cancelled');
+      // Preserve the canonical JWT audience. Only this Core instance's socket
+      // is routed by the bundle-local shim to the same-origin gateway.
+      if (useBridge) registerBridgeToken(jwt, attemptSignal);
       return jwt;
     };
     return SignClient.init({ ...config, core });

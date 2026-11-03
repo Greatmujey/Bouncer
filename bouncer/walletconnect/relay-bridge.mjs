@@ -52,7 +52,11 @@ export function createRelayBridge({
   maxConnections = 16, maxPerIp = 2, maxPerMinute = 12,
   handshakeTimeoutMs = 7_000, upstreamTimeoutMs = 12_000, lifetimeMs = 240_000,
   maxPayload = 64 * 1024, maxMessages = 512, maxTotalBytes = 2 * 1024 * 1024,
+  onDiagnostic,
 } = {}) {
+  // Optional tests may count fixed event names. The deployed entry passes no
+  // callback and never logs connection, request or session data.
+  const diagnostic = code => { try { onDiagnostic?.(code); } catch { /* test diagnostics must not affect transport */ } };
   const active = new Map(), recent = new Map();
   let totalActive = 0;
   const server = http.createServer((_req, res) => {
@@ -64,7 +68,7 @@ export function createRelayBridge({
   server.on('clientError', (_error, socket) => socket.destroy());
   server.on('upgrade', (req, socket, head) => {
     // No query string: request/access logs must never contain the relay JWT.
-    if (!isProjectId(projectId) || req.method !== 'GET' || req.url !== BRIDGE_PATH || req.headers.origin !== allowedOrigin) return reject(socket, 403);
+    if (!isProjectId(projectId) || req.method !== 'GET' || req.url !== BRIDGE_PATH || req.headers.origin !== allowedOrigin) { diagnostic('UPGRADE_DENIED'); return reject(socket, 403); }
     const forwarded = String(req.headers['x-vercel-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
     if (!forwarded || forwarded.length > 100) return reject(socket, 403);
     const now = Date.now();
@@ -76,6 +80,7 @@ export function createRelayBridge({
     try {
       wss.handleUpgrade(req, socket, head, client => {
         active.set(forwarded, (active.get(forwarded) || 0) + 1); totalActive++;
+        diagnostic('UPGRADE_ACCEPTED');
         wss.emit('connection', client, req, forwarded);
       });
     } catch { socket.destroy(); }
@@ -94,16 +99,18 @@ export function createRelayBridge({
       try { if (client.readyState === WebSocket.OPEN || client.readyState === WebSocket.CONNECTING) client.close(); } catch { /* best effort */ }
     };
     const fail = code => {
+      diagnostic(`FAIL_${code}`);
       if (!closed && client.readyState === WebSocket.OPEN) {
         try { client.send(`${BRIDGE_ERROR}:${code}`); } catch { /* best effort */ }
       }
       finish();
     };
     const forward = (destination, data, binary) => {
-      if (closed || !established || binary || destination?.readyState !== WebSocket.OPEN || destination.bufferedAmount > 256 * 1024) return finish();
+      if (closed || !established || binary || destination?.readyState !== WebSocket.OPEN || destination.bufferedAmount > 256 * 1024) { diagnostic(binary ? 'FORWARD_BINARY' : 'FORWARD_UNAVAILABLE'); return finish(); }
       const length = typeof data === 'string' ? Buffer.byteLength(data) : data.length;
       messages++; bytes += length;
-      if (messages > maxMessages || bytes > maxTotalBytes || length > maxPayload) return finish();
+      if (messages > maxMessages || bytes > maxTotalBytes || length > maxPayload) { diagnostic('FORWARD_LIMIT'); return finish(); }
+      diagnostic('FORWARD_OK');
       try { destination.send(data, { binary: false }, error => { if (error) finish(); }); } catch { finish(); }
     };
     client.on('error', finish); client.on('close', finish);
@@ -124,18 +131,24 @@ export function createRelayBridge({
       } catch { return fail('INVALID'); }
       if (closed) return;
       try {
+        diagnostic('UPSTREAM_DIAL');
         upstream = upstreamFactory(url, { origin: allowedOrigin, handshakeTimeout: upstreamTimeoutMs, perMessageDeflate: false, maxPayload });
-        upstream.on('error', () => fail('UNAVAILABLE'));
+        upstream.on('error', error => {
+          const code = ['ENOTFOUND', 'ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'EAI_AGAIN', 'ERR_TLS_CERT_ALTNAME_INVALID'].includes(error?.code) ? error.code : 'OTHER';
+          diagnostic(`UPSTREAM_ERROR_${code}`); fail('UNAVAILABLE');
+        });
         upstream.on('unexpected-response', (request, response) => {
           const code = [401, 403].includes(response.statusCode) ? 'AUTH' : 'UNAVAILABLE';
+          diagnostic(response.statusCode === 401 ? 'UPSTREAM_401' : response.statusCode === 403 ? 'UPSTREAM_403' : response.statusCode === 429 ? 'UPSTREAM_429' : 'UPSTREAM_HTTP_ERROR');
           response.resume(); request.destroy(); fail(code);
         });
-        upstream.on('close', finish);
+        upstream.on('close', () => { diagnostic('UPSTREAM_CLOSE'); finish(); });
         upstream.on('message', (body, isBinary) => forward(client, body, isBinary));
         upstreamTimer = setTimeout(() => fail('TIMEOUT'), upstreamTimeoutMs);
         upstream.once('open', () => {
           if (closed) return;
           clearTimeout(upstreamTimer);
+          diagnostic('UPSTREAM_OPEN');
           established = true;
           client.off('message', unexpected);
           client.on('message', (body, isBinary) => forward(upstream, body, isBinary));
