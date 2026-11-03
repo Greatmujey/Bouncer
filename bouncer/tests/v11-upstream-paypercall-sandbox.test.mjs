@@ -6,7 +6,7 @@ import { validateUpstreamFixture, exerciseUpstreamPayPerCall, waitForPatchedFaul
 
 const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const exports = ['new', 'register_service', 'storage_deposit', 'storage_withdraw', 'get_storage_credit',
-  'ft_on_transfer', 'reject', 'claim', 'get_call', 'get_owed'];
+  'ft_on_transfer', 'fulfill', 'reject', 'claim', 'get_call', 'get_owed'];
 async function moduleWith(names) {
   const compiler = await wabt();
   const compiled = compiler.parseWat('fixture.wat', `(module ${names.map(n => `(func (export "${n}"))`).join(' ')})`);
