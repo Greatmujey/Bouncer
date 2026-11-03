@@ -33,10 +33,16 @@ indicated 6,898 Circle test-USDC atoms for 0.01 test NEAR through the reviewed
 Ref pool, with a 6,553-atom minimum if a later swap is signed. The owner has
 journaled a distinct wrap original `7ofgU7H6KzB525FFYYcEaqNjTfsRzZYL2nfAPqBk3fB2`.
 Its [one-shot run](https://github.com/Greatmujey/Bouncer/actions/runs/41637379448)
-retained fence `13231955034` but could not confirm the result after an RPC view
-failed. The original is **unresolved** until read-only reconciliation verifies
-its actual receipt and balances; never resend it. A quote or wrap is not FT
-acquisition or provider delivery.
+retained fence `13231955034` but lost confirmation during an RPC view. A
+[read-only reconciliation](https://github.com/Greatmujey/Bouncer/actions/runs/41637799734)
+then verified the original FINAL receipt and the 0.01-wNEAR balance; it made no
+send. Never resend the original. A wrap is not FT acquisition or provider
+delivery.
+
+The locally journaled subsequent swap original is
+`9i6AFBKEY2FzDdydnsoTfTxM87shpjvxZYxRyU6JTAGR`. It used a fresh post-wrap
+snapshot and a 6,553-atom minimum. Its separate one-shot outcome must be
+verified, and it must never be blindly resent or replaced.
 
 A usable, funded, keyless vault and independent paid resource delivery are
 separate steps that require fresh checks and original-hash recovery at each
