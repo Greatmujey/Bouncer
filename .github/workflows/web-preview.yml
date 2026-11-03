@@ -103,6 +103,36 @@ jobs:
           fi
           exit "$result"
 
+  near-mobile-live-smoke:
+    # One unsigned synthetic message request, then best-effort rejection; never
+    # logs its bearer link or signs, creates keys, or sends a NEAR transaction.
+    if: contains(github.event.head_commit.message, '[test-live-mobile]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Check live NEAR Mobile message backend
+        shell: bash
+        run: |
+          set +e
+          set -o pipefail
+          {
+            npm install --prefix "$RUNNER_TEMP/bouncer-browser" --no-save --no-audit --no-fund playwright-core@1.64.1 &&
+            node bouncer/scripts/test-near-mobile-live.mjs
+          } 2>&1 | tee "$RUNNER_TEMP/bouncer-mobile-live.log"
+          result=${PIPESTATUS[0]}
+          if [ "$result" -ne 0 ]; then
+            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-3000).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=Live NEAR Mobile probe failed::"+s)' "$RUNNER_TEMP/bouncer-mobile-live.log"
+          fi
+          exit "$result"
+
   walletconnect-session-smoke:
     # Approve only a synthetic testnet-account session over the real relay; no
     # real wallet, signature, wallet RPC call, or NEAR transaction is involved.
