@@ -76,8 +76,8 @@ security or CSP review is implied. The public repository is
 
 The project’s production branch is `main`; working-branch previews and the
 production domain can therefore serve different commits. On 3 November 2026 UTC the
-selected logo and redesigned site were deployed directly from working-branch
-commit `08987ab` to `bouncer-near.vercel.app` without merging to `main`. A future
+workspace redesign and wallet picker were deployed directly from working-branch
+commit `dde7228` to `bouncer-near.vercel.app` without merging to `main`. A future
 production build from `main` could replace it. Verify deployed assets and wallet
 behavior after deployment rather than assuming a branch push updated production.
 GitHub Pages could use
