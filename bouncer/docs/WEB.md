@@ -48,6 +48,10 @@ separately licensed under AGPL-3.0 and built from vendored source pinned to
 to its corresponding source archive. Regenerate it with
 `python3 bouncer/scripts/build-intear-source.py` after updating the source.
 
+The Mobile adapter’s generic “Sign transaction” button is relabeled “Open NEAR
+Mobile” in Bouncer’s message-only flow, after the original executor bytes have
+passed their integrity check. The signed payload itself is unchanged.
+
 WalletConnect is explicitly shown as unavailable: the site does not yet have a
 WalletConnect/Reown project ID or client integration. A project ID alone would
 not enable it. In particular, do not borrow another project's ID or use the

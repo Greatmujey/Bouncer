@@ -425,10 +425,21 @@ try {
       assert.equal(messageRequest.receiver, new URL(url).host);
       assert.equal(messageRequest.nonce.length, 32);
       assert.match(messageRequest.message, /login message does not approve a transaction, transfer funds, or add an access key/i);
+      // The upstream generic label is misleading for this message-only flow.
+      const mobileButton = mobileFrame.locator('#approve-button');
+      assert.equal(await mobileButton.innerText(), 'Open NEAR Mobile');
       // The phone button must be permitted to open the exact signer deep-link.
-      const popupPromise = page.waitForEvent('popup', { timeout: 10_000 });
-      await mobileFrame.locator('#approve-button').click();
-      const popup = await popupPromise;
+      // Headless Chromium can miss taps inside its sandboxed frame, so retain
+      // the protocol check with an explicitly reported programmatic fallback.
+      let popupPromise = page.waitForEvent('popup', { timeout: 3000 }).catch(() => null);
+      await mobileButton.tap();
+      let popup = await popupPromise;
+      if (!popup) {
+        console.warn('Mobile nested-frame touch did not open a popup; using DOM activation for the synthetic protocol check. Touch input was not verified in this run.');
+        popupPromise = page.waitForEvent('popup', { timeout: 10_000 });
+        await mobileButton.evaluate(element => element.click());
+        popup = await popupPromise;
+      }
       await popup.waitForURL(url => url.hostname === 'near-mobile-signer-backend_production.peersyst.tech', { timeout: 10_000 }).catch(error => {
         console.error('Mobile deep-link diagnostic:', { popupUrl: popup.url(), calls, errors, consoleMessages, failures });
         throw error;

@@ -40,7 +40,9 @@ export async function loadVerifiedExecutor(manifest, { fetch, crypto, location }
     // Fastnear's Mobile SDK stores native fetch as a class method. Browsers
     // reject that call with "Illegal invocation" unless fetch retains Window
     // as its receiver. Bind it inside this wallet's sandbox, after verification.
-    if (manifest.id === 'near-mobile') return `window.fetch = window.fetch.bind(window);\n${code}`;
+    // Its generic button says "Sign transaction" even in our message-only flow;
+    // relabel it without changing the signed payload or invoking wallet methods.
+    if (manifest.id === 'near-mobile') return `window.fetch = window.fetch.bind(window);\n${code}\n;{const button = document.getElementById("approve-button"); if (button) button.textContent = "Open NEAR Mobile";}\n`;
     return code;
   } finally {
     clearTimeout(timeout);
