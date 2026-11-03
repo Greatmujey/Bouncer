@@ -19,7 +19,8 @@ export async function githubOriginalFence({ artifactId, runId, headSha, digest, 
         'outlayer-burn-register-fence', 'outlayer-burn-control-fence',
         'outlayer-burn-register-after-control-fence', 'outlayer-burn-wrap-fence',
         'outlayer-burn-swap-fence', 'outlayer-burn-vault-fund-fence',
-        'acquisition-v3-wrap-fence', 'acquisition-v3-swap-fence'].includes(prefix) || typeof fetchImpl !== 'function') {
+        'acquisition-v3-wrap-fence', 'acquisition-v3-swap-fence',
+        'v3-native-faucet-recovery'].includes(prefix) || typeof fetchImpl !== 'function') {
     throw new Error('invalid original-hash artifact fence parameters');
   }
   const response = await fetchImpl(`https://api.github.com/repos/Greatmujey/Bouncer/actions/artifacts/${artifactId}`, {
