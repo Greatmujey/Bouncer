@@ -187,10 +187,10 @@ tour, historical data, origin restrictions, integrity-check rejection, and
 mocked wallet backends through the connector bridge and pinned Mobile, Intear,
 and CLI executors. The WalletConnect browser test uses a synthetic SignClient
 interface and the real QR renderer; unit tests check namespace limits and
-cancellation. An opt-in CI probe can create and cancel a real Reown pairing
-without approving a wallet; another runs near-cli-rs against an ephemeral
-synthetic credential and mock RPC. Neither proves a real wallet session. If
-hosted headless Chromium does not deliver a nested-frame tap, the protocol test
+cancellation. Opt-in CI probes can create and cancel a real Reown pairing,
+approve and disconnect a synthetic wallet session over the relay, or run
+near-cli-rs against an ephemeral synthetic credential and mock RPC. None proves
+a real wallet session. If hosted headless Chromium does not deliver a nested-frame tap, the protocol test
 reports and uses programmatic activation; that fallback does
 not verify touch input. Tests do not demonstrate a real wallet login, an
 independent security review or provider delivery.
