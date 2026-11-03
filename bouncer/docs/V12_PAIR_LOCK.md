@@ -3,8 +3,8 @@
 This is a separate, fresh-state **testnet experiment**, not a deployed upgrade,
 an audit, a new provider purchase or a complete multi-resource flow. Existing
 keyless V11 vaults cannot upgrade themselves, and their behavior is unchanged.
-There is no migration, pinned V12 binary, owner setup path, deployment or live
-seller execution in this change.
+There is no migration, V12 owner setup path, deployment or live seller
+execution in this change.
 
 ## The actual gap
 
@@ -55,9 +55,12 @@ one-shot exact transfer while rejecting replay. A [second run](https://github.co
 also passed the zero-yocto and non-owner policy-escalation checks. This is not
 testnet, real Circle or OutLayer, independent provider delivery, or an audit.
 The V12 WASM marker only catches wrong inputs; it is not code attestation.
-A captured Cargo lock now fixes the resolved `near-sdk` 5.30.0 dependencies,
-and an opt-in workflow compares two clean Rust 1.99.1 builds from that lock.
-Until that comparison and the matching artifact's own runtime tests pass, the
-new artifact must not be treated as reproducible or deployable. Even matching
-GitHub builds are not independent review. A durable owner recovery path,
-independent provider compatibility and genuine delivery also remain necessary.
+A captured Cargo lock fixes the resolved `near-sdk` 5.30.0 dependencies. Two
+clean Rust 1.99.1 builds on GitHub runners produced identical bytes in
+[run 41638808551](https://github.com/Greatmujey/Bouncer/actions/runs/41638808551):
+536,651 bytes, SHA-256 `033f255c5822ff97495809f7d60fddf66f266f20c36285fe71296b66decc6d12`,
+public Git blob `16785505eaed13609d8e569e7b1665f89683d9eb`. The exact
+artifact's isolated runtime test is a separate step. These matching GitHub
+builds are not independent review or an audit, and do not prove deployed-code
+identity. Independent provider compatibility and genuine delivery also remain
+necessary.

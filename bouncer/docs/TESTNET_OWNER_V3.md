@@ -53,9 +53,9 @@ The [V3-specific read-only vault preflight](https://github.com/Greatmujey/Bounce
 indicated the existing V11 funding and storage estimates would pass at that
 snapshot, but did not select or deploy an artifact. V11 has a known
 cross-policy prepaid-route limitation; experimental V12 addresses that narrow
-gap but is not independently audited or reproducibly pinned. The captured
-Rust dependency lock is being tested with two clean builds before considering
-any fresh-state V12 deployment.
+gap but is not independently audited. Two GitHub runners produced matching
+locked V12 builds; the exact artifact still needs runtime testing and a
+separate V3 setup path before any fresh-state deployment.
 A keyless vault can permanently lock its testnet storage stake.
 
 A usable, funded, keyless vault and independent paid resource delivery are
