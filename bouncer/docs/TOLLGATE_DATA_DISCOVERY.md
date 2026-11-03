@@ -127,13 +127,21 @@ as refunds. A seller acknowledgment or shaped data remains a seller claim,
 not independent settlement or provenance proof. The entire channel deposit
 and storage fee remain at risk, including if the upstream request fails.
 The file fence must be backed up across workspace resets and machines; a lost
-fence is not permission to retry. An [isolated HTTP lifecycle](https://github.com/Greatmujey/Bouncer/actions/runs/41655193138)
+fence is not permission to retry. An optional `GithubTollgateVoucherFence` also
+reserves the voucher key in a repository-unique GitHub label and reads it back
+before signing. Two simulated machines, a lost acknowledgment, permission
+failure and a changed read-back all failed closed in local tests. This optional
+path requires GitHub label-create permission and trusted administrators who
+never delete or rename the reservation; it has **not** been exercised against
+GitHub or a live seller. Results explicitly distinguish `LOCAL_ONLY` from
+`GITHUB_LABEL_AND_LOCAL`; a local fence alone is not cross-session protection.
+An [isolated HTTP lifecycle](https://github.com/Greatmujey/Bouncer/actions/runs/41655193138)
 exercised this client against the pinned published seller SDK and a disposable
 nearcore: review, one voucher, synthetic returned data, replay refusal, local
 settlement, close and refund all passed. Its seller and data were fixtures; it
 was not a public-chain payment or independent fulfillment. A turnkey live
-runner, durable cross-session fencing, recovered V3 custody and fresh funding
-are still required. No payment or real provider data has been demonstrated.
+runner, verified cross-session fencing, recovered V3 custody and fresh funding
+checks are still required. No payment or real provider data has been demonstrated.
 
 References: [Tollgate repository](https://github.com/Mattbusel/tollgate),
 [public quakes endpoint](https://near-tollgate.vercel.app/v1/quakes?min_magnitude=5),

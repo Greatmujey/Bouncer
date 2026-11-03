@@ -137,6 +137,7 @@ export async function inspectTollgateQuakesChannel({review:raw,provider,now=Date
  * must stop and reconcile; recreating an empty directory is not recovery. */
 export class TollgateVoucherFence{
  #dir;
+ get fenceScope(){return 'LOCAL_ONLY'}
  constructor(directory){
   if(typeof directory!=='string'||!path.isAbsolute(directory))throw Error('absolute private fence directory required');
   this.#dir=path.resolve(directory);this.#check();
@@ -214,7 +215,10 @@ export async function purchaseTollgateQuakesOnce({review:raw,provider,voucherKey
  const offer=await inspectTollgateOffer({fetchImpl});
  if(!offer.offer_recognized||!offer.exact_resource_match)throw Error('reviewed seller offer no longer matches');
  const snapshot=await inspectTollgateQuakesChannel({review,provider,now});
- fence.claim(review,snapshot); // Permanent even if signing or HTTP subsequently fails.
+ // A reviewed external fence may require an asynchronous durable reservation.
+ // It must complete before any voucher is signed; the local fence remains
+ // permanent even if the remote reservation is unavailable or ambiguous.
+ await fence.claim(review,snapshot);
  const beforeSend=now();
  if(!Number.isSafeInteger(beforeSend)||beforeSend<snapshot.block_timestamp_ms-10_000||
   beforeSend-snapshot.block_timestamp_ms>15_000||BigInt(review.expires_at_ms)<=BigInt(beforeSend+5_000)||
@@ -226,7 +230,7 @@ export async function purchaseTollgateQuakesOnce({review:raw,provider,voucherKey
   channel_id:snapshot.channel_id,cumulative:review.price_yocto,nonce:'1',signature:signature.toString('base64')}}),'utf8').toString('base64');
  const result={network:'testnet',owner:review.owner,vault:review.vault,review_hash:snapshot.review_hash,intent_id:review.intent_id,
   channel_id:snapshot.channel_id,price_yocto:review.price_yocto,channel_budget_yocto:review.channel_budget_yocto,
-  snapshot_block_hash:snapshot.block_hash,fenced:true,do_not_retry:true,settlement_verified:false,upstream_provenance_verified:false,
+  snapshot_block_hash:snapshot.block_hash,fenced:true,fence_scope:fence.fenceScope,do_not_retry:true,settlement_verified:false,upstream_provenance_verified:false,
   voucher_resource_bound:false,asset:'native NEAR (testnet)',scope:'seller response and trusted-RPC snapshot; not an audit or settlement proof'};
  let res;
  try{

@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import nearApi from 'near-api-js';
 import { TOLLGATE_CONTRACT,TOLLGATE_RESOURCE,TOLLGATE_SELLER } from '../agent/tollgate-v12-readiness.mjs';
+import { GithubTollgateVoucherFence } from '../agent/tollgate-github-voucher-fence.mjs';
 import { makeTollgateQuakesReview,validateTollgateQuakesReview,tollgateQuakesReviewHash,inspectTollgateQuakesChannel,
  purchaseTollgateQuakesOnce,TollgateVoucherFence,V13_VOUCHER_SHA256,V13_VOUCHER_CODE_HASH,TOLLGATE_CHANNEL_CODE_HASH,
  CHANNEL_BUDGET_YOCTO,QUAKES_PRICE_YOCTO } from '../agent/tollgate-quakes-v13.mjs';
@@ -129,7 +130,7 @@ test('wrong chain, keys, code, policy, revisions, intent and channel fail closed
 test('a single fenced request signs only the reviewed voucher and returns synthetic seller data',async t=>{
  const f=fixture(),{dir,fence}=privateFence(t),out=await purchaseTollgateQuakesOnce(args(f,fence));
  assert.equal(f.http.free,1);assert.equal(f.http.paid,1);assert.equal(f.state.rpcSends,0);
- assert.equal(out.status,'PROVIDER_RETURNED_DATA');assert.equal(out.seller_claimed_acceptance,true);assert.equal(out.settlement_verified,false);
+ assert.equal(out.status,'PROVIDER_RETURNED_DATA');assert.equal(out.fence_scope,'LOCAL_ONLY');assert.equal(out.seller_claimed_acceptance,true);assert.equal(out.settlement_verified,false);
  assert.equal(out.upstream_provenance_verified,false);assert.equal(out.voucher_resource_bound,false);assert.equal(out.data.quakes[0].id,'us-test');
  const files=fs.readdirSync(dir);assert.equal(files.length,1);const j=JSON.parse(fs.readFileSync(path.join(dir,files[0]),'utf8'));
  assert.equal(j.status,'DO_NOT_RETRY_AFTER_FENCE');assert.equal(j.review_hash,tollgateQuakesReviewHash(f.review));
@@ -181,4 +182,26 @@ test('fence rejects non-private directories and pre-existing symbolic-link targe
  const name='tollgate-voucher-'+crypto.createHash('sha256').update(f.review.voucher_public_key).digest('hex')+'.fence.json';
  fs.symlinkSync(path.join(dir,'target'),path.join(dir,name));
  await assert.rejects(purchaseTollgateQuakesOnce(args(f,fence)),/EEXIST/);assert.equal(f.http.paid,0);
+});
+
+test('paid request waits for a cross-environment GitHub fence, and failure sends nothing',async t=>{
+ const f=fixture(),{dir}=privateFence(t);
+ let start,release,label;const started=new Promise(r=>{start=r}),gate=new Promise(r=>{release=r});
+ const remote=async(_url,options)=>{
+  if(options.method==='POST'){
+   label={...JSON.parse(options.body),id:701};start();await gate;return Response.json(label,{status:201});
+  }
+  return Response.json(label);
+ };
+ const fence=new GithubTollgateVoucherFence(dir,{token:'x'.repeat(30),fetchImpl:remote});
+ const operation=purchaseTollgateQuakesOnce(args(f,fence));
+ await started;assert.equal(f.http.paid,0);assert.equal(fs.readdirSync(dir).length,1);
+ release();const result=await operation;
+ assert.equal(result.status,'PROVIDER_RETURNED_DATA');assert.equal(result.fence_scope,'GITHUB_LABEL_AND_LOCAL');assert.equal(f.http.paid,1);
+ const rejected=fixture(),second=privateFence(t);
+ const denied=new GithubTollgateVoucherFence(second.dir,{token:'x'.repeat(30),fetchImpl:async()=>new Response('',{status:403})});
+ await assert.rejects(purchaseTollgateQuakesOnce(args(rejected,denied)));
+ assert.equal(rejected.http.paid,0);assert.equal(fs.readdirSync(second.dir).length,1);
+ await assert.rejects(purchaseTollgateQuakesOnce(args(rejected,denied)),/EEXIST/);
+ assert.equal(rejected.http.paid,0);
 });
