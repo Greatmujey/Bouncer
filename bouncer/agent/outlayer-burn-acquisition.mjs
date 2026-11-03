@@ -26,7 +26,9 @@ function actionsMatch(actual,expected){
    Buffer.from(x.args,'base64').equals(Buffer.from(y.args))&&num(x.gas)===y.gas&&num(x.deposit)===y.deposit;
  });
 }
-/** Original wrap or swap receipt; output credit still needs a current view. */
+/** Original wrap or swap receipt; the fake-token transfer log is not proof of
+ * a deployed implementation by itself. Callers must also pin token code and
+ * verify the resulting balance at a fresh FINAL block, as reconciliation does. */
 export function verifyOutlayerAcquisitionReceipt(result,envelope,rawPlan,rawOwner){
  const owner=validateOwnerBootstrapPlan(rawOwner),plan=validateOutlayerBurnPlan(rawPlan,owner);
  const signed=verifySignedOutlayerBurnStage(envelope,plan,owner),expected=signed.transaction.actions;
@@ -88,17 +90,24 @@ export function verifyOutlayerAcquisitionReceipt(result,envelope,rawPlan,rawOwne
    if(r?.predecessor_id!==REF||r.receiver_id!==TOKEN||!out.receipt_ids.includes(r.receipt_id)||
       !Array.isArray(r.receipt?.Action?.actions)||r.receipt.Action.actions.length!==1)continue;
    const x=r.receipt.Action.actions[0]?.FunctionCall,o=outcomes.get(r.receipt_id);
-   if(x?.method_name!=='ft_transfer'||num(x.deposit)!==1n||o?.executor_id!==TOKEN||typeof o.status?.SuccessValue!=='string')continue;
+   if(x?.method_name!=='ft_transfer'||num(x.deposit)!==1n||o?.executor_id!==TOKEN||o.status?.SuccessValue!=='')continue;
    let a;try{a=json64(x.args)}catch{continue}const amount=num(a?.amount);
-   if(a?.receiver_id!==owner.account_id||amount===null||amount<MIN||amount>MAX)continue;
-   const events=(o.logs||[]).flatMap(log=>{
+   if(a?.receiver_id!==owner.account_id||amount===null||amount<MIN||amount>MAX||!Array.isArray(o.logs))continue;
+   const events=o.logs.flatMap(log=>{
     if(typeof log!=='string'||!log.startsWith('EVENT_JSON:')||log.length>16384)return [];
     try{const e=JSON.parse(log.slice(11));return e.standard==='nep141'&&e.version==='1.0.0'&&e.event==='ft_transfer'?[e]:[]}catch{return []}
    });
-   if(events.length===1&&Array.isArray(events[0].data)&&events[0].data.length===1&&
-    events[0].data[0]?.old_owner_id===REF&&events[0].data[0]?.new_owner_id===owner.account_id&&events[0].data[0]?.amount===amount.toString()){
-    transfers.push({receipt_id:r.receipt_id,amount_atoms:amount.toString(),transfer_event_verified:true});
-   }
+   const nep141=events.length===1&&Array.isArray(events[0].data)&&events[0].data.length===1&&
+    events[0].data[0]?.old_owner_id===REF&&events[0].data[0]?.new_owner_id===owner.account_id&&events[0].data[0]?.amount===amount.toString();
+   // The pinned testnet USDC.e contract predates NEP-141 structured events.
+   // Its exact legacy transfer log is accepted only for this fixed TOKEN,
+   // after the signed swap, linked successful ft_transfer and arguments match.
+   // Reconciliation also checks the pinned token code and the owner's balance.
+   const legacyLogs=o.logs.filter(log=>typeof log==='string'&&log.startsWith('Transfer '));
+   const legacy=events.length===0&&legacyLogs.length===1&&
+    legacyLogs[0]===`Transfer ${amount} from ${REF} to ${owner.account_id}`;
+   if(nep141||legacy)transfers.push({receipt_id:r.receipt_id,amount_atoms:amount.toString(),
+    transfer_event_verified:nep141,legacy_transfer_log_verified:legacy});
   }
   if(transfers.length!==1)throw new Error('unique successful Ref-to-owner fake-token transfer not verified');
   output=transfers[0];

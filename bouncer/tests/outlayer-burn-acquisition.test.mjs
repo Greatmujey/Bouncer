@@ -69,6 +69,29 @@ test('verified original wrap, Ref output event and pinned fake-token balance bin
  assert.equal(x.next_stage.stage,'fund-vault');assert.equal(f.state.sends,1);
  const recovered=await reconcileOutlayerAcquisition(args(f));assert.equal(recovered.reconciliation_only,true);assert.equal(f.state.sends,1);
 });
+test('pinned legacy fake token transfer log is checked without claiming a NEP-141 event',async()=>{
+ const f=await fixture('swap-fake'),o=f.swapResult.receipts_outcome[3].outcome;
+ o.logs=[`Transfer 21645 from ref-finance-101.testnet to ${owner.account_id}`];
+ const verified=verifyOutlayerAcquisitionReceipt(f.swapResult,f.envelope,plan,owner);
+ assert.equal(verified.fake_token_output.amount_atoms,'21645');
+ assert.equal(verified.fake_token_output.transfer_event_verified,false);
+ assert.equal(verified.fake_token_output.legacy_transfer_log_verified,true);
+ const recovered=await reconcileOutlayerAcquisition(args(f));
+ assert.equal(recovered.receipt.fake_token_output.legacy_transfer_log_verified,true);
+ assert.equal(f.state.sends,0);
+ for(const mutate of [
+  r=>{r.receipts_outcome[3].outcome.logs=[`Transfer 21644 from ref-finance-101.testnet to ${owner.account_id}`]},
+  r=>{r.receipts_outcome[3].outcome.logs=[`Transfer 21645 from someone.testnet to ${owner.account_id}`]},
+  r=>{r.receipts_outcome[3].outcome.logs.push(`Transfer 1 from x.testnet to ${owner.account_id}`)},
+  r=>{r.receipts_outcome[3].outcome.logs.push('EVENT_JSON:'+JSON.stringify({standard:'nep141',version:'1.0.0',event:'ft_transfer',data:[]}))},
+  r=>{r.receipts_outcome[3].outcome.status.SuccessValue=encode('not-unit')},
+  r=>{r.receipts[3].receiver_id='different.testnet'},
+ ]){
+  const changed=structuredClone(f.swapResult);mutate(changed);
+  assert.throws(()=>verifyOutlayerAcquisitionReceipt(changed,f.envelope,plan,owner));
+ }
+});
+
 test('missing fence, prior receipt, changed nonce, balances or reference never authorize another send',async()=>{
  for(const mutate of [f=>{f.state.fence=false},f=>{f.state.before.signer_key_nonce='999'},f=>{f.state.before.eligible=false},
   f=>{f.state.canonical=hash(11)},f=>{f.state.validity=0},f=>{f.provider.txStatusReceipts=async()=>{throw Error('missing original')}}]){
