@@ -7,13 +7,14 @@ and an independent vault audit remain open.
 
 ## Workspace and connecting a wallet
 
-Workspace, Resources, Guardrails, On-chain proof, and Wallet & AI are separate
-client-side views with linkable URL fragments and browser history. Existing
-`#overview`, `#connect`, `#proof`, `#how-it-works`, and recorded-resource links continue to
-work. The default Workspace has a keyboard-accessible resource selector and
-links to recorded examples; its animated network and flow are conceptual, not a
-live activity feed. With JavaScript disabled the document remains readable.
-Decorative motion respects the browser's reduced-motion preference.
+Overview, Resources, Guardrails, On-chain proof, and Wallet & AI are separate
+views within the Workspace, with linkable URL fragments and browser history.
+Both `#overview` and `#workspace`, plus existing `#connect`, `#proof`,
+`#how-it-works`, and recorded-resource links continue to work. Overview has a
+keyboard-accessible resource selector and links to recorded examples; its
+orbiting network and flow are conceptual, not a live activity feed. With
+JavaScript disabled the document remains readable. Decorative motion respects
+the browser's reduced-motion preference.
 
 The Connect button opens a keyboard-accessible wallet picker (a bottom sheet on
 phones, a centered dialog on desktop). It uses pinned NEAR Connect on **testnet**
@@ -91,18 +92,29 @@ and the session stay in tab memory and are discarded on reload or disconnect.
 The pairing QR and mobile `wc:` link are bearer secrets: share them only with
 your chosen wallet. Cancellation is best effort on the remote wallet; check its
 own session list if in doubt. This is account display, **not proof of ownership**.
-The QR view distinguishes component loading, relay setup and wallet approval.
-The initial download plus relay setup has a 30-second outer deadline; before a
-QR is shown, Bouncer tries the documented `.org` relay and then `.com` with a
-bounded startup attempt for each. It never changes a visible pairing or replays
-a wallet request. Retry uses fresh in-memory storage and an isolated SDK core;
-a previous browser build did not reliably disable the SDK's shared global core.
-If a valid pairing is created but the browser cannot draw its QR, the same-device
-wallet link and copy button remain available. If neither relay is reachable,
-Bouncer cannot generate a working pairing code; use Retry, another network, or a
-different wallet. Not every WalletConnect wallet supports NEAR testnet or this
-minimal namespace; no real WalletConnect wallet session has been verified yet.
-Without an ID the picker says setup is required. Do not borrow another project's ID.
+The QR view distinguishes component loading, pairing setup and wallet approval.
+The initial download plus setup has a 50-second outer deadline; before a QR is
+shown, Bouncer tries the documented `.org` relay and then `.com`, allowing up
+to 18 seconds per attempt (the SDK's own connection timeout is 15 seconds).
+It never changes a visible pairing or replays a wallet request. Retry uses fresh
+in-memory storage and an isolated SDK core; a previous browser build did not
+reliably disable the SDK's shared global core. The browser bundle also uses
+standard Uint8Array APIs rather than an extension-injected Node `Buffer`.
+
+A working QR and the `Open wallet app`/copy link represent the same private
+pairing. After a compatible wallet approves the account-only proposal, Bouncer
+updates to Connected automatically; scanning alone is not approval. Mobile
+`wc:` link handling depends on the installed wallet and browser. The pairing
+layout adapts to short screens/high zoom, but the actual user's camera and app
+have not been tested. If the browser cannot draw a valid QR, the link remains
+available. If neither relay works, Bouncer cannot generate a working pairing:
+retry, switch networks or use another listed wallet. Diagnostics show only
+bounded `WC-…` stage codes, not raw SDK errors or pairing secrets. If a
+same-origin HTTP Date suggests a large clock discrepancy, the interface offers
+that as a possible explanation, not a confirmed cause. Not every wallet
+supports NEAR testnet and this minimal namespace; no real WalletConnect wallet
+session has been verified yet. Without an ID the picker says setup is required.
+Do not borrow another project's ID.
 
 To enable the deployed site, the owner creates a project at
 `https://dashboard.reown.com/sign-up`, copies its public **Project ID**, and

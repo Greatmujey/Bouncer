@@ -21,7 +21,15 @@ const walletConnect = await build({
   // The SDK also checks `typeof process`; replacing the env field alone is
   // insufficient in a browser and silently reuses a stopped global Core.
   // Keep this module-scoped shim browser-like (no Node `versions`).
-  define: { process: '{"env":{"DISABLE_GLOBAL_CORE":"true"}}', 'process.env.DISABLE_GLOBAL_CORE': '"true"' },
+  // Some browser extensions inject incomplete Node globals. The WalletConnect
+  // bundle is browser-only, so always use its Uint8Array/browser code paths
+  // rather than trusting a page-global Buffer supplied by another script.
+  define: {
+    process: '{"env":{"DISABLE_GLOBAL_CORE":"true"}}',
+    'process.env.DISABLE_GLOBAL_CORE': '"true"',
+    Buffer: 'undefined',
+    'globalThis.Buffer': 'undefined',
+  },
   banner: { js: '/* Bouncer WalletConnect component. Portions © 2025 Reown, Inc. All Rights Reserved. See walletconnect-NOTICES.txt. */' },
 });
 // Collect the exact licenses of bundled npm inputs, including Reown's

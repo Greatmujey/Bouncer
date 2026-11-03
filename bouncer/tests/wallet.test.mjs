@@ -4,9 +4,23 @@ import { createHash, webcrypto } from 'node:crypto';
 import { KeyPair } from '@near-js/crypto';
 import { nep413Payload } from '../web-src/cli-login.mjs';
 import fs from 'node:fs';
-import { initWallet as bootWallet, walletOriginAllowed } from '../web-src/wallet-core.mjs';
+import { hasLargeClockSkew, initWallet as bootWallet, walletOriginAllowed } from '../web-src/wallet-core.mjs';
 import { WALLET_MANIFEST } from '../web-src/wallet-manifest.mjs';
 import { loadVerifiedExecutor, WALLET_EXECUTOR_SHA256 } from '../web-src/wallet-executor.mjs';
+
+test('clock diagnostic uses only a plausible response Date and accounts for Age and latency', () => {
+  const server = Date.parse('Tue, 03 Nov 2026 10:00:00 GMT');
+  const date = new Date(server).toUTCString();
+  assert.equal(hasLargeClockSkew(date, '0', server, server + 500), false);
+  assert.equal(hasLargeClockSkew(date, '300', server + 300_000, server + 300_500), false);
+  assert.equal(hasLargeClockSkew(date, '0', server + 600_000, server + 600_500), true);
+  assert.equal(hasLargeClockSkew(date, '0', server - 600_000, server - 599_500), true);
+  for (const [value, age, started, ended] of [
+    ['', '0', server, server + 1], [date, 'bad', server, server + 1],
+    [date, '-1', server, server + 1], [date, '999999', server, server + 1],
+    [date, '0', server + 11_000, server], [date, '0', server, server + 11_000],
+  ]) assert.equal(hasLargeClockSkew(value, age, started, ended), false);
+});
 
 const location = url => { const u = new URL(url); return { hostname: u.hostname, host: u.host, protocol: u.protocol, origin: u.origin }; };
 class FakeSandboxWallet {

@@ -27,9 +27,20 @@ const withTimeout = (promise, ms, label) => {
 let browser, wallet, activeTopic, pairingTopic, phase = 'browser startup';
 try {
   browser = await playwright.chromium.launch({ executablePath, args: ['--no-sandbox'], headless: true });
-  const page = await browser.newPage(process.platform === 'win32'
-    ? { viewport: { width: 1365, height: 768 } }
-    : { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  const page = await browser.newPage(process.env.BOUNCER_SHORT_VIEWPORT === '1'
+    ? { viewport: { width: 683, height: 304 }, deviceScaleFactor: 2 }
+    : process.platform === 'win32'
+      ? { viewport: { width: 1365, height: 768 } }
+      : { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  if (process.env.BOUNCER_POISON_BUFFER === '1') {
+    // A hostile/incomplete Node polyfill can be injected by browser extensions.
+    // The browser-only SDK must use standard Uint8Array paths instead.
+    await page.addInitScript(() => {
+      window.Buffer = { from() { throw new Error('synthetic Buffer must not be used'); },
+        allocUnsafe() { throw new Error('synthetic Buffer must not be used'); },
+        isBuffer() { throw new Error('synthetic Buffer must not be used'); } };
+    });
+  }
   if (process.env.BOUNCER_CANDIDATE_SITE === '1') {
     // Exercise the checked-out candidate at the approved production origin,
     // while routing only its static assets to local files. The ID is read from
@@ -47,21 +58,21 @@ try {
       return route.fulfill({ status: 200, contentType: types[path.extname(name)], body: fs.readFileSync(path.join(root, 'web', name)) });
     });
   }
-  if (process.env.BOUNCER_BLOCK_PRIMARY_WC === '1') {
-    // Simulate a blocked primary only in the dapp browser. The synthetic
-    // wallet stays on .org, proving that .com can pair across the relays.
-    await page.addInitScript(() => {
+  if (process.env.BOUNCER_BLOCK_PRIMARY_WC === '1' || process.env.BOUNCER_BLOCK_BOTH_WC === '1') {
+    // Block relay addresses only in the dapp browser. The synthetic wallet
+    // remains on .org, permitting a real cross-relay pairing test.
+    await page.addInitScript(({ blockBoth }) => {
       const NativeWebSocket = window.WebSocket;
       window.__bouncerRelayAttempts = [];
       window.WebSocket = class extends NativeWebSocket {
         constructor(url, protocols) {
           const hostname = new URL(url).hostname;
           if (hostname === 'relay.walletconnect.org' || hostname === 'relay.walletconnect.com') window.__bouncerRelayAttempts.push(hostname);
-          if (hostname === 'relay.walletconnect.org') throw new Error('Primary relay blocked by compatibility test');
+          if (hostname === 'relay.walletconnect.org' || (blockBoth && hostname === 'relay.walletconnect.com')) throw new Error('Relay blocked by compatibility test');
           if (protocols === undefined) super(url); else super(url, protocols);
         }
       };
-    });
+    }, { blockBoth: process.env.BOUNCER_BLOCK_BOTH_WC === '1' });
   }
   phase = 'site load';
   await page.goto('https://bouncer-near.vercel.app/', { waitUntil: 'networkidle', timeout: 45_000 });
@@ -81,9 +92,24 @@ try {
   await page.locator('[data-wallet-id="wallet-connect"]').click();
   const awaitQr = async () => {
     await page.waitForFunction(() => !document.querySelector('#walletconnect-qr').hidden ||
-      !document.querySelector('#walletconnect-error').hidden, null, { timeout: 45_000 });
-    if (!await page.locator('#walletconnect-qr').isVisible()) throw new Error(`QR unavailable: ${await page.locator('#walletconnect-error-detail').innerText()}`);
+      !document.querySelector('#walletconnect-error').hidden, null, { timeout: 60_000 });
+    if (!await page.locator('#walletconnect-qr').isVisible()) throw new Error('QR unavailable');
   };
+  if (process.env.BOUNCER_BLOCK_BOTH_WC === '1') {
+    phase = 'both-relays-blocked diagnostic and retry';
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await page.locator('#walletconnect-error').waitFor({ state: 'visible', timeout: 60_000 });
+      const detail = await page.locator('#walletconnect-error-detail').innerText();
+      assert.match(detail, /Code WC-(INIT|PAIR|START|TIMEOUT)\./);
+      assert.doesNotMatch(detail, /wc:|symKey|auth=/i, 'diagnostic must not expose session secrets');
+      assert.equal(await page.locator('#walletconnect-qr').isVisible(), false, 'a failed connection cannot show a pretend QR');
+      assert.equal(await page.locator('.top-connect').getAttribute('data-wallet-state'), 'disconnected');
+      if (attempt === 0) await page.locator('#walletconnect-retry').click();
+    }
+    await page.locator('#walletconnect-cancel').click();
+    assert.equal(await page.locator('[data-wallet-id="near-mobile"]').isVisible(), true, 'other wallet options remain available');
+    console.log('Both relays were deliberately blocked: a sanitized diagnostic and retry were shown, no QR or connected state was faked.');
+  } else {
   await awaitQr();
   if (process.env.BOUNCER_CANDIDATE_SITE === '1' || process.env.BOUNCER_LIVE_RETRY === '1') {
     phase = 'cancel and retry QR';
@@ -136,6 +162,7 @@ try {
   assert.equal(await page.locator('.top-connect').getAttribute('data-wallet-state'), 'disconnected');
   assert.equal(walletRequests, 0, 'Bouncer must not invoke wallet RPC methods');
   console.log(`${process.env.BOUNCER_CANDIDATE_SITE === '1' ? 'Candidate site' : 'Live site'} connected and disconnected a synthetic wallet over the real Reown relay${process.env.BOUNCER_BLOCK_PRIMARY_WC === '1' ? ' (primary blocked, alternate used)' : ''}; no real wallet, signature, or NEAR transaction was used.`);
+  }
 } catch (error) {
   // SDK/Playwright errors can contain bearer links, auth tokens or topics. The
   // public CI log records only a bounded phase and a safe error category.

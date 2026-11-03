@@ -3,6 +3,18 @@ import { loadVerifiedExecutor } from './wallet-executor.mjs';
 import { isTestnetAccount, isWalletConnectProjectId, pairingTopic } from './walletconnect-core.mjs';
 import { verifyCliLogin } from './cli-login.mjs';
 
+// HTTP Date is coarse and can be cached. Only flag a large discrepancy when
+// the response provides a valid Date/Age and the request was reasonably fast.
+// This is a local diagnostic, not a source of trusted time or a security check.
+export function hasLargeClockSkew(dateHeader, ageHeader, started, finished) {
+  const serverTime = Date.parse(dateHeader || '');
+  const age = ageHeader == null ? 0 : Number(ageHeader);
+  if (!Number.isFinite(serverTime) || !Number.isFinite(age) || age < 0 || age > 86_400 ||
+      !Number.isFinite(started) || !Number.isFinite(finished) || finished < started || finished - started > 10_000) return false;
+  const expected = serverTime + age * 1000;
+  return Math.abs((started + finished) / 2 - expected) > 120_000 + (finished - started) / 2;
+}
+
 /** A temporary host with many projects under one origin must never hold a wallet session. */
 export function walletOriginAllowed(location, isTopLevel, approvedOrigin = '') {
   if (!isTopLevel) return false;
@@ -28,7 +40,7 @@ export function walletOriginAllowed(location, isTopLevel, approvedOrigin = '') {
  * other accounts are wallet-reported, not proof of ownership. The picker is
  * our own accessible dialog; wallet executors remain sandboxed.
  */
-export async function initWallet({ window: win, document: doc, NearConnector, SandboxWallet, loadWalletConnect, walletConnectStartTimeoutMs = 30_000 }) {
+export async function initWallet({ window: win, document: doc, NearConnector, SandboxWallet, loadWalletConnect, walletConnectStartTimeoutMs = 50_000 }) {
   const dialog = doc.querySelector('#wallet-dialog');
   const closeButton = doc.querySelector('#wallet-close');
   const optionsBox = doc.querySelector('#wallet-options');
@@ -62,7 +74,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
   const approved = doc.querySelector('meta[name="bouncer-wallet-origin"]')?.content || '';
   const allowedIds = new Set([...WALLET_MANIFEST.wallets.map(wallet => wallet.id), 'wallet-connect']);
   let connector, selectedWallet = null, connected = false, connectedAccount = '', ready = false, busyState = false, opener = null;
-  let wcProjectId = '', wcHandle = null, wcAbort = null, wcPairing = false, wcUri = '';
+  let wcProjectId = '', wcHandle = null, wcAbort = null, wcPairing = false, wcUri = '', wcClockSkew = false;
   let bannerTimer;
   const trusted = new Set(WALLET_MANIFEST.wallets);
   function setWalletLabels(label) {
@@ -195,10 +207,12 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
   // Failure leaves just WalletConnect disabled, not the other wallet choices.
   void (async () => {
     try {
+      const started = Date.now();
       const response = await win.fetch(new URL('./walletconnect-config.json', win.location.href), {
         credentials: 'omit', redirect: 'error', cache: 'no-store', signal: AbortSignal.timeout(10_000),
       });
       if (!response.ok) return;
+      wcClockSkew = hasLargeClockSkew(response.headers?.get?.('date'), response.headers?.get?.('age'), started, Date.now());
       const text = await response.text();
       if (text.length > 256) return;
       const config = JSON.parse(text);
@@ -321,7 +335,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     const controller = new AbortController();
     wcAbort = controller; wcPairing = true;
     clearWalletConnectPairing(); walletConnectStage('loading');
-    if (wcProgress) wcProgress.textContent = 'Connecting to WalletConnect. This may take a few seconds.';
+    if (wcProgress) wcProgress.textContent = 'Preparing your WalletConnect pairing. This can take up to a minute.';
     busy(true); setStatus('Preparing a private WalletConnect pairing…');
     if (dialog.open) wcCancel?.focus();
     let startTimedOut = false, shown = false, abortListener, phase = 'sdk';
@@ -407,18 +421,32 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
         showDisconnected('WalletConnect pairing cancelled.');
       } else {
         clearWalletConnectPairing();
-        const reason = error?.message || '';
-        const configurationRejected = error?.code === 'WC_CONFIGURATION' || /401|403|unauthori[sz]ed|forbidden|project.?id|allowlist/i.test(reason);
-        const message = configurationRejected
-          ? 'WalletConnect rejected the site configuration. Please try another wallet.'
-          : phase === 'sdk'
-            ? 'The WalletConnect component could not load. Check your connection and retry, or choose another wallet.'
-            : startTimedOut || !shown
-              ? 'WalletConnect could not reach a relay to prepare a pairing. Check your connection or try another network, then retry.'
-              : /timed out/i.test(reason)
-                ? 'The pairing expired before approval. Generate a new QR and try again.'
-                : 'The wallet did not complete this NEAR testnet connection. Try again or choose another wallet.';
-        const title = shown ? 'Connection not completed' : phase === 'sdk' ? 'WalletConnect couldn’t load' : 'Couldn’t reach WalletConnect';
+        const reason = String(error?.message || '');
+        const configurationRejected = error?.code === 'WC_CONFIGURATION';
+        let title = 'Pairing could not be prepared', message;
+        if (shown) {
+          title = 'Connection not completed';
+          message = /timed out/i.test(reason)
+            ? 'The pairing expired before approval. Generate a new QR and try again. Code WC-APPROVAL.'
+            : 'The wallet did not approve this account-only NEAR testnet connection. Try another compatible wallet. Code WC-APPROVAL.';
+        } else if (phase === 'sdk') {
+          title = 'WalletConnect couldn’t load';
+          message = 'The WalletConnect component could not load. Check your connection and retry, or choose another wallet. Code WC-LOAD.';
+        } else if (configurationRejected) {
+          message = 'WalletConnect rejected this site’s configuration. Choose another wallet while we investigate. Code WC-CONFIG.';
+        } else if (win.navigator?.onLine === false) {
+          message = 'Your browser reports that it is offline. Reconnect and retry. Code WC-OFFLINE.';
+        } else if (wcClockSkew) {
+          message = 'Your device clock may be out of sync. Enable automatic date and time, then retry. Code WC-CLOCK.';
+        } else if (error?.code === 'WC_CLIENT_INIT') {
+          message = 'The WalletConnect component could not initialize. Reload the page or try another wallet. Code WC-INIT.';
+        } else if (error?.code === 'WC_PROPOSAL_INIT') {
+          message = 'WalletConnect could not prepare the pairing. Check your connection, then retry or choose another wallet. Code WC-PAIR.';
+        } else if (startTimedOut || error?.code === 'WC_START_TIMEOUT') {
+          message = 'WalletConnect could not prepare a pairing in time. Check your connection or try another network. Code WC-TIMEOUT.';
+        } else {
+          message = 'WalletConnect could not prepare a pairing. Check your connection or try another wallet. Code WC-START.';
+        }
         walletConnectStage('error', title, message);
         showDisconnected(message);
       }

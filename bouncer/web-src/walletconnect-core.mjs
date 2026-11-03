@@ -90,6 +90,7 @@ export async function connectWalletConnect({ projectId, origin, createClient, on
   const prefixBytes = globalThis.crypto.getRandomValues(new Uint8Array(16));
   const customStoragePrefix = `bouncer-${Array.from(prefixBytes, byte => byte.toString(16).padStart(2, '0')).join('')}`;
   let client = null, topic = null, pendingTopic = null, stopped = false, active = false;
+  let startPhase = 'client';
   let expiryListener, deleteListener, updateListener;
   let timer;
   let abortListener;
@@ -130,6 +131,7 @@ export async function connectWalletConnect({ projectId, origin, createClient, on
       }
     }, () => {});
     client = await Promise.race([creating, interrupted]);
+    startPhase = 'proposal';
     const opening = Promise.resolve().then(() => client.connect({ requiredNamespaces: {
       near: { chains: [WC_CHAIN], methods: [WC_METHOD], events: [] },
     } }));
@@ -141,6 +143,7 @@ export async function connectWalletConnect({ projectId, origin, createClient, on
     const proposal = await Promise.race([opening, interrupted]);
     if (!proposal || typeof proposal.approval !== 'function') throw new Error('WalletConnect pairing failed');
     pendingTopic = pairingTopic(proposal.uri);
+    startPhase = 'approval';
     // SignClient's approval listener must be armed before exposing the URI: a
     // very fast wallet response can otherwise arrive before approval() is called.
     const approval = Promise.resolve(proposal.approval());
@@ -179,7 +182,18 @@ export async function connectWalletConnect({ projectId, origin, createClient, on
     return { accountId, disconnect: () => shutdown(true) };
   } catch (error) {
     await shutdown(true);
-    throw error;
+    if (signal?.aborted || startPhase === 'approval') throw error;
+    // SDK exceptions can include bearer URLs or other internal details. Keep
+    // only the startup phase, plus explicit authorization failures, for the UI.
+    const reason = String(error?.message || '');
+    if (/\b401\b|\b403\b|unauthori[sz]ed|forbidden|allowlist/i.test(reason)) {
+      const rejected = new Error('WalletConnect site configuration was rejected');
+      rejected.code = 'WC_CONFIGURATION';
+      throw rejected;
+    }
+    const failure = new Error('WalletConnect could not prepare a pairing');
+    failure.code = startPhase === 'client' ? 'WC_CLIENT_INIT' : 'WC_PROPOSAL_INIT';
+    throw failure;
   } finally {
     clearTimeout(timer);
     signal?.removeEventListener('abort', abortListener);
@@ -189,18 +203,21 @@ export async function connectWalletConnect({ projectId, origin, createClient, on
 // Both addresses are documented Reown relays. Retry only before a pairing URI
 // is exposed: never replay a wallet request or silently replace a visible QR.
 export const WC_RELAY_URLS = Object.freeze(['wss://relay.walletconnect.org', 'wss://relay.walletconnect.com']);
-export async function connectWalletConnectWithFallback({ createClient, onUri, onProgress, signal, relayStartTimeoutMs = 8_000, ...options }) {
+export async function connectWalletConnectWithFallback({ createClient, onUri, onProgress, signal, relayStartTimeoutMs = 18_000, ...options }) {
   if (typeof createClient !== 'function' || typeof onUri !== 'function') throw new Error('WalletConnect is unavailable');
   if (!isWalletConnectProjectId(options.projectId)) throw new Error('WalletConnect project ID is not configured');
+  const failures = [];
   for (const [index, relayUrl] of WC_RELAY_URLS.entries()) {
     if (signal?.aborted) throw new Error('WalletConnect pairing cancelled');
     const attempt = new AbortController();
-    let shown = false, timer;
+    let shown = false, timedOut = false, timer;
     const abort = () => attempt.abort();
     signal?.addEventListener('abort', abort, { once: true });
     try {
       onProgress?.(index === 0 ? 'primary' : 'alternate');
-      timer = setTimeout(() => attempt.abort(), relayStartTimeoutMs);
+      // Reown's own WebSocket connection timeout is 15 seconds. Do not cut a
+      // viable connection short before the SDK has had a chance to finish.
+      timer = setTimeout(() => { timedOut = true; attempt.abort(); }, relayStartTimeoutMs);
       return await connectWalletConnect({
         ...options, signal: attempt.signal,
         createClient: config => createClient({ ...config, relayUrl }),
@@ -212,14 +229,18 @@ export async function connectWalletConnectWithFallback({ createClient, onUri, on
       // multiply requests or leak an arbitrary SDK error to the interface.
       const reason = String(error?.message || '');
       if (/Invalid site origin|project ID is not configured/i.test(reason)) throw error;
-      if (/\b401\b|\b403\b|unauthori[sz]ed|forbidden|allowlist/i.test(reason)) {
+      if (error?.code === 'WC_CONFIGURATION' || /\b401\b|\b403\b|unauthori[sz]ed|forbidden|allowlist/i.test(reason)) {
         const rejected = new Error('WalletConnect site configuration was rejected');
         rejected.code = 'WC_CONFIGURATION';
         throw rejected;
       }
+      failures.push(timedOut ? 'WC_START_TIMEOUT' : error?.code || 'WC_START_FAILED');
       if (index === WC_RELAY_URLS.length - 1) {
-        const unavailable = new Error('WalletConnect relays unavailable');
-        unavailable.code = 'WC_RELAY_UNAVAILABLE';
+        const unavailable = new Error('WalletConnect could not prepare a pairing');
+        // Expose only an allowlisted phase code, never raw SDK error text.
+        unavailable.code = failures.every(value => value === 'WC_CLIENT_INIT') ? 'WC_CLIENT_INIT'
+          : failures.every(value => value === 'WC_PROPOSAL_INIT') ? 'WC_PROPOSAL_INIT'
+            : failures.includes('WC_START_TIMEOUT') ? 'WC_START_TIMEOUT' : 'WC_START_FAILED';
         throw unavailable;
       }
     } finally {

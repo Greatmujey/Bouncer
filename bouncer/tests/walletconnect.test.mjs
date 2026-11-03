@@ -231,6 +231,22 @@ test('failed relays return a bounded, sanitized error', async () => {
   await assert.rejects(connectWalletConnectWithFallback({
     projectId: PROJECT, origin: 'https://bouncer-near.vercel.app',
     createClient: config => { urls.push(config.relayUrl); throw new Error('sensitive internal error'); }, onUri() {},
-  }), error => error.code === 'WC_RELAY_UNAVAILABLE' && !error.message.includes('sensitive'));
+  }), error => error.code === 'WC_CLIENT_INIT' && !error.message.includes('sensitive'));
   assert.deepEqual(urls, WC_RELAY_URLS);
+});
+
+test('pairing-creation errors are distinguished from client initialization without leaking SDK details', async () => {
+  const fixture = fakeClient();
+  fixture.client.connect = async () => { throw new Error('secret bearer URL'); };
+  await assert.rejects(connectWalletConnectWithFallback({
+    projectId: PROJECT, origin: 'https://bouncer-near.vercel.app',
+    createClient: () => fixture.client, onUri() {},
+  }), error => error.code === 'WC_PROPOSAL_INIT' && !error.message.includes('secret'));
+});
+
+test('two stalled startup attempts report a bounded timeout, not a claimed cause', async () => {
+  await assert.rejects(connectWalletConnectWithFallback({
+    projectId: PROJECT, origin: 'https://bouncer-near.vercel.app', relayStartTimeoutMs: 10,
+    createClient: () => new Promise(() => {}), onUri() {},
+  }), error => error.code === 'WC_START_TIMEOUT' && !error.message.includes('relay unavailable'));
 });

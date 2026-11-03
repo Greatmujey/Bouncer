@@ -104,8 +104,19 @@ try {
       const route = name => page.locator(`[data-route-view="${name}"]`);
       assert.equal(await route('workspace').isVisible(), true);
       assert.equal(await page.title(), 'Bouncer — A workspace for autonomous agents');
-      assert.equal(await page.locator('#route-breadcrumb').textContent(), 'Workspace');
+      assert.equal(await page.locator('#route-breadcrumb').textContent(), 'Overview');
+      assert.match(await page.locator(`${nav} a[href="#overview"]`).innerText(), /Overview/);
       assert.equal(await page.locator('[data-workspace-resource="compute"]').getAttribute('aria-selected'), 'true');
+      assert.equal(await page.locator('.orbit-carrier').evaluate(el => {
+        const animation = el.getAnimations().find(item => item.animationName === 'orbit-turn');
+        if (!animation) return false;
+        animation.pause(); animation.currentTime = 0;
+        const before = getComputedStyle(el).transform;
+        animation.currentTime = 6_000;
+        const after = getComputedStyle(el).transform;
+        animation.play();
+        return before !== after;
+      }), true, 'resource icons visibly orbit without changing the selected tab');
       await page.locator('[data-workspace-resource="storage"]').click();
       assert.match(await page.locator('[data-workspace-description]').innerText(), /Keep what your agent creates/);
       assert.equal(await page.locator('[data-workspace-visual]').getAttribute('data-resource'), 'storage');
@@ -115,9 +126,11 @@ try {
       await page.locator('[data-workspace-example]').click();
       await route('resources').waitFor({ state: 'visible' });
       assert.match(await page.locator('#story-result').innerText(), /4 words and 27 bytes/);
-      await page.goto(`${url}#overview`, { waitUntil: 'networkidle' });
-      assert.equal(await route('workspace').isVisible(), true, 'legacy overview link opens Workspace');
-      assert.equal(await page.title(), 'Bouncer — A workspace for autonomous agents');
+      for (const landing of ['overview', 'workspace']) {
+        await page.goto(`${url}#${landing}`, { waitUntil: 'networkidle' });
+        assert.equal(await route('workspace').isVisible(), true, `${landing} link opens the landing view`);
+        assert.equal(await page.title(), 'Bouncer — A workspace for autonomous agents');
+      }
       for (const [hash, name] of [['capabilities', 'resources'], ['guardrails', 'guardrails'], ['proof', 'proof'], ['connect', 'connect']]) {
         await page.locator(`${nav} a[href="#${hash}"]`).click();
         await route(name).waitFor({ state: 'visible' });
@@ -173,6 +186,8 @@ try {
       assert.equal(await page.locator('[data-route-view]:visible').count(), 1, 'unknown fragments safely fall back to workspace');
       await page.emulateMedia({ reducedMotion: 'reduce' });
       assert.equal(await page.locator('.hero-noise').evaluate(el => getComputedStyle(el).animationName), 'none', 'reduced motion disables decorative animation');
+      assert.equal(await page.locator('.orbit-carrier').evaluate(el => getComputedStyle(el).animationName), 'none', 'reduced motion stops the resource orbit');
+      assert.equal(await page.locator('.orbit-node svg').first().evaluate(el => getComputedStyle(el).animationName), 'none');
       assert.deepEqual(writes, [], 'tour and historical story must not send write requests');
       assert.deepEqual(pageErrors, []);
       if (process.env.BOUNCER_SCREENSHOTS) await page.screenshot({ path: path.join(process.env.BOUNCER_SCREENSHOTS, `bouncer-${width}.png`), fullPage: true });
@@ -675,6 +690,17 @@ try {
         return qr.width >= 180 && qr.top >= 0 && qr.bottom <= innerHeight && back.bottom <= innerHeight;
       }), true, `QR and navigation fit the ${viewport.width}px viewport`);
     }
+    // A short CSS viewport also models a desktop browser at high zoom. Verify
+    // the real rendered QR still decodes and the controls remain on screen.
+    await page.setViewportSize({ width: 683, height: 304 });
+    const compactImage = PNG.sync.read(await page.locator('#walletconnect-qr').screenshot());
+    assert.equal(jsQR(new Uint8ClampedArray(compactImage.data), compactImage.width, compactImage.height)?.data, expectedUri, 'compact QR screenshot must decode');
+    assert.equal(await page.evaluate(() => {
+      const qr = document.querySelector('#walletconnect-qr').getBoundingClientRect();
+      const back = document.querySelector('#walletconnect-cancel').getBoundingClientRect();
+      return qr.width >= 130 && qr.top >= 0 && qr.bottom <= innerHeight && back.bottom <= innerHeight;
+    }), true, 'compact QR and controls fit without scrolling');
+    if (process.env.BOUNCER_SCREENSHOTS) await page.screenshot({ path: path.join(process.env.BOUNCER_SCREENSHOTS, 'wallet-compact.png') });
     await page.setViewportSize({ width: 390, height: 844 });
     await page.locator('#walletconnect-cancel').click();
     await page.locator('[data-wallet-id="wallet-connect"]').waitFor({ state: 'visible' });
@@ -692,7 +718,7 @@ try {
     console.log('Synthetic WalletConnect pairing rendered the real QR library, cancelled and disconnected; no live relay or wallet was tested.');
     await page.close();
 
-    // Simulate a stalled first download without waiting 20 seconds. Retry must
+    // Simulate a stalled first download without waiting for the deadline. Retry must
     // issue a new URL rather than reusing the browser's pending module import.
     {
       const page = await wcBrowser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, reducedMotion: 'reduce' });
@@ -719,7 +745,7 @@ try {
       await page.locator('[data-wallet-id="wallet-connect"]').click();
       await page.locator('#walletconnect-loading').waitFor({ state: 'visible' });
       assert.equal(await page.locator('#walletconnect-qr').isVisible(), false, 'loading is not a fake QR');
-      await page.clock.fastForward(20_100);
+      await page.clock.fastForward(50_100);
       await page.locator('#walletconnect-error').waitFor({ state: 'visible' });
       assert.match(await page.locator('#walletconnect-error-detail').innerText(), /connection.*retry/i);
       assert.equal(await page.locator('#walletconnect-retry').isVisible(), true);
