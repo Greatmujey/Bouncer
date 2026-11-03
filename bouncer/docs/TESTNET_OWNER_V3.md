@@ -28,6 +28,13 @@ against its original receipt and a fresh registration view; public fence
 Never resend the original. This is owner setup, not FT acquisition or an
 independent provider purchase.
 
+A [fresh read-only acquisition view](https://github.com/Greatmujey/Bouncer/actions/runs/41637252051)
+indicated 6,898 Circle test-USDC atoms for 0.01 test NEAR through the reviewed
+Ref pool, with a 6,553-atom minimum if a later swap is signed. The owner has
+journaled a distinct wrap original `7ofgU7H6KzB525FFYYcEaqNjTfsRzZYL2nfAPqBk3fB2`;
+its one-shot result must be checked separately and the original must never be
+blindly resent. A quote and wrap are not FT acquisition or provider delivery.
+
 A usable, funded, keyless vault and independent paid resource delivery are
 separate steps that require fresh checks and original-hash recovery at each
 stage. The previous V11 OutLayer pair-lock limitation remains relevant; the
