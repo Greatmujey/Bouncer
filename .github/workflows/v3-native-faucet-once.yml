@@ -1,0 +1,68 @@
+# ONE FIXED TESTNET-ONLY funding attempt. No owner key or owner signature.
+# Any unknown helper/transaction result must be reconciled, never resent.
+name: Fund existing V3 owner from testnet faucet once
+on:
+  push:
+    branches: ['arena/25a7aaf6-near-hub']
+permissions:
+  contents: read
+  actions: read
+  checks: write
+concurrency:
+  group: bouncer-v3-native-faucet-one-fixed-attempt
+  cancel-in-progress: false
+jobs:
+  faucet:
+    if: github.event.before == '92436188646cc00185012962ba8fe498ae5960c0' && github.run_attempt == 1 && contains(github.event.head_commit.message, '[v3-native-faucet-once]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      BOUNCER_FAUCET_EXPECTED_PARENT: 92436188646cc00185012962ba8fe498ae5960c0
+    defaults:
+      run:
+        working-directory: bouncer
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+      - name: Install pinned dependencies and test safety guards
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts --no-audit --no-fund
+          node --test tests/v3-faucet-github-fence.test.mjs tests/v3-faucet-sealed-recovery.test.mjs tests/native-testnet-faucet.test.mjs tests/github-original-fence.test.mjs tests/tollgate-v13-funding.test.mjs
+      - name: Prepare encrypted recovery before any helper request
+        id: recovery
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/v3-native-faucet-ci.mjs prepare
+      - name: Retain ciphertext-only pre-helper snapshot
+        id: artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: v3-native-faucet-recovery-${{ github.run_id }}-${{ steps.recovery.outputs.digest }}
+          path: ${{ runner.temp }}/bouncer-v3-native-faucet-once/recovery/
+          retention-days: 90
+          if-no-files-found: error
+      - name: Download and recheck the retained snapshot
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: v3-native-faucet-recovery-${{ github.run_id }}-${{ steps.recovery.outputs.digest }}
+          path: ${{ runner.temp }}/bouncer-v3-native-faucet-once/downloaded/
+      - name: Fence helper and original hashes, submit once, reconcile
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          BOUNCER_FAUCET_ARTIFACT_ID: ${{ steps.artifact.outputs.artifact-id }}
+          BOUNCER_FAUCET_DIGEST: ${{ steps.recovery.outputs.digest }}
+        run: |
+          set -uo pipefail
+          result="$RUNNER_TEMP/v3-native-faucet-result.json"
+          node scripts/v3-native-faucet-ci.mjs execute > "$result"
+          code=$?
+          if test -s "$result"; then
+            python3 -c 'import os,json; s=json.dumps(json.load(open(os.environ["RUNNER_TEMP"]+"/v3-native-faucet-result.json")),separators=(",",":")); print("::notice title=V3 testnet native faucet result::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
+            { echo '## Testnet-native faucet result'; echo 'No owner key was accessed. This is not Circle funding, a vault deployment, or a provider purchase.'; echo '```json'; cat "$result"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit "$code"
