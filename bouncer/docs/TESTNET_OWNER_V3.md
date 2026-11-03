@@ -82,6 +82,18 @@ The owner held zero Circle atoms at that view. Never resend the original.
 This is testnet vault funding, not an independent provider payment or delivery.
 Independent paid compute, storage and data remain separate steps.
 
+A [read-only OutLayer snapshot](https://github.com/Greatmujey/Bouncer/actions/runs/41642715718)
+confirmed its testnet connector-probe currently accepts `usdc.fakes.testnet`,
+**not Circle USDC**. Its fixed diagnostic burn was quoted at 10,000 fake-token
+atoms; the V3 owner and vault were not registered for that token. A Ref quote
+for 0.0000000001 wrapped test NEAR returned 21,645 fake atoms at that block;
+quotes and provider terms can change. The diagnostic is not general-purpose
+compute, a Circle-paid order, or evidence of delivery. The V12 diagnostic plan
+and read-only preflight are under test, but no fake-token registration, provider
+funding, or order has been sent from this owner. OutLayer can change its deployed
+contract, its plain-token refunds may not restore Bouncer's tracked allowance,
+and unused prepayment may be difficult to recover.
+
 The V12 Circle registration and funding path [passed an isolated nearcore
 rehearsal](https://github.com/Greatmujey/Bouncer/actions/runs/41641922746),
 including recovery of one simulated lost funding acknowledgment by original
