@@ -1,0 +1,61 @@
+# Fresh local nearcore only. The published channel WASM runs with synthetic
+# accounts and keys; this never contacts, pays, or claims delivery from seller.
+name: V13 native channel isolated sandbox
+on:
+  push:
+    branches: ['arena/25a7aaf6-near-hub']
+permissions:
+  contents: read
+jobs:
+  sandbox:
+    if: github.run_attempt == 1 && contains(github.event.head_commit.message, '[tollgate-v13-sandbox]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: bouncer
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: 1.99.1
+          targets: wasm32-unknown-unknown
+      - name: Install locked dependencies and test local-only guards
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          node --test tests/v13-sandbox-tollgate.test.mjs tests/tollgate-v12-readiness.test.mjs
+      - name: Build the tested V13 binary and retrieve fixed local fixtures
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cd contracts/bouncer
+          test "$(sha256sum Cargo.lock | cut -d' ' -f1)" = '263879a4574d1d5ed97dd0da097cdefff52b4f57017738ad291628a9c63e317f'
+          RUSTFLAGS='-C link-arg=-s' cargo build --locked --target wasm32-unknown-unknown --release --no-default-features --features tollgate-native-v13
+          cp target/wasm32-unknown-unknown/release/bouncer.wasm "$RUNNER_TEMP/v13.wasm"
+          echo 'dc1989ba241bef37f4a6f24c9df525a2348f5de16c752906ccb400c8e7704bbf  '"$RUNNER_TEMP/v13.wasm" | sha256sum -c -
+          gh api repos/Mattbusel/tollgate/git/blobs/da71fa08c368f7620bc4bd2e8512a57580a86e15 --jq .content | base64 --decode > "$RUNNER_TEMP/channel.wasm"
+          echo '1142c2546565f70944d578cea15d03c58166797525cd40d863a3425b1afd6956  '"$RUNNER_TEMP/channel.wasm" | sha256sum -c -
+          curl --fail --show-error --silent --location --proto '=https' --tlsv1.2 --max-time 180 --retry 2 --max-filesize 419430400 \
+            'https://s3-us-west-1.amazonaws.com/build.nearprotocol.com/nearcore/Linux-x86_64/2.14.0/near-sandbox.tar.gz' \
+            --output "$RUNNER_TEMP/near-sandbox.tar.gz"
+          python3 ../../scripts/extract-pinned-near-sandbox.py "$RUNNER_TEMP/near-sandbox.tar.gz" "$RUNNER_TEMP/near-sandbox"
+          echo "BOUNCER_V13_WASM_PATH=$RUNNER_TEMP/v13.wasm" >> "$GITHUB_ENV"
+          echo "BOUNCER_V13_WASM_SHA256=dc1989ba241bef37f4a6f24c9df525a2348f5de16c752906ccb400c8e7704bbf" >> "$GITHUB_ENV"
+          echo "BOUNCER_TOLLGATE_WASM_PATH=$RUNNER_TEMP/channel.wasm" >> "$GITHUB_ENV"
+          echo "BOUNCER_SANDBOX_BIN=$RUNNER_TEMP/near-sandbox" >> "$GITHUB_ENV"
+      - name: Exercise open, local voucher, close and detached refund
+        run: |
+          set -euo pipefail
+          ulimit -Sn 65535
+          if ! node integration/v13-tollgate-sandbox-runner.mjs > "$RUNNER_TEMP/v13-sandbox.json" 2> "$RUNNER_TEMP/v13-sandbox-error.log"; then
+            python3 -c 'import os; s=open(os.environ["RUNNER_TEMP"]+"/v13-sandbox-error.log").read()[-3500:]; print("::error title=V13 local sandbox failed::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
+            exit 1
+          fi
+          python3 -c 'import os,json; s=json.dumps(json.load(open(os.environ["RUNNER_TEMP"]+"/v13-sandbox.json")),separators=(",",":")); print("::notice title=V13 native channel sandbox result::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
+          { echo '## Isolated native channel lifecycle'; echo 'Synthetic local seller and voucher; no live seller, Circle payment, data delivery or audit.'; echo '```json'; cat "$RUNNER_TEMP/v13-sandbox.json"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
