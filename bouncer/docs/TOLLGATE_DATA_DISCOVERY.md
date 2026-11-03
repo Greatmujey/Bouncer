@@ -96,8 +96,17 @@ candidate is **not deployed, independently audited or evidence of live data**.
 At the last observed storage price the code alone needs 3.89988 test NEAR. The
 last separately observed owner balance was about 3.969798 test NEAR: code plus
 the 0.05-NEAR vault reserve and 0.02-NEAR channel budget already exceed that,
-even before state storage, owner storage and gas. A fresh funding preflight is
-required; do not assume the V12 balance is liquid or use an earlier owner.
+even before state storage, owner storage and gas. A [read-only funding
+snapshot](https://github.com/Greatmujey/Bouncer/actions/runs/41656376800) at
+FINAL block `CmSXM6eCCjnDRJXYUskrMmU8Hanja2ao6Rfo77CYTF3z` found about
+3.967978 test NEAR after estimated owner storage. The conservative plan uses
+5 test NEAR for the new vault plus a 0.2 test-NEAR owner fee reserve, leaving
+an estimated **1.232022 test-NEAR shortfall**. V12's calculated native surplus
+was at most 0.57903 test NEAR at that snapshot; even recovering all of that
+hypothetically leaves roughly 0.652992 test NEAR short of the plan. This is an
+upper bound, not a withdrawal authorization or a fee guarantee. Circle actual
+and tracked balances remained 6,898 atoms. No money was moved. Do not assume
+the V12 balance is liquid or use an earlier owner.
 
 `agent/tollgate-quakes-v13.mjs` prepares a deterministic owner review of one
 fixed quakes GET, 0.001 test-NEAR price and 0.02 test-NEAR channel budget. It
