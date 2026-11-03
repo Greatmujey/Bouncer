@@ -1,0 +1,59 @@
+# Public, read-only observations only: no keys, signing, broadcast or seller calls.
+name: V3 provider and original-transaction observations
+on:
+  push:
+    branches: ['arena/**']
+
+permissions:
+  contents: read
+
+jobs:
+  observe:
+    if: github.run_attempt == 1 && contains(github.event.head_commit.message, '[v3-provider-readonly]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: bouncer
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+      - name: Install dependencies and test read-only boundaries
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          node --test tests/paypercall-inspect.test.mjs tests/read-only-near-receipts.test.mjs tests/observe-original-reference.test.mjs
+      - name: Observe both original hashes and their canonical reference ages
+        run: |
+          set -euo pipefail
+          node scripts/diagnose-outlayer-v12-v3-control.mjs > "$RUNNER_TEMP/v3-originals.json"
+          python3 -c 'import os,json; s=json.dumps(json.load(open(os.environ["RUNNER_TEMP"]+"/v3-originals.json")),separators=(",",":")); print("::notice title=V3 originals read-only observations::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
+          { echo '## Original hashes: read-only observations'; echo 'A missing receipt or an expired reference is not proof of historical non-execution. Never resend either original.'; echo '```json'; cat "$RUNNER_TEMP/v3-originals.json"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: Inspect current public PayPerCall catalog, no seller contact
+        run: |
+          set -euo pipefail
+          vault='vault.bouncer-owner-12f343b795633e357ae5560d.testnet'
+          if node agent/paypercall-inspect.mjs catalog --rpc https://rpc.testnet.near.org --vault "$vault" > "$RUNNER_TEMP/paypercall-catalog.json"; then
+            endpoint='rpc.testnet.near.org'
+          elif node agent/paypercall-inspect.mjs catalog --rpc https://test.rpc.fastnear.com --vault "$vault" > "$RUNNER_TEMP/paypercall-catalog.json"; then
+            endpoint='test.rpc.fastnear.com'
+          else
+            echo '::error::Both read-only catalog views were unavailable; service availability remains unknown.'
+            exit 1
+          fi
+          export CATALOG_RPC="$endpoint"
+          python3 - <<'PY'
+          import json, os
+          p = os.environ['RUNNER_TEMP'] + '/paypercall-catalog.json'
+          c = json.load(open(p))
+          keep = ['service_id', 'status', 'provider', 'operator', 'token', 'price_base_units', 'timeout_secs', 'active', 'endpoint', 'https_hostname_syntax', 'circle_candidate']
+          out = {k: c.get(k) for k in ['block_hash', 'block_timestamp', 'escrow', 'escrow_code_hash', 'escrow_access_keys', 'escrow_circle_registration', 'service_count', 'scanned_services', 'complete_catalog_snapshot', 'circle_candidates_observed', 'payment_ready', 'operator_contacted', 'signed', 'sent']}
+          out['rpc'] = os.environ['CATALOG_RPC']
+          out['services'] = [{k:s.get(k) for k in keep} for s in c.get('services', [])]
+          s = json.dumps(out, separators=(',', ':'), ensure_ascii=True)
+          print('::notice title=PayPerCall catalog read-only::' + s.replace('%','%25').replace('\n','%0A').replace('\r','%0D'))
+          PY
+          { echo '## Public catalog snapshot'; echo 'HTTPS syntax is not reachability, an offer or payment authorization. The forwarder would be the payer, not the V3 vault. No operator was contacted.'; echo '```json'; cat "$RUNNER_TEMP/paypercall-catalog.json"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
