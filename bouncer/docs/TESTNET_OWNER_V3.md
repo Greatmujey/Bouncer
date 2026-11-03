@@ -20,11 +20,13 @@ No Circle token, vault, seller payment or fulfillment was part of this step.
 
 A fresh [read-only Circle preflight](https://github.com/Greatmujey/Bouncer/actions/runs/41636791850)
 observed the owner unregistered and the pinned six-decimal Circle testnet token.
-One locally journaled, fixed self-registration bearer has original hash
-`HZXhekhXYfqnxuDGMabWbJ9YBApm3c4dZjKtQSm62oWV`; it must never be blindly
-resent or replaced. Its one-shot broadcast workflow and original-hash
-reconciliation determine the outcome. This is owner setup, not FT acquisition
-or an independent provider purchase.
+The fixed self-registration transaction
+[`HZXhekhXYfqnxuDGMabWbJ9YBApm3c4dZjKtQSm62oWV`](https://testnet.nearblocks.io/txns/HZXhekhXYfqnxuDGMabWbJ9YBApm3c4dZjKtQSm62oWV)
+was [verified at FINAL](https://github.com/Greatmujey/Bouncer/actions/runs/41636915967)
+against its original receipt and a fresh registration view; public fence
+`13231365981` was retained. The owner held zero Circle atoms at that view.
+Never resend the original. This is owner setup, not FT acquisition or an
+independent provider purchase.
 
 A usable, funded, keyless vault and independent paid resource delivery are
 separate steps that require fresh checks and original-hash recovery at each

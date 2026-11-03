@@ -1,10 +1,12 @@
 /** Local-only journal-before-export for the single testnet Circle owner
  * registration. A signed envelope is a bearer item, not a private key. */
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import nearApi from 'near-api-js';
 import { validateOwnerBootstrapPlan } from './testnet-owner-bootstrap.mjs';
 import { signCircleOwnerRegistration, verifySignedCircleRegistration } from './circle-owner-registration.mjs';
+import { isTransactionHash } from '../shared/direct-payment-settlement.mjs';
 
 export function readBoundedPrivate(file, limit = 16_384) {
   const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
@@ -68,5 +70,53 @@ export async function signAndJournalCircleRegistration({ plan: raw, paths, resto
     syncWrite(paths.journal, JSON.stringify({ version: 1, status: 'ORIGINAL_SIGNED_NOT_CONFIRMED',
       created_at: new Date().toISOString(), envelope }, null, 2) + '\n', 'wx', 0o600);
     return publishOriginal(envelope, plan, paths.evidence);
+  } finally { fs.rmdirSync(paths.lock); }
+}
+
+/** Record a result already verified by the one-shot CI runner. The caller must
+ * independently authenticate its source (successful expected workflow, commit,
+ * run and fence); this local check is not a new RPC or consensus proof. It
+ * binds the result to BOTH the local journal and the exact exported bearer. */
+export function recordFinalCircleRegistration({ plan: raw, paths, result } = {}) {
+  const plan = validateOwnerBootstrapPlan(raw), names = ['journal', 'evidence', 'lock'];
+  if (!paths || names.some(name => typeof paths[name] !== 'string' || !path.isAbsolute(paths[name])) ||
+      new Set(names.map(name => paths[name])).size !== names.length) throw new Error('distinct registration record paths required');
+  fs.mkdirSync(paths.lock, { mode: 0o700 });
+  try {
+    const journal = readBoundedPrivate(paths.journal);
+    if (journal?.version !== 1 || !['ORIGINAL_SIGNED_NOT_CONFIRMED', 'ORIGINAL_FINAL_VERIFIED'].includes(journal.status)) {
+      throw new Error('invalid original registration journal');
+    }
+    const original = journal.envelope; verifySignedCircleRegistration(original, plan);
+    const stat = fs.lstatSync(paths.evidence);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size < 1 || stat.size > 16_384) throw new Error('invalid public registration original');
+    const bytes = fs.readFileSync(paths.evidence);
+    const exported = JSON.parse(bytes.toString('utf8')); verifySignedCircleRegistration(exported, plan);
+    if (JSON.stringify(exported) !== JSON.stringify(original)) throw new Error('public registration differs from local original');
+    const r = result, receipt = r?.receipt;
+    if (!r || r.status !== 'CIRCLE_OWNER_REGISTERED_AT_FINAL' || r.network !== 'testnet' ||
+        r.owner !== plan.account_id || r.token !== original.token || r.tx_hash !== original.tx_hash ||
+        receipt?.tx_hash !== original.tx_hash || !isTransactionHash(receipt?.root_receipt_id) ||
+        typeof receipt?.circle_reported_total_yocto !== 'string' || !/^[1-9][0-9]{0,38}$/.test(receipt.circle_reported_total_yocto) ||
+        BigInt(receipt.circle_reported_total_yocto) < BigInt(original.deposit_yocto) ||
+        !Number.isSafeInteger(receipt?.linked_successful_outcomes) || receipt.linked_successful_outcomes < 1 || receipt.linked_successful_outcomes > 64 ||
+        receipt.trusted_rpc_not_consensus_proof !== true || !isTransactionHash(r.registration_block_hash) ||
+        r.storage_registration !== 'REGISTERED_AT_VIEW' || typeof r.owner_circle_balance_atoms !== 'string' ||
+        !/^(0|[1-9][0-9]{0,38})$/.test(r.owner_circle_balance_atoms) || r.usdc_funding_verified !== false ||
+        r.vault_deployed !== false || r.seller_contacted !== false || r.do_not_resend !== true ||
+        r.signed_envelope_sha256 !== crypto.createHash('sha256').update(bytes).digest('hex') ||
+        !/^[1-9][0-9]{0,19}$/.test(r.run_id ?? '') || !/^[1-9][0-9]{0,19}$/.test(r.fence_artifact_id ?? '') ||
+        !/^[a-f0-9]{40}$/.test(r.commit ?? '')) throw new Error('final registration result does not match the original');
+    if (journal.status === 'ORIGINAL_FINAL_VERIFIED') {
+      if (JSON.stringify(journal.final_verification) !== JSON.stringify(r)) throw new Error('verified registration result already differs');
+      return { tx_hash: original.tx_hash, journal_status: journal.status, already_recorded: true };
+    }
+    const next = { ...journal, status: 'ORIGINAL_FINAL_VERIFIED', final_verification: r };
+    const temp = `${paths.journal}.verified.tmp`;
+    syncWrite(temp, JSON.stringify(next, null, 2) + '\n', 'wx', 0o600);
+    fs.renameSync(temp, paths.journal);
+    const parent = fs.openSync(path.dirname(paths.journal), fs.constants.O_RDONLY);
+    try { fs.fsyncSync(parent); } finally { fs.closeSync(parent); }
+    return { tx_hash: original.tx_hash, journal_status: next.status, already_recorded: false };
   } finally { fs.rmdirSync(paths.lock); }
 }

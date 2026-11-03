@@ -1,12 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import nearApi from 'near-api-js';
 import { mockHash } from './mock-guarded-payment.mjs';
 import { CIRCLE_TESTNET_USDC } from '../scripts/circle-testnet-setup.mjs';
-import { signAndJournalCircleRegistration } from '../agent/circle-owner-offline-journal.mjs';
+import { signAndJournalCircleRegistration, recordFinalCircleRegistration } from '../agent/circle-owner-offline-journal.mjs';
 import { verifySignedCircleRegistration } from '../agent/circle-owner-registration.mjs';
 
 const NOW = Date.parse('2026-11-02T16:20:00Z');
@@ -72,5 +73,39 @@ test('an interrupted or conflicting export preserves the original hash and canno
     fs.unlinkSync(f.paths.evidence);
     const restored = await signAndJournalCircleRegistration({ plan: f.plan, paths: f.paths, restore: true });
     assert.equal(restored.tx_hash, original.tx_hash); assert.deepEqual(JSON.parse(fs.readFileSync(f.paths.evidence)), original);
+  } finally { f.cleanup(); }
+});
+
+test('only a matching authenticated-run result can mark the exact local registration original final', async () => {
+  const f = fixture();
+  try {
+    await signAndJournalCircleRegistration({ plan: f.plan, paths: f.paths, nowMs: NOW });
+    const original = JSON.parse(fs.readFileSync(f.paths.journal)).envelope;
+    const digest = crypto.createHash('sha256').update(fs.readFileSync(f.paths.evidence)).digest('hex');
+    const result = { status: 'CIRCLE_OWNER_REGISTERED_AT_FINAL', network: 'testnet', owner: f.plan.account_id,
+      token: CIRCLE_TESTNET_USDC, tx_hash: original.tx_hash, receipt: { tx_hash: original.tx_hash,
+        root_receipt_id: mockHash('root'), circle_reported_total_yocto: original.deposit_yocto,
+        linked_successful_outcomes: 2, trusted_rpc_not_consensus_proof: true },
+      registration_block_hash: mockHash('final'), storage_registration: 'REGISTERED_AT_VIEW', owner_circle_balance_atoms: '0',
+      usdc_funding_verified: false, vault_deployed: false, seller_contacted: false, do_not_resend: true,
+      signed_envelope_sha256: digest, run_id: '12345', fence_artifact_id: '56789', commit: 'a'.repeat(40) };
+    const variants = [
+      { tx_hash: mockHash('other') }, { owner: 'other.testnet' }, { token: 'other.testnet' },
+      { signed_envelope_sha256: '0'.repeat(64) }, { storage_registration: 'NOT_REGISTERED_AT_VIEW' },
+      { do_not_resend: false }, { run_id: '0' }, { commit: 'invalid' },
+      { receipt: { ...result.receipt, tx_hash: mockHash('wrong') } },
+      { receipt: { ...result.receipt, trusted_rpc_not_consensus_proof: false } },
+      { receipt: { ...result.receipt, circle_reported_total_yocto: '1' } },
+    ];
+    for (const change of variants) {
+      assert.throws(() => recordFinalCircleRegistration({ plan: f.plan, paths: f.paths, result: { ...result, ...change } }), /does not match/);
+      assert.equal(JSON.parse(fs.readFileSync(f.paths.journal)).status, 'ORIGINAL_SIGNED_NOT_CONFIRMED');
+    }
+    const saved = recordFinalCircleRegistration({ plan: f.plan, paths: f.paths, result });
+    assert.equal(saved.tx_hash, original.tx_hash); assert.equal(saved.journal_status, 'ORIGINAL_FINAL_VERIFIED');
+    assert.deepEqual(JSON.parse(fs.readFileSync(f.paths.journal)).final_verification, result);
+    assert.equal((fs.statSync(f.paths.journal).mode & 0o777), 0o600);
+    assert.equal(recordFinalCircleRegistration({ plan: f.plan, paths: f.paths, result }).already_recorded, true);
+    assert.throws(() => recordFinalCircleRegistration({ plan: f.plan, paths: f.paths, result: { ...result, run_id: '999' } }), /already differs/);
   } finally { f.cleanup(); }
 });
