@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "purpose": "one-testnet-circle-owner-registration",
+  "network": "testnet",
+  "owner": "bouncer-owner-12f343b795633e357ae5560d.testnet",
+  "public_key": "ed25519:3FQ4vfUxvrWpfBgsxsiu9ER8jx71GeUHff5rUJx4zVog",
+  "token": "3e2210e1184b45b64c8a434c0a7e7b23cc04ea7eb7a6c3c32520d03d4afcb8af",
+  "expected_circle_code_hash": "EoAUFWELjD9gYzsjKDXYRmHDHf1RJ95jaKNSYE6v9b2z",
+  "method": "storage_deposit",
+  "deposit_yocto": "1250000000000000000000",
+  "gas": "50000000000000",
+  "nonce": "276049352000001",
+  "block_hash": "5qpxLYwBkaTmNBXS2pCZxzXzXLsJ7V4xqoEYWCmz48JS",
+  "tx_hash": "HZXhekhXYfqnxuDGMabWbJ9YBApm3c4dZjKtQSm62oWV",
+  "signed_tx_base64": "LgAAAGJvdW5jZXItb3duZXItMTJmMzQzYjc5NTYzM2UzNTdhZTU1NjBkLnRlc3RuZXQAIWeWf5uTYw546RidLIIRGURs/Io4ueUkalhp4x0K4LsBApG/EPsAAEAAAAAzZTIyMTBlMTE4NGI0NWI2NGM4YTQzNGMwYTdlN2IyM2NjMDRlYTdlYjdhNmMzYzMyNTIwZDAzZDRhZmNiOGFmR/DZMMmj4zkIQK3G0dQxKIIAKcsUnYAYLPJy97W6/LcBAAAAAg8AAABzdG9yYWdlX2RlcG9zaXRYAAAAeyJhY2NvdW50X2lkIjoiYm91bmNlci1vd25lci0xMmYzNDNiNzk1NjMzZTM1N2FlNTU2MGQudGVzdG5ldCIsInJlZ2lzdHJhdGlvbl9vbmx5Ijp0cnVlfQAgPYh5LQAAAABIVjcZPMNDAAAAAAAAAACN60Olp/Y/D9P1WLDPXmxt5BxoiQgHZ86v7OIJgXep6NcDHguD5ZAZtYnkTjlsnvfTan9sxbFukqbnVBls5n0L",
+  "do_not_blindly_resend": true,
+  "scope": "public fixed-action bearer transaction; no private key is included"
+}

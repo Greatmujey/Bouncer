@@ -18,6 +18,14 @@ key and did not verify the user's saved copy. This is trusted-RPC state, not
 proof of the original creation receipt. Do not repeat the helper request.
 No Circle token, vault, seller payment or fulfillment was part of this step.
 
+A fresh [read-only Circle preflight](https://github.com/Greatmujey/Bouncer/actions/runs/41636791850)
+observed the owner unregistered and the pinned six-decimal Circle testnet token.
+One locally journaled, fixed self-registration bearer has original hash
+`HZXhekhXYfqnxuDGMabWbJ9YBApm3c4dZjKtQSm62oWV`; it must never be blindly
+resent or replaced. Its one-shot broadcast workflow and original-hash
+reconciliation determine the outcome. This is owner setup, not FT acquisition
+or an independent provider purchase.
+
 A usable, funded, keyless vault and independent paid resource delivery are
 separate steps that require fresh checks and original-hash recovery at each
 stage. The previous V11 OutLayer pair-lock limitation remains relevant; the
