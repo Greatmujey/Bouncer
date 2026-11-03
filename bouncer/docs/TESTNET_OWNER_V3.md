@@ -10,12 +10,13 @@ check of the saved copy. Never paste or publish a private key, and never use it
 on mainnet.
 
 The public plan is `config/testnet-owner-v3-plan.json`. The dedicated one-shot
-workflow verifies a fresh testnet FINAL view, uploads a public intent fence,
-and then makes at most one helper request for that exact name and public key.
-The CI runner does not receive a private key. An ambiguous request is never
-repeated: preserve the fence and reconcile the same account through public
-views. Preparing the plan does not create an account, sign a transaction,
-deploy a vault, acquire a token, contact a seller or demonstrate delivery.
+[bootstrap run](https://github.com/Greatmujey/Bouncer/actions/runs/41636581624)
+retained public fence `13230412708`, made one helper request and observed the
+new account at a fresh testnet FINAL block with **10 test NEAR** and exactly
+the expected full-access public key. The CI runner did not receive the private
+key and did not verify the user's saved copy. This is trusted-RPC state, not
+proof of the original creation receipt. Do not repeat the helper request.
+No Circle token, vault, seller payment or fulfillment was part of this step.
 
 A usable, funded, keyless vault and independent paid resource delivery are
 separate steps that require fresh checks and original-hash recovery at each
