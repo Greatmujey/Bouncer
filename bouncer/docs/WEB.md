@@ -101,23 +101,26 @@ Vercel’s `bouncer` project uses `bouncer/web` as its root and
 copies only twelve explicit public assets, including the bundled connector, local
 font and its OFL license, and the Intear executor and corresponding source. It
 rejects symlinks, existing output directories and any wallet-origin override
-other than the exact dedicated origin. It does not
-publish checkout files, credentials, journals or private evidence.
+other than the exact dedicated origin. It does not publish checkout files,
+credentials, journals or private evidence.
 `bouncer/web/vercel.json` sets basic response headers; no production-ready
 security or CSP review is implied. The public repository is
 `https://github.com/Greatmujey/Bouncer`.
 
 The project’s production branch is `main`; working-branch previews and the
 production domain can therefore serve different commits. On 3 November 2026 UTC the
-workspace redesign and wallet picker were deployed directly from working-branch
-commit `03e9759` to `bouncer-near.vercel.app` without merging to `main`. A future
-production build from `main` could replace it. Verify deployed assets and wallet
-behavior after deployment rather than assuming a branch push updated production.
+expanded testnet wallet picker was deployed directly from working-branch commit
+`084467e` to `bouncer-near.vercel.app` without merging to `main`. A future
+production build from `main` could replace it. The deployed Intear source ZIP has
+SHA-256 `2fe277baae87ff16d7b1efee9853cba26a46b1f9813302bf507f5ca53d2e0291`.
+Verify deployed assets and wallet behavior after deployment rather than assuming
+a branch push updated production.
 GitHub Pages could use
 `https://greatmujey.github.io/Bouncer/` if enabled and deployed, but it has not
 been reverified as live. Its shared origin is deliberately not wallet-enabled.
 
 The browser tests exercise responsive layouts, keyboard navigation, an optional
-tour, historical data, a mocked wallet through the real connector bridge, and
-origin restrictions. They do not demonstrate a real wallet login, an independent
+tour, historical data, origin restrictions, integrity-check rejection, and
+mocked wallet backends through the connector bridge and pinned Mobile, Intear,
+and CLI executors. They do not demonstrate a real wallet login, an independent
 security review or provider delivery.
