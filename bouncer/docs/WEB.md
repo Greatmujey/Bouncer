@@ -171,8 +171,8 @@ security or CSP review is implied. The public repository is
 
 The project’s production branch is `main`; working-branch previews and the
 production domain can therefore serve different commits. On 3 November 2026 UTC,
-working-branch commit `2756f8a` was deployed to `bouncer-near.vercel.app`
-without merging to `main` (Vercel deployment `dpl_FnsMxG9MPLu4QDnpuWLK9cB7GW5y`).
+working-branch commit `c3ff5d4` was deployed to `bouncer-near.vercel.app`
+without merging to `main` (Vercel deployment `dpl_D6YhhiwGncbviQe9xPTeTNQYSVa9`).
 The owner-supplied public Reown project ID is configured for production. On
 3 November 2026, GitHub browser smoke `41605658819` generated and cancelled a
 real relay QR and reached the testnet access-key RPC. In `41606756832`, a
