@@ -1797,6 +1797,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           BOUNCER_PLAYWRIGHT_PATH: ${{ runner.temp }}/bouncer-browser/node_modules/playwright-core/index.mjs
           BOUNCER_METEOR_EXECUTOR: ${{ runner.temp }}/meteor-executor.js
+          BOUNCER_WALLET_PROBE_ORIGIN: https://bouncer-near.vercel.app/
         run: |
           npm install --prefix "$RUNNER_TEMP/bouncer-browser" --no-save --no-audit --no-fund playwright-core@1.64.1
           gh api repos/Meteor-Wallet/meteor_wallet_sdk/git/blobs/b76fb93ff5d47064845d09313173b6eddbfa64e3 --jq .content | base64 -d > "$BOUNCER_METEOR_EXECUTOR"
