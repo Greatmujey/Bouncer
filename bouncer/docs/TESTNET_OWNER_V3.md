@@ -9,16 +9,20 @@ must remain private. This confirmation is the user's statement, not a machine
 check of the saved copy. Never paste or publish a private key, and never use it
 on mainnet.
 
-**Current workspace custody:** after the workspace was reconstructed, the
-local encrypted V3 keyrings, private journals and local recovery ZIP were no
-longer present. The unsent Gmail recovery draft was observed still present; it
-was not sent or downloaded into this workspace, and its saved copy was not
+**Current workspace custody:** after reconstruction removed the local V3
+keyring and journals, the original unsent Gmail recovery attachment was
+privately staged on 3 November 2026. Its account and derived public key matched
+the existing V3 plan; it was imported into two new authenticated encrypted
+local copies with an in-workspace wrapping key. The temporary plaintext files
+were removed, the draft was **not sent or changed**, and no transaction was
+signed or sent during recovery. The user's separate saved backup was not
 machine-verified. The draft's pre-bootstrap statement that the account had not
-yet been created or funded is historical and is now outdated. Do not assume
-local custody, recreate missing journals, use either earlier owner, or resume
-owner signing without secure recovery and reconciliation. The statements below
-about local journals describe what was recorded at the time, not files still
-available in this reconstructed workspace.
+yet been created or funded is historical and outdated. This local keyring is
+not an independent backup, missing journals were not recreated, and neither
+older owner was used. **The two outstanding public signed originals remain
+unresolved; this recovery does not authorize other V3 owner transactions.**
+The statements below about old local journals describe what was recorded at
+the time, not files restored in this reconstructed workspace.
 
 The public plan is `config/testnet-owner-v3-plan.json`. The dedicated one-shot
 [bootstrap run](https://github.com/Greatmujey/Bouncer/actions/runs/41636581624)
