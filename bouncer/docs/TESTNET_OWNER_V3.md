@@ -49,8 +49,9 @@ verified the original FINAL receipt, the linked Ref-to-owner transfer and a
 fresh owner balance of **6,898 Circle test-USDC atoms** (0.006898 test USDC).
 It did not send or contact a seller. Never resend or replace this original.
 
-A V3-specific read-only vault preflight checks the existing V11 funding and
-storage estimates, but does not select or deploy an artifact. V11 has a known
+The [V3-specific read-only vault preflight](https://github.com/Greatmujey/Bouncer/actions/runs/41638436661)
+indicated the existing V11 funding and storage estimates would pass at that
+snapshot, but did not select or deploy an artifact. V11 has a known
 cross-policy prepaid-route limitation; experimental V12 addresses that narrow
 gap but is not independently audited or reproducibly pinned. A dependency-lock
 snapshot is being prepared before considering any fresh-state V12 deployment.

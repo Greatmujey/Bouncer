@@ -8,7 +8,7 @@ permissions:
   contents: read
 jobs:
   lock:
-    if: github.run_attempt == 1 && contains(github.event.head_commit.message, '[v12-lock-snapshot]')
+    if: github.run_attempt == 1 && contains(github.event.head_commit.message, '[v12-lock-recover]')
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -25,10 +25,13 @@ jobs:
           test ! -f Cargo.lock
           cargo generate-lockfile
           python3 - <<'PY'
-          import base64,hashlib,pathlib
+          import base64,hashlib,pathlib,zlib
           b=pathlib.Path('Cargo.lock').read_bytes()
-          if not 1000 <= len(b) <= 200_000: raise ValueError('unexpected lockfile size')
-          data=base64.b64encode(b).decode('ascii'); chunks=[data[i:i+5000] for i in range(0,len(data),5000)]
-          print('::notice title=V12 dependency lock digest::'+hashlib.sha256(b).hexdigest()+' '+str(len(b))+' '+str(len(chunks)))
-          for i,c in enumerate(chunks,1): print('::notice title=V12 dependency lock chunk '+str(i).zfill(3)+'::'+c)
+          expected='263879a4574d1d5ed97dd0da097cdefff52b4f57017738ad291628a9c63e317f'
+          if len(b)!=68925 or hashlib.sha256(b).hexdigest()!=expected: raise ValueError('resolved lock differs from the initial capture')
+          packed=zlib.compress(b,9); data=base64.b64encode(packed).decode('ascii')
+          chunks=[data[i:i+3500] for i in range(0,len(data),3500)]
+          if len(chunks)>8: raise ValueError('compressed lock exceeds the annotation limit')
+          print('::notice title=V12 compressed lock digest::'+expected+' '+str(len(b))+' '+str(len(chunks)))
+          for i,c in enumerate(chunks,1): print('::notice title=V12 compressed lock chunk '+str(i).zfill(3)+'::'+c)
           PY
