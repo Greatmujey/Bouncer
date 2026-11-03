@@ -246,9 +246,13 @@ try {
     const errors = [], calls = [], consoleMessages = [];
     page.on('pageerror', error => errors.push(error.message));
     page.on('console', message => consoleMessages.push(`${message.type()}: ${message.text()}`));
-    await page.addInitScript(() => window.addEventListener('message', event => {
-      if (event.data?.type === 'bouncer-test-intear-payload') window.__intearTestPayload = event.data.payload;
-    }));
+    await page.addInitScript(() => {
+      window.__intearTopTrace = [];
+      window.addEventListener('message', event => {
+        if (event.data?.type === 'bouncer-test-intear-payload') window.__intearTestPayload = event.data.payload;
+        if (event.data?.method === 'open') window.__intearTopTrace.push({ method: event.data.method, params: event.data.params, origin: event.data.origin });
+      });
+    });
     const picker = fs.readFileSync(new URL('../web-src/vendor/intear/web/public/hot-wallet-connector-iframe.html', import.meta.url));
     await page.context().route('https://wallet.intear.tech/**', route => {
       const url = new URL(route.request().url()); calls.push(url.pathname);
@@ -284,6 +288,12 @@ try {
         status: await page.locator('#wallet-status').textContent(),
         dialogStatus: await page.locator('#wallet-dialog-status').textContent(),
         payload: await page.evaluate(() => window.__intearTestPayload || null),
+        topTrace: await page.evaluate(() => window.__intearTopTrace),
+        pickerState: await pickerDocument.evaluate(() => ({
+          origin: hotConnector.origin, location: hotConnector.location,
+          waiting: getComputedStyle(document.querySelector('#waiting-screen')).display,
+          hasPopup: !!currentWebPopup,
+        })),
         frames: page.frames().map(frame => frame.url()),
         pages: page.context().pages().map(item => ({ url: item.url(), closed: item.isClosed() })),
       });
