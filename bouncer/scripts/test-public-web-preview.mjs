@@ -19,6 +19,10 @@ try {
   page.on('pageerror', error => pageErrors.push(error.message));
   const response = await page.goto(url, { waitUntil: 'networkidle', timeout: 45_000 });
   assert.equal(response.status(), 200);
+  const brand = page.locator('.mobile-brand .brand-mark svg');
+  assert.equal(await brand.isVisible(), true, 'mobile brand mark is visible');
+  assert.equal(await brand.locator('use').getAttribute('href'), '#i-bouncer');
+  assert.ok(await brand.locator('use').evaluate(el => el.getBBox().width > 0), 'mobile brand vector renders');
   assert.equal(await page.locator('#welcome-tour').evaluate(el => el.open), false, 'tour must not block first visit');
   await page.locator('[data-open-tour]').click();
   assert.match(await page.locator('#tour-count').innerText(), /STEP 1 OF 4/);
