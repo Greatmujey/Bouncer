@@ -144,9 +144,10 @@ security or CSP review is implied. The public repository is
 
 The project’s production branch is `main`; working-branch previews and the
 production domain can therefore serve different commits. On 3 November 2026 UTC the
-expanded testnet wallet picker was deployed directly from working-branch commit
-`6989a99` to `bouncer-near.vercel.app` without merging to `main`. A future
-production build from `main` could replace it. The deployed Intear source ZIP has
+WalletConnect-ready picker was deployed directly from working-branch commit
+`57b4bbc` to `bouncer-near.vercel.app` without merging to `main`. WalletConnect
+remains disabled until an owned project ID is configured. A future production
+build from `main` could replace it. The deployed Intear source ZIP has
 SHA-256 `2fe277baae87ff16d7b1efee9853cba26a46b1f9813302bf507f5ca53d2e0291`.
 Verify deployed assets and wallet behavior after deployment rather than assuming
 a branch push updated production.
@@ -157,7 +158,9 @@ been reverified as live. Its shared origin is deliberately not wallet-enabled.
 The browser tests exercise responsive layouts, keyboard navigation, an optional
 tour, historical data, origin restrictions, integrity-check rejection, and
 mocked wallet backends through the connector bridge and pinned Mobile, Intear,
-and CLI executors. If hosted headless Chromium does not deliver a nested-frame
-tap, the protocol test reports and uses programmatic activation; that fallback
-does not verify touch input. Tests do not demonstrate a real wallet login, an
+and CLI executors. The WalletConnect browser test uses a synthetic SignClient
+interface and the real QR renderer; unit tests check namespace limits and
+cancellation. If hosted headless Chromium does not deliver a nested-frame tap,
+the protocol test reports and uses programmatic activation; that fallback does
+not verify touch input. Tests do not demonstrate a real wallet login, an
 independent security review or provider delivery.
