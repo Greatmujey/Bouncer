@@ -29,8 +29,15 @@ export class GithubTollgateVoucherFence extends TollgateVoucherFence {
         'user-agent': 'bouncer-tollgate-voucher-fence', ...(data ? { 'content-type': 'application/json' } : {}) },
       ...(data ? { body: JSON.stringify(data) } : {}) });
     try {
+      if (method === 'POST' && r.status === 422) {
+        const error = await readBoundedJson(r, { maxBytes: 32_768, label: 'GitHub voucher reservation conflict' });
+        if (Array.isArray(error?.errors) && error.errors.some(e => e?.resource === 'Label' && e?.field === 'name' && e?.code === 'already_exists')) {
+          throw new Error('GitHub voucher reservation already exists; do not sign or retry');
+        }
+        throw new Error('GitHub voucher reservation invalid; do not sign or retry');
+      }
       if ((method === 'POST' && r.status !== 201) || (method === 'GET' && r.status !== 200)) {
-        throw new Error('GitHub voucher reservation unavailable or already exists; do not sign or retry');
+        throw new Error('GitHub voucher reservation unavailable; do not sign or retry');
       }
       return await readBoundedJson(r, { maxBytes: 32_768, label: 'public GitHub voucher reservation' });
     } finally { await r.body?.cancel().catch(() => {}); }

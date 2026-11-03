@@ -33,7 +33,10 @@ try {
   const a = new GithubTollgateVoucherFence(one, { token }), b = new GithubTollgateVoucherFence(two, { token });
   result = await a.claim(review, snapshot); // no voucher is signed
   try { await b.claim(review, snapshot); }
-  catch { duplicateBlocked = true; }
+  catch (error) {
+    if (/reservation already exists/.test(error?.message ?? '')) duplicateBlocked = true;
+    else throw new Error('synthetic duplicate check failed without an explicit name conflict');
+  }
   if (!duplicateBlocked) throw new Error('GitHub allowed a second synthetic key reservation');
   const expectedName = `bouncer-tollgate-voucher-${crypto.createHash('sha256').update(review.voucher_public_key).digest('hex')}`;
   const expectedDescription = `v13:${snapshot.review_hash}:0`;

@@ -27,7 +27,7 @@ function github({ lost = false, corruptRead = false } = {}) {
     requests.push(opts.method);
     if (opts.method === 'POST') {
       const body = JSON.parse(opts.body);
-      if (labels.has(body.name)) return Response.json({ message: 'exists' }, { status: 422 });
+      if (labels.has(body.name)) return Response.json({ message: 'exists', errors: [{ resource: 'Label', field: 'name', code: 'already_exists' }] }, { status: 422 });
       const label = { ...body, id: 12345 }; labels.set(body.name, label);
       if (lost) throw Error('lost acknowledgement');
       return Response.json(label, { status: 201 });
