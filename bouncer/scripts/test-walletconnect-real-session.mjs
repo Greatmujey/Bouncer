@@ -17,7 +17,7 @@ const withTimeout = (promise, ms, label) => {
   let timer;
   return Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`${label} timed out`)), ms); })]).finally(() => clearTimeout(timer));
 };
-let browser, wallet, activeTopic;
+let browser, wallet, activeTopic, pairingTopic;
 try {
   browser = await playwright.chromium.launch({ executablePath, args: ['--no-sandbox'], headless: true });
   const page = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
@@ -26,7 +26,7 @@ try {
   assert.ok(typeof projectId === 'string' && /^[a-f0-9]{32}$/i.test(projectId), 'project must be configured');
   await page.waitForFunction(() => !document.querySelector('[data-wallet-id="wallet-connect"]').disabled);
   wallet = await withTimeout(SignClient.init({
-    projectId, storage: createMemoryStorage(), logger: 'error', telemetryEnabled: false,
+    projectId, storage: createMemoryStorage(), logger: 'silent', telemetryEnabled: false,
     metadata: { name: 'Bouncer synthetic test wallet', description: 'No keys or transactions', url: 'https://bouncer-near.vercel.app', icons: ['https://bouncer-near.vercel.app/favicon.svg'] },
   }), 30_000, 'Synthetic wallet initialization');
   let walletRequests = 0;
@@ -37,11 +37,14 @@ try {
   await page.locator('#walletconnect-qr').waitFor({ state: 'visible', timeout: 60_000 });
   const uri = await page.locator('#walletconnect-open').getAttribute('href');
   assert.ok(typeof uri === 'string' && /^wc:[a-f0-9]{64}@2\?/.test(uri), 'a private pairing URI was generated');
-  await withTimeout(wallet.pair({ uri }), 30_000, 'Synthetic wallet pairing');
+  const pairing = await withTimeout(wallet.pair({ uri }), 30_000, 'Synthetic wallet pairing');
+  pairingTopic = pairing.topic;
   const event = await withTimeout(proposal, 30_000, 'Session proposal');
-  assert.deepEqual(Object.keys(event.params.requiredNamespaces), ['near']);
-  assert.deepEqual(event.params.requiredNamespaces.near, { chains: ['near:testnet'], methods: ['near_getAccounts'], events: [] });
-  assert.deepEqual(Object.keys(event.params.optionalNamespaces || {}), []);
+  // SignClient 2.26 moves required namespaces to optional on the wire.
+  // Bouncer still fails closed unless the approved session is exactly this.
+  assert.deepEqual(Object.keys(event.params.requiredNamespaces || {}), []);
+  assert.deepEqual(Object.keys(event.params.optionalNamespaces || {}), ['near']);
+  assert.deepEqual(event.params.optionalNamespaces.near, { chains: ['near:testnet'], methods: ['near_getAccounts'], events: [] });
   const approval = await wallet.aprove({ id: event.id, namespaces: {
     near: { accounts: ['near:testnet:wc-synthetic.testnet'], methods: ['near_getAccounts'], events: [] },
   } });
@@ -68,6 +71,7 @@ try {
 } finally {
   if (wallet) {
     if (activeTopic) await withTimeout(wallet.disconnect({ topic: activeTopic, reason: { code: 6000, message: 'Test complete' } }).catch(() => {}), 3000, 'Wallet disconnect').catch(() => {});
+    if (pairingTopic) await withTimeout(wallet.core.pairing.disconnect({ topic: pairingTopic }).catch(() => {}), 3000, 'Pairing cleanup').catch(() => {});
     try { wallet.core?.heartbeat?.stop?.(); } catch { /* best effort */ }
     await withTimeout(Promise.resolve().then(() => wallet.core?.relayer?.transportClose?.()).catch(() => {}), 3000, 'Relay close').catch(() => {});
   }

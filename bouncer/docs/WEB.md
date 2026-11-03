@@ -46,9 +46,10 @@ limited key, invalid signature, unavailable RPC, or unsupported Ed25519 browser
 fails closed. This proves control of that key at the time of the RPC response,
 not an audit or a lasting authorization. An old manually typed CLI account is
 not restored as a verified login; a new challenge is required after reload.
-The pinned adapter, generated command, signature verification and disconnect
-are browser-tested with a synthetic signer and mock RPC, not an actual CLI
-wallet or live chain.
+GitHub browser smoke `41606224793` exercised the pinned adapter and real
+`near-cli-rs` with a temporary synthetic credential, mock RPC, successful
+signature verification and disconnect. It did not use an actual user's CLI
+wallet or prove a live account login.
 
 The other returned accounts are wallet-reported rather than cryptographic proof
 of ownership. Once connected, all Connect controls show a green indicator and
@@ -75,8 +76,10 @@ WalletConnect uses a separately bundled SignClient and is available only when
 an owned Reown project ID is configured. It proposes **only** `near:testnet`
 and `near_getAccounts`, displays the approved wallet-reported CAIP account, and
 never sends a wallet RPC request or asks for transaction signing, `near_signIn`,
-`near_signOut`, or an access key. A wallet granting extra methods or networks
-is rejected; a broader session update closes the connection. Pairing material
+`near_signOut`, or an access key. SignClient 2.26 moves the namespace to
+`optionalNamespaces` on the wire, but Bouncer still requires that exact
+identity-only NEAR testnet namespace in the approved session. A wallet granting
+extra methods or networks is rejected; a broader session update closes the connection. Pairing material
 and the session stay in tab memory and are discarded on reload or disconnect.
 The pairing QR and mobile `wc:` link are bearer secrets: share them only with
 your chosen wallet. Cancellation is best effort on the remote wallet; check its
