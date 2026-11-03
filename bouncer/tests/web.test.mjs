@@ -193,3 +193,17 @@ test('website discloses testnet limitations, historical examples and identity-on
     '2xrD5cbvz2MgaThp3VdwbRZU8GAXoJHcbsHN4TispdjL',
   ]) assert.ok(html.includes(explorerTx(tx)), `missing current transaction ${tx}`);
 });
+
+test('workspace routes and the wallet picker are explicit, curated, and keyboard-accessible', () => {
+  const html = fs.readFileSync(new URL('../web/index.html', import.meta.url), 'utf8');
+  const css = fs.readFileSync(new URL('../web/styles.css', import.meta.url), 'utf8');
+  const views = [...html.matchAll(/data-route-view="([^"]+)"/g)].map(match => match[1]);
+  assert.deepEqual(views, ['overview', 'resources', 'guardrails', 'proof', 'connect']);
+  const wallets = [...html.matchAll(/data-wallet-id="([^"]+)"/g)].map(match => match[1]);
+  assert.deepEqual(wallets, ['meteor-wallet', 'nightly-wallet', 'ledger']);
+  assert.match(html, /<dialog class="wallet-dialog" id="wallet-dialog" aria-labelledby="wallet-dialog-title"/);
+  assert.match(html, /id="wallet-close" type="button" aria-label="Close wallet picker"/);
+  assert.doesNotMatch(html, /id="wallet-choice"/);
+  assert.match(html, /THE IDEA IN MOTION/);
+  assert.match(css, /prefers-reduced-motion:reduce/);
+});

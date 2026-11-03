@@ -5,23 +5,33 @@ import { WALLET_MANIFEST } from '../web-src/wallet-manifest.mjs';
 
 const location = url => { const u = new URL(url); return { hostname: u.hostname, protocol: u.protocol, origin: u.origin }; };
 class Element {
-  constructor() { this.listeners = {}; this.value = ''; this.hidden = false; this.disabled = false; this.textContent = ''; }
+  constructor(dataset = {}) { this.listeners = {}; this.dataset = dataset; this.hidden = false; this.disabled = false; this.textContent = ''; this.open = false; this.attributes = {}; this.focused = false; }
   addEventListener(event, callback) { this.listeners[event] = callback; }
-  async click() { await this.listeners.click?.(); }
+  setAttribute(name, value) { this.attributes[name] = value; }
+  async click() { if (!this.disabled) await this.listeners.click?.({ target: this }); }
+  focus() { this.focused = true; }
+  showModal() { this.open = true; }
+  close() { this.open = false; this.listeners.close?.(); }
+  getBoundingClientRect() { return { left: 0, right: 100, top: 0, bottom: 100 }; }
 }
 function fakeBrowser(url, { top = true, storageFails = false, approved = '' } = {}) {
-  const nodes = Object.fromEntries(['wallet-connect', 'wallet-disconnect', 'wallet-choice', 'wallet-status', 'wallet-open-site'].map(id => [id, new Element()]));
-  nodes['wallet-choice'].value = 'meteor-wallet'; nodes['wallet-open-site'].hidden = true;
-  const data = new Map(), labels = [new Element(), new Element()];
+  const ids = ['wallet-connect', 'wallet-disconnect', 'wallet-status', 'wallet-open-site', 'wallet-dialog', 'wallet-close', 'wallet-options', 'wallet-dialog-status', 'wallet-banner'];
+  const nodes = Object.fromEntries(ids.map(id => [id, new Element()]));
+  nodes['wallet-open-site'].hidden = true;
+  const options = ['meteor-wallet', 'nightly-wallet', 'ledger'].map(walletId => new Element({ walletId }));
+  const openers = [nodes['wallet-connect'], new Element(), new Element()];
+  const data = new Map(), labels = [new Element(), new Element(), new Element()];
   const win = { location: { ...location(url), href: url }, localStorage: {
     getItem(key) { if (storageFails) throw new Error('storage disabled'); return data.get(key) ?? null; },
     setItem(key, value) { if (storageFails) throw new Error('storage disabled'); data.set(key, value); },
     removeItem(key) { if (storageFails) throw new Error('storage disabled'); data.delete(key); },
   } };
   win.self = {}; win.top = top ? win.self : {};
-  const doc = { querySelector(sel) { if (sel === 'meta[name="bouncer-wallet-origin"]') return { content: approved }; return nodes[sel.slice(1)]; },
-    querySelectorAll(sel) { return sel === '[data-wallet-label]' ? labels : []; } };
-  return { win, doc, nodes, data, labels };
+  const classes = new Set();
+  const doc = { body: { classList: { add: value => classes.add(value), remove: value => classes.delete(value) } },
+    querySelector(sel) { if (sel === 'meta[name="bouncer-wallet-origin"]') return { content: approved }; return nodes[sel.slice(1)]; },
+    querySelectorAll(sel) { return sel === '[data-wallet-label]' ? labels : sel === '[data-wallet-id]' ? options : sel === '[data-wallet-open]' ? openers : []; } };
+  return { win, doc, nodes, options, openers, data, labels, classes };
 }
 function connectorClass(config = {}) {
   return class FakeConnector {
@@ -34,6 +44,7 @@ function connectorClass(config = {}) {
     async getConnectedWallet() { throw new Error('not connected'); }
     async connect(input) {
       config.input = input;
+      if (config.browser) config.dialogWasOpen = config.browser.nodes['wallet-dialog'].open;
       if (config.fail) throw new Error('cancelled');
       const wallet = this.wallets.find(w => w.manifest.id === input.walletId);
       this.events['wallet:signIn']({ wallet, accounts: [{ accountId: config.account || 'alice.testnet' }] });
@@ -81,14 +92,16 @@ test('shared guest, GitHub Pages and embedded preview never instantiate the wall
   for (const [url, top, approved] of cases) {
     const browser = fakeBrowser(url, { top, approved });
     await initWallet({ window: browser.win, document: browser.doc, NearConnector: class { constructor() { throw new Error('must not initialize'); } } });
-    assert.equal(browser.nodes['wallet-connect'].disabled, true);
+    assert.ok(browser.options.every(option => option.disabled));
     assert.match(browser.nodes['wallet-status'].textContent, /new tab/);
     assert.equal(browser.nodes['wallet-open-site'].hidden, false);
+    await browser.nodes['wallet-connect'].click();
+    assert.equal(browser.nodes['wallet-dialog'].open, true, 'the picker explains the safe alternative');
   }
 });
 
 test('connects and disconnects a wallet-reported account without requesting a key or signature', async () => {
-  const browser = fakeBrowser('http://127.0.0.1:4173/'), config = {};
+  const browser = fakeBrowser('http://127.0.0.1:4173/'), config = { browser };
   await initWallet({ window: browser.win, document: browser.doc, NearConnector: connectorClass(config) });
   assert.equal(config.options.network, 'testnet');
   assert.equal(config.options.features.signInWithoutAddKey, true);
@@ -99,15 +112,21 @@ test('connects and disconnects a wallet-reported account without requesting a ke
   config.instance.events['selector:walletsChanged']();
   assert.equal(config.instance.wallets.length, 3);
   await browser.nodes['wallet-connect'].click();
+  assert.equal(browser.nodes['wallet-dialog'].open, true);
+  assert.equal(config.input, undefined, 'opening the picker does not connect');
+  assert.ok(browser.options.every(option => !option.disabled));
+  await browser.options[0].click();
   assert.deepEqual(config.input, { walletId: 'meteor-wallet' });
+  assert.equal(config.dialogWasOpen, false, 'wallet iframe is not blocked behind our dialog');
   assert.match(browser.nodes['wallet-status'].textContent, /Connected: alice\.testnet \(wallet-reported\)/);
-  assert.equal(browser.nodes['wallet-connect'].hidden, true);
+  assert.equal(browser.nodes['wallet-options'].hidden, true);
   assert.equal(browser.nodes['wallet-disconnect'].hidden, false);
-  assert.deepEqual(browser.labels.map(node => node.textContent), ['Account connected', 'Account connected']);
+  assert.deepEqual(browser.labels.map(node => node.textContent), ['Account connected', 'Account connected', 'Account connected']);
+  await browser.nodes['wallet-connect'].click();
   await browser.nodes['wallet-disconnect'].click();
   assert.equal(config.disconnected, 'meteor-wallet');
   assert.match(browser.nodes['wallet-status'].textContent, /disconnected/i);
-  assert.deepEqual(browser.labels.map(node => node.textContent), ['Connect wallet', 'Connect wallet']);
+  assert.deepEqual(browser.labels.map(node => node.textContent), ['Connect wallet', 'Connect wallet', 'Connect wallet']);
 });
 
 test('the dedicated Vercel origin can connect; implicit IDs use the fixed testnet network', async () => {
@@ -115,6 +134,7 @@ test('the dedicated Vercel origin can connect; implicit IDs use the fixed testne
     const browser = fakeBrowser('https://bouncer-near.vercel.app/', { approved: 'https://bouncer-near.vercel.app' }), config = { account };
     await initWallet({ window: browser.win, document: browser.doc, NearConnector: connectorClass(config) });
     await browser.nodes['wallet-connect'].click();
+    await browser.options[0].click();
     assert.match(browser.nodes['wallet-status'].textContent, new RegExp(`^Connected: ${account}`));
     assert.equal(config.options.network, 'testnet');
   }
@@ -125,15 +145,42 @@ test('wallet errors and named mainnet accounts fail closed; blocked browser stor
     const browser = fakeBrowser('http://127.0.0.1:4173/');
     await initWallet({ window: browser.win, document: browser.doc, NearConnector: connectorClass(config) });
     await browser.nodes['wallet-connect'].click();
+    await browser.options[0].click();
     assert.equal(browser.nodes['wallet-disconnect'].hidden, true);
+    assert.equal(browser.nodes['wallet-dialog'].open, true, 'the picker reopens after failure');
     assert.doesNotMatch(browser.nodes['wallet-status'].textContent, /^Connected:/);
   }
   const browser = fakeBrowser('http://127.0.0.1:4173/', { storageFails: true }), config = {};
   await initWallet({ window: browser.win, document: browser.doc, NearConnector: connectorClass(config) });
   assert.equal(browser.nodes['wallet-connect'].disabled, false);
   await browser.nodes['wallet-connect'].click();
+  await browser.options[0].click();
   assert.match(browser.nodes['wallet-status'].textContent, /Connected: alice\.testnet/);
   assert.equal(browser.nodes['wallet-disconnect'].hidden, false);
   await browser.nodes['wallet-disconnect'].click();
   assert.match(browser.nodes['wallet-status'].textContent, /disconnected/i);
+});
+
+test('picker opens from every entry point, returns focus, and only accepts curated wallet IDs', async () => {
+  for (const [index, id] of [[1, 'nightly-wallet'], [2, 'ledger']]) {
+    const browser = fakeBrowser('http://127.0.0.1:4173/'), config = { browser };
+    await initWallet({ window: browser.win, document: browser.doc, NearConnector: connectorClass(config) });
+    await browser.openers[index].click();
+    assert.equal(browser.nodes['wallet-dialog'].open, true);
+    assert.equal(browser.classes.has('wallet-dialog-open'), true);
+    await browser.nodes['wallet-close'].click();
+    assert.equal(browser.nodes['wallet-dialog'].open, false);
+    assert.equal(browser.openers[index].focused, true);
+    assert.equal(browser.classes.has('wallet-dialog-open'), false);
+    await browser.openers[index].click();
+    await browser.options[index].click();
+    assert.deepEqual(config.input, { walletId: id });
+  }
+  const browser = fakeBrowser('http://127.0.0.1:4173/'), config = {};
+  await initWallet({ window: browser.win, document: browser.doc, NearConnector: connectorClass(config) });
+  await browser.openers[0].click();
+  browser.options[0].dataset.walletId = 'untrusted-wallet';
+  await browser.options[0].click();
+  assert.equal(config.input, undefined);
+  assert.equal(browser.nodes['wallet-dialog'].open, true);
 });

@@ -70,7 +70,45 @@ try {
       await page.keyboard.press('Escape');
       assert.equal(await dialog.evaluate(el => el.open), false);
       assert.equal(await page.locator('[data-open-tour]').evaluate(el => el === document.activeElement), true, 'focus returns to opener');
+
+      // The workspace destinations actually switch views, work with browser
+      // history, and keep a single visible section at each viewport size.
+      const nav = width < 650 ? '.mobile-nav' : '.side-nav';
+      const route = name => page.locator(`[data-route-view="${name}"]`);
+      assert.equal(await route('overview').isVisible(), true);
+      for (const [hash, name] of [['capabilities', 'resources'], ['guardrails', 'guardrails'], ['proof', 'proof'], ['connect', 'connect']]) {
+        await page.locator(`${nav} a[href="#${hash}"]`).click();
+        await route(name).waitFor({ state: 'visible' });
+        assert.equal(await route(name).isVisible(), true, `${name} is visible at ${width}px`);
+        assert.equal(await page.locator('[data-route-view]:visible').count(), 1, 'only one workspace view is visible');
+        assert.equal(await page.locator(`${nav} a[href="#${hash}"]`).getAttribute('aria-current'), 'page');
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `${name} overflows at ${width}px`);
+      }
+      await page.goBack();
+      await route('proof').waitFor({ state: 'visible' });
+      assert.equal(await route('proof').isVisible(), true, 'Back returns to the preceding view');
+      await page.reload({ waitUntil: 'networkidle' });
+      assert.equal(await route('proof').isVisible(), true, 'deep-linked view survives a refresh');
+
+      // The picker itself opens without selecting a wallet or making writes.
+      await page.waitForFunction(() => !document.querySelector('[data-wallet-id="meteor-wallet"]').disabled);
+      await page.locator('.top-connect').click();
+      const picker = page.locator('#wallet-dialog');
+      assert.equal(await picker.evaluate(el => el.open), true);
+      assert.equal(await page.locator('[data-wallet-id]').count(), 3);
+      assert.equal(await page.locator('[data-wallet-id="meteor-wallet"]').isEnabled(), true);
+      for (let i = 0; i < 5; i++) {
+        await page.keyboard.press('Tab');
+        assert.equal(await picker.evaluate(el => el.contains(document.activeElement)), true, 'focus stays in the wallet picker');
+      }
+      await page.keyboard.press('Escape');
+      assert.equal(await picker.evaluate(el => el.open), false);
+      assert.equal(await page.locator('.top-connect').evaluate(el => el === document.activeElement), true, 'picker returns focus');
+
+      await page.locator(`${nav} a[href="#capabilities"]`).click();
       assert.equal(await page.locator('.resource-card').count(), 3);
+      await page.locator('[data-resource-story="storage"]').click();
+      assert.match(await page.locator('#story-result').innerText(), /stored and retrieved \(42 bytes\)/);
       await page.locator('[data-story-tab="storage"]').click();
       assert.match(await page.locator('#story-result').innerText(), /stored and retrieved \(42 bytes\)/);
       await page.locator('[data-story-tab="api"]').click();
@@ -78,6 +116,14 @@ try {
       await page.locator('[data-story-tab="api"]').press('Home');
       assert.equal(await page.locator('[data-story-tab="compute"]').getAttribute('aria-selected'), 'true');
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `page overflows at ${width}px`);
+      await page.goto(`${url}#how-it-works`, { waitUntil: 'networkidle' });
+      await route('guardrails').waitFor({ state: 'visible' });
+      assert.equal(await page.locator('#how-it-works').isVisible(), true, 'old flow links open the guardrails view');
+      await page.goto(`${url}#resources`, { waitUntil: 'networkidle' });
+      await route('resources').waitFor({ state: 'visible' });
+      assert.equal(await page.locator('#resources').isVisible(), true, 'old recorded-resource links still work');
+      await page.emulateMedia({ reducedMotion: 'reduce' });
+      assert.equal(await page.locator('.hero-noise').evaluate(el => getComputedStyle(el).animationName), 'none', 'reduced motion disables decorative animation');
       assert.deepEqual(writes, [], 'tour and historical story must not send write requests');
       assert.deepEqual(pageErrors, []);
       if (process.env.BOUNCER_SCREENSHOTS) await page.screenshot({ path: path.join(process.env.BOUNCER_SCREENSHOTS, `bouncer-${width}.png`), fullPage: true });
@@ -101,13 +147,15 @@ try {
       });` });
     });
     await page.goto(url, { waitUntil: 'networkidle' });
-    await page.locator('#wallet-connect').waitFor({ state: 'visible' });
-    await page.waitForFunction(() => !document.querySelector('#wallet-connect').disabled);
-    await page.locator('#wallet-connect').click();
+    await page.waitForFunction(() => !document.querySelector('[data-wallet-id="meteor-wallet"]').disabled);
+    await page.locator('.top-connect').click();
+    await page.locator('[data-wallet-id="meteor-wallet"]').click();
     await page.waitForFunction(() => document.querySelector('#wallet-status').textContent.includes('browser-test.testnet'));
-    assert.match(await page.locator('#wallet-status').innerText(), /wallet-reported.*no vault or spending access/i);
+    assert.match(await page.locator('#wallet-status').textContent(), /wallet-reported.*no vault or spending access/i);
     assert.equal(calls.length, 1);
     assert.match(calls[0], /53a8b39d1aaaf067502c11e49ebb050c75df019e/);
+    await page.locator('.top-connect').click();
+    assert.match(await page.locator('#wallet-dialog-status').innerText(), /browser-test\.testnet/);
     await page.locator('#wallet-disconnect').click();
     await page.waitForFunction(() => document.querySelector('#wallet-status').textContent.includes('disconnected'));
     assert.deepEqual(errors, []);
@@ -129,13 +177,15 @@ try {
       async signOut() {}, async getAccounts() { return [{ accountId: 'production-test.testnet' }]; }
     });` }));
     await page.goto('https://bouncer-near.vercel.app/', { waitUntil: 'networkidle' });
-    await page.waitForFunction(() => !document.querySelector('#wallet-connect').disabled);
-    await page.locator('#wallet-connect').click();
+    await page.waitForFunction(() => !document.querySelector('[data-wallet-id="meteor-wallet"]').disabled);
+    await page.locator('.top-connect').click();
+    await page.locator('[data-wallet-id="meteor-wallet"]').click();
     await page.waitForFunction(() => document.querySelector('#wallet-status').textContent.includes('production-test.testnet'));
     assert.match(await page.locator('[data-wallet-label]').first().innerText(), /Account connected/);
+    await page.locator('.top-connect').click();
     await page.locator('#wallet-disconnect').click();
     await page.waitForFunction(() => document.querySelector('#wallet-status').textContent.includes('Wallet disconnected.'));
-    assert.match(await page.locator('#wallet-status').innerText(), /disconnected/i);
+    assert.match(await page.locator('#wallet-dialog-status').innerText(), /disconnected/i);
     console.log('Exact Vercel origin passed with mocked wallet executor; not a real sign-in or deployed-site test.');
   } finally { await productionBrowser.close(); }
 
@@ -152,8 +202,9 @@ try {
       await page.route('**/meteor-near-connect-latest.js?*', route => route.fulfill({ status: 200, contentType: 'text/javascript', body: executor }));
       await page.route('https://mc.meteorwallet.app/**', route => route.fulfill({ status: 503, body: 'blocked in browser test' }));
       await page.goto(url, { waitUntil: 'networkidle' });
-      await page.waitForFunction(() => !document.querySelector('#wallet-connect').disabled);
-      await page.locator('#wallet-connect').click();
+      await page.waitForFunction(() => !document.querySelector('[data-wallet-id="meteor-wallet"]').disabled);
+      await page.locator('.top-connect').click();
+      await page.locator('[data-wallet-id="meteor-wallet"]').click();
       const walletFrame = page.frameLocator('iframe').first();
       await walletFrame.getByRole('button', { name: 'Meteor Web' }).waitFor({ timeout: 20_000 });
       await walletFrame.getByRole('button', { name: 'Close Meteor Connect' }).click();
@@ -168,9 +219,11 @@ try {
     const page = await browserError.newPage();
     await page.route('**/meteor-near-connect-latest.js?*', route => route.fulfill({ status: 503, body: 'unavailable' }));
     await page.goto(url, { waitUntil: 'networkidle' });
-    await page.waitForFunction(() => !document.querySelector('#wallet-connect').disabled);
-    await page.locator('#wallet-connect').click();
-    await page.waitForFunction(() => document.querySelector('#wallet-status').textContent.includes('cancelled or unavailable'));
+    await page.waitForFunction(() => !document.querySelector('[data-wallet-id="meteor-wallet"]').disabled);
+    await page.locator('.top-connect').click();
+    await page.locator('[data-wallet-id="meteor-wallet"]').click();
+    await page.waitForFunction(() => document.querySelector('#wallet-dialog-status').textContent.includes('cancelled or unavailable'));
+    assert.equal(await page.locator('#wallet-dialog').evaluate(el => el.open), true);
     assert.equal(await page.locator('#wallet-disconnect').isVisible(), false);
     console.log('Wallet executor outage fails closed without a fake connection.');
   } finally { await browserError.close(); }
@@ -180,8 +233,9 @@ try {
     const page = await browser2.newPage();
     await page.goto(url + 'embed.html', { waitUntil: 'networkidle' });
     const frame = page.frameLocator('iframe');
-    assert.equal(await frame.locator('#wallet-connect').isDisabled(), true);
-    assert.match(await frame.locator('#wallet-status').innerText(), /new tab/);
+    await frame.locator('.top-connect').click();
+    assert.equal(await frame.locator('[data-wallet-id="meteor-wallet"]').isDisabled(), true);
+    assert.match(await frame.locator('#wallet-dialog-status').innerText(), /new tab/);
     assert.equal(await frame.locator('#wallet-open-site').isVisible(), true);
     console.log('Embedded preview offers a direct top-level link instead of a wallet session.');
   } finally { await browser2.close(); }

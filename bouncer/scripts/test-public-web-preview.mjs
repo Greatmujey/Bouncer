@@ -29,17 +29,27 @@ try {
   await page.locator('#tour-next').click();
   assert.match(await page.locator('#tour-title').innerText(), /need to a result/);
   await page.locator('#tour-skip').click();
-  if (isProduction) {
-    await page.waitForFunction(() => !document.querySelector('#wallet-connect').disabled);
-    assert.match(await page.locator('#wallet-status').innerText(), /testnet wallet/i);
-  } else {
-    assert.equal(await page.locator('#wallet-connect').isDisabled(), true, 'shared guest origin must not enable wallets');
-    assert.match(await page.locator('#wallet-status').innerText(), /new tab/);
-  }
-  assert.equal(await page.locator('.resource-card').count(), 3);
-  assert.deepEqual(await page.locator('.resource-amount').allInnerTexts(), ['0.1 wNEAR', '1.5 storage credits', '2 API credits']);
-  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'mobile page overflows');
   assert.match(await page.locator('.snapshot-note').innerText(), /not a live purchasing dashboard/);
+  await page.locator('.top-connect').click();
+  assert.equal(await page.locator('#wallet-dialog').evaluate(el => el.open), true, 'wallet picker opens');
+  if (isProduction) {
+    await page.waitForFunction(() => !document.querySelector('[data-wallet-id="meteor-wallet"]').disabled);
+    assert.match(await page.locator('#wallet-dialog-status').innerText(), /testnet wallet/i);
+  } else {
+    assert.equal(await page.locator('[data-wallet-id="meteor-wallet"]').isDisabled(), true, 'shared guest origin must not enable wallets');
+    assert.match(await page.locator('#wallet-dialog-status').innerText(), /new tab/);
+    assert.equal(await page.locator('#wallet-open-site').isVisible(), true);
+  }
+  await page.locator('#wallet-close').click();
+  const nav = '.mobile-nav';
+  for (const [hash, name] of [['guardrails', 'guardrails'], ['connect', 'connect'], ['proof', 'proof']]) {
+    await page.locator(`${nav} a[href="#${hash}"]`).click();
+    await page.locator(`[data-route-view="${name}"]`).waitFor({ state: 'visible' });
+    assert.equal(await page.locator(`[data-route-view="${name}"]`).isVisible(), true);
+    assert.equal(await page.locator('[data-route-view]:visible').count(), 1, 'only the selected view is visible');
+    assert.equal(await page.locator(`${nav} a[href="#${hash}"]`).getAttribute('aria-current'), 'page');
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'mobile page overflows');
+  }
   await page.locator('#latest-mission summary').click();
   assert.match(await page.locator('#latest-mission').innerText(), /4\.27625/);
   assert.match(await page.locator('#latest-mission').innerText(), /Circle testnet USDC/);
@@ -51,6 +61,12 @@ try {
   assert.deepEqual(pageErrors, []);
   const writes = [];
   page.on('request', request => { if (request.method() !== 'GET' && request.method() !== 'HEAD') writes.push(request.url()); });
+  await page.locator(`${nav} a[href="#capabilities"]`).click();
+  await page.locator('[data-route-view="resources"]').waitFor({ state: 'visible' });
+  assert.equal(await page.locator('[data-route-view="resources"]').isVisible(), true);
+  assert.equal(await page.locator('.resource-card').count(), 3);
+  assert.deepEqual(await page.locator('.resource-amount').allInnerTexts(), ['0.1 wNEAR', '1.5 storage credits', '2 API credits']);
+  await page.locator('[data-resource-story="storage"]').click();
   await page.locator('[data-story-tab="storage"]').click();
   assert.equal(await page.locator('#story-title').innerText(), 'Store and retrieve a note');
   assert.match(await page.locator('#story-result').innerText(), /stored and retrieved \(42 bytes\)/);

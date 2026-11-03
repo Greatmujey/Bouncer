@@ -47,9 +47,14 @@ try {
   assert.equal(await page.locator('#welcome-tour').evaluate(el => el.open), false);
   await page.locator('[data-open-tour]').click();
   await page.locator('#tour-skip').click();
-  assert.equal(await page.locator('#wallet-connect').isDisabled(), true, 'GitHub Pages shared origins must not enable wallet sign-in');
-  assert.match(await page.locator('#wallet-status').innerText(), /new tab/);
+  await page.locator('.top-connect').click();
+  assert.equal(await page.locator('[data-wallet-id="meteor-wallet"]').isDisabled(), true, 'GitHub Pages shared origins must not enable wallet sign-in');
+  assert.match(await page.locator('#wallet-dialog-status').innerText(), /new tab/);
   assert.equal(await page.locator('#wallet-open-site').isVisible(), true);
+  await page.locator('#wallet-close').click();
+  await page.locator('.mobile-nav a[href="#capabilities"]').click();
+  await page.locator('[data-route-view="resources"]').waitFor({ state: 'visible' });
+  assert.equal(await page.locator('[data-route-view="resources"]').isVisible(), true);
   assert.equal(await page.locator('.resource-card').count(), 3);
   await page.locator('[data-story-tab="storage"]').click();
   assert.match(await page.locator('#story-result').innerText(), /stored and retrieved \(42 bytes\)/);

@@ -5,11 +5,21 @@ real transaction links and historical examples, but it is **not** a live
 purchasing dashboard. Independent FT-paid provider delivery, refund recovery
 and an independent vault audit remain open.
 
-## Connecting a wallet
+## Workspace and connecting a wallet
 
-The site uses pinned NEAR Connect on **testnet**, with curated Meteor, Nightly
-and Ledger choices. Connection requests account-only sign-in, without adding an
-access key, signing a message or sending a transaction. The displayed account is
+Overview, Resources, Guardrails, On-chain proof, and Wallet & AI are separate
+client-side views with linkable URL fragments and browser history. Existing
+`#connect`, `#proof`, `#how-it-works`, and recorded-resource links continue to
+work. With JavaScript disabled the document remains readable. The animated flow
+is conceptual; it is not a live activity feed. Decorative motion respects the
+browser's reduced-motion preference.
+
+The Connect button opens a keyboard-accessible wallet picker (a bottom sheet on
+phones, a centered dialog on desktop). It uses pinned NEAR Connect on **testnet**,
+with curated Meteor, Nightly and Ledger choices. The pinned upstream manifest
+marks NEAR Mobile as not supporting testnet, so that mainnet-only option is not
+presented as connectable here. Connection requests account-only sign-in, without
+adding an access key, signing a message or sending a transaction. The displayed account is
 wallet-reported, not cryptographic proof of ownership; connection does not create
 a vault or grant the agent spending access. Never enter a seed phrase or private
 key into Bouncer. Named `.testnet` accounts and 64-hex implicit accounts are

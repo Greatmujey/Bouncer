@@ -31,20 +31,111 @@ function testnetAccount(value) {
 /**
  * Identity-only NEAR Connect integration. No add-key/sign/send methods are
  * called. The returned account is wallet-reported, not proof of ownership.
+ * The picker is our own accessible dialog; wallet executors remain sandboxed.
  */
 export async function initWallet({ window: win, document: doc, NearConnector }) {
-  const connect = doc.querySelector('#wallet-connect');
+  const dialog = doc.querySelector('#wallet-dialog');
+  const closeButton = doc.querySelector('#wallet-close');
+  const optionsBox = doc.querySelector('#wallet-options');
+  const options = [...doc.querySelectorAll('[data-wallet-id]')];
+  const openers = [...doc.querySelectorAll('[data-wallet-open]')];
   const disconnect = doc.querySelector('#wallet-disconnect');
-  const choice = doc.querySelector('#wallet-choice');
   const status = doc.querySelector('#wallet-status');
+  const dialogStatus = doc.querySelector('#wallet-dialog-status');
   const openSite = doc.querySelector('#wallet-open-site');
-  if (!connect || !disconnect || !choice || !status) return;
+  const banner = doc.querySelector('#wallet-banner');
+  if (!dialog || !closeButton || !optionsBox || !options.length || !openers.length || !disconnect || !status || !dialogStatus) return;
+
   const approved = doc.querySelector('meta[name="bouncer-wallet-origin"]')?.content || '';
+  const allowedIds = new Set(WALLET_MANIFEST.wallets.map(wallet => wallet.id));
+  let connector, selectedWallet = null, connected = false, ready = false, busyState = false, opener = null;
+  let bannerTimer;
+  const trusted = new Set(WALLET_MANIFEST.wallets);
+  function setWalletLabels(label) {
+    doc.querySelectorAll('[data-wallet-label]').forEach(node => { node.textContent = label; });
+  }
+  function setStatus(message) { status.textContent = message; dialogStatus.textContent = message; }
+  function notify(message, persistent = false) {
+    if (!banner) return;
+    clearTimeout(bannerTimer);
+    banner.textContent = message; banner.hidden = false;
+    if (!persistent) {
+      bannerTimer = setTimeout(() => { banner.hidden = true; }, 5500);
+      bannerTimer?.unref?.();
+    }
+  }
+  function hideBanner() { clearTimeout(bannerTimer); if (banner) banner.hidden = true; }
+  function renderControls() {
+    optionsBox.hidden = connected;
+    options.forEach(button => { button.disabled = !ready || busyState || connected || !allowedIds.has(button.dataset.walletId); });
+    disconnect.hidden = !connected; disconnect.disabled = busyState;
+    openers.forEach(button => { button.disabled = busyState; });
+  }
+  function busy(value) { busyState = value; renderControls(); }
+  function showDisconnected(message = 'Choose a testnet wallet to connect.') {
+    selectedWallet = null; connected = false;
+    setStatus(message); setWalletLabels('Connect wallet'); renderControls();
+  }
+  function acceptAccounts(wallet, accounts) {
+    const id = accounts?.[0]?.accountId;
+    if (!wallet || !trusted.has(wallet.manifest) || !testnetAccount(id)) {
+      showDisconnected('The wallet did not return a testnet account. No account was connected.');
+      void storage.remove('selected-wallet').catch(() => {});
+      return false;
+    }
+    selectedWallet = wallet; connected = true;
+    setWalletLabels('Account connected');
+    setStatus(`Connected: ${id} (wallet-reported). No vault or spending access is granted.`);
+    renderControls();
+    return true;
+  }
+  function closePicker() { if (dialog.open) dialog.close(); }
+  function openPicker(trigger) {
+    if (dialog.open) return;
+    opener = trigger || doc.activeElement;
+    if (typeof dialog.showModal !== 'function') {
+      setStatus('This browser does not support the wallet picker. Try an up-to-date browser.');
+      return;
+    }
+    hideBanner();
+    dialog.showModal();
+    doc.body?.classList.add('wallet-dialog-open');
+    (connected ? disconnect : options.find(button => !button.disabled) || closeButton).focus();
+  }
+  for (const button of openers) {
+    button.setAttribute('aria-haspopup', 'dialog');
+    button.setAttribute('aria-controls', 'wallet-dialog');
+    button.addEventListener('click', () => openPicker(button));
+  }
+  closeButton.addEventListener('click', closePicker);
+  dialog.addEventListener('cancel', event => { event.preventDefault(); closePicker(); });
+  dialog.addEventListener('keydown', event => {
+    if (event.key !== 'Tab') return;
+    const focusable = [...dialog.querySelectorAll('button:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])')]
+      .filter(element => !element.closest('[hidden]') && element.getClientRects().length > 0);
+    if (!focusable.length) { event.preventDefault(); return; }
+    const first = focusable[0], last = focusable[focusable.length - 1];
+    if (event.shiftKey && doc.activeElement === first) { event.preventDefault(); last.focus(); }
+    else if (!event.shiftKey && doc.activeElement === last) { event.preventDefault(); first.focus(); }
+  });
+  dialog.addEventListener('close', () => {
+    // The browser can queue a close event after an immediately reopened dialog.
+    if (dialog.open) return;
+    doc.body?.classList.remove('wallet-dialog-open');
+    if (opener && typeof opener.focus === 'function') opener.focus();
+  });
+  dialog.addEventListener('click', event => {
+    // Only a click on the backdrop closes the sheet, not empty space inside it.
+    if (event.target !== dialog) return;
+    const rect = dialog.getBoundingClientRect();
+    if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) closePicker();
+  });
+  renderControls();
+
   let isTop = false;
   try { isTop = win.top === win.self; } catch { /* fail closed */ }
   if (!walletOriginAllowed(win.location, isTop, approved)) {
-    status.textContent = 'Open Bouncer in a new tab to connect your testnet wallet.';
-    connect.disabled = true; choice.disabled = true;
+    setStatus('Open Bouncer in a new tab to connect your testnet wallet.');
     if (openSite) {
       // A dedicated development preview can be opened directly; shared or
       // unapproved hosts link to the approved production site instead.
@@ -76,41 +167,15 @@ export async function initWallet({ window: win, document: doc, NearConnector }) 
       try { win.localStorage.removeItem(prefix + key); } catch { /* session-only */ }
     },
   };
-  let connector, selectedWallet = null, connected = false;
-  const trusted = new Set(WALLET_MANIFEST.wallets);
   function trimUntrustedWallets() {
     // NEAR Connect also discovers injected/debug/parent-frame wallets. Keep
     // only the exact curated manifest objects; never trust injected overrides.
     connector.wallets = connector.wallets.filter(wallet => trusted.has(wallet.manifest));
   }
-  function setWalletLabels(label) {
-    doc.querySelectorAll?.('[data-wallet-label]')?.forEach(node => { node.textContent = label; });
-  }
-  function showDisconnected(message = 'Choose a testnet wallet to connect.') {
-    selectedWallet = null; connected = false;
-    status.textContent = message; connect.hidden = false; disconnect.hidden = true; choice.disabled = false;
-    setWalletLabels('Connect wallet');
-  }
-  function acceptAccounts(wallet, accounts) {
-    const id = accounts?.[0]?.accountId;
-    if (!wallet || !trusted.has(wallet.manifest) || !testnetAccount(id)) {
-      showDisconnected('The wallet did not return a testnet account. No account was connected.');
-      void storage.remove('selected-wallet').catch(() => {});
-      return false;
-    }
-    selectedWallet = wallet; connected = true; choice.disabled = true;
-    connect.hidden = true; disconnect.hidden = false; setWalletLabels('Account connected');
-    status.textContent = `Connected: ${id} (wallet-reported). No vault or spending access is granted.`;
-    return true;
-  }
-  function busy(value) { connect.disabled = value; disconnect.disabled = value; }
-
   try {
     connector = new NearConnector({ network: 'testnet', features: { testnet: true, signInWithoutAddKey: true },
       autoConnect: false, manifest: WALLET_MANIFEST, storage, providers: { testnet: ['https://test.rpc.fastnear.com'] } });
-    // The SDK normally runs an IndexedDB cache before refreshing the executor.
-    // Avoid running stale code cached by another app/version on this origin;
-    // fetch the immutable, pinned URL each page session instead.
+    // Avoid executing stale code cached by another app/version on this origin.
     connector.db.getItem = async () => null;
     connector.db.setItem = async () => {};
     connector.on('selector:walletsChanged', trimUntrustedWallets);
@@ -118,6 +183,7 @@ export async function initWallet({ window: win, document: doc, NearConnector }) 
     connector.on('wallet:signOut', () => showDisconnected());
     await connector.whenManifestLoaded;
     trimUntrustedWallets();
+    ready = true;
     // Only attempt restoration if this app had a previously selected wallet.
     if (await storage.get('selected-wallet')) {
       try {
@@ -125,33 +191,47 @@ export async function initWallet({ window: win, document: doc, NearConnector }) 
         acceptAccounts(wallet, accounts);
       } catch { showDisconnected('Previous wallet session could not be restored. You can connect again.'); }
     } else showDisconnected();
-    busy(false);
+    renderControls();
   } catch {
-    status.textContent = 'Wallet connector could not initialize. Check browser storage and try reloading.';
-    connect.disabled = true; choice.disabled = true;
+    setStatus('Wallet connector could not initialize. Check browser storage and try reloading.');
+    ready = false; renderControls();
     return;
   }
 
-  connect.addEventListener('click', async () => {
-    if (connected) return;
-    const walletId = choice.value;
-    if (!WALLET_MANIFEST.wallets.some(wallet => wallet.id === walletId)) return;
-    busy(true); status.textContent = 'Opening your selected testnet wallet…';
-    try {
-      trimUntrustedWallets();
-      // Explicit choice; no addFunctionCallKey, message signing or transaction.
-      await connector.connect({ walletId });
-      if (!connected) showDisconnected('No valid testnet account was returned.');
-    } catch {
-      await storage.remove('selected-wallet');
-      showDisconnected('Wallet connection was cancelled or unavailable. No transaction was sent.');
-    } finally { busy(false); }
-  });
+  for (const button of options) {
+    button.addEventListener('click', async () => {
+      const walletId = button.dataset.walletId;
+      if (!ready || busyState || connected || !allowedIds.has(walletId)) return;
+      const name = WALLET_MANIFEST.wallets.find(wallet => wallet.id === walletId).name;
+      busy(true); setStatus(`Opening ${name} on testnet…`); notify(`Opening ${name}…`, true);
+      // The NEAR Connect executor uses its own iframe overlay. A native dialog
+      // is in the top layer, so close ours before opening the wallet UI.
+      closePicker();
+      let reopen = false;
+      try {
+        trimUntrustedWallets();
+        // Explicit choice; no addFunctionCallKey, message signing or transaction.
+        await connector.connect({ walletId });
+        if (!connected) {
+          await storage.remove('selected-wallet');
+          if (!/did not return a testnet account/.test(status.textContent)) showDisconnected('No valid testnet account was returned.');
+          reopen = true;
+        } else notify('Testnet account connected. No spending access was granted.');
+      } catch {
+        await storage.remove('selected-wallet');
+        showDisconnected('Wallet connection was cancelled or unavailable. No transaction was sent.');
+        reopen = true;
+      } finally {
+        busy(false);
+        if (reopen) { hideBanner(); openPicker(opener); }
+      }
+    });
+  }
   disconnect.addEventListener('click', async () => {
-    if (!selectedWallet) return;
-    busy(true); status.textContent = 'Disconnecting your wallet…';
+    if (!selectedWallet || busyState) return;
+    busy(true); setStatus('Disconnecting your wallet…');
     try { await connector.disconnect(selectedWallet); showDisconnected('Wallet disconnected.'); }
-    catch { status.textContent = 'Could not disconnect. Please try again in your wallet.'; }
+    catch { setStatus('Could not disconnect. Please try again in your wallet.'); }
     finally { busy(false); }
   });
 }

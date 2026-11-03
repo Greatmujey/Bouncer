@@ -3,14 +3,43 @@ import { setupTour } from './tour.mjs';
 
 setupTour();
 
-// Keep the workspace navigation in sync with the section the reader selected.
+// Each workspace destination is its own view, with hash links for deep links,
+// refresh and browser Back/Forward. Existing section URLs continue to work.
+// Without JavaScript all sections remain readable as a single document.
+const routeByHash = Object.freeze({
+  '': 'overview', overview: 'overview', capabilities: 'resources',
+  'run-story': 'resources', resources: 'resources', guardrails: 'guardrails',
+  'how-it-works': 'guardrails', proof: 'proof', 'latest-mission': 'proof',
+  roadmap: 'proof', connect: 'connect',
+});
+const routeNames = Object.freeze({ overview: 'Overview', resources: 'Resources', guardrails: 'Guardrails', proof: 'On-chain proof', connect: 'Wallet & AI' });
+const sectionHashes = new Set(['run-story', 'resources', 'how-it-works', 'latest-mission', 'roadmap']);
 const navigation = [...document.querySelectorAll('.side-link, .mobile-nav a')];
-for (const link of navigation) {
-  link.addEventListener('click', () => {
-    const target = link.getAttribute('href');
-    for (const item of navigation) item.classList.toggle('active', item.getAttribute('href') === target);
+const routeViews = [...document.querySelectorAll('[data-route-view]')];
+function showRoute(initial = false) {
+  const hash = location.hash.slice(1);
+  const route = routeByHash[hash] || 'overview';
+  for (const view of routeViews) view.hidden = view.dataset.routeView !== route;
+  for (const link of navigation) {
+    const active = routeByHash[link.getAttribute('href').slice(1)] === route;
+    link.classList.toggle('active', active);
+    if (active) link.setAttribute('aria-current', 'page');
+    else link.removeAttribute('aria-current');
+  }
+  document.querySelector('#route-breadcrumb').textContent = routeNames[route];
+  document.title = `${routeNames[route]} · Bouncer`;
+  if (!initial) {
+    document.querySelector('#route-announcement').textContent = `${routeNames[route]} view`;
+    const heading = document.querySelector(`[data-route-view="${route}"] h1`);
+    if (heading) { heading.tabIndex = -1; heading.focus({ preventScroll: true }); }
+  }
+  requestAnimationFrame(() => {
+    if (sectionHashes.has(hash)) document.getElementById(hash)?.scrollIntoView({ behavior: 'auto', block: 'start' });
+    else if (!initial || hash) window.scrollTo({ top: 0, behavior: 'auto' });
   });
 }
+window.addEventListener('hashchange', () => showRoute());
+showRoute(true);
 
 const grid = document.querySelector('#resource-grid');
 const status = document.querySelector('#rpc-status');
@@ -81,6 +110,9 @@ function selectStory(id, focus = false) {
   document.querySelector('#story-payment').textContent = `${formatUnits(resource.amount, resource.decimals)} ${resource.tokenLabel} on NEAR testnet, within the owner’s rules.`;
   document.querySelector('#story-result').textContent = resource.story.result;
   document.querySelector('#story-transaction').href = explorerTx(resource.tx);
+}
+for (const link of document.querySelectorAll('[data-resource-story]')) {
+  link.addEventListener('click', () => selectStory(link.dataset.resourceStory));
 }
 for (const [index, tab] of storyTabs.entries()) {
   tab.addEventListener('click', () => selectStory(tab.dataset.storyTab));

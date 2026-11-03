@@ -31,8 +31,9 @@ try {
   if (requested && requested !== 'https://bouncer-near.vercel.app/') throw new Error('unexpected wallet probe origin');
   const target = requested || `http://127.0.0.1:${server.address().port}/`;
   await page.goto(target, { waitUntil: 'networkidle' });
-  await page.waitForFunction(() => !document.querySelector('#wallet-connect').disabled);
-  await page.locator('#wallet-connect').click();
+  await page.waitForFunction(() => !document.querySelector('[data-wallet-id="meteor-wallet"]').disabled);
+  await page.locator('.top-connect').click();
+  await page.locator('[data-wallet-id="meteor-wallet"]').click();
   const button = page.frameLocator('iframe').first().getByRole('button', { name: 'Meteor Web' });
   await button.waitFor({ timeout: 30_000 });
   const popupPromise = page.waitForEvent('popup', { timeout: 30_000 });
