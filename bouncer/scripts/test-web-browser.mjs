@@ -277,8 +277,14 @@ try {
     // The upstream picker must receive its connector origin before it can
     // proxy a popup. Automated clicks can otherwise outrun initialization.
     await pickerDocument.waitForFunction(() => typeof hotConnector !== 'undefined' && !!hotConnector.origin && !!hotConnector.location, null, { timeout: 20_000 });
+    await pickerDocument.evaluate(() => {
+      window.__pickerInputTrace = [];
+      for (const type of ['pointerdown', 'pointerup', 'touchstart', 'touchend', 'click']) {
+        document.addEventListener(type, event => window.__pickerInputTrace.push({ type, target: event.target?.className || event.target?.tagName }), true);
+      }
+    });
     const pickerFrame = page.frameLocator('iframe').first().frameLocator('iframe');
-    await pickerFrame.locator('.card-title').getByText('Web', { exact: true }).tap({ timeout: 20_000 }).catch(async error => {
+    await pickerFrame.locator('.card-title').getByText('Web', { exact: true }).locator('..').tap({ timeout: 20_000 }).catch(async error => {
       console.error('Intear browser diagnostic:', { calls, errors, consoleMessages, status: await page.locator('#wallet-status').textContent(), frames: page.frames().map(frame => frame.url()) });
       throw error;
     });
@@ -292,7 +298,8 @@ try {
         pickerState: await pickerDocument.evaluate(() => ({
           origin: hotConnector.origin, location: hotConnector.location,
           waiting: getComputedStyle(document.querySelector('#waiting-screen')).display,
-          hasPopup: !!currentWebPopup,
+          hasPopup: !!currentWebPopup, inputs: window.__pickerInputTrace,
+          clickHandler: typeof document.querySelector('.card').onclick,
         })),
         frames: page.frames().map(frame => frame.url()),
         pages: page.context().pages().map(item => ({ url: item.url(), closed: item.isClosed() })),
