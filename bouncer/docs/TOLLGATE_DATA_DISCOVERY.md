@@ -145,7 +145,11 @@ and deleted only that synthetic label; it signed no voucher, made no chain
 transaction, and contacted no provider. This verifies that GitHub permission
 and uniqueness worked in that run, not a live reservation or purchase. Results
 explicitly distinguish `LOCAL_ONLY` from `GITHUB_LABEL_AND_LOCAL`; a local
-fence alone is not cross-session protection.
+fence alone is not cross-session protection. The client now defaults to live
+mode and refuses a local-only fence before contacting the seller. Its explicit
+`synthetic` mode allows an injected test transport; the caller is responsible
+for ensuring that transport cannot reach a real seller, so never use this mode
+for a real purchase.
 An [isolated HTTP lifecycle](https://github.com/Greatmujey/Bouncer/actions/runs/41662141220)
 exercised the updated client against the pinned published seller SDK and a disposable
 nearcore: review, one voucher, synthetic returned data, replay refusal, local

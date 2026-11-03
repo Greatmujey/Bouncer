@@ -86,7 +86,7 @@ function privateFence(t){
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'bouncer-tollgate-test-'));fs.chmodSync(dir,0o700);
  t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));return {dir,fence:new TollgateVoucherFence(dir)};
 }
-const args=(f,fence)=>({review:f.review,provider:f.provider,voucherKey:f.voucherKey,fence,fetchImpl:f.fetchImpl,now:()=>f.now});
+const args=(f,fence)=>({review:f.review,provider:f.provider,voucherKey:f.voucherKey,fence,fetchImpl:f.fetchImpl,now:()=>f.now,executionMode:'synthetic'});
 
 test('review pins the exact resource, bounded native channel, identities and tested code',()=>{
  const f=fixture(),r=f.review;
@@ -204,4 +204,12 @@ test('paid request waits for a cross-environment GitHub fence, and failure sends
  assert.equal(rejected.http.paid,0);assert.equal(fs.readdirSync(second.dir).length,1);
  await assert.rejects(purchaseTollgateQuakesOnce(args(rejected,denied)),/EEXIST/);
  assert.equal(rejected.http.paid,0);
+});
+
+test('live mode fails closed with a local-only fence before contacting the seller',async t=>{
+ const f=fixture(),{dir,fence}=privateFence(t),live={...args(f,fence),executionMode:'live'};
+ await assert.rejects(purchaseTollgateQuakesOnce(live),/cross-environment fence/);
+ assert.equal(f.http.free,0);assert.equal(f.http.paid,0);assert.deepEqual(fs.readdirSync(dir),[]);
+ await assert.rejects(purchaseTollgateQuakesOnce({...args(f,fence),fetchImpl:globalThis.fetch}),/injected test transport/);
+ assert.equal(f.http.free,0);assert.deepEqual(fs.readdirSync(dir),[]);
 });

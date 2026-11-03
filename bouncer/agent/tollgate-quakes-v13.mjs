@@ -207,11 +207,17 @@ function validQuakes(body,channelId,now){
  * FINAL snapshot and an exclusive durable local fence. No automatic retry,
  * account key, NEAR transaction, channel top-up or voucher rollback. The
  * caller must preserve the fence across environments, including lost replies. */
-export async function purchaseTollgateQuakesOnce({review:raw,provider,voucherKey,fence,fetchImpl=globalThis.fetch,now=Date.now}={}){
+export async function purchaseTollgateQuakesOnce({review:raw,provider,voucherKey,fence,fetchImpl=globalThis.fetch,now=Date.now,
+ executionMode='live'}={}){
  const review=validateTollgateQuakesReview(raw);
  if(!(fence instanceof TollgateVoucherFence)||typeof fetchImpl!=='function'||typeof now!=='function'||
   !voucherKey||typeof voucherKey.getPublicKey!=='function'||typeof voucherKey.sign!=='function'||
   String(voucherKey.getPublicKey())!==review.voucher_public_key)throw Error('matching dedicated key and durable fence required');
+ if(!['live','synthetic'].includes(executionMode)||
+  (executionMode==='live'&&fence.fenceScope!=='GITHUB_LABEL_AND_LOCAL')||
+  (executionMode==='synthetic'&&fetchImpl===globalThis.fetch)){
+  throw Error('live purchase requires a cross-environment fence; synthetic mode requires an injected test transport');
+ }
  const offer=await inspectTollgateOffer({fetchImpl});
  if(!offer.offer_recognized||!offer.exact_resource_match)throw Error('reviewed seller offer no longer matches');
  const snapshot=await inspectTollgateQuakesChannel({review,provider,now});
@@ -230,7 +236,7 @@ export async function purchaseTollgateQuakesOnce({review:raw,provider,voucherKey
   channel_id:snapshot.channel_id,cumulative:review.price_yocto,nonce:'1',signature:signature.toString('base64')}}),'utf8').toString('base64');
  const result={network:'testnet',owner:review.owner,vault:review.vault,review_hash:snapshot.review_hash,intent_id:review.intent_id,
   channel_id:snapshot.channel_id,price_yocto:review.price_yocto,channel_budget_yocto:review.channel_budget_yocto,
-  snapshot_block_hash:snapshot.block_hash,fenced:true,fence_scope:fence.fenceScope,do_not_retry:true,settlement_verified:false,upstream_provenance_verified:false,
+  snapshot_block_hash:snapshot.block_hash,fenced:true,fence_scope:fence.fenceScope,execution_mode:executionMode,do_not_retry:true,settlement_verified:false,upstream_provenance_verified:false,
   voucher_resource_bound:false,asset:'native NEAR (testnet)',scope:'seller response and trusted-RPC snapshot; not an audit or settlement proof'};
  let res;
  try{

@@ -107,11 +107,11 @@ try{
   };
   const fenceDir=path.join(rootDir,'voucher-fence');fs.mkdirSync(fenceDir,{mode:0o700});
   const fence=new TollgateVoucherFence(fenceDir);
-  const result=await purchaseTollgateQuakesOnce({review,provider,voucherKey,fence,fetchImpl:localFetch});
+  const result=await purchaseTollgateQuakesOnce({review,provider,voucherKey,fence,fetchImpl:localFetch,executionMode:'synthetic'});
   assert.equal(result.status,'PROVIDER_RETURNED_DATA');assert.equal(result.settlement_verified,false);
   assert.equal(result.data.quakes[0].id,'sandbox-synthetic-event');assert.equal(httpRequests,2);
   assert.equal((await view(CHANNEL,'get_channel',{channel_id:opened.channel_id})).settled,'0');
-  await assert.rejects(purchaseTollgateQuakesOnce({review,provider,voucherKey,fence,fetchImpl:localFetch}),/EEXIST/);
+  await assert.rejects(purchaseTollgateQuakesOnce({review,provider,voucherKey,fence,fetchImpl:localFetch,executionMode:'synthetic'}),/EEXIST/);
   assert.equal(httpRequests,3); // second call discovers only; paid request is never repeated
   const settlement=await gate.settleChannel(opened.channel_id);assert.equal(settlement.ok,true);
   let channel=await view(CHANNEL,'get_channel',{channel_id:opened.channel_id});assert.equal(channel.settled,QUAKES_PRICE_YOCTO);
