@@ -266,6 +266,29 @@ async function exercise({ endpoint, root, tokenOwner, wasm, escrowWasm, upstream
   assert.equal(correlated.answer_hash_matches_onchain_commitment, true);
   assert.equal(correlated.independent_fulfillment_verified, false);
   checkpoint('independent receipt verifier correlated the isolated graphs, pinned views and fixture answer');
+
+  // Complete the same successful-order path: the unused 40 mock units must
+  // leave the fixed forwarder through ft_transfer_call and actually credit the
+  // vault ledger. The conservative rolling policy still counts the original
+  // 100, even though the provider was paid 60 and 40 were returned. These
+  // are state assertions in a disposable chain, not a public-chain receipt
+  // verifier or proof of an independently delivered answer.
+  assert.equal(await ft(VAULT), '0'); assert.equal(await tracked(), '0');
+  const answerReturn = await must(answerBridgeAgent, FULFILLED_ADAPTER, 'return_tokens', { amount: '40' }, 0n, 300n * TGAS);
+  assert.equal(await ft(FULFILLED_ADAPTER), '0'); assert.equal(await ft(VAULT), '40');
+  assert.equal(await tracked(), '40'); assert.equal(await ft(PROVIDER), '60');
+  assert.equal(await view(VAULT, 'daily_spent', { policy_id: 'fulfilled' }), '100');
+  // An independently owner-pinned sandbox-only probe has enough actual and
+  // tracked funds, but the already consumed daily cap must still block it.
+  await must(buyer, VAULT, 'set_exact_ft_intent', { intent_id: 'rolling-cap-probe', policy_id: 'fulfilled',
+    expected_token: TOKEN, payee: FULFILLED_ADAPTER, amount: '40', memo: 'sandbox:rolling-cap-probe',
+    review_hash: '0'.repeat(64), expires_at_ms: String(answerArtifact.review.expires_at_ms),
+    agent_public_key: pub(vaultKey) }, 1n);
+  expectFailure(await call(vaultAgent, VAULT, 'execute_exact_ft', { intent_id: 'rolling-cap-probe' }, 0n, 250n * TGAS),
+    /daily cap exceeded/);
+  assert.equal(await ft(VAULT), '40'); assert.equal(await tracked(), '40'); assert.equal(await ft(FULFILLED_ADAPTER), '0');
+  assert.equal(await view(VAULT, 'daily_spent', { policy_id: 'fulfilled' }), '100');
+  checkpoint('isolated fulfilled order returned the unused mock tokens; a new intent remained blocked by the rolling cap');
   const compactOutcome = o => ({ executor_id: o?.executor_id, status: o?.status, receipt_ids: o?.receipt_ids, logs: o?.logs });
   const graph = result => ({ final_execution_status: result.final_execution_status, status: result.status,
     transaction: { hash: result.transaction?.hash, signer_id: result.transaction?.signer_id,
@@ -285,14 +308,15 @@ async function exercise({ endpoint, root, tokenOwner, wasm, escrowWasm, upstream
     refund_scenario_conservative_spend: '100',
     partial_refund: '40', claimed_late_refund: '60', owner_native_storage_return_checked: true,
     isolated_fulfillment: { funding_final: true, escrow_open: true, locally_supplied_answer_hash_matched: true,
-      detached_mock_token_payout: '60', unused_at_forwarder: '40', answer_sha256: hash(answer),
-      independent_receipt_verifier_passed: true, independent_provider_delivery: false },
+      detached_mock_token_payout: '60', unused_forwarder_return: '40', final_vault_actual_and_tracked: '40',
+      final_forwarder_balance: '0', conservative_rolling_spend: '100', subsequent_intent_blocked_by_daily_cap: true,
+      answer_sha256: hash(answer), independent_receipt_verifier_passed: true, independent_provider_delivery: false },
     seller_contacted: false, independent_fulfillment_verified: false,
     local_hashes: { to_forwarder: toAdapter.transaction_outcome.id, opened: opened.transaction_outcome.id,
       partial_return: partial.transaction_outcome.id, rejection: rejected.transaction_outcome.id,
       claim: claim.transaction_outcome.id, late_return: returnLate.transaction_outcome.id,
       answer_funding: answerFunding.transaction_outcome.id, answer_open: answerOpened.transaction_outcome.id,
-      answer_fulfillment: fulfilled.transaction_outcome.id },
+      answer_fulfillment: fulfilled.transaction_outcome.id, answer_unused_return: answerReturn.transaction_outcome.id },
     isolated_receipt_graphs: { funding: graph(fundingReceipts), opening: graph(openingReceipts), fulfillment: graph(fulfillmentReceipts) } };
 }
 
