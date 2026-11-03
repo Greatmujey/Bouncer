@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "kind": "swap",
+  "original_run_id": "41637917983",
+  "original_commit": "eb24d4d9e2a2b7c741378ecb3b7c588b2a28056e",
+  "original_fence_artifact_id": "13231466627",
+  "signed_envelope_sha256": "99777150d96e155ba9392c4c0c14c4f7d98f6248ee91f31f0a8fcf707ed7b927"
+}

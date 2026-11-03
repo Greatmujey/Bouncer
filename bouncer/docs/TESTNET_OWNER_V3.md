@@ -41,8 +41,11 @@ delivery.
 
 The locally journaled subsequent swap original is
 `9i6AFBKEY2FzDdydnsoTfTxM87shpjvxZYxRyU6JTAGR`. It used a fresh post-wrap
-snapshot and a 6,553-atom minimum. Its separate one-shot outcome must be
-verified, and it must never be blindly resent or replaced.
+snapshot and a 6,553-atom minimum. Its
+[one-shot run](https://github.com/Greatmujey/Bouncer/actions/runs/41637917983)
+retained fence `13231466627` but lost confirmation after a view failed. Its
+outcome remains unresolved until the original receipt and balances are
+reconciled; never blindly resend or replace it.
 
 A usable, funded, keyless vault and independent paid resource delivery are
 separate steps that require fresh checks and original-hash recovery at each
