@@ -238,6 +238,7 @@ export async function purchaseTollgateQuakesOnce({review:raw,provider,voucherKey
   channel_id:snapshot.channel_id,cumulative:review.price_yocto,nonce:'1',signature:signature.toString('base64')}}),'utf8').toString('base64');
  const result={network:'testnet',owner:review.owner,vault:review.vault,review_hash:snapshot.review_hash,intent_id:review.intent_id,
   channel_id:snapshot.channel_id,price_yocto:review.price_yocto,channel_budget_yocto:review.channel_budget_yocto,
+  channel_deposit_yocto:snapshot.channel_deposit,channel_storage_fee_yocto:snapshot.channel_storage_fee,
   snapshot_block_hash:snapshot.block_hash,fenced:true,fence_scope:fence.fenceScope,execution_mode:executionMode,do_not_retry:true,settlement_verified:false,upstream_provenance_verified:false,
   voucher_resource_bound:false,asset:'native NEAR (testnet)',scope:'seller response and trusted-RPC snapshot; not an audit or settlement proof'};
  let res;

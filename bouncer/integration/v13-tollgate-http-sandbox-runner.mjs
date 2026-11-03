@@ -20,6 +20,7 @@ import {makeTollgateQuakesReview,tollgateQuakesReviewHash,purchaseTollgateQuakes
 import {TOLLGATE_RESOURCE} from '../agent/tollgate-v12-readiness.mjs';
 import {TollgateResponseStore} from '../agent/tollgate-response-store.mjs';
 import {corroborateTollgateQuakes} from '../agent/tollgate-quakes-corroboration.mjs';
+import {inspectTollgateSettlement} from '../agent/tollgate-settlement-verification.mjs';
 
 const fixture=process.env.BOUNCER_TOLLGATE_SELLER_FIXTURES;
 if(!fixture||!path.isAbsolute(fixture))throw Error('absolute pinned seller fixture path required');
@@ -126,6 +127,21 @@ try{
   await assert.rejects(purchaseTollgateQuakesOnce({review,provider,voucherKey,fence,fetchImpl:localFetch,executionMode:'synthetic'}),/EEXIST/);
   assert.equal(httpRequests,3); // second call discovers only; paid request is never repeated
   const settlement=await gate.settleChannel(opened.channel_id);assert.equal(settlement.ok,true);
+  const proofProvider={...provider,txStatusReceipts:(...a)=>p.txStatusReceipts(...a)};
+  let settlementProof;
+  try{settlementProof=await inspectTollgateSettlement({review,purchase:result,txHash:settlement.hash,provider:proofProvider})}
+  catch(error){
+   // Diagnostic structure only. Never print voucher signatures or call args.
+   const r=await p.txStatusReceipts(settlement.hash,SELLER,'FINAL');
+   const shape={final:r.final_execution_status,txStatus:Object.keys(r.transaction_outcome?.outcome?.status??{}),
+    txChildren:r.transaction_outcome?.outcome?.receipt_ids,txActionKeys:r.transaction?.actions?.map(a=>Object.keys(a)),
+    receipts:r.receipts?.map(x=>({id:x.receipt_id,from:x.predecessor_id,to:x.receiver_id,
+     actions:x.receipt?.Action?.actions?.map(a=>Object.keys(a)),methods:x.receipt?.Action?.actions?.map(a=>a.FunctionCall?.method_name??null)})),
+    outcomes:r.receipts_outcome?.map(x=>({id:x.id,executor:x.outcome?.executor_id,status:Object.keys(x.outcome?.status??{}),
+     children:x.outcome?.receipt_ids,logCount:x.outcome?.logs?.length,block:!!x.block_hash}))};
+   console.log('SANITIZED_SYNTHETIC_RECEIPT_SHAPE '+JSON.stringify(shape));throw error;
+  }
+  assert.equal(settlementProof.settlement_verified,true);
   let channel=await view(CHANNEL,'get_channel',{channel_id:opened.channel_id});assert.equal(channel.settled,QUAKES_PRICE_YOCTO);
   await call(owner,VAULT,'start_tollgate_close',{intent_id:review.intent_id},1n);
   channel=await view(CHANNEL,'get_channel',{channel_id:opened.channel_id});let ready=false;
@@ -142,7 +158,8 @@ try{
    owner_review_hash_pinned:true,one_yocto_owner_policy:true,restricted_agent:true,channel_verified:true,
    one_fenced_http_voucher:true,replay_refused:true,local_seller_acknowledged:true,local_data_returned:true,
    exact_response_retained:true,synthetic_upstream_comparison_passed:true,
-   no_false_settlement_claim_before_chain:true,local_seller_settled:true,owner_close_and_detached_refund:true,
+   no_false_settlement_claim_before_chain:true,local_seller_settled:true,final_receipt_graph_and_detached_payout_verified:true,
+   owner_close_and_detached_refund:true,
    rolling_budget_conservative:true,v13_sha256:V13_VOUCHER_SHA256,channel_sha256:PUBLISHED_CHANNEL_SHA256},null,2));
  });
 }finally{

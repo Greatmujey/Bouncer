@@ -163,6 +163,15 @@ data. This comparison is not proof of payment, seller identity, or that the
 seller actually fetched USGS at its claimed time. The response and fence must
 still be preserved across environments.
 
+`inspectTollgateSettlement` is a separate read-only check for the first
+seller `settle` transaction. It requires a FINAL receipt-inclusive RPC result,
+the reviewed channel, amount, nonce and voucher key, the pinned channel code
+at execution, and a successful, linked **detached native-transfer** receipt.
+A seller acknowledgement or settlement event alone is not enough. This check
+assumes the RPC is honest and does not prove provider delivery. If no
+transaction hash is available, settlement remains unconfirmed; it does not
+ask the seller to repeat a payment or force a close.
+
 An [isolated HTTP lifecycle](https://github.com/Greatmujey/Bouncer/actions/runs/41663649675)
 exercised the updated client against the pinned published seller SDK and a disposable
 nearcore: review, one voucher, synthetic returned data, replay refusal, local
