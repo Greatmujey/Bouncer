@@ -189,10 +189,11 @@ HTTP request or a cooperative-close signature is not a safe workaround without
 reviewing seller state and the possibility of an immediate full refund without
 paying the seller; neither is automated here.
 
-An [isolated HTTP lifecycle](https://github.com/Greatmujey/Bouncer/actions/runs/41667759080)
+An [isolated HTTP lifecycle](https://github.com/Greatmujey/Bouncer/actions/runs/41669496393)
 exercised the pinned seller SDK and disposable nearcore in both `settle` and
-`cooperative_close` modes: one-yocto policy, restricted agent, one voucher,
-synthetic data, replay refusal, FINAL payout receipts and local refunds passed.
+`cooperative_close` modes: one-yocto policy, locally encrypted synthetic agent
+and voucher keys, restricted agent, one voucher, synthetic data, replay refusal,
+FINAL payout receipts and local refunds passed.
 The sellers and data were fixtures, not a public-chain payment or independent
 fulfillment. A separate [read-only USGS check](https://github.com/Greatmujey/Bouncer/actions/runs/41666639556)
 compared two real public USGS observations using a synthetic seller projection;
