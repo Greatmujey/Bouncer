@@ -151,16 +151,21 @@ remote disconnect over the real Reown relay with both direct browser relay
 hosts blocked. In those gateway cases Playwright forwards the browser socket to
 an in-runner gateway; it does **not** test Vercel WebSockets. The all-transports
 blocked case returned a truthful error without a QR or Connected state. The
-regression workflows `41625060278` and `41625945287` also passed. These are not real-wallet or
-user-device tests. A real wallet, the user's Windows connection and Vercel's
-WebSocket deployment remain unverified. On 3 November 2026 Vercel rejected the isolated test deployment with
+regression workflows `41625060278` and `41625945287` also passed. A later
+[live-site run](https://github.com/Greatmujey/Bouncer/actions/runs/41675941212)
+passed eight Windows/Linux scenarios against the deployed site. In the two
+production-gateway scenarios, both direct browser relays were blocked and a
+throwaway synthetic wallet approved and disconnected over the deployed Vercel
+WebSocket; the all-transports-blocked scenario did not show a fake QR. These
+are not real-wallet or user-device tests: the user's Windows connection and
+real wallet compatibility remain unverified. On 3 November 2026 Vercel rejected the isolated test deployment with
 `api-deployments-free-per-day` (100 Hobby deployments per day); the temporary
 empty test project was removed. The existing production deployment was not
 changed at that time. The gateway subsequently shipped in the main-branch
 production deployment `dpl_3Wd2ygmnz34gvTmNkpGBidYsNGAJ`. A plain HTTP request
-to `/api/wc-relay` now receives `WebSocket upgrade required`, which establishes
-that a handler is reachable, **not** that an actual upgraded WebSocket or a
-wallet session works. No Vercel WAF rule or global quota has been verified;
+to `/api/wc-relay` receives `WebSocket upgrade required`. The later live-site
+smoke above also exercised actual WebSocket upgrades with synthetic sessions,
+not a real wallet. No Vercel WAF rule or global quota has been verified;
 the public endpoint's resource-exhaustion risk remains. `vercel.json` disables
 automatic preview deployments for this Arena branch only, to avoid consuming
 the daily deployment quota on test/docs pushes; `main` and explicit deployments
