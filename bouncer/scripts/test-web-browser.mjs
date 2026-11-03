@@ -272,7 +272,17 @@ try {
       console.error('Intear browser diagnostic:', { calls, errors, consoleMessages, status: await page.locator('#wallet-status').textContent(), frames: page.frames().map(frame => frame.url()) });
       throw error;
     });
-    await page.waitForFunction(() => document.querySelector('#wallet-status').textContent.includes('intear-synthetic.testnet'), null, { timeout: 20_000 });
+    await page.waitForFunction(() => document.querySelector('#wallet-status').textContent.includes('intear-synthetic.testnet'), null, { timeout: 20_000 }).catch(async error => {
+      console.error('Intear connection diagnostic:', {
+        calls, errors, consoleMessages,
+        status: await page.locator('#wallet-status').textContent(),
+        dialogStatus: await page.locator('#wallet-dialog-status').textContent(),
+        payload: await page.evaluate(() => window.__intearTestPayload || null),
+        frames: page.frames().map(frame => frame.url()),
+        pages: page.context().pages().map(item => ({ url: item.url(), closed: item.isClosed() })),
+      });
+      throw error;
+    });
     const request = await page.evaluate(() => window.__intearTestPayload);
     assert.equal(request.networkId, 'testnet');
     assert.equal(request.contractId, undefined);
