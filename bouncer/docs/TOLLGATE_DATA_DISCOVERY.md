@@ -150,7 +150,7 @@ mode and refuses a local-only fence before contacting the seller. Its explicit
 `synthetic` mode allows an injected test transport; the caller is responsible
 for ensuring that transport cannot reach a real seller, so never use this mode
 for a real purchase.
-An [isolated HTTP lifecycle](https://github.com/Greatmujey/Bouncer/actions/runs/41662141220)
+An [isolated HTTP lifecycle](https://github.com/Greatmujey/Bouncer/actions/runs/41663649675)
 exercised the updated client against the pinned published seller SDK and a disposable
 nearcore: review, one voucher, synthetic returned data, replay refusal, local
 settlement, close and refund all passed. Its seller and data were fixtures; it
