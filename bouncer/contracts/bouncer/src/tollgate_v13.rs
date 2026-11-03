@@ -84,11 +84,14 @@ pub struct TollgateIntentView {
 
 fn channel_id() -> AccountId { CHANNEL.parse().unwrap_or_else(|_| abort_with("invalid channel constant")) }
 fn seller_id() -> AccountId { SELLER.parse().unwrap_or_else(|_| abort_with("invalid seller constant")) }
-fn active(s: &Bouncer, i: &TollgateIntent) -> bool {
+// Shared by opening and the cooperative voucher client. This view cannot
+// revoke a voucher already signed: the provider contract has its own key and
+// the entire channel deposit remains at risk until closure.
+fn authorization_current(s: &Bouncer, i: &TollgateIntent) -> bool {
     let channel = channel_id();
     let seller = seller_id();
     let agent = (i.policy_id.clone(), i.agent_public_key.clone());
-    !i.consumed && !i.cancelled && env::block_timestamp() / 1_000_000 < i.expires_at_ms &&
+    !i.cancelled && env::block_timestamp() / 1_000_000 < i.expires_at_ms &&
         s.token_of.get(&i.policy_id).map(|t| t.as_str()) == Some(NATIVE_ASSET) &&
         s.ft_policy_revisions.get(&i.policy_id) == Some(&i.policy_revision) &&
         s.allow.get(&allow_key(&i.policy_id, channel.as_str())) == Some(&true) &&
@@ -96,6 +99,9 @@ fn active(s: &Bouncer, i: &TollgateIntent) -> bool {
         s.allow_revisions.get(&(i.policy_id.clone(), channel)) == Some(&i.contract_revision) &&
         s.allow_revisions.get(&(i.policy_id.clone(), seller)) == Some(&i.seller_revision) &&
         s.agents.get(&agent) == Some(&true) && s.exact_agent_revisions.get(&agent) == Some(&i.agent_revision)
+}
+fn active(s: &Bouncer, i: &TollgateIntent) -> bool {
+    !i.consumed && authorization_current(s, i)
 }
 
 #[near]
@@ -158,6 +164,19 @@ impl Bouncer {
             dispute_window_sec: U64(i.dispute_window_sec), policy_revision: i.policy_revision, contract_revision: i.contract_revision,
             seller_revision: i.seller_revision, agent_revision: i.agent_revision, consumed: i.consumed, cancelled: i.cancelled,
             callback_recorded: i.callback_recorded, promise_failed: i.promise_failed, recovering: i.recovering, recovery_generation: U64(i.recovery_generation), channel_verified: i.channel_verified, channel_id: i.channel_id.map(U64), active: active(self, i) })
+    }
+
+    /// Advisory gate for a cooperative off-chain voucher client after opening.
+    /// Every original policy, allowlist and agent revision must still match,
+    /// the intent must be unexpired, and the owner must have verified the
+    /// channel. This view cannot stop a stolen key or an already issued voucher
+    /// and cannot eliminate a change between a view and an HTTP request.
+    pub fn is_tollgate_voucher_authorized(&self, intent_id: String) -> bool {
+        match self.tollgate_intents.get(&intent_id) {
+            Some(i) => i.consumed && i.callback_recorded && !i.promise_failed && !i.recovering &&
+                i.channel_verified && i.channel_id.is_some() && authorization_current(self, i),
+            None => false,
+        }
     }
 
     /// Consume once before dispatch. The agent cannot choose destination,
@@ -404,6 +423,74 @@ mod tests {
         assert!(!c.get_tollgate_intent("two".into()).unwrap().active);
         pin(&mut c, "three", key(5)); c.set_policy("data".into(), id("native"), U128(500), Some(U128(700)));
         assert!(!c.get_tollgate_intent("three".into()).unwrap().active);
+    }
+
+    #[allow(deprecated)]
+    fn opened_and_verified() -> Bouncer {
+        let mut c = fixture();
+        assert!(!c.is_tollgate_voucher_authorized("missing".into()));
+        assert!(!c.is_tollgate_voucher_authorized("one".into()));
+        testing_env!(agent()); execute(&mut c);
+        assert!(!c.is_tollgate_voucher_authorized("one".into()));
+        testing_env_with_promise_results(context("vault.testnet", "owner.testnet", &key(2), 0, NOW),
+            PromiseResult::Successful(b"\"7\"".to_vec()));
+        c.after_tollgate_open("one".into());
+        assert!(!c.is_tollgate_voucher_authorized("one".into()));
+        testing_env!(owner(1)); drop(c.verify_tollgate_channel("one".into(), U64(7)));
+        assert!(!c.is_tollgate_voucher_authorized("one".into()));
+        testing_env_with_promise_results(context("vault.testnet", "owner.testnet", &key(2), 0, NOW),
+            PromiseResult::Successful(recovery_view(SELLER, &key(3))));
+        assert_eq!(c.after_tollgate_recovery("one".into(), U64(7), U64(1)).unwrap().0, 7);
+        assert!(c.is_tollgate_voucher_authorized("one".into()));
+        testing_env!(owner(1)); c
+    }
+
+    #[test]
+    fn voucher_view_expires_after_open() {
+        let c = opened_and_verified();
+        testing_env!(context("owner.testnet", "owner.testnet", &key(1), 1, NOW + 61_000 * 1_000_000));
+        assert!(!c.is_tollgate_voucher_authorized("one".into()));
+    }
+
+    #[test]
+    fn voucher_view_rejects_changed_policy_after_open() {
+        let mut c = opened_and_verified();
+        c.set_policy("data".into(), id("native"), U128(500), Some(U128(700)));
+        assert!(!c.is_tollgate_voucher_authorized("one".into()));
+    }
+
+    #[test]
+    fn voucher_view_does_not_revive_after_seller_regrant() {
+        let mut c = opened_and_verified();
+        c.revoke_payee("data".into(), seller_id()); c.allow_payee("data".into(), seller_id());
+        assert!(!c.is_tollgate_voucher_authorized("one".into()));
+    }
+
+    #[test]
+    fn voucher_view_does_not_revive_after_contract_regrant() {
+        let mut c = opened_and_verified();
+        c.revoke_payee("data".into(), channel_id()); c.allow_payee("data".into(), channel_id());
+        assert!(!c.is_tollgate_voucher_authorized("one".into()));
+    }
+
+    #[test]
+    fn voucher_view_does_not_revive_after_agent_regrant() {
+        let mut c = opened_and_verified();
+        c.revoke_agent_key("data".into(), key(2)); c.grant_agent_key("data".into(), key(2));
+        assert!(!c.is_tollgate_voucher_authorized("one".into()));
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn voucher_view_rejects_failed_open_even_when_a_channel_is_recovered() {
+        let mut c = fixture(); testing_env!(agent()); execute(&mut c);
+        testing_env_with_promise_results(context("vault.testnet", "owner.testnet", &key(2), 0, NOW), PromiseResult::Failed);
+        c.after_tollgate_open("one".into()); testing_env!(owner(1));
+        drop(c.verify_tollgate_channel("one".into(), U64(7)));
+        testing_env_with_promise_results(context("vault.testnet", "owner.testnet", &key(2), 0, NOW),
+            PromiseResult::Successful(recovery_view(SELLER, &key(3))));
+        c.after_tollgate_recovery("one".into(), U64(7), U64(1));
+        assert!(!c.is_tollgate_voucher_authorized("one".into()));
     }
 
     #[test]

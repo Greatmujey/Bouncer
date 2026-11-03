@@ -19,16 +19,17 @@ const sha=b=>crypto.createHash('sha256').update(b).digest('hex');
 
 /** Fail closed before constructing any signed actions; all inputs and traffic
  * must refer to the fresh local sandbox and reviewed fixture binaries. */
-export async function exerciseV13TollgateSandbox({rpcUrl,root,v13Wasm,v13Sha256,channelWasm}={}){
+export async function exerciseV13TollgateSandbox({rpcUrl,root,v13Wasm,v13Sha256,channelWasm,requireVoucherAuthorization=false}={}){
+ if(typeof requireVoucherAuthorization!=='boolean')throw Error('invalid voucher view requirement');
  const endpoint=loopbackSandboxUrl(rpcUrl);
  let rootEndpoint;try{rootEndpoint=loopbackSandboxUrl(root?.provider?.connection?.url)}catch{throw Error('local sandbox root required')}
  if(root?.accountId!==ROOT||rootEndpoint!==endpoint||!Buffer.isBuffer(v13Wasm)||v13Wasm.length<100_000||v13Wasm.length>2_000_000||
   !/^[a-f0-9]{64}$/.test(v13Sha256??'')||sha(v13Wasm)!==v13Sha256||!v13Wasm.includes(Buffer.from('bouncer-agent-v13-tollgate-native-testnet'))||
   !Buffer.isBuffer(channelWasm)||sha(channelWasm)!==PUBLISHED_CHANNEL_SHA256)throw Error('local sandbox and exact fixture binaries required');
- return withSandboxOnlyFetch(endpoint,()=>exercise({endpoint,root,v13Wasm,channelWasm}));
+ return withSandboxOnlyFetch(endpoint,()=>exercise({endpoint,root,v13Wasm,channelWasm,requireVoucherAuthorization}));
 }
 
-async function exercise({endpoint,root,v13Wasm,channelWasm}){
+async function exercise({endpoint,root,v13Wasm,channelWasm,requireVoucherAuthorization}){
  const provider=new nearApi.providers.JsonRpcProvider({url:endpoint});assertSandboxStatus(await provider.status());
  const ownerKey=key(),agentKey=key(),voucherKey=key(),parentKey=key(),sellerKey=key();
  const owner=account(OWNER,provider,ownerKey),agent=account(OWNER,provider,agentKey),parent=account(PARENT,provider,parentKey),seller=account(SELLER,provider,sellerKey);
@@ -72,8 +73,10 @@ async function exercise({endpoint,root,v13Wasm,channelWasm}){
  const intent=await view(VAULT,'get_tollgate_intent',{intent_id:'local-data-1'});
  assert.equal(intent.consumed,true);assert.equal(intent.callback_recorded,true);assert.equal(intent.promise_failed,false);assert.equal(intent.channel_id,'0');
  assert.equal(intent.channel_verified,false);
+ if(requireVoucherAuthorization)assert.equal(await view(VAULT,'is_tollgate_voucher_authorized',{intent_id:'local-data-1'}),false);
  await call(owner,VAULT,'verify_tollgate_channel',{intent_id:'local-data-1',candidate_id:intent.channel_id},1n);
  assert.equal((await view(VAULT,'get_tollgate_intent',{intent_id:'local-data-1'})).channel_verified,true);
+ if(requireVoucherAuthorization)assert.equal(await view(VAULT,'is_tollgate_voucher_authorized',{intent_id:'local-data-1'}),true);
  let channel=await view(CHANNEL,'get_channel',{channel_id:intent.channel_id});
  assert.equal(channel.owner,VAULT);assert.equal(channel.seller,SELLER);assert.equal(channel.agent_pubkey,pub(voucherKey));
  assert.equal(BigInt(channel.deposit)+BigInt(channel.storage_fee),AMOUNT);assert.ok(BigInt(channel.deposit)>=NEAR/100n);
@@ -125,6 +128,7 @@ async function exercise({endpoint,root,v13Wasm,channelWasm}){
  return {scope:'isolated nearcore only; local seller, synthetic voucher and published channel binary, no HTTP or real provider delivery',
   v13_sha256:sha(v13Wasm),channel_sha256:sha(channelWasm),one_yocto_guard_verified:true,restricted_agent_key:true,
   open_once_and_replay_rejected:true,local_voucher_settled:true,unilateral_close:true,detached_refund_arrived:true,
+  voucher_authorization_view_checked:requireVoucherAuthorization,
   native_ledger_and_rolling_budget_conservative:true,owner_surplus_recovery:true,failed_open_does_not_recredit:true,
   local_open_tx:opened.transaction_outcome.id,local_finalize_tx:finalization.transaction_outcome.id,
   live_seller_contacted:false,circle_payment:false,independent_fulfillment_verified:false};

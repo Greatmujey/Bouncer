@@ -17,7 +17,8 @@ try{
  sandbox=await startSandbox(process.env.BOUNCER_SANDBOX_BIN,dir,String(genesisKey.getPublicKey()));
  const root=new nearApi.Account('testnet',sandbox.provider,new nearApi.KeyPairSigner(sandbox.rootKey));
  const result=await exerciseV13TollgateSandbox({rpcUrl:sandbox.rpcUrl,root,v13Wasm:wasm,
-  v13Sha256:process.env.BOUNCER_V13_WASM_SHA256,channelWasm:channel});
+  v13Sha256:process.env.BOUNCER_V13_WASM_SHA256,channelWasm:channel,
+  requireVoucherAuthorization:process.env.BOUNCER_V13_VOUCHER_VIEW==='true'});
  console.log(JSON.stringify(result,null,2));
 }finally{
  if(sandbox)await stopSandboxChild(sandbox.child);
