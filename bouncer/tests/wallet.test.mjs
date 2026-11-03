@@ -55,7 +55,7 @@ class Element {
   close() { this.open = false; this.listeners.close?.(); }
   getBoundingClientRect() { return { left: 0, right: 100, top: 0, bottom: 100 }; }
 }
-function fakeBrowser(url, { top = true, storageFails = false, approved = '', walletConnectProjectId = '' } = {}) {
+function fakeBrowser(url, { top = true, storageFails = false, approved = '', walletConnectProjectId = '', configDate = '', configAge = '0' } = {}) {
   const ids = ['wallet-connect', 'wallet-disconnect', 'wallet-status', 'wallet-open-site', 'wallet-dialog', 'wallet-close', 'wallet-options', 'wallet-dialog-status', 'wallet-title-text', 'wallet-dialog-description', 'wallet-banner',
     'walletconnect-pairing', 'walletconnect-caption', 'walletconnect-badge', 'walletconnect-qr', 'walletconnect-canvas', 'walletconnect-open', 'walletconnect-copy', 'walletconnect-cancel', 'walletconnect-retry', 'walletconnect-loading', 'walletconnect-progress', 'walletconnect-error', 'walletconnect-error-title', 'walletconnect-error-detail', 'walletconnect-ready', 'wallet-safety'];
   const nodes = Object.fromEntries(ids.map(id => [id, new Element()]));
@@ -65,7 +65,10 @@ function fakeBrowser(url, { top = true, storageFails = false, approved = '', wal
   const data = new Map(), labels = [new Element(), new Element(), new Element()];
   const win = { location: { ...location(url), href: url }, crypto: webcrypto,
     fetch: async target => {
-      if (String(target).endsWith('/walletconnect-config.json')) return { ok: true, text: async () => JSON.stringify({ projectId: walletConnectProjectId }) };
+      if (String(target).endsWith('/walletconnect-config.json')) return {
+        ok: true, headers: { get(name) { return name === 'date' ? configDate : name === 'age' ? configAge : null; } },
+        text: async () => JSON.stringify({ projectId: walletConnectProjectId }),
+      };
       if (String(target) === 'https://test.rpc.fastnear.com') return { ok: true, text: async () => JSON.stringify({ result: { permission: win.cliKeyPermission || 'FullAccess' } }) };
       throw new Error('unexpected network');
     },
@@ -414,6 +417,50 @@ test('configured WalletConnect opens a private QR pairing and connects only the 
   assert.ok(browser.openers.every(button => button.dataset.walletState === 'disconnected'));
 });
 
+test('WalletConnect revocation before approval completes cannot display a stale connected state', async () => {
+  const browser = fakeBrowser('http://127.0.0.1:4173/', { walletConnectProjectId: '1234567890abcdef1234567890abcdef' });
+  let disconnects = 0;
+  const module = {
+    async renderPairingCode(canvas) { canvas.width = canvas.height = 240; },
+    async connect({ onUri, onEnded }) {
+      await onUri(`wc:${'a'.repeat(64)}@2?relay-protocol=irn&symKey=${'b'.repeat(64)}`);
+      onEnded('WalletConnect session disconnected.');
+      return { accountId: 'alice.testnet', async disconnect() { disconnects++; } };
+    },
+  };
+  await initWallet({ window: browser.win, document: browser.doc, NearConnector: connectorClass(), loadWalletConnect: async () => module });
+  await new Promise(resolve => setImmediate(resolve));
+  await browser.nodes['wallet-connect'].click();
+  await browser.options.find(option => option.dataset.walletId === 'wallet-connect').click();
+  assert.equal(disconnects, 1);
+  assert.ok(browser.openers.every(button => button.dataset.walletState === 'disconnected'));
+  assert.equal(browser.nodes['wallet-disconnect'].hidden, true);
+  assert.match(browser.nodes['walletconnect-error-detail'].textContent, /connection|wallet/i);
+});
+
+test('an old WalletConnect session cannot clear a newer connected session', async () => {
+  const browser = fakeBrowser('http://127.0.0.1:4173/', { walletConnectProjectId: '1234567890abcdef1234567890abcdef' });
+  const ended = [];
+  const module = {
+    async renderPairingCode(canvas) { canvas.width = canvas.height = 240; },
+    async connect({ onUri, onEnded }) {
+      ended.push(onEnded); await onUri(`wc:${'a'.repeat(64)}@2?relay-protocol=irn&symKey=${'b'.repeat(64)}`);
+      return { accountId: 'alice.testnet', async disconnect() {} };
+    },
+  };
+  await initWallet({ window: browser.win, document: browser.doc, NearConnector: connectorClass(), loadWalletConnect: async () => module });
+  await new Promise(resolve => setImmediate(resolve));
+  await browser.nodes['wallet-connect'].click();
+  const option = browser.options.find(button => button.dataset.walletId === 'wallet-connect');
+  await option.click();
+  await browser.nodes['wallet-disconnect'].click();
+  await option.click();
+  ended[0]('old session ended');
+  assert.ok(browser.openers.every(button => button.dataset.walletState === 'connected'));
+  ended[1]('current session ended');
+  assert.ok(browser.openers.every(button => button.dataset.walletState === 'disconnected'));
+});
+
 test('closing WalletConnect aborts an in-flight pairing and clears the QR/link', async () => {
   const browser = fakeBrowser('http://127.0.0.1:4173/', { walletConnectProjectId: '1234567890abcdef1234567890abcdef' });
   let aborted = false;
@@ -475,6 +522,29 @@ test('a stalled WalletConnect download displays an actionable error and retry su
   resolveApproval({ accountId: 'alice.testnet', async disconnect() {} });
   await retry;
   assert.match(browser.nodes['wallet-status'].textContent, /Connected: alice\.testnet/);
+});
+
+test('pairing errors present safe, actionable stage diagnostics', async () => {
+  const projectId = '1234567890abcdef1234567890abcdef';
+  for (const scenario of ['clock', 'offline', 'crypto', 'initialization', 'proposal']) {
+    const browser = fakeBrowser('http://127.0.0.1:4173/', { walletConnectProjectId: projectId,
+      configDate: scenario === 'clock' ? new Date(Date.now() - 600_000).toUTCString() : '' });
+    if (scenario === 'offline') browser.win.navigator.onLine = false;
+    if (scenario === 'crypto') browser.win.crypto = {};
+    const code = scenario === 'initialization' ? 'WC_CLIENT_INIT' : 'WC_PROPOSAL_INIT';
+    const module = { async renderPairingCode() {}, async connect() {
+      const error = new Error('secret wc:pairing-url'); error.code = code; throw error;
+    } };
+    await initWallet({ window: browser.win, document: browser.doc, NearConnector: connectorClass(), loadWalletConnect: async () => module });
+    await new Promise(resolve => setImmediate(resolve));
+    await browser.nodes['wallet-connect'].click();
+    await browser.options.find(option => option.dataset.walletId === 'wallet-connect').click();
+    const detail = browser.nodes['walletconnect-error-detail'].textContent;
+    const expected = { clock: 'WC-CLOCK', offline: 'WC-OFFLINE', crypto: 'WC-CRYPTO', initialization: 'WC-INIT', proposal: 'WC-PAIR' }[scenario];
+    assert.ok(detail.includes(expected), `${scenario} diagnostic`);
+    assert.doesNotMatch(detail, /secret|wc:pairing-url/i);
+    assert.equal(browser.nodes['walletconnect-qr'].hidden, true);
+  }
 });
 
 test('a stalled relay is bounded and a late approved session is disconnected', async () => {

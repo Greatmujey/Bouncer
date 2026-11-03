@@ -95,6 +95,19 @@ test('public staging approves only the dedicated Bouncer wallet origin', t => {
   }
 });
 
+test('the deployed HTML revalidates and references versioned wallet and UI assets', () => {
+  const config = JSON.parse(fs.readFileSync(path.join(realSource, 'vercel.json'), 'utf8'));
+  for (const source of ['/', '/index.html']) {
+    const headers = config.headers.find(rule => rule.source === source)?.headers || [];
+    assert.match(headers.find(header => header.key.toLowerCase() === 'cache-control')?.value || '', /no-cache.*must-revalidate/);
+  }
+  const html = fs.readFileSync(path.join(realSource, 'index.html'), 'utf8');
+  for (const file of ['styles.css', 'app.mjs', 'wallet.bundle.js']) {
+    assert.match(html, new RegExp(`\\./${file.replaceAll('.', '\\.') }\\?v=\\d+`));
+  }
+  assert.match(fs.readFileSync(path.join(realSource, 'wallet.bundle.js'), 'utf8'), /walletconnect\.bundle\.js\?v=\d+/);
+});
+
 test('staging CLI runs from the web root and publishes only allowlisted files', t => {
   const { dest } = fixture(t);
   const output = execFileSync(process.execPath, [script, dest], { cwd: realSource, encoding: 'utf8' });

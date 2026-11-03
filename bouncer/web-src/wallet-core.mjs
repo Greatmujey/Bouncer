@@ -107,7 +107,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     if (walletTitle) walletTitle.textContent = connected ? 'Wallet connected' : wcPairing ? 'Connect your wallet' : 'Connect a wallet';
     if (walletDescription) walletDescription.textContent = connected
       ? 'Your testnet account is connected. You can disconnect below.'
-      : wcPairing ? 'Scan with a NEAR testnet wallet, or open the wallet app on this device.'
+      : wcPairing ? 'Scan with a NEAR testnet wallet, or open it. Approve and return here.'
         : 'Choose a testnet wallet. NEAR Mobile and NEAR CLI use an off-chain login message; no access key or payment is requested.';
     openers.forEach(button => {
       button.disabled = busyState;
@@ -339,6 +339,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     busy(true); setStatus('Preparing a private WalletConnect pairing…');
     if (dialog.open) wcCancel?.focus();
     let startTimedOut = false, shown = false, abortListener, phase = 'sdk';
+    let thisHandle = null, endedBeforeHandle = false;
     const cancelled = new Promise((_, reject) => {
       abortListener = () => reject(new Error('cancelled'));
       controller.signal.addEventListener('abort', abortListener, { once: true });
@@ -397,7 +398,10 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
           } finally { clearTimeout(renderTimer); }
         },
         onEnded: message => {
-          if (!wcHandle) return;
+          // A revocation can arrive while approval is resolving. It must not
+          // become a stale Connected state, or clear a newer session.
+          if (!thisHandle) { if (wcAbort === controller) endedBeforeHandle = true; return; }
+          if (wcHandle !== thisHandle) return;
           wcHandle = null; showDisconnected(message); notify(message);
         },
       }));
@@ -409,7 +413,9 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
         }
       }, () => {});
       const handle = await Promise.race([connecting, cancelled]);
+      thisHandle = handle;
       if (controller.signal.aborted) { await handle.disconnect(); showDisconnected('WalletConnect pairing cancelled.'); return; }
+      if (endedBeforeHandle) { await handle.disconnect(); throw new Error('WalletConnect session ended before connection'); }
       if (!isTestnetAccount(handle.accountId)) { await handle.disconnect(); throw new Error('invalid account'); }
       wcHandle = handle; selectedWallet = null; connected = true; connectedAccount = handle.accountId; wcPairing = false;
       setWalletLabels('Connected');
@@ -436,6 +442,8 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
           message = 'WalletConnect rejected this site’s configuration. Choose another wallet while we investigate. Code WC-CONFIG.';
         } else if (win.navigator?.onLine === false) {
           message = 'Your browser reports that it is offline. Reconnect and retry. Code WC-OFFLINE.';
+        } else if (!win.crypto?.getRandomValues || !win.crypto?.subtle) {
+          message = 'This browser cannot provide the required secure cryptography. Use an up-to-date browser over HTTPS. Code WC-CRYPTO.';
         } else if (wcClockSkew) {
           message = 'Your device clock may be out of sync. Enable automatic date and time, then retry. Code WC-CLOCK.';
         } else if (error?.code === 'WC_CLIENT_INIT') {

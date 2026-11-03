@@ -698,8 +698,11 @@ try {
     assert.equal(await page.evaluate(() => {
       const qr = document.querySelector('#walletconnect-qr').getBoundingClientRect();
       const back = document.querySelector('#walletconnect-cancel').getBoundingClientRect();
-      return qr.width >= 130 && qr.top >= 0 && qr.bottom <= innerHeight && back.bottom <= innerHeight;
-    }), true, 'compact QR and controls fit without scrolling');
+      const title = document.querySelector('#wallet-dialog-title').getBoundingClientRect();
+      const close = document.querySelector('#wallet-close').getBoundingClientRect();
+      return qr.width >= 130 && qr.top >= 0 && qr.bottom <= innerHeight && back.bottom <= innerHeight &&
+        title.top >= 0 && close.top >= 0 && close.bottom <= innerHeight;
+    }), true, 'compact QR, title and controls fit without scrolling');
     if (process.env.BOUNCER_SCREENSHOTS) await page.screenshot({ path: path.join(process.env.BOUNCER_SCREENSHOTS, 'wallet-compact.png') });
     await page.setViewportSize({ width: 390, height: 844 });
     await page.locator('#walletconnect-cancel').click();
