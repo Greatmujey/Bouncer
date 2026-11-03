@@ -125,8 +125,11 @@ however, so that does not prove that nobody else relayed them. Both labels are
 now explicitly retired, and a test checks fixed fence labels to catch similar
 mismatches. [Read-only diagnosis](https://github.com/Greatmujey/Bouncer/actions/runs/41650165471)
 could not retrieve either receipt and observed the old nonce at one RPC; both
-references remained within the reported validity window. This does not prove
-their history. Never resend either original. Even if the control reaches FINAL,
+references remained within the reported validity window. A [later read-only
+observation](https://github.com/Greatmujey/Bouncer/actions/runs/41655189868)
+still found neither receipt and reported both reference ages within the
+86,400-block validity period. This does not prove their history or authorize
+other V3 owner transactions. Never resend either original. Even if the control reaches FINAL,
 it cannot prove whether the registration executed first. The earlier original was a storage registration, not a
 provider payment or order. OutLayer can change its deployed
 contract, its plain-token refunds may not restore Bouncer's tracked allowance,
