@@ -41,11 +41,13 @@ const wsLicense = fs.readFileSync(path.join(here, 'walletconnect/node_modules/ws
 const relayBridge = await build({
   absWorkingDir: here,
   entryPoints: ['walletconnect/relay-entry.mjs'],
-  outfile: 'web/api/wc-relay.cjs',
-  bundle: true, format: 'cjs', platform: 'node', target: ['node22'],
+  // Vercel's zero-config /api detector recognizes .mjs but not .cjs.
+  outfile: 'web/api/wc-relay.mjs',
+  bundle: true, format: 'esm', platform: 'node', target: ['node22'],
   minify: true, metafile: true, legalComments: 'inline',
   external: ['bufferutil', 'utf-8-validate'],
-  banner: { js: `/* Bouncer WalletConnect gateway; third-party notices: walletconnect-NOTICES.txt.\n${wsLicense}\n*/` },
+  // Bundled ws still requires built-in Node modules from its CommonJS code.
+  banner: { js: `/* Bouncer WalletConnect gateway; third-party notices: walletconnect-NOTICES.txt.\n${wsLicense}\n*/\nimport { createRequire as __bouncerCreateRequire } from 'node:module'; const require = __bouncerCreateRequire(import.meta.url);` },
 });
 // Collect the exact licenses of both bundled components, including Reown's
 // community license and the required attribution. Keep this deterministic.

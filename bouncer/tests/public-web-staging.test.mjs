@@ -109,6 +109,19 @@ test('the deployed HTML revalidates and references versioned wallet and UI asset
   assert.match(fs.readFileSync(path.join(realSource, 'wallet.bundle.js'), 'utf8'), /walletconnect\.bundle\.js\?v=\d+/);
 });
 
+test('the prebuilt relay is a detectable Node API entry, not a public static file', () => {
+  const api = path.join(realSource, 'api');
+  assert.deepEqual(fs.readdirSync(api), ['wc-relay.mjs']);
+  assert.ok(!PUBLIC_WEB_FILES.includes('api/wc-relay.mjs'));
+  const script = `import http from 'node:http'; import server from ${JSON.stringify(new URL('../web/api/wc-relay.mjs', import.meta.url).href)};
+    if (!(server instanceof http.Server)) throw new Error('Not an HTTP server');
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    const result = await fetch('http://127.0.0.1:' + server.address().port + '/api/wc-relay');
+    if (result.status !== 426) throw new Error('Unexpected handler response');
+    await new Promise(resolve => server.close(resolve));`;
+  execFileSync(process.execPath, ['--input-type=module', '-e', script], { env: { ...process.env, BOUNCER_WALLETCONNECT_PROJECT_ID: '1234567890abcdef1234567890abcdef' } });
+});
+
 test('staging CLI runs from the web root and publishes only allowlisted files', t => {
   const { dest } = fixture(t);
   const output = execFileSync(process.execPath, [script, dest], { cwd: realSource, encoding: 'utf8' });

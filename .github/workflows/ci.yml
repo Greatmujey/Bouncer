@@ -44,7 +44,7 @@ jobs:
         run: |
           npm run build:web
           python3 scripts/build-intear-source.py
-          git diff --exit-code -- web/wallet.bundle.js web/walletconnect.bundle.js web/api/wc-relay.cjs web/walletconnect-NOTICES.txt web/intear-wallet.executor.js web/intear-wallet-source.zip
+          git diff --exit-code -- web/wallet.bundle.js web/walletconnect.bundle.js web/api/wc-relay.mjs web/walletconnect-NOTICES.txt web/intear-wallet.executor.js web/intear-wallet-source.zip
       - name: Test onboarding, mobile layout and testnet wallet UI
         env:
           GH_TOKEN: ${{ github.token }}

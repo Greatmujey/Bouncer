@@ -88,6 +88,19 @@ test('invalid or tampered authentication does not create an upstream socket', as
   assert.equal(await reply, `${BRIDGE_ERROR}:INVALID`); assert.equal(connections, 0);
 });
 
+test('the bundled Vercel handler upgrades securely and rejects malformed authentication', async t => {
+  const previous = process.env.BOUNCER_WALLETCONNECT_PROJECT_ID;
+  process.env.BOUNCER_WALLETCONNECT_PROJECT_ID = PROJECT;
+  const { default: server } = await import('../web/api/wc-relay.mjs');
+  if (previous === undefined) delete process.env.BOUNCER_WALLETCONNECT_PROJECT_ID; else process.env.BOUNCER_WALLETCONNECT_PROJECT_ID = previous;
+  const port = await listen(server); t.after(() => closeServer(server));
+  const url = `ws://127.0.0.1:${port}${BRIDGE_PATH}`;
+  assert.equal(await rejectedUpgrade(url, 'https://evil.example'), 403);
+  const socket = new WebSocket(url, { origin: BRIDGE_ORIGIN }); await opened(socket);
+  const reply = message(socket); socket.send(JSON.stringify({ type: 'connect', url: 'wss://attacker.invalid/?auth=secret' }));
+  assert.equal(await reply, `${BRIDGE_ERROR}:INVALID`);
+});
+
 test('per-instance limits refuse parallel and burst connections; handshake times out', async t => {
   const server = createRelayBridge({ projectId: PROJECT, maxPerIp: 1, maxPerMinute: 1, handshakeTimeoutMs: 80 });
   const port = await listen(server); t.after(() => closeServer(server));

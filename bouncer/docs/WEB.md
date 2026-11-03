@@ -143,17 +143,25 @@ no such rule has been installed or verified here. The team's Hobby plan is
 non-commercial and may suspend features after usage limits are reached. Confirm
 plan and Reown terms for any commercial deployment.
 
-Unit tests use mock sockets; candidate CI separately tests synthetic wallet
-sessions over Reown with the browser's two direct relays blocked. A real wallet,
-the user's Windows connection and Vercel's WebSocket deployment remain
-unverified. On 3 November 2026 Vercel rejected the isolated test deployment with
+Unit tests use mock sockets. Candidate run `41625060310` passed all eight
+Windows/Linux browser scenarios, including synthetic wallet approval and
+remote disconnect over the real Reown relay with both direct browser relay
+hosts blocked. In those gateway cases Playwright forwards the browser socket to
+an in-runner gateway; it does **not** test Vercel WebSockets. The all-transports
+blocked case returned a truthful error without a QR or Connected state. The
+regression workflow `41625060278` also passed. These are not real-wallet or
+user-device tests. A real wallet, the user's Windows connection and Vercel's
+WebSocket deployment remain unverified. On 3 November 2026 Vercel rejected the isolated test deployment with
 `api-deployments-free-per-day` (100 Hobby deployments per day); the temporary
 empty test project was removed. The existing production deployment was not
 changed. `vercel.json` disables automatic preview deployments for this Arena
 branch only, to avoid consuming the daily deployment quota on test/docs pushes;
 `main` and explicit deployments are unaffected. Do not describe the candidate
 as live until the quota resets, the Vercel endpoint and edge protections are
-tested, and a suitable release is explicitly deployed.
+tested, and a suitable release is explicitly deployed. The earlier protected
+preview at `a306135` used a `.cjs` entry, which Vercel's zero-config API detector
+does not match. The candidate now builds `api/wc-relay.mjs`; local tests verify
+its export, but only a new deployed test can verify Vercel discovers and runs it.
 
 To enable the deployed site, the owner creates a project at
 `https://dashboard.reown.com/sign-up`, copies its public **Project ID**, and
