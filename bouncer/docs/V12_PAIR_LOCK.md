@@ -59,8 +59,10 @@ A captured Cargo lock fixes the resolved `near-sdk` 5.30.0 dependencies. Two
 clean Rust 1.99.1 builds on GitHub runners produced identical bytes in
 [run 41638808551](https://github.com/Greatmujey/Bouncer/actions/runs/41638808551):
 536,651 bytes, SHA-256 `033f255c5822ff97495809f7d60fddf66f266f20c36285fe71296b66decc6d12`,
-public Git blob `16785505eaed13609d8e569e7b1665f89683d9eb`. The exact
-artifact's isolated runtime test is a separate step. These matching GitHub
-builds are not independent review or an audit, and do not prove deployed-code
-identity. Independent provider compatibility and genuine delivery also remain
-necessary.
+public Git blob `16785505eaed13609d8e569e7b1665f89683d9eb`. That exact
+artifact [passed the isolated nearcore test](https://github.com/Greatmujey/Bouncer/actions/runs/41639066475):
+zero-yocto and non-owner policy changes were rejected, a stale prepaid route
+was blocked, and a synthetic exact-FT intent settled once with replay rejected.
+These matching GitHub builds and synthetic tests are not independent review or
+an audit, and do not prove deployed-code identity. Independent provider
+compatibility and genuine delivery also remain necessary.

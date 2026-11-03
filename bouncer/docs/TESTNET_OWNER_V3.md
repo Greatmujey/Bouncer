@@ -54,8 +54,9 @@ indicated the existing V11 funding and storage estimates would pass at that
 snapshot, but did not select or deploy an artifact. V11 has a known
 cross-policy prepaid-route limitation; experimental V12 addresses that narrow
 gap but is not independently audited. Two GitHub runners produced matching
-locked V12 builds; the exact artifact still needs runtime testing and a
-separate V3 setup path before any fresh-state deployment.
+locked V12 builds, and the exact artifact passed an isolated synthetic runtime
+test. A separate V3 setup path and fresh checks are required before any
+testnet deployment.
 A keyless vault can permanently lock its testnet storage stake.
 
 A usable, funded, keyless vault and independent paid resource delivery are
