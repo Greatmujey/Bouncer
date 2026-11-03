@@ -335,8 +335,8 @@ try {
       await page.locator('[data-wallet-id="near-cli"]').click();
       const frame = page.frameLocator('iframe').first();
       await frame.locator('#account-id').fill('cli-synthetic.testnet', { timeout: 20_000 });
-      await frame.locator('#submit-btn').click();
-      await frame.locator('#submit-signing-method-btn').click();
+      await frame.locator('#submit-btn').tap();
+      await frame.locator('#submit-signing-method-btn').tap();
       await page.waitForFunction(() => document.querySelector('#wallet-status').textContent.includes('cli-synthetic.testnet'));
       assert.match(await page.locator('#wallet-status').textContent(), /wallet-reported/);
       assert.deepEqual(writes, [], 'CLI account entry must not send any transaction or write request');
