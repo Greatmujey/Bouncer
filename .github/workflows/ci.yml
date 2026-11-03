@@ -66,11 +66,21 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           BOUNCER_PLAYWRIGHT_PATH: ${{ runner.temp }}/bouncer-browser/node_modules/playwright-core/index.mjs
           BOUNCER_METEOR_EXECUTOR: ${{ runner.temp }}/meteor-executor.js
+        shell: bash
         run: |
-          npm install --prefix "$RUNNER_TEMP/bouncer-browser" --no-save --no-audit --no-fund playwright-core@1.64.1
-          # Public, pinned vendor executor; test verifies its SHA-256 before use.
-          gh api repos/Meteor-Wallet/meteor_wallet_sdk/git/blobs/b76fb93ff5d47064845d09313173b6eddbfa64e3 --jq .content | base64 -d > "$BOUNCER_METEOR_EXECUTOR"
-          node scripts/test-web-browser.mjs
+          set +e
+          set -o pipefail
+          {
+            npm install --prefix "$RUNNER_TEMP/bouncer-browser" --no-save --no-audit --no-fund playwright-core@1.64.1 &&
+            # Public, pinned vendor executor; test verifies its SHA-256 before use.
+            gh api repos/Meteor-Wallet/meteor_wallet_sdk/git/blobs/b76fb93ff5d47064845d09313173b6eddbfa64e3 --jq .content | base64 -d > "$BOUNCER_METEOR_EXECUTOR" &&
+            node scripts/test-web-browser.mjs
+          } 2>&1 | tee "$RUNNER_TEMP/bouncer-web-browser.log"
+          result=${PIPESTATUS[0]}
+          if [ "$result" -ne 0 ]; then
+            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-5500).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=Website browser test failed::"+s)' "$RUNNER_TEMP/bouncer-web-browser.log"
+          fi
+          exit "$result"
 
   contract-tests:
     name: Rust contract tests
