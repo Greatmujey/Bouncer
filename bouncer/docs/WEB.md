@@ -84,9 +84,14 @@ and the session stay in tab memory and are discarded on reload or disconnect.
 The pairing QR and mobile `wc:` link are bearer secrets: share them only with
 your chosen wallet. Cancellation is best effort on the remote wallet; check its
 own session list if in doubt. This is account display, **not proof of ownership**.
-Not every WalletConnect wallet supports NEAR testnet or this minimal namespace;
-no real WalletConnect wallet session has been verified yet. Without an ID the
-picker accurately says setup is required. Do not borrow another project's ID.
+The QR view shows its loading state and times out the initial download or relay
+setup after 20 seconds; Retry starts a fresh attempt. If a valid pairing is
+created but the browser cannot draw its QR, the same-device wallet link and
+copy button remain available. If the relay is blocked or unreachable, Bouncer
+cannot generate a working pairing code; use Retry, another network, or a
+different wallet. Not every WalletConnect wallet supports NEAR testnet or this
+minimal namespace; no real WalletConnect wallet session has been verified yet.
+Without an ID the picker says setup is required. Do not borrow another project's ID.
 
 To enable the deployed site, the owner creates a project at
 `https://dashboard.reown.com/sign-up`, copies its public **Project ID**, and

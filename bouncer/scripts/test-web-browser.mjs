@@ -16,6 +16,11 @@ import { WALLET_EXECUTOR_SHA256 } from '../web-src/wallet-executor.mjs';
 const require = createRequire(import.meta.url);
 const { KeyPair } = require('@near-js/crypto');
 const { baseEncode } = require('@near-js/utils');
+// Decode screenshots, not just canvas pixels: this verifies the QR remains
+// scannable at its actual CSS-scaled mobile size (the fixture URI is synthetic).
+const requireWalletConnect = createRequire(new URL('../walletconnect/package.json', import.meta.url));
+const jsQR = requireWalletConnect('jsqr');
+const { PNG } = requireWalletConnect('pngjs');
 
 const web = fileURLToPath(new URL('../web/', import.meta.url));
 const playwrightPath = process.env.BOUNCER_PLAYWRIGHT_PATH || path.join(process.env.RUNNER_TEMP || '', 'bouncer-browser/node_modules/playwright-core/index.mjs');
@@ -588,7 +593,7 @@ try {
   // client. No Reown relay or real wallet is contacted by this browser test.
   const wcBrowser = await chromium.launch({ executablePath, args: browserArgs, headless: true });
   try {
-    const page = await wcBrowser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+    const page = await wcBrowser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, reducedMotion: 'reduce' });
     const errors = [], writes = []; let bundleLoads = 0;
     page.on('pageerror', error => errors.push(error.message));
     page.on('request', request => { if (!['GET', 'HEAD'].includes(request.method())) writes.push(request.url()); });
@@ -625,6 +630,19 @@ try {
       return dark > 500 && light > 500;
     }), true, 'real QR library renders visible dark and light modules');
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'pairing view does not overflow');
+    const expectedUri = `wc:${'a'.repeat(64)}@2?relay-protocol=irn&symKey=${'b'.repeat(64)}`;
+    for (const viewport of [{ width: 390, height: 844 }, { width: 320, height: 650 }]) {
+      await page.setViewportSize(viewport);
+      const image = PNG.sync.read(await page.locator('#walletconnect-qr').screenshot());
+      const decoded = jsQR(new Uint8ClampedArray(image.data), image.width, image.height);
+      assert.ok(decoded?.data === expectedUri, `QR screenshot must decode at ${viewport.width}px`);
+      assert.equal(await page.evaluate(() => {
+        const qr = document.querySelector('#walletconnect-qr').getBoundingClientRect();
+        const back = document.querySelector('#walletconnect-cancel').getBoundingClientRect();
+        return qr.width >= 180 && qr.top >= 0 && qr.bottom <= innerHeight && back.bottom <= innerHeight;
+      }), true, `QR and navigation fit the ${viewport.width}px viewport`);
+    }
+    await page.setViewportSize({ width: 390, height: 844 });
     await page.locator('#walletconnect-cancel').click();
     await page.locator('[data-wallet-id="wallet-connect"]').waitFor({ state: 'visible' });
     assert.match(await page.locator('#wallet-dialog-status').innerText(), /cancelled/i);
@@ -639,6 +657,51 @@ try {
     assert.equal(await page.evaluate(() => window.__wcDisconnected), true);
     assert.deepEqual(errors, []); assert.deepEqual(writes, []);
     console.log('Synthetic WalletConnect pairing rendered the real QR library, cancelled and disconnected; no live relay or wallet was tested.');
+    await page.close();
+
+    // Simulate a stalled first download without waiting 20 seconds. Retry must
+    // issue a new URL rather than reusing the browser's pending module import.
+    {
+      const page = await wcBrowser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, reducedMotion: 'reduce' });
+      await page.clock.install();
+      const urls = [], errors = [];
+      page.on('pageerror', error => errors.push(error.message));
+      await page.route('**/walletconnect-config.json', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ projectId: '1234567890abcdef1234567890abcdef' }) }));
+      await page.route('**/walletconnect.bundle.js?*', route => {
+        const url = route.request().url();
+        if (url.includes('?real-fixture')) return route.continue();
+        urls.push(url);
+        if (urls.length === 1) return new Promise(() => {}); // blocked download
+        const body = `import { renderPairingCode } from './walletconnect.bundle.js?real-fixture';
+          export { renderPairingCode };
+          export async function connect(options) {
+            await options.onUri('wc:' + 'a'.repeat(64) + '@2?relay-protocol=irn&symKey=' + 'b'.repeat(64));
+            return new Promise((resolve, reject) => options.signal.addEventListener('abort', () => reject(new Error('cancelled')), { once: true }));
+          }`;
+        return route.fulfill({ status: 200, contentType: 'text/javascript', body });
+      });
+      await page.goto(url, { waitUntil: 'domcontentloaded' });
+      await page.waitForFunction(() => !document.querySelector('[data-wallet-id="wallet-connect"]').disabled);
+      await page.locator('.top-connect').click();
+      await page.locator('[data-wallet-id="wallet-connect"]').click();
+      await page.locator('#walletconnect-loading').waitFor({ state: 'visible' });
+      assert.equal(await page.locator('#walletconnect-qr').isVisible(), false, 'loading is not a fake QR');
+      await page.clock.fastForward(20_100);
+      await page.locator('#walletconnect-error').waitFor({ state: 'visible' });
+      assert.match(await page.locator('#walletconnect-error-detail').innerText(), /connection.*retry/i);
+      assert.equal(await page.locator('#walletconnect-retry').isVisible(), true);
+      assert.equal(await page.locator('#walletconnect-open').getAttribute('href'), null);
+      await page.locator('#walletconnect-retry').click();
+      await page.locator('#walletconnect-qr').waitFor({ state: 'visible' });
+      assert.equal(urls.length, 2, 'Retry triggers a fresh bundle request');
+      assert.match(urls[1], /[&?]retry=1(?:&|$)/);
+      await page.locator('#walletconnect-cancel').click();
+      await page.locator('[data-wallet-id="wallet-connect"]').waitFor({ state: 'visible' });
+      assert.equal(await page.locator('#walletconnect-open').getAttribute('href'), null);
+      assert.deepEqual(errors, []);
+      console.log('A blocked WalletConnect download produces a retryable error; retry makes a fresh request and renders a QR.');
+      await page.close();
+    }
   } finally { await wcBrowser.close(); }
 
   const browser2 = await chromium.launch({ executablePath, args: browserArgs, headless: true });

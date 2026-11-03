@@ -76,7 +76,7 @@ function waitBriefly(task, ms = 1500) {
  * method is near_getAccounts; this module never sends a wallet RPC request.
  * The UI supplies a client factory, QR renderer and AbortSignal.
  */
-export async function connectWalletConnect({ projectId, origin, createClient, onUri, onEnded, signal, timeoutMs = 120_000 }) {
+export async function connectWalletConnect({ projectId, origin, createClient, onUri, onEnded, signal, timeoutMs = 180_000 }) {
   if (!isWalletConnectProjectId(projectId)) throw new Error('WalletConnect project ID is not configured');
   const parsed = new URL(origin);
   const local = ['localhost', '127.0.0.1', '[::1]'].includes(parsed.hostname);

@@ -1,6 +1,6 @@
 import { WALLET_MANIFEST } from './wallet-manifest.mjs';
 import { loadVerifiedExecutor } from './wallet-executor.mjs';
-import { isTestnetAccount, isWalletConnectProjectId } from './walletconnect-core.mjs';
+import { isTestnetAccount, isWalletConnectProjectId, pairingTopic } from './walletconnect-core.mjs';
 import { verifyCliLogin } from './cli-login.mjs';
 
 /** A temporary host with many projects under one origin must never hold a wallet session. */
@@ -28,7 +28,7 @@ export function walletOriginAllowed(location, isTopLevel, approvedOrigin = '') {
  * other accounts are wallet-reported, not proof of ownership. The picker is
  * our own accessible dialog; wallet executors remain sandboxed.
  */
-export async function initWallet({ window: win, document: doc, NearConnector, SandboxWallet, loadWalletConnect }) {
+export async function initWallet({ window: win, document: doc, NearConnector, SandboxWallet, loadWalletConnect, walletConnectStartTimeoutMs = 20_000 }) {
   const dialog = doc.querySelector('#wallet-dialog');
   const closeButton = doc.querySelector('#wallet-close');
   const optionsBox = doc.querySelector('#wallet-options');
@@ -49,6 +49,14 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
   const wcOpen = doc.querySelector('#walletconnect-open');
   const wcCopy = doc.querySelector('#walletconnect-copy');
   const wcCancel = doc.querySelector('#walletconnect-cancel');
+  const wcRetry = doc.querySelector('#walletconnect-retry');
+  const wcLoading = doc.querySelector('#walletconnect-loading');
+  const wcProgress = doc.querySelector('#walletconnect-progress');
+  const wcError = doc.querySelector('#walletconnect-error');
+  const wcErrorTitle = doc.querySelector('#walletconnect-error-title');
+  const wcErrorDetail = doc.querySelector('#walletconnect-error-detail');
+  const wcReady = doc.querySelector('#walletconnect-ready');
+  const walletSafety = doc.querySelector('#wallet-safety');
   if (!dialog || !closeButton || !optionsBox || !options.length || !openers.length || !disconnect || !status || !dialogStatus) return;
 
   const approved = doc.querySelector('meta[name="bouncer-wallet-origin"]')?.content || '';
@@ -74,18 +82,21 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
   function renderControls() {
     optionsBox.hidden = connected || wcPairing;
     if (wcPanel) wcPanel.hidden = !wcPairing;
+    if (walletSafety) walletSafety.hidden = wcPairing;
+    dialog.dataset.walletView = wcPairing ? 'pairing' : connected ? 'connected' : 'options';
     options.forEach(button => {
       const isWc = button.dataset.walletId === 'wallet-connect';
       button.disabled = !ready || busyState || connected || !allowedIds.has(button.dataset.walletId) ||
-        (isWc && (!wcProjectId || typeof loadWalletConnect !== 'function' || !wcPanel || !wcQr || !wcCanvas || !wcOpen || !wcCopy || !wcCancel));
+        (isWc && (!wcProjectId || typeof loadWalletConnect !== 'function' || !wcPanel || !wcQr || !wcCanvas || !wcOpen || !wcCopy || !wcCancel || !wcRetry || !wcLoading || !wcError || !wcReady));
     });
     if (wcCaption) wcCaption.textContent = wcProjectId ? 'QR or wallet app · NEAR testnet' : 'Not configured · Project ID required';
     if (wcBadge) wcBadge.textContent = wcProjectId ? 'CONNECT' : 'SETUP';
     disconnect.hidden = !connected; disconnect.disabled = busyState;
-    if (walletTitle) walletTitle.textContent = connected ? 'Wallet connected' : 'Connect a wallet';
+    if (walletTitle) walletTitle.textContent = connected ? 'Wallet connected' : wcPairing ? 'Connect your wallet' : 'Connect a wallet';
     if (walletDescription) walletDescription.textContent = connected
       ? 'Your testnet account is connected. You can disconnect below.'
-      : 'Choose a testnet wallet. NEAR Mobile and NEAR CLI use an off-chain login message; no access key or payment is requested.';
+      : wcPairing ? 'Scan with a NEAR testnet wallet, or open the wallet app on this device.'
+        : 'Choose a testnet wallet. NEAR Mobile and NEAR CLI use an off-chain login message; no access key or payment is requested.';
     openers.forEach(button => {
       button.disabled = busyState;
       button.dataset.walletState = connected ? 'connected' : 'disconnected';
@@ -113,7 +124,10 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     return true;
   }
   function closePicker() {
-    if (wcPairing) wcAbort?.abort();
+    if (wcPairing) {
+      if (wcAbort) wcAbort.abort('cancelled');
+      else { wcPairing = false; clearWalletConnectPairing(); setStatus('Choose a testnet wallet to connect.'); renderControls(); }
+    }
     if (dialog.open) dialog.close();
   }
   function openPicker(trigger) {
@@ -261,44 +275,116 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
   function clearWalletConnectPairing() {
     wcUri = '';
     if (wcOpen) { wcOpen.hidden = true; wcOpen.removeAttribute('href'); }
-    if (wcCopy) wcCopy.hidden = true;
+    if (wcCopy) { wcCopy.hidden = true; wcCopy.textContent = 'Copy pairing link'; }
     if (wcQr) wcQr.hidden = true;
+    if (wcReady) wcReady.hidden = true;
     try { wcCanvas?.getContext('2d')?.clearRect(0, 0, wcCanvas.width, wcCanvas.height); } catch { /* canvas is optional in tests */ }
   }
-  wcCancel?.addEventListener('click', () => wcAbort?.abort());
+  function walletConnectStage(stage, title = '', detail = '') {
+    if (wcPanel) wcPanel.dataset.state = stage;
+    if (wcLoading) wcLoading.hidden = stage !== 'loading';
+    if (wcError) wcError.hidden = stage !== 'error' && stage !== 'qr-error';
+    if (wcRetry) wcRetry.hidden = stage !== 'error';
+    if (wcReady) wcReady.hidden = stage !== 'ready';
+    if (stage === 'error' || stage === 'qr-error') {
+      if (wcErrorTitle) wcErrorTitle.textContent = title;
+      if (wcErrorDetail) wcErrorDetail.textContent = detail;
+    }
+  }
+  function backToWallets() {
+    wcPairing = false; clearWalletConnectPairing();
+    setStatus('Choose a testnet wallet to connect.');
+    renderControls();
+    if (dialog.open) options.find(button => button.dataset.walletId === 'wallet-connect')?.focus();
+  }
+  wcCancel?.addEventListener('click', () => {
+    if (wcAbort) wcAbort.abort('cancelled');
+    else backToWallets();
+  });
+  wcRetry?.addEventListener('click', async () => { if (!wcAbort && !busyState) await openWalletConnect(); });
   wcCopy?.addEventListener('click', async () => {
     if (!wcUri) return;
     try {
       if (!win.navigator?.clipboard?.writeText) throw new Error('clipboard unavailable');
       await win.navigator.clipboard.writeText(wcUri);
+      wcCopy.textContent = 'Copied ✓';
       setStatus('Pairing code copied. Share it only with your wallet app.');
-    } catch { setStatus('Copy is unavailable here. Scan the code or open your wallet app.'); }
+    } catch {
+      wcCopy.textContent = 'Copy unavailable';
+      setStatus('Copy is unavailable here. Scan the code or open your wallet app.');
+    }
   });
   async function openWalletConnect() {
-    if (!wcProjectId || typeof loadWalletConnect !== 'function') return;
+    if (!wcProjectId || typeof loadWalletConnect !== 'function' || wcAbort || busyState || connected) return;
     const controller = new AbortController();
     wcAbort = controller; wcPairing = true;
-    clearWalletConnectPairing();
+    clearWalletConnectPairing(); walletConnectStage('loading');
+    if (wcProgress) wcProgress.textContent = 'Connecting to WalletConnect. This may take a few seconds.';
     busy(true); setStatus('Preparing a private WalletConnect pairing…');
+    if (dialog.open) wcCancel?.focus();
+    let startTimedOut = false, shown = false, abortListener;
+    const cancelled = new Promise((_, reject) => {
+      abortListener = () => reject(new Error('cancelled'));
+      controller.signal.addEventListener('abort', abortListener, { once: true });
+    });
+    // Bound both the bundle download and relay setup. A stalled import used to
+    // wait forever, and the relay could leave an empty view for two minutes.
+    const startTimer = setTimeout(() => { startTimedOut = true; controller.abort('timeout'); }, walletConnectStartTimeoutMs);
+    const slowTimer = setTimeout(() => {
+      if (!controller.signal.aborted && !shown && wcAbort === controller) {
+        if (wcProgress) wcProgress.textContent = 'Taking longer than usual. Still trying to reach WalletConnect…';
+        setStatus('Still preparing the WalletConnect QR…');
+      }
+    }, Math.min(8_000, Math.floor(walletConnectStartTimeoutMs / 2)));
     try {
-      const cancelled = new Promise((_, reject) => controller.signal.addEventListener('abort', () => reject(new Error('cancelled')), { once: true }));
-      const module = await Promise.race([loadWalletConnect(), cancelled]);
+      const module = await Promise.race([Promise.resolve().then(() => loadWalletConnect({ signal: controller.signal })), cancelled]);
       if (controller.signal.aborted) throw new Error('cancelled');
-      const handle = await module.connect({
+      const connecting = Promise.resolve().then(() => module.connect({
         projectId: wcProjectId, origin: win.location.origin, signal: controller.signal,
         onUri: async uri => {
-          if (controller.signal.aborted) return;
-          await module.renderPairingCode(wcCanvas, uri);
-          if (controller.signal.aborted) { clearWalletConnectPairing(); return; }
+          if (controller.signal.aborted || wcAbort !== controller) return;
+          pairingTopic(uri); // Never put an unvalidated link in the DOM.
+          clearTimeout(startTimer); clearTimeout(slowTimer); shown = true;
           wcUri = uri;
-          wcOpen.setAttribute('href', uri); wcOpen.hidden = false; wcCopy.hidden = false; wcQr.hidden = false;
-          setStatus('Waiting for approval in your NEAR testnet wallet…');
+          wcOpen.setAttribute('href', uri); wcOpen.hidden = false; wcCopy.hidden = false;
+          if (wcProgress) wcProgress.textContent = 'Pairing ready. Drawing your QR code…';
+          setStatus('Pairing ready. Drawing the QR code…');
+          // Render off-DOM so a cancelled or late attempt cannot paint over a
+          // subsequent attempt's QR with an expired, different pairing URI.
+          const canvas = doc.createElement('canvas');
+          let renderTimer;
+          try {
+            const rendering = Promise.resolve().then(() => module.renderPairingCode(canvas, uri));
+            const renderTimeout = new Promise((_, reject) => { renderTimer = setTimeout(() => reject(new Error('QR rendering timed out')), 5_000); });
+            await Promise.race([rendering, renderTimeout, cancelled]);
+            if (controller.signal.aborted || wcAbort !== controller) return;
+            if (!canvas.width || !canvas.height) throw new Error('QR rendering failed');
+            wcCanvas.width = canvas.width; wcCanvas.height = canvas.height;
+            const context = wcCanvas.getContext('2d');
+            if (!context) throw new Error('QR rendering failed');
+            context.drawImage(canvas, 0, 0);
+            wcQr.hidden = false; walletConnectStage('ready');
+            setStatus('Waiting for approval in your NEAR testnet wallet…');
+          } catch {
+            if (controller.signal.aborted || wcAbort !== controller) return;
+            const message = 'The pairing is ready, but the QR could not be drawn. Open your wallet app or copy the link below.';
+            walletConnectStage('qr-error', 'QR display unavailable', message);
+            setStatus(message);
+          } finally { clearTimeout(renderTimer); }
         },
         onEnded: message => {
           if (!wcHandle) return;
           wcHandle = null; showDisconnected(message); notify(message);
         },
-      });
+      }));
+      // Even if the SDK or a renderer finishes after timeout/cancellation,
+      // disconnect a late approved session instead of accepting it.
+      connecting.then(late => {
+        if ((controller.signal.aborted || wcAbort !== controller) && typeof late?.disconnect === 'function') {
+          void Promise.resolve().then(() => late.disconnect()).catch(() => {});
+        }
+      }, () => {});
+      const handle = await Promise.race([connecting, cancelled]);
       if (controller.signal.aborted) { await handle.disconnect(); showDisconnected('WalletConnect pairing cancelled.'); return; }
       if (!isTestnetAccount(handle.accountId)) { await handle.disconnect(); throw new Error('invalid account'); }
       wcHandle = handle; selectedWallet = null; connected = true; connectedAccount = handle.accountId; wcPairing = false;
@@ -306,16 +392,29 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
       setStatus(`Connected: ${handle.accountId} (wallet-reported). No vault or spending access is granted.`);
       closePicker(); notify('Testnet account connected. No spending access was granted.');
     } catch (error) {
-      wcPairing = false;
-      const detail = error?.message || '';
-      const message = controller.signal.aborted ? 'WalletConnect pairing cancelled.'
-        : /timed out/i.test(detail) ? 'WalletConnect pairing timed out. Please try again.'
-          : /401|403|unauthori[sz]ed|forbidden|project.?id|allowlist/i.test(detail)
-            ? 'WalletConnect configuration was rejected. Check the Reown project and allowed site origin.'
-            : 'WalletConnect could not connect. Check that your wallet supports NEAR testnet and try again.';
-      showDisconnected(message);
+      if (controller.signal.aborted && !startTimedOut) {
+        wcPairing = false;
+        showDisconnected('WalletConnect pairing cancelled.');
+      } else {
+        clearWalletConnectPairing();
+        const reason = error?.message || '';
+        const message = /401|403|unauthori[sz]ed|forbidden|project.?id|allowlist/i.test(reason)
+          ? 'WalletConnect rejected the site configuration. Please try another wallet.'
+          : startTimedOut || !shown
+            ? 'The QR could not be prepared. Check your connection or try another network, then retry.'
+            : /timed out/i.test(reason)
+              ? 'The pairing expired before approval. Generate a new QR and try again.'
+              : 'The wallet did not complete this NEAR testnet connection. Try again or choose another wallet.';
+        walletConnectStage('error', shown ? 'Connection not completed' : 'Couldn’t load the QR', message);
+        showDisconnected(message);
+      }
     } finally {
-      wcAbort = null; wcPairing = false; clearWalletConnectPairing(); busy(false);
+      clearTimeout(startTimer); clearTimeout(slowTimer);
+      controller.signal.removeEventListener('abort', abortListener);
+      if (wcAbort === controller) wcAbort = null;
+      if (!wcPairing) clearWalletConnectPairing();
+      busy(false);
+      if (wcPairing && wcError && !wcError.hidden && dialog.open) wcRetry?.focus();
     }
   }
 

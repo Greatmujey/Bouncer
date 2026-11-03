@@ -80,6 +80,7 @@ jobs:
         with:
           node-version: '22'
       - run: npm ci --prefix bouncer --no-audit --no-fund
+      - run: npm ci --prefix bouncer/walletconnect --no-audit --no-fund
       - name: Exercise real CLI with a synthetic local credential
         env:
           GH_TOKEN: ${{ github.token }}

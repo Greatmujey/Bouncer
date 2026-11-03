@@ -5,9 +5,13 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 import { createMemoryStorage } from '../web-src/walletconnect-core.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
+const requireWalletConnect = createRequire(new URL('../walletconnect/package.json', import.meta.url));
+const jsQR = requireWalletConnect('jsqr');
+const { PNG } = requireWalletConnect('pngjs');
 const playwright = await import(pathToFileURL(path.join(process.env.RUNNER_TEMP, 'bouncer-browser/node_modules/playwright-core/index.mjs')));
 process.env.DISABLE_GLOBAL_CORE = 'true';
 const { default: SignClient } = await import(pathToFileURL(path.join(root, 'walletconnect/node_modules/@walletconnect/sign-client/dist/index.js')));
@@ -34,9 +38,16 @@ try {
   const proposal = new Promise(resolve => wallet.once('session_proposal', resolve));
   await page.locator('.top-connect').click();
   await page.locator('[data-wallet-id="wallet-connect"]').click();
-  await page.locator('#walletconnect-qr').waitFor({ state: 'visible', timeout: 60_000 });
+  await page.waitForFunction(() => !document.querySelector('#walletconnect-qr').hidden ||
+    !document.querySelector('#walletconnect-error').hidden, null, { timeout: 45_000 });
+  if (!await page.locator('#walletconnect-qr').isVisible()) throw new Error(`QR unavailable: ${await page.locator('#walletconnect-error-detail').innerText()}`);
   const uri = await page.locator('#walletconnect-open').getAttribute('href');
   assert.ok(typeof uri === 'string' && /^wc:[a-f0-9]{64}@2\?/.test(uri), 'a private pairing URI was generated');
+  // Decode the actual rendered CSS-sized screenshot in memory. Never persist or
+  // print the bearer URI (including on assertion failure).
+  const image = PNG.sync.read(await page.locator('#walletconnect-qr').screenshot());
+  const decoded = jsQR(new Uint8ClampedArray(image.data), image.width, image.height);
+  assert.ok(decoded?.data === uri, 'the displayed live QR decodes to the pairing link');
   const pairing = await withTimeout(wallet.pair({ uri }), 30_000, 'Synthetic wallet pairing');
   pairingTopic = pairing.topic;
   const event = await withTimeout(proposal, 30_000, 'Session proposal');

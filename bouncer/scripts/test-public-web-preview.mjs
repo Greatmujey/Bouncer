@@ -52,10 +52,8 @@ try {
       // Generate and cancel one real pairing proposal. Never log the bearer
       // URI, scan the QR, approve a session, or request a wallet transaction.
       await page.locator('[data-wallet-id="wallet-connect"]').click();
-      await page.waitForFunction(() => {
-        const status = document.querySelector('#wallet-dialog-status').textContent;
-        return !document.querySelector('#walletconnect-qr').hidden || /could not connect|configuration was rejected|timed out/i.test(status);
-      }, null, { timeout: 135_000 });
+      await page.waitForFunction(() => !document.querySelector('#walletconnect-qr').hidden ||
+        !document.querySelector('#walletconnect-error').hidden, null, { timeout: 45_000 });
       const pairingReady = await page.locator('#walletconnect-qr').isVisible();
       if (!pairingReady) throw new Error(`Real relay probe failed: ${await page.locator('#wallet-dialog-status').innerText()}`);
       assert.equal(await page.locator('#walletconnect-open').isVisible(), true);
