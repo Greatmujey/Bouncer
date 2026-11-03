@@ -89,8 +89,12 @@ atoms; the V3 owner and vault were not registered for that token. A Ref quote
 for 0.0000000001 wrapped test NEAR returned 21,645 fake atoms at that block;
 quotes and provider terms can change. The diagnostic is not general-purpose
 compute, a Circle-paid order, or evidence of delivery. The V12 diagnostic plan
-and read-only preflight are under test, but no fake-token registration, provider
-funding, or order has been sent from this owner. OutLayer can change its deployed
+and read-only preflight are under test. The V3 fake-token registration original
+[`9tsgJgUUqJsV9X8hpRABqPwcC7SZJ9uV64xc3bFoamPe`](https://testnet.nearblocks.io/txns/9tsgJgUUqJsV9X8hpRABqPwcC7SZJ9uV64xc3bFoamPe)
+was fenced in [run 41644157538](https://github.com/Greatmujey/Bouncer/actions/runs/41644157538),
+but that run could not confirm its outcome. Its status is **unknown**: reconcile
+this original only, never resend or sign a replacement. It was a storage
+registration, not a provider payment or order. OutLayer can change its deployed
 contract, its plain-token refunds may not restore Bouncer's tracked allowance,
 and unused prepayment may be difficult to recover. The initial V12 diagnostic
 plan passed an [isolated nearcore rehearsal](https://github.com/Greatmujey/Bouncer/actions/runs/41643361478)
