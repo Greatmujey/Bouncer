@@ -59,7 +59,9 @@ async function exercise({ sandbox, wasm, mockFt, ownerKey, tokenKey }) {
     };
 
     await must(root, OWNER, [tx.createAccount(), tx.transfer(25n * NEAR), tx.addKey(ownerKey.getPublicKey(), tx.fullAccessKey())], 'create disposable owner');
-    await must(owner, VAULT, [tx.createAccount(), tx.transfer(8n * NEAR), tx.deployContract(wasm), fn('new', { owner: OWNER })], 'create disposable keyless V12');
+    // Exercise the same 6 test-NEAR initial balance proposed for the real
+    // testnet bootstrap, not a more generously funded 8-NEAR vault.
+    await must(owner, VAULT, [tx.createAccount(), tx.transfer(6n * NEAR), tx.deployContract(wasm), fn('new', { owner: OWNER })], 'create disposable keyless V12');
     await must(root, SELLER, [tx.createAccount(), tx.transfer(8n * NEAR), tx.deployContract(wasm), fn('new', { owner: ROOT })], 'create local receiver stand-in');
     await must(token, TOKEN, [tx.deployContract(mockFt), fn('new_default_meta', { owner_id: ROOT, total_supply: '1000000' }, 0n, 50n * TGAS)], 'deploy example mock FT');
     assert.equal(await view(VAULT, 'contract_version'), 'bouncer-agent-v12-exact-ft-testnet');
@@ -137,6 +139,7 @@ async function exercise({ sandbox, wasm, mockFt, ownerKey, tokenKey }) {
     failed(replay, /intent.*(consumed|inactive|used|stale)/i, 'exact-intent replay');
     return { scope: 'isolated nearcore only; synthetic FT, balances and receiver, not Circle, OutLayer, testnet, audit or delivery',
       v12_sha256: sha(wasm), mock_ft_sha256: MOCK_FT_SHA256, keys_ephemeral: true, live_seller_contacted: false,
+      initial_vault_native_yocto: (6n * NEAR).toString(),
       owner_policy_guard_rejects_zero_yocto_and_non_owner: true,
       prepaid_before_lock: '300', stale_project_rejected: true, provider_call_emitted: false,
       native_and_prepaid_unchanged_on_rejection: true, exact_intent_settled_locally: true, replay_rejected: true };
