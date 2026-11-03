@@ -42,6 +42,11 @@ jobs:
           echo "BOUNCER_V12_WASM_PATH=$RUNNER_TEMP/bouncer-v12.wasm" >> "$GITHUB_ENV"
           echo "BOUNCER_SANDBOX_BIN=$RUNNER_TEMP/near-sandbox" >> "$GITHUB_ENV"
           echo "BOUNCER_MOCK_FT_WASM_PATH=$RUNNER_TEMP/mock-ft.wasm" >> "$GITHUB_ENV"
+      - name: Test V12 Circle registration, funding and original-hash safeguards
+        env:
+          BOUNCER_V12_WASM: ${{ runner.temp }}/bouncer-v12.wasm
+        run: |
+          node --test tests/keyless-vault-v12-circle*.test.mjs tests/github-original-fence.test.mjs tests/read-only-near-receipts.test.mjs
       - name: Exercise exact artifact in isolated nearcore
         run: |
           set -euo pipefail
