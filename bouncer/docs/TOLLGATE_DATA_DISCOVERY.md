@@ -156,8 +156,9 @@ if retention fails after voucher exposure, do not retry the paid request.
 
 `corroborateTollgateQuakes` checks that retained bytes match the original
 purchase result, reconstructs the exact allowed USGS query, and makes one
-separate unpaid request to USGS. It compares event IDs, magnitudes, places and
-times, rejecting URL substitution and treating changed or unavailable data
+separate unpaid request to USGS. It compares every field in the seller's
+published event projection: ID, magnitude, place, time, depth, tsunami flag and
+URL. It rejects URL substitution and treats changed or unavailable data
 as unconfirmed. An empty result is not called independently returned event
 data. This comparison is not proof of payment, seller identity, or that the
 seller actually fetched USGS at its claimed time. The response and fence must

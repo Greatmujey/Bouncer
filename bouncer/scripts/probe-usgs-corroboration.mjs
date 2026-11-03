@@ -23,7 +23,8 @@ try { upstream = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(byt
 catch { throw new Error('USGS response is not JSON'); }
 if (upstream?.type !== 'FeatureCollection' || !Array.isArray(upstream.features) || upstream.features.length > 10) throw new Error('unexpected USGS GeoJSON');
 const quakes = upstream.features.map(f => ({ id: f.id, magnitude: f.properties?.mag, place: f.properties?.place,
-  time: new Date(f.properties?.time).toISOString() }));
+  time: new Date(f.properties?.time).toISOString(), depth_km: f.geometry?.coordinates?.[2] ?? null,
+  tsunami: Boolean(f.properties?.tsunami), url: f.properties?.url }));
 const owner = nearApi.KeyPair.fromRandom('ed25519'), agent = nearApi.KeyPair.fromRandom('ed25519'), voucher = nearApi.KeyPair.fromRandom('ed25519');
 const ownerPlan = { version: 1, purpose: 'new-bouncer-testnet-owner', network: 'testnet',
   account_id: 'bouncer-owner-aaaaaaaaaaaaaaaaaaaaaaaa.testnet', public_key: String(owner.getPublicKey()) };

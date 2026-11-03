@@ -39,7 +39,11 @@ function rows(value) {
     if (!record(feature) || feature.type !== 'Feature' || typeof feature.id !== 'string' || !feature.id || feature.id.length > 128 ||
         out.has(feature.id) || !record(p) || typeof p.mag !== 'number' || !Number.isFinite(p.mag) ||
         typeof p.place !== 'string' || p.place.length > 500 || !Number.isSafeInteger(time) || !Number.isFinite(Date.parse(new Date(time).toISOString()))) return null;
-    out.set(feature.id, { magnitude: p.mag, place: p.place, time: new Date(time).toISOString() });
+    const depth = feature.geometry?.coordinates?.[2] ?? null;
+    if ((depth !== null && (typeof depth !== 'number' || !Number.isFinite(depth))) ||
+        typeof p.url !== 'string' || p.url.length > 1000) return null;
+    out.set(feature.id, { magnitude: p.mag, place: p.place, time: new Date(time).toISOString(),
+      depth_km: depth, tsunami: Boolean(p.tsunami), url: p.url });
   }
   return out;
 }
@@ -89,12 +93,14 @@ export async function corroborateTollgateQuakes({ review: raw, purchase, respons
     try { upstreamRows = rows(geo); } catch { upstreamRows = null; }
     if (!upstreamRows) return { ...base, status: 'UPSTREAM_COMPARISON_UNAVAILABLE', source_data_corroborated: false };
     const distinct = new Set(body.quakes.map(q => q.id));
+    const fields = ['id', 'magnitude', 'place', 'time', 'depth_km', 'tsunami', 'url'];
     const matched = distinct.size === body.quakes.length && body.quakes.length === upstreamRows.size && body.quakes.every(q => {
       const u = upstreamRows.get(q.id);
-      return u && q.magnitude === u.magnitude && q.place === u.place && q.time === u.time;
+      return Object.keys(q).sort().join(',') === [...fields].sort().join(',') && u && q.magnitude === u.magnitude &&
+        q.place === u.place && q.time === u.time && q.depth_km === u.depth_km && q.tsunami === u.tsunami && q.url === u.url;
     });
     const detail = { source_url: url, upstream_response_sha256: sha(upstream), seller_count: body.quakes.length,
-      upstream_count: upstreamRows.size, compared_fields: ['id', 'magnitude', 'place', 'time'] };
+      upstream_count: upstreamRows.size, compared_fields: fields };
     if (!matched) return { ...base, ...detail, status: 'UPSTREAM_DATA_DIFFERED_AT_RECHECK', source_data_corroborated: false };
     if (!body.quakes.length) return { ...base, ...detail, status: 'UPSTREAM_EMPTY_RESULT_MATCHED', source_data_corroborated: false };
     return { ...base, ...detail, status: 'UPSTREAM_DATA_CORROBORATED', source_data_corroborated: true };

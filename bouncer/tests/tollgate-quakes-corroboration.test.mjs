@@ -19,7 +19,8 @@ function fixture(t, { empty = false } = {}) {
   const review = makeTollgateQuakesReview({ ownerPlan, intentId: 'one-quake', agentPublicKey: pub(agent),
     voucherPublicKey: pub(voucher), expiresAtMs: String(now + 120_000) });
   const start = new Date(now - 24 * 3600_000).toISOString(), time = new Date(now - 3000).toISOString();
-  const quake = { id: 'us-event-test', magnitude: 5.3, place: 'Synthetic Ocean', time, depth_km: 12 };
+  const quake = { id: 'us-event-test', magnitude: 5.3, place: 'Synthetic Ocean', time, depth_km: 12,
+    tsunami: false, url: 'https://earthquake.usgs.gov/earthquakes/eventpage/us-event-test' };
   const body = { source: 'USGS Earthquake Hazards Program, FDSN event API',
     source_url: `https://earthquake.usgs.gov/fdsnws/event/1/query?format=geojson&orderby=time&minmagnitude=5&starttime=${encodeURIComponent(start)}&limit=10`,
     fetched_at: new Date(now).toISOString(), cached: false, query: { min_magnitude: 5, hours: 24, limit: 10 },
@@ -30,7 +31,8 @@ function fixture(t, { empty = false } = {}) {
     review_hash: reviewHash, intent_id: review.intent_id, channel_id: '7', price_yocto: review.price_yocto,
     seller_claimed_acceptance: true, response_locally_retained: true, response_sha256: saved.response_sha256, data: body };
   const upstream = { type: 'FeatureCollection', features: empty ? [] : [{ type: 'Feature', id: quake.id,
-    properties: { mag: quake.magnitude, place: quake.place, time: Date.parse(quake.time) } }] };
+    properties: { mag: quake.magnitude, place: quake.place, time: Date.parse(quake.time), tsunami: 0, url: quake.url },
+    geometry: { type: 'Point', coordinates: [0, 0, quake.depth_km] } }] };
   let calls = 0;
   const fetchImpl = async (url, options) => {
     calls++; const u = new URL(url); assert.equal(u.origin, 'https://earthquake.usgs.gov');
@@ -50,13 +52,15 @@ test('exact retained seller bytes match an independently fetched synthetic USGS 
   assert.equal(out.payment_sent, false); assert.equal(out.seller_contacted, false);
   assert.equal(out.seller_response_sha256, f.purchase.response_sha256);
   assert.equal(out.upstream_response_sha256, crypto.createHash('sha256').update(JSON.stringify(f.upstream)).digest('hex'));
-  assert.deepEqual(out.compared_fields, ['id', 'magnitude', 'place', 'time']);
+  assert.deepEqual(out.compared_fields, ['id', 'magnitude', 'place', 'time', 'depth_km', 'tsunami', 'url']);
 });
 
 test('upstream changes and empty results do not falsely claim independent event data', async t => {
   const f = fixture(t); f.upstream.features[0].properties.mag = 5.4;
   const different = await corroborateTollgateQuakes(args(f));
   assert.equal(different.status, 'UPSTREAM_DATA_DIFFERED_AT_RECHECK'); assert.equal(different.source_data_corroborated, false);
+  const d = fixture(t); d.upstream.features[0].geometry.coordinates[2] = 13;
+  assert.equal((await corroborateTollgateQuakes(args(d))).status, 'UPSTREAM_DATA_DIFFERED_AT_RECHECK');
   const z = fixture(t, { empty: true }), empty = await corroborateTollgateQuakes(args(z));
   assert.equal(empty.status, 'UPSTREAM_EMPTY_RESULT_MATCHED'); assert.equal(empty.source_data_corroborated, false);
 });

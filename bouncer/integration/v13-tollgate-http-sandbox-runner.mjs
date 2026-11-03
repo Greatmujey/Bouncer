@@ -89,7 +89,8 @@ try{
    const body={source:'USGS Earthquake Hazards Program, FDSN event API',
     source_url:`https://earthquake.usgs.gov/fdsnws/event/1/query?format=geojson&orderby=time&minmagnitude=5&starttime=${encodeURIComponent(start)}&limit=10`,
     fetched_at:new Date(now).toISOString(),cached:false,query:{min_magnitude:5,hours:24,limit:10},count:1,
-    quakes:[{id:'sandbox-synthetic-event',magnitude:5.1,place:'Synthetic Ocean',time:new Date(now).toISOString()}],
+    quakes:[{id:'sandbox-synthetic-event',magnitude:5.1,place:'Synthetic Ocean',time:new Date(now).toISOString(),
+     depth_km:12,tsunami:false,url:'https://earthquake.usgs.gov/earthquakes/eventpage/sandbox-synthetic-event'}],
     paid:{channel_id:receipt.channel_id,nonce:receipt.nonce,price_yocto:receipt.price}};
    res.statusCode=200;res.setHeader('content-type','application/json');res.end(JSON.stringify(body));
   });
@@ -119,7 +120,8 @@ try{
   const q=result.data.quakes[0],fakeSource=async(url,options)=>{
    assert.equal(new URL(url).hostname,'earthquake.usgs.gov');assert.equal(options.method,'GET');
    return Response.json({type:'FeatureCollection',features:[{type:'Feature',id:q.id,
-    properties:{mag:q.magnitude,place:q.place,time:Date.parse(q.time)}}]});
+    properties:{mag:q.magnitude,place:q.place,time:Date.parse(q.time),tsunami:0,url:q.url},
+    geometry:{type:'Point',coordinates:[0,0,q.depth_km]}}]});
   };
   const comparison=await corroborateTollgateQuakes({review,purchase:result,responseStore,fetchImpl:fakeSource});
   assert.equal(comparison.status,'UPSTREAM_DATA_CORROBORATED');assert.equal(comparison.settlement_verified,false);
