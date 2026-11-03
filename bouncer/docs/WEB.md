@@ -165,8 +165,10 @@ The project’s production branch is `main`; working-branch previews and the
 production domain can therefore serve different commits. On 3 November 2026 UTC,
 working-branch commit `2756f8a` was deployed to `bouncer-near.vercel.app`
 without merging to `main` (Vercel deployment `dpl_FnsMxG9MPLu4QDnpuWLK9cB7GW5y`).
-The owner-supplied public Reown project ID is configured for production; this
-alone does not prove that the relay or a particular wallet accepts a session.
+The owner-supplied public Reown project ID is configured for production. On
+3 November 2026, GitHub browser smoke `41605658819` generated a real relay QR,
+cancelled the proposal and reached the testnet access-key RPC. No wallet was
+paired or approved; compatibility with an actual wallet remains unverified.
 A future production build from `main` could replace the site. The deployed Intear source ZIP has
 SHA-256 `2fe277baae87ff16d7b1efee9853cba26a46b1f9813302bf507f5ca53d2e0291`.
 Verify deployed assets and wallet behavior after deployment rather than assuming

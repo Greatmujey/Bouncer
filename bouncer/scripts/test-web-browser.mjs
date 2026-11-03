@@ -425,7 +425,9 @@ try {
       assert.equal(await page.locator('.top-connect').getAttribute('data-wallet-state'), 'disconnected');
       assert.equal(rpc.length, 1, 'bad signature fails before RPC');
       assert.deepEqual(errors, []);
-      console.log('Pinned NEAR CLI executor + synthetic signer and RPC: valid off-chain login accepted, forgery rejected; no real CLI wallet or transaction tested.');
+      console.log(process.env.BOUNCER_REAL_CLI_PATH
+        ? 'Real near-cli-rs signed a synthetic off-chain login; mock RPC accepted it and forgery was rejected. No real wallet or transaction was used.'
+        : 'Pinned NEAR CLI executor + synthetic signer and RPC: valid off-chain login accepted, forgery rejected; no real CLI wallet or transaction tested.');
     } finally { await cliBrowser.close(); }
   }
 

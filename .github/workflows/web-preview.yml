@@ -88,11 +88,19 @@ jobs:
           BOUNCER_REAL_CLI_PATH: ${{ runner.temp }}/near-cli/node_modules/.bin/near
         shell: bash
         run: |
+          set +e
           set -o pipefail
-          npm install --prefix "$RUNNER_TEMP/bouncer-browser" --no-save --no-audit --no-fund playwright-core@1.64.1
-          npm install --prefix "$RUNNER_TEMP/near-cli" --no-save --no-audit --no-fund near-cli-rs@0.30.1
-          gh api repos/near/near-cli-connect/git/blobs/32f1a33250370b5250a72d68ce24459628069fd7 --jq .content | base64 -d > "$BOUNCER_CLI_EXECUTOR"
-          node bouncer/scripts/test-web-browser.mjs
+          {
+            npm install --prefix "$RUNNER_TEMP/bouncer-browser" --no-save --no-audit --no-fund playwright-core@1.64.1 &&
+            npm install --prefix "$RUNNER_TEMP/near-cli" --no-save --no-audit --no-fund near-cli-rs@0.30.1 &&
+            gh api repos/near/near-cli-connect/git/blobs/32f1a33250370b5250a72d68ce24459628069fd7 --jq .content | base64 -d > "$BOUNCER_CLI_EXECUTOR" &&
+            node bouncer/scripts/test-web-browser.mjs
+          } 2>&1 | tee "$RUNNER_TEMP/bouncer-cli-smoke.log"
+          result=${PIPESTATUS[0]}
+          if [ "$result" -ne 0 ]; then
+            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-5500).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=Offline CLI smoke failed::"+s)' "$RUNNER_TEMP/bouncer-cli-smoke.log"
+          fi
+          exit "$result"
 
   durable-site-smoke:
     # Public asset checks; the optional relay probe creates and cancels a
@@ -115,7 +123,17 @@ jobs:
         env:
           BOUNCER_PREVIEW_URL_FILE: ${{ runner.temp }}/bouncer-production-url.txt
           BOUNCER_TEST_WALLETCONNECT_RELAY: ${{ contains(github.event.head_commit.message, '[test-walletconnect-relay]') && '1' || '0' }}
+        shell: bash
         run: |
-          npm install --prefix "$RUNNER_TEMP/bouncer-browser" --no-save --no-audit --no-fund playwright-core@1.64.1
-          printf '%s\n' 'https://bouncer-near.vercel.app/' > "$BOUNCER_PREVIEW_URL_FILE"
-          node bouncer/scripts/test-public-web-preview.mjs
+          set +e
+          set -o pipefail
+          {
+            npm install --prefix "$RUNNER_TEMP/bouncer-browser" --no-save --no-audit --no-fund playwright-core@1.64.1 &&
+            printf '%s\n' 'https://bouncer-near.vercel.app/' > "$BOUNCER_PREVIEW_URL_FILE" &&
+            node bouncer/scripts/test-public-web-preview.mjs
+          } 2>&1 | tee "$RUNNER_TEMP/bouncer-durable-smoke.log"
+          result=${PIPESTATUS[0]}
+          if [ "$result" -ne 0 ]; then
+            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-5500).replace(/wc:[^\s\x27\x22]+/g,"[redacted pairing URI]").replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=Live wallet smoke failed::"+s)' "$RUNNER_TEMP/bouncer-durable-smoke.log"
+          fi
+          exit "$result"
