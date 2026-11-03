@@ -117,9 +117,12 @@ late refund credit to the vault is a separate check and is not claimed here.
 The verifier never resends an original or makes a failed verification a retry
 signal.
 
-The receipt checker [passed on disposable nearcore](https://github.com/Greatmujey/Bouncer/actions/runs/41675139617)
+The receipt checker [passed on disposable nearcore](https://github.com/Greatmujey/Bouncer/actions/runs/41676762624)
 with the source-built PayPerCall contract, a mock FT, a locally supplied fixture
-answer, historical block views and the detached provider payout. That simulation
+answer, historical block views and the detached provider payout. In that same
+isolated fulfilled scenario, state checks showed 40 unused mock units returned
+to the vault and a new 40-unit intent blocked by the still-full 100-unit rolling
+budget. The return is not yet covered by the receipt verifier. That simulation
 is not Circle, a public-chain purchase, independent provider fulfillment or an
 audit.
 

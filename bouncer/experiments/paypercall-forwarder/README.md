@@ -103,13 +103,18 @@ recovery budget need actual runtime and token checks.
   deployed escrow or seller delivery was involved. The source-built artifact
   is not an independent reproducible-build or audit claim, and the detailed
   sandbox log was not available in this environment.
-- A [later sandbox run](https://github.com/Greatmujey/Bouncer/actions/runs/41675139617)
+- A [later sandbox run](https://github.com/Greatmujey/Bouncer/actions/runs/41676762624)
   used a second keyless forwarder for a locally fulfilled call. A separate
   read-only verifier correlated the exact vault transfer, escrow opening,
   locally supplied answer hash and linked mock-token provider payout, using
-  historical code, key and balance views. This is a disposable chain, not
-  evidence of a public-chain purchase, seller HTTP response, independent
-  fulfillment or a security audit.
+  historical code, key and balance views. After the 60-unit payout, the unused
+  40 mock units were returned via the vault's FT receiver callback: actual and
+  tracked vault balances both became 40, the forwarder became empty and the
+  rolling spend remained 100. A distinct owner-pinned 40-unit sandbox intent
+  was then blocked by the daily cap despite the returned balance. The return is
+  checked by isolated-chain state assertions, not by the public receipt
+  verifier. This is a disposable chain, not evidence of a public-chain purchase,
+  seller HTTP response, independent fulfillment or a security audit.
 
 ## Unresolved risks and prerequisites
 
