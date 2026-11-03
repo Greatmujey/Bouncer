@@ -14,6 +14,7 @@ import { startSandbox, stopSandboxChild } from './v11-nearcore-sandbox.mjs';
 import { loopbackSandboxUrl, withSandboxOnlyFetch } from './v11-sandbox-setup-rpc.mjs';
 import { MOCK_FT_SHA256, SANDBOX_SHA256, readVerifiedFile, requireFinalSuccess, assertSandboxStatus } from './v11-sandbox-support.mjs';
 import { CIRCLE_TESTNET_USDC as TOKEN } from '../scripts/circle-testnet-setup.mjs';
+import { exerciseSandboxV12Bootstrap } from './v12-sandbox-bootstrap-runner.mjs';
 
 const ROOT = 'testnet', OWNER = 'v12-owner.testnet', VAULT = 'vault.v12-owner.testnet', SELLER = 'outlayer.testnet';
 const NEAR = 10n ** 24n, TGAS = 10n ** 12n, NATIVE = 2n * 10n ** 22n;
@@ -158,7 +159,9 @@ async function main() {
   try {
     sandbox = await startSandbox(binary, directory, pub(tokenKey));
     const result = await exercise({ sandbox, wasm, mockFt, ownerKey, tokenKey });
-    console.log(JSON.stringify(result, null, 2));
+    const bootstrap = await exerciseSandboxV12Bootstrap({ rpcUrl: sandbox.rpcUrl,
+      root: account(ROOT, sandbox.provider, sandbox.rootKey), wasm, directory });
+    console.log(JSON.stringify({ ...result, bootstrap_original_hash_recovery: bootstrap }, null, 2));
   } finally {
     if (sandbox) await stopSandboxChild(sandbox.child);
     fs.rmSync(directory, { recursive: true, force: true });
