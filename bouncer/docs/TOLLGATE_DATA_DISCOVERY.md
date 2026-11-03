@@ -63,8 +63,14 @@ promise handling and owner-only recovery. The hardened binary then passed the
 [isolated runtime exercise](https://github.com/Greatmujey/Bouncer/actions/runs/41649077636):
 a locally simulated channel opening, voucher settlement, close, refund and
 failed-open conservative accounting. This used a local seller and is neither
-live fulfillment nor an audit. Its 602,587-byte binary required increasing the
-sandbox storage stake; a live deployment needs a fresh balance preflight.
+live fulfillment nor an audit. The original binary was 602,587 bytes. A
+size-optimized 388,570-byte build was reproduced on two GitHub runners and
+[passed the same isolated lifecycle](https://github.com/Greatmujey/Bouncer/actions/runs/41652177986);
+its SHA-256 is `783c7fc06f55868bff8e9f53d41dc896e9d6ac3056c37f6fd18de4f1d270a540`.
+The code alone requires approximately 3.8857 test NEAR at the last observed
+storage price; state, native reserves, channel budget and fees are additional.
+Matching builds and sandbox results are not independent security review or a
+live deployment. Any future deployment needs a fresh balance and safety preflight.
 
 References: [Tollgate repository](https://github.com/Mattbusel/tollgate),
 [public quakes endpoint](https://near-tollgate.vercel.app/v1/quakes?min_magnitude=5),
