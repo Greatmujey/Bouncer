@@ -43,11 +43,19 @@ The locally journaled subsequent swap original is
 `9i6AFBKEY2FzDdydnsoTfTxM87shpjvxZYxRyU6JTAGR`. It used a fresh post-wrap
 snapshot and a 6,553-atom minimum. Its
 [one-shot run](https://github.com/Greatmujey/Bouncer/actions/runs/41637917983)
-retained fence `13231466627` but lost confirmation after a view failed. Its
-outcome remains unresolved until the original receipt and balances are
-reconciled; never blindly resend or replace it.
+retained fence `13231466627` but lost confirmation after a view failed.
+[Read-only reconciliation](https://github.com/Greatmujey/Bouncer/actions/runs/41638107835)
+verified the original FINAL receipt, the linked Ref-to-owner transfer and a
+fresh owner balance of **6,898 Circle test-USDC atoms** (0.006898 test USDC).
+It did not send or contact a seller. Never resend or replace this original.
+
+A V3-specific read-only vault preflight checks the existing V11 funding and
+storage estimates, but does not select or deploy an artifact. V11 has a known
+cross-policy prepaid-route limitation; experimental V12 addresses that narrow
+gap but is not independently audited or reproducibly pinned. A dependency-lock
+snapshot is being prepared before considering any fresh-state V12 deployment.
+A keyless vault can permanently lock its testnet storage stake.
 
 A usable, funded, keyless vault and independent paid resource delivery are
 separate steps that require fresh checks and original-hash recovery at each
-stage. The previous V11 OutLayer pair-lock limitation remains relevant; the
-experimental V12 code has not been audited, deployed or migrated.
+stage.
