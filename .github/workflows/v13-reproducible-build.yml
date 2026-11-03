@@ -1,0 +1,101 @@
+# Experimental V13 build comparison, no keys, chain access, or deployment.
+# Matching hashes from two GitHub runners are not independent review or an audit.
+name: Compare locked V13 native-channel WASM builds
+on:
+  push:
+    branches: ['arena/25a7aaf6-near-hub']
+permissions:
+  contents: read
+jobs:
+  build:
+    if: github.run_attempt == 1 && contains(github.event.head_commit.message, '[v13-locked-build]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        instance: [a, b]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: 1.99.1
+          targets: wasm32-unknown-unknown
+      - name: Build from the committed lock
+        working-directory: bouncer/contracts/bouncer
+        run: |
+          set -euo pipefail
+          test "$(sha256sum Cargo.lock | cut -d' ' -f1)" = '263879a4574d1d5ed97dd0da097cdefff52b4f57017738ad291628a9c63e317f'
+          rustc --version --verbose
+          cargo --version
+          RUSTFLAGS='-C link-arg=-s' cargo build --locked --target wasm32-unknown-unknown --release --no-default-features --features tollgate-native-v13
+          mkdir -p "$RUNNER_TEMP/v13-result"
+          cp target/wasm32-unknown-unknown/release/bouncer.wasm "$RUNNER_TEMP/v13-result/bouncer.wasm"
+          python3 - <<'PY'
+          import hashlib,json,os,pathlib
+          b=pathlib.Path(os.environ['RUNNER_TEMP']+'/v13-result/bouncer.wasm').read_bytes()
+          if len(b)!=602587 or hashlib.sha256(b).hexdigest()!='44d8c3280639785a06f9d34658a508e9709f755ac7f5a93c614d3c52e80fd385' or b[:8]!=b'\0asm\1\0\0\0' or b'bouncer-agent-v13-tollgate-native-testnet' not in b:
+              raise ValueError('wrong V13 binary or version marker')
+          report={'commit':os.environ['GITHUB_SHA'],'lock_sha256':'263879a4574d1d5ed97dd0da097cdefff52b4f57017738ad291628a9c63e317f',
+                  'sha256':hashlib.sha256(b).hexdigest(),'bytes':len(b),'rust':'1.99.1','feature':'tollgate-native-v13'}
+          pathlib.Path(os.environ['RUNNER_TEMP']+'/v13-result/report.json').write_text(json.dumps(report)+'\n')
+          print('V13 build',json.dumps(report))
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: v13-locked-build-${{ matrix.instance }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/v13-result/
+          retention-days: 30
+          if-no-files-found: error
+  compare:
+    needs: build
+    if: needs.build.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write # publish only the matching public binary as an unattached Git blob
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: v13-locked-build-a-${{ github.run_id }}
+          path: ${{ runner.temp }}/v13-a
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: v13-locked-build-b-${{ github.run_id }}
+          path: ${{ runner.temp }}/v13-b
+      - name: Compare independent runner outputs
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib,json,os,pathlib
+          root=pathlib.Path(os.environ['RUNNER_TEMP']); a=(root/'v13-a/bouncer.wasm').read_bytes(); b=(root/'v13-b/bouncer.wasm').read_bytes()
+          ar=json.loads((root/'v13-a/report.json').read_text()); br=json.loads((root/'v13-b/report.json').read_text())
+          if a!=b or ar!=br or ar.get('commit')!=os.environ['GITHUB_SHA'] or ar.get('sha256')!=hashlib.sha256(a).hexdigest() or ar.get('bytes')!=len(a):
+              raise ValueError('V13 locked builds differ')
+          if not 100_000<len(a)<2_000_000 or a[:8]!=b'\0asm\1\0\0\0' or b'bouncer-agent-v13-tollgate-native-testnet' not in a:
+              raise ValueError('wrong V13 binary')
+          (root/'v13-report.json').write_text(json.dumps(ar)+'\n')
+          PY
+      - name: Preserve matching public artifact as a Git blob
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64,json,os,pathlib
+          root=pathlib.Path(os.environ['RUNNER_TEMP']); b=(root/'v13-a/bouncer.wasm').read_bytes()
+          (root/'v13-blob-request.json').write_text(json.dumps({'content':base64.b64encode(b).decode(),'encoding':'base64'}))
+          PY
+          gh api --method POST repos/Greatmujey/Bouncer/git/blobs --input "$RUNNER_TEMP/v13-blob-request.json" > "$RUNNER_TEMP/v13-blob-result.json"
+          python3 - <<'PY'
+          import json,os,pathlib,re
+          root=pathlib.Path(os.environ['RUNNER_TEMP']); report=json.loads((root/'v13-report.json').read_text()); blob=json.loads((root/'v13-blob-result.json').read_text())
+          if not re.fullmatch(r'[a-f0-9]{40}',blob.get('sha','')): raise ValueError('invalid public blob id')
+          report.update({'git_blob':blob['sha'],'run_id':os.environ['GITHUB_RUN_ID'],'matching_github_builds':2,
+                         'independently_audited':False,'deployed':False})
+          print('::notice title=Locked V13 build comparison::'+json.dumps(report,separators=(',',':')))
+          with open(os.environ['GITHUB_STEP_SUMMARY'],'a') as f:
+              f.write('## Experimental V13 build comparison\nTwo GitHub runners built the same locked inputs. Matching hashes are not independent security review or deployed-code attestation. No chain calls were made.\n```json\n'+json.dumps(report,indent=2)+'\n```\n')
+          PY
