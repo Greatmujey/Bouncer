@@ -23,7 +23,11 @@ export function checkWasmArtifact(bytes, source) {
   // V11 is also an explicitly separate fresh-state testnet artifact. Accept
   // only this exact source form and continue checking the default V9 arm.
   const multiConditional = [...source.matchAll(/pub\s+fn\s+contract_version\s*\([^)]*\)\s*->\s*&'static\s+str\s*\{\s*#\[cfg\(feature\s*=\s*"exact-ft-v11"\)\]\s*\{\s*"bouncer-agent-v11-exact-ft-testnet"\s*\}\s*#\[cfg\(feature\s*=\s*"youtick-playback-v10"\)\]\s*\{\s*"bouncer-agent-v10-youtick-testnet"\s*\}\s*#\[cfg\(not\(any\(feature\s*=\s*"youtick-playback-v10",\s*feature\s*=\s*"exact-ft-v11"\)\)\)\]\s*\{\s*"(bouncer-agent-v[0-9]+)"\s*\}\s*\}/g)];
-  const matches = [...direct, ...conditional, ...multiConditional];
+  // V12 implies the V11 feature but has its own version and fresh artifact.
+  // Require this exact mutually-exclusive branch structure, not just any
+  // nearby version-looking string.
+  const v12Conditional = [...source.matchAll(/pub\s+fn\s+contract_version\s*\([^)]*\)\s*->\s*&'static\s+str\s*\{\s*#\[cfg\(feature\s*=\s*"exact-ft-v12"\)\]\s*\{\s*"bouncer-agent-v12-exact-ft-testnet"\s*\}\s*#\[cfg\(all\(feature\s*=\s*"exact-ft-v11",\s*not\(feature\s*=\s*"exact-ft-v12"\)\)\)\]\s*\{\s*"bouncer-agent-v11-exact-ft-testnet"\s*\}\s*#\[cfg\(feature\s*=\s*"youtick-playback-v10"\)\]\s*\{\s*"bouncer-agent-v10-youtick-testnet"\s*\}\s*#\[cfg\(not\(any\(feature\s*=\s*"youtick-playback-v10",\s*feature\s*=\s*"exact-ft-v11"\)\)\)\]\s*\{\s*"(bouncer-agent-v[0-9]+)"\s*\}\s*\}/g)];
+  const matches = [...direct, ...conditional, ...multiConditional, ...v12Conditional];
   if (matches.length !== 1) throw new Error('cannot find a unique contract source version');
   const version = matches[0][1], binary = Buffer.from(bytes);
   if (!binary.includes(Buffer.from(version))) throw new Error(`WASM does not contain source version ${version}; rebuild the artifact`);

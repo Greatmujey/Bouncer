@@ -35,6 +35,21 @@ test('two separate experimental features still check only the default V9 artifac
   assert.throws(() => checkWasmArtifact(wasm('bouncer-agent-v9'), conditional + conditional), /unique/);
 });
 
+test('V12 and V11 feature relationship still checks only the default V9 artifact', () => {
+  const conditional = `pub fn contract_version(&self) -> &'static str {
+    #[cfg(feature = "exact-ft-v12")] { "bouncer-agent-v12-exact-ft-testnet" }
+    #[cfg(all(feature = "exact-ft-v11", not(feature = "exact-ft-v12")))] { "bouncer-agent-v11-exact-ft-testnet" }
+    #[cfg(feature = "youtick-playback-v10")] { "bouncer-agent-v10-youtick-testnet" }
+    #[cfg(not(any(feature = "youtick-playback-v10", feature = "exact-ft-v11")))] { "bouncer-agent-v9" }
+  }`;
+  assert.equal(checkWasmArtifact(wasm('bouncer-agent-v9'), conditional).version, 'bouncer-agent-v9');
+  for (const marker of ['bouncer-agent-v12-exact-ft-testnet', 'bouncer-agent-v11-exact-ft-testnet']) {
+    assert.throws(() => checkWasmArtifact(wasm(marker), conditional), /rebuild/);
+  }
+  assert.throws(() => checkWasmArtifact(wasm('bouncer-agent-v9'), conditional + conditional), /unique/);
+  assert.throws(() => checkWasmArtifact(wasm('bouncer-agent-v9'), conditional.replace('not(feature = "exact-ft-v12")', 'feature = "exact-ft-v12"')), /unique/);
+});
+
 test('checked-in deployment artifact carries the current source marker', () => {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
   const checked = checkWasmArtifact(fs.readFileSync(path.join(root, 'bouncer.wasm')),

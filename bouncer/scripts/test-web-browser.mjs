@@ -568,6 +568,17 @@ async function testOtherWallets() {
       assert.match(messageRequest.message, /login message does not approve a transaction, transfer funds, or add an access key/i);
       assert.match(await mobileFrame.locator('.bouncer-mobile-hint').innerText(), /testnet account.*return to this tab/i);
       assert.equal(await page.locator('.bouncer-mobile-close').getAttribute('aria-label'), 'Cancel NEAR Mobile connection');
+      // The connector fades/slides its entire popup in over 200ms. The QR SVG
+      // can already exist while the underlying page is still visible through
+      // it, making a screenshot undecodable. Wait for the *real* final painted
+      // state rather than weakening the QR check or retrying a bad decode.
+      await page.waitForFunction(() => {
+        const popup = [...document.querySelectorAll('.hot-connector-popup')].find(el => getComputedStyle(el).display !== 'none' && el.querySelector('iframe'));
+        const container = popup?.querySelector('.modal-container');
+        const content = popup?.querySelector('.modal-content');
+        return container && content && Number(getComputedStyle(container).opacity) === 1 &&
+          ![container, content].some(el => el.getAnimations().some(animation => animation.playState === 'running'));
+      });
       // Decode the actual, dark-on-white, CSS-sized Mobile QR. The request is
       // synthetic and the bearer link is kept only in process memory.
       const mobileQr = PNG.sync.read(await mobileFrame.locator('.near-mobile-qr-wrap').screenshot());
