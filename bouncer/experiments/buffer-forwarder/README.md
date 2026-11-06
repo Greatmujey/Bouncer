@@ -38,8 +38,9 @@ reconciliation; never resend an ambiguous action. This does not yet configure
 policy, create an order, install agent keys or pay Buffer. A public view alone
 is not a wallet signature. Bouncer has
 not created an order or quote, contacted the seller's paid workflow, or paid or
-obtained a report. The contract source below is pinned for investigation; it
-is not proof that the live deployment matches that source.
+obtained a report. A later read-only source-build comparison matched the
+deployed contract hash at one FINAL block, as described below; it does not
+establish seller service, audited code or delivery.
 
 `agent/buffer-wallet-spending-plan.mjs` now prepares an additional **unsigned**
 owner review for a locked, exact-intent policy and two distinct, receiver- and
@@ -119,12 +120,18 @@ wallet: future client code must never reuse a reservation to reopen a prompt.
 No Supabase project or production database was created or modified.
 
 [Read-only code comparison 42276988446](https://github.com/Greatmujey/Bouncer/actions/runs/42276988446)
-compared a plain Cargo build of the pinned public Buffer source with the seller's
-code hash at one trusted testnet FINAL block. **They did not match.** The seller
-documents a different `cargo near build non-reproducible-wasm` command, so this
-mismatch does not establish malicious or different source; it means source
-and deployed bytecode equivalence is still unverified. No order, transaction or
-seller HTTP request was made.
+first found that a plain Cargo build did **not** match the deployed code hash.
+Using the seller-documented `cargo near build non-reproducible-wasm` command,
+[run 42277687212](https://github.com/Greatmujey/Bouncer/actions/runs/42277687212)
+built the pinned public source at `Chima30/buffer@9bc5ef0cbdc84074e94995cb50d334fc615f9b96`
+with Rust 1.93.0, the pinned lockfile and cargo-near 0.22.0. Its **419,506-byte**
+WASM had SHA-256 `f835dd7f6c87dc3b4f3686ce8fa79c978ae721f1748693fc3c38af567be76edd`,
+matching the seller's NEAR code hash `HhukNLoRAK77ZL2iqGaH7m4hhk4Wu3owxH5sxkRK5pnG`
+at trusted-RPC FINAL block `AdT714jZpAgRCcJnckiTocxBkoV7mxQ6B3UYVPuVAyNw`
+(height 276,526,470). This establishes a hash match for that build and block,
+not a code audit, future code pin, service availability, payment or delivery.
+The contract self-reported its repository but no build information. No order,
+transaction or seller HTTP request was made.
 
 ## Why a separate forwarder
 
@@ -186,9 +193,11 @@ correlate **already-recorded** original FINAL transaction hashes with historical
 vault, adapter, token and seller code/intent/order views, the seller's payment
 and fulfillment events, and the SHA-256 of a separately retained report. The
 inspector is testnet-only and requires the reviewed V12 and Circle token code
-pins. The seller code hash and fulfillment signer are separately reviewed pins,
-not proof that deployed code matches public source. Buffer's published agent can
-be a 64-hex implicit account, which does not encode a network: the receipt
+pins. The seller code hash and fulfillment signer are separately reviewed pins;
+the inspector itself does not establish source equivalence. The separate build
+comparison above establishes a match only for its observed block. Buffer's
+published agent can be a 64-hex implicit account, which does not encode a
+network: the receipt
 lookup explicitly opts in and separately checks the RPC reports testnet. The
 pinned seller configuration and fulfillment transaction must still name exactly
 that signer. The evidence contains an output hash, **not** the private brief,
@@ -218,8 +227,8 @@ Buffer, create an order, sign, broadcast, notify the seller or retry. The
 accompanying API offers a separate, fixed-origin private-order GET; that GET
 contacts Buffer and discloses the bearer token to Buffer, so use it only
 intentionally and never log the URL. HTTP response provenance, independent seller
-fulfillment, report accuracy and deployed-source equivalence remain unproven.
-A missing receipt is unknown, not permission to resend. The correlator also
+fulfillment, report accuracy and source equivalence at a later execution block
+remain unproven. A missing receipt is unknown, not permission to resend. The correlator also
 passed against actual isolated nearcore receipt graphs in the source-built
 sandbox described below; that remains different from real seller delivery.
 
