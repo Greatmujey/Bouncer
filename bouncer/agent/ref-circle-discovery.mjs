@@ -97,6 +97,12 @@ export async function inspectRefCirclePaths({ provider, now = Date.now } = {}) {
     page.data.forEach((p, i) => { const pool = simplePool(p, page.offset + i); if (pool) pools.push(pool); });
   }
   const { routes, directCount, pairCount } = sortedRoutes(pools);
+  // This inventory is discovery only: the other token may be a valueless
+  // unaudited mock and a pool's existence says nothing about executable price.
+  const circlePairs = pools.filter(p => p.tokens.includes(CIRCLE)).map(p => {
+    const i = p.tokens.indexOf(CIRCLE);
+    return { pool_id: p.id, other_token: p.tokens[1 - i], circle_reserve_atoms: p.amounts[i] };
+  });
   const selected = routes.slice(0, MAX_PATHS);
   const quotations = await mapLimit(selected, 5, async route => {
     try {
@@ -118,6 +124,7 @@ export async function inspectRefCirclePaths({ provider, now = Date.now } = {}) {
     observed_at: new Date(end).toISOString(), pools_total: total, pools_scanned: limit,
     failed_page_offsets: missing.slice(0, 20), failed_page_count: missing.length,
     enumeration_complete: limit === total && missing.length === 0, simple_pools_valid: pools.length,
+    circle_pair_count: circlePairs.length, circle_pairs_truncated: circlePairs.length > 30, circle_pairs: circlePairs.slice(0, 30),
     direct_paths_observed: directCount, total_direct_and_two_hop_paths_observed: directCount + pairCount,
     representative_paths_pre_ranked: routes.length, paths_quoted: selected.length,
     paths_truncated: directCount + pairCount > selected.length,

@@ -32,6 +32,7 @@ test('finds and quotes only representative testnet direct and two-hop paths at o
   const f = fixture(), result = await inspectRefCirclePaths(f);
   assert.equal(result.enumeration_complete, true); assert.equal(result.pools_total, 5); assert.equal(result.simple_pools_valid, 3);
   assert.equal(result.direct_paths_observed, 1); assert.equal(result.total_direct_and_two_hop_paths_observed, 2);
+  assert.equal(result.circle_pair_count, 2); assert.deepEqual(result.circle_pairs.map(x => x.other_token), [WRAP, MIDDLE]);
   assert.equal(result.top_indicative_paths[0].output_atoms, '7000000');
   assert.deepEqual(result.top_indicative_paths[0].pool_ids, [1, 2]);
   assert.deepEqual(result.top_indicative_paths[0].tokens, [WRAP, MIDDLE, CIRCLE]);
