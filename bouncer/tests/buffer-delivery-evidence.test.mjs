@@ -179,6 +179,23 @@ test('historical preparation does not authorize spending and requires separately
     openingHash: f.opening.txHash, fulfillmentHash: f.fulfillment.txHash, privateOrder: f.privateOrder, provider }), /testnet/);
 });
 
+test('a separately pinned implicit Buffer agent can be correlated only with its exact fulfillment and config', async () => {
+  const f = await fixture();
+  const implicit = '26f36567c9a7bd63f340c0c48621ee1257ee28c68211736226caf4efefb8dd84';
+  f.pins.fulfillment_signer = implicit;
+  f.fulfillment.result.transaction.signer_id = implicit;
+  f.fulfillment.result.transaction_outcome.outcome.executor_id = implicit;
+  f.fulfillment.result.receipts[0].predecessor_id = implicit;
+  f.snapshots.seller_config.view.agent = implicit;
+  const result = await verifyBufferDeliveryEvidence(f);
+  assert.equal(result.report_hash_matches_onchain_commitment, true);
+  assert.equal(result.independent_fulfillment_verified, false);
+  const changed = structuredClone(f); changed.snapshots.seller_config.view.agent = '00'.repeat(32);
+  await assert.rejects(verifyBufferDeliveryEvidence(changed), /seller order or agent state differs/);
+  changed.snapshots.seller_config.view.agent = implicit; changed.pins.fulfillment_signer = implicit.toUpperCase();
+  await assert.rejects(prepareBufferDeliveryEvidence(changed.terms, changed.pins), /invalid owner-reviewed/);
+});
+
 test('private order fetch uses one fixed HTTPS origin and never exposes bearer in errors', async () => {
   const token = 'aa'.repeat(24), orderId = '123e4567-e89b-12d3-a456-426614174000'; let calls = 0;
   const data = await fetchBufferPrivateOrder({ orderId, accessToken: token, fetchImpl: async (url, options) => {
@@ -202,8 +219,8 @@ function historicalProvider(f, options = {}) {
   }
   return { calls,
     async viewNodeStatus() { calls.push(['status']); return { chain_id: options.chain ?? 'testnet' }; },
-    async txStatusReceipts(hash, signer, wait) {
-      calls.push(['receipt', hash, signer, wait]); const entry = [f.funding, f.opening, f.fulfillment].find(x => x.txHash === hash);
+    async txStatusReceipts(hash, signer, wait, lookupOptions) {
+      calls.push(['receipt', hash, signer, wait, lookupOptions]); const entry = [f.funding, f.opening, f.fulfillment].find(x => x.txHash === hash);
       if (!entry || entry.result.transaction.signer_id !== signer || wait !== 'FINAL' || options.missingReceipt) throw Error('unknown');
       return structuredClone(entry.result);
     },
@@ -239,6 +256,7 @@ test('testnet inspector collects only the three originals and pinned historical 
   assert.equal(proof.network, 'testnet'); assert.equal(proof.historical_views_collected, true);
   assert.equal(proof.seller_contacted_by_inspector, false); assert.equal(proof.independent_fulfillment_verified, false);
   assert.equal(provider.calls.filter(c => c[0] === 'receipt').length, 3);
+  assert.deepEqual(provider.calls.find(c => c[0] === 'receipt' && c[1] === f.fulfillment.txHash)[4], { allowImplicitTestnet: true });
   assert(provider.calls.every(c => ['status', 'receipt', 'block', 'query', 'view'].includes(c[0])));
   assert(provider.calls.filter(c => c[0] === 'query').every(c => ['view_account', 'view_access_key_list'].includes(c[1].request_type) && c[1].block_id));
   assert(provider.calls.filter(c => c[0] === 'view').every(c => c[4]));

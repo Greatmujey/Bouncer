@@ -76,8 +76,12 @@ vault, adapter, token and seller code/intent/order views, the seller's payment
 and fulfillment events, and the SHA-256 of a separately retained report. The
 inspector is testnet-only and requires the reviewed V12 and Circle token code
 pins. The seller code hash and fulfillment signer are separately reviewed pins,
-not proof that deployed code matches public source. The evidence contains an
-output hash, **not** the private brief, report or access token.
+not proof that deployed code matches public source. Buffer's published agent can
+be a 64-hex implicit account, which does not encode a network: the receipt
+lookup explicitly opts in and separately checks the RPC reports testnet. The
+pinned seller configuration and fulfillment transaction must still name exactly
+that signer. The evidence contains an output hash, **not** the private brief,
+report or access token.
 
 For an actual order, privately retain the seller's authorized JSON response and
 prepare a public JSON review with exactly these fields:
@@ -107,6 +111,17 @@ fulfillment, report accuracy and deployed-source equivalence remain unproven.
 A missing receipt is unknown, not permission to resend. The correlator also
 passed against actual isolated nearcore receipt graphs in the source-built
 sandbox described below; that remains different from real seller delivery.
+
+## Current read-only funding and seller preflight
+
+`node scripts/inspect-buffer-live-readiness.mjs` inspects the V12 vault, Circle
+registration, Buffer configuration/products/quote rules, and sample Ref pool
+returns at one trusted-RPC FINAL block. It makes no seller HTTP call, quote,
+order, signature, or send. Any sample is only a raw indication: the custom
+quote can exceed the on-chain minimum; storage, gas, reserves and slippage are
+not covered. It does **not** inspect the two uncertain V3 original histories or
+authorize trading. An implicit seller agent is accepted only in this explicitly
+testnet-pinned inspection. Failures or mixed/stale views remain unknown.
 
 ## Tests and status
 

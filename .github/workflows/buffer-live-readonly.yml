@@ -1,0 +1,45 @@
+# Read-only testnet preflight: no private keys, quotes, signatures or payments.
+name: Independent Buffer funding readiness (read only)
+
+on:
+  push:
+    branches: ['arena/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  snapshot:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[buffer-live-readonly]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: bouncer
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+      - name: Test pinned views and receipt boundaries
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          node --test tests/buffer-live-readiness.test.mjs tests/buffer-delivery-evidence.test.mjs tests/read-only-near-receipts.test.mjs
+      - name: Inspect V12, Buffer and indicative Ref returns at one FINAL block
+        run: |
+          set -euo pipefail
+          node scripts/inspect-buffer-live-readiness.mjs > "$RUNNER_TEMP/buffer-readiness.json"
+          python3 - <<'PY'
+          import json, os
+          p = os.environ['RUNNER_TEMP'] + '/buffer-readiness.json'
+          data = json.load(open(p))
+          s = json.dumps(data, separators=(',', ':'), ensure_ascii=True)
+          assert len(s) < 12000
+          print('::notice title=Buffer read-only readiness::' + s.replace('%','%25').replace('\n','%0A').replace('\r','%0D'))
+          PY
+          { echo '## Independent Buffer: read-only testnet preflight';
+            echo 'One trusted-RPC FINAL block; no seller HTTP call, quote, order, transaction, signature or authorization. Ref values are indications only. Historical owner transaction outcomes remain unknown.';
+            echo '```json'; cat "$RUNNER_TEMP/buffer-readiness.json"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
