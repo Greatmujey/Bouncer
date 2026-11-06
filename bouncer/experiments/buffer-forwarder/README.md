@@ -95,6 +95,23 @@ prompt failed. A separate durable owner-scoped service, authenticated identity,
 receipt reconciliation and recovery flow are still required before wiring a
 wallet prompt to this primitive.
 
+`agent/postgres-wallet-prompt-fence.mjs` is an additional **server-side
+prototype**, tested with a disposable PostgreSQL 17 primary. Cooperating
+processes compete for one owner-wide reservation, which stores the complete
+canonical Buffer spending review and stage commitment before any possible
+prompt. The first recorded original hash is immutable; the database trigger
+also rejects ordinary updates or deletion, and the service checks its critical
+indexes, trigger, row visibility, primary status, fsync and synchronous commit.
+A lost commit acknowledgement is treated as unknown. There is deliberately no
+unlock, expiry, payment, endpoint or wallet call. The required authenticator
+is an injected trust boundary, **not yet implemented**, and the tests use
+synthetic acceptance—not actual wallet control. Local concurrency, corruption
+and lost-ack tests do not establish backup, rollback protection, database
+failover, genuine authorization, current chain state or safe live spending. A
+DB administrator, stale restore, alternate database or bypassing wallet can
+still defeat coordination. No Supabase project or production database was
+created or modified.
+
 ## Why a separate forwarder
 
 The Buffer source receives an exact `ft_transfer_call`, records the token
