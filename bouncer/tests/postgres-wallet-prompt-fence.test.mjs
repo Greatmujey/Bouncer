@@ -8,6 +8,7 @@ import nearApi from 'near-api-js';
 import { buildBufferWalletSpendingPlan } from '../agent/buffer-wallet-spending-plan.mjs';
 import { buildBufferWalletSetup } from '../agent/buffer-wallet-setup-plan.mjs';
 import { wasm as V12, NOW as SETUP_NOW, snapshot as setupSnapshot, fixture as setupFixture } from './buffer-wallet-setup-fixture.mjs';
+import { firstSetupPreflightFixture } from './fixtures/wallet-setup-preflight-provider.mjs';
 import { createPostgresWalletPromptFence, initializePostgresWalletPromptFence } from '../agent/postgres-wallet-prompt-fence.mjs';
 
 // Disposable keys, invented review/transactions and an isolated PostgreSQL
@@ -76,6 +77,8 @@ test('the prototype requires an explicit authenticator and has no wallet or unlo
   assert.deepEqual(Object.keys(f).sort(), ['claimPrompt', 'inspect', 'reconcileSetupOriginal', 'recordOriginalHash', 'reserve']);
   assert.throws(() => createPostgresWalletPromptFence({ pool: { connect() {} }, authenticate: syntheticAuth,
     setupReceiptProvider: {} }), /trusted read-only setup receipt provider/);
+  assert.throws(() => createPostgresWalletPromptFence({ pool: { connect() {} }, authenticate: syntheticAuth,
+    setupPreflightProvider: {} }), /trusted read-only setup preflight provider/);
 });
 
 dbtest('two independent processes atomically reserve at most one prompt per owner', async () => resources(async (db, fence) => {
@@ -108,7 +111,8 @@ setupDbTest('the first setup prompt binds the pinned V12, retained snapshot, own
   const bytes = Buffer.from(V12), owner = newOwner(), ownerKey = key(), snapshot = setupSnapshot();
   snapshot.owner = owner; snapshot.candidate_vault = `vault.${owner}`;
   const review = buildBufferWalletSetup({ snapshot, wasmBytes: V12, nowMs: SETUP_NOW }).review;
-  const fence = createPostgresWalletPromptFence({ pool: db, authenticate: syntheticAuth, setupWasmBytes: bytes });
+  const { provider: setupPreflightProvider, state, blockHash } = firstSetupPreflightFixture({ owner, ownerKey });
+  const fence = createPostgresWalletPromptFence({ pool: db, authenticate: syntheticAuth, setupWasmBytes: bytes, setupPreflightProvider });
   bytes[100] ^= 1; // server retained its own copy before caller mutation
   assert.throws(() => createPostgresWalletPromptFence({ pool: db, authenticate: syntheticAuth, setupWasmBytes: bytes }), /pinned V12/);
   const request = { review, setupSnapshot: snapshot, trustedReviewHash: review.review_sha256,
@@ -122,10 +126,16 @@ setupDbTest('the first setup prompt binds the pinned V12, retained snapshot, own
   const read = { owner, ownerPublicKey: ownerKey, evidence: 'synthetic-auth' };
   assert.equal((await fence.inspect(read)).stage_id, 'create_keyless_vault');
   await assert.rejects(noArtifact.inspect(read), error => error.code === 'CORRUPT');
-  const claim = await fence.claimPrompt({ owner, ownerPublicKey: ownerKey, operationId: reservation.operation_id,
+  const claimArgs = { owner, ownerPublicKey: ownerKey, operationId: reservation.operation_id,
     reviewSha256: review.review_sha256, stageId: 'create_keyless_vault',
-    actionCommitmentSha256: review.stages[0].action_commitment_sha256, evidence: 'synthetic-auth' });
+    actionCommitmentSha256: review.stages[0].action_commitment_sha256, evidence: 'synthetic-auth' };
+  const noPreflight = createPostgresWalletPromptFence({ pool: db, authenticate: syntheticAuth, setupWasmBytes: V12 });
+  await assert.rejects(noPreflight.claimPrompt(claimArgs), error => error.code === 'SETUP_PREFLIGHT_UNAVAILABLE');
+  assert.equal((await fence.inspect(read)).claim_status, 'AVAILABLE');
+  const claim = await fence.claimPrompt(claimArgs);
   assert.equal(claim.status, 'PROMPT_CLAIMED_NO_HASH'); assert.equal(claim.execution_authorized, false);
+  assert.equal(claim.preflight_block_hash, blockHash);
+  assert.ok(state.calls.length > 10, 'fresh same-block reads happen before the claim');
   const recorded = await fence.recordOriginalHash({ ...read, operationId: reservation.operation_id, originalHash: hash(23) });
   assert.equal(recorded.original_hash, hash(23));
   assert.deepEqual(recorded.review, review); assert.deepEqual(recorded.setup_snapshot, snapshot);
@@ -135,6 +145,87 @@ setupDbTest('the first setup prompt binds the pinned V12, retained snapshot, own
     forwarder_agent_gas_allowance_yocto: '200000000000000000000000' }).review;
   await assert.rejects(fence.reserve({ review: spending, trustedReviewHash: spending.review_sha256, trustedOwnerPublicKey: ownerKey,
     stageId: stage, evidence: 'synthetic-auth' }), error => error.code === 'OWNER_FENCED');
+}));
+
+setupDbTest('first setup claims fail closed on stale, changed or unavailable same-block chain state', async () => resources(async db => {
+  const owner = newOwner(), ownerKey = key(), snapshot = setupSnapshot();
+  snapshot.owner = owner; snapshot.candidate_vault = `vault.${owner}`;
+  const review = buildBufferWalletSetup({ snapshot, wasmBytes: V12, nowMs: SETUP_NOW }).review;
+  const { provider, state } = firstSetupPreflightFixture({ owner, ownerKey });
+  const fence = createPostgresWalletPromptFence({ pool: db, authenticate: syntheticAuth, setupWasmBytes: V12, setupPreflightProvider: provider });
+  const reserved = await fence.reserve({ review, setupSnapshot: snapshot, trustedReviewHash: review.review_sha256,
+    trustedOwnerPublicKey: ownerKey, stageId: 'create_keyless_vault', evidence: 'synthetic-auth' });
+  const args = { owner, ownerPublicKey: ownerKey, operationId: reserved.operation_id, reviewSha256: review.review_sha256,
+    stageId: 'create_keyless_vault', actionCommitmentSha256: review.stages[0].action_commitment_sha256, evidence: 'synthetic-auth' };
+  const read = { owner, ownerPublicKey: ownerKey, evidence: 'synthetic-auth' };
+  await assert.rejects(fence.claimPrompt({ ...args, evidence: 'bad' }), e => e.code === 'UNAUTHENTICATED');
+  await assert.rejects(fence.claimPrompt({ ...args, reviewSha256: '0'.repeat(64) }), e => e.code === 'MISMATCH');
+  assert.deepEqual(state.calls, [], 'invalid authentication or retained identity is rejected before RPC');
+  const cases = [
+    { apply: () => { state.ownerKey.permission = { FunctionCall: {} }; }, reset: () => { state.ownerKey.permission = 'FullAccess'; }, code: 'SETUP_PREFLIGHT_BLOCKED' },
+    { apply: () => { state.ownerTokens = '19999999'; }, reset: () => { state.ownerTokens = '20000000'; }, code: 'SETUP_PREFLIGHT_BLOCKED' },
+    { apply: () => { state.seller.code_hash = hash(77); }, reset: () => { state.seller.code_hash = hash(5); }, code: 'SETUP_PREFLIGHT_BLOCKED' },
+    { apply: () => { state.fail.add('ownerKey'); }, reset: () => state.fail.delete('ownerKey'), code: 'SETUP_PREFLIGHT_BLOCKED' },
+    { apply: () => { state.blockAgeMs = 200_000; }, reset: () => { state.blockAgeMs = 0; }, code: 'SETUP_PREFLIGHT_UNAVAILABLE' },
+    { apply: () => { state.network = 'mainnet'; }, reset: () => { state.network = 'testnet'; }, code: 'SETUP_PREFLIGHT_UNAVAILABLE' },
+  ];
+  for (const item of cases) {
+    item.apply();
+    await assert.rejects(fence.claimPrompt(args), e => e.code === item.code && !e.message.includes('private'));
+    assert.equal((await fence.inspect(read)).claim_status, 'AVAILABLE');
+    item.reset();
+  }
+  // Provider functions were bound at construction, not reselected from a
+  // later-mutated object. The test RPC state itself remains a trust boundary.
+  provider.viewNodeStatus = async () => ({ chain_id: 'mainnet' });
+  const outcomes = await Promise.allSettled([fence.claimPrompt(args), fence.claimPrompt(args)]);
+  assert.equal(outcomes.filter(x => x.status === 'fulfilled').length, 1);
+  assert.equal(outcomes.find(x => x.status === 'rejected').reason.code, 'ALREADY_CLAIMED');
+  assert.equal((await fence.inspect(read)).claim_status, 'CLAIMED');
+}));
+
+setupDbTest('a newly recorded original during preflight prevents claiming and is never replaced', async () => resources(async db => {
+  const owner = newOwner(), ownerKey = key(), snapshot = setupSnapshot();
+  snapshot.owner = owner; snapshot.candidate_vault = `vault.${owner}`;
+  const review = buildBufferWalletSetup({ snapshot, wasmBytes: V12, nowMs: SETUP_NOW }).review;
+  const { provider, state } = firstSetupPreflightFixture({ owner, ownerKey });
+  const fence = createPostgresWalletPromptFence({ pool: db, authenticate: syntheticAuth, setupWasmBytes: V12, setupPreflightProvider: provider });
+  const reserved = await fence.reserve({ review, setupSnapshot: snapshot, trustedReviewHash: review.review_sha256,
+    trustedOwnerPublicKey: ownerKey, stageId: 'create_keyless_vault', evidence: 'synthetic-auth' });
+  const read = { owner, ownerPublicKey: ownerKey, evidence: 'synthetic-auth' };
+  state.hook = () => fence.recordOriginalHash({ ...read, operationId: reserved.operation_id, originalHash: hash(63) });
+  const args = { ...read, operationId: reserved.operation_id, reviewSha256: review.review_sha256,
+    stageId: 'create_keyless_vault', actionCommitmentSha256: review.stages[0].action_commitment_sha256 };
+  await assert.rejects(fence.claimPrompt(args), e => e.code === 'MISMATCH');
+  const retained = await fence.inspect(read);
+  assert.equal(retained.original_hash, hash(63)); assert.equal(retained.claim_status, 'ORIGINAL_ALREADY_RECORDED');
+  await assert.rejects(fence.recordOriginalHash({ ...read, operationId: reserved.operation_id, originalHash: hash(64) }), e => e.code === 'MISMATCH');
+}));
+
+setupDbTest('a setup claim whose acknowledgement arrives after freshness expires is never returned or retried', async () => resources(async db => {
+  const owner = newOwner(), ownerKey = key(), snapshot = setupSnapshot();
+  snapshot.owner = owner; snapshot.candidate_vault = `vault.${owner}`;
+  const review = buildBufferWalletSetup({ snapshot, wasmBytes: V12, nowMs: SETUP_NOW }).review;
+  const { provider } = firstSetupPreflightFixture({ owner, ownerKey });
+  const normal = createPostgresWalletPromptFence({ pool: db, authenticate: syntheticAuth, setupWasmBytes: V12, setupPreflightProvider: provider });
+  const reserved = await normal.reserve({ review, setupSnapshot: snapshot, trustedReviewHash: review.review_sha256,
+    trustedOwnerPublicKey: ownerKey, stageId: 'create_keyless_vault', evidence: 'synthetic-auth' });
+  let touched = false;
+  const delayed = { async connect() {
+    const c = await db.connect();
+    return { release: c.release.bind(c), async query(sql, values) {
+      if (String(sql).includes('UPDATE bouncer_wallet_prompt_v1.claims SET claimed=true')) touched = true;
+      const result = await c.query(sql, values);
+      if (sql === 'COMMIT' && touched) { touched = false; await new Promise(resolve => setTimeout(resolve, 5_100)); }
+      return result;
+    } };
+  } };
+  const slow = createPostgresWalletPromptFence({ pool: delayed, authenticate: syntheticAuth, setupWasmBytes: V12, setupPreflightProvider: provider });
+  const args = { owner, ownerPublicKey: ownerKey, operationId: reserved.operation_id, reviewSha256: review.review_sha256,
+    stageId: 'create_keyless_vault', actionCommitmentSha256: review.stages[0].action_commitment_sha256, evidence: 'synthetic-auth' };
+  await assert.rejects(slow.claimPrompt(args), e => e.code === 'CLAIM_COMMITTED_PREFLIGHT_STALE' && /do not open or retry/.test(e.message));
+  assert.equal((await normal.inspect({ owner, ownerPublicKey: ownerKey, evidence: 'synthetic-auth' })).claim_status, 'CLAIMED');
+  await assert.rejects(normal.claimPrompt(args), e => e.code === 'ALREADY_CLAIMED');
 }));
 
 setupDbTest('reconciliation reads only the retained setup original and never unlocks a retry or later stage', async () => resources(async db => {
@@ -148,7 +239,9 @@ setupDbTest('reconciliation reads only the retained setup original and never unl
       return observed.result;
     },
   };
-  const fence = createPostgresWalletPromptFence({ pool: db, authenticate: syntheticAuth, setupWasmBytes: V12, setupReceiptProvider: provider });
+  const { provider: setupPreflightProvider } = firstSetupPreflightFixture({ owner, ownerKey });
+  const fence = createPostgresWalletPromptFence({ pool: db, authenticate: syntheticAuth, setupWasmBytes: V12,
+    setupReceiptProvider: provider, setupPreflightProvider });
   const request = { review: f.review, setupSnapshot: f.snapshot, trustedReviewHash: f.trustedReviewHash,
     trustedOwnerPublicKey: ownerKey, stageId: 'create_keyless_vault', evidence: 'synthetic-auth' };
   const reserved = await fence.reserve(request), read = { owner, ownerPublicKey: ownerKey, evidence: 'synthetic-auth' };

@@ -7,6 +7,7 @@ import { nep413Payload } from '../web-src/cli-login.mjs';
 import { buildBufferWalletSpendingPlan } from '../agent/buffer-wallet-spending-plan.mjs';
 import { buildBufferWalletSetup } from '../agent/buffer-wallet-setup-plan.mjs';
 import { wasm as V12, NOW as SETUP_NOW, snapshot as setupSnapshot, fixture as setupFixture } from './buffer-wallet-setup-fixture.mjs';
+import { firstSetupPreflightFixture } from './fixtures/wallet-setup-preflight-provider.mjs';
 import { createPostgresWalletPromptFence, initializePostgresWalletPromptFence } from '../agent/postgres-wallet-prompt-fence.mjs';
 import { createPostgresWalletPromptAuth, initializePostgresWalletPromptAuth } from '../agent/postgres-wallet-prompt-auth.mjs';
 
@@ -161,7 +162,9 @@ setupDbTest('signed NEP-413 challenges bind the first pinned vault-creation rese
       assert.equal(hash, original.trustedOriginalHash); assert.equal(owner, f.owner); assert.equal(finality, 'FINAL');
       return original.result;
     } };
-  const fence = createPostgresWalletPromptFence({ pool: db, authenticate: auth.authenticate, setupWasmBytes: V12, setupReceiptProvider: provider });
+  const { provider: setupPreflightProvider } = firstSetupPreflightFixture({ owner: f.owner, ownerKey: pk(f.ownerKey) });
+  const fence = createPostgresWalletPromptFence({ pool: db, authenticate: auth.authenticate, setupWasmBytes: V12,
+    setupReceiptProvider: provider, setupPreflightProvider });
   const action = { format: f.action.format, network: 'testnet', purpose: 'reserve', owner: f.owner,
     owner_public_key: pk(f.ownerKey), review_sha256: review.review_sha256, stage_id: 'create_keyless_vault',
     action_commitment_sha256: review.stages[0].action_commitment_sha256 };

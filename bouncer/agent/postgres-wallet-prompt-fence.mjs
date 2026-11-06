@@ -7,7 +7,9 @@
  * reserve at most ONE prompt record in this database, ever. A separate
  * claim is committed at most once before a cooperating caller could invoke a
  * wallet; a returned claim cannot prevent a malicious or bypassing caller
- * from invoking a wallet twice. The first public original hash is immutable.
+ * from invoking a wallet twice. The first setup claim additionally requires a
+ * fresh same-block preflight from a configured trusted RPC; that does not
+ * authorize execution or protect later stages. The first public original hash is immutable.
  * A reservation or claim without a hash remains blocked after a crash or lost
  * wallet response, and is never permission to retry.
  *
@@ -27,6 +29,7 @@
 import crypto from 'node:crypto';
 import { verifyBufferSpendingReview } from './buffer-wallet-spending-evidence.mjs';
 import { verifyBufferWalletSetupReview, prepareBufferWalletSetupAttempt, inspectBufferWalletSetupAttempt } from './buffer-wallet-setup-evidence.mjs';
+import { inspectBufferWalletSetupStage } from './buffer-wallet-setup-preflight.mjs';
 import { V12_EXPECTED_BYTES, V12_EXPECTED_SHA256 } from './keyless-vault-v12-readiness.mjs';
 import { isTestnetAccount } from '../shared/account-id.mjs';
 import { isTransactionHash } from '../shared/direct-payment-settlement.mjs';
@@ -75,6 +78,12 @@ const SPENDING_STAGES = Object.freeze(['configure_buffer_locked_policy', 'instal
 const SETUP_STAGE = 'create_keyless_vault';
 const STAGES = Object.freeze([...SPENDING_STAGES, SETUP_STAGE]);
 const SETUP_RECORD = 'bouncer-buffer-setup-fence-review-v1';
+// A fresh FINAL-block profile is still only a trusted RPC snapshot. Limit the
+// time between completing it and committing the first claim; chain state can
+// change even within this window, and it is not live execution authority.
+const MAX_SETUP_PREFLIGHT_AGE_MS = 5_000;
+const PREFLIGHT_METHODS = ['viewNodeStatus', 'viewBlock', 'viewAccount', 'viewAccessKey', 'viewAccessKeyList',
+  'viewTestnetAccountPresenceAt', 'callFunctionRaw', 'experimental_protocolConfig'];
 const hex32 = x => typeof x === 'string' && /^[a-f0-9]{32}$/.test(x);
 const digest = x => typeof x === 'string' && /^[a-f0-9]{64}$/.test(x);
 const plain = x => x !== null && typeof x === 'object' && !Array.isArray(x);
@@ -286,7 +295,7 @@ function requiredOwner(owner, ownerPublicKey) {
  * No production authenticator is supplied here. The caller must also protect
  * its browser/server channel, credentials, backups and trusted RPC.
  */
-export function createPostgresWalletPromptFence({ pool, authenticate, setupWasmBytes, setupReceiptProvider } = {}) {
+export function createPostgresWalletPromptFence({ pool, authenticate, setupWasmBytes, setupReceiptProvider, setupPreflightProvider } = {}) {
   if (!pool || typeof pool.connect !== 'function' || typeof authenticate !== 'function') throw new Error('PostgreSQL pool and owner authenticator required');
   // Copy the pinned artifact once into server-owned memory. It is never sent
   // to the database or returned to a browser by this prototype.
@@ -297,6 +306,14 @@ export function createPostgresWalletPromptFence({ pool, authenticate, setupWasmB
   }
   const readStatus = setupReceiptProvider?.viewNodeStatus.bind(setupReceiptProvider);
   const readReceipts = setupReceiptProvider?.txStatusReceipts.bind(setupReceiptProvider);
+  if (setupPreflightProvider !== undefined && (!pinnedSetupWasm || !setupPreflightProvider ||
+      PREFLIGHT_METHODS.some(method => typeof setupPreflightProvider[method] !== 'function'))) {
+    throw new Error('pinned V12 bytes and a trusted read-only setup preflight provider are required');
+  }
+  // Bind the configured provider once. A browser cannot supply or replace it,
+  // a method or the seller-code pin as part of a claim request.
+  const preflightProvider = setupPreflightProvider && Object.freeze(Object.fromEntries(
+    PREFLIGHT_METHODS.map(method => [method, setupPreflightProvider[method].bind(setupPreflightProvider)])));
   async function authorize(action, evidence) {
     let accepted = false;
     try { accepted = await authenticate({ action: Object.freeze(action), evidence }); } catch { /* fail closed */ }
@@ -355,30 +372,78 @@ export function createPostgresWalletPromptFence({ pool, authenticate, setupWasmB
       });
     },
 
-    /** One durable claim is available for a newly reserved prompt. A caller
-     * must never retry after a lost claim acknowledgement or wallet result.
-     * No wallet is invoked here, and a claim is NOT live spending authority. */
+    /** One durable claim is available for a newly reserved prompt. The first
+     * setup stage requires a newly completed same-block preflight immediately
+     * before the claim. Spending stages do not yet have this integration.
+     * A caller must never retry after a lost claim acknowledgement or wallet
+     * result. No wallet is invoked and a claim is NOT live spending authority. */
     async claimPrompt({ owner, ownerPublicKey, operationId, reviewSha256, stageId, actionCommitmentSha256, evidence } = {}) {
       requiredOwner(owner, ownerPublicKey);
       if (!hex32(operationId) || !digest(reviewSha256) || !STAGES.includes(stageId) || !digest(actionCommitmentSha256)) {
         throw new Error('original operation and exact reviewed action are required');
       }
+      if (stageId === SETUP_STAGE && !preflightProvider) {
+        throw fail('SETUP_PREFLIGHT_UNAVAILABLE', 'a trusted same-block setup preflight is required before claiming the first prompt');
+      }
       await authorize(context('claim_prompt', owner, ownerPublicKey, { operation_id: operationId,
         review_sha256: reviewSha256, stage_id: stageId, action_commitment_sha256: actionCommitmentSha256 }), evidence);
-      return transaction(pool, async client => {
-        await verifySchema(client);
-        const selected = await client.query(`SELECT ${columns} FROM ${SCHEMA}.prompts WHERE owner_account_id=$1 FOR UPDATE`, [owner]);
-        if (selected.rows.length !== 1) throw fail('OWNER_FENCED', 'original prompt reservation missing; stop and reconcile');
-        const row = validatedRow(selected.rows[0], pinnedSetupWasm);
+      const assertMatching = row => {
         if (row.owner_public_key !== ownerPublicKey || row.operation_id !== operationId || row.review_sha256 !== reviewSha256 ||
             row.stage_id !== stageId || row.action_commitment_sha256 !== actionCommitmentSha256 || row.original_hash !== null) {
           throw fail('MISMATCH', 'original prompt, reviewed action or hash differs; stop and reconcile');
         }
+      };
+      let preflight;
+      if (stageId === SETUP_STAGE) {
+        // Do not hold a database lock across network requests. Read the
+        // immutable reservation, then re-read and lock it after the preflight.
+        const retained = await transaction(pool, async client => {
+          await verifySchema(client);
+          const selected = await client.query(`SELECT ${columns} FROM ${SCHEMA}.prompts WHERE owner_account_id=$1`, [owner]);
+          if (selected.rows.length !== 1) throw fail('OWNER_FENCED', 'original prompt reservation missing; stop and reconcile');
+          const row = validatedRow(selected.rows[0], pinnedSetupWasm);
+          assertMatching(row);
+          if (!row.setup_snapshot) throw fail('CORRUPT', 'first setup prompt has no retained snapshot; stop');
+          const status = await claimStatus(client, row);
+          if (status === 'CLAIMED') throw fail('ALREADY_CLAIMED', 'wallet prompt was already claimed; never open it again');
+          if (status === 'LEGACY_NOT_CLAIMABLE') throw fail('LEGACY_NOT_CLAIMABLE', 'legacy prompt may already have been opened; stop and reconcile');
+          if (status !== 'AVAILABLE') throw fail('MISMATCH', 'original setup prompt is not claimable; stop and reconcile');
+          return row;
+        });
+        try {
+          preflight = await inspectBufferWalletSetupStage({ review: retained.review, snapshot: retained.setup_snapshot,
+            wasmBytes: pinnedSetupWasm, trustedReviewHash: reviewSha256, trustedOwnerPublicKey: ownerPublicKey,
+            trustedSellerCodeHash: retained.review.seller_code_hash_observed, stageId, priorOriginals: [], provider: preflightProvider });
+        } catch {
+          throw fail('SETUP_PREFLIGHT_UNAVAILABLE', 'fresh setup preflight is unavailable; no wallet prompt was claimed');
+        }
+        if (preflight.status !== 'READ_ONLY_SETUP_STAGE_PROFILE_MATCH' || preflight.owner !== owner ||
+            preflight.review_sha256 !== reviewSha256 || preflight.stage_id !== stageId ||
+            preflight.seller_code_hash !== retained.review.seller_code_hash_observed ||
+            !Array.isArray(preflight.blockers) || preflight.blockers.length !== 0) {
+          throw fail('SETUP_PREFLIGHT_BLOCKED', 'fresh same-block setup checks did not all pass; no wallet prompt was claimed');
+        }
+      }
+      const assertFreshPreflight = () => {
+        if (!preflight) return;
+        const checked = Date.parse(preflight.checked_at), now = Date.now();
+        if (!Number.isSafeInteger(checked) || !Number.isSafeInteger(now) || now < checked || now - checked > MAX_SETUP_PREFLIGHT_AGE_MS) {
+          throw fail('SETUP_PREFLIGHT_STALE', 'setup preflight expired before the claim; no wallet prompt was claimed');
+        }
+      };
+      assertFreshPreflight();
+      const claimed = await transaction(pool, async client => {
+        await verifySchema(client);
+        const selected = await client.query(`SELECT ${columns} FROM ${SCHEMA}.prompts WHERE owner_account_id=$1 FOR UPDATE`, [owner]);
+        if (selected.rows.length !== 1) throw fail('OWNER_FENCED', 'original prompt reservation missing; stop and reconcile');
+        const row = validatedRow(selected.rows[0], pinnedSetupWasm);
+        assertMatching(row);
         const claims = await client.query(`SELECT owner_account_id,operation_id,claimed,created_at,claimed_at
           FROM ${SCHEMA}.claims WHERE owner_account_id=$1 FOR UPDATE`, [owner]);
         if (claims.rows.length === 0) throw fail('LEGACY_NOT_CLAIMABLE', 'legacy prompt may already have been opened; stop and reconcile');
         if (claims.rows.length !== 1) throw fail('CORRUPT', 'duplicate wallet prompt claims; stop');
         if (checkedClaim(claims.rows[0], row).claimed) throw fail('ALREADY_CLAIMED', 'wallet prompt was already claimed; never open it again');
+        assertFreshPreflight();
         const updated = await client.query(`UPDATE ${SCHEMA}.claims SET claimed=true,claimed_at=pg_catalog.clock_timestamp()
           WHERE owner_account_id=$1 AND operation_id=$2 AND claimed=false
           RETURNING owner_account_id,operation_id,claimed,created_at,claimed_at`, [owner, operationId]);
@@ -389,8 +454,16 @@ export function createPostgresWalletPromptFence({ pool, authenticate, setupWasmB
           action_commitment_sha256: actionCommitmentSha256, status: 'PROMPT_CLAIMED_NO_HASH',
           claimed_at: updated.rows[0].claimed_at.toISOString(), do_not_retry: true, execution_authorized: false,
           wallet_invocation_verified: false, independently_durable: false,
-          scope: 'single database claim only; no wallet invocation, consent, backup or chain state is established' };
+          scope: 'single database claim only; no wallet invocation, consent, backup or future chain state is established',
+          ...(preflight ? { preflight_block_hash: preflight.block_hash, preflight_checked_at: preflight.checked_at,
+            preflight_scope: 'trusted same-block profile only; state can change and is not approval' } : {}) };
       });
+      // If a commit acknowledgement arrives after the freshness window, the
+      // claim may have committed. Do not give it to a caller as usable and do
+      // not claim or open the prompt again, even though no send is known.
+      try { assertFreshPreflight(); }
+      catch { throw fail('CLAIM_COMMITTED_PREFLIGHT_STALE', 'the claim committed after its preflight expired; do not open or retry the prompt'); }
+      return claimed;
     },
 
     async recordOriginalHash({ owner, ownerPublicKey, operationId, originalHash, evidence } = {}) {
