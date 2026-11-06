@@ -87,6 +87,15 @@ jobs:
       # Isolated, lockfile-pinned third-party seller SDK. Its NEAR driver is
       # wrapped only in tests because the published preset is mainnet-only.
       - run: npm ci --prefix interop/piprail --ignore-scripts --legacy-peer-deps --no-audit --no-fund
+      - name: Recover exact public V12 test fixture
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api repos/Greatmujey/Bouncer/git/blobs/16785505eaed13609d8e569e7b1665f89683d9eb --jq .content | base64 --decode > "$RUNNER_TEMP/bouncer-v12.wasm"
+          echo '033f255c5822ff97495809f7d60fddf66f266f20c36285fe71296b66decc6d12  '"$RUNNER_TEMP/bouncer-v12.wasm" | sha256sum -c -
+          echo "BOUNCER_V12_WASM_PATH=$RUNNER_TEMP/bouncer-v12.wasm" >> "$GITHUB_ENV"
       - name: Run JavaScript test suite
         shell: bash
         run: |

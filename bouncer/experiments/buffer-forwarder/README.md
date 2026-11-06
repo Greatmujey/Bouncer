@@ -42,6 +42,18 @@ obtained a report. A later read-only source-build comparison matched the
 deployed contract hash at one FINAL block, as described below; it does not
 establish seller service, audited code or delivery.
 
+`agent/buffer-wallet-setup-evidence.mjs` can separately reconcile the original
+hashes for those three setup batches against receipt-inclusive FINAL data from
+a trusted RPC. It rebuilds the canonical review from the retained historical
+snapshot and the exact pinned V12 artifact, checks the owner key, actions and
+root receipt, and for funding matches the token transfer event, vault callback
+and linked resolver. The historical snapshot is **not** a fresh preflight or
+proof of wallet control. The caller must retain the review digest, snapshot,
+owner key and original hash independently; a missing or ambiguous original is
+not permission to retry. Matches do not verify deployed code/current state,
+wallet approval, seller payment or delivery. These offline checks do not open
+a wallet or implement a prompt fence.
+
 `agent/buffer-wallet-spending-plan.mjs` now prepares an additional **unsigned**
 owner review for a locked, exact-intent policy and two distinct, receiver- and
 method-scoped agent keys. The trial limits are at most 20 test USDC per
