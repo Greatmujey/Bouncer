@@ -79,6 +79,10 @@ async function fixture() {
     outcome('open-receiver', 'escrow-open-block', ESCROW, { SuccessValue: enc('40') }, [], [event('paypercall', 'call_requested', requestEvent)]),
     outcome('open-resolver', 'resolver-block', TOKEN, { SuccessValue: enc('60') }),
   ], enc('60'));
+  // The real token resolver receives the exact receiver promise result by its
+  // data ID, not just any successful sibling receipt.
+  openingResult.receipts[2].receipt.Action.output_data_receivers = [{ receiver_id: TOKEN, data_id: id('open-result') }];
+  openingResult.receipts[3].receipt.Action.input_data_ids = [id('open-result')];
   const answerBytes = Buffer.from('{"token":"wrap.testnet","source":"fixture"}\n'), answerHash = hash(answerBytes);
   const fulfillAction = action('fulfill', { call_id: 7, result_hash: answerHash, result_uri: null }, '0', 250_000_000_000_000);
   const payoutAction = action('ft_transfer', { receiver_id: PROVIDER, amount: '60' }, '1');
@@ -178,6 +182,9 @@ test('one-shot forwarder, escrow message, resolver and original opening event ca
     x => { x.opening.result.receipts_outcome[2].outcome.status = { SuccessValue: enc('0') }; },
     x => { x.opening.result.receipts_outcome[2].outcome.logs.push(x.opening.result.receipts_outcome[2].outcome.logs[0]); },
     x => { x.opening.result.receipts_outcome[3].outcome.status = { SuccessValue: enc('100') }; },
+    x => { x.opening.result.receipts[2].receipt.Action.output_data_receivers = []; },
+    x => { x.opening.result.receipts[2].receipt.Action.output_data_receivers[0].receiver_id = 'other.testnet'; },
+    x => { x.opening.result.receipts[3].receipt.Action.input_data_ids = [id('unrelated-result')]; },
     x => { x.opening.result.receipts.push(structuredClone(x.opening.result.receipts[1])); },
     x => { x.snapshots.adapter_execution.keys.push({ public_key: k() }); },
     x => { x.snapshots.adapter_funding.keys.push({ public_key: k() }); },

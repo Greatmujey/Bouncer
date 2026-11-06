@@ -22,7 +22,8 @@ import nearApi from 'near-api-js';
 import { buildExperimentalForwarder } from '../experiments/paypercall-forwarder/build.mjs';
 import { CIRCLE_TESTNET_USDC as TOKEN } from '../scripts/circle-testnet-setup.mjs';
 import { PAYPERCALL_TESTNET_ESCROW as ESCROW } from '../agent/paypercall-inspect.mjs';
-import { collectPayPerCallHistoricalSnapshots, verifyPayPerCallForwarderEvidence } from '../agent/paypercall-forwarder-evidence.mjs';
+import { collectPayPerCallHistoricalSnapshots, verifyPayPerCallForwarderEvidence,
+  collectPayPerCallReturnSnapshots, verifyPayPerCallForwarderReturn } from '../agent/paypercall-forwarder-evidence.mjs';
 import { loopbackSandboxUrl, withSandboxOnlyFetch } from './v11-sandbox-setup-rpc.mjs';
 import { V11_SHA256, MOCK_FT_SHA256, SANDBOX_SHA256, SANDBOX_CHAIN_ID, readVerifiedFile,
   assertSandboxStatus, requireFinalSuccess } from './v11-sandbox-support.mjs';
@@ -271,13 +272,22 @@ async function exercise({ endpoint, root, tokenOwner, wasm, escrowWasm, upstream
   // leave the fixed forwarder through ft_transfer_call and actually credit the
   // vault ledger. The conservative rolling policy still counts the original
   // 100, even though the provider was paid 60 and 40 were returned. These
-  // are state assertions in a disposable chain, not a public-chain receipt
-  // verifier or proof of an independently delivered answer.
+  // are state and receipt assertions in a disposable chain, not a public-chain
+  // return or proof of an independently delivered answer.
   assert.equal(await ft(VAULT), '0'); assert.equal(await tracked(), '0');
   const answerReturn = await must(answerBridgeAgent, FULFILLED_ADAPTER, 'return_tokens', { amount: '40' }, 0n, 300n * TGAS);
   assert.equal(await ft(FULFILLED_ADAPTER), '0'); assert.equal(await ft(VAULT), '40');
   assert.equal(await tracked(), '40'); assert.equal(await ft(PROVIDER), '60');
   assert.equal(await view(VAULT, 'daily_spent', { policy_id: 'fulfilled' }), '100');
+  const answerReturnReceipts = await provider.txStatusReceipts(answerReturn.transaction_outcome.id, BUYER, 'FINAL');
+  const returnEvidence = { txHash: answerReturn.transaction_outcome.id, result: answerReturnReceipts };
+  const returnArgs = { terms: answerTerms, offer, returned: returnEvidence, amount: '40' };
+  const returnSnapshots = await collectPayPerCallReturnSnapshots({ ...returnArgs, provider });
+  const returnProof = await verifyPayPerCallForwarderReturn({ ...returnArgs, snapshots: returnSnapshots });
+  assert.equal(returnProof.forwarder_to_vault_return_verified, true);
+  assert.equal(returnProof.order_refund_origin_verified, false);
+  assert.equal(returnProof.independent_fulfillment_verified, false);
+  checkpoint('read-only verifier correlated the isolated 40-unit return receipt, vault hook and token resolver');
   // An independently owner-pinned sandbox-only probe has enough actual and
   // tracked funds, but the already consumed daily cap must still block it.
   await must(buyer, VAULT, 'set_exact_ft_intent', { intent_id: 'rolling-cap-probe', policy_id: 'fulfilled',
@@ -296,7 +306,8 @@ async function exercise({ endpoint, root, tokenOwner, wasm, escrowWasm, upstream
     transaction_outcome: { id: result.transaction_outcome?.id, block_hash: result.transaction_outcome?.block_hash,
       outcome: compactOutcome(result.transaction_outcome?.outcome) },
     receipts: result.receipts?.map(r => ({ receipt_id: r.receipt_id, predecessor_id: r.predecessor_id,
-      receiver_id: r.receiver_id, actions: r.receipt?.Action?.actions })),
+      receiver_id: r.receiver_id, actions: r.receipt?.Action?.actions,
+      input_data_ids: r.receipt?.Action?.input_data_ids, output_data_receivers: r.receipt?.Action?.output_data_receivers })),
     receipts_outcome: result.receipts_outcome?.map(o => ({ id: o.id, block_hash: o.block_hash, outcome: compactOutcome(o.outcome) })) });
   return { scope: 'ISOLATED nearcore with PayPerCall compiled from pinned source and an example mock FT; NOT Circle, deployed escrow or seller delivery',
     source_revision: '9159811bc6443ce29ae3c32482d0808f094caa87', source_built_escrow_sha256: upstream.sha256,
@@ -310,14 +321,16 @@ async function exercise({ endpoint, root, tokenOwner, wasm, escrowWasm, upstream
     isolated_fulfillment: { funding_final: true, escrow_open: true, locally_supplied_answer_hash_matched: true,
       detached_mock_token_payout: '60', unused_forwarder_return: '40', final_vault_actual_and_tracked: '40',
       final_forwarder_balance: '0', conservative_rolling_spend: '100', subsequent_intent_blocked_by_daily_cap: true,
-      answer_sha256: hash(answer), independent_receipt_verifier_passed: true, independent_provider_delivery: false },
+      answer_sha256: hash(answer), independent_receipt_verifier_passed: true,
+      return_receipt_verifier_passed: true, return_order_origin_proven: false, independent_provider_delivery: false },
     seller_contacted: false, independent_fulfillment_verified: false,
     local_hashes: { to_forwarder: toAdapter.transaction_outcome.id, opened: opened.transaction_outcome.id,
       partial_return: partial.transaction_outcome.id, rejection: rejected.transaction_outcome.id,
       claim: claim.transaction_outcome.id, late_return: returnLate.transaction_outcome.id,
       answer_funding: answerFunding.transaction_outcome.id, answer_open: answerOpened.transaction_outcome.id,
       answer_fulfillment: fulfilled.transaction_outcome.id, answer_unused_return: answerReturn.transaction_outcome.id },
-    isolated_receipt_graphs: { funding: graph(fundingReceipts), opening: graph(openingReceipts), fulfillment: graph(fulfillmentReceipts) } };
+    isolated_receipt_graphs: { funding: graph(fundingReceipts), opening: graph(openingReceipts),
+      fulfillment: graph(fulfillmentReceipts), returned: graph(answerReturnReceipts) } };
 }
 
 async function main() {

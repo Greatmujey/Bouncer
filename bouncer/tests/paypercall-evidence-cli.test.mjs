@@ -48,6 +48,42 @@ test('CLI reads exact local answer bytes and submits only public fields to a rea
   } finally { t.cleanup(); }
 });
 
+test('optional return inspection uses its original hash and keeps refund origin unproven', async () => {
+  const t = temp(), original = mockHash('test-only-return'); let output = '', returnCalls = 0;
+  try {
+    const provider = {};
+    await main(['--rpc', 'https://rpc.testnet.near.org', '--review', t.review, '--answer', t.answer,
+      '--return-hash', original, '--return-amount', '40'], {
+      createProvider() { return provider; },
+      async inspect() { return { status: 'synthetic order' }; },
+      async inspectReturn(request) {
+        returnCalls++; assert.equal(request.provider, provider); assert.equal(request.returnHash, original);
+        assert.equal(request.amount, '40');
+        return { status: 'synthetic return', order_refund_origin_verified: false };
+      }, print(text) { output += text; },
+    });
+    assert.equal(returnCalls, 1); assert.match(output, /synthetic return/);
+    assert.equal(JSON.parse(output).same_order_refund_origin_verified, false);
+    assert(!output.includes('local fixture answer'));
+  } finally { t.cleanup(); }
+});
+
+test('unpaired, malformed, duplicate or over-cap return flags fail before creating an RPC provider', async () => {
+  const t = temp(); let calls = 0;
+  const opts = { createProvider() { calls++; return {}; }, async inspect() { calls++; }, print() {} };
+  const base = ['--rpc', 'https://rpc.testnet.near.org', '--review', t.review, '--answer', t.answer];
+  try {
+    const original = mockHash('test-only-return');
+    for (const extra of [['--return-hash', original], ['--return-amount', '40'],
+      ['--return-hash', 'bad', '--return-amount', '40'], ['--return-hash', original, '--return-amount', '101'],
+      ['--return-hash', original, '--return-amount', '01'],
+      ['--return-hash', JSON.parse(fs.readFileSync(t.review)).funding_hash, '--return-amount', '40']]) {
+      await assert.rejects(main([...base, ...extra], opts));
+    }
+    assert.equal(calls, 0);
+  } finally { t.cleanup(); }
+});
+
 test('malformed reviews, extra secret-like fields and invalid files stop before the RPC provider is created', async () => {
   const t = temp(); let calls = 0;
   const opts = { createProvider() { calls++; return {}; }, async inspect() { calls++; }, print() {} };

@@ -106,6 +106,15 @@ function root(g, { signer, receiver, publicKey, method, args }) {
 function linked(parent, child) {
   if (!parent?.outcome?.receipt_ids?.includes(child?.receipt?.receipt_id)) throw new Error('receipt is not linked to its parent');
 }
+// The token resolver must consume the result of this exact receiver call. Two
+// sibling receipts with plausible arguments are not sufficient evidence.
+function linkedPromiseResult(receiver, resolver, token) {
+  const outputs = receiver?.receipt?.receipt?.Action?.output_data_receivers;
+  const inputs = resolver?.receipt?.receipt?.Action?.input_data_ids;
+  if (!Array.isArray(outputs) || outputs.length !== 1 || outputs[0]?.receiver_id !== token ||
+      !isTransactionHash(outputs[0]?.data_id) || !Array.isArray(inputs) || inputs.length !== 1 ||
+      inputs[0] !== outputs[0].data_id) throw new Error('receiver result is not linked to the token resolver');
+}
 function oneEvent(item, standard, name) {
   const found = [];
   for (const line of item?.outcome?.logs ?? []) {
@@ -224,7 +233,7 @@ function openingGraph(prepared, txHash, result) {
     throw new Error('escrow opening event differs from the reviewed request');
   }
   const resolver = oneReceipt(g, r.token, r.token, 'ft_resolve_transfer');
-  linked(transfer.item, resolver);
+  linked(transfer.item, resolver); linkedPromiseResult(receive, resolver, r.token);
   if (transfer.item.outcome.status?.SuccessReceiptId !== resolver.receipt.receipt_id || !success(resolver.item.outcome.status) ||
       resolver.item.outcome.status.SuccessValue !== result.status.SuccessValue ||
       json(result.status.SuccessValue, 'resolved used amount') !== prepared.offer.price) {
@@ -326,6 +335,73 @@ export async function verifyPayPerCallForwarderEvidence({ terms, offer, funding,
     scope: 'caller-supplied historical views and FINAL receipt graphs trusted; order-specific unaudited forwarder, fungible tokens and block-level snapshots do not establish answer provenance, accuracy or independent delivery' };
 }
 
+// A return transaction is deliberately inspected separately from the earlier
+// order: fungible token receipts do not prove where these particular units came
+// from. The original retained return hash is mandatory; no retry is implied.
+function returnGraph(prepared, txHash, result, amount) {
+  const r = prepared.review;
+  if (!positive(amount) || BigInt(amount) > BigInt(r.amount)) throw new Error('invalid reviewed return amount');
+  const g = graph(result, txHash);
+  const initial = root(g, { signer: r.owner, receiver: r.adapter, publicKey: r.forwarder_agent_public_key,
+    method: 'return_tokens', args: { amount } });
+  const transfer = oneReceipt(g, r.adapter, r.token, 'ft_transfer_call');
+  linked(initial.item, transfer);
+  const msg = 'bouncer:forwarder-return';
+  if (initial.item.outcome.status?.SuccessReceiptId !== transfer.receipt.receipt_id || String(transfer.action.deposit) !== '1' ||
+      !equal(json(transfer.action.args, 'return transfer arguments'),
+        { receiver_id: r.vault, amount, memo: msg, msg })) throw new Error('fixed forwarder return call differs');
+  transferEvent(transfer.item, r.adapter, r.vault, amount, msg);
+  const receive = oneReceipt(g, r.token, r.vault, 'ft_on_transfer');
+  const resolver = oneReceipt(g, r.token, r.token, 'ft_resolve_transfer');
+  linked(transfer.item, receive); linked(transfer.item, resolver); linkedPromiseResult(receive, resolver, r.token);
+  if (String(receive.action.deposit) !== '0' || !equal(json(receive.action.args, 'vault receiver arguments'),
+        { sender_id: r.adapter, amount, msg }) || !success(receive.item.outcome.status) ||
+      json(receive.item.outcome.status.SuccessValue, 'vault unused amount') !== '0' ||
+      !receive.item.outcome.logs.includes('BOUNCER deposit received')) {
+    throw new Error('vault return callback is not established');
+  }
+  if (transfer.item.outcome.status?.SuccessReceiptId !== resolver.receipt.receipt_id ||
+      String(resolver.action.deposit) !== '0' || !equal(json(resolver.action.args, 'return resolver arguments'),
+        { sender_id: r.adapter, receiver_id: r.vault, amount }) || !success(resolver.item.outcome.status) ||
+      resolver.item.outcome.status.SuccessValue !== result.status.SuccessValue ||
+      json(result.status.SuccessValue, 'return resolved amount') !== amount) {
+    throw new Error('token resolver did not confirm the complete vault return');
+  }
+  return { txBlock: result.transaction_outcome.block_hash, adapterBlock: initial.item.block_hash,
+    tokenBlock: transfer.item.block_hash, vaultBlock: receive.item.block_hash, resolverBlock: resolver.item.block_hash,
+    vaultReceiptId: receive.receipt.receipt_id, resolverReceiptId: resolver.receipt.receipt_id };
+}
+
+/** Correlate a previously retained forwarder-to-vault return receipt and
+ * historical code/key snapshots. Caller-supplied snapshots/graphs can be
+ * synthetic; use the read-only inspector below for a testnet RPC lookup.
+ * A return is not proof of order-specific refund origin or seller delivery. */
+export async function verifyPayPerCallForwarderReturn({ terms, offer, returned, amount, snapshots } = {}) {
+  const prepared = await preparePayPerCallEvidence(terms, offer), r = prepared.review;
+  if (!obj(returned) || !obj(snapshots)) throw new Error('original return receipt and snapshots required');
+  const ret = returnGraph(prepared, returned.txHash, returned.result, amount);
+  keylessAt(snapshots.forwarder_transaction, ret.txBlock, prepared.adapterCodeHash);
+  keylessAt(snapshots.forwarder_execution, ret.adapterBlock, prepared.adapterCodeHash);
+  keylessAt(snapshots.vault_callback, ret.vaultBlock, prepared.offer.vault_code_hash);
+  codeAt(snapshots.token_states, ret.tokenBlock, prepared.offer.token_code_hash);
+  codeAt(snapshots.token_states, ret.resolverBlock, prepared.offer.token_code_hash);
+  const txBlock = blockAt(snapshots.blocks, ret.txBlock), adapterBlock = blockAt(snapshots.blocks, ret.adapterBlock);
+  const tokenBlock = blockAt(snapshots.blocks, ret.tokenBlock), vaultBlock = blockAt(snapshots.blocks, ret.vaultBlock);
+  const resolverBlock = blockAt(snapshots.blocks, ret.resolverBlock);
+  if (txBlock.height > adapterBlock.height || adapterBlock.height > tokenBlock.height ||
+      tokenBlock.height > vaultBlock.height || vaultBlock.height > resolverBlock.height) {
+    throw new Error('return receipt block order is not established');
+  }
+  return { status: 'VAULT_RETURN_RECEIPTS_CORRELATED', network_assumption: 'testnet', review_sha256: r.review_sha256,
+    return_tx_hash: returned.txHash, forwarder: r.adapter, vault: r.vault, token: r.token, returned_atoms: amount,
+    vault_callback_receipt_id: ret.vaultReceiptId, token_resolver_receipt_id: ret.resolverReceiptId,
+    forwarder_to_vault_return_verified: true, order_refund_origin_verified: false, rolling_budget_restoration_verified: false,
+    seller_http_delivery_verified: false, independent_fulfillment_verified: false,
+    deployed_source_equivalence_verified: false, agent_key_permission_verified: false,
+    signed: false, sent: false, retry_authorized: false, do_not_resend_original: true,
+    scope: 'caller-supplied historical code/key snapshots and FINAL receipts trusted; this proves neither refund provenance nor absence of other same-block activity, seller delivery, an audit or source/build equivalence' };
+}
+
 async function limitedMap(items, operation, limit = 4) {
   const results = Array(items.length); let next = 0;
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
@@ -337,6 +413,65 @@ async function limitedMap(items, operation, limit = 4) {
   return results;
 }
 const unique = values => [...new Set(values)];
+
+/** Collect the code, key and block views for one already-observed return.
+ * This low-level collector accepts a caller-supplied provider and graph; it
+ * neither checks network identity nor fetches or submits a transaction. */
+export async function collectPayPerCallReturnSnapshots({ terms, offer, returned, amount, provider } = {}) {
+  const prepared = await preparePayPerCallEvidence(terms, offer), r = prepared.review;
+  if (!obj(returned) || !provider || ['query', 'viewBlock'].some(k => typeof provider[k] !== 'function')) {
+    throw new Error('original return and read-only historical provider required');
+  }
+  const ret = returnGraph(prepared, returned.txHash, returned.result, amount);
+  const blockIds = unique([ret.txBlock, ret.adapterBlock, ret.tokenBlock, ret.vaultBlock, ret.resolverBlock]);
+  if (blockIds.some(h => !isTransactionHash(h))) throw new Error('historical return block is unavailable');
+  const blocks = await limitedMap(blockIds, async hash => {
+    const b = await provider.viewBlock({ blockId: hash });
+    if (b?.header?.hash !== hash || !isTransactionHash(b.header.prev_hash) ||
+        !Number.isSafeInteger(b.header.height) || b.header.height < 1) throw new Error('historical return block differs');
+    return { header: { hash, prev_hash: b.header.prev_hash, height: b.header.height } };
+  });
+  async function accountAt(account, blockHash, keys = false) {
+    const query = request_type => provider.query({ request_type, account_id: account, block_id: blockHash });
+    const [accountView, keyView] = await Promise.all([query('view_account'), keys ? query('view_access_key_list') : Promise.resolve(null)]);
+    if (accountView?.block_hash !== blockHash || !isTransactionHash(accountView.code_hash) ||
+        (keys && (keyView?.block_hash !== blockHash || !Array.isArray(keyView.keys)))) {
+      throw new Error('historical return account query differs');
+    }
+    return keys ? { block_hash: blockHash, code_hash: accountView.code_hash, keys: keyView.keys } :
+      { block_hash: blockHash, code_hash: accountView.code_hash };
+  }
+  const tokenBlocks = unique([ret.tokenBlock, ret.resolverBlock]);
+  const tasks = [
+    ['forwarder_transaction', () => accountAt(r.adapter, ret.txBlock, true)],
+    ['forwarder_execution', () => accountAt(r.adapter, ret.adapterBlock, true)],
+    ['vault_callback', () => accountAt(r.vault, ret.vaultBlock, true)],
+    ...tokenBlocks.map(block => [`token:${block}`, () => accountAt(r.token, block)]),
+  ];
+  const entries = await limitedMap(tasks, async ([name, get]) => [name, await get()]);
+  const map = new Map(entries), snapshots = Object.fromEntries(entries.filter(([name]) => !name.includes(':')));
+  snapshots.blocks = blocks;
+  snapshots.token_states = tokenBlocks.map(block => map.get(`token:${block}`));
+  return snapshots;
+}
+
+/** Look up exactly the retained return hash on a read-only testnet RPC. The
+ * reviewed Circle token hash is required; unavailable history stays UNKNOWN.
+ * A successful return does not authorize a retry or prove an order's refund. */
+export async function inspectPayPerCallForwarderReturn({ terms, offer, returnHash, amount, provider } = {}) {
+  const prepared = await preparePayPerCallEvidence(terms, offer), r = prepared.review;
+  if (prepared.offer.token_code_hash !== CIRCLE_TESTNET_REVIEWED_CODE_HASH || !isTransactionHash(returnHash) ||
+      !positive(amount) || BigInt(amount) > BigInt(r.amount) || !provider ||
+      ['viewNodeStatus', 'txStatusReceipts', 'query', 'viewBlock'].some(k => typeof provider[k] !== 'function')) {
+    throw new Error('reviewed Circle testnet code, original return hash and read-only provider are required');
+  }
+  if ((await provider.viewNodeStatus())?.chain_id !== 'testnet') throw new Error('RPC must report testnet');
+  const returned = { txHash: returnHash, result: await provider.txStatusReceipts(returnHash, r.owner, 'FINAL') };
+  const snapshots = await collectPayPerCallReturnSnapshots({ terms, offer: prepared.offer, returned, amount, provider });
+  const proof = await verifyPayPerCallForwarderReturn({ terms, offer: prepared.offer, returned, amount, snapshots });
+  return { ...proof, network: 'testnet', historical_views_collected: true, operator_contacted: false,
+    rpc_trust: 'testnet and historical blocks reported by the caller-selected RPC; not consensus proofs' };
+}
 
 /** Collect historic views for already-received receipts. This is a low-level,
  * strictly read-only collector, not chain identity verification; the caller
