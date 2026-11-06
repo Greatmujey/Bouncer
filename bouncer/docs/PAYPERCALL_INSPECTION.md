@@ -149,9 +149,10 @@ isolated fulfilled scenario, state checks showed 40 unused mock units returned
 to the vault and a new 40-unit intent blocked by the still-full 100-unit rolling
 budget. A [newer isolated run](https://github.com/Greatmujey/Bouncer/actions/runs/42211109011)
 also verified the linked 40-unit forwarder-to-vault return receipts and the
-receiver-to-resolver promise data ID. This was a mock token on a disposable
-chain, not Circle, a public-chain purchase, independent provider fulfillment or
-an audit.
+receiver-to-resolver promise data ID. A [follow-up isolated run](https://github.com/Greatmujey/Bouncer/actions/runs/42211753462)
+also checked the exact-FT transfer-to-callback dependency. These used a mock
+token on a disposable chain, not Circle, a public-chain purchase, independent
+provider fulfillment or an audit.
 
 ## V11 compatibility boundary
 

@@ -34,6 +34,15 @@ projects are eligible; integrations named in the track hints are not mandatory.
 | Coordinate a genuine agent swarm | One coordinator sequences work; there is no demonstrated independent multi-agent bidding, hiring or secure handoff economy. | **AI Swarms** |
 | Verify security at production strength | There is no independent audit of the vault, experimental forwarder or deployed relay. Receipt correlation still trusts the RPC and cannot prove source/build equivalence or isolate every same-block transfer. Seller output remains untrusted. | **AI Security & Defense**; affects every track |
 
+**Alternative research lead:** [Allowance's published testnet report](https://github.com/Rahat-ch/allowance/blob/f44c27ff84e07d2c29c8937bac12818e421e5320/docs/proof/testnet.md)
+describes a Circle test-USDC x402 flow using NEAR Chain Signatures. Its
+[proof code](https://github.com/Rahat-ch/allowance/blob/f44c27ff84e07d2c29c8937bac12818e421e5320/packages/proof/src/run.ts)
+starts its own seller and facilitator, and the [weather response](https://github.com/Rahat-ch/allowance/blob/f44c27ff84e07d2c29c8937bac12818e421e5320/packages/seller/src/app.ts)
+is demo data. This is a useful independently published design to evaluate,
+not a verified publicly available seller or a Bouncer payment. No funds were
+sent and no source-code licensing, deployed-code equivalence or safety audit is
+claimed.
+
 ## Recommended focus, not automatic track selection
 
 1. **Agent Economy + AI Security & Defense:** make one real testnet purchase
