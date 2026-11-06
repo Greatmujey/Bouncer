@@ -65,12 +65,21 @@ jobs:
           BOUNCER_NIGHTLY_EXECUTOR: ${{ runner.temp }}/nightly-executor.js
           BOUNCER_LEDGER_EXECUTOR: ${{ runner.temp }}/ledger-executor.js
         run: |
-          gh api repos/Meteor-Wallet/meteor_wallet_sdk/git/blobs/b76fb93ff5d47064845d09313173b6eddbfa64e3 --jq .content | base64 -d > "$BOUNCER_METEOR_EXECUTOR"
-          gh api repos/near/near-cli-connect/git/blobs/32f1a33250370b5250a72d68ce24459628069fd7 --jq .content | base64 -d > "$BOUNCER_CLI_EXECUTOR"
-          gh api repos/fastnear/near-connect/git/blobs/19a9d9513c6a240e1fe228b820b9aebccbf66dcd --jq .content | base64 -d > "$BOUNCER_MOBILE_EXECUTOR"
-          gh api repos/hot-dao/near-selector/git/blobs/4a683d0d14abd97e163fbcc539a98949a7f79f86 --jq .content | base64 -d > "$BOUNCER_NIGHTLY_EXECUTOR"
-          gh api repos/near/near-connect-ledger/git/blobs/0e735ec1243811bd38a7a2af359b2f19c07be282 --jq .content | base64 -d > "$BOUNCER_LEDGER_EXECUTOR"
-          node scripts/test-wallet-adapters.mjs
+          set +e
+          (
+            set -e -o pipefail
+            gh api repos/Meteor-Wallet/meteor_wallet_sdk/git/blobs/b76fb93ff5d47064845d09313173b6eddbfa64e3 --jq .content | base64 -d > "$BOUNCER_METEOR_EXECUTOR"
+            gh api repos/near/near-cli-connect/git/blobs/32f1a33250370b5250a72d68ce24459628069fd7 --jq .content | base64 -d > "$BOUNCER_CLI_EXECUTOR"
+            gh api repos/fastnear/near-connect/git/blobs/19a9d9513c6a240e1fe228b820b9aebccbf66dcd --jq .content | base64 -d > "$BOUNCER_MOBILE_EXECUTOR"
+            gh api repos/hot-dao/near-selector/git/blobs/4a683d0d14abd97e163fbcc539a98949a7f79f86 --jq .content | base64 -d > "$BOUNCER_NIGHTLY_EXECUTOR"
+            gh api repos/near/near-connect-ledger/git/blobs/0e735ec1243811bd38a7a2af359b2f19c07be282 --jq .content | base64 -d > "$BOUNCER_LEDGER_EXECUTOR"
+            node scripts/test-wallet-adapters.mjs
+          ) 2>&1 | tee "$RUNNER_TEMP/wallet-adapters.log"
+          result=${PIPESTATUS[0]}
+          if [ "$result" -ne 0 ]; then
+            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-6000).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=Wallet adapter tests failed::"+s)' "$RUNNER_TEMP/wallet-adapters.log"
+          fi
+          exit "$result"
 
       # Isolated, lockfile-pinned third-party seller SDK. Its NEAR driver is
       # wrapped only in tests because the published preset is mainnet-only.
