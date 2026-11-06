@@ -183,13 +183,13 @@
     <details class="account-entry-cli"><summary>Verify with NEAR CLI instead</summary><p>For CLI users who can sign a login message in a terminal.</p><button id="wallet-cli-verify" type="button">Verify using NEAR CLI</button></details>
   </section>
   <section class="account-view" id="wallet-account-view" aria-label="Public testnet account" hidden>
-    <div class="account-view-head"><div><small>PUBLIC TESTNET ACCOUNT</small><strong id="wallet-account-name"></strong></div><span>VIEW ONLY</span></div>
-    <p class="account-view-warning">Unverified account name. No wallet is connected and no spending access was granted.</p>
+    <div class="account-view-head"><div><small>PUBLIC TESTNET ACCOUNT</small><strong id="wallet-account-name"></strong></div><span id="wallet-account-badge">VIEW ONLY</span></div>
+    <p class="account-view-warning" id="wallet-account-warning">Unverified account name. No wallet is connected and no spending access was granted.</p>
     <dl class="account-view-balances"><div><dt>Account NEAR*</dt><dd id="wallet-account-near">—</dd></div><div><dt>Circle test USDC</dt><dd id="wallet-account-usdc">—</dd></div></dl>
     <p id="wallet-account-balance-status" class="account-view-status" role="status" aria-live="polite"></p>
     <p class="account-view-footnote">*NEAR may include funds reserved for storage; staked NEAR is not included. These are public balances, not a spendable quote.</p>
     <button class="account-entry-primary" id="wallet-account-use-wallet" type="button">Choose a wallet to sign →</button>
-    <button class="account-entry-secondary" id="wallet-account-refresh" type="button">Refresh public balances</button>
+    <button class="account-entry-secondary" id="wallet-account-refresh" type="button">Load public balances</button>
   </section>
   <section class="walletconnect-pairing" id="walletconnect-pairing" aria-label="WalletConnect pairing" hidden>
     <div class="walletconnect-heading">
@@ -235,7 +235,7 @@
   </dialog>
   <dialog class="tour-dialog" id="welcome-tour" aria-labelledby="tour-title" aria-describedby="tour-description"><div class="tour-topline"><span class="brand-mark" aria-hidden="true"><svg viewBox="16 17 300 300"><use href="#i-bouncer"/></svg></span><span class="tour-count" id="tour-count">STEP 1 OF 4</span><button type="button" class="tour-close" id="tour-skip" aria-label="Close the tour">×</button></div><div class="tour-progress" aria-hidden="true"><span></span><span></span><span></span><span></span></div><div class="tour-copy" aria-live="polite"><div class="section-kicker" id="tour-kicker">WELCOME TO BOUNCER</div><h2 id="tour-title">Meet your resource agent.</h2><p id="tour-description">Bouncer helps an agent get compute, storage and API services while your on-chain rules guard its spending.</p><div class="tour-callout" id="tour-callout">Bouncer is a testnet prototype, not an open marketplace.</div></div><div class="tour-actions"><button class="button tour-back" type="button" id="tour-back" disabled>Back</button><button class="button tour-next" type="button" id="tour-next">Next →</button></div></dialog>
   <script type="module" src="./app.mjs?v=7"></script>
-  <script type="module" src="./wallet.bundle.js?v=16"></script>
+  <script type="module" src="./wallet.bundle.js?v=17"></script>
   <script type="module" src="./google-signin.mjs?v=2"></script>
 </body>
 </html>

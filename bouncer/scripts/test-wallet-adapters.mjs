@@ -63,7 +63,7 @@ try {
     const ethBrowser = await chromium.launch({ executablePath, args: browserArgs, headless: true });
     try {
       const context = await ethBrowser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
-      const page = await context.newPage(), errors = [], requests = [];
+      const page = await context.newPage(), errors = [], requests = [], rpc = [];
       page.on('pageerror', error => errors.push(error.message));
       const fakeApprovalPage = `<!doctype html><button id="approve">Approve synthetic request</button><p id="kind"></p><script>
         const params = new URLSearchParams(location.hash.slice(1)), origin = params.get('origin'), requestId = params.get('requestId');
@@ -80,6 +80,17 @@ try {
         setInterval(ready, 250); ready();
       <\/script>`;
       await context.route('https://evm-on-near.dev/**', route => route.fulfill({ status: 200, contentType: 'text/html', body: fakeApprovalPage }));
+      await context.route('https://test.rpc.fastnear.com/**', route => {
+        const cors = { 'access-control-allow-origin': '*', 'access-control-allow-methods': 'POST, OPTIONS', 'access-control-allow-headers': 'content-type' };
+        if (route.request().method() === 'OPTIONS') return route.fulfill({ status: 204, headers: cors });
+        const body = route.request().postDataJSON(); rpc.push(body);
+        const block = 'B'.repeat(44), height = 276000123;
+        const result = body.method === 'block' ? { header: { hash: block, height } }
+          : body.params.request_type === 'view_account'
+            ? { amount: '16000000000000000000000000', block_hash: block, block_height: height }
+            : { result: [...Buffer.from('"20000000"')], block_hash: block, block_height: height };
+        return route.fulfill({ status: 200, headers: cors, contentType: 'application/json', body: JSON.stringify({ jsonrpc: '2.0', id: body.id, result }) });
+      });
       await context.route('**/api/google-session**', route => route.fulfill({ status: 503, contentType: 'application/json', body: '{}' }));
       page.on('request', request => { if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method())) requests.push(request.url()); });
       await page.goto(url, { waitUntil: 'networkidle' });
@@ -98,15 +109,25 @@ try {
       assert.match(await page.locator('#wallet-status').textContent(), /wallet-reported.*No vault or spending access/);
       assert.equal(await page.locator('.top-connect').getAttribute('data-wallet-state'), 'connected');
       await page.locator('.top-connect').click();
+      assert.equal(await page.locator('#wallet-account-badge').textContent(), 'CONNECTED');
+      assert.match(await page.locator('#wallet-account-warning').textContent(), /does not grant Bouncer spending access/);
+      assert.equal(await page.locator('#wallet-account-use-wallet').isVisible(), false);
+      await page.locator('#wallet-account-refresh').click();
+      await page.waitForFunction(() => document.querySelector('#wallet-account-usdc').textContent === '20');
+      assert.equal(await page.locator('#wallet-account-near').textContent(), '16');
+      assert.deepEqual(rpc.map(call => call.method === 'block' ? 'block' : call.params.request_type), ['block', 'view_account', 'call_function']);
+      assert.equal(rpc[1].params.account_id, `0x${'a'.repeat(40)}`);
+      assert.equal(JSON.parse(Buffer.from(rpc[2].params.args_base64, 'base64')).account_id, `0x${'a'.repeat(40)}`);
       const signOutPopup = page.waitForEvent('popup');
       await page.locator('#wallet-disconnect').click({ noWaitAfter: true });
       const disconnectPopup = await signOutPopup;
       await disconnectPopup.waitForFunction(() => document.querySelector('#kind').textContent === 'signOut:testnet');
       await disconnectPopup.locator('#approve').click();
       await page.waitForFunction(() => document.querySelector('#wallet-status').textContent.includes('disconnected'));
-      assert.deepEqual(requests, []);
+      assert.equal(requests.length, 3);
+      assert.ok(requests.every(url => url === 'https://test.rpc.fastnear.com/'), 'only read-only RPC requests were sent');
       assert.deepEqual(errors, []);
-      console.log('Vendored Ethereum executor completed a synthetic testnet connect/disconnect through a mock popup. No real wallet, relayer or transaction was tested.');
+      console.log('Vendored Ethereum executor completed a synthetic testnet connect, public balance view and disconnect through a mock popup. No real wallet, relayer or transaction was tested.');
       await context.close();
     } finally { await ethBrowser.close(); }
   }

@@ -81,6 +81,8 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
   const cliVerify = doc.querySelector('#wallet-cli-verify');
   const accountViewPanel = doc.querySelector('#wallet-account-view');
   const accountName = doc.querySelector('#wallet-account-name');
+  const accountBadge = doc.querySelector('#wallet-account-badge');
+  const accountWarning = doc.querySelector('#wallet-account-warning');
   const accountNear = doc.querySelector('#wallet-account-near');
   const accountUsdc = doc.querySelector('#wallet-account-usdc');
   const accountBalanceStatus = doc.querySelector('#wallet-account-balance-status');
@@ -91,7 +93,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
   const ethereumBack = doc.querySelector('#wallet-ethereum-back');
   if (!dialog || !closeButton || !optionsBox || !options.length || !openers.length || !disconnect || !status || !dialogStatus ||
       !accountEntryPanel || !accountForm || !accountInput || !accountError || !accountBack || !cliVerify || !accountViewPanel ||
-      !accountName || !accountNear || !accountUsdc || !accountBalanceStatus || !accountUseWallet || !accountRefresh ||
+      !accountName || !accountBadge || !accountWarning || !accountNear || !accountUsdc || !accountBalanceStatus || !accountUseWallet || !accountRefresh ||
       !ethereumInfoPanel || !ethereumContinue || !ethereumBack) return;
 
   const approved = doc.querySelector('meta[name="bouncer-wallet-origin"]')?.content || '';
@@ -122,7 +124,12 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     optionsBox.hidden = connected || wcPairing || accountEntry || ethereumInfo || viewing;
     if (wcPanel) wcPanel.hidden = !wcPairing;
     accountEntryPanel.hidden = !accountEntry;
-    accountViewPanel.hidden = !viewing;
+    accountViewPanel.hidden = !viewing && !connected;
+    accountBadge.textContent = connected ? 'CONNECTED' : 'VIEW ONLY';
+    accountWarning.textContent = connected
+      ? 'Public balances for the connected testnet account. Connecting alone does not grant Bouncer spending access.'
+      : 'Unverified account name. No wallet is connected and no spending access was granted.';
+    accountUseWallet.hidden = connected;
     ethereumInfoPanel.hidden = !ethereumInfo;
     if (walletSafety) walletSafety.hidden = wcPairing || accountEntry || ethereumInfo || viewing;
     // Keep each focused panel uncluttered. Google is separate and returns
@@ -161,19 +168,27 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     accountEntry = false; ethereumInfo = false; viewedAccount = '';
     accountName.textContent = ''; accountNear.textContent = '—'; accountUsdc.textContent = '—';
     accountBalanceStatus.textContent = ''; accountError.hidden = true; accountError.textContent = ''; accountRefresh.disabled = false;
+    accountRefresh.textContent = 'Load public balances';
   }
+  function prepareConnectedBalance(id) {
+    accountName.textContent = id;
+    accountBalanceStatus.textContent = 'Tap below to load public testnet balances. No signature is requested.';
+  }
+  function displayedAccount() { return connected ? connectedAccount : viewedAccount; }
   async function refreshAccountView() {
-    if (!viewedAccount) return;
-    const id = viewedAccount, version = ++accountReadVersion;
+    const id = displayedAccount();
+    if (!id) return;
+    const version = ++accountReadVersion;
     accountRead?.abort();
     const controller = new AbortController(); accountRead = controller;
     const timer = setTimeout(() => controller.abort(), 15_000);
     accountNear.textContent = '—'; accountUsdc.textContent = '—';
     accountBalanceStatus.textContent = 'Checking public NEAR testnet balances…';
+    accountRefresh.textContent = 'Refresh public balances';
     accountRefresh.disabled = true;
     try {
       const result = await readPublicTestnetAccount(id, { fetch: win.fetch.bind(win), signal: controller.signal });
-      if (version !== accountReadVersion || viewedAccount !== id) return;
+      if (version !== accountReadVersion || displayedAccount() !== id) return;
       accountUsdc.textContent = formatPublicAmount(result.circle, 6);
       if (!result.exists) {
         accountBalanceStatus.textContent = `No native account found for this exact ID on testnet at final block ${result.blockHeight}. The token ledger is not proof of control or spendability; .near is not changed to .testnet.`;
@@ -182,7 +197,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
         accountBalanceStatus.textContent = `Public testnet RPC · final block ${result.blockHeight}. Balances can change.`;
       }
     } catch {
-      if (version === accountReadVersion && viewedAccount === id) {
+      if (version === accountReadVersion && displayedAccount() === id) {
         accountBalanceStatus.textContent = 'Could not load live testnet balances. No balance is being guessed; try refreshing.';
       }
     } finally {
@@ -207,6 +222,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     }
     clearAccountView();
     selectedWallet = wallet; connected = true; connectedAccount = id;
+    prepareConnectedBalance(id);
     setWalletLabels('Connected');
     const evidence = verifiedBy === 'near-cli' ? 'CLI login verified against testnet'
       : verifiedBy === 'near-mobile' ? 'NEAR Mobile login verified against testnet' : 'wallet-reported';
@@ -539,7 +555,9 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
       if (controller.signal.aborted) { await handle.disconnect(); showDisconnected('WalletConnect pairing cancelled.'); return; }
       if (endedBeforeHandle) { await handle.disconnect(); throw new Error('WalletConnect session ended before connection'); }
       if (!isTestnetAccount(handle.accountId)) { await handle.disconnect(); throw new Error('invalid account'); }
+      clearAccountView();
       wcHandle = handle; selectedWallet = null; connected = true; connectedAccount = handle.accountId; wcPairing = false;
+      prepareConnectedBalance(handle.accountId);
       setWalletLabels('Connected');
       setStatus(`Connected: ${handle.accountId} (wallet-reported). No vault or spending access is granted.`);
       closePicker(); notify('Testnet account connected. No spending access was granted.');

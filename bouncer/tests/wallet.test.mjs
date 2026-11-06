@@ -44,7 +44,7 @@ class Element {
 function fakeBrowser(url, { top = true, storageFails = false, approved = '' } = {}) {
   const ids = ['wallet-connect', 'wallet-disconnect', 'wallet-status', 'wallet-open-site', 'wallet-dialog', 'wallet-close', 'wallet-options', 'wallet-dialog-status', 'wallet-title-text', 'wallet-dialog-description', 'wallet-banner', 'wallet-safety',
     'wallet-account-entry', 'wallet-account-form', 'wallet-account-id', 'wallet-account-error', 'wallet-account-back', 'wallet-cli-verify',
-    'wallet-account-view', 'wallet-account-name', 'wallet-account-near', 'wallet-account-usdc', 'wallet-account-balance-status', 'wallet-account-use-wallet', 'wallet-account-refresh',
+    'wallet-account-view', 'wallet-account-name', 'wallet-account-badge', 'wallet-account-warning', 'wallet-account-near', 'wallet-account-usdc', 'wallet-account-balance-status', 'wallet-account-use-wallet', 'wallet-account-refresh',
     'wallet-ethereum-info', 'wallet-ethereum-continue', 'wallet-ethereum-back'];
   const nodes = Object.fromEntries(ids.map(id => [id, new Element()]));
   nodes['wallet-open-site'].hidden = true;
@@ -193,6 +193,41 @@ test('connects and disconnects a wallet-reported account without requesting a ke
   assert.ok(browser.openers.every(button => button.attributes['aria-label'] === 'Connect wallet or Google account'));
   assert.equal(browser.nodes['wallet-title-text'].textContent, 'Connect an account');
   assert.match(browser.nodes['wallet-dialog-description'].textContent, /Google/);
+});
+
+test('a connected wallet can load its own public balance without requesting a transaction', async () => {
+  const browser = fakeBrowser('http://127.0.0.1:4173/'), config = { account: 'wallet-owner.testnet' };
+  const calls = [], block = 'B'.repeat(44);
+  browser.win.fetch = async (url, options) => {
+    if (String(url) !== 'https://test.rpc.fastnear.com') throw new Error('unexpected network');
+    const body = JSON.parse(options.body); calls.push(body);
+    const result = body.method === 'block' ? { header: { hash: block, height: 123 } }
+      : body.params.request_type === 'view_account'
+        ? { block_hash: block, block_height: 123, amount: '16000000000000000000000000' }
+        : { block_hash: block, block_height: 123, result: [...Buffer.from('"20000000"')] };
+    return { ok: true, text: async () => JSON.stringify({ jsonrpc: '2.0', id: body.id, result }) };
+  };
+  await initWallet({ window: browser.win, document: browser.doc, NearConnector: connectorClass(config) });
+  await browser.nodes['wallet-connect'].click();
+  await browser.options[0].click();
+  assert.equal(calls.length, 0, 'connecting does not sign or automatically query balances');
+  assert.equal(browser.nodes['wallet-account-view'].hidden, false);
+  assert.equal(browser.nodes['wallet-account-name'].textContent, 'wallet-owner.testnet');
+  assert.equal(browser.nodes['wallet-account-badge'].textContent, 'CONNECTED');
+  assert.match(browser.nodes['wallet-account-warning'].textContent, /does not grant Bouncer spending access/);
+  assert.equal(browser.nodes['wallet-account-use-wallet'].hidden, true);
+  await browser.nodes['wallet-account-refresh'].click();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(calls.map(call => call.method === 'block' ? 'block' : call.params.request_type), ['block', 'view_account', 'call_function']);
+  assert.equal(calls[1].params.account_id, 'wallet-owner.testnet');
+  assert.equal(JSON.parse(Buffer.from(calls[2].params.args_base64, 'base64')).account_id, 'wallet-owner.testnet');
+  assert.equal(browser.nodes['wallet-account-near'].textContent, '16');
+  assert.equal(browser.nodes['wallet-account-usdc'].textContent, '20');
+  assert.match(browser.nodes['wallet-account-balance-status'].textContent, /final block 123/);
+  await browser.nodes['wallet-disconnect'].click();
+  assert.equal(browser.nodes['wallet-account-view'].hidden, true);
+  assert.equal(browser.nodes['wallet-account-name'].textContent, '');
+  assert.equal(browser.nodes['wallet-account-usdc'].textContent, '—');
 });
 
 test('all four wallet-reported choices connect on testnet and disconnect independently', async () => {
