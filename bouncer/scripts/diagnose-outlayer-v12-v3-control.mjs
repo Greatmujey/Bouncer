@@ -12,7 +12,10 @@ const ownerPlan=read('../config/testnet-owner-v3-plan.json'),plan=read('../confi
 const original=read('../evidence/testnet-owner-v3/outlayer-v12-register-original.json');
 const control=read('../evidence/testnet-owner-v3/outlayer-v12-register-control-original.json');
 const observations=[];
-for (const endpoint of ['https://test.rpc.fastnear.com','https://rpc.testnet.near.org']) {
+// Older reference blocks may be pruned by ordinary RPCs. The public NEAR
+// archival endpoint is severely rate-limited, so make only these targeted,
+// read-only observations; an unavailable response remains UNKNOWN.
+for (const endpoint of ['https://archival-rpc.testnet.near.org','https://test.rpc.fastnear.com','https://rpc.testnet.near.org']) {
  const provider=new ReadOnlyNearReceiptProvider(endpoint,{timeoutMs:10000});
  const o={rpc:new URL(endpoint).hostname,original:{tx_hash:original.tx_hash,status:'UNAVAILABLE',receipt_verified:false},
   control:{tx_hash:control.tx_hash,status:'UNAVAILABLE',receipt_verified:false},state:{status:'UNAVAILABLE'}};
