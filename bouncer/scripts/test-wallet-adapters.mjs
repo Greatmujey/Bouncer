@@ -19,7 +19,7 @@ const { chromium } = await import(pathToFileURL(path.resolve(playwrightPath)));
 const executablePath = process.env.CHROMIUM_PATH || ['/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/usr/bin/chromium', '/usr/bin/chromium-browser'].find(fs.existsSync);
 if (!executablePath) throw new Error('No Chromium executable found');
 if (!['BOUNCER_METEOR_EXECUTOR', 'BOUNCER_CLI_EXECUTOR', 'BOUNCER_MOBILE_EXECUTOR', 'BOUNCER_NIGHTLY_EXECUTOR', 'BOUNCER_LEDGER_EXECUTOR'].some(key => process.env[key])) throw new Error('Provide at least one pinned executor path');
-const types = { '.html': 'text/html', '.css': 'text/css', '.mjs': 'text/javascript', '.js': 'text/javascript', '.zip': 'application/zip', '.svg': 'image/svg+xml', '.jpg': 'image/jpeg', '.woff2': 'font/woff2', '.txt': 'text/plain' };
+const types = { '.html': 'text/html', '.css': 'text/css', '.mjs': 'text/javascript', '.js': 'text/javascript', '.json': 'application/json', '.zip': 'application/zip', '.svg': 'image/svg+xml', '.jpg': 'image/jpeg', '.woff2': 'font/woff2', '.txt': 'text/plain' };
 const allowed = new Set(PUBLIC_WEB_FILES);
 const server = http.createServer((req, res) => {
   const filename = new URL(req.url, 'http://test.invalid').pathname.slice(1) || 'index.html';

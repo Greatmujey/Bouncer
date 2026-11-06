@@ -122,17 +122,15 @@ local AI model to propose tasks; the latest oracle mission used prepared goals. 
 two credit tokens in the earlier example are synthetic and fulfillment was
 self-hosted. The site is not a live agent dashboard or commercial marketplace.
 
-This branch restores the testnet account picker: NEAR Mobile, Meteor, Intear,
-Nightly, Ledger and NEAR CLI, followed by Google sign-in. Only the former
-WalletConnect QR/project-ID option is removed. Google is **identity only**.
-The public OAuth client ID is configured in Vercel for new deployments;
-its authorization for `https://bouncer-near.vercel.app` and a real sign-in
-still need verification. Mocked UI and token-verification tests do not prove a
-real Google login. Neither Google sign-in nor selecting a wallet creates a
-vault or grants spending
-authority. Website updates reach production only after review and deployment.
-The optional public-RPC read keeps the recorded snapshot if a current balance
-check fails.
+The testnet account picker offers NEAR Mobile, Meteor, Intear, Nightly, Ledger,
+NEAR CLI and WalletConnect QR, followed by Google sign-in. WalletConnect uses
+the existing public project configuration; its account-only session does not
+request transaction signing. Google is **identity only**. Its public OAuth
+client ID is configured in Vercel for new deployments, but origin authorization
+and a real Google login still need verification. Selecting a wallet or signing
+in with Google does not create a vault or grant spending authority. Website
+updates reach production only after review and deployment. The optional
+public-RPC read keeps the recorded snapshot if a current balance check fails.
 
 Preview locally with Node:
 
@@ -140,10 +138,11 @@ Preview locally with Node:
 node bouncer/scripts/dev-web.mjs
 ```
 
-The Vercel build publishes **only the 13 allowlisted static website files**,
-not the checkout, credentials or journals, plus a separately deployed Google
-session API. Shared guest and GitHub Pages origins do not allow wallet sessions
-and cannot host Google sign-in. See [website and sign-in notes](bouncer/docs/WEB.md).
+The Vercel build publishes **only the 16 allowlisted static website files**,
+not the checkout, credentials or journals, plus the separately deployed Google
+session and restricted WalletConnect relay functions. Shared guest and GitHub
+Pages origins do not allow wallet sessions and cannot host Google sign-in.
+See [website and sign-in notes](bouncer/docs/WEB.md).
 
 ## AI assistant access (MCP)
 

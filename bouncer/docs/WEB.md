@@ -7,11 +7,11 @@ icons remain. Motion respects the browser's reduced-motion setting. Recorded
 examples and transactions are explicitly labeled; independent FT-paid delivery,
 refund recovery and an independent vault audit remain open.
 
-The account picker offers NEAR Mobile, Meteor, Intear, Nightly, Ledger and
-NEAR CLI on testnet, with Google sign-in last. The separate WalletConnect QR
-option and project-ID requirement are removed. The old production release is
-unchanged until this branch is reviewed and merged. The new Google flow is
-**not live or verified with a real Google account yet**.
+The account picker offers NEAR Mobile, Meteor, Intear, Nightly, Ledger, NEAR CLI
+and WalletConnect QR on testnet, with Google sign-in last. WalletConnect uses
+the existing public project configuration, so users do not need to supply a
+project ID. The new Google flow has **not been verified with a real Google
+account**. Site updates reach production only after review and deployment.
 
 Wallet sessions are restricted to approved dedicated, top-level origins, with
 GitHub Pages and shared guest origins blocked. The curated executors are
@@ -21,6 +21,12 @@ wallets report an account but do not independently prove ownership to Bouncer.
 No transaction, access key or vault spending authority is requested by this
 picker. Wallet extensions, provider availability and real-device sign-in still
 need end-to-end testing; unit and mocked-browser tests are not live logins.
+
+WalletConnect requests only `near_getAccounts` on `near:testnet` and rejects
+broader permissions. Pairing keys remain in the browser; a limited fallback
+may relay encrypted messages through Bouncer's server. Pairing QR codes contain
+sensitive information: do not publish or reuse a photographed code. Cancel and
+generate a fresh one if it has been shared.
 
 ## Configure Google Identity Services
 
@@ -79,18 +85,25 @@ explicit authorization design; never put seed phrases in the website. The
 ## Preview and tests
 
 ```sh
-node bouncer/scripts/dev-web.mjs
-node --test bouncer/tests/google-session.test.mjs bouncer/tests/wallet.test.mjs bouncer/tests/cli-login.test.mjs bouncer/tests/web.test.mjs bouncer/tests/public-web-staging.test.mjs
-cd bouncer && npm run build:web
+cd bouncer
+npm ci
+npm ci --prefix walletconnect --ignore-scripts
+npm run build:web
+node --test tests/google-session.test.mjs tests/wallet.test.mjs tests/cli-login.test.mjs tests/walletconnect.test.mjs tests/walletconnect-bridge.test.mjs tests/web.test.mjs tests/public-web-staging.test.mjs
+# Run separately to serve the site: node scripts/dev-web.mjs
 ```
 
 `dev-web.mjs` binds to `0.0.0.0` for preview, serves only the reviewed public
 assets, and uses relative API URLs. Its account endpoint deliberately refuses
-non-production hosts. Open the preview in its own tab to use testnet wallets;
-embedded iframes are blocked by the wallet-origin policy.
+non-production hosts. The optional public `BOUNCER_WALLETCONNECT_PROJECT_ID`
+environment variable enables direct-relay QR testing; the fallback gateway is
+restricted to the production origin. Open the preview in its own tab to use
+testnet wallets; embedded iframes are blocked by the wallet-origin policy.
 
 `scripts/test-web-browser.mjs` uses synthetic Google responses, a mocked Meteor
 wallet, and the real vendored Intear adapter with a synthetic wallet page.
+`scripts/test-walletconnect-browser.mjs` checks the real QR renderer and
+synthetic pairing/cancellation, including independence from Google identity.
 `scripts/test-wallet-adapters.mjs` optionally tests the other pinned executors:
 Meteor, Nightly and Ledger prompts open and cancel; Mobile and CLI validate
 synthetic signatures against a mocked read-only RPC and reject forgeries. CI
@@ -99,7 +112,7 @@ Ledger device, Google login or transaction is tested. `google-session.test.mjs`
 uses locally generated RSA keys to test signatures, claims, nonce, CSRF,
 expiry, restoration, sign-out and key rotation.
 
-`stage-public-web.mjs` publishes only the 13 allowlisted website files. The
-Vercel API function is separately detected from `web/api/google-session.mjs`;
-it is not published as a static source file. The public URL is
-https://bouncer-near.vercel.app/. The site and session API remain unaudited.
+`stage-public-web.mjs` publishes only the 16 allowlisted website files. Vercel
+separately detects `web/api/google-session.mjs` and `web/api/wc-relay.mjs`;
+neither function is published as a static source file. The public URL is
+https://bouncer-near.vercel.app/. The site and functions remain unaudited.

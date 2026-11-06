@@ -15,7 +15,7 @@ const playwrightPath = process.env.BOUNCER_PLAYWRIGHT_PATH || path.join(process.
 const { chromium } = await import(pathToFileURL(path.resolve(playwrightPath)));
 const executablePath = process.env.CHROMIUM_PATH || ['/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/usr/bin/chromium', '/usr/bin/chromium-browser'].find(fs.existsSync);
 if (!executablePath) throw new Error('No Chromium executable found');
-const types = { '.html': 'text/html', '.css': 'text/css', '.mjs': 'text/javascript', '.js': 'text/javascript', '.zip': 'application/zip', '.svg': 'image/svg+xml', '.jpg': 'image/jpeg', '.woff2': 'font/woff2', '.txt': 'text/plain' };
+const types = { '.html': 'text/html', '.css': 'text/css', '.mjs': 'text/javascript', '.js': 'text/javascript', '.json': 'application/json', '.zip': 'application/zip', '.svg': 'image/svg+xml', '.jpg': 'image/jpeg', '.woff2': 'font/woff2', '.txt': 'text/plain' };
 const allowed = new Set(PUBLIC_WEB_FILES);
 const server = http.createServer((req, res) => {
   const filename = new URL(req.url, 'http://test.invalid').pathname.slice(1) || 'index.html';
@@ -27,7 +27,7 @@ server.listen(0, '127.0.0.1');
 await once(server, 'listening');
 const url = `http://127.0.0.1:${server.address().port}/`;
 const browser = await chromium.launch({ executablePath, args: ['--no-sandbox', '--disable-gpu'], headless: true });
-const expected = ['near-mobile', 'meteor-wallet', 'intear-wallet', 'nightly-wallet', 'ledger', 'near-cli'];
+const expected = ['near-mobile', 'meteor-wallet', 'intear-wallet', 'nightly-wallet', 'ledger', 'near-cli', 'wallet-connect'];
 try {
   for (const [width, height] of [[320, 844], [390, 844], [1440, 844], [844, 390]]) {
     const page = await browser.newPage({ viewport: { width, height }, isMobile: width < 650, hasTouch: width < 650, reducedMotion: 'reduce' });
@@ -59,15 +59,16 @@ try {
     for (const gap of [angles[1] - angles[0], angles[2] - angles[1], 2 * Math.PI + angles[0] - angles[2]]) {
       assert.ok(Math.abs(gap - 2 * Math.PI / 3) < .08, 'resource icons should be evenly spaced');
     }
-    await page.waitForFunction(() => [...document.querySelectorAll('[data-wallet-id]')].every(button => !button.disabled));
+    await page.waitForFunction(() => [...document.querySelectorAll('[data-wallet-id]:not([data-wallet-id="wallet-connect"])')].every(button => !button.disabled));
     await page.locator('.top-connect').click();
     const picker = page.locator('#wallet-dialog');
     assert.equal(await picker.evaluate(el => el.open), true);
     assert.deepEqual(await page.locator('[data-wallet-id]').evaluateAll(nodes => nodes.map(node => node.dataset.walletId)), expected);
-    assert.equal(await page.locator('#walletconnect-canvas, [data-wallet-id="wallet-connect"]').count(), 0);
+    assert.equal(await page.locator('#walletconnect-canvas').count(), 1);
+    assert.equal(await page.locator('[data-wallet-id="wallet-connect"]').isDisabled(), true, 'blank source config must not fabricate a WalletConnect project ID');
     await page.waitForFunction(() => document.querySelector('#account-status').textContent.includes('not configured'));
     assert.equal(await page.locator('#google-signout').isVisible(), false);
-    const lastWallet = page.locator('[data-wallet-id="near-cli"]');
+    const lastWallet = page.locator('[data-wallet-id="wallet-connect"]');
     const google = page.locator('#google-start');
     assert.equal(await lastWallet.evaluate((node, other) => Boolean(node.compareDocumentPosition(other) & Node.DOCUMENT_POSITION_FOLLOWING), await google.elementHandle()), true);
     await google.scrollIntoViewIfNeeded();

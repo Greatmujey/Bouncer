@@ -22,16 +22,44 @@ test('public staging copies only reviewed wallet and Google assets, never creden
   fs.writeFileSync(path.join(source, 'credentials.txt'), 'private');
   fs.mkdirSync(path.join(source, 'journals'));
   fs.writeFileSync(path.join(source, 'journals', 'recovery.json'), 'private');
-  assert.equal(PUBLIC_WEB_FILES.length, 13);
+  assert.equal(PUBLIC_WEB_FILES.length, 16);
   assert.ok(PUBLIC_WEB_FILES.includes('google-signin.mjs'));
   assert.ok(PUBLIC_WEB_FILES.includes('hero-orbit.jpg'));
   assert.ok(PUBLIC_WEB_FILES.includes('manrope-latin.woff2'));
   assert.ok(PUBLIC_WEB_FILES.includes('manrope-OFL.txt'));
-  for (const file of ['wallet.bundle.js', 'intear-wallet.executor.js', 'intear-wallet-source.zip']) assert.ok(PUBLIC_WEB_FILES.includes(file));
-  assert.ok(PUBLIC_WEB_FILES.every(file => !/walletconnect|relay|^api\//i.test(file)));
+  for (const file of ['wallet.bundle.js', 'intear-wallet.executor.js', 'intear-wallet-source.zip', 'walletconnect.bundle.js', 'walletconnect-config.json', 'walletconnect-NOTICES.txt']) assert.ok(PUBLIC_WEB_FILES.includes(file));
+  assert.ok(PUBLIC_WEB_FILES.every(file => !/^api\//i.test(file)));
   assert.deepEqual(stagePublicWeb(dest, source), [...PUBLIC_WEB_FILES]);
   assert.deepEqual(fs.readdirSync(dest).sort(), [...PUBLIC_WEB_FILES].sort());
   for (const file of PUBLIC_WEB_FILES) assert.deepEqual(fs.readFileSync(path.join(dest, file)), fs.readFileSync(path.join(source, file)));
+});
+
+test('staging injects only a validated public WalletConnect project ID', t => {
+  const { source, dest } = fixture(t);
+  const projectId = '1234567890abcdef1234567890abcdef'; // synthetic, never contacts a relay
+  for (const invalid of ['abc', 'z'.repeat(32), `${projectId}\n`, { projectId }, '../x']) {
+    assert.throws(() => stagePublicWeb(dest, source, { walletConnectProjectId: invalid }), /Invalid WalletConnect/);
+    assert.equal(fs.existsSync(dest), false);
+  }
+  stagePublicWeb(dest, source, { walletConnectProjectId: projectId });
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dest, 'walletconnect-config.json'))), { projectId });
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(source, 'walletconnect-config.json'))), { projectId: '' });
+  fs.writeFileSync(path.join(source, 'walletconnect-config.json'), JSON.stringify({ projectId }));
+  assert.throws(() => validatePublicWeb(source), /must not contain a project ID/);
+});
+
+test('staging approves only the dedicated Bouncer wallet origin', t => {
+  const { source, dest } = fixture(t), index = path.join(source, 'index.html');
+  const original = fs.readFileSync(index, 'utf8');
+  const marker = '<meta name="bouncer-wallet-origin" content="https://bouncer-near.vercel.app">';
+  for (const replacement of [
+    '<meta name="bouncer-wallet-origin" content="https://owner.github.io">',
+    '<meta name="bouncer-wallet-origin" content="https://other.vercel.app">', '', `${marker}\n${marker}`,
+  ]) {
+    fs.writeFileSync(index, original.replace(marker, replacement));
+    assert.throws(() => stagePublicWeb(dest, source), /exactly the dedicated Bouncer wallet origin/);
+    assert.equal(fs.existsSync(dest), false);
+  }
 });
 
 test('public staging refuses reused destinations and leaves their contents untouched', t => {
@@ -52,18 +80,19 @@ test('public staging refuses symlinked or missing assets before creating output'
   assert.throws(() => validatePublicWeb(`${linkedSource}/`), /real directory/);
 });
 
-test('public staging requires all six testnet wallets followed by Google and rejects WalletConnect', t => {
+test('public staging requires six wallets, WalletConnect, then Google', t => {
   const { source, dest } = fixture(t), index = path.join(source, 'index.html');
   const original = fs.readFileSync(index, 'utf8');
   for (const altered of [
     original.replace('google-signin.mjs?v=2', 'old.mjs?v=2'),
-    original.replace('wallet.bundle.js?v=13', 'old-wallet.js?v=13'),
+    original.replace('wallet.bundle.js?v=14', 'old-wallet.js?v=14'),
     original.replace('data-wallet-id="near-cli"', 'data-wallet-id="other"'),
+    original.replace('data-wallet-id="wallet-connect"', 'data-wallet-id="other"'),
     original.replace('id="google-start"', 'id="missing-google"'),
-    `${original}\n<div>WalletConnect</div>`,
+    original.replace('id="walletconnect-pairing"', 'id="missing-pairing"'),
   ]) {
     fs.writeFileSync(index, altered);
-    assert.throws(() => stagePublicWeb(dest, source), /wallet picker followed by Google/);
+    assert.throws(() => stagePublicWeb(dest, source), /wallets and WalletConnect followed by Google/);
     assert.equal(fs.existsSync(dest), false);
   }
 });
@@ -81,16 +110,23 @@ test('deployment revalidates HTML, permits Google popups, and versions its asset
   for (const file of ['styles.css', 'app.mjs', 'google-signin.mjs', 'wallet.bundle.js']) assert.match(html, new RegExp(`\\./${file.replaceAll('.', '\\.') }\\?v=\\d+`));
 });
 
-test('only the Google session API is detected by Vercel, never served as a public static file', async () => {
-  assert.deepEqual(fs.readdirSync(path.join(realSource, 'api')), ['google-session.mjs']);
-  assert.ok(!PUBLIC_WEB_FILES.includes('api/google-session.mjs'));
+test('Google session and WalletConnect relay are server functions, never public static files', async () => {
+  assert.deepEqual(fs.readdirSync(path.join(realSource, 'api')).sort(), ['google-session.mjs', 'wc-relay.mjs']);
+  for (const file of ['api/google-session.mjs', 'api/wc-relay.mjs']) assert.ok(!PUBLIC_WEB_FILES.includes(file));
   const api = await import('../web/api/google-session.mjs');
   assert.equal(typeof api.default, 'function');
+  const script = `import http from 'node:http'; import server from ${JSON.stringify(new URL('../web/api/wc-relay.mjs', import.meta.url).href)};
+    if (!(server instanceof http.Server)) throw new Error('Not an HTTP server');
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    const result = await fetch('http://127.0.0.1:' + server.address().port + '/api/wc-relay');
+    if (result.status !== 426) throw new Error('Unexpected relay response');
+    await new Promise(resolve => server.close(resolve));`;
+  execFileSync(process.execPath, ['--input-type=module', '-e', script], { env: { ...process.env, BOUNCER_WALLETCONNECT_PROJECT_ID: '1234567890abcdef1234567890abcdef' } });
 });
 
 test('staging CLI runs from the web root and publishes only allowlisted files', t => {
   const { dest } = fixture(t);
   const output = execFileSync(process.execPath, [script, dest], { cwd: realSource, encoding: 'utf8' });
-  assert.match(output, /Staged 13 reviewed public website files/);
+  assert.match(output, /Staged 16 reviewed public website files/);
   assert.deepEqual(fs.readdirSync(dest).sort(), [...PUBLIC_WEB_FILES].sort());
 });

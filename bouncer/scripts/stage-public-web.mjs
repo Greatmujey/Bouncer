@@ -1,6 +1,6 @@
-// Stage only reviewed public website files. The Vercel API function lives in
-// web/api and is separately detected by Vercel; it is never published as a
-// static asset. Do not publish checkout files, journals, or credentials.
+// Stage only reviewed public website files. Vercel separately detects the
+// server-side functions in web/api; they are never published as static files.
+// Do not publish checkout files, journals, or credentials.
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,6 +10,7 @@ export const PUBLIC_WEB_FILES = Object.freeze([
   'manrope-latin.woff2', 'manrope-OFL.txt', 'evidence.mjs',
   'app.mjs', 'tour.mjs', 'google-signin.mjs', 'wallet.bundle.js',
   'intear-wallet.executor.js', 'intear-wallet-source.zip',
+  'walletconnect.bundle.js', 'walletconnect-config.json', 'walletconnect-NOTICES.txt',
 ]);
 const DEFAULT_SOURCE = fileURLToPath(new URL('../web/', import.meta.url));
 
@@ -21,27 +22,43 @@ export function validatePublicWeb(source = DEFAULT_SOURCE) {
     const stat = fs.lstatSync(path.join(rootPath, file));
     if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`Refusing unexpected website file ${file}`);
   }
+  // The source template is always empty; only a validated public client ID
+  // from the deployment environment may be written to the staged copy.
+  if (fs.readFileSync(path.join(rootPath, 'walletconnect-config.json'), 'utf8') !== '{"projectId":""}\n') {
+    throw new Error('Committed WalletConnect configuration must not contain a project ID');
+  }
   const html = fs.readFileSync(path.join(rootPath, 'index.html'), 'utf8');
+  const metas = (html.match(/<meta\b[^>]*>/gi) || [])
+    .filter(tag => /\bname\s*=\s*["']bouncer-wallet-origin["']/i.test(tag));
+  if (metas.length !== 1 || metas[0] !== '<meta name="bouncer-wallet-origin" content="https://bouncer-near.vercel.app">') {
+    throw new Error('Public website must approve exactly the dedicated Bouncer wallet origin');
+  }
   const walletIds = [...html.matchAll(/data-wallet-id="([a-z-]+)"/g)].map(match => match[1]);
-  const expected = ['near-mobile', 'meteor-wallet', 'intear-wallet', 'nightly-wallet', 'ledger', 'near-cli'];
+  const expected = ['near-mobile', 'meteor-wallet', 'intear-wallet', 'nightly-wallet', 'ledger', 'near-cli', 'wallet-connect'];
   const pickerStart = html.indexOf('id="wallet-dialog"');
-  const cli = html.indexOf('data-wallet-id="near-cli"', pickerStart);
+  const walletConnect = html.indexOf('data-wallet-id="wallet-connect"', pickerStart);
   const google = html.indexOf('id="google-start"', pickerStart);
   if (!/<script type="module" src="\.\/google-signin\.mjs\?v=\d+"><\/script>/.test(html) ||
       !/<script type="module" src="\.\/wallet\.bundle\.js\?v=\d+"><\/script>/.test(html) ||
-      !html.includes('data-wallet-open') || pickerStart < 0 || cli < pickerStart || google < cli ||
-      walletIds.join(',') !== expected.join(',') || /walletconnect|wc-relay/i.test(html)) {
-    throw new Error('Public website must contain the reviewed testnet wallet picker followed by Google sign-in');
+      !html.includes('data-wallet-open') || pickerStart < 0 || walletConnect < pickerStart || google < walletConnect ||
+      !html.includes('id="walletconnect-pairing"') || walletIds.join(',') !== expected.join(',')) {
+    throw new Error('Public website must contain the reviewed testnet wallets and WalletConnect followed by Google sign-in');
   }
 }
 
-export function stagePublicWeb(destination, source = DEFAULT_SOURCE) {
+export function stagePublicWeb(destination, source = DEFAULT_SOURCE, { walletConnectProjectId = process.env.BOUNCER_WALLETCONNECT_PROJECT_ID || '' } = {}) {
   if (typeof destination !== 'string' || !destination.trim()) throw new Error('A new staging directory is required');
+  if (typeof walletConnectProjectId !== 'string' || (walletConnectProjectId !== '' && !/^[a-f0-9]{32}$/i.test(walletConnectProjectId))) {
+    throw new Error('Invalid WalletConnect project ID');
+  }
   validatePublicWeb(source);
   // Refuse an existing directory so unrelated leftovers cannot be deployed.
   fs.mkdirSync(destination);
   for (const file of PUBLIC_WEB_FILES) {
     fs.copyFileSync(path.join(source, file), path.join(destination, file), fs.constants.COPYFILE_EXCL);
+  }
+  if (walletConnectProjectId) {
+    fs.writeFileSync(path.join(destination, 'walletconnect-config.json'), `${JSON.stringify({ projectId: walletConnectProjectId })}\n`);
   }
   return [...PUBLIC_WEB_FILES];
 }

@@ -34,11 +34,12 @@ try {
   await page.locator('.top-connect').click();
   assert.equal(await page.locator('#wallet-dialog').evaluate(el => el.open), true);
   assert.deepEqual(await page.locator('[data-wallet-id]').evaluateAll(nodes => nodes.map(node => node.dataset.walletId)),
-    ['near-mobile', 'meteor-wallet', 'intear-wallet', 'nightly-wallet', 'ledger', 'near-cli']);
-  assert.equal(await page.locator('#walletconnect-canvas').count(), 0);
+    ['near-mobile', 'meteor-wallet', 'intear-wallet', 'nightly-wallet', 'ledger', 'near-cli', 'wallet-connect']);
+  assert.equal(await page.locator('#walletconnect-canvas').count(), 1);
+  assert.equal(await page.locator('#walletconnect-pairing').isVisible(), false);
   assert.equal(await page.locator('#google-start').count(), 1);
   assert.equal(await page.locator('#google-signout').isVisible(), false, 'no signed-in state without a real login');
-  if (isGuestPreview) assert.equal(await page.locator('[data-wallet-id]:disabled').count(), 6, 'shared guest origins cannot hold wallet sessions');
+  if (isGuestPreview) assert.equal(await page.locator('[data-wallet-id]:disabled').count(), 7, 'shared guest origins cannot hold wallet sessions');
   await page.locator('#wallet-close').click();
   for (const [hash, name] of [['guardrails', 'guardrails'], ['proof', 'proof'], ['capabilities', 'resources']]) {
     await page.locator(`.mobile-nav a[href="#${hash}"]`).click();

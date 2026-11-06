@@ -194,20 +194,21 @@ test('website discloses testnet limitations, historical examples and identity-on
   ]) assert.ok(html.includes(explorerTx(tx)), `missing current transaction ${tx}`);
 });
 
-test('workspace picker contains the six testnet wallets followed by Google identity', () => {
+test('workspace picker contains the six testnet wallets, WalletConnect and Google identity', () => {
   const html = fs.readFileSync(new URL('../web/index.html', import.meta.url), 'utf8');
   const css = fs.readFileSync(new URL('../web/styles.css', import.meta.url), 'utf8');
   const views = [...html.matchAll(/data-route-view="([^"]+)"/g)].map(match => match[1]);
   assert.deepEqual(views, ['workspace', 'resources', 'guardrails', 'proof', 'connect']);
   const wallets = [...html.matchAll(/data-wallet-id="([^"]+)"/g)].map(match => match[1]);
-  assert.deepEqual(wallets, ['near-mobile', 'meteor-wallet', 'intear-wallet', 'nightly-wallet', 'ledger', 'near-cli']);
-  assert.ok(html.indexOf('id="google-start"') > html.indexOf('data-wallet-id="near-cli"'));
+  assert.deepEqual(wallets, ['near-mobile', 'meteor-wallet', 'intear-wallet', 'nightly-wallet', 'ledger', 'near-cli', 'wallet-connect']);
+  assert.ok(html.indexOf('id="google-start"') > html.indexOf('data-wallet-id="wallet-connect"'));
   assert.match(html, /id="wallet-dialog"/);
   assert.match(html, /id="google-signin-button"/);
   assert.match(html, /id="google-signout"/);
   assert.match(html, /id="account-status"[^>]*role="status"/);
   assert.match(html, /sign in with Google/i);
-  assert.doesNotMatch(html, /walletconnect|wc-relay/i);
+  assert.match(html, /id="walletconnect-pairing"/);
+  assert.match(html, /id="walletconnect-canvas"/);
   assert.match(html, /THE IDEA IN MOTION/);
   assert.match(css, /prefers-reduced-motion:reduce/);
 });
