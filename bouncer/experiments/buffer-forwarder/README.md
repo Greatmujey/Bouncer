@@ -81,6 +81,12 @@ absent, open a wallet, sign, send or pay the seller. The native account funding
 may leave storage locked. Each action still requires fresh checks, owner
 approval and independent prompt/receipt recovery.
 
+`agent/buffer-forwarder-wallet-evidence.mjs` can compare only an independently
+retained original hash and reviewed batch to receipt-inclusive FINAL RPC data.
+It also works after the intent expires, without claiming the intent is fresh.
+A match is not proof of wallet approval, current state, deployed code or
+independent delivery. A missing or failed original never permits a retry.
+
 `agent/buffer-wallet-spending-preflight.mjs` performs read-only, fresh,
 same-FINAL-block checks for the next policy/key stage or the separately retained
 exact-intent stage, including both installed method-scoped keys for that final

@@ -15,6 +15,7 @@ import nearApi from 'near-api-js';
 import { buildBufferForwarder, checkBufferQuoteResponse, BUFFER_TESTNET_CONTRACT as SELLER } from '../experiments/buffer-forwarder/build.mjs';
 import { buildBufferWalletSpendingPlan, assertBufferSpendingBatchMatchesReview } from '../agent/buffer-wallet-spending-plan.mjs';
 import { buildBufferForwarderWalletPlan } from '../agent/buffer-forwarder-wallet-plan.mjs';
+import { prepareBufferForwarderWalletAttempt, inspectBufferForwarderWalletAttempt } from '../agent/buffer-forwarder-wallet-evidence.mjs';
 import { assertSvalinBatchMatchesReview } from '../agent/svalin-setup-plan.mjs';
 import { prepareBufferSpendingAttempt, inspectBufferSpendingAttempt } from '../agent/buffer-wallet-spending-evidence.mjs';
 import { inspectBufferSpendingStage } from '../agent/buffer-wallet-spending-preflight.mjs';
@@ -106,7 +107,8 @@ async function exercise({ endpoint, root, tokenOwner, v12, sellerWasm, sellerFix
     if (id !== PROVIDER) assert.deepEqual((await provider.viewAccessKeyList(id, { finality: 'final' })).keys, []);
     await must(tokenOwner, TOKEN, 'storage_deposit', { account_id: id, registration_only: true }, BigInt(storageMin), 50n * TGAS);
   }
-  let vaultAgentInstalled = false, spendingReceiptsChecked = 0, spendingPreflightsChecked = 0, forwarderBatchesChecked = 0;
+  let vaultAgentInstalled = false, spendingReceiptsChecked = 0, spendingPreflightsChecked = 0,
+    forwarderBatchesChecked = 0, forwarderReceiptsChecked = 0;
   await must(tokenOwner, TOKEN, 'ft_transfer_call', { receiver_id: VAULT, amount: '60000000', msg: '' }, 1n, 300n * TGAS);
   await must(sellerOwner, SELLER, 'set_product', { sku: SKU, price: PRICE, max_expense: '0', active: true });
   await must(sellerOwner, SELLER, 'set_product', { sku: CUSTOM_SKU, price: CUSTOM_PRICE, max_expense: '1000000', active: true });
@@ -139,6 +141,15 @@ async function exercise({ endpoint, root, tokenOwner, v12, sellerWasm, sellerFix
       assertSvalinBatchMatchesReview(b, forwarderReview.stages[index]);
       const result = await batch(buyer, b.receiverId, b.actions, `sandbox reviewed forwarder stage ${b.id}`);
       forwarderBatchesChecked++;
+      const original = result.transaction_outcome.id;
+      const evidenceInput = { review: forwarderReview, trustedReviewHash: forwarderReview.review_sha256, terms,
+        spendingReview: spendingPlan.review, trustedSpendingReviewHash: spendingPlan.review.review_sha256,
+        trustedOwnerPublicKey: pub(buyerKey), trustedOriginalHash: original, stageId: b.id };
+      const attempt = await prepareBufferForwarderWalletAttempt(evidenceInput);
+      const receiptResult = await provider.txStatusReceipts(original, BUYER, 'FINAL');
+      const evidence = await inspectBufferForwarderWalletAttempt({ ...evidenceInput, attempt, result: receiptResult });
+      assert.equal(evidence.status, 'FINAL_FORWARDER_SETUP_RECEIPT_MATCH');
+      assert.equal(evidence.do_not_resend, true); forwarderReceiptsChecked++;
       return result;
     };
     await applyForwarderStage(0);
@@ -315,10 +326,12 @@ async function exercise({ endpoint, root, tokenOwner, v12, sellerWasm, sellerFix
   assert.equal(spendingReceiptsChecked, 9, 'all synthetic policy and scoped-key originals must be reconciled');
   assert.equal(spendingPreflightsChecked, 4, 'sandbox views checked policy, keys and intent while the mock-Circle pin blocked');
   assert.equal(forwarderBatchesChecked, 12, 'four local scenarios executed all three reviewed forwarder batches');
+  assert.equal(forwarderReceiptsChecked, 12, 'all synthetic forwarder original hashes were reconciled');
   return { scope: 'ISOLATED nearcore, source-built Buffer contract and mock FT; not Circle or a public-chain order',
     buffer_source_revision: '9bc5ef0cbdc84074e94995cb50d334fc615f9b96', source_built_sha256: sellerFixture.sha256,
     v12_sha256: V12_SHA256, unsigned_wallet_spending_plan_exercised_locally: true,
     synthetic_forwarder_wallet_batches_exercised: forwarderBatchesChecked,
+    synthetic_original_forwarder_receipts_checked: forwarderReceiptsChecked,
     synthetic_original_spending_receipts_checked: spendingReceiptsChecked,
     sandbox_stage_preflights_checked_with_mock_token_pin_blocked: spendingPreflightsChecked,
     price_change_returned_to_forwarder: true, price_rejection_return_credited_vault: true,
