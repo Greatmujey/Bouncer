@@ -198,7 +198,7 @@ export async function verifyBufferDeliveryEvidence({ terms, pins, funding, openi
     order_id: r.onchain_order_id, sku: r.sku, amount_atoms: r.amount, report_sha256: report.digest, report_bytes: report.size,
     funding_tx_hash: funding.txHash, opening_tx_hash: opening.txHash, fulfillment_tx_hash: fulfillment.txHash,
     guarded_forwarder_funding_verified: true, seller_payment_receipt_verified: true, report_hash_matches_onchain_commitment: true,
-    seller_http_delivery_verified: false, independent_fulfillment_verified: false, report_correctness_verified: false,
+    seller_payout_verified: false, seller_http_delivery_verified: false, independent_fulfillment_verified: false, report_correctness_verified: false,
     deployed_source_equivalence_verified: false, late_refund_verified: false, retry_authorized: false, signed: false, sent: false,
     scope: 'trusted caller response, RPC and historical code pins; fungible balances and block-level views do not prove HTTP origin, correctness, deployed source or independent delivery' };
 }

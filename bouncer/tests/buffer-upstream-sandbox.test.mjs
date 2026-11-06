@@ -5,7 +5,7 @@ import wabt from 'wabt';
 import { validateBufferFixture, exerciseBufferSandbox } from '../integration/buffer-upstream-sandbox.mjs';
 
 const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
-const names = ['new', 'set_product', 'ft_on_transfer', 'refund', 'mark_fulfilled', 'settle', 'get_order'];
+const names = ['new', 'set_product', 'set_quote_rules', 'create_quote', 'get_quote', 'ft_on_transfer', 'refund', 'mark_fulfilled', 'settle', 'get_order'];
 async function fixture(exports) {
   const compiler = await wabt();
   const compiled = compiler.parseWat('fixture.wat', `(module ${exports.map(x => `(func (export "${x}"))`).join(' ')})`);

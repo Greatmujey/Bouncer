@@ -7,11 +7,14 @@ for Bouncer's compute and storage tracks.
 
 On November 6, 2026, Buffer's public catalog listed `weekly-market-brief` and
 `crosschain-brief` at **20,000,000 atoms (20 test USDC)**; a custom quote had a
-5,000,000-atom minimum. The observed V12 Circle balance was **6,898 atoms**.
-Prices, availability and deployed contract code can change. Bouncer has not
-created a Buffer order or contacted the seller, and has not paid or obtained a
-report from Buffer. The contract source below is pinned for investigation; it
-is not proof that the live deployment matches that source.
+5,000,000-atom minimum. The observed V12 Circle balance was **6,898 atoms**. A
+read-only web4 view of Ref testnet pool 1845 indicated **5,422,448 atoms** for
+2 test NEAR, enough for the *minimum* custom quote but not proof a particular
+quote will cost that amount. This was not a pinned FINAL quote, reservation,
+swap or funding. Prices, liquidity, quote availability and deployed code can
+change. Bouncer has not created an order or quote, contacted the seller's paid
+workflow, or paid or obtained a report. The contract source below is pinned for
+investigation; it is not proof that the live deployment matches that source.
 
 ## Why a separate forwarder
 
@@ -25,10 +28,15 @@ validated against the real Circle token or deployed Buffer contract.
 
 1. After an independently reviewed fixed-price order is created, compare its
    private response with the reviewed request and terms using
-   `checkBufferOrderResponse`. It checks the fixed token, seller, amount,
-   order ID, SKU, exact message, payer and brief hash, but returns neither the
-   private order bearer nor the brief. Treat both as sensitive; a brief hash is
-   not encryption and short briefs may be guessable.
+   `checkBufferOrderResponse` for fixed products. For `custom-brief`,
+   `checkBufferQuoteResponse` additionally compares the private quote, request,
+   exact price, expense limit, caller-supplied on-chain quote view and expiration. It
+   rejects an already-paid quote and requires a 10-second expiry safety margin;
+   the supplied view is not itself proof of RPC provenance or live readiness.
+   Both checks return neither the private order bearer nor the brief. Treat both
+   as sensitive; a brief hash is not encryption and short briefs may be guessable.
+   Buffer's custom-quote endpoint itself spends seller inference and registers an
+   on-chain quote; do not create a speculative quote before Bouncer is ready.
 2. `buildBufferForwarder` creates deterministic WASM, pinning those public
    terms and a single `ft_transfer_call`. An owner-controlled V12 exact intent
    would have to pin the resulting code review hash, amount, payee, memo,
@@ -97,9 +105,9 @@ accompanying API offers a separate, fixed-origin private-order GET; that GET
 contacts Buffer and discloses the bearer token to Buffer, so use it only
 intentionally and never log the URL. HTTP response provenance, independent seller
 fulfillment, report accuracy and deployed-source equivalence remain unproven.
-A missing receipt is unknown, not permission to resend. The source-built sandbox
-is being extended to exercise this correlator against actual isolated nearcore
-receipt graphs; that remains different from real seller delivery.
+A missing receipt is unknown, not permission to resend. The correlator also
+passed against actual isolated nearcore receipt graphs in the source-built
+sandbox described below; that remains different from real seller delivery.
 
 ## Tests and status
 
@@ -118,6 +126,12 @@ seller payout. The final mock-token and tracked vault balances were 40,000,000
 atoms; each policy's recorded spend stayed at 20,000,000 atoms. This used a
 local source build, not proof of the deployed code, and no real Circle, private
 project key, seller contact or independent report.
+
+[Run 42217186932](https://github.com/Greatmujey/Bouncer/actions/runs/42217186932)
+repeated the scenario and additionally passed the separate Buffer receipt and
+fixture-report correlator against the actual isolated nearcore graphs and
+block-pinned historical views. It still used the source build and mock token;
+HTTP provenance and independent fulfillment remain unverified.
 
 ```sh
 cd bouncer

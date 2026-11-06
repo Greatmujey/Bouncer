@@ -12,7 +12,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import nearApi from 'near-api-js';
-import { buildBufferForwarder, BUFFER_TESTNET_CONTRACT as SELLER } from '../experiments/buffer-forwarder/build.mjs';
+import { buildBufferForwarder, checkBufferQuoteResponse, BUFFER_TESTNET_CONTRACT as SELLER } from '../experiments/buffer-forwarder/build.mjs';
 import { collectBufferDeliverySnapshots, verifyBufferDeliveryEvidence } from '../agent/buffer-delivery-evidence.mjs';
 import { CIRCLE_TESTNET_USDC as TOKEN } from '../scripts/circle-testnet-setup.mjs';
 import { loopbackSandboxUrl, withSandboxOnlyFetch } from './v11-sandbox-setup-rpc.mjs';
@@ -24,6 +24,7 @@ const V12_SHA256 = '033f255c5822ff97495809f7d60fddf66f266f20c36285fe71296b66decc
 const BUYER = 'buffer-buyer.testnet', VAULT = 'vault.buffer-buyer.testnet';
 const PROVIDER = 'buffer-provider.testnet', AGENT = 'buffer-agent.testnet';
 const PRICE = '20000000', SKU = 'weekly-market-brief', NEAR = 10n ** 24n, TGAS = 10n ** 12n;
+const CUSTOM_PRICE = '5000000', CUSTOM_SKU = 'custom-brief', BRIEF = 'isolated fixture request';
 const { transactions: tx } = nearApi;
 const key = () => nearApi.KeyPair.fromRandom('ed25519');
 const pub = pair => String(pair.getPublicKey());
@@ -38,7 +39,8 @@ export function validateBufferFixture(bytes, digest) {
     throw new Error('invalid source-built isolated Buffer fixture');
   }
   const module = new WebAssembly.Module(bytes), names = WebAssembly.Module.exports(module).map(e => e.name);
-  if (['new', 'set_product', 'ft_on_transfer', 'refund', 'mark_fulfilled', 'settle', 'get_order'].some(x => !names.includes(x))) {
+  if (['new', 'set_product', 'set_quote_rules', 'create_quote', 'get_quote', 'ft_on_transfer', 'refund',
+    'mark_fulfilled', 'settle', 'get_order'].some(x => !names.includes(x))) {
     throw new Error('source-built fixture is missing Buffer methods');
   }
   return { sha256: digest, bytes: bytes.length };
@@ -103,17 +105,21 @@ async function exercise({ endpoint, root, tokenOwner, v12, sellerWasm, sellerFix
     'install scoped vault agent key');
   await must(tokenOwner, TOKEN, 'ft_transfer_call', { receiver_id: VAULT, amount: '60000000', msg: '' }, 1n, 300n * TGAS);
   await must(sellerOwner, SELLER, 'set_product', { sku: SKU, price: PRICE, max_expense: '0', active: true });
+  await must(sellerOwner, SELLER, 'set_product', { sku: CUSTOM_SKU, price: CUSTOM_PRICE, max_expense: '1000000', active: true });
+  await must(sellerOwner, SELLER, 'set_quote_rules', { sku: CUSTOM_SKU, min_price: CUSTOM_PRICE, max_price: '50000000',
+    max_expense_bps: 5000, max_ttl_ns: 1800000000000, active: true });
   assert.equal(await balance(VAULT), '60000000'); assert.equal(await tracked(), '60000000');
 
-  async function prepare(label, onchainId, apiId) {
+  async function prepare(label, onchainId, apiId, { amount = PRICE, sku = SKU, expiryMs, precheck } = {}) {
     const adapter = `${label}.${BUYER}`, adapterKey = key(), policy = label;
     const block = await provider.viewBlock({ finality: 'final' });
     const nowMs = Number(BigInt(block.header.timestamp_nanosec) / 1_000_000n);
     const terms = { owner: BUYER, vault: VAULT, adapter, forwarder_agent_public_key: pub(adapterKey),
-      vault_agent_public_key: pub(vaultKey), policy_id: policy, intent_id: `buffer-${label}`, amount: PRICE,
-      expires_at_ms: nowMs + 60 * 60 * 1000, native_return_cap: NEAR.toString(), native_reserve: NEAR.toString(),
-      api_order_id: apiId, onchain_order_id: onchainId, sku: SKU, brief_sha256: sha(Buffer.from('isolated fixture request')) };
+      vault_agent_public_key: pub(vaultKey), policy_id: policy, intent_id: `buffer-${label}`, amount,
+      expires_at_ms: expiryMs ?? nowMs + 60 * 60 * 1000, native_return_cap: NEAR.toString(), native_reserve: NEAR.toString(),
+      api_order_id: apiId, onchain_order_id: onchainId, sku, brief_sha256: sha(Buffer.from(BRIEF)) };
     const artifact = await buildBufferForwarder(terms, { nowMs });
+    if (precheck) await precheck(terms, nowMs);
     await batch(buyer, adapter, [tx.createAccount(), tx.transfer(3n * NEAR), tx.deployContract(artifact.wasm)],
       'create keyless fixed-order forwarder');
     assert.equal((await provider.viewAccount(adapter, { finality: 'final' })).code_hash, codeHash(artifact.wasm));
@@ -121,18 +127,18 @@ async function exercise({ endpoint, root, tokenOwner, v12, sellerWasm, sellerFix
     await must(tokenOwner, TOKEN, 'storage_deposit', { account_id: adapter, registration_only: true }, BigInt(storageMin), 50n * TGAS);
     await batch(buyer, BUYER, [tx.addKey(adapterKey.getPublicKey(), tx.functionCallAccessKey(adapter, ['open', 'return_tokens'], NEAR))],
       'install distinct scoped forwarder agent key');
-    const setPolicy = { policy_id: policy, token: TOKEN, per_tx_cap: PRICE, daily_cap: PRICE };
+    const setPolicy = { policy_id: policy, token: TOKEN, per_tx_cap: amount, daily_cap: amount };
     failure(await call(buyer, VAULT, 'set_policy', setPolicy), /exactly 1 yoctoNEAR/);
     await must(buyer, VAULT, 'set_policy', setPolicy, 1n);
     await must(buyer, VAULT, 'allow_payee', { policy_id: policy, payee: adapter }, 1n);
     await must(buyer, VAULT, 'grant_agent_key', { policy_id: policy, public_key: pub(vaultKey) }, 1n);
     await must(buyer, VAULT, 'lock_ft_policy_to_intents', { policy_id: policy }, 1n);
     await must(buyer, VAULT, 'set_exact_ft_intent', { intent_id: terms.intent_id, policy_id: policy,
-      expected_token: TOKEN, payee: adapter, amount: PRICE, memo: artifact.review.intent_memo,
+      expected_token: TOKEN, payee: adapter, amount, memo: artifact.review.intent_memo,
       review_hash: artifact.review.review_sha256, expires_at_ms: String(terms.expires_at_ms), agent_public_key: pub(vaultKey) }, 1n);
     const signer = account(BUYER, provider, adapterKey);
     const funding = await must(vaultAgent, VAULT, 'execute_exact_ft', { intent_id: terms.intent_id }, 0n, 200n * TGAS);
-    assert.equal(await balance(adapter), PRICE); assert.equal(await spend(policy), PRICE);
+    assert.equal(await balance(adapter), amount); assert.equal(await spend(policy), amount);
     return { ...terms, terms, artifact, signer, funding };
   }
   async function open(item) {
@@ -143,9 +149,9 @@ async function exercise({ endpoint, root, tokenOwner, v12, sellerWasm, sellerFix
     return result;
   }
   async function returnTokens(item) {
-    await must(item.signer, item.adapter, 'return_tokens', { amount: PRICE }, 0n, 300n * TGAS);
+    await must(item.signer, item.adapter, 'return_tokens', { amount: item.amount }, 0n, 300n * TGAS);
     assert.equal(await balance(item.adapter), '0'); assert.equal(await balance(VAULT), await tracked());
-    assert.equal(await spend(item.policy_id), PRICE);
+    assert.equal(await spend(item.policy_id), item.amount);
   }
 
   // A changed product price returns the complete payment to the forwarder,
@@ -213,6 +219,36 @@ async function exercise({ endpoint, root, tokenOwner, v12, sellerWasm, sellerFix
   assert.equal(await balance(PROVIDER), PRICE); assert.equal(await balance(SELLER), '0');
   assert.equal(await balance(VAULT), '40000000'); assert.equal(await tracked(), '40000000');
   assert.equal(await spend('delivery'), PRICE);
+
+  // Exercise the lower-price quote shape too. The API order and report below
+  // are local fixtures; only the source-built contract and receipts are real
+  // on this isolated chain. No live quote is created or seller contacted.
+  const quoteId = 'q-000000000004', quoteApiId = '123e4567-e89b-12d3-a456-426614174004';
+  const quoteBlock = await provider.viewBlock({ finality: 'final' });
+  const quoteExpiryMs = Number(BigInt(quoteBlock.header.timestamp_nanosec) / 1_000_000n) + 25 * 60_000;
+  const quoteTx = await must(sellerAgent, SELLER, 'create_quote', { order_id: quoteId, sku: CUSTOM_SKU,
+    amount: CUSTOM_PRICE, max_expense: '1000000', expires_ns: Number(BigInt(quoteExpiryMs) * 1_000_000n) });
+  const chainQuote = await view(SELLER, 'get_quote', { order_id: quoteId });
+  const custom = await prepare('custom', quoteId, quoteApiId, { amount: CUSTOM_PRICE, sku: CUSTOM_SKU,
+    expiryMs: quoteExpiryMs - 60_000, precheck: async (terms, nowMs) => {
+      const request = { request: BRIEF, customerAccount: terms.adapter };
+      const response = { orderId: quoteApiId, accessToken: 'ab'.repeat(24) };
+      const privateOrder = { id: quoteApiId, onchainOrderId: quoteId, contractId: SELLER, tokenContract: TOKEN,
+        sku: CUSTOM_SKU, priceUnits: CUSTOM_PRICE, state: 'AWAITING_PAYMENT', authorised: true, brief: BRIEF,
+        quote: { expiresAt: new Date(quoteExpiryMs).toISOString(), quoteTx: quoteTx.transaction_outcome.id, maxExpenseUnits: '1000000' } };
+      const checked = checkBufferQuoteResponse(terms, request, response, privateOrder, chainQuote, { nowMs });
+      assert.equal(checked.checked, true); assert.equal(checked.execution_authorized, false);
+    } });
+  const customOpen = await open(custom);
+  assert.equal(JSON.parse(Buffer.from(customOpen.status.SuccessValue, 'base64').toString()), CUSTOM_PRICE);
+  assert.equal((await order(quoteId)).customer, custom.adapter);
+  assert.equal((await view(SELLER, 'get_quote', { order_id: quoteId })).paid, true);
+  await must(sellerAgent, SELLER, 'mark_fulfilled', { order_id: quoteId, report_hash: digest });
+  await must(sellerAgent, SELLER, 'settle', { order_id: quoteId, claims: [] }, 0n, 300n * TGAS);
+  assert.equal((await order(quoteId)).state, 'Settled');
+  assert.equal(await balance(PROVIDER), '25000000'); assert.equal(await balance(SELLER), '0');
+  assert.equal(await balance(VAULT), '35000000'); assert.equal(await tracked(), '35000000');
+  assert.equal(await spend('custom'), CUSTOM_PRICE);
   return { scope: 'ISOLATED nearcore, source-built Buffer contract and mock FT; not Circle or a public-chain order',
     buffer_source_revision: '9bc5ef0cbdc84074e94995cb50d334fc615f9b96', source_built_sha256: sellerFixture.sha256,
     v12_sha256: V12_SHA256, price_change_returned_to_forwarder: true, price_rejection_return_credited_vault: true,
@@ -220,7 +256,8 @@ async function exercise({ endpoint, root, tokenOwner, v12, sellerWasm, sellerFix
     refund_vault_actual_and_tracked: '60000000', refund_conservative_rolling_spend: PRICE,
     next_refund_policy_intent_blocked_by_cap: true, fixture_report_sha256: digest,
     fixture_report_hash_recorded_onchain: true, separate_receipt_and_report_verifier_passed: true,
-    local_mock_token_provider_payout: PRICE, final_vault_actual_and_tracked: '40000000', one_shot_replay_blocked: true,
+    custom_quote_checked_paid_and_settled_locally: true, custom_quote_atoms: CUSTOM_PRICE,
+    local_mock_token_provider_payout: '25000000', final_vault_actual_and_tracked: '35000000', one_shot_replay_blocked: true,
     real_circle_or_real_testnet_used: false, independent_provider_delivery_verified: false, seller_contacted: false };
 }
 

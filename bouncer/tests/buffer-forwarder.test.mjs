@@ -5,8 +5,9 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import nearApi from 'near-api-js';
-import { BUFFER_TESTNET_CONTRACT as SELLER, buildBufferForwarder, checkBufferOrderResponse,
+import { BUFFER_TESTNET_CONTRACT as SELLER, buildBufferForwarder, checkBufferOrderResponse, checkBufferQuoteResponse,
   validateBufferForwarderTerms } from '../experiments/buffer-forwarder/build.mjs';
+import { mockHash } from './mock-guarded-payment.mjs';
 import { CIRCLE_TESTNET_USDC as TOKEN } from '../scripts/circle-testnet-setup.mjs';
 import { SyntheticNearHost, OWNER, VAULT, AGENT_PK, AGENT_BYTES, TIME_NS } from './fixtures/v11-synthetic-host.mjs';
 
@@ -69,6 +70,50 @@ test('order matching rejects modified token, destination, price, order, message,
   Object.defineProperty(sample.payment.args, 'amount', { enumerable: true, get() { accessed = true; return PRICE; } });
   assert.throws(() => checkBufferOrderResponse(terms(), request(), sample, { nowMs: NOW }));
   assert.equal(accessed, false);
+});
+
+function quoteFixture() {
+  const quoteTerms = terms({ onchain_order_id: 'q-123456789abc', sku: 'custom-brief', amount: '5000000' });
+  const request = { request: BRIEF, customerAccount: ADAPTER };
+  const response = { orderId: quoteTerms.api_order_id, accessToken: 'ab'.repeat(24) };
+  const expiration = NOW + 120_000;
+  const order = { id: quoteTerms.api_order_id, onchainOrderId: quoteTerms.onchain_order_id, contractId: SELLER,
+    tokenContract: TOKEN, sku: 'custom-brief', priceUnits: quoteTerms.amount, state: 'AWAITING_PAYMENT',
+    authorised: true, brief: BRIEF, quote: { expiresAt: new Date(expiration).toISOString(),
+      quoteTx: mockHash('synthetic-quote'), maxExpenseUnits: '1000000' } };
+  const chainQuote = { sku: 'custom-brief', amount: quoteTerms.amount, max_expense: '1000000',
+    expires_ns: String(BigInt(expiration) * 1_000_000n), paid: false };
+  return { quoteTerms, request, response, order, chainQuote };
+}
+test('matches a custom quote and short-lived chain-view terms without returning private data', async () => {
+  const f = quoteFixture(), out = checkBufferQuoteResponse(f.quoteTerms, f.request, f.response, f.order, f.chainQuote, { nowMs: NOW });
+  assert.equal(out.checked, true); assert.equal(out.amount, '5000000');
+  assert.equal(out.chain_view_provenance_verified, false); assert.equal(out.execution_authorized, false);
+  assert(!JSON.stringify(out).includes(BRIEF)); assert(!JSON.stringify(out).includes(f.response.accessToken));
+  const withRoundedNs = { ...f.chainQuote, expires_ns: Number(f.chainQuote.expires_ns) };
+  assert.equal(checkBufferQuoteResponse(f.quoteTerms, f.request, f.response, f.order, withRoundedNs, { nowMs: NOW }).checked, true);
+  const artifact = await buildBufferForwarder(f.quoteTerms, { nowMs: NOW });
+  const h = host(artifact.wasm), call = h.call('open', {}, agent());
+  assert.deepEqual(call.promises[0].actions[0].args, { receiver_id: SELLER, amount: '5000000',
+    memo: 'bouncer:experimental-forwarder', msg: JSON.stringify({ order_id: f.quoteTerms.onchain_order_id, sku: 'custom-brief' }) });
+  assert.throws(() => checkBufferOrderResponse(f.quoteTerms, request(), response(), { nowMs: NOW }));
+});
+test('custom quote rejects substitutions, spent/expired quotes and expiry mismatches', () => {
+  const changes = [
+    x => { x.request.request += 'changed'; }, x => { x.request.customerAccount = VAULT; },
+    x => { x.response.accessToken = 'bad'; }, x => { x.response.orderId = 'wrong'; },
+    x => { x.order.authorised = false; }, x => { x.order.onchainOrderId = 'q-123456789abd'; },
+    x => { x.order.contractId = 'attacker.testnet'; }, x => { x.order.tokenContract = 'attacker.testnet'; },
+    x => { x.order.priceUnits = '4999999'; }, x => { x.order.sku = 'weekly-market-brief'; },
+    x => { x.order.state = 'PAID'; }, x => { x.order.brief += 'changed'; },
+    x => { x.order.quote.quoteTx = 'bad'; }, x => { x.order.quote.maxExpenseUnits = '10'; },
+    x => { x.chainQuote.sku = 'crosschain-brief'; }, x => { x.chainQuote.amount = '1'; },
+    x => { x.chainQuote.paid = true; }, x => { x.chainQuote.max_expense = '5000001'; },
+    x => { x.order.quote.expiresAt = new Date(NOW + 300_000).toISOString(); },
+    x => { x.chainQuote.expires_ns = String(BigInt(NOW + 65_000) * 1_000_000n); x.order.quote.expiresAt = new Date(NOW + 65_000).toISOString(); },
+  ];
+  for (const mutate of changes) { const f = quoteFixture(); mutate(f);
+    assert.throws(() => checkBufferQuoteResponse(f.quoteTerms, f.request, f.response, f.order, f.chainQuote, { nowMs: NOW })); }
 });
 
 test('forwarder terms fail closed on malformed keys, IDs, prices, expiry and alternate destinations', async () => {

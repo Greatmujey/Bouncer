@@ -118,7 +118,8 @@ test('correlates synthetic funding, exact Buffer receipt and report hash without
   assert.equal(proof.status, 'BUFFER_RECEIPTS_AND_REPORT_HASH_CORRELATED');
   assert.equal(proof.guarded_forwarder_funding_verified, true); assert.equal(proof.seller_payment_receipt_verified, true);
   assert.equal(proof.report_sha256, sha(REPORT)); assert.equal(proof.report_hash_matches_onchain_commitment, true);
-  assert.equal(proof.seller_http_delivery_verified, false); assert.equal(proof.independent_fulfillment_verified, false);
+  assert.equal(proof.seller_payout_verified, false); assert.equal(proof.seller_http_delivery_verified, false);
+  assert.equal(proof.independent_fulfillment_verified, false);
   assert.equal(proof.deployed_source_equivalence_verified, false); assert.equal(proof.retry_authorized, false);
   assert(!JSON.stringify(proof).includes(BRIEF)); assert(!JSON.stringify(proof).includes(REPORT));
 });
