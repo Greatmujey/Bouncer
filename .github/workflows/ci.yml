@@ -56,6 +56,7 @@ jobs:
           npm install --prefix "$RUNNER_TEMP/bouncer-browser" --no-save --no-audit --no-fund playwright-core@1.64.1
           node scripts/test-web-browser.mjs
           node scripts/test-walletconnect-browser.mjs
+          node scripts/test-wallet-prompt-fence-browser.mjs
       - name: Test pinned wallet adapters with synthetic signers
         shell: bash
         env:

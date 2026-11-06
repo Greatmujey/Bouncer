@@ -79,6 +79,21 @@ A mismatch or unavailable view blocks; even a matching snapshot never replaces
 a pre-prompt durable fence, verification of prior original transactions, owner
 approval, a code audit, or a fresh check at execution time. This preflight has
 no signer or transaction sender and does not contact the seller's HTTP service.
+In [isolated run 42273529625](https://github.com/Greatmujey/Bouncer/actions/runs/42273529625),
+the stage checks parsed actual local nearcore views but correctly **blocked**
+the mock FT because its code is not the real Circle testnet token.
+
+`web-src/wallet-local-prompt-fence.mjs` is a separate, experimental local
+write-ahead primitive: one unresolved owner prompt per browser profile, a
+strict IndexedDB commit before the reservation returns, and an immutable
+original hash once recorded. It does not call a wallet, and there is no
+unlock or expiry operation. Two-tab/reload/corruption tests are synthetic.
+Browser storage can be erased, rolled back or isolated on another device, so
+this local fence alone is **not** independently durable or safe authorization
+for live spending. Missing local state does not establish that an earlier wallet
+prompt failed. A separate durable owner-scoped service, authenticated identity,
+receipt reconciliation and recovery flow are still required before wiring a
+wallet prompt to this primitive.
 
 ## Why a separate forwarder
 
