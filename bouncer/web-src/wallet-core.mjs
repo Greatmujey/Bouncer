@@ -706,7 +706,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
         const reason = typeof error === 'string' ? error : error?.message || '';
         const ethereumHash = ethereum ? reason.match(/0x[0-9a-fA-F]{64}/)?.[0] : '';
         showDisconnected(ethereum
-          ? `Ethereum wallet connection did not finish. Setup may have been submitted; check ${ethereumHash ? `transaction ${ethereumHash}` : 'your wallet’s transaction history'} before retrying.`
+          ? `Ethereum wallet connection did not finish. Setup may have been submitted; do not retry until ${ethereumHash ? `original transaction ${ethereumHash}` : 'the original transaction'} is identified and reconciled.`
           : reason === 'INTEAR_ED25519_UNAVAILABLE'
           ? 'Intear needs a newer browser with Ed25519 support. No transaction was sent.'
           : reason === 'CLI_ED25519_UNAVAILABLE'

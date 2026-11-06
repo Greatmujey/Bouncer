@@ -271,7 +271,7 @@ test('Ethereum wallet connection failure does not claim a setup transaction was 
   await initWallet({ window: browser.win, document: browser.doc, NearConnector: connectorClass(config) });
   await browser.options.find(option => option.dataset.walletId === 'ethereum-wallets').click();
   await browser.nodes['wallet-ethereum-continue'].click();
-  assert.match(browser.nodes['wallet-status'].textContent, /Setup may have been submitted.*before retrying/);
+  assert.match(browser.nodes['wallet-status'].textContent, /Setup may have been submitted.*do not retry.*original transaction.*reconciled/);
   assert.doesNotMatch(browser.nodes['wallet-status'].textContent, /No transaction was sent/);
 });
 

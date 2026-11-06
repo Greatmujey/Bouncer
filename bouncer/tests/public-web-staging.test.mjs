@@ -85,7 +85,7 @@ test('public staging requires six wallets, WalletConnect, then Google', t => {
   const original = fs.readFileSync(index, 'utf8');
   for (const altered of [
     original.replace('google-signin.mjs?v=2', 'old.mjs?v=2'),
-    original.replace('wallet.bundle.js?v=17', 'old-wallet.js?v=17'),
+    original.replace('wallet.bundle.js?v=18', 'old-wallet.js?v=18'),
     original.replace('data-wallet-id="near-cli"', 'data-wallet-id="other"'),
     original.replace('data-wallet-id="ethereum-wallets"', 'data-wallet-id="other"'),
     original.replace('data-wallet-id="wallet-connect"', 'data-wallet-id="other"'),
