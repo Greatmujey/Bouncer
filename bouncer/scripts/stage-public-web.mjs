@@ -10,6 +10,7 @@ export const PUBLIC_WEB_FILES = Object.freeze([
   'manrope-latin.woff2', 'manrope-OFL.txt', 'evidence.mjs',
   'app.mjs', 'tour.mjs', 'google-signin.mjs', 'wallet.bundle.js',
   'intear-wallet.executor.js', 'intear-wallet-source.zip',
+  'ethereum-wallet.executor.js', 'ethereum-wallet-NOTICE.txt',
   'walletconnect.bundle.js', 'walletconnect-config.json', 'walletconnect-NOTICES.txt',
 ]);
 const DEFAULT_SOURCE = fileURLToPath(new URL('../web/', import.meta.url));
@@ -34,7 +35,7 @@ export function validatePublicWeb(source = DEFAULT_SOURCE) {
     throw new Error('Public website must approve exactly the dedicated Bouncer wallet origin');
   }
   const walletIds = [...html.matchAll(/data-wallet-id="([a-z-]+)"/g)].map(match => match[1]);
-  const expected = ['near-mobile', 'meteor-wallet', 'intear-wallet', 'nightly-wallet', 'ledger', 'near-cli', 'wallet-connect'];
+  const expected = ['near-mobile', 'meteor-wallet', 'intear-wallet', 'nightly-wallet', 'ledger', 'ethereum-wallets', 'near-cli', 'wallet-connect'];
   const pickerStart = html.indexOf('id="wallet-dialog"');
   const walletConnect = html.indexOf('data-wallet-id="wallet-connect"', pickerStart);
   const google = html.indexOf('id="google-start"', pickerStart);

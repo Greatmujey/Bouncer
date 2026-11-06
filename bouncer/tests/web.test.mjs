@@ -178,7 +178,8 @@ test('website discloses testnet limitations, historical examples and identity-on
   assert.match(html, /not proof of independent provider payment or delivery/);
   assert.doesNotMatch(html, /Start buying/i);
   assert.match(html, /Sign in with Google/i);
-  assert.match(html, /Neither connection creates a vault, grants spending access or sends a transaction/i);
+  assert.match(html, /does not create a Bouncer vault or grant agent spending access/i);
+  assert.match(html, /Ethereum wallet setup may require an approved testnet transaction/i);
   assert.match(html, /Never enter a seed phrase or private key into Bouncer/i);
   assert.match(html, /Gemini CLI and Claude Code passed local connection checks/i);
   assert.match(html, /ChatGPT web and other hosted assistants need HTTPS/i);
@@ -200,7 +201,7 @@ test('workspace picker contains the six testnet wallets, WalletConnect and Googl
   const views = [...html.matchAll(/data-route-view="([^"]+)"/g)].map(match => match[1]);
   assert.deepEqual(views, ['workspace', 'resources', 'guardrails', 'proof', 'connect']);
   const wallets = [...html.matchAll(/data-wallet-id="([^"]+)"/g)].map(match => match[1]);
-  assert.deepEqual(wallets, ['near-mobile', 'meteor-wallet', 'intear-wallet', 'nightly-wallet', 'ledger', 'near-cli', 'wallet-connect']);
+  assert.deepEqual(wallets, ['near-mobile', 'meteor-wallet', 'intear-wallet', 'nightly-wallet', 'ledger', 'ethereum-wallets', 'near-cli', 'wallet-connect']);
   assert.ok(html.indexOf('id="google-start"') > html.indexOf('data-wallet-id="wallet-connect"'));
   assert.match(html, /id="wallet-dialog"/);
   assert.match(html, /id="google-signin-button"/);

@@ -1,0 +1,27 @@
+name: Public wallet account view (read only)
+
+on:
+  push:
+    branches: ['arena/**']
+
+permissions:
+  contents: read
+
+jobs:
+  account-view:
+    if: contains(github.event.head_commit.message, '[wallet-account-read]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Read the exact public account in a phone-sized browser
+        env:
+          BOUNCER_PLAYWRIGHT_PATH: ${{ runner.temp }}/bouncer-browser/node_modules/playwright-core/index.mjs
+        run: |
+          npm install --prefix "$RUNNER_TEMP/bouncer-browser" --no-save --no-audit --no-fund playwright-core@1.64.1
+          node bouncer/scripts/test-wallet-live-account.mjs

@@ -13,7 +13,7 @@
   <title>Bouncer — The resource layer for agents</title>
   <link rel="icon" type="image/svg+xml" href="./favicon.svg?v=3">
   <link rel="preload" href="./manrope-latin.woff2" as="font" type="font/woff2" crossorigin>
-  <link rel="stylesheet" href="./styles.css?v=15">
+  <link rel="stylesheet" href="./styles.css?v=16">
 </head>
 <body>
   <svg class="svg-defs" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
@@ -135,7 +135,7 @@
 <section class="section access-section" id="connect" aria-labelledby="access-title">
           <div class="section-heading"><div><div class="section-kicker">YOUR WORKSPACE</div><h2 id="access-title">One place to get started<span>.</span></h2><p>Choose a wallet or Google sign-in, or explore Bouncer with a compatible AI assistant.</p></div></div>
           <div class="access-grid">
-            <article class="access-card account-card"><div class="access-card-head"><span class="access-icon account-icon"><svg><use href="#i-wallet"/></svg></span><span class="access-pill"><span class="status-dot"></span> NEAR TESTNET</span></div><h3>Connect your account</h3><p class="access-copy">Choose a testnet wallet or sign in with Google. Neither connection creates a vault, grants spending access or sends a transaction.</p>
+            <article class="access-card account-card"><div class="access-card-head"><span class="access-icon account-icon"><svg><use href="#i-wallet"/></svg></span><span class="access-pill"><span class="status-dot"></span> NEAR TESTNET</span></div><h3>Connect your account</h3><p class="access-copy">Choose a testnet wallet or sign in with Google. Connecting does not create a Bouncer vault or grant agent spending access. Ethereum wallet setup may require an approved testnet transaction.</p>
               <div class="wallet-actions"><button id="wallet-connect" class="button wallet-button" type="button" data-wallet-open><span data-wallet-label>Connect wallet</span> <svg><use href="#i-arrow"/></svg></button></div>
               <p id="wallet-status" class="connection-status" role="status" aria-live="polite">Getting your wallet options ready…</p><p class="security-note"><svg><use href="#i-lock"/></svg> Never enter a seed phrase or private key into Bouncer.</p>
             </article>
@@ -159,9 +159,38 @@
     <button class="wallet-option" type="button" data-wallet-id="intear-wallet" disabled><span class="wallet-logo intear-logo" aria-hidden="true"><svg viewBox="0 0 48 48"><path d="M24 8C20 14 13 23 13 29a11 11 0 0 0 22 0c0-6-7-15-11-21Z"/><path d="M18 29c0 3 2 6 5 6"/></svg></span><span class="wallet-option-name"><strong>Intear Wallet</strong><small>Web &amp; app · Testnet</small></span><svg class="wallet-option-arrow"><use href="#i-arrow"/></svg></button>
     <button class="wallet-option" type="button" data-wallet-id="nightly-wallet" disabled><span class="wallet-logo nightly-logo" aria-hidden="true"><svg viewBox="0 0 48 48"><path d="M31 10a16 16 0 1 0 7 25 14 14 0 0 1-7-25Z"/><path d="M34 11v6M31 14h6"/></svg></span><span class="wallet-option-name"><strong>Nightly Wallet</strong><small>nightly.app · Browser extension</small></span><svg class="wallet-option-arrow"><use href="#i-arrow"/></svg></button>
     <button class="wallet-option" type="button" data-wallet-id="ledger" disabled><span class="wallet-logo ledger-logo" aria-hidden="true"><svg viewBox="0 0 48 48"><path d="M8 18v-8h10M30 10h10v8M8 30v8h10M30 38h10v-8M20 16v16h10"/></svg></span><span class="wallet-option-name"><strong>Ledger</strong><small>ledger.com · Hardware wallet</small></span><svg class="wallet-option-arrow"><use href="#i-arrow"/></svg></button>
-    <button class="wallet-option" type="button" data-wallet-id="near-cli" disabled><span class="wallet-logo cli-logo" aria-hidden="true"><svg viewBox="0 0 48 48"><path d="m12 15 10 9-10 9M25 34h11"/></svg></span><span class="wallet-option-name"><strong>NEAR CLI</strong><small>Terminal · Sign a testnet login message</small></span><svg class="wallet-option-arrow"><use href="#i-arrow"/></svg></button>
+    <button class="wallet-option" type="button" data-wallet-id="ethereum-wallets" disabled><span class="wallet-logo ethereum-logo" aria-hidden="true"><svg viewBox="0 0 48 48"><path d="M24 6 12 25l12 7 12-7L24 6Zm-12 22 12 14 12-14-12 7-12-7Zm12-22v26"/></svg></span><span class="wallet-option-name"><strong>Ethereum Wallets</strong><small>MetaMask &amp; more · 0x account on NEAR</small></span><svg class="wallet-option-arrow"><use href="#i-arrow"/></svg></button>
+    <button class="wallet-option" type="button" data-wallet-id="near-cli" disabled><span class="wallet-logo cli-logo" aria-hidden="true"><svg viewBox="0 0 48 48"><path d="m12 15 10 9-10 9M25 34h11"/></svg></span><span class="wallet-option-name"><strong>NEAR CLI / account ID</strong><small>Enter an ID · no terminal for viewing</small></span><svg class="wallet-option-arrow"><use href="#i-arrow"/></svg></button>
     <button class="wallet-option wallet-unavailable" type="button" data-wallet-id="wallet-connect" disabled><span class="wallet-logo walletconnect-logo" aria-hidden="true"><svg viewBox="0 0 400 400"><circle cx="200" cy="200" fill="#3396ff" r="199.5" stroke="#66b1ff"/><path d="m122.519 148.965c42.791-41.729 112.171-41.729 154.962 0l5.15 5.022c2.14 2.086 2.14 5.469 0 7.555l-17.617 17.18c-1.07 1.043-2.804 1.043-3.874 0l-7.087-6.911c-29.853-29.111-78.253-29.111-108.106 0l-7.59 7.401c-1.07 1.043-2.804 1.043-3.874 0l-17.617-17.18c-2.14-2.086-2.14-5.469 0-7.555zm191.397 35.529 15.679 15.29c2.14 2.086 2.14 5.469 0 7.555l-70.7 68.944c-2.139 2.087-5.608 2.087-7.748 0l-50.178-48.931c-.535-.522-1.402-.522-1.937 0l-50.178 48.931c-2.139 2.087-5.608 2.087-7.748 0l-70.7015-68.945c-2.1396-2.086-2.1396-5.469 0-7.555l15.6795-15.29c2.1396-2.087 5.6085-2.087 7.7481 0l50.1789 48.932c.535.522 1.402.522 1.937 0l50.177-48.932c2.139-2.087 5.608-2.087 7.748 0l50.179 48.932c.535.522 1.402.522 1.937 0l50.179-48.931c2.139-2.087 5.608-2.087 7.748 0z" fill="#fff" stroke="none"/></svg></span><span class="wallet-option-name"><strong>WalletConnect</strong><small id="walletconnect-caption">Not configured · Project ID required</small></span><span class="wallet-soon" id="walletconnect-badge">SETUP</span></button>
   </div>
+  <section class="account-entry ethereum-info" id="wallet-ethereum-info" aria-label="Ethereum wallet setup information" hidden>
+    <strong>Ethereum wallet on NEAR testnet</strong>
+    <p>This connects your Ethereum wallet’s <strong>0x… account on NEAR</strong>. It is a different account from a named NEAR wallet such as <code>name.testnet</code>; its funds do not move across automatically.</p>
+    <p>The wallet provider may ask you to approve a one-time testnet setup transaction for a restricted <code>rlp_execute</code> relayer key. Review it in your wallet. Later actions require separate approval and testnet NEAR for gas.</p>
+    <p>This bridge is experimental. If setup times out, check its transaction in your wallet before retrying. Your keys stay in your wallet.</p>
+    <button class="account-entry-primary" id="wallet-ethereum-continue" type="button">Continue to Ethereum Wallets →</button>
+    <button class="account-entry-secondary" id="wallet-ethereum-back" type="button">← Back to wallets</button>
+  </section>
+  <section class="account-entry" id="wallet-account-entry" aria-label="Enter a NEAR account" hidden>
+    <form id="wallet-account-form" novalidate>
+      <label for="wallet-account-id">NEAR account ID</label>
+      <input id="wallet-account-id" name="accountId" type="text" placeholder="your-name.testnet" maxlength="64" autocomplete="off" autocapitalize="none" spellcheck="false" aria-describedby="wallet-account-help wallet-account-error">
+      <p id="wallet-account-help">This looks up the exact ID on <strong>testnet</strong>. Entering a name is view-only; it does not verify ownership or connect a signing wallet.</p>
+      <p id="wallet-account-error" class="account-entry-error" role="alert" hidden></p>
+      <button class="account-entry-primary" id="wallet-account-submit" type="submit">Continue without a terminal →</button>
+    </form>
+    <button class="account-entry-secondary" id="wallet-account-back" type="button">← Back to wallets</button>
+    <details class="account-entry-cli"><summary>Verify with NEAR CLI instead</summary><p>For CLI users who can sign a login message in a terminal.</p><button id="wallet-cli-verify" type="button">Verify using NEAR CLI</button></details>
+  </section>
+  <section class="account-view" id="wallet-account-view" aria-label="Public testnet account" hidden>
+    <div class="account-view-head"><div><small>PUBLIC TESTNET ACCOUNT</small><strong id="wallet-account-name"></strong></div><span>VIEW ONLY</span></div>
+    <p class="account-view-warning">Unverified account name. No wallet is connected and no spending access was granted.</p>
+    <dl class="account-view-balances"><div><dt>Account NEAR*</dt><dd id="wallet-account-near">—</dd></div><div><dt>Circle test USDC</dt><dd id="wallet-account-usdc">—</dd></div></dl>
+    <p id="wallet-account-balance-status" class="account-view-status" role="status" aria-live="polite"></p>
+    <p class="account-view-footnote">*NEAR may include funds reserved for storage; staked NEAR is not included. These are public balances, not a spendable quote.</p>
+    <button class="account-entry-primary" id="wallet-account-use-wallet" type="button">Choose a wallet to sign →</button>
+    <button class="account-entry-secondary" id="wallet-account-refresh" type="button">Refresh public balances</button>
+  </section>
   <section class="walletconnect-pairing" id="walletconnect-pairing" aria-label="WalletConnect pairing" hidden>
     <div class="walletconnect-heading">
       <span class="walletconnect-mark" aria-hidden="true"><svg viewBox="0 0 400 400"><path d="m122.519 148.965c42.791-41.729 112.171-41.729 154.962 0l5.15 5.022c2.14 2.086 2.14 5.469 0 7.555l-17.617 17.18c-1.07 1.043-2.804 1.043-3.874 0l-7.087-6.911c-29.853-29.111-78.253-29.111-108.106 0l-7.59 7.401c-1.07 1.043-2.804 1.043-3.874 0l-17.617-17.18c-2.14-2.086-2.14-5.469 0-7.555zm191.397 35.529 15.679 15.29c2.14 2.086 2.14 5.469 0 7.555l-70.7 68.944c-2.139 2.087-5.608 2.087-7.748 0l-50.178-48.931c-.535-.522-1.402-.522-1.937 0l-50.178 48.931c-2.139 2.087-5.608 2.087-7.748 0l-70.7015-68.945c-2.1396-2.086-2.1396-5.469 0-7.555l15.6795-15.29c2.1396-2.086 5.6085-2.086 7.748 0l50.1789 48.932c.535.522 1.402.522 1.937 0l50.177-48.932c2.139-2.087 5.608-2.087 7.748 0l50.179 48.932c.535.522 1.402.522 1.937 0l50.179-48.931c2.139-2.087 5.608-2.087 7.748 0z" fill="currentColor" stroke="none"/></svg></span>
@@ -202,11 +231,11 @@
       <button id="google-signout" class="button account-signout" type="button" hidden>Sign out of Google</button>
       <a id="account-open-site" class="wallet-open-site" href="https://bouncer-near.vercel.app/#connect" target="_blank" rel="noopener noreferrer" hidden>Open Bouncer’s account page ↗</a>
     </div>
-    <div class="wallet-safety" id="wallet-safety"><svg><use href="#i-lock"/></svg><div><strong>Just your account, never your keys.</strong><p>No spending access or transaction is requested. Never share your seed phrase or private key.</p><details><summary>CLI help &amp; licenses</summary><p>For CLI, choose your key source, run the displayed command in your terminal and paste only its signed output. <a href="./intear-wallet-source.zip">Intear adapter source</a> (AGPL-3.0) · <a href="./walletconnect-NOTICES.txt">WalletConnect notices</a>.</p></details></div></div>
+    <div class="wallet-safety" id="wallet-safety"><svg><use href="#i-lock"/></svg><div><strong>Just your account, never your keys.</strong><p>Connecting does not grant Bouncer spending access. Ethereum wallet setup may request an approved testnet transaction. Never share your seed phrase or private key.</p><details><summary>CLI help &amp; licenses</summary><p>An account ID alone is view-only. To verify with CLI, use the optional signed login; it requires a terminal. <a href="./intear-wallet-source.zip">Intear adapter source</a> (AGPL-3.0) · <a href="./walletconnect-NOTICES.txt">WalletConnect notices</a> · <a href="./ethereum-wallet-NOTICE.txt">Ethereum wallet notice</a>.</p></details></div></div>
   </dialog>
   <dialog class="tour-dialog" id="welcome-tour" aria-labelledby="tour-title" aria-describedby="tour-description"><div class="tour-topline"><span class="brand-mark" aria-hidden="true"><svg viewBox="16 17 300 300"><use href="#i-bouncer"/></svg></span><span class="tour-count" id="tour-count">STEP 1 OF 4</span><button type="button" class="tour-close" id="tour-skip" aria-label="Close the tour">×</button></div><div class="tour-progress" aria-hidden="true"><span></span><span></span><span></span><span></span></div><div class="tour-copy" aria-live="polite"><div class="section-kicker" id="tour-kicker">WELCOME TO BOUNCER</div><h2 id="tour-title">Meet your resource agent.</h2><p id="tour-description">Bouncer helps an agent get compute, storage and API services while your on-chain rules guard its spending.</p><div class="tour-callout" id="tour-callout">Bouncer is a testnet prototype, not an open marketplace.</div></div><div class="tour-actions"><button class="button tour-back" type="button" id="tour-back" disabled>Back</button><button class="button tour-next" type="button" id="tour-next">Next →</button></div></dialog>
   <script type="module" src="./app.mjs?v=7"></script>
-  <script type="module" src="./wallet.bundle.js?v=14"></script>
+  <script type="module" src="./wallet.bundle.js?v=15"></script>
   <script type="module" src="./google-signin.mjs?v=2"></script>
 </body>
 </html>

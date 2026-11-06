@@ -90,6 +90,17 @@ const notices = [
 ].join('\n');
 fs.writeFileSync(path.join(here, 'web/walletconnect-NOTICES.txt'), notices.trimEnd() + '\n');
 
+// The Ethereum wallet executor is separately sandboxed. Its exact upstream
+// source is vendored under MIT; the external approval page is not bundled.
+await build({
+  absWorkingDir: here,
+  entryPoints: ['web-src/vendor/eth-wallet/src/executor.ts'],
+  outfile: 'web/ethereum-wallet.executor.js',
+  bundle: true, format: 'esm', platform: 'browser', target: ['es2020'], minify: true,
+  banner: { js: '/* Ethereum wallets for NEAR, MIT © 2026 Guille. See ethereum-wallet-NOTICE.txt. */' },
+});
+fs.copyFileSync(path.join(here, 'web-src/vendor/eth-wallet/LICENSE.md'), path.join(here, 'web/ethereum-wallet-NOTICE.txt'));
+
 // Intear is a separately loaded AGPL-3.0 component, built from its vendored,
 // pinned upstream sources. Its corresponding source is offered on the site.
 await build({
