@@ -124,14 +124,15 @@ self-hosted. The site is not a live agent dashboard or commercial marketplace.
 
 This branch restores the testnet account picker: NEAR Mobile, Meteor, Intear,
 Nightly, Ledger and NEAR CLI, followed by Google sign-in. Only the former
-WalletConnect QR/project-ID option is removed. Google is **identity only** and
-requires an app-specific OAuth client ID with the authorized origin
-`https://bouncer-near.vercel.app`; this is not configured in Vercel yet. Mocked
-UI and token-verification tests do not prove a real Google login. Neither
+WalletConnect QR/project-ID option is removed. Google is **identity only**.
+The public OAuth client ID is configured in Vercel for a future deployment;
+its authorization for `https://bouncer-near.vercel.app` and a real sign-in
+still need verification. Mocked UI and token-verification tests do not prove a
+real Google login. Neither
 Google sign-in nor selecting a wallet creates a vault or grants spending
-authority. The current production site remains on the earlier release until
-this branch is reviewed and merged. The optional public-RPC read keeps the
-recorded snapshot if a current balance check fails.
+authority. Website updates reach production only after review and deployment.
+The optional public-RPC read keeps the recorded snapshot if a current balance
+check fails.
 
 Preview locally with Node:
 

@@ -24,23 +24,22 @@ need end-to-end testing; unit and mocked-browser tests are not live logins.
 
 ## Configure Google Identity Services
 
-The Bouncer Vercel project currently has no Google OAuth client ID. An owner of
-a Google Cloud project must create or select a **Web application** OAuth
-client in [Google Auth Platform](https://console.cloud.google.com/auth/clients),
-configure the consent screen (including test users if in testing mode), and
-add exactly this **Authorized JavaScript origin**:
+The public Google OAuth client ID supplied by the owner is configured as
+`BOUNCER_GOOGLE_CLIENT_ID` in Vercel for production and preview deployments.
+The corresponding **Web application** client in [Google Auth Platform](https://console.cloud.google.com/auth/clients)
+must have a configured consent screen (including test users if in testing
+mode) and exactly this **Authorized JavaScript origin**:
 
 ```
 https://bouncer-near.vercel.app
 ```
 
-Provide only the public client ID, ending in `.apps.googleusercontent.com`, for
-`BOUNCER_GOOGLE_CLIENT_ID` on the Bouncer Vercel project. Do **not** send a
-Google client secret, password, private key, access token or one-time code.
 The GIS JavaScript popup flow uses a callback rather than a redirect URI. The
-server receives the client ID at runtime; it is not a secret. Vercel must deploy
-the reviewed branch after its usual production-merge heads-up. Then test a
-real sign-in and sign-out on the dedicated origin, including a page reload.
+client ID is public; do **not** send a Google client secret, password, private
+key, access token or one-time code. Origin authorization and consent settings
+have not been independently verified. A new deployment is required for the
+configured environment variable to take effect. Then test a real sign-in and
+sign-out on the dedicated origin, including a page reload.
 
 The optional static GitHub Pages address is
 https://greatmujey.github.io/Bouncer/ if Pages is enabled for this repository;
