@@ -93,6 +93,16 @@ child's presence, current storage cost, bounded native funding, token and
 seller code, vault balances and unused policy. It cannot verify the private
 order, approval, prompt fence, provider delivery or future chain state.
 
+`agent/buffer-wallet-connector-compat.mjs` compares reviewed unsigned batches
+to the pinned NEAR Connect action conversion without opening a wallet. The
+reviewed V12 binary is 536,651 bytes; encoding just those bytes as base64 takes
+715,536 bytes, while a decimal JSON byte array takes 1,568,153 bytes, before
+protocol envelopes or escaping. Meteor's pinned mobile bridge uses a base64
+representation and the pinned Intear adapter uses an array, but these figures
+are **not** measured wallet transport limits and do not prove a phone can
+approve a deployment. WalletConnect currently requests accounts only; the
+EVM adapter cannot execute this named-owner, multi-action V12 setup.
+
 `agent/buffer-wallet-spending-preflight.mjs` performs read-only, fresh,
 same-FINAL-block checks for the next policy/key stage or the separately retained
 exact-intent stage, including both installed method-scoped keys for that final

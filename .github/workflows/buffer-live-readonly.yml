@@ -37,7 +37,7 @@ jobs:
           gh api repos/Greatmujey/Bouncer/git/blobs/16785505eaed13609d8e569e7b1665f89683d9eb --jq .content | base64 -d > "$BOUNCER_V12_WASM_PATH"
           printf '%s  %s\n' '033f255c5822ff97495809f7d60fddf66f266f20c36285fe71296b66decc6d12' "$BOUNCER_V12_WASM_PATH" | sha256sum -c -
           test "$(wc -c < "$BOUNCER_V12_WASM_PATH")" -eq 536651
-          node --test tests/buffer-wallet-setup-plan.test.mjs
+          node --test tests/buffer-wallet-setup-plan.test.mjs tests/buffer-wallet-connector-compat.test.mjs
       - name: Inspect V12, Buffer and indicative Ref returns at one FINAL block
         run: |
           set -euo pipefail
