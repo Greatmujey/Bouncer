@@ -23,9 +23,12 @@ export function summarizeBufferSourceMetadata(value) {
   const image = typeof info.build_environment === 'string' ? /^docker\.io\/sourcescan\/cargo-near@sha256:([a-f0-9]{64})$/.exec(info.build_environment) : null;
   const command = Array.isArray(info.build_command) && info.build_command.length <= 12 &&
     info.build_command.every(x => typeof x === 'string' && /^[a-zA-Z0-9_.\/-]{1,80}$/.test(x)) ? [...info.build_command] : null;
-  return { status: 'RETURNED_UNVERIFIED', claimed_commit_from_link: link?.[1] ?? null,
-    claimed_commit_from_snapshot: snapshot?.[1] ?? null, claimed_build_image_sha256: image?.[1] ?? null,
-    claimed_build_command: command };
+  const version = typeof value.version === 'string' && /^[A-Za-z0-9_.-]{1,40}$/.test(value.version) ? value.version : null;
+  const repository = typeof value.link === 'string' && /^https:\/\/github\.com\/Chima30\/buffer(?:\/tree\/[a-f0-9]{40})?\/?$/.test(value.link);
+  return { status: 'RETURNED_UNVERIFIED', version, claims_buffer_repository: repository,
+    build_info_present: Boolean(value.build_info && typeof value.build_info === 'object' && !Array.isArray(value.build_info)),
+    claimed_commit_from_link: link?.[1] ?? null, claimed_commit_from_snapshot: snapshot?.[1] ?? null,
+    claimed_build_image_sha256: image?.[1] ?? null, claimed_build_command: command };
 }
 
 export async function compareBufferCode({ wasmBytes, provider, now = Date.now } = {}) {

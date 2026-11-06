@@ -64,8 +64,9 @@ test('source metadata is self-reported, pinned to the same block and sanitized',
     return { block_hash: hash(1), result: [...Buffer.from(JSON.stringify(metadata))] };
   };
   const result = await compare(p);
-  assert.deepEqual(result.self_reported_source_metadata, { status: 'RETURNED_UNVERIFIED',
-    claimed_commit_from_link: commit, claimed_commit_from_snapshot: commit, claimed_build_image_sha256: image,
+  assert.deepEqual(result.self_reported_source_metadata, { status: 'RETURNED_UNVERIFIED', version: null,
+    claims_buffer_repository: true, build_info_present: true, claimed_commit_from_link: commit,
+    claimed_commit_from_snapshot: commit, claimed_build_image_sha256: image,
     claimed_build_command: ['cargo', 'near', 'build', '--locked'] });
   assert.doesNotMatch(JSON.stringify(result), /secret-not-echoed/);
   const unsafe = summarizeBufferSourceMetadata({ link: 'https://evil.example/%0A::error::x', build_info: { build_command: ['%0A::error::x'] } });
