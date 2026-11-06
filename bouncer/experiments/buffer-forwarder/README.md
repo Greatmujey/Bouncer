@@ -87,6 +87,12 @@ It also works after the intent expires, without claiming the intent is fresh.
 A match is not proof of wallet approval, current state, deployed code or
 independent delivery. A missing or failed original never permits a retry.
 
+`agent/buffer-forwarder-wallet-preflight.mjs` checks the proposed create and
+registration stages against a fresh pinned testnet block, including the direct
+child's presence, current storage cost, bounded native funding, token and
+seller code, vault balances and unused policy. It cannot verify the private
+order, approval, prompt fence, provider delivery or future chain state.
+
 `agent/buffer-wallet-spending-preflight.mjs` performs read-only, fresh,
 same-FINAL-block checks for the next policy/key stage or the separately retained
 exact-intent stage, including both installed method-scoped keys for that final
