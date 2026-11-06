@@ -15,24 +15,33 @@ projects are eligible; integrations named in the track hints are not mandatory.
   development providers. Neither proves independently operated FT-paid
   compute, storage and API fulfillment. Synthetic nearcore tests are not live
   purchases.
-- The production WalletConnect relay has passed a deployed-site smoke with a
-  synthetic wallet over the real relay. A real compatible wallet on the user's
-  Windows machine has not yet been shown to approve and display Connected.
+- A synthetic WalletConnect session passed against the real relay. The deployed
+  Vercel gateway and a real compatible wallet on the user's Windows machine
+  have not yet been verified end to end.
 
 ## What has stopped or limited us
 
 | Attempt | Current blocker or unfinished work | Most relevant track(s) |
 | --- | --- | --- |
-| Buy useful data, compute or storage from an independent seller with a policy-controlled FT payment | No full independent FT-paid delivery has been verified. In the [6 November PayPerCall catalog snapshot](https://github.com/Greatmujey/Bouncer/actions/runs/42210554203), both services were native-NEAR-priced and no Circle offer was found. An HTTPS-shaped listing is not proof that an operator is reachable. Find and verify a compatible independent operator; do not depend solely on one vendor response. | **Agent Economy**, Autonomous Business; Real-World Money if a convincing stablecoin use case is built |
+| Buy useful data, compute or storage from an independent seller with a policy-controlled FT payment | No full independent FT-paid delivery has been verified. A [6 November FINAL snapshot](https://github.com/Greatmujey/Bouncer/actions/runs/42250800169) found Buffer's 5-test-USDC custom minimum against 0.006898 test USDC in the vault; 7 test NEAR indicated only ~3.267 test USDC in the best of two sampled direct Ref pools. That is neither an executable quote nor an exhaustive route search. The [later PayPerCall catalog snapshot](https://github.com/Greatmujey/Bouncer/actions/runs/42250799913) again found only native-NEAR services and no Circle offer. An HTTPS-shaped listing is not proof that an operator is reachable. | **Agent Economy**, Autonomous Business; Real-World Money if a convincing stablecoin use case is built |
 | Use PayPerCall's escrow without losing vault refund accounting | Its published route uses `ft_transfer_call`, while a later plain FT refund can bypass the vault's ledger. The experimental one-shot forwarder and isolated mock-token refund/fulfillment scenarios are promising, but are not deployed, audited or proven against Circle and the live escrow. The forwarder limits price to a maximum but does not atomically pin provider, operator and exact price at the escrow. A preflight alone cannot remove that race. | **AI Security & Defense**, Agent Economy |
 | Prove the seller actually delivered the requested answer and was paid | A seller's answer hash, a payment event and a successful promise are different facts. The read-only verifier correlates the guarded transfer, escrow call, answer commitment and separately linked payout. A separate return check can verify a linked vault callback but does not prove the fungible units originated in that order. HTTP origin, data correctness and independent delivery remain unproven. | **Agent Economy**, AI Security & Defense |
 | Use Tollgate for independent data | It accepts native testnet NEAR, not Circle. Its voucher does not bind the HTTP resource; the reviewed seller stores state in per-instance temporary storage and relies on asynchronous settlement. Timely settlement and successful delivery within the channel's short deadline are not established. V13 is experimental, undeployed and unaudited. | **Agent Economy**, AI Security & Defense |
 | Complete wallet login on the user's Windows browser | Earlier attempts timed out before showing a QR. Production now contains a same-origin fallback and passed a synthetic deployed-site session, but no real wallet approval on that device has been verified. The public fallback has per-instance limits but no verified global quota or Vercel WAF rule. Account display is not spending authorization. | Cross-cutting product usability; **AI Security & Defense** for session scope and relay abuse |
-| Safely resume work with the V3 testnet owner | Two public original signed transactions have no verified receipts. The [archival observation](https://github.com/Greatmujey/Bouncer/actions/runs/42210554203) found their references beyond the then-observed validity window; it did not prove what happened historically. The local V3 keyring is absent from the reconstructed workspace. Do not resend either original, re-enable retired fences, or sign unrelated V3 owner transactions while their histories remain unresolved. | **AI Security & Defense** and a cross-cutting development dependency |
+| Safely resume work with the V3 testnet owner | Two public original signed transactions have no verified receipts. The [latest archival observation](https://github.com/Greatmujey/Bouncer/actions/runs/42250799913) found their references beyond the then-observed validity window; it did not prove what happened historically. The V3 keyring was privately restored and checked against the public owner plan; the user's saved backup remains unverified. Do not resend either original, re-enable retired fences, or sign unrelated V3 owner transactions while their histories remain unresolved. | **AI Security & Defense** and a cross-cutting development dependency |
 | Move from guarded procurement to complete business operations | The planner and development examples are not a running autonomous business with real customers, invoicing and dependable operations. | **Autonomous Business** |
 | Perform guarded swaps and cross-chain settlement | Previous Ref testnet swaps were owner setup, not a finished agent-guarded swap with reliable output accounting. A cross-chain Intents path is not complete. No real-money Intents transaction is authorized. | **Unstoppable DeFi** |
 | Coordinate a genuine agent swarm | One coordinator sequences work; there is no demonstrated independent multi-agent bidding, hiring or secure handoff economy. | **AI Swarms** |
 | Verify security at production strength | There is no independent audit of the vault, experimental forwarder or deployed relay. Receipt correlation still trusts the RPC and cannot prove source/build equivalence or isolate every same-block transfer. Seller output remains untrusted. | **AI Security & Defense**; affects every track |
+
+**Additional independent offer, not currently compatible:** [Leash's live
+catalog](https://leash.frankolien.com/api/paid) advertises useful price, search
+and page-reading endpoints for 0.01–0.02 Circle test USDC. Its [testnet x402
+facilitator](https://leash.frankolien.com/api/x402/supported) requires its own
+`leash` transfer method and a policy on `leash.frankolien.testnet`; it does not
+accept Bouncer's direct on-chain proof. Its [test-USDC tap](https://leash.frankolien.com/api/test-usdc)
+reported unavailable on 6 November. No payment, account or seller request
+beyond these public GETs was made.
 
 **Alternative research lead:** [Allowance's published testnet report](https://github.com/Rahat-ch/allowance/blob/f44c27ff84e07d2c29c8937bac12818e421e5320/docs/proof/testnet.md)
 describes a Circle test-USDC x402 flow using NEAR Chain Signatures. Its

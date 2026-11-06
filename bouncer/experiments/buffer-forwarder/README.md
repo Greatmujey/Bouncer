@@ -5,15 +5,18 @@ delivery, or authorization to spend. The independent Buffer service is a
 promising candidate for an FT-paid research/data resource, not a substitute
 for Bouncer's compute and storage tracks.
 
-On November 6, 2026, Buffer's public catalog listed `weekly-market-brief` and
-`crosschain-brief` at **20,000,000 atoms (20 test USDC)**; a custom quote had a
-5,000,000-atom minimum. The observed V12 Circle balance was **6,898 atoms**.
-A web4 Ref quote briefly recorded here was from a stale indexer at block
-238,527,181 and must not be used for planning or spending. A fresh FINAL quote
-is still required. Prices, liquidity, quote availability and deployed code can
-change. Bouncer has not created an order or quote, contacted the seller's paid
-workflow, or paid or obtained a report. The contract source below is pinned for
-investigation; it is not proof that the live deployment matches that source.
+At 16:16 UTC on November 6, 2026, a [read-only testnet snapshot](https://github.com/Greatmujey/Bouncer/actions/runs/42250800169)
+found Buffer's two fixed briefs active at **20,000,000 atoms (20 test USDC)**
+and its custom-brief minimum at **5,000,000 atoms**. The V12 vault held **6,898
+atoms**. The same FINAL block indicated 7 test NEAR would return only 3,267,177
+atoms from the better of the two sampled Ref pools, below the custom minimum.
+That quote was an observation, not a reservation or authority to trade. A web4
+quote previously cited was from a stale indexer at block 238,527,181 and must
+not be used. Prices, liquidity, quote availability and deployed code can change;
+any later action requires a new fresh check. Bouncer has not created an order or
+quote, contacted the seller's paid workflow, or paid or obtained a report. The
+contract source below is pinned for investigation; it is not proof that the live
+deployment matches that source.
 
 ## Why a separate forwarder
 

@@ -17,7 +17,10 @@ and 100 paid-route calls per day. Its NEAR offer named `near:testnet`, Circle's
 `3e2210e1184b45b64c8a434c0a7e7b23cc04ea7eb7b23cc04ea7eb7a6c3c32520d03d4afcb8af`,
 and `svalin-agent.testnet`. Testnet USDC has no real value. The free
 `/v1/demo/risk/root.near` returned a JSON report; this is neither paid delivery
-nor a validation of the report's accuracy. The published offer may change.
+nor a validation of the report's accuracy. A later anonymous GET on 6 November
+at approximately 16:20 UTC listed the monthly pass at **9**, not 5 test USDC.
+The historical 5-USDC profile below must not be treated as the current price;
+all prices and availability may change.
 
 ## Why this may close part of the FT gap
 
