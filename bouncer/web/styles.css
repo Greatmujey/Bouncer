@@ -105,7 +105,7 @@ body.wallet-dialog-open{overflow:hidden}
 @media(max-width:740px){.wallet-dialog{inset:auto 0 0;bottom:0;width:100%;max-height:min(92dvh,760px);margin:0;padding:15px 20px calc(20px + env(safe-area-inset-bottom));border:1px solid #3c4b3f;border-bottom:0;border-radius:23px 23px 0 0;animation:sheet-in .28s ease both}.wallet-sheet-handle{display:block;width:38px;height:4px;margin:0 auto 13px;border-radius:4px;background:#52695a}.wallet-dialog h2{font-size:25px;margin-top:6px}.wallet-banner{right:12px;bottom:12px;max-width:calc(100vw - 24px)}}
 @media(max-width:350px){.wallet-option-name small{font-size:9px}}
 @media(prefers-reduced-motion:reduce){.wallet-dialog{animation:none}}
-/* Nightly may present only an install prompt; make cancellation visible. */
+/* Nightly and Ledger can lack a close control while opening. */
 .hot-connector-popup .modal-content{position:relative}
 .hot-connector-popup .bouncer-wallet-close{position:absolute;top:12px;right:12px;z-index:2;display:grid;place-items:center;width:34px;height:34px;padding:0;border:1px solid #78998180;border-radius:50%;background:#173122;color:#f3fff1;font-size:22px;line-height:1}
 .hot-connector-popup .bouncer-wallet-close:hover{background:#2f5238}

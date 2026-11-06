@@ -270,8 +270,10 @@ try {
         assert.match(await frame.locator('body').innerText(), /Download Nightly/);
         await page.getByRole('button', { name: 'Cancel Nightly Wallet connection' }).click();
       } else {
-        assert.match(await frame.locator('body').innerText(), /Ledger device.*USB/i);
-        await frame.locator('#cancelBtn').click();
+        assert.match(await frame.locator('body').innerText(), /Ledger device/i);
+        // Some browsers wait for WebHID permission; cancellation must work
+        // even while the upstream adapter is still showing its spinner.
+        await page.getByRole('button', { name: 'Cancel Ledger connection' }).click();
       }
       await page.waitForFunction(() => document.querySelector('#wallet-dialog').open && /cancelled or unavailable/i.test(document.querySelector('#wallet-status').textContent));
       assert.deepEqual(writes, []);

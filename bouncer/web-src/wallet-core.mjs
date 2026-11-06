@@ -227,7 +227,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     return;
   }
 
-  // Mobile and Nightly's sandbox popups can lack a visible close control.
+  // Mobile, Nightly and Ledger's sandbox popups can lack a visible close control.
   // The parent-side cancel invokes the existing rejection handler; it never
   // approves a request, signs a message or sends a transaction.
   function decorateWalletPopup(walletId) {
@@ -242,7 +242,8 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
       if (!content || !backdrop || content.querySelector(`.${className}`)) return;
       const cancel = doc.createElement('button');
       cancel.type = 'button'; cancel.className = className;
-      cancel.setAttribute('aria-label', mobile ? 'Cancel NEAR Mobile connection' : 'Cancel Nightly Wallet connection');
+      const label = mobile ? 'NEAR Mobile' : walletId === 'ledger' ? 'Ledger' : 'Nightly Wallet';
+      cancel.setAttribute('aria-label', `Cancel ${label} connection`);
       cancel.textContent = '×';
       cancel.addEventListener('click', () => backdrop.click());
       content.appendChild(cancel);
@@ -301,7 +302,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
           await verifyCliLogin({ account, message, nonce, recipient, crypto: win.crypto, fetch: win.fetch.bind(win) });
           acceptAccounts(wallet, [account], 'near-cli');
         } else {
-          if (walletId === 'nightly-wallet') stopWalletPresentation = decorateWalletPopup(walletId);
+          if (walletId === 'nightly-wallet' || walletId === 'ledger') stopWalletPresentation = decorateWalletPopup(walletId);
           if (walletId === 'intear-wallet') {
             // Intear's app-session protocol needs native WebCrypto Ed25519.
             // Fail clearly on older browsers rather than opening a broken UI.
