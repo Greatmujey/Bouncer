@@ -167,7 +167,7 @@ test('the same custom Bouncer mark appears in both navigation layouts, the tour 
   assert.doesNotMatch(logo, /<script|<foreignObject|\b(?:href|src)\s*=/i);
 });
 
-test('website discloses testnet limitations, historical examples and identity-only wallet connection', () => {
+test('website discloses testnet limitations, historical examples and identity-only Google sign-in', () => {
   const html = fs.readFileSync(new URL('../web/index.html', import.meta.url), 'utf8');
   assert.match(html, /unaudited testnet prototype/i);
   assert.match(html, /not a live purchasing dashboard/i);
@@ -177,7 +177,7 @@ test('website discloses testnet limitations, historical examples and identity-on
   assert.match(html, /Refund recovery and the vault’s independent audit remain open/);
   assert.match(html, /not proof of independent provider payment or delivery/);
   assert.doesNotMatch(html, /Start buying/i);
-  assert.match(html, /Connect a testnet wallet/i);
+  assert.match(html, /Sign in with Google/i);
   assert.match(html, /does not create a vault, grant spending access or send a transaction/i);
   assert.match(html, /Never enter a seed phrase or private key into Bouncer/i);
   assert.match(html, /Gemini CLI and Claude Code passed local connection checks/i);
@@ -194,23 +194,16 @@ test('website discloses testnet limitations, historical examples and identity-on
   ]) assert.ok(html.includes(explorerTx(tx)), `missing current transaction ${tx}`);
 });
 
-test('workspace routes and the wallet picker are explicit, curated, and keyboard-accessible', () => {
+test('workspace routes and Google account UI replace the wallet picker', () => {
   const html = fs.readFileSync(new URL('../web/index.html', import.meta.url), 'utf8');
   const css = fs.readFileSync(new URL('../web/styles.css', import.meta.url), 'utf8');
   const views = [...html.matchAll(/data-route-view="([^"]+)"/g)].map(match => match[1]);
   assert.deepEqual(views, ['workspace', 'resources', 'guardrails', 'proof', 'connect']);
-  const wallets = [...html.matchAll(/data-wallet-id="([^"]+)"/g)].map(match => match[1]);
-  assert.deepEqual(wallets, ['near-mobile', 'meteor-wallet', 'intear-wallet', 'nightly-wallet', 'ledger', 'near-cli', 'wallet-connect']);
-  assert.match(html, /id="walletconnect-caption">Not configured · Project ID required/);
-  assert.match(html, /id="walletconnect-canvas"/);
-  assert.match(html, /walletconnect-NOTICES\.txt/);
-  assert.match(html, /NEAR Mobile and NEAR CLI use an off-chain login message/);
-  assert.match(html, /Terminal · Sign a testnet login message/);
-  assert.match(css, /data-wallet-state="connected"/);
-  assert.match(html, /intear-wallet-source\.zip/);
-  assert.match(html, /<dialog class="wallet-dialog" id="wallet-dialog" aria-labelledby="wallet-dialog-title"/);
-  assert.match(html, /id="wallet-close" type="button" aria-label="Close wallet picker"/);
-  assert.doesNotMatch(html, /id="wallet-choice"/);
+  assert.match(html, /id="google-signin-button"/);
+  assert.match(html, /id="google-signout"/);
+  assert.match(html, /id="account-status"[^>]*role="status"/);
+  assert.match(html, /Sign in with Google/);
+  assert.doesNotMatch(html, /data-wallet-open|wallet-dialog|walletconnect|wallet\.bundle/i);
   assert.match(html, /THE IDEA IN MOTION/);
   assert.match(css, /prefers-reduced-motion:reduce/);
 });

@@ -48,7 +48,7 @@
     "market": "node agent/intents.mjs market",
     "demo": "node demo-multi-resource.mjs",
     "simulation": "echo \"Offline simulation only: open demo/index.html; no transactions are sent.\"",
-    "build:web": "node scripts/build-web.mjs",
+    "build:web": "node --check web/google-signin.mjs && node --check web/api/google-session.mjs",
     "mcp": "node mcp/server.mjs"
   },
   "license": "MIT",
@@ -57,7 +57,6 @@
     "url": "https://github.com/Greatmujey/Bouncer"
   },
   "dependencies": {
-    "@hot-labs/near-connect": "0.12.0",
     "@modelcontextprotocol/sdk": "1.32.2",
     "@noble/curves": "1.8.1",
     "express": "5.2.1",
@@ -66,7 +65,6 @@
     "zod": "4.6.7"
   },
   "devDependencies": {
-    "esbuild": "0.28.2",
     "wabt": "1.0.39"
   }
 }

@@ -30,6 +30,9 @@ try {
   await page.route('**/*', async route => {
     const request = route.request(), url = new URL(request.url());
     const name = url.pathname === prefix ? 'index.html' : url.pathname.startsWith(prefix) ? url.pathname.slice(prefix.length) : '';
+    if (request.method() === 'GET' && url.origin === origin && name === 'api/google-session') {
+      return route.fulfill({ status: 503, contentType: 'application/json', body: '{\"error\":\"Static site has no session API\"}' });
+    }
     if (request.method() !== 'GET' || url.origin !== origin || !staged.has(name)) {
       rejected.push(`${request.method()} ${url.origin}${url.pathname}`);
       return route.abort();
@@ -41,17 +44,17 @@ try {
   assert.equal(response.status(), 200);
   assert.equal(await page.evaluate(() => location.origin + location.pathname), `${origin}${prefix}`);
   assert.equal(await page.evaluate(() => document.styleSheets.length > 0), true, 'nested-path stylesheet did not load');
-  for (const asset of ['index.html', 'styles.css', 'app.mjs', 'evidence.mjs', 'tour.mjs', 'wallet.bundle.js', 'hero-orbit.jpg', 'manrope-latin.woff2']) {
+  for (const asset of ['index.html', 'styles.css', 'app.mjs', 'evidence.mjs', 'tour.mjs', 'google-signin.mjs', 'manrope-latin.woff2']) {
     assert.ok(served.includes(asset), `nested-path asset did not load: ${asset}`);
   }
   assert.equal(await page.locator('#welcome-tour').evaluate(el => el.open), false);
   await page.locator('[data-open-tour]').click();
   await page.locator('#tour-skip').click();
   await page.locator('.top-connect').click();
-  assert.equal(await page.locator('[data-wallet-id="meteor-wallet"]').isDisabled(), true, 'GitHub Pages shared origins must not enable wallet sign-in');
-  assert.match(await page.locator('#wallet-dialog-status').innerText(), /new tab/);
-  assert.equal(await page.locator('#wallet-open-site').isVisible(), true);
-  await page.locator('#wallet-close').click();
+  await page.locator('[data-route-view="connect"]').waitFor({ state: 'visible' });
+  await page.waitForFunction(() => document.querySelector('#account-status').textContent.includes('not configured'));
+  assert.equal(await page.locator('#google-signout').isVisible(), false, 'shared static origin cannot sign in');
+  assert.equal(await page.locator('#wallet-dialog, [data-wallet-open]').count(), 0);
   await page.locator('.mobile-nav a[href="#capabilities"]').click();
   await page.locator('[data-route-view="resources"]').waitFor({ state: 'visible' });
   assert.equal(await page.locator('[data-route-view="resources"]').isVisible(), true);
@@ -61,8 +64,8 @@ try {
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'mobile page overflows');
   assert.deepEqual(errors, []);
   assert.deepEqual(rejected, [], 'offline Pages simulation made an unexpected request');
-  console.log('GitHub Pages path simulation passed: staged assets, mobile layout and disabled wallet. This was offline; no Pages site was published.');
-  console.log('::notice title=GitHub Pages path simulation::Staged assets and wallet safety passed at the nested project path. This offline simulation did not publish a site.');
+  console.log('GitHub Pages path simulation passed: staged assets, mobile layout and disabled sign-in. This was offline; no Pages site was published.');
+  console.log('::notice title=GitHub Pages path simulation::Staged assets and account safety passed at the nested project path. This offline simulation did not publish a site.');
 } finally {
   if (browser) await browser.close();
   fs.rmSync(tempRoot, { recursive: true, force: true });

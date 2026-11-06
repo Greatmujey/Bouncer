@@ -38,37 +38,16 @@ jobs:
         with:
           node-version: '22'
       - run: npm ci --no-audit --no-fund
-      - run: npm ci --prefix walletconnect --no-audit --no-fund
       # Fail quickly on browser or asset regressions before the broader suite.
-      - name: Check committed wallet bundles and source archive
-        run: |
-          npm run build:web
-          python3 scripts/build-intear-source.py
-          git diff --exit-code -- web/wallet.bundle.js web/walletconnect.bundle.js web/api/wc-relay.mjs web/walletconnect-NOTICES.txt web/intear-wallet.executor.js web/intear-wallet-source.zip
-      - name: Test onboarding, mobile layout and testnet wallet UI
+      - name: Check Google account modules
+        run: npm run build:web
+      - name: Test onboarding, mobile layout and Google account UI
         env:
-          GH_TOKEN: ${{ github.token }}
           BOUNCER_PLAYWRIGHT_PATH: ${{ runner.temp }}/bouncer-browser/node_modules/playwright-core/index.mjs
-          BOUNCER_METEOR_EXECUTOR: ${{ runner.temp }}/meteor-executor.js
-          BOUNCER_MOBILE_EXECUTOR: ${{ runner.temp }}/near-mobile-executor.js
-          BOUNCER_CLI_EXECUTOR: ${{ runner.temp }}/near-cli-executor.js
         shell: bash
         run: |
-          set +e
-          set -o pipefail
-          {
-            npm install --prefix "$RUNNER_TEMP/bouncer-browser" --no-save --no-audit --no-fund playwright-core@1.64.1 &&
-            # Public, pinned vendor executors; the test verifies each SHA-256.
-            gh api repos/Meteor-Wallet/meteor_wallet_sdk/git/blobs/b76fb93ff5d47064845d09313173b6eddbfa64e3 --jq .content | base64 -d > "$BOUNCER_METEOR_EXECUTOR" &&
-            gh api repos/fastnear/near-connect/git/blobs/19a9d9513c6a240e1fe228b820b9aebccbf66dcd --jq .content | base64 -d > "$BOUNCER_MOBILE_EXECUTOR" &&
-            gh api repos/near/near-cli-connect/git/blobs/32f1a33250370b5250a72d68ce24459628069fd7 --jq .content | base64 -d > "$BOUNCER_CLI_EXECUTOR" &&
-            node scripts/test-web-browser.mjs
-          } 2>&1 | tee "$RUNNER_TEMP/bouncer-web-browser.log"
-          result=${PIPESTATUS[0]}
-          if [ "$result" -ne 0 ]; then
-            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-5500).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=Website browser test failed::"+s)' "$RUNNER_TEMP/bouncer-web-browser.log"
-          fi
-          exit "$result"
+          npm install --prefix "$RUNNER_TEMP/bouncer-browser" --no-save --no-audit --no-fund playwright-core@1.64.1
+          node scripts/test-web-browser.mjs
 
       # Isolated, lockfile-pinned third-party seller SDK. Its NEAR driver is
       # wrapped only in tests because the published preset is mainnet-only.

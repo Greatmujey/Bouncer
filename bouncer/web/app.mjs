@@ -12,7 +12,7 @@ const routeByHash = Object.freeze({
   'how-it-works': 'guardrails', proof: 'proof', 'latest-mission': 'proof',
   roadmap: 'proof', connect: 'connect',
 });
-const routeNames = Object.freeze({ workspace: 'Overview', resources: 'Resources', guardrails: 'Guardrails', proof: 'On-chain proof', connect: 'Wallet & AI' });
+const routeNames = Object.freeze({ workspace: 'Overview', resources: 'Resources', guardrails: 'Guardrails', proof: 'On-chain proof', connect: 'Account & AI' });
 const sectionHashes = new Set(['run-story', 'resources', 'how-it-works', 'latest-mission', 'roadmap']);
 const navigation = [...document.querySelectorAll('.side-link, .mobile-nav a')];
 const routeViews = [...document.querySelectorAll('[data-route-view]')];

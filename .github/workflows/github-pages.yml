@@ -38,8 +38,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Test public-site and wallet safeguards
-        run: node --test bouncer/tests/public-web-staging.test.mjs bouncer/tests/web.test.mjs bouncer/tests/wallet.test.mjs
+      - name: Test public-site and account safeguards
+        run: node --test bouncer/tests/public-web-staging.test.mjs bouncer/tests/web.test.mjs bouncer/tests/google-session.test.mjs
       - name: Configure already-enabled GitHub Pages
         uses: actions/configure-pages@v5
       - name: Stage only approved public files

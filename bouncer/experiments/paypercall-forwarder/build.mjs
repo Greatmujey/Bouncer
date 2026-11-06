@@ -64,7 +64,12 @@ function normalize(input, nowMs) {
 /** Build entirely offline; caller supplies only public terms. Does not write a
  * file, perform an RPC call, create keys, sign, broadcast or fund anything. */
 export async function buildExperimentalForwarder(raw, { nowMs = Date.now() } = {}) {
-  const { review, agent, msg } = normalize(raw, nowMs);
+  return compileFixedForwarder(normalize(raw, nowMs), { paypercallRecovery: true });
+}
+
+/** Internal compiler shared by separately validated, provider-specific builders.
+ * It must never be treated as a validator or an authorization to deploy. */
+export async function compileFixedForwarder({ review, agent, msg }, { paypercallRecovery = false } = {}) {
   const reviewHash = sha(Buffer.from(JSON.stringify(review)));
   const view = { ...review, review_sha256: reviewHash, signed: false, sent: false,
     scope: 'EXPERIMENT ONLY; unaudited, no runtime or deployed-code proof' };
@@ -225,12 +230,12 @@ export async function buildExperimentalForwarder(raw, { nowMs = Date.now() } = {
       (call $copy (i32.const ${INPUT + inputPrefix.len}) (i32.const ${OUT + returnPrefix.len}) (local.get $n))
       (call $copy (i32.const ${returnSuffix.ptr}) (i32.add (i32.const ${OUT + returnPrefix.len}) (local.get $n)) (i32.const ${returnSuffix.len}))
       (call $token_call (i32.const ${OUT}) (i32.add (i32.const ${returnPrefix.len + returnSuffix.len}) (local.get $n))))
-    (func (export "claim")
+    ${paypercallRecovery ? `(func (export "claim")
       (call $actor) (call $escrow_call (i32.const ${fClaim.ptr}) (i32.const ${fClaim.len})
         (i32.const ${claimArgs.ptr}) (i32.const ${claimArgs.len}) (i64.const 70000000000000)))
     (func (export "withdraw_storage")
       (call $owner) (call $escrow_call (i32.const ${fStorageWithdraw.ptr}) (i32.const ${fStorageWithdraw.len})
-        (i32.const ${jsonEmpty.ptr}) (i32.const ${jsonEmpty.len}) (i64.const 30000000000000)))
+        (i32.const ${jsonEmpty.ptr}) (i32.const ${jsonEmpty.len}) (i64.const 30000000000000)))` : ''}
     (func (export "return_native") (local $n i32) (local $lo i64) (local $hi i64) (local $borrow i64) (local $p i64)
       (call $owner) (local.set $n (call $read_amount (i32.const ${nativeCap.ptr}) (i32.const ${nativeCap.len}))) (call $to_u128 (local.get $n))
       (call $balance (i64.const ${BALANCE}))
@@ -254,7 +259,7 @@ export async function buildExperimentalForwarder(raw, { nowMs = Date.now() } = {
     if (imports.some(i => i.module !== 'env' || i.kind !== 'function') ||
         imports.some(i => /deploy|delete|add_key|delegate|create_account/i.test(i.name)) ||
         exports.map(e => e.name).sort().join(',') !== ['memory', 'configuration', 'opened', 'open', 'return_tokens',
-          'claim', 'withdraw_storage', 'return_native'].sort().join(',')) {
+          ...(paypercallRecovery ? ['claim', 'withdraw_storage'] : []), 'return_native'].sort().join(',')) {
       throw new Error('unexpected experimental WASM interface');
     }
     return { wasm, wasm_sha256: sha(wasm), review: view, imports: imports.map(i => i.name) };
