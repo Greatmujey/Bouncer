@@ -109,7 +109,7 @@ try {
       const [create, transfer, deploy, init] = batch.actions;
       assert.deepEqual([create.enum, transfer.enum, deploy.enum, init.enum], ['createAccount', 'transfer', 'deployContract', 'functionCall']);
       actions = ['add-action', 'create-account', 'add-action', 'transfer', nearAmount(transfer.transfer.deposit),
-        'add-action', 'deploy', 'use-file', wasmPath, 'with-init-call', ...callArgs(init)];
+        'add-action', 'deploy-contract', 'use-file', wasmPath, 'with-init-call', ...callArgs(init)];
     } else {
       assert.equal(batch.actions.length, 1);
       actions = ['add-action', 'function-call', ...callArgs(batch.actions[0])];

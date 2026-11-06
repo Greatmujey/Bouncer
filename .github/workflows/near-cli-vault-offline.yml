@@ -51,6 +51,22 @@ jobs:
           mapfile -t binaries < <(find "$dir/bin" -type f -name near)
           test "${#binaries[@]}" -eq 1
           printf '%s\n' "${binaries[0]}" > "$dir/binary-path"
+      - name: Check CLI import logging with an unfunded disposable key
+        run: |
+          set -euo pipefail
+          near="$(cat "$RUNNER_TEMP/near-cli-offline/binary-path")"
+          node scripts/test-near-cli-import-exposure.mjs "$near" > "$RUNNER_TEMP/near-cli-import-fixture.json"
+          python3 - <<'PY'
+          import json, os
+          data = json.load(open(os.path.join(os.environ['RUNNER_TEMP'], 'near-cli-import-fixture.json')))
+          report = json.dumps(data, separators=(',', ':'), ensure_ascii=True)
+          assert len(report) < 12000 and not data['user_key_used'] and not data['broadcast']
+          print('::notice title=Disposable CLI import logging probe::' + report.replace('%','%25').replace('\n','%0A').replace('\r','%0D'))
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as f:
+              f.write('## CLI import safety — disposable key only\n\n')
+              f.write('No user key was used. The generated fixture and temporary files were deleted.\n\n```json\n')
+              f.write(json.dumps(data, indent=2) + '\n```\n')
+          PY
       - name: Compare three synthetic unsigned CLI transactions
         env:
           BOUNCER_V12_WASM_PATH: ${{ runner.temp }}/v12-cli-fixture.wasm
