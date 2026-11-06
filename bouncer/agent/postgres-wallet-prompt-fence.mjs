@@ -2,8 +2,9 @@
  * EXPERIMENTAL server-side write-ahead fence for the unsigned Buffer spending
  * review. This module has no HTTP endpoint, signer, wallet integration, chain
  * client, unlock, expiry, or payment operation. One named testnet owner may
- * reserve at most ONE wallet prompt in this database, ever. Recording the
- * first public original hash is immutable. A committed reservation without a
+ * reserve at most ONE prompt record in this database, ever. This cannot stop
+ * a caller from opening a wallet twice using the same returned record. Recording
+ * the first public original hash is immutable. A committed reservation without a
  * hash remains blocked, including after a crash or lost wallet response.
  *
  * The injected authenticate() is a REQUIRED TRUST BOUNDARY, not implemented

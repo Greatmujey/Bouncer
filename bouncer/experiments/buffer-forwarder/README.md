@@ -103,14 +103,20 @@ prompt. The first recorded original hash is immutable; the database trigger
 also rejects ordinary updates or deletion, and the service checks its critical
 indexes, trigger, row visibility, primary status, fsync and synchronous commit.
 A lost commit acknowledgement is treated as unknown. There is deliberately no
-unlock, expiry, payment, endpoint or wallet call. The required authenticator
-is an injected trust boundary, **not yet implemented**, and the tests use
-synthetic acceptance—not actual wallet control. Local concurrency, corruption
-and lost-ack tests do not establish backup, rollback protection, database
-failover, genuine authorization, current chain state or safe live spending. A
-DB administrator, stale restore, alternate database or bypassing wallet can
-still defeat coordination. No Supabase project or production database was
-created or modified.
+unlock, expiry, payment, endpoint or wallet call. Its authenticator is an
+injected trust boundary. A separate experimental
+`agent/postgres-wallet-prompt-auth.mjs` implements one-use, origin- and
+exact-action-bound NEP-413 challenges, checking an Ed25519 FullAccess key at a
+fresh trusted-RPC testnet FINAL block; it signs and sends nothing. Tests connect
+the two prototypes using disposable keys and fabricated RPC responses, not a
+real phone or wallet. NEP-413 is not available for the EVM adapter. Local
+concurrency, corruption and lost-ack tests do not establish backup, rollback
+protection, database failover, actual wallet interoperability, genuine
+on-chain approval, current chain state or safe live spending. A DB administrator,
+stale restore, alternate database or bypassing wallet can still defeat
+coordination. The database enforces one **record**, not one invocation of a
+wallet: future client code must never reuse a reservation to reopen a prompt.
+No Supabase project or production database was created or modified.
 
 ## Why a separate forwarder
 

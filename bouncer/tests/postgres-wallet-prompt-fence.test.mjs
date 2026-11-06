@@ -162,17 +162,30 @@ dbtest('invalid review or corrupt retained state fails closed', async () => reso
   await assert.rejects(fence.reserve(f.request), error => error.code === 'OWNER_FENCED');
 }));
 
-dbtest('missing unique index or RLS prevents reservations and reads', async () => resources(async (db, fence) => {
+dbtest('missing unique index, RLS or disabled trigger prevents reservations and reads', async () => resources(async (db, normal) => {
   const f = fixture();
-  await db.query('ALTER TABLE bouncer_wallet_prompt_v1.prompts DROP CONSTRAINT prompts_operation_unique');
-  try { await assert.rejects(fence.reserve(f.request), error => error.code === 'UNSAFE_SCHEMA'); }
-  finally { await db.query('ALTER TABLE bouncer_wallet_prompt_v1.prompts ADD CONSTRAINT prompts_operation_unique UNIQUE (operation_id)'); }
-  await db.query('ALTER TABLE bouncer_wallet_prompt_v1.prompts ENABLE ROW LEVEL SECURITY');
-  try { await assert.rejects(fence.inspect(f.read), error => error.code === 'UNSAFE_SCHEMA'); }
-  finally { await db.query('ALTER TABLE bouncer_wallet_prompt_v1.prompts DISABLE ROW LEVEL SECURITY'); }
-  await db.query('ALTER TABLE bouncer_wallet_prompt_v1.prompts DISABLE TRIGGER prompt_immutable');
-  try { await assert.rejects(fence.reserve(f.request), error => error.code === 'UNSAFE_SCHEMA'); }
-  finally { await db.query('ALTER TABLE bouncer_wallet_prompt_v1.prompts ENABLE TRIGGER prompt_immutable'); }
+  // Inject catalog faults around a real PostgreSQL connection without changing
+  // the shared schema while other test files run concurrently.
+  function catalogFault(kind) {
+    return { async connect() {
+      const client = await db.connect();
+      return { release: client.release.bind(client), async query(sql, args) {
+        const result = await client.query(sql, args), text = String(sql);
+        if (kind === 'index' && text.includes('FROM pg_catalog.pg_index')) {
+          result.rows = result.rows.filter(row => !(row.table_name === 'prompts' && row.columns.join(',') === 'operation_id'));
+        }
+        if (kind === 'rls' && text.includes('SELECT t.relrowsecurity')) result.rows[0].relrowsecurity = true;
+        if (kind === 'trigger' && text.includes('FROM pg_catalog.pg_trigger')) result.rows[0].tgenabled = 'D';
+        return result;
+      } };
+    } };
+  }
+  for (const kind of ['index', 'rls', 'trigger']) {
+    const fence = createPostgresWalletPromptFence({ pool: catalogFault(kind), authenticate: syntheticAuth });
+    await assert.rejects(fence.reserve(f.request), error => error.code === 'UNSAFE_SCHEMA');
+    await assert.rejects(fence.inspect(f.read), error => error.code === 'UNSAFE_SCHEMA');
+  }
+  assert.equal(await normal.inspect(f.read), null);
 }));
 
 dbtest('unwritable or unsafe primary blocks before any row is inserted', async () => resources(async (db, normal) => {
