@@ -39,7 +39,7 @@ function pairs(value, name) {
   }
   return result;
 }
-function sellerTerms(config, rules, products, registration) {
+export function sellerTerms(config, rules, products, registration) {
   // Buffer's agent can be an implicit account, which has no network in its ID.
   // The vault inspector has already required a testnet RPC and a pinned block.
   const sellerAccount = x => isTestnetAccount(x) || isImplicitNearAccount(x);

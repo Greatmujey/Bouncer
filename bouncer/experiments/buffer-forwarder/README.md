@@ -13,10 +13,18 @@ atoms from the better of the two sampled Ref pools, below the custom minimum.
 That quote was an observation, not a reservation or authority to trade. A web4
 quote previously cited was from a stale indexer at block 238,527,181 and must
 not be used. Prices, liquidity, quote availability and deployed code can change;
-any later action requires a new fresh check. Bouncer has not created an order or
-quote, contacted the seller's paid workflow, or paid or obtained a report. The
-contract source below is pinned for investigation; it is not proof that the live
-deployment matches that source.
+any later action requires a new fresh check. A later [fixed split-route view](https://github.com/Greatmujey/Bouncer/actions/runs/42254486049)
+indicated 5,270,212 atoms for 4 test NEAR across three distinct paths. Almost
+3.084 USDC of that indication comes from draining all but one atom of a small
+public two-hop pool; it is fragile, potentially disruptive to other testnet
+users, and neither executed nor a promise of liquidity. The user subsequently
+confirmed control of `great_mujey.testnet`; a public index showed it held 20
+Circle test USDC and roughly 16 test NEAR. The newly added wallet-owner
+preflight checks this alternative without a Ref swap and without using the
+previous V3 owner. A public view alone is not a wallet signature. Bouncer has
+not created an order or quote, contacted the seller's paid workflow, or paid or
+obtained a report. The contract source below is pinned for investigation; it
+is not proof that the live deployment matches that source.
 
 ## Why a separate forwarder
 

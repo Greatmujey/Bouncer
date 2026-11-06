@@ -27,7 +27,7 @@ jobs:
       - name: Test pinned views and receipt boundaries
         run: |
           npm ci --ignore-scripts --no-audit --no-fund
-          node --test tests/buffer-live-readiness.test.mjs tests/buffer-delivery-evidence.test.mjs tests/read-only-near-receipts.test.mjs
+          node --test tests/buffer-live-readiness.test.mjs tests/buffer-wallet-readiness.test.mjs tests/buffer-delivery-evidence.test.mjs tests/read-only-near-receipts.test.mjs
       - name: Inspect V12, Buffer and indicative Ref returns at one FINAL block
         run: |
           set -euo pipefail
@@ -43,3 +43,17 @@ jobs:
           { echo '## Independent Buffer: read-only testnet preflight';
             echo 'One trusted-RPC FINAL block; no seller HTTP call, quote, order, transaction, signature or authorization. Ref values are indications only. Historical owner transaction outcomes remain unknown.';
             echo '```json'; cat "$RUNNER_TEMP/buffer-readiness.json"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: Inspect the user-named wallet and a fresh candidate vault
+        run: |
+          set -euo pipefail
+          node scripts/inspect-buffer-wallet-readiness.mjs > "$RUNNER_TEMP/buffer-wallet.json"
+          python3 - <<'PY'
+          import json, os
+          data = json.load(open(os.environ['RUNNER_TEMP'] + '/buffer-wallet.json'))
+          s = json.dumps(data, separators=(',', ':'), ensure_ascii=True)
+          assert len(s) < 12000
+          print('::notice title=User testnet wallet and Buffer funding readiness::' + s.replace('%','%25').replace('\n','%0A').replace('\r','%0D'))
+          PY
+          { echo '## User-named testnet account: read-only funding indication';
+            echo 'Only public account, token, seller and protocol views. No wallet ownership, consent, deployment, seller order or payment is established.';
+            echo '```json'; cat "$RUNNER_TEMP/buffer-wallet.json"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
