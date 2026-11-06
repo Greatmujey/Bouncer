@@ -14,6 +14,8 @@ import { pathToFileURL } from 'node:url';
 import nearApi from 'near-api-js';
 import { buildBufferForwarder, checkBufferQuoteResponse, BUFFER_TESTNET_CONTRACT as SELLER } from '../experiments/buffer-forwarder/build.mjs';
 import { buildBufferWalletSpendingPlan, assertBufferSpendingBatchMatchesReview } from '../agent/buffer-wallet-spending-plan.mjs';
+import { buildBufferForwarderWalletPlan } from '../agent/buffer-forwarder-wallet-plan.mjs';
+import { assertSvalinBatchMatchesReview } from '../agent/svalin-setup-plan.mjs';
 import { prepareBufferSpendingAttempt, inspectBufferSpendingAttempt } from '../agent/buffer-wallet-spending-evidence.mjs';
 import { inspectBufferSpendingStage } from '../agent/buffer-wallet-spending-preflight.mjs';
 import { collectBufferDeliverySnapshots, verifyBufferDeliveryEvidence } from '../agent/buffer-delivery-evidence.mjs';
@@ -104,7 +106,7 @@ async function exercise({ endpoint, root, tokenOwner, v12, sellerWasm, sellerFix
     if (id !== PROVIDER) assert.deepEqual((await provider.viewAccessKeyList(id, { finality: 'final' })).keys, []);
     await must(tokenOwner, TOKEN, 'storage_deposit', { account_id: id, registration_only: true }, BigInt(storageMin), 50n * TGAS);
   }
-  let vaultAgentInstalled = false, spendingReceiptsChecked = 0, spendingPreflightsChecked = 0;
+  let vaultAgentInstalled = false, spendingReceiptsChecked = 0, spendingPreflightsChecked = 0, forwarderBatchesChecked = 0;
   await must(tokenOwner, TOKEN, 'ft_transfer_call', { receiver_id: VAULT, amount: '60000000', msg: '' }, 1n, 300n * TGAS);
   await must(sellerOwner, SELLER, 'set_product', { sku: SKU, price: PRICE, max_expense: '0', active: true });
   await must(sellerOwner, SELLER, 'set_product', { sku: CUSTOM_SKU, price: CUSTOM_PRICE, max_expense: '1000000', active: true });
@@ -122,16 +124,27 @@ async function exercise({ endpoint, root, tokenOwner, v12, sellerWasm, sellerFix
       api_order_id: apiId, onchain_order_id: onchainId, sku, brief_sha256: sha(Buffer.from(BRIEF)) };
     const artifact = await buildBufferForwarder(terms, { nowMs });
     if (precheck) await precheck(terms, nowMs);
-    await batch(buyer, adapter, [tx.createAccount(), tx.transfer(3n * NEAR), tx.deployContract(artifact.wasm)],
-      'create keyless fixed-order forwarder');
-    assert.equal((await provider.viewAccount(adapter, { finality: 'final' })).code_hash, codeHash(artifact.wasm));
-    assert.deepEqual((await provider.viewAccessKeyList(adapter, { finality: 'final' })).keys, []);
-    await must(tokenOwner, TOKEN, 'storage_deposit', { account_id: adapter, registration_only: true }, BigInt(storageMin), 50n * TGAS);
     const spendingPlan = buildBufferWalletSpendingPlan({ owner: BUYER, vault: VAULT, adapter, policy_id: policy,
       vault_agent_public_key: pub(vaultKey), forwarder_agent_public_key: pub(adapterKey),
       per_tx_cap_atoms: amount, daily_cap_atoms: amount,
       vault_agent_gas_allowance_yocto: NEAR.toString(), forwarder_agent_gas_allowance_yocto: NEAR.toString() });
     for (let i = 0; i < spendingPlan.batches.length; i++) assertBufferSpendingBatchMatchesReview(spendingPlan.batches[i], spendingPlan.review.stages[i]);
+    const forwarderPlan = await buildBufferForwarderWalletPlan({ terms, spendingReview: spendingPlan.review,
+      trustedSpendingReviewHash: spendingPlan.review.review_sha256, trustedOwnerPublicKey: pub(buyerKey),
+      registrationDepositYocto: storageMin, nowMs });
+    assert.equal(forwarderPlan.review.forwarder_wasm_sha256, artifact.wasm_sha256);
+    const forwarderReview = structuredClone(forwarderPlan.review);
+    const applyForwarderStage = async index => {
+      const b = forwarderPlan.batches[index];
+      assertSvalinBatchMatchesReview(b, forwarderReview.stages[index]);
+      const result = await batch(buyer, b.receiverId, b.actions, `sandbox reviewed forwarder stage ${b.id}`);
+      forwarderBatchesChecked++;
+      return result;
+    };
+    await applyForwarderStage(0);
+    assert.equal((await provider.viewAccount(adapter, { finality: 'final' })).code_hash, codeHash(artifact.wasm));
+    assert.deepEqual((await provider.viewAccessKeyList(adapter, { finality: 'final' })).keys, []);
+    await applyForwarderStage(1);
     // Retain the public review before these synthetic sends. This isolated
     // fixture has no durable pre-prompt journal and is NOT a live executor.
     const retained = structuredClone(spendingPlan.review), trustedReviewHash = retained.review_sha256;
@@ -175,9 +188,7 @@ async function exercise({ endpoint, root, tokenOwner, v12, sellerWasm, sellerFix
       vaultAgentInstalled = true;
     }
     await verifiedBatch(2);
-    await must(buyer, VAULT, 'set_exact_ft_intent', { intent_id: terms.intent_id, policy_id: policy,
-      expected_token: TOKEN, payee: adapter, amount, memo: artifact.review.intent_memo,
-      review_hash: artifact.review.review_sha256, expires_at_ms: String(terms.expires_at_ms), agent_public_key: pub(vaultKey) }, 1n);
+    await applyForwarderStage(2);
     const signer = account(BUYER, provider, adapterKey);
     const funding = await must(vaultAgent, VAULT, 'execute_exact_ft', { intent_id: terms.intent_id }, 0n, 200n * TGAS);
     assert.equal(await balance(adapter), amount); assert.equal(await spend(policy), amount);
@@ -293,9 +304,11 @@ async function exercise({ endpoint, root, tokenOwner, v12, sellerWasm, sellerFix
   assert.equal(await spend('custom'), CUSTOM_PRICE);
   assert.equal(spendingReceiptsChecked, 9, 'all synthetic policy and scoped-key originals must be reconciled');
   assert.equal(spendingPreflightsChecked, 3, 'sandbox views checked all three stages while the mock-Circle pin blocked');
+  assert.equal(forwarderBatchesChecked, 12, 'four local scenarios executed all three reviewed forwarder batches');
   return { scope: 'ISOLATED nearcore, source-built Buffer contract and mock FT; not Circle or a public-chain order',
     buffer_source_revision: '9bc5ef0cbdc84074e94995cb50d334fc615f9b96', source_built_sha256: sellerFixture.sha256,
     v12_sha256: V12_SHA256, unsigned_wallet_spending_plan_exercised_locally: true,
+    synthetic_forwarder_wallet_batches_exercised: forwarderBatchesChecked,
     synthetic_original_spending_receipts_checked: spendingReceiptsChecked,
     sandbox_stage_preflights_checked_with_mock_token_pin_blocked: spendingPreflightsChecked,
     price_change_returned_to_forwarder: true, price_rejection_return_credited_vault: true,
