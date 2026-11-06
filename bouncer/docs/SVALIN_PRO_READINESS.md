@@ -22,6 +22,22 @@ at approximately 16:20 UTC listed the monthly pass at **9**, not 5 test USDC.
 The historical 5-USDC profile below must not be treated as the current price;
 all prices and availability may change.
 
+A separate [anonymous x402 check at 16:31 UTC on 6 November](https://github.com/Greatmujey/Bouncer/actions/runs/42253070781)
+advertised **2,000 Circle atoms (0.002 test USDC)** for one portfolio call on
+`near:testnet`, payable to `svalin-agent.testnet`, as well as a Solana offer.
+That NEAR advertisement is newly relevant because the vault holds 6,898 atoms;
+it does not establish facilitator access or actual settlement. It uses x402
+`exact`, not the Pro checkout or Bouncer's `onchain-proof` adapter. The standard
+NEAR exact transfer requires a one-yocto delegated FT call signed by a
+full-access key. A restricted Bouncer function-call key cannot authorize that
+deposit, and the existing keyless vault cannot sign a delegate. An intermediate
+full-access wallet would weaken recipient enforcement unless a separate,
+reviewed mechanism confines it. Do not label a direct-wallet payment as a
+guarded Bouncer purchase. The initial offer-only check named `near.testnet` as
+the portfolio target, but the seller's free route reported that target absent;
+future read-only checks use a known mainnet account and must label the data's
+network separately from the testnet payment. No proof or payment was sent.
+
 ## Why this may close part of the FT gap
 
 In Svalin's [source at commit `7ebfb14`](https://github.com/noobshole/svalin-agent/tree/7ebfb14f35630dfc1665b04993e684b5444133fb),

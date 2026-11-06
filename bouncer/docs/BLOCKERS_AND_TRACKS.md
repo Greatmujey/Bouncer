@@ -34,6 +34,19 @@ projects are eligible; integrations named in the track hints are not mandatory.
 | Coordinate a genuine agent swarm | One coordinator sequences work; there is no demonstrated independent multi-agent bidding, hiring or secure handoff economy. | **AI Swarms** |
 | Verify security at production strength | There is no independent audit of the vault, experimental forwarder or deployed relay. Receipt correlation still trusts the RPC and cannot prove source/build equivalence or isolate every same-block transfer. Seller output remains untrusted. | **AI Security & Defense**; affects every track |
 
+**Svalin pay-per-call lead:** An [anonymous x402 offer refresh](https://github.com/Greatmujey/Bouncer/actions/runs/42253070781)
+on 6 November advertised an `exact` NEAR testnet route for **2,000 Circle
+atoms (0.002 test USDC)** to `svalin-agent.testnet`, within the vault's 6,898
+atoms. This is an advertisement, not proof the facilitator will settle or the
+seller will deliver. The existing Bouncer buyer speaks `onchain-proof`, not the
+advertised NEAR `exact` delegated transfer; a restricted function-call key
+cannot attach the token's required 1 yocto to that delegate, and the keyless V12
+vault cannot sign it. Do not silently substitute a full-access key or imply the
+payee is enforced through an unreviewed intermediary. That offer-check used a
+`near.testnet` target, which Svalin's free endpoint reported as nonexistent;
+future inspections use `root.near` without assuming the seller's mainnet data is
+testnet data. No signed proof, seller order or payment was made.
+
 **Additional independent offer, not currently compatible:** [Leash's live
 catalog](https://leash.frankolien.com/api/paid) advertises useful price, search
 and page-reading endpoints for 0.01–0.02 Circle test USDC. Its [testnet x402
