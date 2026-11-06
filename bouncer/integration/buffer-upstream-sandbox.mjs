@@ -14,6 +14,7 @@ import { pathToFileURL } from 'node:url';
 import nearApi from 'near-api-js';
 import { buildBufferForwarder, checkBufferQuoteResponse, BUFFER_TESTNET_CONTRACT as SELLER } from '../experiments/buffer-forwarder/build.mjs';
 import { buildBufferWalletSpendingPlan, assertBufferSpendingBatchMatchesReview } from '../agent/buffer-wallet-spending-plan.mjs';
+import { prepareBufferSpendingAttempt, inspectBufferSpendingAttempt } from '../agent/buffer-wallet-spending-evidence.mjs';
 import { collectBufferDeliverySnapshots, verifyBufferDeliveryEvidence } from '../agent/buffer-delivery-evidence.mjs';
 import { CIRCLE_TESTNET_USDC as TOKEN } from '../scripts/circle-testnet-setup.mjs';
 import { loopbackSandboxUrl, withSandboxOnlyFetch } from './v11-sandbox-setup-rpc.mjs';
@@ -102,7 +103,7 @@ async function exercise({ endpoint, root, tokenOwner, v12, sellerWasm, sellerFix
     if (id !== PROVIDER) assert.deepEqual((await provider.viewAccessKeyList(id, { finality: 'final' })).keys, []);
     await must(tokenOwner, TOKEN, 'storage_deposit', { account_id: id, registration_only: true }, BigInt(storageMin), 50n * TGAS);
   }
-  let vaultAgentInstalled = false;
+  let vaultAgentInstalled = false, spendingReceiptsChecked = 0;
   await must(tokenOwner, TOKEN, 'ft_transfer_call', { receiver_id: VAULT, amount: '60000000', msg: '' }, 1n, 300n * TGAS);
   await must(sellerOwner, SELLER, 'set_product', { sku: SKU, price: PRICE, max_expense: '0', active: true });
   await must(sellerOwner, SELLER, 'set_product', { sku: CUSTOM_SKU, price: CUSTOM_PRICE, max_expense: '1000000', active: true });
@@ -130,16 +131,31 @@ async function exercise({ endpoint, root, tokenOwner, v12, sellerWasm, sellerFix
       per_tx_cap_atoms: amount, daily_cap_atoms: amount,
       vault_agent_gas_allowance_yocto: NEAR.toString(), forwarder_agent_gas_allowance_yocto: NEAR.toString() });
     for (let i = 0; i < spendingPlan.batches.length; i++) assertBufferSpendingBatchMatchesReview(spendingPlan.batches[i], spendingPlan.review.stages[i]);
+    // Retain the public review before these synthetic sends. This isolated
+    // fixture has no durable pre-prompt journal and is NOT a live executor.
+    const retained = structuredClone(spendingPlan.review), trustedReviewHash = retained.review_sha256;
+    const verifiedBatch = async index => {
+      const b = spendingPlan.batches[index];
+      const sent = await batch(buyer, b.receiverId, b.actions, `sandbox reviewed batch ${b.id}`);
+      const trustedOriginalHash = sent.transaction_outcome.id, trustedOwnerPublicKey = pub(buyerKey);
+      const attempt = prepareBufferSpendingAttempt({ review: retained, trustedReviewHash, stageId: b.id,
+        trustedOriginalHash, trustedOwnerPublicKey });
+      const result = await provider.txStatusReceipts(trustedOriginalHash, BUYER, 'FINAL');
+      const checked = inspectBufferSpendingAttempt({ review: retained, trustedReviewHash, trustedOriginalHash,
+        trustedOwnerPublicKey, attempt, result });
+      assert.ok(['FINAL_SPENDING_SETUP_RECEIPT_MATCH', 'FINAL_LOCAL_ADD_KEY_OUTCOME_MATCH'].includes(checked.status));
+      assert.equal(checked.do_not_resend, true); spendingReceiptsChecked++;
+    };
     const setPolicy = { policy_id: policy, token: TOKEN, per_tx_cap: amount, daily_cap: amount };
     failure(await call(buyer, VAULT, 'set_policy', setPolicy), /exactly 1 yoctoNEAR/);
-    await batch(buyer, VAULT, spendingPlan.batches[0].actions, 'configure locked policy using the reviewed wallet plan');
+    await verifiedBatch(0);
     // Later synthetic scenarios deliberately reuse the same already scoped
     // vault key. A live plan separately requires fresh key-state preflight.
     if (!vaultAgentInstalled) {
-      await batch(buyer, BUYER, spendingPlan.batches[1].actions, 'install reviewed scoped vault agent key');
+      await verifiedBatch(1);
       vaultAgentInstalled = true;
     }
-    await batch(buyer, BUYER, spendingPlan.batches[2].actions, 'install reviewed scoped forwarder agent key');
+    await verifiedBatch(2);
     await must(buyer, VAULT, 'set_exact_ft_intent', { intent_id: terms.intent_id, policy_id: policy,
       expected_token: TOKEN, payee: adapter, amount, memo: artifact.review.intent_memo,
       review_hash: artifact.review.review_sha256, expires_at_ms: String(terms.expires_at_ms), agent_public_key: pub(vaultKey) }, 1n);
@@ -256,9 +272,11 @@ async function exercise({ endpoint, root, tokenOwner, v12, sellerWasm, sellerFix
   assert.equal(await balance(PROVIDER), '25000000'); assert.equal(await balance(SELLER), '0');
   assert.equal(await balance(VAULT), '35000000'); assert.equal(await tracked(), '35000000');
   assert.equal(await spend('custom'), CUSTOM_PRICE);
+  assert.equal(spendingReceiptsChecked, 9, 'all synthetic policy and scoped-key originals must be reconciled');
   return { scope: 'ISOLATED nearcore, source-built Buffer contract and mock FT; not Circle or a public-chain order',
     buffer_source_revision: '9bc5ef0cbdc84074e94995cb50d334fc615f9b96', source_built_sha256: sellerFixture.sha256,
     v12_sha256: V12_SHA256, unsigned_wallet_spending_plan_exercised_locally: true,
+    synthetic_original_spending_receipts_checked: spendingReceiptsChecked,
     price_change_returned_to_forwarder: true, price_rejection_return_credited_vault: true,
     accepted_order_customer_matches_forwarder: true, later_plain_ft_refund_returned_to_vault: true,
     refund_vault_actual_and_tracked: '60000000', refund_conservative_rolling_spend: PRICE,

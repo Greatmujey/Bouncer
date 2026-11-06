@@ -28,7 +28,7 @@ jobs:
       - name: Install dependencies and test offline gates
         run: |
           npm ci --ignore-scripts --no-audit --no-fund
-          node --test tests/buffer-forwarder.test.mjs tests/buffer-delivery-evidence.test.mjs tests/buffer-evidence-cli.test.mjs tests/buffer-upstream-sandbox.test.mjs tests/buffer-wallet-spending-plan.test.mjs tests/paypercall-forwarder-experimental.test.mjs
+          node --test tests/buffer-forwarder.test.mjs tests/buffer-delivery-evidence.test.mjs tests/buffer-evidence-cli.test.mjs tests/buffer-upstream-sandbox.test.mjs tests/buffer-wallet-spending-plan.test.mjs tests/buffer-wallet-spending-evidence.test.mjs tests/paypercall-forwarder-experimental.test.mjs
       - name: Recover pinned Buffer source, V12 and mock FT
         env:
           GH_TOKEN: ${{ github.token }}

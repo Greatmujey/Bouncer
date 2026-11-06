@@ -57,6 +57,17 @@ The same unsigned batches were exercised with synthetic keys, source-built
 Buffer and a mock FT in [isolated nearcore run 42269956792](https://github.com/Greatmujey/Bouncer/actions/runs/42269956792);
 that is not a real wallet approval or live sale.
 
+`agent/buffer-wallet-spending-evidence.mjs` adds an **offline** checker for the
+three policy/key batches. It rebuilds the exact plan from an independently
+retained review and compares a receipt-inclusive FINAL RPC result to the
+retained original hash, owner key, actions, receiver, root outcome and any
+protocol gas refund. A missing hash, incomplete graph or unexpected action is
+not success; a FINAL failure still requires state review and is never an
+instruction to retry. The caller must retain those trust anchors independently.
+The checker neither journals before a wallet prompt nor accesses RPC, proves
+current contract state, or authorizes the next stage. Synthetic tests alone are
+not a real wallet approval, a live key installation, a payment or delivery.
+
 ## Why a separate forwarder
 
 The Buffer source receives an exact `ft_transfer_call`, records the token
