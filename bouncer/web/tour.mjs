@@ -12,7 +12,7 @@ const steps = [
   },
   {
     kicker: 'YOU STAY IN CONTROL', title: 'Your account, your rules.',
-    description: 'Sign in with Google to identify your account. Sign-in does not approve spending or set up a vault.',
+    description: 'Connect a testnet wallet or sign in with Google. Neither action approves spending or sets up a vault.',
     callout: 'The contract requires exactly 1 yoctoNEAR for owner-only policy changes. Never share a private key or seed phrase.',
   },
   {

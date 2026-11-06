@@ -32,10 +32,14 @@ try {
   await page.locator('#tour-skip').click();
   assert.match(await page.locator('.snapshot-note').innerText(), /not a live purchasing dashboard/);
   await page.locator('.top-connect').click();
-  await page.locator('[data-route-view="connect"]').waitFor({ state: 'visible' });
-  assert.match(await page.locator('.account-card').innerText(), /Sign in with Google/);
-  assert.equal(await page.locator('#wallet-dialog, [data-wallet-open], #walletconnect-canvas').count(), 0);
+  assert.equal(await page.locator('#wallet-dialog').evaluate(el => el.open), true);
+  assert.deepEqual(await page.locator('[data-wallet-id]').evaluateAll(nodes => nodes.map(node => node.dataset.walletId)),
+    ['near-mobile', 'meteor-wallet', 'intear-wallet', 'nightly-wallet', 'ledger', 'near-cli']);
+  assert.equal(await page.locator('#walletconnect-canvas').count(), 0);
+  assert.equal(await page.locator('#google-start').count(), 1);
   assert.equal(await page.locator('#google-signout').isVisible(), false, 'no signed-in state without a real login');
+  if (isGuestPreview) assert.equal(await page.locator('[data-wallet-id]:disabled').count(), 6, 'shared guest origins cannot hold wallet sessions');
+  await page.locator('#wallet-close').click();
   for (const [hash, name] of [['guardrails', 'guardrails'], ['proof', 'proof'], ['capabilities', 'resources']]) {
     await page.locator(`.mobile-nav a[href="#${hash}"]`).click();
     await page.locator(`[data-route-view="${name}"]`).waitFor({ state: 'visible' });

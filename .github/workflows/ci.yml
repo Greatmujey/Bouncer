@@ -39,15 +39,38 @@ jobs:
           node-version: '22'
       - run: npm ci --no-audit --no-fund
       # Fail quickly on browser or asset regressions before the broader suite.
-      - name: Check Google account modules
-        run: npm run build:web
-      - name: Test onboarding, mobile layout and Google account UI
+      - name: Rebuild and verify wallet and Google website assets
+        shell: bash
+        run: |
+          npm run build:web
+          python3 scripts/build-intear-source.py
+          ./node_modules/.bin/esbuild web-src/vendor/intear/web/src/js/near-selector.js --bundle --format=esm --target=es2020 --minify --define:__NEARCONNECT__=true --outfile="$RUNNER_TEMP/intear-rebuilt.js"
+          cmp web/intear-wallet.executor.js "$RUNNER_TEMP/intear-rebuilt.js"
+          git diff --exit-code -- web/wallet.bundle.js web/intear-wallet-source.zip
+      - name: Test onboarding, wallet picker and Google identity UI
         env:
           BOUNCER_PLAYWRIGHT_PATH: ${{ runner.temp }}/bouncer-browser/node_modules/playwright-core/index.mjs
         shell: bash
         run: |
           npm install --prefix "$RUNNER_TEMP/bouncer-browser" --no-save --no-audit --no-fund playwright-core@1.64.1
           node scripts/test-web-browser.mjs
+      - name: Test pinned wallet adapters with synthetic signers
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BOUNCER_PLAYWRIGHT_PATH: ${{ runner.temp }}/bouncer-browser/node_modules/playwright-core/index.mjs
+          BOUNCER_METEOR_EXECUTOR: ${{ runner.temp }}/meteor-executor.js
+          BOUNCER_CLI_EXECUTOR: ${{ runner.temp }}/cli-executor.js
+          BOUNCER_MOBILE_EXECUTOR: ${{ runner.temp }}/mobile-executor.js
+          BOUNCER_NIGHTLY_EXECUTOR: ${{ runner.temp }}/nightly-executor.js
+          BOUNCER_LEDGER_EXECUTOR: ${{ runner.temp }}/ledger-executor.js
+        run: |
+          gh api repos/Meteor-Wallet/meteor_wallet_sdk/git/blobs/b76fb93ff5d47064845d09313173b6eddbfa64e3 --jq .content | base64 -d > "$BOUNCER_METEOR_EXECUTOR"
+          gh api repos/near/near-cli-connect/git/blobs/32f1a33250370b5250a72d68ce24459628069fd7 --jq .content | base64 -d > "$BOUNCER_CLI_EXECUTOR"
+          gh api repos/fastnear/near-connect/git/blobs/19a9d9513c6a240e1fe228b820b9aebccbf66dcd --jq .content | base64 -d > "$BOUNCER_MOBILE_EXECUTOR"
+          gh api repos/hot-dao/near-selector/git/blobs/4a683d0d14abd97e163fbcc539a98949a7f79f86 --jq .content | base64 -d > "$BOUNCER_NIGHTLY_EXECUTOR"
+          gh api repos/near/near-connect-ledger/git/blobs/0e735ec1243811bd38a7a2af359b2f19c07be282 --jq .content | base64 -d > "$BOUNCER_LEDGER_EXECUTOR"
+          node scripts/test-wallet-adapters.mjs
 
       # Isolated, lockfile-pinned third-party seller SDK. Its NEAR driver is
       # wrapped only in tests because the published preset is mainnet-only.

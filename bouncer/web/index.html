@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#101b17">
+  <meta name="bouncer-wallet-origin" content="https://bouncer-near.vercel.app">
   <meta name="description" content="Bouncer helps AI agents get compute, storage and data within owner-defined rules. An experimental NEAR testnet prototype.">
   <meta property="og:type" content="website">
   <meta property="og:title" content="Bouncer — Give your agents room to do more">
@@ -12,7 +13,7 @@
   <title>Bouncer — The resource layer for agents</title>
   <link rel="icon" type="image/svg+xml" href="./favicon.svg?v=3">
   <link rel="preload" href="./manrope-latin.woff2" as="font" type="font/woff2" crossorigin>
-  <link rel="stylesheet" href="./styles.css?v=13">
+  <link rel="stylesheet" href="./styles.css?v=14">
 </head>
 <body>
   <svg class="svg-defs" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
@@ -28,6 +29,7 @@
     <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
     <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M5.5 9a7 7 0 0 1 12-2L20 12M4 12l2.5 5a7 7 0 0 0 12-2"/></symbol>
     <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v3"/></symbol>
+    <symbol id="i-wallet" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="M16 12h5M16 12h.01M3 9h18"/></symbol>
     <symbol id="i-account" viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.5"/><path d="M5 20a7 7 0 0 1 14 0"/></symbol>
     <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 2l1.8 6.2L20 10l-6.2 1.8L12 18l-1.8-6.2L4 10l6.2-1.8L12 2ZM19 16l.7 2.3L22 19l-2.3.7L19 22l-.7-2.3L16 19l2.3-.7L19 16Z"/></symbol>
   </svg>
@@ -41,7 +43,7 @@
         <a class="side-link" href="#capabilities"><svg><use href="#i-cpu"/></svg><span>Resources</span></a>
         <a class="side-link" href="#guardrails"><svg><use href="#i-shield"/></svg><span>Guardrails</span></a>
         <a class="side-link" href="#proof"><svg><use href="#i-activity"/></svg><span>On-chain proof</span></a>
-        <a class="side-link" href="#connect"><svg><use href="#i-account"/></svg><span>Account &amp; AI</span></a>
+        <a class="side-link" href="#connect"><svg><use href="#i-account"/></svg><span>Wallet &amp; AI</span></a>
       </nav>
       <div class="side-bottom">
         <div class="side-orb"><svg><use href="#i-spark"/></svg></div>
@@ -56,9 +58,9 @@
       <header class="topbar">
         <a class="mobile-brand" href="#workspace" aria-label="Bouncer workspace"><span class="brand-mark" aria-hidden="true"><svg viewBox="16 17 300 300"><use href="#i-bouncer"/></svg></span><strong>bouncer<span>.</span></strong></a>
         <div class="breadcrumb"><span>Workspace</span><span class="slash">/</span><strong id="route-breadcrumb">Overview</strong></div>
-        <div class="top-actions"><button class="tour-link" type="button" data-open-tour>Take a tour</button><span class="network"><span class="status-dot"></span> Testnet</span><a class="button top-connect" href="#connect" data-signin-open><svg><use href="#i-account"/></svg><span data-account-label>Sign in</span></a></div>
+        <div class="top-actions"><button class="tour-link" type="button" data-open-tour>Take a tour</button><span class="network"><span class="status-dot"></span> Testnet</span><button class="button top-connect" type="button" data-wallet-open><svg><use href="#i-wallet"/></svg><span data-wallet-label>Connect wallet</span></button></div>
       </header>
-      <nav class="mobile-nav" aria-label="Workspace navigation"><a class="active" href="#overview">Overview</a><a href="#capabilities">Resources</a><a href="#guardrails">Guardrails</a><a href="#proof">Proof</a><a href="#connect">Account</a></nav>
+      <nav class="mobile-nav" aria-label="Workspace navigation"><a class="active" href="#overview">Overview</a><a href="#capabilities">Resources</a><a href="#guardrails">Guardrails</a><a href="#proof">Proof</a><a href="#connect">Wallet</a></nav>
 
       <main class="main" id="main-content">
         <div class="route-view workspace-view" id="workspace" data-route-view="workspace" aria-label="Workspace">
@@ -72,7 +74,7 @@
               <div class="hero-eyebrow"><span></span> THE RESOURCE LAYER FOR AGENTS</div>
               <h2 id="hero-title">Big ideas.<br><em>Better boundaries.</em></h2>
               <p>Give your agent room to find compute, storage and data — while you define the rules it operates by.</p>
-              <div class="hero-actions"><a class="button hero-primary" href="#capabilities">Explore resources <svg><use href="#i-arrow"/></svg></a><a class="button hero-secondary" href="#connect" data-signin-open>Sign in with Google <svg><use href="#i-arrow"/></svg></a></div>
+              <div class="hero-actions"><a class="button hero-primary" href="#capabilities">Explore resources <svg><use href="#i-arrow"/></svg></a><button class="button hero-secondary" type="button" data-wallet-open><span data-wallet-label>Connect wallet</span><svg><use href="#i-wallet"/></svg></button></div>
               <div class="workspace-hero-meta"><span><svg><use href="#i-shield"/></svg> OWNER CONTROLLED</span><span class="workspace-meta-separator"></span><span>BUILT ON NEAR</span></div>
             </div>
             <div class="workspace-visual" data-workspace-visual data-resource="compute">
@@ -129,17 +131,13 @@
 <section class="section history-section" id="latest-mission"><details class="history-details"><summary><span><span class="section-kicker">THE BUILD LOG</span><strong>Explore the earlier testnet mission</strong><small>Independent price execution + self-hosted resource examples · 30 Oct 2026</small></span><span class="history-plus" aria-hidden="true">+</span></summary><div class="history-body"><p>Bouncer paid OutLayer in <strong>testnet NEAR</strong> to fetch a recorded $4.27625 price from Coinbase’s public endpoint through OutLayer. The data was not independently verified for accuracy or market freshness. Three subsequent resource tasks used Circle testnet USDC, which has no real value, with self-hosted development examples. The independent execution was not paid in USDC; this process is non-atomic and cannot undo earlier payments. An intentionally corrupted result stopped later payments. A separate test used a local AI model to propose resource tasks while the owner retained financial authority.</p><div class="history-links"><a href="https://testnet.nearblocks.io/txns/4MCH1jvtrz43trdnjvxQfkVuLXN4a9nhtyzPt8kM95yZ" target="_blank" rel="noopener noreferrer">Data execution ↗</a><a href="https://testnet.nearblocks.io/txns/7XxeU466RVYvVN3wBrWqXHu2zeHHyFPcs4WhNuFX2GbJ" target="_blank" rel="noopener noreferrer">Compute ↗</a><a href="https://testnet.nearblocks.io/txns/GJkJMWBF2CCh1H5uh9uAKJJciTsqcvcgKvNXvnJrEvjL" target="_blank" rel="noopener noreferrer">Storage ↗</a><a href="https://testnet.nearblocks.io/txns/7RxBwG4G6FRqG1o2shYRN2ES2WsxVFdEMd8NWp7zA5vy" target="_blank" rel="noopener noreferrer">API ↗</a><a href="https://testnet.nearblocks.io/txns/BaScmpZxC7tqAdQC515A3xoj8ev9exFxsN7T4KjHFppw" target="_blank" rel="noopener noreferrer">Funding ↗</a><a href="https://testnet.nearblocks.io/txns/CqXgcgZ5RuN4n5hTgkgZFx51EH5t1WeVU7SsiNyNeVwt" target="_blank" rel="noopener noreferrer">Owner setup swap ↗</a><a href="https://github.com/Greatmujey/Bouncer/actions/runs/41073097919/job/124122803916" target="_blank" rel="noopener noreferrer">Run evidence ↗</a><a href="https://github.com/Greatmujey/Bouncer/actions/runs/40689705483/job/122821855839" target="_blank" rel="noopener noreferrer">AI-planned run ↗</a><a href="https://testnet.nearblocks.io/txns/GkQL6ZNHC7gGmRmCHc9uFv7fSsNdeJkTZaHtNPcxfhtw" target="_blank" rel="noopener noreferrer">Separate earlier refund test ↗</a></div></div></details></section>
 <section class="section roadmap-section" id="roadmap"><div><div class="section-kicker">WHAT’S NEXT</div><h2>There’s more to build<span>.</span></h2><p>Useful independent providers, reliable refunds, stronger policies and an independent security audit are still ahead. Bouncer is not yet an open marketplace.</p></div><a class="button roadmap-button" href="https://github.com/Greatmujey/Bouncer" target="_blank" rel="noopener noreferrer">Follow the build <svg><use href="#i-external"/></svg></a></section>
 <details class="history-details track-detail"><summary><span><span class="section-kicker">SIX TRACKS · ONE ROADMAP</span><strong>See the bigger picture</strong><small>What the prototype has explored—and what remains ahead.</small></span><span class="history-plus" aria-hidden="true">+</span></summary><div class="track-grid"><article class="track-card"><h3>AI Security &amp; Defense</h3><p>Owner guard and caps tested; independent audit ahead.</p></article><article class="track-card"><h3>Agent Economy</h3><p>Testnet examples; useful independent providers ahead.</p></article><article class="track-card"><h3>Autonomous Business</h3><p>Local task planning explored; reliable operations ahead.</p></article><article class="track-card"><h3>Real-World Money</h3><p>Circle test USDC used in development; real-money rails are not live.</p></article><article class="track-card"><h3>Unstoppable DeFi</h3><p>Owner setup swap tested; agent-guarded swaps ahead.</p></article><article class="track-card"><h3>AI Swarms</h3><p>One coordinator sequenced tasks; multi-agent handoffs ahead.</p></article></div></details></div>
-        <div class="route-view" data-route-view="connect" aria-label="Account and AI"><header class="route-header"><div><div class="section-kicker"><span class="kicker-dot"></span> 04 / YOUR ACCOUNT</div><h1>You’re in the driver’s seat<span>.</span></h1><p>Sign in with Google, or bring an AI assistant into your workflow.</p></div><span class="route-tag">YOUR ACCOUNT · YOUR RULES</span></header>
+        <div class="route-view" data-route-view="connect" aria-label="Wallet and AI"><header class="route-header"><div><div class="section-kicker"><span class="kicker-dot"></span> 04 / YOUR CONNECTION</div><h1>You’re in the driver’s seat<span>.</span></h1><p>Connect a testnet wallet, use Google sign-in, or bring an AI assistant into your workflow.</p></div><span class="route-tag">YOUR ACCOUNT · YOUR RULES</span></header>
 <section class="section access-section" id="connect" aria-labelledby="access-title">
-          <div class="section-heading"><div><div class="section-kicker">YOUR WORKSPACE</div><h2 id="access-title">One place to get started<span>.</span></h2><p>Sign in to identify your account, or explore Bouncer with a compatible AI assistant.</p></div></div>
+          <div class="section-heading"><div><div class="section-kicker">YOUR WORKSPACE</div><h2 id="access-title">One place to get started<span>.</span></h2><p>Choose a wallet or Google sign-in, or explore Bouncer with a compatible AI assistant.</p></div></div>
           <div class="access-grid">
-            <article class="access-card account-card"><div class="access-card-head"><span class="access-icon account-icon"><svg><use href="#i-account"/></svg></span><span class="access-pill"><span class="status-dot"></span> ACCOUNT</span></div><h3>Sign in with Google</h3><p class="access-copy">Use your Google account to identify yourself in Bouncer. Google sign-in does not create a vault, grant spending access or send a transaction.</p>
-              <div id="google-signin-button" class="google-signin-button" aria-label="Google sign-in"></div>
-              <p id="account-status" class="connection-status" role="status" aria-live="polite">Checking sign-in availability…</p>
-              <button id="google-retry" class="button account-signout" type="button" hidden>Try again</button>
-              <button id="google-signout" class="button account-signout" type="button" hidden>Sign out</button>
-              <a id="account-open-site" class="account-open-site" href="https://bouncer-near.vercel.app/#connect" target="_blank" rel="noopener noreferrer" hidden>Open Bouncer’s account page ↗</a>
-              <p class="security-note"><svg><use href="#i-lock"/></svg> Your on-chain permissions remain separate. Never enter a seed phrase or private key into Bouncer.</p>
+            <article class="access-card account-card"><div class="access-card-head"><span class="access-icon account-icon"><svg><use href="#i-wallet"/></svg></span><span class="access-pill"><span class="status-dot"></span> NEAR TESTNET</span></div><h3>Connect your account</h3><p class="access-copy">Choose a testnet wallet or sign in with Google. Neither connection creates a vault, grants spending access or sends a transaction.</p>
+              <div class="wallet-actions"><button id="wallet-connect" class="button wallet-button" type="button" data-wallet-open><span data-wallet-label>Connect wallet</span> <svg><use href="#i-arrow"/></svg></button></div>
+              <p id="wallet-status" class="connection-status" role="status" aria-live="polite">Getting your wallet options ready…</p><p class="security-note"><svg><use href="#i-lock"/></svg> Never enter a seed phrase or private key into Bouncer.</p>
             </article>
             <article class="access-card assistant-card"><div class="access-card-head"><span class="access-icon assistant-icon"><svg><use href="#i-spark"/></svg></span><span class="access-pill muted-pill">LOCAL · READ ONLY</span></div><h3>Bring your AI assistant</h3><p class="access-copy">Use the local MCP server to inspect policies and preview resource quotes, without granting it spending access.</p><div class="assistant-list" aria-label="Compatible assistant examples"><span>Claude</span><span>Gemini</span><span>ChatGPT*</span><span>+ more</span></div><p class="assistant-note">Gemini CLI and Claude Code passed local connection checks. *ChatGPT web and other hosted assistants need HTTPS and compatible authentication; that setup is not available yet. Model conversations have not been tested.</p><details class="setup-details"><summary>Set up an MCP client <span>↗</span></summary><p>Install the project dependencies and launch Gemini CLI or Claude Code from the repository root. Other local clients can run <code>node</code> with the absolute path to <code>bouncer/mcp/server.mjs</code>. <a href="https://github.com/Greatmujey/Bouncer/blob/main/bouncer/docs/MCP.md" target="_blank" rel="noopener noreferrer">Read the setup guide ↗</a></p></details></article>
           </div>
@@ -149,8 +147,37 @@
     </div>
   </div>
   <div id="route-announcement" class="visually-hidden" aria-live="polite"></div>
+  <div id="wallet-banner" class="wallet-banner" role="status" aria-live="polite" hidden></div>
+  <dialog class="wallet-dialog" id="wallet-dialog" aria-labelledby="wallet-dialog-title" aria-describedby="wallet-dialog-description">
+    <div class="wallet-sheet-handle" aria-hidden="true"></div>
+    <div class="wallet-dialog-top"><span class="wallet-dialog-kicker"><span class="status-dot"></span> YOUR ACCOUNT</span><button class="wallet-close" id="wallet-close" type="button" aria-label="Close account picker">×</button></div>
+    <h2 id="wallet-dialog-title"><span id="wallet-title-text">Connect an account</span><span>.</span></h2>
+    <p id="wallet-dialog-description">Choose a testnet wallet or continue with Google. Connecting does not grant spending access.</p>
+  <div class="wallet-options" id="wallet-options" aria-label="Available testnet wallets">
+    <button class="wallet-option" type="button" data-wallet-id="near-mobile" disabled><span class="wallet-logo near-mobile-logo" aria-hidden="true"><svg viewBox="0 0 48 48"><path d="M12 34V14l24 20V14M12 34l7-6M29 20l7-6"/></svg></span><span class="wallet-option-name"><strong>NEAR Mobile</strong><small>NEAR wallet · Testnet login message</small></span><svg class="wallet-option-arrow"><use href="#i-arrow"/></svg></button>
+    <button class="wallet-option" type="button" data-wallet-id="meteor-wallet" disabled><span class="wallet-logo meteor-logo" aria-hidden="true"><svg viewBox="0 0 48 48"><path d="M9 27 26 10M15 33 36 12M22 38l16-16"/></svg></span><span class="wallet-option-name"><strong>Meteor Wallet</strong><small>meteorwallet.app · Web &amp; mobile</small></span><svg class="wallet-option-arrow"><use href="#i-arrow"/></svg></button>
+    <button class="wallet-option" type="button" data-wallet-id="intear-wallet" disabled><span class="wallet-logo intear-logo" aria-hidden="true"><svg viewBox="0 0 48 48"><path d="M24 8C20 14 13 23 13 29a11 11 0 0 0 22 0c0-6-7-15-11-21Z"/><path d="M18 29c0 3 2 6 5 6"/></svg></span><span class="wallet-option-name"><strong>Intear Wallet</strong><small>Web &amp; app · Testnet</small></span><svg class="wallet-option-arrow"><use href="#i-arrow"/></svg></button>
+    <button class="wallet-option" type="button" data-wallet-id="nightly-wallet" disabled><span class="wallet-logo nightly-logo" aria-hidden="true"><svg viewBox="0 0 48 48"><path d="M31 10a16 16 0 1 0 7 25 14 14 0 0 1-7-25Z"/><path d="M34 11v6M31 14h6"/></svg></span><span class="wallet-option-name"><strong>Nightly Wallet</strong><small>nightly.app · Browser extension</small></span><svg class="wallet-option-arrow"><use href="#i-arrow"/></svg></button>
+    <button class="wallet-option" type="button" data-wallet-id="ledger" disabled><span class="wallet-logo ledger-logo" aria-hidden="true"><svg viewBox="0 0 48 48"><path d="M8 18v-8h10M30 10h10v8M8 30v8h10M30 38h10v-8M20 16v16h10"/></svg></span><span class="wallet-option-name"><strong>Ledger</strong><small>ledger.com · Hardware wallet</small></span><svg class="wallet-option-arrow"><use href="#i-arrow"/></svg></button>
+    <button class="wallet-option" type="button" data-wallet-id="near-cli" disabled><span class="wallet-logo cli-logo" aria-hidden="true"><svg viewBox="0 0 48 48"><path d="m12 15 10 9-10 9M25 34h11"/></svg></span><span class="wallet-option-name"><strong>NEAR CLI</strong><small>Terminal · Sign a testnet login message</small></span><svg class="wallet-option-arrow"><use href="#i-arrow"/></svg></button>
+  </div>
+    <p id="wallet-dialog-status" class="wallet-dialog-status" role="status" aria-live="polite">Getting your wallet options ready…</p>
+    <a id="wallet-open-site" class="wallet-open-site" href="https://bouncer-near.vercel.app/#connect" target="_blank" rel="noopener noreferrer" hidden>Open Bouncer in a new tab <svg><use href="#i-external"/></svg></a>
+    <button id="wallet-disconnect" class="button wallet-disconnect" type="button" hidden>Disconnect wallet</button>
+    <div class="google-picker" aria-label="Google account sign-in">
+      <div class="account-divider"><span>or continue with</span></div>
+      <button class="wallet-option google-start" id="google-start" type="button"><span class="google-g" aria-hidden="true">G</span><span class="wallet-option-name"><strong>Google</strong><small>Identity only · no NEAR spending access</small></span><svg class="wallet-option-arrow"><use href="#i-arrow"/></svg></button>
+      <div id="google-signin-button" class="google-signin-button" aria-label="Google sign-in" hidden></div>
+      <p id="account-status" class="google-status" role="status" aria-live="polite">Checking Google sign-in…</p>
+      <button id="google-retry" class="button account-signout" type="button" hidden>Try again</button>
+      <button id="google-signout" class="button account-signout" type="button" hidden>Sign out of Google</button>
+      <a id="account-open-site" class="wallet-open-site" href="https://bouncer-near.vercel.app/#connect" target="_blank" rel="noopener noreferrer" hidden>Open Bouncer’s account page ↗</a>
+    </div>
+    <div class="wallet-safety" id="wallet-safety"><svg><use href="#i-lock"/></svg><div><strong>Just your account, never your keys.</strong><p>No spending access or transaction is requested. Never share your seed phrase or private key.</p><details><summary>CLI help &amp; licenses</summary><p>For CLI, choose your key source, run the displayed command in your terminal and paste only its signed output. <a href="./intear-wallet-source.zip">Intear adapter source</a> (AGPL-3.0).</p></details></div></div>
+  </dialog>
   <dialog class="tour-dialog" id="welcome-tour" aria-labelledby="tour-title" aria-describedby="tour-description"><div class="tour-topline"><span class="brand-mark" aria-hidden="true"><svg viewBox="16 17 300 300"><use href="#i-bouncer"/></svg></span><span class="tour-count" id="tour-count">STEP 1 OF 4</span><button type="button" class="tour-close" id="tour-skip" aria-label="Close the tour">×</button></div><div class="tour-progress" aria-hidden="true"><span></span><span></span><span></span><span></span></div><div class="tour-copy" aria-live="polite"><div class="section-kicker" id="tour-kicker">WELCOME TO BOUNCER</div><h2 id="tour-title">Meet your resource agent.</h2><p id="tour-description">Bouncer helps an agent get compute, storage and API services while your on-chain rules guard its spending.</p><div class="tour-callout" id="tour-callout">Bouncer is a testnet prototype, not an open marketplace.</div></div><div class="tour-actions"><button class="button tour-back" type="button" id="tour-back" disabled>Back</button><button class="button tour-next" type="button" id="tour-next">Next →</button></div></dialog>
-  <script type="module" src="./app.mjs?v=6"></script>
-  <script type="module" src="./google-signin.mjs?v=1"></script>
+  <script type="module" src="./app.mjs?v=7"></script>
+  <script type="module" src="./wallet.bundle.js?v=13"></script>
+  <script type="module" src="./google-signin.mjs?v=2"></script>
 </body>
 </html>

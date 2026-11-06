@@ -7,11 +7,10 @@ for Bouncer's compute and storage tracks.
 
 On November 6, 2026, Buffer's public catalog listed `weekly-market-brief` and
 `crosschain-brief` at **20,000,000 atoms (20 test USDC)**; a custom quote had a
-5,000,000-atom minimum. The observed V12 Circle balance was **6,898 atoms**. A
-read-only web4 view of Ref testnet pool 1845 indicated **5,422,448 atoms** for
-2 test NEAR, enough for the *minimum* custom quote but not proof a particular
-quote will cost that amount. This was not a pinned FINAL quote, reservation,
-swap or funding. Prices, liquidity, quote availability and deployed code can
+5,000,000-atom minimum. The observed V12 Circle balance was **6,898 atoms**.
+A web4 Ref quote briefly recorded here was from a stale indexer at block
+238,527,181 and must not be used for planning or spending. A fresh FINAL quote
+is still required. Prices, liquidity, quote availability and deployed code can
 change. Bouncer has not created an order or quote, contacted the seller's paid
 workflow, or paid or obtained a report. The contract source below is pinned for
 investigation; it is not proof that the live deployment matches that source.

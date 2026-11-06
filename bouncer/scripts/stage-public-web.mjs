@@ -8,7 +8,8 @@ import { fileURLToPath } from 'node:url';
 export const PUBLIC_WEB_FILES = Object.freeze([
   'index.html', 'styles.css', 'favicon.svg', 'hero-orbit.jpg',
   'manrope-latin.woff2', 'manrope-OFL.txt', 'evidence.mjs',
-  'app.mjs', 'tour.mjs', 'google-signin.mjs',
+  'app.mjs', 'tour.mjs', 'google-signin.mjs', 'wallet.bundle.js',
+  'intear-wallet.executor.js', 'intear-wallet-source.zip',
 ]);
 const DEFAULT_SOURCE = fileURLToPath(new URL('../web/', import.meta.url));
 
@@ -21,9 +22,16 @@ export function validatePublicWeb(source = DEFAULT_SOURCE) {
     if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`Refusing unexpected website file ${file}`);
   }
   const html = fs.readFileSync(path.join(rootPath, 'index.html'), 'utf8');
+  const walletIds = [...html.matchAll(/data-wallet-id="([a-z-]+)"/g)].map(match => match[1]);
+  const expected = ['near-mobile', 'meteor-wallet', 'intear-wallet', 'nightly-wallet', 'ledger', 'near-cli'];
+  const pickerStart = html.indexOf('id="wallet-dialog"');
+  const cli = html.indexOf('data-wallet-id="near-cli"', pickerStart);
+  const google = html.indexOf('id="google-start"', pickerStart);
   if (!/<script type="module" src="\.\/google-signin\.mjs\?v=\d+"><\/script>/.test(html) ||
-      /(?:data-wallet-open|wallet-dialog|wallet\.bundle|walletconnect|wc-relay)/i.test(html)) {
-    throw new Error('Public website must use Google sign-in, not the retired wallet experience');
+      !/<script type="module" src="\.\/wallet\.bundle\.js\?v=\d+"><\/script>/.test(html) ||
+      !html.includes('data-wallet-open') || pickerStart < 0 || cli < pickerStart || google < cli ||
+      walletIds.join(',') !== expected.join(',') || /walletconnect|wc-relay/i.test(html)) {
+    throw new Error('Public website must contain the reviewed testnet wallet picker followed by Google sign-in');
   }
 }
 

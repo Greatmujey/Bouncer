@@ -12,7 +12,7 @@ const site = path.join(tempRoot, 'site');
 const origin = 'https://greatmujey.github.io';
 const prefix = '/Bouncer/';
 const target = `${origin}${prefix}?page=overview`;
-const types = { '.html': 'text/html', '.css': 'text/css', '.mjs': 'text/javascript', '.js': 'text/javascript', '.svg': 'image/svg+xml', '.jpg': 'image/jpeg', '.woff2': 'font/woff2', '.txt': 'text/plain' };
+const types = { '.html': 'text/html', '.css': 'text/css', '.mjs': 'text/javascript', '.js': 'text/javascript', '.zip': 'application/zip', '.js': 'text/javascript', '.svg': 'image/svg+xml', '.jpg': 'image/jpeg', '.woff2': 'font/woff2', '.txt': 'text/plain' };
 const staged = new Set(PUBLIC_WEB_FILES);
 const playwrightPath = process.env.BOUNCER_PLAYWRIGHT_PATH || path.join(process.env.RUNNER_TEMP || '', 'bouncer-browser/node_modules/playwright-core/index.mjs');
 let browser;
@@ -44,17 +44,21 @@ try {
   assert.equal(response.status(), 200);
   assert.equal(await page.evaluate(() => location.origin + location.pathname), `${origin}${prefix}`);
   assert.equal(await page.evaluate(() => document.styleSheets.length > 0), true, 'nested-path stylesheet did not load');
-  for (const asset of ['index.html', 'styles.css', 'app.mjs', 'evidence.mjs', 'tour.mjs', 'google-signin.mjs', 'manrope-latin.woff2']) {
+  for (const asset of ['index.html', 'styles.css', 'app.mjs', 'evidence.mjs', 'tour.mjs', 'google-signin.mjs', 'wallet.bundle.js', 'manrope-latin.woff2']) {
     assert.ok(served.includes(asset), `nested-path asset did not load: ${asset}`);
   }
   assert.equal(await page.locator('#welcome-tour').evaluate(el => el.open), false);
   await page.locator('[data-open-tour]').click();
   await page.locator('#tour-skip').click();
   await page.locator('.top-connect').click();
-  await page.locator('[data-route-view="connect"]').waitFor({ state: 'visible' });
+  assert.equal(await page.locator('#wallet-dialog').evaluate(el => el.open), true);
   await page.waitForFunction(() => document.querySelector('#account-status').textContent.includes('not configured'));
   assert.equal(await page.locator('#google-signout').isVisible(), false, 'shared static origin cannot sign in');
-  assert.equal(await page.locator('#wallet-dialog, [data-wallet-open]').count(), 0);
+  assert.equal(await page.locator('[data-wallet-id]').count(), 6);
+  assert.equal(await page.locator('[data-wallet-id]:disabled').count(), 6, 'shared Pages origin cannot create wallet sessions');
+  assert.match(await page.locator('#wallet-dialog-status').innerText(), /new tab/);
+  assert.equal(await page.locator('#wallet-open-site').isVisible(), true);
+  await page.locator('#wallet-close').click();
   await page.locator('.mobile-nav a[href="#capabilities"]').click();
   await page.locator('[data-route-view="resources"]').waitFor({ state: 'visible' });
   assert.equal(await page.locator('[data-route-view="resources"]').isVisible(), true);

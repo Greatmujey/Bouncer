@@ -1,16 +1,26 @@
-# Website and Google sign-in
+# Website, testnet wallets and Google sign-in
 
 `bouncer/web/` is the responsive Bouncer testnet walkthrough, not a live
 purchasing dashboard. The Workspace, Overview, Resources, Guardrails, On-chain
-proof, Account & AI, optional tour, and three evenly spaced animated resource
+proof, Wallet & AI, optional tour, and three evenly spaced animated resource
 icons remain. Motion respects the browser's reduced-motion setting. Recorded
 examples and transactions are explicitly labeled; independent FT-paid delivery,
 refund recovery and an independent vault audit remain open.
 
-This branch removes the wallet picker, wallet adapters, WalletConnect relay,
-QR pairing, CLI login and their published bundles. The old production release
-is unchanged until this branch is reviewed and merged. The new Google flow is
+The account picker offers NEAR Mobile, Meteor, Intear, Nightly, Ledger and
+NEAR CLI on testnet, with Google sign-in last. The separate WalletConnect QR
+option and project-ID requirement are removed. The old production release is
+unchanged until this branch is reviewed and merged. The new Google flow is
 **not live or verified with a real Google account yet**.
+
+Wallet sessions are restricted to approved dedicated, top-level origins, with
+GitHub Pages and shared guest origins blocked. The curated executors are
+sandboxed and their pinned bytes are SHA-256 verified before use. NEAR Mobile
+and CLI use fresh, off-chain login messages checked against testnet; the other
+wallets report an account but do not independently prove ownership to Bouncer.
+No transaction, access key or vault spending authority is requested by this
+picker. Wallet extensions, provider availability and real-device sign-in still
+need end-to-end testing; unit and mocked-browser tests are not live logins.
 
 ## Configure Google Identity Services
 
@@ -44,7 +54,7 @@ by copying the static files. A successful synthetic test is not a live login.
 
 ## Security and boundaries
 
-The actual Google-rendered button is loaded on the account view only. The
+The actual Google-rendered button is loaded inside the account picker. The
 server supplies a 5-minute random nonce in a secure host-only HttpOnly cookie.
 The Google credential is sent over same-origin JSON; the API requires a custom
 header, exact Origin and fetch-site checks. It uses the fixed Google HTTPS
@@ -71,18 +81,26 @@ explicit authorization design; never put seed phrases in the website. The
 
 ```sh
 node bouncer/scripts/dev-web.mjs
-node --test bouncer/tests/google-session.test.mjs bouncer/tests/web.test.mjs bouncer/tests/public-web-staging.test.mjs
+node --test bouncer/tests/google-session.test.mjs bouncer/tests/wallet.test.mjs bouncer/tests/cli-login.test.mjs bouncer/tests/web.test.mjs bouncer/tests/public-web-staging.test.mjs
 cd bouncer && npm run build:web
 ```
 
 `dev-web.mjs` binds to `0.0.0.0` for preview, serves only the reviewed public
 assets, and uses relative API URLs. Its account endpoint deliberately refuses
-non-production hosts. The browser test in `scripts/test-web-browser.mjs` uses
-synthetic Google responses only; `google-session.test.mjs` uses locally generated
-RSA keys to test good signatures, forgery, claims, nonce, CSRF, expiry, session
-restoration, sign-out and key rotation. Neither test signs a NEAR transaction.
+non-production hosts. Open the preview in its own tab to use testnet wallets;
+embedded iframes are blocked by the wallet-origin policy.
 
-`stage-public-web.mjs` publishes only the ten allowlisted website files. The
+`scripts/test-web-browser.mjs` uses synthetic Google responses, a mocked Meteor
+wallet, and the real vendored Intear adapter with a synthetic wallet page.
+`scripts/test-wallet-adapters.mjs` optionally tests the other pinned executors:
+Meteor, Nightly and Ledger prompts open and cancel; Mobile and CLI validate
+synthetic signatures against a mocked read-only RPC and reject forgeries. CI
+obtains and hash-checks the pinned public blobs. No real wallet, extension,
+Ledger device, Google login or transaction is tested. `google-session.test.mjs`
+uses locally generated RSA keys to test signatures, claims, nonce, CSRF,
+expiry, restoration, sign-out and key rotation.
+
+`stage-public-web.mjs` publishes only the 13 allowlisted website files. The
 Vercel API function is separately detected from `web/api/google-session.mjs`;
 it is not published as a static source file. The public URL is
 https://bouncer-near.vercel.app/. The site and session API remain unaudited.

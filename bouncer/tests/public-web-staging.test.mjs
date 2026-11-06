@@ -17,17 +17,18 @@ function fixture(t) {
   return { tmp, source, dest: path.join(tmp, 'site') };
 }
 
-test('public staging copies only reviewed public assets, never credentials or retired wallet bundles', t => {
+test('public staging copies only reviewed wallet and Google assets, never credentials', t => {
   const { source, dest } = fixture(t);
   fs.writeFileSync(path.join(source, 'credentials.txt'), 'private');
   fs.mkdirSync(path.join(source, 'journals'));
   fs.writeFileSync(path.join(source, 'journals', 'recovery.json'), 'private');
-  assert.equal(PUBLIC_WEB_FILES.length, 10);
+  assert.equal(PUBLIC_WEB_FILES.length, 13);
   assert.ok(PUBLIC_WEB_FILES.includes('google-signin.mjs'));
   assert.ok(PUBLIC_WEB_FILES.includes('hero-orbit.jpg'));
   assert.ok(PUBLIC_WEB_FILES.includes('manrope-latin.woff2'));
   assert.ok(PUBLIC_WEB_FILES.includes('manrope-OFL.txt'));
-  assert.ok(PUBLIC_WEB_FILES.every(file => !/wallet|relay|^api\//i.test(file)));
+  for (const file of ['wallet.bundle.js', 'intear-wallet.executor.js', 'intear-wallet-source.zip']) assert.ok(PUBLIC_WEB_FILES.includes(file));
+  assert.ok(PUBLIC_WEB_FILES.every(file => !/walletconnect|relay|^api\//i.test(file)));
   assert.deepEqual(stagePublicWeb(dest, source), [...PUBLIC_WEB_FILES]);
   assert.deepEqual(fs.readdirSync(dest).sort(), [...PUBLIC_WEB_FILES].sort());
   for (const file of PUBLIC_WEB_FILES) assert.deepEqual(fs.readFileSync(path.join(dest, file)), fs.readFileSync(path.join(source, file)));
@@ -51,12 +52,18 @@ test('public staging refuses symlinked or missing assets before creating output'
   assert.throws(() => validatePublicWeb(`${linkedSource}/`), /real directory/);
 });
 
-test('public staging rejects a restored wallet experience or absent Google module', t => {
+test('public staging requires all six testnet wallets followed by Google and rejects WalletConnect', t => {
   const { source, dest } = fixture(t), index = path.join(source, 'index.html');
   const original = fs.readFileSync(index, 'utf8');
-  for (const altered of [original.replace('google-signin.mjs?v=1', 'old.mjs?v=1'), `${original}\n<div data-wallet-open></div>`, `${original}\n<script src="wallet.bundle.js"></script>`]) {
+  for (const altered of [
+    original.replace('google-signin.mjs?v=2', 'old.mjs?v=2'),
+    original.replace('wallet.bundle.js?v=13', 'old-wallet.js?v=13'),
+    original.replace('data-wallet-id="near-cli"', 'data-wallet-id="other"'),
+    original.replace('id="google-start"', 'id="missing-google"'),
+    `${original}\n<div>WalletConnect</div>`,
+  ]) {
     fs.writeFileSync(index, altered);
-    assert.throws(() => stagePublicWeb(dest, source), /Google sign-in/);
+    assert.throws(() => stagePublicWeb(dest, source), /wallet picker followed by Google/);
     assert.equal(fs.existsSync(dest), false);
   }
 });
@@ -71,7 +78,7 @@ test('deployment revalidates HTML, permits Google popups, and versions its asset
   const globalHeaders = config.headers.find(rule => rule.source === '/(.*)').headers;
   assert.equal(globalHeaders.find(h => h.key.toLowerCase() === 'cross-origin-opener-policy').value, 'same-origin-allow-popups');
   const html = fs.readFileSync(path.join(realSource, 'index.html'), 'utf8');
-  for (const file of ['styles.css', 'app.mjs', 'google-signin.mjs']) assert.match(html, new RegExp(`\\./${file.replaceAll('.', '\\.') }\\?v=\\d+`));
+  for (const file of ['styles.css', 'app.mjs', 'google-signin.mjs', 'wallet.bundle.js']) assert.match(html, new RegExp(`\\./${file.replaceAll('.', '\\.') }\\?v=\\d+`));
 });
 
 test('only the Google session API is detected by Vercel, never served as a public static file', async () => {
@@ -84,6 +91,6 @@ test('only the Google session API is detected by Vercel, never served as a publi
 test('staging CLI runs from the web root and publishes only allowlisted files', t => {
   const { dest } = fixture(t);
   const output = execFileSync(process.execPath, [script, dest], { cwd: realSource, encoding: 'utf8' });
-  assert.match(output, /Staged 10 reviewed public website files/);
+  assert.match(output, /Staged 13 reviewed public website files/);
   assert.deepEqual(fs.readdirSync(dest).sort(), [...PUBLIC_WEB_FILES].sort());
 });

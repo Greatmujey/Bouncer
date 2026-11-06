@@ -122,15 +122,16 @@ local AI model to propose tasks; the latest oracle mission used prepared goals. 
 two credit tokens in the earlier example are synthetic and fulfillment was
 self-hosted. The site is not a live agent dashboard or commercial marketplace.
 
-This working branch replaces the wallet-connection experience with Google
-sign-in for **identity only**. It requires an app-specific Google OAuth client
-ID and the authorized origin `https://bouncer-near.vercel.app`; neither is
-configured in the Bouncer Vercel project yet. Mocked UI and token-verification
-tests pass, but no real Google login has been tested. Google sign-in does not
-create a vault, grant spending authority or send a transaction. The current
-production site remains on the earlier release until this branch is reviewed
-and merged. The optional public-RPC read keeps the recorded snapshot if a
-current balance check fails.
+This branch restores the testnet account picker: NEAR Mobile, Meteor, Intear,
+Nightly, Ledger and NEAR CLI, followed by Google sign-in. Only the former
+WalletConnect QR/project-ID option is removed. Google is **identity only** and
+requires an app-specific OAuth client ID with the authorized origin
+`https://bouncer-near.vercel.app`; this is not configured in Vercel yet. Mocked
+UI and token-verification tests do not prove a real Google login. Neither
+Google sign-in nor selecting a wallet creates a vault or grants spending
+authority. The current production site remains on the earlier release until
+this branch is reviewed and merged. The optional public-RPC read keeps the
+recorded snapshot if a current balance check fails.
 
 Preview locally with Node:
 
@@ -138,10 +139,10 @@ Preview locally with Node:
 node bouncer/scripts/dev-web.mjs
 ```
 
-The Vercel build publishes **only the ten whitelisted static website files**,
+The Vercel build publishes **only the 13 allowlisted static website files**,
 not the checkout, credentials or journals, plus a separately deployed Google
-session API. Static guest and GitHub Pages previews do not host the API and
-cannot sign in. See [website and Google sign-in notes](bouncer/docs/WEB.md).
+session API. Shared guest and GitHub Pages origins do not allow wallet sessions
+and cannot host Google sign-in. See [website and sign-in notes](bouncer/docs/WEB.md).
 
 ## AI assistant access (MCP)
 

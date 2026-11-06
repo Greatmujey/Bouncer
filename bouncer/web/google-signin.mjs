@@ -1,13 +1,13 @@
-// Google Identity Services signs in to Bouncer only; it does not create a NEAR
-// wallet, sign a transaction, or grant an agent any spending authority.
-// The browser never treats decoded JWT claims as proof. The server verifies
-// the Google signature, app audience, issuer, expiry and one-time nonce first.
+// Google Identity Services is an identity session, not a NEAR wallet. It does
+// not sign transactions, create a vault or grant spending authority. The server
+// verifies Google's signature, audience, issuer, expiry and one-time nonce.
 const status = document.querySelector('#account-status');
 const button = document.querySelector('#google-signin-button');
+const start = document.querySelector('#google-start');
 const signout = document.querySelector('#google-signout');
 const retry = document.querySelector('#google-retry');
 const openSite = document.querySelector('#account-open-site');
-const labels = [...document.querySelectorAll('[data-account-label]')];
+const dialog = document.querySelector('#wallet-dialog');
 const endpoint = new URL('./api/google-session', location.href);
 let authenticated = false;
 let ready = false;
@@ -16,20 +16,22 @@ let scriptPromise;
 
 function showSignedOut(message) {
   authenticated = false;
-  labels.forEach(label => { label.textContent = 'Sign in'; });
   signout.hidden = true;
-  button.hidden = false;
+  start.hidden = false;
+  button.hidden = true;
   if (message) status.textContent = message;
 }
 function showSignedIn(user) {
   authenticated = true;
-  labels.forEach(label => { label.textContent = 'My account'; });
+  ready = false;
+  start.hidden = true;
   button.hidden = true;
+  button.replaceChildren();
   retry.hidden = true;
   openSite.hidden = true;
   signout.hidden = false;
   const display = user?.name || user?.email || 'Google account';
-  status.textContent = `Signed in as ${display}. Google sign-in does not authorize NEAR spending.`;
+  status.textContent = `Signed in as ${display}. Google sign-in does not authorize a NEAR wallet or spending.`;
 }
 async function request(options = {}, query = '') {
   const url = new URL(endpoint);
@@ -53,10 +55,14 @@ function loadGoogle() {
   if (!scriptPromise) {
     scriptPromise = new Promise((resolve, reject) => {
       const script = document.createElement('script');
+      const timer = setTimeout(() => { script.remove(); reject(new Error('Google could not load')); }, 12000);
       script.src = 'https://accounts.google.com/gsi/client';
       script.async = true;
-      script.onload = () => window.google?.accounts?.id ? resolve(window.google.accounts.id) : reject(new Error('Google could not load'));
-      script.onerror = () => reject(new Error('Google could not load'));
+      script.onload = () => {
+        clearTimeout(timer);
+        window.google?.accounts?.id ? resolve(window.google.accounts.id) : reject(new Error('Google could not load'));
+      };
+      script.onerror = () => { clearTimeout(timer); script.remove(); reject(new Error('Google could not load')); };
       document.head.append(script);
     }).catch(error => { scriptPromise = null; throw error; });
   }
@@ -66,6 +72,7 @@ async function onCredential(response) {
   if (busy || typeof response?.credential !== 'string') return;
   busy = true;
   ready = false;
+  button.hidden = true;
   button.replaceChildren();
   status.textContent = 'Verifying your Google account…';
   try {
@@ -83,7 +90,9 @@ async function onCredential(response) {
 async function prepareButton() {
   if (authenticated || ready || busy) return;
   busy = true;
+  start.disabled = true;
   retry.hidden = true;
+  button.hidden = true;
   button.replaceChildren();
   status.textContent = 'Preparing Google sign-in…';
   try {
@@ -91,19 +100,45 @@ async function prepareButton() {
     if (typeof config.clientId !== 'string' || typeof config.nonce !== 'string') throw new Error('Invalid account configuration');
     const google = await loadGoogle();
     google.initialize({ client_id: config.clientId, nonce: config.nonce, callback: onCredential, auto_select: false, ux_mode: 'popup' });
-    google.renderButton(button, { type: 'standard', theme: 'outline', size: 'large', text: 'signin_with', shape: 'rectangular', width: Math.min(320, button.parentElement.clientWidth - 48) });
+    google.renderButton(button, { type: 'standard', theme: 'outline', size: 'large', text: 'signin_with', shape: 'rectangular', width: Math.max(200, Math.min(320, button.parentElement.clientWidth || 280)) });
     ready = true;
-    status.textContent = 'Sign in to identify your account. On-chain spending authority is separate.';
+    start.hidden = true;
+    button.hidden = false;
+    openSite.hidden = true;
+    status.textContent = 'Google identifies your account; NEAR wallet connection and spending authority are separate.';
   } catch (error) {
     showSignedOut(error.status === 503 ? 'Google sign-in is not configured yet.' :
       error.status === 403 ? 'Google sign-in is supported only on Bouncer’s dedicated site; setup may still be required.' :
         'Google sign-in is currently unavailable. Please try again.');
     openSite.hidden = location.origin === 'https://bouncer-near.vercel.app';
     retry.hidden = error.status === 503 || error.status === 403;
-  } finally { busy = false; }
+  } finally { busy = false; start.disabled = false; }
 }
 
-retry.addEventListener('click', () => { ready = false; void prepareButton(); });
+// Restore only a server-validated session. Wait for this read before preparing
+// a login challenge so that a slow session restore cannot race the picker.
+const sessionReady = (async () => {
+  try {
+    const session = await request();
+    if (session.authenticated && typeof session.user?.sub === 'string') showSignedIn(session.user);
+    else showSignedOut('Google identifies your account; NEAR wallet connection is separate.');
+  } catch (error) {
+    showSignedOut(error.status === 503 ? 'Google sign-in is not configured yet.' :
+      error.status === 403 ? 'Google sign-in is supported only on Bouncer’s dedicated site; setup may still be required.' :
+        'Google sign-in is currently unavailable.');
+    openSite.hidden = location.origin === 'https://bouncer-near.vercel.app';
+  }
+})();
+function openGoogle() {
+  void sessionReady.then(() => {
+    // Each picker opening gets a fresh nonce rather than reusing a button that
+    // may have expired while the dialog was closed.
+    if (!authenticated) { ready = false; void prepareButton(); }
+  });
+}
+window.addEventListener('bouncer:account-picker-open', openGoogle);
+start.addEventListener('click', openGoogle);
+retry.addEventListener('click', openGoogle);
 signout.addEventListener('click', async () => {
   if (busy) return;
   busy = true;
@@ -112,23 +147,8 @@ signout.addEventListener('click', async () => {
     await request({ method: 'DELETE' });
     window.google?.accounts?.id?.disableAutoSelect();
     ready = false;
-    showSignedOut('Signed out.');
-  } catch { status.textContent = 'Could not sign out. Please try again.'; }
+    showSignedOut('Signed out of Google.');
+  } catch { status.textContent = 'Could not sign out of Google. Please try again.'; }
   finally { busy = false; signout.disabled = false; }
-  if (!authenticated) void prepareButton();
+  if (!authenticated && dialog.open) void prepareButton();
 });
-window.addEventListener('hashchange', () => { if (location.hash === '#connect') void prepareButton(); });
-
-// Restore only a session that the server validates; localStorage and unsigned
-// profile data are never used to assert that someone is signed in.
-try {
-  const session = await request();
-  if (session.authenticated && typeof session.user?.sub === 'string') showSignedIn(session.user);
-  else showSignedOut('Sign in to identify your account. On-chain spending authority is separate.');
-} catch (error) {
-  showSignedOut(error.status === 503 ? 'Google sign-in is not configured yet.' :
-    error.status === 403 ? 'Google sign-in is supported only on Bouncer’s dedicated site; setup may still be required.' :
-      'Google sign-in is currently unavailable.');
-  openSite.hidden = location.origin === 'https://bouncer-near.vercel.app';
-}
-if (location.hash === '#connect') void prepareButton();
