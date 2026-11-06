@@ -24,11 +24,11 @@ export function formatPublicAmount(value, decimals, maxFraction = decimals) {
   return `${truncated ? '≈' : ''}${whole}${visible ? `.${visible}` : ''}`;
 }
 
-async function rpc(fetchImpl, id, params, signal) {
+async function rpc(fetchImpl, id, method, params, signal) {
   const response = await fetchImpl(TESTNET_RPC, {
     method: 'POST', headers: { 'content-type': 'application/json' },
     credentials: 'omit', redirect: 'error', cache: 'no-store', signal,
-    body: JSON.stringify({ jsonrpc: '2.0', id, method: 'query', params }),
+    body: JSON.stringify({ jsonrpc: '2.0', id, method, params }),
   });
   if (!response.ok) throw new Error('TESTNET_RPC_UNAVAILABLE');
   const text = await response.text();
@@ -39,7 +39,9 @@ async function rpc(fetchImpl, id, params, signal) {
   if (payload.error) {
     // This indicates that the native account itself was not found at this
     // testnet node. It says nothing about mainnet or token-contract ledgers.
-    if (params.request_type === 'view_account' && payload.error?.cause?.name === 'UNKNOWN_ACCOUNT') return null;
+    const info = payload.error?.cause?.info;
+    if (method === 'query' && params.request_type === 'view_account' && payload.error?.cause?.name === 'UNKNOWN_ACCOUNT' &&
+        info?.requested_account_id === params.account_id && info?.block_hash === params.block_id) return null;
     throw new Error('TESTNET_RPC_UNAVAILABLE');
   }
   if (!payload.result || typeof payload.result !== 'object') throw new Error('TESTNET_RPC_INVALID');
@@ -47,30 +49,37 @@ async function rpc(fetchImpl, id, params, signal) {
 }
 
 /**
- * Two read-only queries at one FINAL block. NEAR's amount includes the portion
- * reserved for storage and excludes staked balance; it is not a spendable quote.
- * An RPC failure is an error, never a zero or a historical/fabricated balance.
+ * One FINAL block and two pinned read-only queries. A token contract can have
+ * a ledger entry for a name that does not currently exist as a native account;
+ * that balance is not evidence of ownership or spendability. NEAR's amount
+ * includes its storage reserve and excludes staked balance; it is not a
+ * spendable quote. A failed read is never replaced with a guessed balance.
  */
 export async function readPublicTestnetAccount(accountId, { fetch: fetchImpl = globalThis.fetch, signal } = {}) {
   if (!isNearAccountId(accountId)) throw new Error('INVALID_ACCOUNT_ID');
   if (typeof fetchImpl !== 'function') throw new Error('TESTNET_RPC_UNAVAILABLE');
-  const account = await rpc(fetchImpl, 'bouncer-public-account', {
-    request_type: 'view_account', finality: 'final', account_id: accountId,
-  }, signal);
-  if (account === null) return { exists: false };
-  if (!isAmount(account.amount) || !isBlockHash(account.block_hash) ||
-      !Number.isSafeInteger(account.block_height) || account.block_height < 0) throw new Error('TESTNET_RPC_INVALID');
+  const finalBlock = await rpc(fetchImpl, 'bouncer-final-block', 'block', { finality: 'final' }, signal);
+  const blockHash = finalBlock?.header?.hash, blockHeight = finalBlock?.header?.height;
+  if (!isBlockHash(blockHash) || !Number.isSafeInteger(blockHeight) || blockHeight < 0) throw new Error('TESTNET_RPC_INVALID');
   const args = btoa(JSON.stringify({ account_id: accountId }));
-  const token = await rpc(fetchImpl, 'bouncer-public-circle', {
-    request_type: 'call_function', block_id: account.block_hash, account_id: CIRCLE_TEST_USDC,
-    method_name: 'ft_balance_of', args_base64: args,
-  }, signal);
-  if (!token || token.block_hash !== account.block_hash || token.block_height !== account.block_height ||
+  const [account, token] = await Promise.all([
+    rpc(fetchImpl, 'bouncer-public-account', 'query', {
+      request_type: 'view_account', block_id: blockHash, account_id: accountId,
+    }, signal),
+    rpc(fetchImpl, 'bouncer-public-circle', 'query', {
+      request_type: 'call_function', block_id: blockHash, account_id: CIRCLE_TEST_USDC,
+      method_name: 'ft_balance_of', args_base64: args,
+    }, signal),
+  ]);
+  if (account !== null && (!isAmount(account.amount) || account.block_hash !== blockHash || account.block_height !== blockHeight)) {
+    throw new Error('TESTNET_RPC_INVALID');
+  }
+  if (!token || token.block_hash !== blockHash || token.block_height !== blockHeight ||
       !Array.isArray(token.result) || token.result.length > 128 ||
       !token.result.every(byte => Number.isInteger(byte) && byte >= 0 && byte <= 255)) throw new Error('TESTNET_RPC_INVALID');
   let circle;
   try { circle = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Uint8Array.from(token.result))); }
   catch { throw new Error('TESTNET_RPC_INVALID'); }
   if (!isAmount(circle)) throw new Error('TESTNET_RPC_INVALID');
-  return { exists: true, near: account.amount, circle, blockHash: account.block_hash, blockHeight: account.block_height };
+  return { exists: account !== null, near: account?.amount ?? null, circle, blockHash, blockHeight };
 }

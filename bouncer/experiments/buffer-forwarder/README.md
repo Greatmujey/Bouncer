@@ -53,8 +53,9 @@ Its atomic four-action policy setup and the current V12 named-owner check are
 not supported by the experimental EVM-on-NEAR adapter; its `0x…` account also
 cannot be silently substituted for a named NEAR account. WalletConnect's
 current session remains account-only. Neither is spending-enabled by this plan.
-The same unsigned batches are exercised with synthetic keys and a mock FT in
-the isolated Buffer sandbox; that is not a real wallet approval or live sale.
+The same unsigned batches were exercised with synthetic keys, source-built
+Buffer and a mock FT in [isolated nearcore run 42269956792](https://github.com/Greatmujey/Bouncer/actions/runs/42269956792);
+that is not a real wallet approval or live sale.
 
 ## Why a separate forwarder
 

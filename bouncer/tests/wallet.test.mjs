@@ -246,9 +246,10 @@ test('typed account selects an unverified, view-only account without a CLI, sign
   browser.win.fetch = async (url, options) => {
     if (String(url) !== 'https://test.rpc.fastnear.com') throw new Error('unexpected network');
     const body = JSON.parse(options.body); calls.push(body);
-    const result = body.params.request_type === 'view_account'
-      ? { amount: '16019958035075000000000000', block_hash: block, block_height: 123 }
-      : { result: [...new TextEncoder().encode('"20000000"')], block_hash: block, block_height: 123 };
+    const result = body.method === 'block' ? { header: { hash: block, height: 123 } }
+      : body.params.request_type === 'view_account'
+        ? { amount: '16019958035075000000000000', block_hash: block, block_height: 123 }
+        : { result: [...new TextEncoder().encode('"20000000"')], block_hash: block, block_height: 123 };
     return { ok: true, text: async () => JSON.stringify({ jsonrpc: '2.0', id: body.id, result }) };
   };
   await initWallet({ window: browser.win, document: browser.doc, NearConnector: connectorClass(config) });
@@ -269,8 +270,8 @@ test('typed account selects an unverified, view-only account without a CLI, sign
   assert.equal(browser.nodes['wallet-account-name'].textContent, 'great_mujey.testnet');
   assert.equal(browser.nodes['wallet-account-near'].textContent, '≈16.019958');
   assert.equal(browser.nodes['wallet-account-usdc'].textContent, '20');
-  assert.equal(calls.length, 2);
-  assert.ok(calls.every(request => request.method === 'query'));
+  assert.equal(calls.length, 3);
+  assert.deepEqual(calls.map(request => request.method), ['block', 'query', 'query']);
   await browser.nodes['wallet-connect'].click();
   assert.equal(browser.nodes['wallet-account-view'].hidden, false);
   await browser.nodes['wallet-disconnect'].click();
@@ -293,8 +294,8 @@ test('closing an account view aborts its public read and a late response cannot 
   assert.equal(signal.aborted, false);
   await browser.nodes['wallet-account-use-wallet'].click();
   assert.equal(signal.aborted, true);
-  respond({ ok: true, text: async () => JSON.stringify({ jsonrpc: '2.0', id: 'bouncer-public-account',
-    result: { amount: '123', block_hash: 'B'.repeat(44), block_height: 10 } }) });
+  respond({ ok: true, text: async () => JSON.stringify({ jsonrpc: '2.0', id: 'bouncer-final-block',
+    result: { header: { hash: 'B'.repeat(44), height: 10 } } }) });
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(browser.nodes['wallet-account-name'].textContent, '');
   assert.equal(browser.nodes['wallet-account-near'].textContent, '—');
@@ -307,8 +308,12 @@ test('account input rejects malformed IDs but does not silently rewrite a .near 
   const calls = [];
   browser.win.fetch = async (url, options) => {
     if (String(url) !== 'https://test.rpc.fastnear.com') throw new Error('unexpected network');
-    const body = JSON.parse(options.body); calls.push(body);
-    return { ok: true, text: async () => JSON.stringify({ jsonrpc: '2.0', id: body.id, error: { cause: { name: 'UNKNOWN_ACCOUNT' } } }) };
+    const body = JSON.parse(options.body); calls.push(body); const block = 'B'.repeat(44);
+    const reply = body.method === 'block' ? { result: { header: { hash: block, height: 123 } } }
+      : body.params.request_type === 'view_account'
+        ? { error: { cause: { name: 'UNKNOWN_ACCOUNT', info: { requested_account_id: body.params.account_id, block_hash: block } } } }
+        : { result: { result: [...new TextEncoder().encode('"20000000"')], block_hash: block, block_height: 123 } };
+    return { ok: true, text: async () => JSON.stringify({ jsonrpc: '2.0', id: body.id, ...reply }) };
   };
   await initWallet({ window: browser.win, document: browser.doc, NearConnector: connectorClass(config) });
   await browser.nodes['wallet-connect'].click();
@@ -320,10 +325,10 @@ test('account input rejects malformed IDs but does not silently rewrite a .near 
   browser.nodes['wallet-account-id'].value = 'great_mujey.near';
   browser.nodes['wallet-account-form'].listeners.submit({ preventDefault() {} });
   await new Promise(resolve => setImmediate(resolve));
-  assert.equal(calls[0].params.account_id, 'great_mujey.near');
+  assert.equal(calls[1].params.account_id, 'great_mujey.near');
   assert.equal(browser.nodes['wallet-account-near'].textContent, '—');
-  assert.equal(browser.nodes['wallet-account-usdc'].textContent, '—');
-  assert.match(browser.nodes['wallet-account-balance-status'].textContent, /No native account found/);
+  assert.equal(browser.nodes['wallet-account-usdc'].textContent, '20');
+  assert.match(browser.nodes['wallet-account-balance-status'].textContent, /No native account found.*not proof of control or spendability/);
   assert.ok(browser.openers.every(button => button.dataset.walletState === 'view-only'));
   await browser.nodes['wallet-account-use-wallet'].click();
   assert.equal(browser.nodes['wallet-options'].hidden, false);

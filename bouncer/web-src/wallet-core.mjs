@@ -174,11 +174,11 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     try {
       const result = await readPublicTestnetAccount(id, { fetch: win.fetch.bind(win), signal: controller.signal });
       if (version !== accountReadVersion || viewedAccount !== id) return;
+      accountUsdc.textContent = formatPublicAmount(result.circle, 6);
       if (!result.exists) {
-        accountBalanceStatus.textContent = 'No native account found for this exact ID on testnet. Check the account and network; .near is not changed to .testnet.';
+        accountBalanceStatus.textContent = `No native account found for this exact ID on testnet at final block ${result.blockHeight}. The token ledger is not proof of control or spendability; .near is not changed to .testnet.`;
       } else {
         accountNear.textContent = formatPublicAmount(result.near, 24, 6);
-        accountUsdc.textContent = formatPublicAmount(result.circle, 6);
         accountBalanceStatus.textContent = `Public testnet RPC · final block ${result.blockHeight}. Balances can change.`;
       }
     } catch {

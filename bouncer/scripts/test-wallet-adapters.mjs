@@ -129,11 +129,12 @@ try {
         if (route.request().method() === 'OPTIONS') return route.fulfill({ status: 204, headers: cors });
         const body = route.request().postDataJSON(); rpc.push(body);
         const block = 'B'.repeat(44), height = 276000123;
-        const result = body.params.request_type === 'view_account'
-          ? { amount: '16019958035075000000000000', block_hash: block, block_height: height }
-          : body.params.request_type === 'call_function'
-            ? { result: [...Buffer.from('"20000000"')], block_hash: block, block_height: height }
-            : { permission: 'FullAccess' };
+        const result = body.method === 'block' ? { header: { hash: block, height } }
+          : body.params.request_type === 'view_account'
+            ? { amount: '16019958035075000000000000', block_hash: block, block_height: height }
+            : body.params.request_type === 'call_function'
+              ? { result: [...Buffer.from('"20000000"')], block_hash: block, block_height: height }
+              : { permission: 'FullAccess' };
         return route.fulfill({ status: 200, headers: cors, contentType: 'application/json', body: JSON.stringify({ jsonrpc: '2.0', id: body.id, result }) });
       });
       await page.route('**/api/google-session**', route => route.fulfill({ status: 503, contentType: 'application/json', body: '{}' }));
@@ -149,7 +150,7 @@ try {
       assert.equal(await page.locator('.top-connect').getAttribute('data-wallet-state'), 'view-only');
       assert.match(await page.locator('#wallet-status').textContent(), /unverified.*No wallet is connected/);
       assert.equal(cliLoads, 0, 'typed account does not execute the CLI adapter');
-      assert.deepEqual(rpc.map(request => request.params.request_type), ['view_account', 'call_function']);
+      assert.deepEqual(rpc.map(request => request.method === 'block' ? 'block' : request.params.request_type), ['block', 'view_account', 'call_function']);
       await page.locator('.top-connect').click();
       assert.equal(await page.locator('#wallet-account-view').isVisible(), true);
       await page.locator('#wallet-disconnect').click();

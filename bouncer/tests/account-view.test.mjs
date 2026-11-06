@@ -10,9 +10,10 @@ function mockRpc({ missing = false, mismatch = false, circle = '20000000' } = {}
   const fetch = async (url, options) => {
     const body = JSON.parse(options.body); requests.push({ url, options, body });
     const id = body.id;
+    if (body.method === 'block') return response({ jsonrpc: '2.0', id, result: { header: { hash: blockHash, height: blockHeight } } });
     if (body.params.request_type === 'view_account') {
       return response(missing
-        ? { jsonrpc: '2.0', id, error: { cause: { name: 'UNKNOWN_ACCOUNT' } } }
+        ? { jsonrpc: '2.0', id, error: { cause: { name: 'UNKNOWN_ACCOUNT', info: { requested_account_id: body.params.account_id, block_hash: blockHash } } } }
         : { jsonrpc: '2.0', id, result: { amount: '16019958035075000000000000', locked: '0', block_hash: blockHash, block_height: blockHeight } });
     }
     return response({ jsonrpc: '2.0', id, result: { result: bytes(circle), block_hash: mismatch ? 'C'.repeat(44) : blockHash, block_height: blockHeight } });
@@ -31,29 +32,39 @@ test('public balances use the exact typed ID and one final testnet block, with r
   const mock = mockRpc();
   const value = await readPublicTestnetAccount('great_mujey.testnet', { fetch: mock.fetch });
   assert.deepEqual(value, { exists: true, near: '16019958035075000000000000', circle: '20000000', blockHash, blockHeight });
-  assert.equal(mock.requests.length, 2);
+  assert.equal(mock.requests.length, 3);
   for (const request of mock.requests) {
     assert.equal(request.url, TESTNET_RPC);
     assert.equal(request.options.credentials, 'omit');
     assert.equal(request.options.redirect, 'error');
-    assert.equal(request.body.method, 'query');
+    assert.ok(['block', 'query'].includes(request.body.method));
   }
-  assert.deepEqual(mock.requests[0].body.params, { request_type: 'view_account', finality: 'final', account_id: 'great_mujey.testnet' });
-  const second = mock.requests[1].body.params;
+  assert.deepEqual(mock.requests[0].body.params, { finality: 'final' });
+  assert.deepEqual(mock.requests[1].body.params, { request_type: 'view_account', block_id: blockHash, account_id: 'great_mujey.testnet' });
+  const second = mock.requests[2].body.params;
   assert.deepEqual(second, { request_type: 'call_function', block_id: blockHash, account_id: CIRCLE_TEST_USDC,
     method_name: 'ft_balance_of', args_base64: btoa('{"account_id":"great_mujey.testnet"}') });
   const other = mockRpc();
   await readPublicTestnetAccount('great_mujey.near', { fetch: other.fetch });
-  assert.equal(other.requests[0].body.params.account_id, 'great_mujey.near', 'never silently rewrite .near as .testnet');
+  assert.equal(other.requests[1].body.params.account_id, 'great_mujey.near', 'never silently rewrite .near as .testnet');
 });
 
 test('unknown account is not assigned a fake balance; malformed or inconsistent RPC responses fail closed', async () => {
   const absent = mockRpc({ missing: true });
-  assert.deepEqual(await readPublicTestnetAccount('great_mujey.near', { fetch: absent.fetch }), { exists: false });
-  assert.equal(absent.requests.length, 1);
+  assert.deepEqual(await readPublicTestnetAccount('great_mujey.near', { fetch: absent.fetch }),
+    { exists: false, near: null, circle: '20000000', blockHash, blockHeight });
+  assert.equal(absent.requests.length, 3, 'token ledger is read even when the native account is absent');
   for (const mock of [mockRpc({ mismatch: true }), mockRpc({ circle: '1e8' }), mockRpc({ circle: 0 })]) {
     await assert.rejects(readPublicTestnetAccount('alice.testnet', { fetch: mock.fetch }), /TESTNET_RPC_INVALID/);
   }
+  const badAbsence = mockRpc({ missing: true });
+  const wrapped = async (url, opts) => {
+    const reply = await badAbsence.fetch(url, opts);
+    const payload = JSON.parse(await reply.text());
+    if (payload.error) payload.error.cause.info.requested_account_id = 'someone-else.testnet';
+    return response(payload);
+  };
+  await assert.rejects(readPublicTestnetAccount('alice.testnet', { fetch: wrapped }), /TESTNET_RPC_UNAVAILABLE/);
   await assert.rejects(readPublicTestnetAccount('alice.testnet', { fetch: async () => ({ ok: false }) }), /TESTNET_RPC_UNAVAILABLE/);
   await assert.rejects(readPublicTestnetAccount('BAD', { fetch: () => { throw new Error('must not query'); } }), /INVALID_ACCOUNT_ID/);
 });
