@@ -103,9 +103,10 @@ append `--return-hash <original-hash> --return-amount <atoms>`. Both flags are
 required together. The separate return check follows the linked token transfer,
 vault `ft_on_transfer` callback and token resolver; checks the callback's promise
 data ID, a complete used amount, and pinned historical code/key views; and
-rejects changed or unavailable evidence. The token resolver for the opening
-must likewise consume the exact escrow callback's promise data. All views still
-rely on the caller's archival RPC. Never resend an unresolved return.
+rejects changed or unavailable evidence. The exact-FT funding callback must
+consume its transfer's result, and the token resolver for the opening must
+consume the exact escrow callback's promise result. All views still rely on the
+caller's archival RPC. Never resend an unresolved return.
 
 A successful return establishes a correlated forwarder-to-vault transfer and
 vault callback under these assumptions. It does **not** establish that fungible
@@ -146,9 +147,11 @@ with the source-built PayPerCall contract, a mock FT, a locally supplied fixture
 answer, historical block views and the detached provider payout. In that same
 isolated fulfilled scenario, state checks showed 40 unused mock units returned
 to the vault and a new 40-unit intent blocked by the still-full 100-unit rolling
-budget. That earlier run checked the return by state, not by the newer receipt
-verifier. That simulation is not Circle, a public-chain purchase, independent
-provider fulfillment or an audit.
+budget. A [newer isolated run](https://github.com/Greatmujey/Bouncer/actions/runs/42211109011)
+also verified the linked 40-unit forwarder-to-vault return receipts and the
+receiver-to-resolver promise data ID. This was a mock token on a disposable
+chain, not Circle, a public-chain purchase, independent provider fulfillment or
+an audit.
 
 ## V11 compatibility boundary
 

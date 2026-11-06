@@ -111,10 +111,13 @@ recovery budget need actual runtime and token checks.
   40 mock units were returned via the vault's FT receiver callback: actual and
   tracked vault balances both became 40, the forwarder became empty and the
   rolling spend remained 100. A distinct owner-pinned 40-unit sandbox intent
-  was then blocked by the daily cap despite the returned balance. The return is
-  checked by isolated-chain state assertions, not by the public receipt
-  verifier. This is a disposable chain, not evidence of a public-chain purchase,
-  seller HTTP response, independent fulfillment or a security audit.
+  was then blocked by the daily cap despite the returned balance. A [newer
+  isolated run](https://github.com/Greatmujey/Bouncer/actions/runs/42211109011)
+  also checked the original return's token transfer, linked vault callback,
+  promise data ID and resolver with historical code/key views. The return check
+  does not attribute fungible units to that order. This is a disposable chain,
+  not evidence of a public-chain purchase, seller HTTP response, independent
+  fulfillment or a security audit.
 
 ## Unresolved risks and prerequisites
 

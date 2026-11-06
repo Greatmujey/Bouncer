@@ -157,8 +157,9 @@ tools—it does not itself provide a model or access to the new planning/executi
 
 Bouncer is a resource-buying agent; the on-chain firewall is its spending
 kernel, not the whole product. These are connections to the tracks, not claims
-that all six are complete. See the [interoperability roadmap](bouncer/docs/INTEROPERABILITY_ROADMAP.md)
-for the independent-seller gap, experimental authentication and outstanding swap-accounting work.
+that all six are complete. See the [current blockers and track map](bouncer/docs/BLOCKERS_AND_TRACKS.md)
+and [interoperability roadmap](bouncer/docs/INTEROPERABILITY_ROADMAP.md) for the independent-seller gap,
+experimental authentication and outstanding swap-accounting work.
 
 | Track | Evidence today | Still needed |
 | --- | --- | --- |

@@ -61,6 +61,8 @@ async function fixture() {
     outcome('fund-callback', 'fund-callback-block', VAULT, { SuccessValue: '' }, [],
       ['BOUNCER exact FT transfer succeeded; intent stays consumed']),
   ]);
+  fundingResult.receipts[1].receipt.Action.output_data_receivers = [{ receiver_id: VAULT, data_id: id('fund-result') }];
+  fundingResult.receipts[2].receipt.Action.input_data_ids = [id('fund-result')];
   const msg = buildPayPerCallMessage({ service_id: 7, request: terms.request, max_price: '100' }).msg;
   const openAction = action('open', {}, '0', 300_000_000_000_000);
   const tokenCall = action('ft_transfer_call', { receiver_id: ESCROW, amount: '100', memo: 'bouncer:experimental-forwarder', msg }, '1');
@@ -164,6 +166,8 @@ test('funding terms, locked intent, keyless vault, transfer event and callback m
     x => { x.snapshots.intent.view.consumed = false; },
     x => { x.funding.result.receipts_outcome[1].outcome.logs = []; },
     x => { x.funding.result.receipts_outcome[2].outcome.status = { Failure: {} }; },
+    x => { x.funding.result.receipts[1].receipt.Action.output_data_receivers = []; },
+    x => { x.funding.result.receipts[2].receipt.Action.input_data_ids = [id('unrelated-funding-result')]; },
     x => { x.funding.result.receipts_outcome[0].outcome.receipt_ids = [id('fund-callback')]; },
     x => { x.funding.result.receipts[0].receipt.Action.actions[0].FunctionCall.deposit = '1'; },
     x => { x.snapshots.token_states[0].code_hash = id('other-token'); },

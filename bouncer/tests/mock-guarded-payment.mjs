@@ -12,7 +12,7 @@ const receipt = (id, predecessor_id, receiver_id, method_name, args, deposit) =>
 
 export function mockGuardedPayment({ hash, owner, contract, publicKey = MOCK_PUBLIC_KEY, args, gas = '200000000000000' }) {
   const request = { policy_id: args.policy_id, payee: args.payee, amount: args.amount, memo: args.memo, expected_token: args.expected_token };
-  return { final_execution_status: 'FINAL', status: { SuccessValue: '' },
+  const result = { final_execution_status: 'FINAL', status: { SuccessValue: '' },
     transaction_outcome: { id: hash, outcome: { receipt_ids: ['init'] } },
     transaction: { hash, signer_id: owner, receiver_id: contract, public_key: publicKey,
       actions: [{ FunctionCall: { method_name: 'execute', deposit: '0', gas, args: enc(request) } }] },
@@ -23,4 +23,8 @@ export function mockGuardedPayment({ hash, owner, contract, publicKey = MOCK_PUB
     receipt('callback', contract, contract, 'after_execute',
       { policy_id: args.policy_id, token: args.expected_token, amount: args.amount, bucket: 24 }, '0')],
   };
+  const dataId = mockHash(`${hash}:transfer-promise`);
+  result.receipts[0].receipt.Action.output_data_receivers = [{ receiver_id: contract, data_id: dataId }];
+  result.receipts[1].receipt.Action.input_data_ids = [dataId];
+  return result;
 }

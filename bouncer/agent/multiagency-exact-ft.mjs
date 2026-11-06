@@ -248,6 +248,14 @@ export function verifyReviewedExactFtReceipts({ owner, vault, vaultCodeHash, pub
     return method ? [{ receipt, method }] : [];
   });
   if (callback.length !== 1 || String(callback[0].method.deposit) !== '0') throw new Error('missing exact FT callback');
+  // The callback must consume this particular FT transfer's promise result.
+  // Matching sibling receipts alone do not establish the dependency.
+  const outputs = transfer[0].receipt?.receipt?.Action?.output_data_receivers;
+  const inputs = callback[0].receipt?.receipt?.Action?.input_data_ids;
+  if (!Array.isArray(outputs) || outputs.length !== 1 || outputs[0]?.receiver_id !== vault ||
+      !isTransactionHash(outputs[0]?.data_id) || !Array.isArray(inputs) || inputs.length !== 1 || inputs[0] !== outputs[0].data_id) {
+    throw new Error('exact FT callback does not consume the transfer result');
+  }
   const cb = json(callback[0].method.args, 'exact FT callback arguments');
   if (!fields(cb, ['intent_id', 'policy_id', 'token', 'amount', 'bucket', 'policy_revision']) || cb.intent_id !== a.intent_id ||
       cb.policy_id !== a.policy_id || cb.token !== a.expected_token || cb.amount !== a.amount || cb.policy_revision !== pinned.policy_revision ||
