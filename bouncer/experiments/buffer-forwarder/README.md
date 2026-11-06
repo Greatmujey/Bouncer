@@ -118,6 +118,14 @@ coordination. The database enforces one **record**, not one invocation of a
 wallet: future client code must never reuse a reservation to reopen a prompt.
 No Supabase project or production database was created or modified.
 
+[Read-only code comparison 42276988446](https://github.com/Greatmujey/Bouncer/actions/runs/42276988446)
+compared a plain Cargo build of the pinned public Buffer source with the seller's
+code hash at one trusted testnet FINAL block. **They did not match.** The seller
+documents a different `cargo near build non-reproducible-wasm` command, so this
+mismatch does not establish malicious or different source; it means source
+and deployed bytecode equivalence is still unverified. No order, transaction or
+seller HTTP request was made.
+
 ## Why a separate forwarder
 
 The Buffer source receives an exact `ft_transfer_call`, records the token

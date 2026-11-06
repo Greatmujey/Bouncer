@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import nearApi from 'near-api-js';
-import { compareBufferCode } from '../agent/buffer-code-comparison.mjs';
+import { compareBufferCode, summarizeBufferSourceMetadata } from '../agent/buffer-code-comparison.mjs';
 import { BUFFER_TESTNET_CONTRACT } from '../experiments/buffer-forwarder/build.mjs';
 
 // A minimal valid synthetic WASM and fabricated RPC views only; no live call.
@@ -50,6 +50,28 @@ test('malformed or oversized WASM is rejected before any RPC', async () => {
   for (const bytes of [Buffer.alloc(0), Buffer.alloc(8), Buffer.alloc(4 * 1024 * 1024 + 1),
     Buffer.from([0, 97, 115, 109, 1, 0, 0, 0, 0xff])]) await assert.rejects(compare(p, bytes));
   assert.equal(calls, 0);
+});
+
+test('source metadata is self-reported, pinned to the same block and sanitized', async () => {
+  const p = mock(), commit = 'a'.repeat(40), image = 'b'.repeat(64);
+  p.callFunctionRaw = async (account, method, args, at) => {
+    assert.equal(account, BUFFER_TESTNET_CONTRACT); assert.equal(method, 'contract_source_metadata');
+    assert.deepEqual(args, {}); assert.deepEqual(at, { blockId: hash(1) });
+    const metadata = { link: `https://github.com/Chima30/buffer/tree/${commit}`, build_info: {
+      source_code_snapshot: `git+https://github.com/Chima30/buffer?rev=${commit}`,
+      build_environment: `docker.io/sourcescan/cargo-near@sha256:${image}`,
+      build_command: ['cargo', 'near', 'build', '--locked'], arbitrary: 'secret-not-echoed' } };
+    return { block_hash: hash(1), result: [...Buffer.from(JSON.stringify(metadata))] };
+  };
+  const result = await compare(p);
+  assert.deepEqual(result.self_reported_source_metadata, { status: 'RETURNED_UNVERIFIED',
+    claimed_commit_from_link: commit, claimed_commit_from_snapshot: commit, claimed_build_image_sha256: image,
+    claimed_build_command: ['cargo', 'near', 'build', '--locked'] });
+  assert.doesNotMatch(JSON.stringify(result), /secret-not-echoed/);
+  const unsafe = summarizeBufferSourceMetadata({ link: 'https://evil.example/%0A::error::x', build_info: { build_command: ['%0A::error::x'] } });
+  assert.equal(unsafe.claimed_commit_from_link, null); assert.equal(unsafe.claimed_build_command, null);
+  p.callFunctionRaw = async () => ({ block_hash: hash(2), result: [123, 125] });
+  assert.deepEqual((await compare(p)).self_reported_source_metadata, { status: 'UNAVAILABLE' });
 });
 
 test('comparison snapshots bytes before awaiting the provider', async () => {
