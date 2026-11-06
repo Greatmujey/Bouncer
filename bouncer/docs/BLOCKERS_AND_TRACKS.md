@@ -23,7 +23,7 @@ projects are eligible; integrations named in the track hints are not mandatory.
 
 | Attempt | Current blocker or unfinished work | Most relevant track(s) |
 | --- | --- | --- |
-| Buy useful data, compute or storage from an independent seller with a policy-controlled FT payment | No full independent FT-paid delivery has been verified. A [6 November FINAL snapshot](https://github.com/Greatmujey/Bouncer/actions/runs/42250800169) found Buffer's 5-test-USDC custom minimum against 0.006898 test USDC in the vault; 7 test NEAR indicated only ~3.267 test USDC in the best of two sampled direct Ref pools. That is neither an executable quote nor an exhaustive route search. The [later PayPerCall catalog snapshot](https://github.com/Greatmujey/Bouncer/actions/runs/42250799913) again found only native-NEAR services and no Circle offer. An HTTPS-shaped listing is not proof that an operator is reachable. | **Agent Economy**, Autonomous Business; Real-World Money if a convincing stablecoin use case is built |
+| Buy useful data, compute or storage from an independent seller with a policy-controlled FT payment | No full independent FT-paid delivery has been verified. A [6 November FINAL snapshot](https://github.com/Greatmujey/Bouncer/actions/runs/42250800169) found Buffer's 5-test-USDC custom minimum against 0.006898 test USDC in the vault; 7 test NEAR indicated only ~3.267 test USDC in the best of two sampled direct Ref pools. A [later bounded scan](https://github.com/Greatmujey/Bouncer/actions/runs/42252402265) enumerated 2,908 pools and found the best pre-ranked two-hop path below that direct sample. These are not executable quotes, split-route checks or an exhaustive search. The [later PayPerCall catalog snapshot](https://github.com/Greatmujey/Bouncer/actions/runs/42250799913) again found only native-NEAR services and no Circle offer. An HTTPS-shaped listing is not proof that an operator is reachable. | **Agent Economy**, Autonomous Business; Real-World Money if a convincing stablecoin use case is built |
 | Use PayPerCall's escrow without losing vault refund accounting | Its published route uses `ft_transfer_call`, while a later plain FT refund can bypass the vault's ledger. The experimental one-shot forwarder and isolated mock-token refund/fulfillment scenarios are promising, but are not deployed, audited or proven against Circle and the live escrow. The forwarder limits price to a maximum but does not atomically pin provider, operator and exact price at the escrow. A preflight alone cannot remove that race. | **AI Security & Defense**, Agent Economy |
 | Prove the seller actually delivered the requested answer and was paid | A seller's answer hash, a payment event and a successful promise are different facts. The read-only verifier correlates the guarded transfer, escrow call, answer commitment and separately linked payout. A separate return check can verify a linked vault callback but does not prove the fungible units originated in that order. HTTP origin, data correctness and independent delivery remain unproven. | **Agent Economy**, AI Security & Defense |
 | Use Tollgate for independent data | It accepts native testnet NEAR, not Circle. Its voucher does not bind the HTTP resource; the reviewed seller stores state in per-instance temporary storage and relies on asynchronous settlement. Timely settlement and successful delivery within the channel's short deadline are not established. V13 is experimental, undeployed and unaudited. | **Agent Economy**, AI Security & Defense |
@@ -42,6 +42,13 @@ facilitator](https://leash.frankolien.com/api/x402/supported) requires its own
 accept Bouncer's direct on-chain proof. Its [test-USDC tap](https://leash.frankolien.com/api/test-usdc)
 reported unavailable on 6 November. No payment, account or seller request
 beyond these public GETs was made.
+
+**Tidepool is a separate test-token sandbox:** its [live token list](https://www.usetidepool.tech/v0/tokens)
+uses `usdc.tidepool-sandbox.testnet`, not Circle's testnet USDC. It is not a
+source of Circle funds just because its token has the symbol USDC. The Ref
+simple-pool inventory did not show a direct Tidepool-token/Circle pair; it did
+not rule out other exchanges, non-simple pools or longer routes. No Tidepool
+faucet, swap, quote reservation or payment was made.
 
 **Alternative research lead:** [Allowance's published testnet report](https://github.com/Rahat-ch/allowance/blob/f44c27ff84e07d2c29c8937bac12818e421e5320/docs/proof/testnet.md)
 describes a Circle test-USDC x402 flow using NEAR Chain Signatures. Its

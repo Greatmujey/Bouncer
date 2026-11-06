@@ -17,8 +17,16 @@ function fixture(o = {}) {
     async viewBlock(ref) { calls.push(['block', ref]); return { header: { hash: HASH, height: 20,
       timestamp_nanosec: o.stale ? String(BigInt(NOW - 121_000) * 1_000_000n) : NANO } }; },
     async callFunctionRaw(account, method, args, ref) {
-      calls.push([method, args, ref]); assert.equal(account, REF); assert.deepEqual(ref, { blockId: HASH });
+      calls.push([method, args, ref]); assert.deepEqual(ref, { blockId: HASH });
       let result;
+      if (account === 'dclv2.ref-dev.testnet') {
+        const [x, y] = [CIRCLE, WRAP].sort();
+        if (method === 'get_pool') result = args.pool_id.endsWith('|400') ? { pool_id: args.pool_id, token_x: x, token_y: y, fee: 400, total_x: '500000' } : null;
+        else if (method === 'quote') result = { amount: '100000', tag: null };
+        else throw Error('unexpected DCL call');
+        return { block_hash: o.mixedDcl ? OTHER : HASH, result: [...Buffer.from(JSON.stringify(result))] };
+      }
+      assert.equal(account, REF);
       if (method === 'get_number_of_pools') result = data.length;
       else if (method === 'get_pools') result = o.shortPage ? [] : data.slice(args.from_index, args.from_index + args.limit);
       else if (method === 'get_return') result = args.pool_id === 0 ? '900000' : args.pool_id === 1 ? '100' : '7000000';
@@ -37,7 +45,9 @@ test('finds and quotes only representative testnet direct and two-hop paths at o
   assert.deepEqual(result.top_indicative_paths[0].pool_ids, [1, 2]);
   assert.deepEqual(result.top_indicative_paths[0].tokens, [WRAP, MIDDLE, CIRCLE]);
   assert.equal(result.execution_authorized, false); assert.equal(result.signed, false); assert.equal(result.sent, false);
-  assert(f.calls.every(c => c === 'status' || ['block', 'get_number_of_pools', 'get_pools', 'get_return'].includes(c[0])));
+  assert.deepEqual(result.dcl_direct_fee_tiers.map(x => x.status), ['absent', 'observed', 'absent', 'absent']);
+  assert.deepEqual(result.dcl_direct_fee_tiers[1].outputs.map(x => x.output_atoms), ['100000', '100000']);
+  assert(f.calls.every(c => c === 'status' || ['block', 'get_number_of_pools', 'get_pools', 'get_return', 'get_pool', 'quote'].includes(c[0])));
 });
 
 test('mainnet, stale snapshots and malformed or mixed count fail closed', async () => {
@@ -55,7 +65,8 @@ test('missing or mixed pages are marked incomplete rather than proof of no paths
 });
 
 test('a mixed or failed return quote is unavailable rather than an executable price', async () => {
-  const result = await inspectRefCirclePaths(fixture({ mixed: 'get_return' }));
+  const result = await inspectRefCirclePaths(fixture({ mixed: 'get_return', mixedDcl: true }));
   assert.equal(result.enumeration_complete, true);
   assert(result.top_indicative_paths.every(p => p.output_atoms === null));
+  assert(result.dcl_direct_fee_tiers.every(p => p.status === 'unavailable'));
 });

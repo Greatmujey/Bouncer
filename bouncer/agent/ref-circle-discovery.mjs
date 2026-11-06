@@ -7,6 +7,7 @@ import { isTestnetAccount, isImplicitNearAccount } from '../shared/account-id.mj
 import { CIRCLE_TESTNET_USDC as CIRCLE, WRAP_TESTNET as WRAP, REF_TESTNET as REF } from '../scripts/circle-testnet-setup.mjs';
 
 const SAMPLE = '7000000000000000000000000'; // 7 test NEAR, before gas, reserve or slippage
+const DCL = 'dclv2.ref-dev.testnet'; // testnet Rhea concentrated-liquidity deployment
 const MAX_POOLS = 10_000, PAGE = 50, MAX_PATHS = 20, MAX_AMOUNT = (1n << 128n) - 1n;
 const uint = value => typeof value === 'string' && /^(0|[1-9][0-9]{0,38})$/.test(value) && BigInt(value) <= MAX_AMOUNT;
 const account = value => isTestnetAccount(value) || isImplicitNearAccount(value);
@@ -117,6 +118,29 @@ export async function inspectRefCirclePaths({ provider, now = Date.now } = {}) {
   });
   quotations.sort((a, b) => a.output_atoms === null ? 1 : b.output_atoms === null ? -1 :
     BigInt(a.output_atoms) === BigInt(b.output_atoms) ? a.pool_ids[0] - b.pool_ids[0] : BigInt(a.output_atoms) > BigInt(b.output_atoms) ? -1 : 1);
+  // Also inspect the four standard DCL fee tiers. A zero/failed quote does not
+  // establish that an amount can be filled, and splitting trades is not tested.
+  const dcl = await mapLimit([100, 400, 2000, 10000], 4, async fee => {
+    const id = `${[CIRCLE, WRAP].sort().join('|')}|${fee}`;
+    const result = { pool_id: id, status: 'unavailable', circle_reserve_atoms: null, outputs: [] };
+    try {
+      const pool = await readPinnedJsonView(provider, hash, DCL, 'get_pool', { pool_id: id });
+      if (pool === null) return { ...result, status: 'absent' };
+      if (!obj(pool) || pool.pool_id !== id || pool.token_x !== CIRCLE || pool.token_y !== WRAP ||
+          pool.fee !== fee || !uint(pool.total_x)) return { ...result, status: 'invalid' };
+      result.status = 'observed'; result.circle_reserve_atoms = pool.total_x;
+      for (const input of ['1000000000000000000000000', SAMPLE]) {
+        let amount = null;
+        try {
+          const q = await readPinnedJsonView(provider, hash, DCL, 'quote', { pool_ids: [id], input_token: WRAP,
+            output_token: CIRCLE, input_amount: input, tag: null });
+          if (obj(q) && uint(q.amount)) amount = q.amount;
+        } catch { /* one failed view is not a zero or an executable quote */ }
+        result.outputs.push({ input_yocto: input, output_atoms: amount });
+      }
+    } catch { /* unknown pool status */ }
+    return result;
+  });
   const end = now();
   if (!Number.isSafeInteger(end) || end < start) throw new Error('local clock moved backwards');
   assertFreshFinalBlock(block, end);
@@ -129,6 +153,7 @@ export async function inspectRefCirclePaths({ provider, now = Date.now } = {}) {
     representative_paths_pre_ranked: routes.length, paths_quoted: selected.length,
     paths_truncated: directCount + pairCount > selected.length,
     input_token: WRAP, output_token: CIRCLE, sample_input_yocto: SAMPLE, top_indicative_paths: quotations.slice(0, 10),
+    dcl_contract: DCL, dcl_direct_fee_tiers: dcl,
     signed: false, sent: false, execution_authorized: false, owner_funds_or_history_checked: false,
-    scope: 'single trusted FINAL RPC block; only simple pools and at most 20 pre-ranked paths, no token/code audit or executable quote; actual settlement, gas, storage and slippage not checked' };
+    scope: 'single trusted FINAL RPC block; simple pools and at most 20 pre-ranked paths plus four direct DCL tiers, no token/code audit or executable quote; split routes, actual settlement, gas, storage and slippage not checked' };
 }
