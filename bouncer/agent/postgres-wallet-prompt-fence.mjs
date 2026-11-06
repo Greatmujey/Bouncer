@@ -1,8 +1,9 @@
 /**
  * EXPERIMENTAL server-side write-ahead fence for an unsigned Buffer spending
  * review or the first vault-creation stage of a pinned setup review. This
- * module has no HTTP endpoint, signer, wallet integration, chain
- * client, unlock, expiry, or payment operation. One named testnet owner may
+ * module has no HTTP endpoint, signer, wallet integration, unlock, expiry, or
+ * payment operation. An optional injected read-only RPC can reconcile the first
+ * original hash; that is not permission to advance. One named testnet owner may
  * reserve at most ONE prompt record in this database, ever. A separate
  * claim is committed at most once before a cooperating caller could invoke a
  * wallet; a returned claim cannot prevent a malicious or bypassing caller
@@ -25,7 +26,7 @@
  */
 import crypto from 'node:crypto';
 import { verifyBufferSpendingReview } from './buffer-wallet-spending-evidence.mjs';
-import { verifyBufferWalletSetupReview } from './buffer-wallet-setup-evidence.mjs';
+import { verifyBufferWalletSetupReview, prepareBufferWalletSetupAttempt, inspectBufferWalletSetupAttempt } from './buffer-wallet-setup-evidence.mjs';
 import { V12_EXPECTED_BYTES, V12_EXPECTED_SHA256 } from './keyless-vault-v12-readiness.mjs';
 import { isTestnetAccount } from '../shared/account-id.mjs';
 import { isTransactionHash } from '../shared/direct-payment-settlement.mjs';
@@ -285,11 +286,17 @@ function requiredOwner(owner, ownerPublicKey) {
  * No production authenticator is supplied here. The caller must also protect
  * its browser/server channel, credentials, backups and trusted RPC.
  */
-export function createPostgresWalletPromptFence({ pool, authenticate, setupWasmBytes } = {}) {
+export function createPostgresWalletPromptFence({ pool, authenticate, setupWasmBytes, setupReceiptProvider } = {}) {
   if (!pool || typeof pool.connect !== 'function' || typeof authenticate !== 'function') throw new Error('PostgreSQL pool and owner authenticator required');
   // Copy the pinned artifact once into server-owned memory. It is never sent
   // to the database or returned to a browser by this prototype.
   const pinnedSetupWasm = setupArtifact(setupWasmBytes);
+  if (setupReceiptProvider !== undefined && (!pinnedSetupWasm || !setupReceiptProvider ||
+      typeof setupReceiptProvider.viewNodeStatus !== 'function' || typeof setupReceiptProvider.txStatusReceipts !== 'function')) {
+    throw new Error('pinned V12 bytes and a trusted read-only setup receipt provider are required');
+  }
+  const readStatus = setupReceiptProvider?.viewNodeStatus.bind(setupReceiptProvider);
+  const readReceipts = setupReceiptProvider?.txStatusReceipts.bind(setupReceiptProvider);
   async function authorize(action, evidence) {
     let accepted = false;
     try { accepted = await authenticate({ action: Object.freeze(action), evidence }); } catch { /* fail closed */ }
@@ -406,6 +413,47 @@ export function createPostgresWalletPromptFence({ pool, authenticate, setupWasmB
         if (updated.rows.length !== 1) throw fail('MISMATCH', 'original hash update conflicted; stop and reconcile');
         return validatedRow(updated.rows[0], pinnedSetupWasm);
       });
+    },
+
+    /** Fetch and verify ONLY the retained first setup original. The provider is
+     * a server-owned trust boundary, not a caller-supplied receipt. Successful
+     * matching does not unlock a later stage or establish fresh chain state. */
+    async reconcileSetupOriginal({ owner, ownerPublicKey, operationId, reviewSha256, stageId,
+      actionCommitmentSha256, originalHash, evidence } = {}) {
+      requiredOwner(owner, ownerPublicKey);
+      if (!readStatus || !readReceipts) throw fail('RECEIPT_UNAVAILABLE', 'no trusted setup receipt provider is configured; stop and reconcile');
+      if (!hex32(operationId) || !digest(reviewSha256) || stageId !== SETUP_STAGE || !digest(actionCommitmentSha256) || !isTransactionHash(originalHash)) {
+        throw new Error('original setup operation, reviewed action and original hash are required');
+      }
+      await authorize(context('reconcile_setup_original', owner, ownerPublicKey, { operation_id: operationId,
+        review_sha256: reviewSha256, stage_id: stageId, action_commitment_sha256: actionCommitmentSha256, original_hash: originalHash }), evidence);
+      const retained = await transaction(pool, async client => {
+        await verifySchema(client);
+        const selected = await client.query(`SELECT ${columns} FROM ${SCHEMA}.prompts WHERE owner_account_id=$1`, [owner]);
+        if (selected.rows.length !== 1) throw fail('OWNER_FENCED', 'original prompt reservation missing; stop and reconcile');
+        const row = validatedRow(selected.rows[0], pinnedSetupWasm);
+        if (!row.setup_snapshot || row.owner_public_key !== ownerPublicKey || row.operation_id !== operationId ||
+            row.review_sha256 !== reviewSha256 || row.stage_id !== stageId || row.action_commitment_sha256 !== actionCommitmentSha256 ||
+            row.original_hash !== originalHash) {
+          throw fail('MISMATCH', 'retained setup original or reviewed action differs; stop and reconcile');
+        }
+        return row;
+      });
+      try {
+        if ((await readStatus())?.chain_id !== 'testnet') throw new Error('not testnet');
+        const attempt = prepareBufferWalletSetupAttempt({ review: retained.review, snapshot: retained.setup_snapshot,
+          wasmBytes: pinnedSetupWasm, trustedReviewHash: reviewSha256, trustedOwnerPublicKey: ownerPublicKey,
+          stageId, trustedOriginalHash: originalHash });
+        const result = structuredClone(await readReceipts(originalHash, owner, 'FINAL'));
+        const proof = inspectBufferWalletSetupAttempt({ review: retained.review, snapshot: retained.setup_snapshot,
+          wasmBytes: pinnedSetupWasm, trustedReviewHash: reviewSha256, trustedOwnerPublicKey: ownerPublicKey,
+          trustedOriginalHash: originalHash, attempt, result });
+        return { ...proof, owner, operation_id: operationId, review_sha256: reviewSha256,
+          action_commitment_sha256: actionCommitmentSha256, execution_authorized: false, later_stage_unlocked: false,
+          independently_durable: false, provider_trusted_not_consensus_proof: true };
+      } catch {
+        throw fail('RECEIPT_UNKNOWN', 'original setup receipt is unavailable, incomplete or mismatched; preserve it and never resend');
+      }
     },
   });
 }

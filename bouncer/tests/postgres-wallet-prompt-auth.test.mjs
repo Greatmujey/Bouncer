@@ -6,7 +6,7 @@ import nearApi from 'near-api-js';
 import { nep413Payload } from '../web-src/cli-login.mjs';
 import { buildBufferWalletSpendingPlan } from '../agent/buffer-wallet-spending-plan.mjs';
 import { buildBufferWalletSetup } from '../agent/buffer-wallet-setup-plan.mjs';
-import { wasm as V12, NOW as SETUP_NOW, snapshot as setupSnapshot } from './buffer-wallet-setup-fixture.mjs';
+import { wasm as V12, NOW as SETUP_NOW, snapshot as setupSnapshot, fixture as setupFixture } from './buffer-wallet-setup-fixture.mjs';
 import { createPostgresWalletPromptFence, initializePostgresWalletPromptFence } from '../agent/postgres-wallet-prompt-fence.mjs';
 import { createPostgresWalletPromptAuth, initializePostgresWalletPromptAuth } from '../agent/postgres-wallet-prompt-auth.mjs';
 
@@ -155,7 +155,13 @@ setupDbTest('signed NEP-413 challenges bind the first pinned vault-creation rese
   const f = fixture(), snapshot = setupSnapshot();
   snapshot.owner = f.owner; snapshot.candidate_vault = `vault.${f.owner}`;
   const review = buildBufferWalletSetup({ snapshot, wasmBytes: V12, nowMs: SETUP_NOW }).review;
-  const fence = createPostgresWalletPromptFence({ pool: db, authenticate: auth.authenticate, setupWasmBytes: V12 });
+  const original = setupFixture(0, 35, { owner: f.owner, ownerKey: pk(f.ownerKey) });
+  const provider = { async viewNodeStatus() { return { chain_id: 'testnet' }; },
+    async txStatusReceipts(hash, owner, finality) {
+      assert.equal(hash, original.trustedOriginalHash); assert.equal(owner, f.owner); assert.equal(finality, 'FINAL');
+      return original.result;
+    } };
+  const fence = createPostgresWalletPromptFence({ pool: db, authenticate: auth.authenticate, setupWasmBytes: V12, setupReceiptProvider: provider });
   const action = { format: f.action.format, network: 'testnet', purpose: 'reserve', owner: f.owner,
     owner_public_key: pk(f.ownerKey), review_sha256: review.review_sha256, stage_id: 'create_keyless_vault',
     action_commitment_sha256: review.stages[0].action_commitment_sha256 };
@@ -172,6 +178,18 @@ setupDbTest('signed NEP-413 challenges bind the first pinned vault-creation rese
   assert.equal(claim.status, 'PROMPT_CLAIMED_NO_HASH');
   assert.equal(claim.execution_authorized, false); assert.equal(claim.wallet_invocation_verified, false);
   await assert.rejects(fence.claimPrompt(claimArgs), e => e.code === 'UNAUTHENTICATED');
+  const recordAction = { format: f.action.format, network: 'testnet', purpose: 'record_original_hash', owner: f.owner,
+    owner_public_key: pk(f.ownerKey), operation_id: reservation.operation_id, original_hash: original.trustedOriginalHash };
+  const recordChallenge = await auth.issue(recordAction);
+  await fence.recordOriginalHash({ owner: f.owner, ownerPublicKey: pk(f.ownerKey), operationId: reservation.operation_id,
+    originalHash: original.trustedOriginalHash, evidence: signed(recordChallenge, f) });
+  const receiptAction = { ...claimAction, purpose: 'reconcile_setup_original', original_hash: original.trustedOriginalHash };
+  const receiptChallenge = await auth.issue(receiptAction);
+  const receiptArgs = { ...claimArgs, originalHash: original.trustedOriginalHash, evidence: signed(receiptChallenge, f) };
+  await assert.rejects(fence.reconcileSetupOriginal({ ...receiptArgs, originalHash: hash(36) }), e => e.code === 'UNAUTHENTICATED');
+  const proof = await fence.reconcileSetupOriginal(receiptArgs);
+  assert.equal(proof.status, 'FINAL_SETUP_RECEIPT_MATCH'); assert.equal(proof.later_stage_unlocked, false);
+  await assert.rejects(fence.reconcileSetupOriginal(receiptArgs), e => e.code === 'UNAUTHENTICATED');
 }));
 
 dbtest('a lost challenge-consumption acknowledgement never grants authentication', async () => resources(async (db, rpc, normal) => {

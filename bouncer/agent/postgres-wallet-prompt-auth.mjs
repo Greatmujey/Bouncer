@@ -65,13 +65,21 @@ function actionFields(action) {
   const common = ['format', 'network', 'purpose', 'owner', 'owner_public_key'];
   const extra = purpose.value === 'reserve' ? ['review_sha256', 'stage_id', 'action_commitment_sha256'] :
     purpose.value === 'claim_prompt' ? ['operation_id', 'review_sha256', 'stage_id', 'action_commitment_sha256'] :
+    purpose.value === 'reconcile_setup_original' ? ['operation_id', 'review_sha256', 'stage_id', 'action_commitment_sha256', 'original_hash'] :
     purpose.value === 'record_original_hash' ? ['operation_id', 'original_hash'] : purpose.value === 'inspect' ? [] : null;
   if (!extra || !exact(action, [...common, ...extra]) || action.format !== 'bouncer-wallet-prompt-auth-v1' ||
       action.network !== 'testnet' || !isTestnetAccount(action.owner)) throw new Error('invalid owner authorization action');
   parseOwnerKey(action.owner_public_key);
-  if (['reserve', 'claim_prompt'].includes(action.purpose) && (!HEX64.test(action.review_sha256 ?? '') || !STAGES.includes(action.stage_id) ||
-      !HEX64.test(action.action_commitment_sha256 ?? ''))) throw new Error('invalid reservation authorization action');
-  if (action.purpose === 'claim_prompt' && !HEX32.test(action.operation_id ?? '')) throw new Error('invalid prompt claim authorization action');
+  if (['reserve', 'claim_prompt', 'reconcile_setup_original'].includes(action.purpose) &&
+      (!HEX64.test(action.review_sha256 ?? '') || !STAGES.includes(action.stage_id) || !HEX64.test(action.action_commitment_sha256 ?? ''))) {
+    throw new Error('invalid reservation authorization action');
+  }
+  if (['claim_prompt', 'reconcile_setup_original'].includes(action.purpose) && !HEX32.test(action.operation_id ?? '')) {
+    throw new Error('invalid prompt operation authorization action');
+  }
+  if (action.purpose === 'reconcile_setup_original' && (action.stage_id !== 'create_keyless_vault' || !isTransactionHash(action.original_hash))) {
+    throw new Error('invalid original setup receipt authorization action');
+  }
   if (action.purpose === 'record_original_hash' && (!HEX32.test(action.operation_id ?? '') || !isTransactionHash(action.original_hash))) {
     throw new Error('invalid original-hash authorization action');
   }
@@ -93,7 +101,8 @@ function fixedOrigin(value) {
 function challengeMessage(action, digest, origin, issued, expires) {
   const what = action.purpose === 'reserve' ? `Reserve setup prompt: ${action.stage_id}` :
     action.purpose === 'claim_prompt' ? `Claim one setup prompt: ${action.stage_id}` :
-      action.purpose === 'record_original_hash' ? 'Record the original transaction hash' : 'Inspect the retained prompt';
+      action.purpose === 'reconcile_setup_original' ? 'Reconcile the original vault-creation transaction' :
+        action.purpose === 'record_original_hash' ? 'Record the original transaction hash' : 'Inspect the retained prompt';
   return `Bouncer testnet owner authentication\n${what}\nAccount: ${action.owner}\n` +
     `Public key: ${action.owner_public_key}\nAction SHA-256: ${digest}\nSite: ${origin}\n` +
     `Issued: ${new Date(issued).toISOString()}\nExpires: ${new Date(expires).toISOString()}\n` +

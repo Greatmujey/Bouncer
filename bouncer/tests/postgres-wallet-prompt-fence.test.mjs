@@ -7,7 +7,7 @@ import pg from 'pg';
 import nearApi from 'near-api-js';
 import { buildBufferWalletSpendingPlan } from '../agent/buffer-wallet-spending-plan.mjs';
 import { buildBufferWalletSetup } from '../agent/buffer-wallet-setup-plan.mjs';
-import { wasm as V12, NOW as SETUP_NOW, snapshot as setupSnapshot } from './buffer-wallet-setup-fixture.mjs';
+import { wasm as V12, NOW as SETUP_NOW, snapshot as setupSnapshot, fixture as setupFixture } from './buffer-wallet-setup-fixture.mjs';
 import { createPostgresWalletPromptFence, initializePostgresWalletPromptFence } from '../agent/postgres-wallet-prompt-fence.mjs';
 
 // Disposable keys, invented review/transactions and an isolated PostgreSQL
@@ -73,7 +73,9 @@ function startWorker(payload) {
 test('the prototype requires an explicit authenticator and has no wallet or unlock API', () => {
   assert.throws(() => createPostgresWalletPromptFence({ pool: { connect() {} } }), /authenticator/);
   const f = createPostgresWalletPromptFence({ pool: { connect() {} }, authenticate: syntheticAuth });
-  assert.deepEqual(Object.keys(f).sort(), ['claimPrompt', 'inspect', 'recordOriginalHash', 'reserve']);
+  assert.deepEqual(Object.keys(f).sort(), ['claimPrompt', 'inspect', 'reconcileSetupOriginal', 'recordOriginalHash', 'reserve']);
+  assert.throws(() => createPostgresWalletPromptFence({ pool: { connect() {} }, authenticate: syntheticAuth,
+    setupReceiptProvider: {} }), /trusted read-only setup receipt provider/);
 });
 
 dbtest('two independent processes atomically reserve at most one prompt per owner', async () => resources(async (db, fence) => {
@@ -133,6 +135,56 @@ setupDbTest('the first setup prompt binds the pinned V12, retained snapshot, own
     forwarder_agent_gas_allowance_yocto: '200000000000000000000000' }).review;
   await assert.rejects(fence.reserve({ review: spending, trustedReviewHash: spending.review_sha256, trustedOwnerPublicKey: ownerKey,
     stageId: stage, evidence: 'synthetic-auth' }), error => error.code === 'OWNER_FENCED');
+}));
+
+setupDbTest('reconciliation reads only the retained setup original and never unlocks a retry or later stage', async () => resources(async db => {
+  const owner = newOwner(), ownerKey = key(), f = setupFixture(0, 33, { owner, ownerKey });
+  const observed = { calls: [], network: 'testnet', result: f.result, unavailable: false };
+  const provider = {
+    async viewNodeStatus() { observed.calls.push('status'); return { chain_id: observed.network }; },
+    async txStatusReceipts(original, signer, finality) {
+      observed.calls.push([original, signer, finality]);
+      if (observed.unavailable) throw new Error('private RPC URL and access token');
+      return observed.result;
+    },
+  };
+  const fence = createPostgresWalletPromptFence({ pool: db, authenticate: syntheticAuth, setupWasmBytes: V12, setupReceiptProvider: provider });
+  const request = { review: f.review, setupSnapshot: f.snapshot, trustedReviewHash: f.trustedReviewHash,
+    trustedOwnerPublicKey: ownerKey, stageId: 'create_keyless_vault', evidence: 'synthetic-auth' };
+  const reserved = await fence.reserve(request), read = { owner, ownerPublicKey: ownerKey, evidence: 'synthetic-auth' };
+  const args = { ...read, operationId: reserved.operation_id, reviewSha256: f.trustedReviewHash,
+    stageId: request.stageId, actionCommitmentSha256: f.review.stages[0].action_commitment_sha256, originalHash: f.trustedOriginalHash };
+  await assert.rejects(fence.reconcileSetupOriginal(args), e => e.code === 'MISMATCH');
+  assert.deepEqual(observed.calls, []);
+  await fence.claimPrompt({ ...args });
+  await fence.recordOriginalHash({ ...read, operationId: reserved.operation_id, originalHash: f.trustedOriginalHash });
+  for (const patch of [{ operationId: '0'.repeat(32) }, { originalHash: hash(34) }, { reviewSha256: '0'.repeat(64) },
+    { actionCommitmentSha256: '0'.repeat(64) }, { evidence: 'bad' }]) {
+    await assert.rejects(fence.reconcileSetupOriginal({ ...args, ...patch }));
+  }
+  assert.deepEqual(observed.calls, []);
+  const proof = await fence.reconcileSetupOriginal(args);
+  assert.equal(proof.status, 'FINAL_SETUP_RECEIPT_MATCH'); assert.equal(proof.tx_hash, f.trustedOriginalHash);
+  assert.equal(proof.execution_authorized, false); assert.equal(proof.later_stage_unlocked, false);
+  assert.equal(proof.provider_trusted_not_consensus_proof, true);
+  assert.deepEqual(observed.calls, ['status', [f.trustedOriginalHash, owner, 'FINAL']]);
+  assert.equal((await fence.reconcileSetupOriginal(args)).tx_hash, f.trustedOriginalHash, 're-reading is safe; resending is not');
+  observed.network = 'mainnet'; observed.calls.length = 0;
+  await assert.rejects(fence.reconcileSetupOriginal(args), e => e.code === 'RECEIPT_UNKNOWN');
+  assert.deepEqual(observed.calls, ['status']); observed.network = 'testnet';
+  observed.unavailable = true;
+  await assert.rejects(fence.reconcileSetupOriginal(args), e => e.code === 'RECEIPT_UNKNOWN' && !e.message.includes('private'));
+  observed.unavailable = false;
+  for (const change of [r => { r.transaction.hash = hash(34); }, r => { r.receipts = []; }, r => { r.final_execution_status = 'EXECUTED'; }]) {
+    observed.result = structuredClone(f.result); change(observed.result);
+    await assert.rejects(fence.reconcileSetupOriginal(args), e => e.code === 'RECEIPT_UNKNOWN');
+  }
+  observed.result = structuredClone(f.result); observed.result.status = { Failure: { ActionError: {} } };
+  const failure = await fence.reconcileSetupOriginal(args);
+  assert.equal(failure.status, 'FINAL_FAILURE_NEEDS_RECONCILIATION'); assert.equal(failure.later_stage_unlocked, false);
+  assert.equal((await fence.inspect(read)).original_hash, f.trustedOriginalHash);
+  await assert.rejects(fence.claimPrompt(args), e => e.code === 'MISMATCH');
+  await assert.rejects(fence.reserve(request), e => e.code === 'OWNER_FENCED');
 }));
 
 dbtest('two separate processes cannot claim the same reviewed wallet prompt twice', async () => resources(async (db, fence) => {

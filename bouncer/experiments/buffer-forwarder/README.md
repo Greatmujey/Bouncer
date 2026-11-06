@@ -165,10 +165,14 @@ not backfilled, because they might already have been used. The first recorded
 original hash is immutable; triggers reject ordinary updates or deletion, and
 the service checks its critical indexes, triggers, row visibility, primary
 status, fsync and synchronous commit. A lost reservation, claim or hash commit
-acknowledgement is unknown and **not** permission to retry. There is deliberately
-no progression to the remaining setup stages, unlock, expiry, receipt
-reconciliation, payment, endpoint or wallet call. Its authenticator is an
-injected trust boundary. A separate experimental
+acknowledgement is unknown and **not** permission to retry. An optional
+server-owned trusted read-only RPC can fetch and match the original
+vault-creation transaction and its receipt graph; missing, incomplete or
+changed results remain unknown, and a FINAL failure remains blocked. This
+lookup does not unlock the next stage or verify fresh state. There is
+deliberately no progression to the remaining setup stages, unlock, expiry,
+payment, endpoint or wallet call. The receipt provider and authenticator are
+injected trust boundaries. A separate experimental
 `agent/postgres-wallet-prompt-auth.mjs` implements one-use, origin- and
 exact-action-bound NEP-413 challenges, checking an Ed25519 FullAccess key at a
 fresh trusted-RPC testnet FINAL block; it signs and sends nothing. Tests connect
