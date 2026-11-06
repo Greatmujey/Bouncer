@@ -13,6 +13,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import nearApi from 'near-api-js';
 import { buildBufferForwarder, checkBufferQuoteResponse, BUFFER_TESTNET_CONTRACT as SELLER } from '../experiments/buffer-forwarder/build.mjs';
+import { buildBufferWalletSpendingPlan, assertBufferSpendingBatchMatchesReview } from '../agent/buffer-wallet-spending-plan.mjs';
 import { collectBufferDeliverySnapshots, verifyBufferDeliveryEvidence } from '../agent/buffer-delivery-evidence.mjs';
 import { CIRCLE_TESTNET_USDC as TOKEN } from '../scripts/circle-testnet-setup.mjs';
 import { loopbackSandboxUrl, withSandboxOnlyFetch } from './v11-sandbox-setup-rpc.mjs';
@@ -101,8 +102,7 @@ async function exercise({ endpoint, root, tokenOwner, v12, sellerWasm, sellerFix
     if (id !== PROVIDER) assert.deepEqual((await provider.viewAccessKeyList(id, { finality: 'final' })).keys, []);
     await must(tokenOwner, TOKEN, 'storage_deposit', { account_id: id, registration_only: true }, BigInt(storageMin), 50n * TGAS);
   }
-  await batch(buyer, BUYER, [tx.addKey(vaultKey.getPublicKey(), tx.functionCallAccessKey(VAULT, ['execute_exact_ft'], NEAR))],
-    'install scoped vault agent key');
+  let vaultAgentInstalled = false;
   await must(tokenOwner, TOKEN, 'ft_transfer_call', { receiver_id: VAULT, amount: '60000000', msg: '' }, 1n, 300n * TGAS);
   await must(sellerOwner, SELLER, 'set_product', { sku: SKU, price: PRICE, max_expense: '0', active: true });
   await must(sellerOwner, SELLER, 'set_product', { sku: CUSTOM_SKU, price: CUSTOM_PRICE, max_expense: '1000000', active: true });
@@ -125,14 +125,21 @@ async function exercise({ endpoint, root, tokenOwner, v12, sellerWasm, sellerFix
     assert.equal((await provider.viewAccount(adapter, { finality: 'final' })).code_hash, codeHash(artifact.wasm));
     assert.deepEqual((await provider.viewAccessKeyList(adapter, { finality: 'final' })).keys, []);
     await must(tokenOwner, TOKEN, 'storage_deposit', { account_id: adapter, registration_only: true }, BigInt(storageMin), 50n * TGAS);
-    await batch(buyer, BUYER, [tx.addKey(adapterKey.getPublicKey(), tx.functionCallAccessKey(adapter, ['open', 'return_tokens'], NEAR))],
-      'install distinct scoped forwarder agent key');
+    const spendingPlan = buildBufferWalletSpendingPlan({ owner: BUYER, vault: VAULT, adapter, policy_id: policy,
+      vault_agent_public_key: pub(vaultKey), forwarder_agent_public_key: pub(adapterKey),
+      per_tx_cap_atoms: amount, daily_cap_atoms: amount,
+      vault_agent_gas_allowance_yocto: NEAR.toString(), forwarder_agent_gas_allowance_yocto: NEAR.toString() });
+    for (let i = 0; i < spendingPlan.batches.length; i++) assertBufferSpendingBatchMatchesReview(spendingPlan.batches[i], spendingPlan.review.stages[i]);
     const setPolicy = { policy_id: policy, token: TOKEN, per_tx_cap: amount, daily_cap: amount };
     failure(await call(buyer, VAULT, 'set_policy', setPolicy), /exactly 1 yoctoNEAR/);
-    await must(buyer, VAULT, 'set_policy', setPolicy, 1n);
-    await must(buyer, VAULT, 'allow_payee', { policy_id: policy, payee: adapter }, 1n);
-    await must(buyer, VAULT, 'grant_agent_key', { policy_id: policy, public_key: pub(vaultKey) }, 1n);
-    await must(buyer, VAULT, 'lock_ft_policy_to_intents', { policy_id: policy }, 1n);
+    await batch(buyer, VAULT, spendingPlan.batches[0].actions, 'configure locked policy using the reviewed wallet plan');
+    // Later synthetic scenarios deliberately reuse the same already scoped
+    // vault key. A live plan separately requires fresh key-state preflight.
+    if (!vaultAgentInstalled) {
+      await batch(buyer, BUYER, spendingPlan.batches[1].actions, 'install reviewed scoped vault agent key');
+      vaultAgentInstalled = true;
+    }
+    await batch(buyer, BUYER, spendingPlan.batches[2].actions, 'install reviewed scoped forwarder agent key');
     await must(buyer, VAULT, 'set_exact_ft_intent', { intent_id: terms.intent_id, policy_id: policy,
       expected_token: TOKEN, payee: adapter, amount, memo: artifact.review.intent_memo,
       review_hash: artifact.review.review_sha256, expires_at_ms: String(terms.expires_at_ms), agent_public_key: pub(vaultKey) }, 1n);
@@ -251,7 +258,8 @@ async function exercise({ endpoint, root, tokenOwner, v12, sellerWasm, sellerFix
   assert.equal(await spend('custom'), CUSTOM_PRICE);
   return { scope: 'ISOLATED nearcore, source-built Buffer contract and mock FT; not Circle or a public-chain order',
     buffer_source_revision: '9bc5ef0cbdc84074e94995cb50d334fc615f9b96', source_built_sha256: sellerFixture.sha256,
-    v12_sha256: V12_SHA256, price_change_returned_to_forwarder: true, price_rejection_return_credited_vault: true,
+    v12_sha256: V12_SHA256, unsigned_wallet_spending_plan_exercised_locally: true,
+    price_change_returned_to_forwarder: true, price_rejection_return_credited_vault: true,
     accepted_order_customer_matches_forwarder: true, later_plain_ft_refund_returned_to_vault: true,
     refund_vault_actual_and_tracked: '60000000', refund_conservative_rolling_spend: PRICE,
     next_refund_policy_intent_blocked_by_cap: true, fixture_report_sha256: digest,

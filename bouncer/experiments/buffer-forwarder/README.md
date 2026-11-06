@@ -41,6 +41,21 @@ not created an order or quote, contacted the seller's paid workflow, or paid or
 obtained a report. The contract source below is pinned for investigation; it
 is not proof that the live deployment matches that source.
 
+`agent/buffer-wallet-spending-plan.mjs` now prepares an additional **unsigned**
+owner review for a locked, exact-intent policy and two distinct, receiver- and
+method-scoped agent keys. The trial limits are at most 20 test USDC per
+transaction and per rolling day; each owner policy call attaches exactly one
+yocto, while each agent key has a bounded test-NEAR gas allowance and cannot
+attach a deposit. It grants no full-access key. This plan does not create a
+vault or forwarder, install keys, obtain wallet approval, place an order or pay.
+It requires fresh on-chain preflights and reconciliation of each original hash.
+Its atomic four-action policy setup and the current V12 named-owner check are
+not supported by the experimental EVM-on-NEAR adapter; its `0x…` account also
+cannot be silently substituted for a named NEAR account. WalletConnect's
+current session remains account-only. Neither is spending-enabled by this plan.
+The same unsigned batches are exercised with synthetic keys and a mock FT in
+the isolated Buffer sandbox; that is not a real wallet approval or live sale.
+
 ## Why a separate forwarder
 
 The Buffer source receives an exact `ft_transfer_call`, records the token
