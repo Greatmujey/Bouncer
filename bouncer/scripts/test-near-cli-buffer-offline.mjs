@@ -79,7 +79,23 @@ try {
     TMPDIR: temp, TMP: temp, TEMP: temp, NO_COLOR: '1', TERM: 'dumb' };
   const cli = (args) => {
     const result = spawnSync(near, args, { env, encoding: 'utf8', timeout: 30_000, maxBuffer: 100_000, stdio: ['ignore', 'pipe', 'pipe'] });
-    if (result.error || result.status !== 0) throw new Error(`official CLI offline command failed (status ${result.status}): ${(result.stderr || result.error?.message || '').slice(0, 1800)}`);
+    if (result.error || result.status !== 0) {
+      // The CLI's JS-compatibility fallback can mask its original parser error.
+      // Probe only --help on synthetic prefixes, never on a signing command.
+      let diagnostic = '';
+      if (args.includes('sign-later')) {
+        const bare = args.filter(v => v !== '--offline' && v !== '--quiet');
+        for (let i = 1; i <= bare.length; i++) {
+          const probe = spawnSync(near, [...bare.slice(0, i), '--help'],
+            { env, encoding: 'utf8', timeout: 3000, maxBuffer: 100_000, stdio: ['ignore', 'pipe', 'pipe'] });
+          if (probe.status !== 0) {
+            diagnostic = `; first rejected prefix: ${bare.slice(0, i).join(' ')}; help: ${(probe.stderr || '').slice(0, 600)}`;
+            break;
+          }
+        }
+      }
+      throw new Error(`official CLI offline command failed (status ${result.status}): ${(result.stderr || result.error?.message || '').slice(0, 1000)}${diagnostic}`);
+    }
     return result.stdout;
   };
   const version = cli(['--version']).trim();
