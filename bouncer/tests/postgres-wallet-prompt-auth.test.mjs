@@ -5,6 +5,8 @@ import pg from 'pg';
 import nearApi from 'near-api-js';
 import { nep413Payload } from '../web-src/cli-login.mjs';
 import { buildBufferWalletSpendingPlan } from '../agent/buffer-wallet-spending-plan.mjs';
+import { buildBufferWalletSetup } from '../agent/buffer-wallet-setup-plan.mjs';
+import { wasm as V12, NOW as SETUP_NOW, snapshot as setupSnapshot } from './buffer-wallet-setup-fixture.mjs';
 import { createPostgresWalletPromptFence, initializePostgresWalletPromptFence } from '../agent/postgres-wallet-prompt-fence.mjs';
 import { createPostgresWalletPromptAuth, initializePostgresWalletPromptAuth } from '../agent/postgres-wallet-prompt-auth.mjs';
 
@@ -13,6 +15,7 @@ import { createPostgresWalletPromptAuth, initializePostgresWalletPromptAuth } fr
 const url = process.env.BOUNCER_TEST_POSTGRES_URL;
 if (process.env.BOUNCER_REQUIRE_POSTGRES_TESTS === '1' && !url) throw new Error('PostgreSQL integration test URL is required');
 const dbtest = url ? test : test.skip;
+const setupDbTest = url && V12 ? test : test.skip;
 const origin = 'https://bouncer.example';
 const blockHash = nearApi.utils.serialize.base_encode(Buffer.alloc(32, 21));
 const hash = n => nearApi.utils.serialize.base_encode(Buffer.alloc(32, n));
@@ -124,6 +127,19 @@ dbtest('authenticated fence reserves only the exact signed review, then records 
   await assert.rejects(fence.reserve(request), error => error.code === 'UNAUTHENTICATED');
   const second = await auth.issue(f.action);
   await assert.rejects(fence.reserve({ ...request, evidence: signed(second, f) }), error => error.code === 'OWNER_FENCED');
+  const claimAction = { format: f.action.format, network: 'testnet', purpose: 'claim_prompt', owner: f.owner,
+    owner_public_key: pk(f.ownerKey), operation_id: reservation.operation_id, review_sha256: f.review.review_sha256,
+    stage_id: f.action.stage_id, action_commitment_sha256: f.action.action_commitment_sha256 };
+  const claimChallenge = await auth.issue(claimAction), claimEvidence = signed(claimChallenge, f);
+  const claimArgs = { owner: f.owner, ownerPublicKey: pk(f.ownerKey), operationId: reservation.operation_id,
+    reviewSha256: f.review.review_sha256, stageId: f.action.stage_id,
+    actionCommitmentSha256: f.action.action_commitment_sha256, evidence: claimEvidence };
+  await assert.rejects(fence.claimPrompt({ ...claimArgs, actionCommitmentSha256: '0'.repeat(64) }), error => error.code === 'UNAUTHENTICATED');
+  const claimed = await fence.claimPrompt(claimArgs);
+  assert.equal(claimed.status, 'PROMPT_CLAIMED_NO_HASH'); assert.equal(claimed.execution_authorized, false);
+  await assert.rejects(fence.claimPrompt(claimArgs), error => error.code === 'UNAUTHENTICATED');
+  const freshClaim = await auth.issue(claimAction);
+  await assert.rejects(fence.claimPrompt({ ...claimArgs, evidence: signed(freshClaim, f) }), error => error.code === 'ALREADY_CLAIMED');
   const recordAction = { format: f.action.format, network: 'testnet', purpose: 'record_original_hash', owner: f.owner,
     owner_public_key: pk(f.ownerKey), operation_id: reservation.operation_id, original_hash: hash(31) };
   const c = await auth.issue(recordAction);
@@ -133,6 +149,29 @@ dbtest('authenticated fence reserves only the exact signed review, then records 
   const inspectAction = { format: f.action.format, network: 'testnet', purpose: 'inspect', owner: f.owner, owner_public_key: pk(f.ownerKey) };
   const inspect = await auth.issue(inspectAction);
   assert.equal((await fence.inspect({ owner: f.owner, ownerPublicKey: pk(f.ownerKey), evidence: signed(inspect, f) })).original_hash, hash(31));
+}));
+
+setupDbTest('signed NEP-413 challenges bind the first pinned vault-creation reservation and claim', async () => resources(async (db, rpc, auth) => {
+  const f = fixture(), snapshot = setupSnapshot();
+  snapshot.owner = f.owner; snapshot.candidate_vault = `vault.${f.owner}`;
+  const review = buildBufferWalletSetup({ snapshot, wasmBytes: V12, nowMs: SETUP_NOW }).review;
+  const fence = createPostgresWalletPromptFence({ pool: db, authenticate: auth.authenticate, setupWasmBytes: V12 });
+  const action = { format: f.action.format, network: 'testnet', purpose: 'reserve', owner: f.owner,
+    owner_public_key: pk(f.ownerKey), review_sha256: review.review_sha256, stage_id: 'create_keyless_vault',
+    action_commitment_sha256: review.stages[0].action_commitment_sha256 };
+  const challenge = await auth.issue(action);
+  const reservation = await fence.reserve({ review, setupSnapshot: snapshot, trustedReviewHash: review.review_sha256,
+    trustedOwnerPublicKey: pk(f.ownerKey), stageId: action.stage_id, evidence: signed(challenge, f) });
+  assert.equal(reservation.claim_status, 'AVAILABLE');
+  const claimAction = { ...action, purpose: 'claim_prompt', operation_id: reservation.operation_id };
+  const c = await auth.issue(claimAction);
+  const claimArgs = { owner: f.owner, ownerPublicKey: pk(f.ownerKey), operationId: reservation.operation_id,
+    reviewSha256: review.review_sha256, stageId: action.stage_id,
+    actionCommitmentSha256: action.action_commitment_sha256, evidence: signed(c, f) };
+  const claim = await fence.claimPrompt(claimArgs);
+  assert.equal(claim.status, 'PROMPT_CLAIMED_NO_HASH');
+  assert.equal(claim.execution_authorized, false); assert.equal(claim.wallet_invocation_verified, false);
+  await assert.rejects(fence.claimPrompt(claimArgs), e => e.code === 'UNAUTHENTICATED');
 }));
 
 dbtest('a lost challenge-consumption acknowledgement never grants authentication', async () => resources(async (db, rpc, normal) => {

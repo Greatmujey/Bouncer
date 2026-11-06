@@ -156,12 +156,18 @@ wallet prompt to this primitive.
 `agent/postgres-wallet-prompt-fence.mjs` is an additional **server-side
 prototype**, tested with a disposable PostgreSQL 17 primary. Cooperating
 processes compete for one owner-wide reservation, which stores the complete
-canonical Buffer spending review and stage commitment before any possible
-prompt. The first recorded original hash is immutable; the database trigger
-also rejects ordinary updates or deletion, and the service checks its critical
-indexes, trigger, row visibility, primary status, fsync and synchronous commit.
-A lost commit acknowledgement is treated as unknown. There is deliberately no
-unlock, expiry, payment, endpoint or wallet call. Its authenticator is an
+canonical Buffer spending review or the **first** pinned V12 vault-creation
+review, its original snapshot and stage commitment. The reviewed V12 artifact
+is hash-checked in server memory and is not stored in PostgreSQL. Each newly
+reserved row gets one atomic, exact-action-bound **claim**; two cooperating
+processes cannot both claim the same row. Legacy reservations are deliberately
+not backfilled, because they might already have been used. The first recorded
+original hash is immutable; triggers reject ordinary updates or deletion, and
+the service checks its critical indexes, triggers, row visibility, primary
+status, fsync and synchronous commit. A lost reservation, claim or hash commit
+acknowledgement is unknown and **not** permission to retry. There is deliberately
+no progression to the remaining setup stages, unlock, expiry, receipt
+reconciliation, payment, endpoint or wallet call. Its authenticator is an
 injected trust boundary. A separate experimental
 `agent/postgres-wallet-prompt-auth.mjs` implements one-use, origin- and
 exact-action-bound NEP-413 challenges, checking an Ed25519 FullAccess key at a
@@ -171,10 +177,13 @@ real phone or wallet. NEP-413 is not available for the EVM adapter. Local
 concurrency, corruption and lost-ack tests do not establish backup, rollback
 protection, database failover, actual wallet interoperability, genuine
 on-chain approval, current chain state or safe live spending. A DB administrator,
-stale restore, alternate database or bypassing wallet can still defeat
-coordination. The database enforces one **record**, not one invocation of a
-wallet: future client code must never reuse a reservation to reopen a prompt.
-No Supabase project or production database was created or modified.
+stale restore, alternate database, old software or bypassing wallet can still
+defeat coordination. The database enforces one **claim**, not one invocation of
+a wallet: a returned claim could still be reused by client code. Additional
+client-side protection, authenticated sessions/CSRF defenses, independent
+durability, prior-receipt validation and stage progression are required before
+any live wallet wiring. No Supabase project or production database was created
+or modified.
 
 [Read-only code comparison 42276988446](https://github.com/Greatmujey/Bouncer/actions/runs/42276988446)
 first found that a plain Cargo build did **not** match the deployed code hash.

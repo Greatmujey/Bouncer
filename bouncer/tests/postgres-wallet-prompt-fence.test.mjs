@@ -6,6 +6,8 @@ import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import nearApi from 'near-api-js';
 import { buildBufferWalletSpendingPlan } from '../agent/buffer-wallet-spending-plan.mjs';
+import { buildBufferWalletSetup } from '../agent/buffer-wallet-setup-plan.mjs';
+import { wasm as V12, NOW as SETUP_NOW, snapshot as setupSnapshot } from './buffer-wallet-setup-fixture.mjs';
 import { createPostgresWalletPromptFence, initializePostgresWalletPromptFence } from '../agent/postgres-wallet-prompt-fence.mjs';
 
 // Disposable keys, invented review/transactions and an isolated PostgreSQL
@@ -13,6 +15,7 @@ import { createPostgresWalletPromptFence, initializePostgresWalletPromptFence } 
 const url = process.env.BOUNCER_TEST_POSTGRES_URL;
 if (process.env.BOUNCER_REQUIRE_POSTGRES_TESTS === '1' && !url) throw new Error('PostgreSQL integration test URL is required');
 const dbtest = url ? test : test.skip;
+const setupDbTest = url && V12 ? test : test.skip;
 const stage = 'configure_buffer_locked_policy';
 const hash = n => nearApi.utils.serialize.base_encode(Buffer.alloc(32, n));
 const key = () => String(nearApi.KeyPair.fromRandom('ed25519').getPublicKey());
@@ -70,7 +73,7 @@ function startWorker(payload) {
 test('the prototype requires an explicit authenticator and has no wallet or unlock API', () => {
   assert.throws(() => createPostgresWalletPromptFence({ pool: { connect() {} } }), /authenticator/);
   const f = createPostgresWalletPromptFence({ pool: { connect() {} }, authenticate: syntheticAuth });
-  assert.deepEqual(Object.keys(f).sort(), ['inspect', 'recordOriginalHash', 'reserve']);
+  assert.deepEqual(Object.keys(f).sort(), ['claimPrompt', 'inspect', 'recordOriginalHash', 'reserve']);
 });
 
 dbtest('two independent processes atomically reserve at most one prompt per owner', async () => resources(async (db, fence) => {
@@ -91,6 +94,95 @@ dbtest('two independent processes atomically reserve at most one prompt per owne
     await assert.rejects(fence.reserve(f.request), error => error.code === 'OWNER_FENCED');
     const another = fixture(); assert.equal((await fence.reserve(another.request)).owner, another.owner);
   } finally { workers.forEach(w => { if (w.child.connected) w.child.kill(); }); }
+}));
+
+function claimRequest(f, reservation) {
+  return { owner: f.owner, ownerPublicKey: f.ownerKey, operationId: reservation.operation_id,
+    reviewSha256: f.review.review_sha256, stageId: stage,
+    actionCommitmentSha256: f.review.stages[0].action_commitment_sha256, evidence: 'synthetic-auth' };
+}
+
+setupDbTest('the first setup prompt binds the pinned V12, retained snapshot, owner and exact review', async () => resources(async db => {
+  const bytes = Buffer.from(V12), owner = newOwner(), ownerKey = key(), snapshot = setupSnapshot();
+  snapshot.owner = owner; snapshot.candidate_vault = `vault.${owner}`;
+  const review = buildBufferWalletSetup({ snapshot, wasmBytes: V12, nowMs: SETUP_NOW }).review;
+  const fence = createPostgresWalletPromptFence({ pool: db, authenticate: syntheticAuth, setupWasmBytes: bytes });
+  bytes[100] ^= 1; // server retained its own copy before caller mutation
+  assert.throws(() => createPostgresWalletPromptFence({ pool: db, authenticate: syntheticAuth, setupWasmBytes: bytes }), /pinned V12/);
+  const request = { review, setupSnapshot: snapshot, trustedReviewHash: review.review_sha256,
+    trustedOwnerPublicKey: ownerKey, stageId: 'create_keyless_vault', evidence: 'synthetic-auth' };
+  await assert.rejects(fence.reserve({ ...request, stageId: 'register_vault_circle' }), /first pinned setup stage/);
+  const noArtifact = createPostgresWalletPromptFence({ pool: db, authenticate: syntheticAuth });
+  await assert.rejects(noArtifact.reserve(request), /first pinned setup stage/);
+  const reservation = await fence.reserve(request);
+  assert.deepEqual(reservation.review, review); assert.deepEqual(reservation.setup_snapshot, snapshot);
+  assert.equal(reservation.claim_status, 'AVAILABLE');
+  const read = { owner, ownerPublicKey: ownerKey, evidence: 'synthetic-auth' };
+  assert.equal((await fence.inspect(read)).stage_id, 'create_keyless_vault');
+  await assert.rejects(noArtifact.inspect(read), error => error.code === 'CORRUPT');
+  const claim = await fence.claimPrompt({ owner, ownerPublicKey: ownerKey, operationId: reservation.operation_id,
+    reviewSha256: review.review_sha256, stageId: 'create_keyless_vault',
+    actionCommitmentSha256: review.stages[0].action_commitment_sha256, evidence: 'synthetic-auth' });
+  assert.equal(claim.status, 'PROMPT_CLAIMED_NO_HASH'); assert.equal(claim.execution_authorized, false);
+  const recorded = await fence.recordOriginalHash({ ...read, operationId: reservation.operation_id, originalHash: hash(23) });
+  assert.equal(recorded.original_hash, hash(23));
+  assert.deepEqual(recorded.review, review); assert.deepEqual(recorded.setup_snapshot, snapshot);
+  const spending = buildBufferWalletSpendingPlan({ owner, vault: `vault.${owner}`, adapter: `buffer.${owner}`,
+    policy_id: 'research', vault_agent_public_key: key(), forwarder_agent_public_key: key(),
+    per_tx_cap_atoms: '20000000', daily_cap_atoms: '20000000', vault_agent_gas_allowance_yocto: '100000000000000000000000',
+    forwarder_agent_gas_allowance_yocto: '200000000000000000000000' }).review;
+  await assert.rejects(fence.reserve({ review: spending, trustedReviewHash: spending.review_sha256, trustedOwnerPublicKey: ownerKey,
+    stageId: stage, evidence: 'synthetic-auth' }), error => error.code === 'OWNER_FENCED');
+}));
+
+dbtest('two separate processes cannot claim the same reviewed wallet prompt twice', async () => resources(async (db, fence) => {
+  const f = fixture(), reservation = await fence.reserve(f.request), claim = claimRequest(f, reservation);
+  assert.equal(reservation.claim_status, 'AVAILABLE');
+  const workers = [startWorker({ __mode: 'claim', ...claim }), startWorker({ __mode: 'claim', ...claim })];
+  try {
+    await Promise.all(workers.map(w => w.ready)); workers.forEach(w => w.send());
+    const results = await Promise.all(workers.map(w => w.done));
+    assert.equal(results.filter(r => r.ok).length, 1);
+    assert.equal(results.filter(r => r.code === 'ALREADY_CLAIMED').length, 1);
+    assert.equal((await fence.inspect(f.read)).claim_status, 'CLAIMED');
+    await assert.rejects(fence.claimPrompt(claim), e => e.code === 'ALREADY_CLAIMED');
+    await assert.rejects(db.query('UPDATE bouncer_wallet_prompt_v1.claims SET claimed=false WHERE owner_account_id=$1', [f.owner]), /single use/);
+    await assert.rejects(db.query('DELETE FROM bouncer_wallet_prompt_v1.claims WHERE owner_account_id=$1', [f.owner]), /cannot be deleted/);
+    assert.equal((await fence.recordOriginalHash({ ...f.read, operationId: reservation.operation_id, originalHash: hash(20) })).original_hash, hash(20));
+  } finally { workers.forEach(w => { if (w.child.connected) w.child.kill(); }); }
+}));
+
+dbtest('a lost claim acknowledgement never becomes a second claim', async () => resources(async (db, normal) => {
+  const f = fixture(), reservation = await normal.reserve(f.request), claim = claimRequest(f, reservation);
+  const injected = faultPool(db, 'UPDATE bouncer_wallet_prompt_v1.claims SET claimed');
+  const failing = createPostgresWalletPromptFence({ pool: injected, authenticate: syntheticAuth });
+  await assert.rejects(failing.claimPrompt(claim), error => error.code === 'DATABASE_UNKNOWN' && !error.message.includes('secret'));
+  assert.equal(injected.fired, true);
+  assert.equal((await normal.inspect(f.read)).claim_status, 'CLAIMED');
+  await assert.rejects(normal.claimPrompt(claim), error => error.code === 'ALREADY_CLAIMED');
+}));
+
+dbtest('legacy, changed, unauthenticated or already-hashed prompts cannot be newly claimed', async () => resources(async (db, fence) => {
+  const f = fixture(), operation = crypto.randomBytes(16).toString('hex');
+  // Simulate a reservation from the older prototype, before eligibility rows
+  // existed. Lack of a claim is never evidence that no wallet was opened.
+  await db.query(`INSERT INTO bouncer_wallet_prompt_v1.prompts
+    (owner_account_id,operation_id,owner_public_key,review_sha256,stage_id,action_commitment_sha256,review)
+    VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb)`, [f.owner, operation, f.ownerKey, f.review.review_sha256, stage,
+    f.review.stages[0].action_commitment_sha256, JSON.stringify(f.review)]);
+  const legacy = await fence.inspect(f.read);
+  assert.equal(legacy.claim_status, 'LEGACY_NOT_CLAIMABLE');
+  await assert.rejects(fence.claimPrompt(claimRequest(f, { operation_id: operation })), error => error.code === 'LEGACY_NOT_CLAIMABLE');
+  const g = fixture(), reserved = await fence.reserve(g.request), request = claimRequest(g, reserved);
+  await assert.rejects(fence.claimPrompt({ ...request, evidence: 'bad' }), error => error.code === 'UNAUTHENTICATED');
+  for (const patch of [{ operationId: 'f'.repeat(32) }, { reviewSha256: '0'.repeat(64) },
+    { actionCommitmentSha256: '0'.repeat(64) }, { stageId: 'install_buffer_vault_agent' }]) {
+    await assert.rejects(fence.claimPrompt({ ...request, ...patch }), error => error.code === 'MISMATCH');
+  }
+  assert.equal((await fence.inspect(g.read)).claim_status, 'AVAILABLE');
+  await fence.recordOriginalHash({ ...g.read, operationId: reserved.operation_id, originalHash: hash(22) });
+  assert.equal((await fence.inspect(g.read)).claim_status, 'ORIGINAL_ALREADY_RECORDED');
+  await assert.rejects(fence.claimPrompt(request), error => error.code === 'MISMATCH');
 }));
 
 dbtest('competing original hashes cannot overwrite; same hash is idempotent', async () => resources(async (db, fence) => {
@@ -171,16 +263,16 @@ dbtest('missing unique index, RLS or disabled trigger prevents reservations and 
       const client = await db.connect();
       return { release: client.release.bind(client), async query(sql, args) {
         const result = await client.query(sql, args), text = String(sql);
-        if (kind === 'index' && text.includes('FROM pg_catalog.pg_index')) {
-          result.rows = result.rows.filter(row => !(row.table_name === 'prompts' && row.columns.join(',') === 'operation_id'));
+        if (['index', 'claim-index'].includes(kind) && text.includes('FROM pg_catalog.pg_index')) {
+          result.rows = result.rows.filter(row => !(row.table_name === (kind === 'index' ? 'prompts' : 'claims') && row.columns.join(',') === 'operation_id'));
         }
-        if (kind === 'rls' && text.includes('SELECT t.relrowsecurity')) result.rows[0].relrowsecurity = true;
-        if (kind === 'trigger' && text.includes('FROM pg_catalog.pg_trigger')) result.rows[0].tgenabled = 'D';
+        if ((kind === 'rls' || (kind === 'claim-rls' && args?.[0] === 'claims')) && text.includes('SELECT t.relrowsecurity')) result.rows[0].relrowsecurity = true;
+        if ((kind === 'trigger' || (kind === 'claim-trigger' && args?.[0] === 'claims')) && text.includes('FROM pg_catalog.pg_trigger')) result.rows[0].tgenabled = 'D';
         return result;
       } };
     } };
   }
-  for (const kind of ['index', 'rls', 'trigger']) {
+  for (const kind of ['index', 'rls', 'trigger', 'claim-index', 'claim-rls', 'claim-trigger']) {
     const fence = createPostgresWalletPromptFence({ pool: catalogFault(kind), authenticate: syntheticAuth });
     await assert.rejects(fence.reserve(f.request), error => error.code === 'UNSAFE_SCHEMA');
     await assert.rejects(fence.inspect(f.read), error => error.code === 'UNSAFE_SCHEMA');
