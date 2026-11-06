@@ -50,14 +50,25 @@ function canonicalPlan(review, trustedReviewHash) {
   return plan;
 }
 
+/** Rebuild the constrained review and validate the separately retained owner
+ * key. No trust anchor, owner approval, signature or chain state is created. */
+export function verifyBufferSpendingReview({ review, trustedReviewHash, trustedOwnerPublicKey } = {}) {
+  const plan = canonicalPlan(review, trustedReviewHash), key = canonicalOwnerKey(trustedOwnerPublicKey);
+  if (key === plan.review.vault_agent_public_key || key === plan.review.forwarder_agent_public_key) {
+    throw new Error('owner key must be distinct from both restricted agent keys');
+  }
+  return { review_sha256: trustedReviewHash, owner: plan.review.owner, vault: plan.review.vault,
+    adapter: plan.review.adapter, owner_public_key: key, vault_agent_public_key: plan.review.vault_agent_public_key,
+    forwarder_agent_public_key: plan.review.forwarder_agent_public_key };
+}
+
 /** Returns PUBLIC metadata only; this does not retain it or prove approval.
  * The hash and owner key must be retained independently, not taken on faith
  * from a later RPC response. A missing wallet-returned hash remains unresolved. */
 export function prepareBufferSpendingAttempt({ review, trustedReviewHash, stageId, trustedOriginalHash, trustedOwnerPublicKey } = {}) {
-  const plan = canonicalPlan(review, trustedReviewHash), index = STAGES.indexOf(stageId);
-  const key = canonicalOwnerKey(trustedOwnerPublicKey);
-  if (index < 0 || !isTransactionHash(trustedOriginalHash) || key === review.vault_agent_public_key ||
-      key === review.forwarder_agent_public_key) throw new Error('reviewed stage, original hash and distinct owner key required');
+  const identity = verifyBufferSpendingReview({ review, trustedReviewHash, trustedOwnerPublicKey });
+  const plan = canonicalPlan(review, trustedReviewHash), index = STAGES.indexOf(stageId), key = identity.owner_public_key;
+  if (index < 0 || !isTransactionHash(trustedOriginalHash)) throw new Error('reviewed stage and original hash required');
   const stage = plan.review.stages[index];
   return { kind: 'buffer-wallet-spending-attempt-v1', status: 'pending', network: 'testnet',
     review_sha256: trustedReviewHash, stage_id: stageId, action_commitment_sha256: stage.action_commitment_sha256,

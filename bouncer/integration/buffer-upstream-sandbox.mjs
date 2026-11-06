@@ -15,6 +15,7 @@ import nearApi from 'near-api-js';
 import { buildBufferForwarder, checkBufferQuoteResponse, BUFFER_TESTNET_CONTRACT as SELLER } from '../experiments/buffer-forwarder/build.mjs';
 import { buildBufferWalletSpendingPlan, assertBufferSpendingBatchMatchesReview } from '../agent/buffer-wallet-spending-plan.mjs';
 import { prepareBufferSpendingAttempt, inspectBufferSpendingAttempt } from '../agent/buffer-wallet-spending-evidence.mjs';
+import { inspectBufferSpendingStage } from '../agent/buffer-wallet-spending-preflight.mjs';
 import { collectBufferDeliverySnapshots, verifyBufferDeliveryEvidence } from '../agent/buffer-delivery-evidence.mjs';
 import { CIRCLE_TESTNET_USDC as TOKEN } from '../scripts/circle-testnet-setup.mjs';
 import { loopbackSandboxUrl, withSandboxOnlyFetch } from './v11-sandbox-setup-rpc.mjs';
@@ -103,7 +104,7 @@ async function exercise({ endpoint, root, tokenOwner, v12, sellerWasm, sellerFix
     if (id !== PROVIDER) assert.deepEqual((await provider.viewAccessKeyList(id, { finality: 'final' })).keys, []);
     await must(tokenOwner, TOKEN, 'storage_deposit', { account_id: id, registration_only: true }, BigInt(storageMin), 50n * TGAS);
   }
-  let vaultAgentInstalled = false, spendingReceiptsChecked = 0;
+  let vaultAgentInstalled = false, spendingReceiptsChecked = 0, spendingPreflightsChecked = 0;
   await must(tokenOwner, TOKEN, 'ft_transfer_call', { receiver_id: VAULT, amount: '60000000', msg: '' }, 1n, 300n * TGAS);
   await must(sellerOwner, SELLER, 'set_product', { sku: SKU, price: PRICE, max_expense: '0', active: true });
   await must(sellerOwner, SELLER, 'set_product', { sku: CUSTOM_SKU, price: CUSTOM_PRICE, max_expense: '1000000', active: true });
@@ -134,8 +135,26 @@ async function exercise({ endpoint, root, tokenOwner, v12, sellerWasm, sellerFix
     // Retain the public review before these synthetic sends. This isolated
     // fixture has no durable pre-prompt journal and is NOT a live executor.
     const retained = structuredClone(spendingPlan.review), trustedReviewHash = retained.review_sha256;
+    // The sandbox must not masquerade as testnet in production. For this local
+    // test only, adapt its chain labels so the real view parsing can be checked;
+    // keep the mock token's real code hash unchanged and assert it BLOCKS.
+    const sandboxViews = {
+      async viewNodeStatus() { const status = await provider.viewNodeStatus(); assertSandboxStatus(status); return { ...status, chain_id: 'testnet' }; },
+      async experimental_protocolConfig(ref) { const config = await provider.experimental_protocolConfig(ref); return { ...config, chain_id: 'testnet' }; },
+      viewBlock: provider.viewBlock.bind(provider), viewAccount: provider.viewAccount.bind(provider),
+      viewAccessKey: provider.viewAccessKey.bind(provider), viewAccessKeyList: provider.viewAccessKeyList.bind(provider),
+      callFunctionRaw: provider.callFunctionRaw.bind(provider),
+    };
     const verifiedBatch = async index => {
       const b = spendingPlan.batches[index];
+      if (label === 'reject') {
+        const snapshot = await inspectBufferSpendingStage({ review: retained, trustedReviewHash, trustedOwnerPublicKey: pub(buyerKey),
+          stageId: b.id, forwarderTerms: terms, trustedForwarderReviewHash: artifact.review.review_sha256,
+          trustedForwarderWasmSha256: artifact.wasm_sha256, trustedSellerCodeHash: codeHash(sellerWasm), provider: sandboxViews });
+        assert.equal(snapshot.status, 'BLOCKED_OR_UNKNOWN', 'mock token must not pass the real Circle code pin');
+        assert.deepEqual(snapshot.blockers, [{ check: 'circle_and_seller_code_pins', status: 'BLOCKED' }]);
+        assert.equal(snapshot.execution_authorized, false); spendingPreflightsChecked++;
+      }
       const sent = await batch(buyer, b.receiverId, b.actions, `sandbox reviewed batch ${b.id}`);
       const trustedOriginalHash = sent.transaction_outcome.id, trustedOwnerPublicKey = pub(buyerKey);
       const attempt = prepareBufferSpendingAttempt({ review: retained, trustedReviewHash, stageId: b.id,
@@ -273,10 +292,12 @@ async function exercise({ endpoint, root, tokenOwner, v12, sellerWasm, sellerFix
   assert.equal(await balance(VAULT), '35000000'); assert.equal(await tracked(), '35000000');
   assert.equal(await spend('custom'), CUSTOM_PRICE);
   assert.equal(spendingReceiptsChecked, 9, 'all synthetic policy and scoped-key originals must be reconciled');
+  assert.equal(spendingPreflightsChecked, 3, 'sandbox views checked all three stages while the mock-Circle pin blocked');
   return { scope: 'ISOLATED nearcore, source-built Buffer contract and mock FT; not Circle or a public-chain order',
     buffer_source_revision: '9bc5ef0cbdc84074e94995cb50d334fc615f9b96', source_built_sha256: sellerFixture.sha256,
     v12_sha256: V12_SHA256, unsigned_wallet_spending_plan_exercised_locally: true,
     synthetic_original_spending_receipts_checked: spendingReceiptsChecked,
+    sandbox_stage_preflights_checked_with_mock_token_pin_blocked: spendingPreflightsChecked,
     price_change_returned_to_forwarder: true, price_rejection_return_credited_vault: true,
     accepted_order_customer_matches_forwarder: true, later_plain_ft_refund_returned_to_vault: true,
     refund_vault_actual_and_tracked: '60000000', refund_conservative_rolling_spend: PRICE,

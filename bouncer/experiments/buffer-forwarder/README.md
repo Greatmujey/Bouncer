@@ -65,8 +65,20 @@ protocol gas refund. A missing hash, incomplete graph or unexpected action is
 not success; a FINAL failure still requires state review and is never an
 instruction to retry. The caller must retain those trust anchors independently.
 The checker neither journals before a wallet prompt nor accesses RPC, proves
-current contract state, or authorizes the next stage. Synthetic tests alone are
-not a real wallet approval, a live key installation, a payment or delivery.
+current contract state, or authorizes the next stage. [Run 42272203799](https://github.com/Greatmujey/Bouncer/actions/runs/42272203799)
+matched nine originals to actual **isolated** nearcore receipt graphs with
+synthetic keys and a mock token. That is not a real wallet approval, a live key
+installation, a payment or delivery.
+
+`agent/buffer-wallet-spending-preflight.mjs` performs read-only, fresh,
+same-FINAL-block checks for the next policy/key stage, including the independently
+retained V12/forwarder/seller code pins, native reserve estimates, token balances
+and registration, exact policy and scoped keys, unconsumed intent and seller
+terms. It rebuilds the forwarder from reviewed terms and checks its configuration.
+A mismatch or unavailable view blocks; even a matching snapshot never replaces
+a pre-prompt durable fence, verification of prior original transactions, owner
+approval, a code audit, or a fresh check at execution time. This preflight has
+no signer or transaction sender and does not contact the seller's HTTP service.
 
 ## Why a separate forwarder
 
