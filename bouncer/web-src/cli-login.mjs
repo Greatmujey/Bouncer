@@ -77,6 +77,7 @@ export async function verifyCliLogin({ account, message, nonce, recipient, crypt
     const text = await response.text();
     if (text.length > 16_384) throw new Error('RPC response too large');
     result = JSON.parse(text);
+    if (result?.jsonrpc !== '2.0' || result?.id !== 'bouncer-cli-login') throw new Error('invalid RPC envelope');
   } catch { throw new Error('CLI_RPC_UNAVAILABLE'); }
   if (result?.error || result?.result?.permission !== 'FullAccess') throw new Error('CLI_KEY_NOT_FULL_ACCESS');
   return id;

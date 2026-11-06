@@ -1,7 +1,8 @@
 // Browser smoke tests exercise the real bundled selector with synthetic wallet
 // and Google responses. They do not claim a live sign-in or send transactions.
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
+import { createHash, generateKeyPairSync } from 'node:crypto';
+import { baseEncode } from '@near-js/utils';
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
@@ -95,12 +96,32 @@ try {
   // the shipped digest and curated executor remain untouched. This runs the
   // real connector and sandbox bridge with a deliberately fake Meteor wallet.
   const page = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
-  const errors = [], calls = [], walletCalls = []; let loggedIn = false;
+  const errors = [], calls = [], walletCalls = [], ownerRpc = []; let loggedIn = false;
   page.on('pageerror', error => errors.push(error.message));
+  // One throwaway browser-test key, never used outside this mocked page. The
+  // real sandbox bridge still has to carry a fresh NEP-413 nonce and result.
+  const synthetic = generateKeyPairSync('ed25519');
+  const privatePkcs8 = synthetic.privateKey.export({ type: 'pkcs8', format: 'der' }).toString('base64');
+  const publicRaw = Buffer.from(synthetic.publicKey.export({ format: 'jwk' }).x, 'base64url');
+  const publicKey = `ed25519:${baseEncode(publicRaw)}`;
   const mock = `window.selector.ready({
     async signIn(params) { if (params.network !== 'testnet' || params.addFunctionCallKey) throw new Error('unsafe request'); return [{ accountId: 'browser-test.testnet' }]; },
     async signOut(params) { if (params.network !== 'testnet') throw new Error('wrong network'); },
-    async getAccounts() { return [{ accountId: 'browser-test.testnet' }]; }
+    async getAccounts() { return [{ accountId: 'browser-test.testnet' }]; },
+    async signMessage({ network, signerId, message, nonce, recipient }) {
+      if (network !== 'testnet' || signerId !== 'browser-test.testnet') throw new Error('wrong account');
+      const encoder = new TextEncoder(), m = encoder.encode(message), r = encoder.encode(recipient);
+      const payload = new Uint8Array(4 + 4 + m.length + 32 + 4 + r.length + 1), view = new DataView(payload.buffer);
+      let i = 0; view.setUint32(i, 0x80000000 + 413, true); i += 4;
+      view.setUint32(i, m.length, true); i += 4; payload.set(m, i); i += m.length;
+      payload.set(nonce, i); i += 32; view.setUint32(i, r.length, true); i += 4; payload.set(r, i); i += r.length;
+      payload[i] = 0;
+      const keyBytes = Uint8Array.from(atob('${privatePkcs8}'), c => c.charCodeAt(0));
+      const key = await crypto.subtle.importKey('pkcs8', keyBytes, { name: 'Ed25519' }, false, ['sign']);
+      const digest = await crypto.subtle.digest('SHA-256', payload);
+      const signature = new Uint8Array(await crypto.subtle.sign('Ed25519', key, digest));
+      return { accountId: signerId, publicKey: '${publicKey}', signature: btoa(String.fromCharCode(...signature)) };
+    }
   });`;
   const bundle = fs.readFileSync(path.join(web, 'wallet.bundle.js'), 'utf8');
   const pinned = WALLET_EXECUTOR_SHA256['meteor-wallet'];
@@ -108,6 +129,13 @@ try {
   const mockDigest = createHash('sha256').update(mock).digest('hex');
   await page.route('**/wallet.bundle.js?*', route => route.fulfill({ status: 200, contentType: 'text/javascript', body: bundle.replace(pinned, mockDigest) }));
   await page.route('**/meteor-near-connect-latest.js*', route => { walletCalls.push(route.request().url()); return route.fulfill({ status: 200, contentType: 'text/javascript', body: mock }); });
+  await page.route('https://test.rpc.fastnear.com/**', route => {
+    const headers = { 'access-control-allow-origin': '*', 'access-control-allow-methods': 'POST, OPTIONS', 'access-control-allow-headers': 'content-type' };
+    if (route.request().method() === 'OPTIONS') return route.fulfill({ status: 204, headers });
+    const body = route.request().postDataJSON(); ownerRpc.push(body);
+    return route.fulfill({ status: 200, headers, contentType: 'application/json',
+      body: JSON.stringify({ jsonrpc: '2.0', id: body.id, result: { permission: 'FullAccess' } }) });
+  });
   await page.route('**/api/google-session**', async route => {
     const request = route.request(), parsed = new URL(request.url());
     calls.push(`${request.method()} ${parsed.search}`);
@@ -146,6 +174,12 @@ try {
   assert.equal(walletCalls.length, 1);
   assert.match(walletCalls[0], /53a8b39d1aaaf067502c11e49ebb050c75df019e/);
   await page.locator('.top-connect').click();
+  assert.equal(await page.locator('#wallet-owner-verify').isVisible(), true);
+  await page.locator('#wallet-owner-verify').click();
+  await page.waitForFunction(() => document.querySelector('#wallet-account-badge').textContent === 'OWNER VERIFIED');
+  assert.match(await page.locator('#wallet-account-warning').textContent(), /does not approve transactions.*spending access/);
+  assert.equal(ownerRpc.length, 1);
+  assert.deepEqual(ownerRpc[0].params, { request_type: 'view_access_key', finality: 'final', account_id: 'browser-test.testnet', public_key: publicKey });
   assert.equal(await page.locator('#google-signout').isVisible(), true);
   await page.locator('#google-signout').click();
   assert.equal(loggedIn, false);

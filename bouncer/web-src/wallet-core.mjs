@@ -2,6 +2,7 @@ import { WALLET_MANIFEST } from './wallet-manifest.mjs';
 import { loadVerifiedExecutor } from './wallet-executor.mjs';
 import { isTestnetAccount, isWalletConnectProjectId, pairingTopic } from './walletconnect-core.mjs';
 import { verifyCliLogin } from './cli-login.mjs';
+import { verifyConnectedWalletOwner } from './wallet-owner-verification.mjs';
 import { formatPublicAmount, isNearAccountId, readPublicTestnetAccount } from './account-view.mjs';
 
 // HTTP Date is coarse and can be cached. Only flag a large discrepancy when
@@ -88,6 +89,8 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
   const accountBalanceStatus = doc.querySelector('#wallet-account-balance-status');
   const accountUseWallet = doc.querySelector('#wallet-account-use-wallet');
   const accountRefresh = doc.querySelector('#wallet-account-refresh');
+  const ownerVerify = doc.querySelector('#wallet-owner-verify');
+  const ownerStatus = doc.querySelector('#wallet-owner-status');
   const ethereumInfoPanel = doc.querySelector('#wallet-ethereum-info');
   const ethereumContinue = doc.querySelector('#wallet-ethereum-continue');
   const ethereumBack = doc.querySelector('#wallet-ethereum-back');
@@ -103,6 +106,9 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
   // A name-only view never populates selectedWallet, connectedAccount or the
   // connector's session storage. It cannot be used as a wallet or signer.
   let accountEntry = false, ethereumInfo = false, viewedAccount = '', accountRead = null, accountReadVersion = 0;
+  // In-memory proof only, bound to the selected session. It never grants
+  // spending access, authenticates a backend, or survives account changes.
+  let ownerVerification = null, ownerSessionVersion = 0;
   let bannerTimer;
   const trusted = new Set(WALLET_MANIFEST.wallets);
   function setWalletLabels(label) {
@@ -125,10 +131,17 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     if (wcPanel) wcPanel.hidden = !wcPairing;
     accountEntryPanel.hidden = !accountEntry;
     accountViewPanel.hidden = !viewing && !connected;
-    accountBadge.textContent = connected ? 'CONNECTED' : 'VIEW ONLY';
-    accountWarning.textContent = connected
-      ? 'Public balances for the connected testnet account. Connecting alone does not grant Bouncer spending access.'
-      : 'Unverified account name. No wallet is connected and no spending access was granted.';
+    const ownerVerified = connected && ownerVerification?.wallet === selectedWallet && ownerVerification?.accountId === connectedAccount;
+    accountBadge.textContent = ownerVerified ? 'OWNER VERIFIED' : connected ? 'CONNECTED' : 'VIEW ONLY';
+    accountWarning.textContent = ownerVerified
+      ? 'Your wallet signed an off-chain message and its Full Access key was checked on testnet. This does not approve transactions, create a vault, or grant spending access.'
+      : connected ? 'Public balances for the connected testnet account. Connecting alone does not grant Bouncer spending access.'
+        : 'Unverified account name. No wallet is connected and no spending access was granted.';
+    if (ownerVerify) {
+      ownerVerify.hidden = !connected || !selectedWallet?.manifest?.features?.signMessage || !isTestnetAccount(connectedAccount);
+      ownerVerify.disabled = busyState;
+      ownerVerify.textContent = ownerVerified ? 'Verify account again' : 'Verify account in wallet';
+    }
     accountUseWallet.hidden = connected;
     ethereumInfoPanel.hidden = !ethereumInfo;
     if (walletSafety) walletSafety.hidden = wcPairing || accountEntry || ethereumInfo || viewing;
@@ -164,6 +177,8 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
   function busy(value) { busyState = value; renderControls(); }
   function clearAccountView() {
     accountReadVersion++;
+    ownerSessionVersion++; ownerVerification = null;
+    if (ownerStatus) { ownerStatus.hidden = true; ownerStatus.textContent = ''; }
     accountRead?.abort(); accountRead = null;
     accountEntry = false; ethereumInfo = false; viewedAccount = '';
     accountName.textContent = ''; accountNear.textContent = '—'; accountUsdc.textContent = '—';
@@ -410,6 +425,49 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     options.find(button => !button.disabled)?.focus();
   });
   accountRefresh.addEventListener('click', () => { void refreshAccountView(); });
+  ownerVerify?.addEventListener('click', async () => {
+    const wallet = selectedWallet, accountId = connectedAccount, version = ownerSessionVersion;
+    if (busyState || !connected || !wallet?.manifest?.features?.signMessage || !isTestnetAccount(accountId)) return;
+    const stillCurrent = () => connected && selectedWallet === wallet && connectedAccount === accountId && ownerSessionVersion === version;
+    let stopWalletPresentation = () => {};
+    busy(true); closePicker();
+    setStatus('Approve the identity message in your wallet. Bouncer is not requesting a transaction.');
+    notify('Approve the identity message in your wallet. No transaction is requested.', true);
+    try {
+      if (['near-mobile', 'nightly-wallet', 'ledger'].includes(wallet.manifest.id)) stopWalletPresentation = decorateWalletPopup(wallet.manifest.id);
+      let timeout;
+      const attempt = verifyConnectedWalletOwner({ wallet, accountId, location: win.location,
+        crypto: win.crypto, fetch: win.fetch.bind(win) });
+      let proof;
+      try {
+        proof = await Promise.race([attempt, new Promise((_, reject) => {
+          timeout = setTimeout(() => reject(new Error('WALLET_OWNER_TIMEOUT')), 90_000);
+        })]);
+      } finally { clearTimeout(timeout); }
+      if (!stillCurrent()) return;
+      ownerVerification = { wallet, accountId: proof.accountId, publicKey: proof.publicKey };
+      if (ownerStatus) {
+        ownerStatus.hidden = false;
+        ownerStatus.textContent = 'Identity verified for this session. This is not spending permission.';
+      }
+      setStatus(`Verified testnet wallet control for ${accountId}. No vault or spending access is granted.`);
+    } catch (error) {
+      if (!stillCurrent()) return;
+      ownerVerification = null;
+      const reason = error?.message || '';
+      const message = reason === 'CLI_ED25519_UNAVAILABLE'
+        ? 'This browser cannot verify Ed25519 signatures. Try an up-to-date browser.'
+        : reason === 'WALLET_OWNER_TIMEOUT' ? 'The wallet identity request timed out.'
+        : reason === 'CLI_RPC_UNAVAILABLE' ? 'Could not check the signing key on testnet. Check your connection and try again.'
+          : reason === 'CLI_KEY_NOT_FULL_ACCESS' ? 'The signing key is not a current testnet Full Access key.'
+            : 'Identity verification was cancelled or the signed message could not be verified.';
+      if (ownerStatus) { ownerStatus.hidden = false; ownerStatus.textContent = `${message} No spending access was granted.`; }
+      setStatus(`${message} No spending access was granted.`);
+    } finally {
+      stopWalletPresentation(); busy(false);
+      if (stillCurrent()) { renderControls(); hideBanner(); openPicker(opener); }
+    }
+  });
   // Verified CLI login remains available as an explicit, optional path.
   cliVerify.addEventListener('click', async () => { if (accountEntry && !busyState) await startWallet('near-cli'); });
   ethereumBack.addEventListener('click', () => {

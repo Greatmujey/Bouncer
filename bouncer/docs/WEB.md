@@ -7,8 +7,8 @@ icons remain. Motion respects the browser's reduced-motion setting. Recorded
 examples and transactions are explicitly labeled; independent FT-paid delivery,
 refund recovery and an independent vault audit remain open.
 
-The account picker offers NEAR Mobile, Meteor, Intear, Nightly, Ledger, NEAR CLI
-and WalletConnect QR on testnet, with Google sign-in last. WalletConnect uses
+The account picker offers NEAR Mobile, Meteor, Intear, Nightly, Ledger, NEAR CLI,
+experimental Ethereum Wallets, and WalletConnect QR on testnet, with Google sign-in last. WalletConnect uses
 the existing public project configuration, so users do not need to supply a
 project ID. The new Google flow has **not been verified with a real Google
 account**. Site updates reach production only after review and deployment.
@@ -16,11 +16,18 @@ account**. Site updates reach production only after review and deployment.
 Wallet sessions are restricted to approved dedicated, top-level origins, with
 GitHub Pages and shared guest origins blocked. The curated executors are
 sandboxed and their pinned bytes are SHA-256 verified before use. NEAR Mobile
-and CLI use fresh, off-chain login messages checked against testnet; the other
-wallets report an account but do not independently prove ownership to Bouncer.
-No transaction, access key or vault spending authority is requested by this
-picker. Wallet extensions, provider availability and real-device sign-in still
-need end-to-end testing; unit and mocked-browser tests are not live logins.
+and CLI use fresh, off-chain login messages checked against testnet; other
+named wallets initially report an account without independently proving control.
+For named accounts on adapters that support NEP-413 message signing, the optional
+**Verify account in wallet** button requests a fresh off-chain signature and
+checks its public key for Full Access using a read-only final testnet RPC query.
+It verifies control only for the current browser session; it is not server
+identity, transaction approval, a vault, or agent spending authority. Account
+entry and WalletConnect are view/account-only; the Ethereum adapter does not
+support this message verification and its own onboarding may request an approved
+testnet setup transaction. Wallet extensions, provider availability and
+real-device sign-in still need end-to-end testing; unit and mocked-browser tests
+are not live logins. Never enter a seed phrase into Bouncer.
 
 WalletConnect requests only `near_getAccounts` on `near:testnet` and rejects
 broader permissions. Pairing keys remain in the browser; a limited fallback

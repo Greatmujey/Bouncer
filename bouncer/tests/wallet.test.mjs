@@ -25,6 +25,14 @@ class FakeSandboxWallet {
     this.config.messageRequests ??= [];
     this.config.messageRequests.push(params);
     if (this.config.fail) throw new Error('cancelled');
+    if (this.config.messageWait) await this.config.messageWait;
+    if (this.config.signConnectedMessage) {
+      const pair = this.config.cliKey || KeyPair.fromRandom('ed25519');
+      const hash = createHash('sha256').update(nep413Payload(params)).digest();
+      const publicKey = pair.getPublicKey().toString();
+      return { accountId: this.config.account || 'alice.testnet', publicKey,
+        signature: Buffer.from(pair.sign(hash).signature).toString('base64') };
+    }
     return this.config.messageResult || { accountId: 'mobile.testnet', publicKey: 'ed25519:public', signature: 'test-signature' };
   }
 }
@@ -44,7 +52,7 @@ class Element {
 function fakeBrowser(url, { top = true, storageFails = false, approved = '' } = {}) {
   const ids = ['wallet-connect', 'wallet-disconnect', 'wallet-status', 'wallet-open-site', 'wallet-dialog', 'wallet-close', 'wallet-options', 'wallet-dialog-status', 'wallet-title-text', 'wallet-dialog-description', 'wallet-banner', 'wallet-safety',
     'wallet-account-entry', 'wallet-account-form', 'wallet-account-id', 'wallet-account-error', 'wallet-account-back', 'wallet-cli-verify',
-    'wallet-account-view', 'wallet-account-name', 'wallet-account-badge', 'wallet-account-warning', 'wallet-account-near', 'wallet-account-usdc', 'wallet-account-balance-status', 'wallet-account-use-wallet', 'wallet-account-refresh',
+    'wallet-account-view', 'wallet-account-name', 'wallet-account-badge', 'wallet-account-warning', 'wallet-account-near', 'wallet-account-usdc', 'wallet-account-balance-status', 'wallet-account-use-wallet', 'wallet-account-refresh', 'wallet-owner-verify', 'wallet-owner-status',
     'wallet-ethereum-info', 'wallet-ethereum-continue', 'wallet-ethereum-back'];
   const nodes = Object.fromEntries(ids.map(id => [id, new Element()]));
   nodes['wallet-open-site'].hidden = true;
@@ -53,7 +61,7 @@ function fakeBrowser(url, { top = true, storageFails = false, approved = '' } = 
   const data = new Map(), labels = [new Element(), new Element(), new Element()];
   const win = { location: { ...location(url), href: url }, crypto: webcrypto,
     fetch: async target => {
-      if (String(target) === 'https://test.rpc.fastnear.com') return { ok: true, text: async () => JSON.stringify({ result: { permission: win.cliKeyPermission || 'FullAccess' } }) };
+      if (String(target) === 'https://test.rpc.fastnear.com') return { ok: true, text: async () => JSON.stringify({ jsonrpc: '2.0', id: 'bouncer-cli-login', result: { permission: win.cliKeyPermission || 'FullAccess' } }) };
       throw new Error('unexpected network');
     },
     navigator: { clipboard: { async writeText(value) { win.clipboard = value; } } }, localStorage: {
@@ -193,6 +201,64 @@ test('connects and disconnects a wallet-reported account without requesting a ke
   assert.ok(browser.openers.every(button => button.attributes['aria-label'] === 'Connect wallet or Google account'));
   assert.equal(browser.nodes['wallet-title-text'].textContent, 'Connect an account');
   assert.match(browser.nodes['wallet-dialog-description'].textContent, /Google/);
+});
+
+test('connected phone-wallet accounts can verify a fresh identity message without approving spending', async () => {
+  for (const id of ['meteor-wallet', 'intear-wallet', 'nightly-wallet', 'ledger']) {
+    const browser = fakeBrowser('http://127.0.0.1:4173/'), config = { account: 'great_mujey.testnet', signConnectedMessage: true };
+    await initWallet({ window: browser.win, document: browser.doc, NearConnector: connectorClass(config) });
+    await browser.nodes['wallet-connect'].click();
+    await browser.options.find(option => option.dataset.walletId === id).click();
+    assert.equal(browser.nodes['wallet-owner-verify'].hidden, false);
+    assert.equal(browser.nodes['wallet-account-badge'].textContent, 'CONNECTED');
+    assert.equal(config.messageRequests, undefined, 'connecting alone does not sign a message');
+    await browser.nodes['wallet-connect'].click();
+    await browser.nodes['wallet-owner-verify'].click();
+    assert.equal(config.messageRequests.length, 1);
+    assert.equal(config.messageRequests[0].signerId, 'great_mujey.testnet');
+    assert.equal(config.messageRequests[0].network, 'testnet');
+    assert.equal(browser.nodes['wallet-account-badge'].textContent, 'OWNER VERIFIED');
+    assert.match(browser.nodes['wallet-account-warning'].textContent, /does not approve transactions.*spending access/);
+    assert.match(browser.nodes['wallet-owner-status'].textContent, /not spending permission/);
+    assert.equal(browser.nodes['wallet-dialog'].open, true);
+    await browser.nodes['wallet-disconnect'].click();
+    assert.equal(browser.nodes['wallet-owner-verify'].hidden, true);
+    assert.equal(browser.nodes['wallet-owner-status'].hidden, true);
+    assert.equal(browser.nodes['wallet-owner-status'].textContent, '');
+  }
+});
+
+test('NEAR Mobile owner verification targets the connected account and performs no transaction', async () => {
+  const browser = fakeBrowser('http://127.0.0.1:4173/'), config = { account: 'great_mujey.testnet', signConnectedMessage: true };
+  await initWallet({ window: browser.win, document: browser.doc, NearConnector: connectorClass(config) });
+  await browser.options.find(option => option.dataset.walletId === 'near-mobile').click();
+  assert.equal(config.messageRequests.length, 1, 'the connection uses a message only');
+  await browser.nodes['wallet-owner-verify'].click();
+  assert.equal(config.messageRequests.length, 2);
+  assert.equal(config.messageRequests[1].signerId, 'great_mujey.testnet');
+  assert.equal(config.messageRequests[1].accountId, 'great_mujey.testnet', 'pinned Mobile adapter requires its accountId option');
+  assert.equal(browser.nodes['wallet-account-badge'].textContent, 'OWNER VERIFIED');
+  assert.match(browser.nodes['wallet-account-warning'].textContent, /does not approve transactions.*spending access/);
+});
+
+test('a restricted key or a late wallet result cannot mark the connected account as verified', async () => {
+  const browser = fakeBrowser('http://127.0.0.1:4173/'), config = { signConnectedMessage: true };
+  await initWallet({ window: browser.win, document: browser.doc, NearConnector: connectorClass(config) });
+  await browser.options[0].click();
+  browser.win.cliKeyPermission = { FunctionCall: {} };
+  await browser.nodes['wallet-owner-verify'].click();
+  assert.equal(browser.nodes['wallet-account-badge'].textContent, 'CONNECTED');
+  assert.match(browser.nodes['wallet-owner-status'].textContent, /not a current testnet Full Access key/);
+  browser.win.cliKeyPermission = 'FullAccess';
+  let release;
+  config.messageWait = new Promise(resolve => { release = resolve; });
+  const pending = browser.nodes['wallet-owner-verify'].click();
+  config.instance.events['wallet:signOut']();
+  release(); await pending;
+  assert.equal(browser.nodes['wallet-account-view'].hidden, true);
+  assert.equal(browser.nodes['wallet-owner-verify'].hidden, true);
+  assert.equal(browser.nodes['wallet-owner-status'].textContent, '');
+  assert.equal(browser.nodes['wallet-dialog'].open, false);
 });
 
 test('a connected wallet can load its own public balance without requesting a transaction', async () => {
