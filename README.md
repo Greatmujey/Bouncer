@@ -98,8 +98,8 @@ not establish rights to any reused material; contributors must review those
 before publication.
 
 Development used AI assistance. Main external libraries and tooling are
-`near-sdk` (Rust), `near-api-js`, HOT `near-connect`, the MCP SDK, Express,
-PostgreSQL/`pg`, Zod and esbuild; exact Node dependencies are recorded in
+`near-sdk` (Rust), `near-api-js`, the MCP SDK, Express,
+PostgreSQL/`pg` and Zod; exact Node dependencies are recorded in
 [`bouncer/package-lock.json`](bouncer/package-lock.json), and Rust requirements
 in [`Cargo.toml`](bouncer/contracts/bouncer/Cargo.toml). CI also exercises
 Playwright and an external PipRail SDK; the local-model option uses Qwen and
@@ -120,27 +120,29 @@ preserves an earlier oracle-led Circle testnet mission. It also retains an inter
 **recorded** requests from an earlier multi-token run. A separate test used a
 local AI model to propose tasks; the latest oracle mission used prepared goals. The
 two credit tokens in the earlier example are synthetic and fulfillment was
-self-hosted. The site
-is not a live agent dashboard or commercial marketplace. It includes an
-optional, identity-only testnet wallet connection on the dedicated Vercel
-origin; shared-origin and embedded previews offer a link to open the site in a
-new tab instead. The connector has been exercised with a mock and a real Meteor UI opened and
-cancelled, but not with a real wallet sign-in. Connecting does not create a
-vault, grant spending access, or sign transactions. The site can try an
-optional public-RPC read of the recorded contract’s current vault balances; if
-that fails it keeps the recorded snapshot.
+self-hosted. The site is not a live agent dashboard or commercial marketplace.
 
-To view it locally from the repository root (Node is not required):
+The testnet account picker offers NEAR Mobile, Meteor, Intear, Nightly, Ledger,
+NEAR CLI and WalletConnect QR, followed by Google sign-in. WalletConnect uses
+the existing public project configuration; its account-only session does not
+request transaction signing. Google is **identity only**. Its public OAuth
+client ID is configured in Vercel for new deployments, but origin authorization
+and a real Google login still need verification. Selecting a wallet or signing
+in with Google does not create a vault or grant spending authority. Website
+updates reach production only after review and deployment. The optional
+public-RPC read keeps the recorded snapshot if a current balance check fails.
+
+Preview locally with Node:
 
 ```sh
-python3 -m http.server 4173 --bind 0.0.0.0 --directory bouncer/web
+node bouncer/scripts/dev-web.mjs
 ```
 
-The Vercel build publishes **only the ten whitelisted static website files**,
-not the checkout, credentials or journals. GitHub Pages has not been reverified
-since the repository became public; its shared origin is not wallet-enabled.
-The opt-in `[publish-web-preview]` workflow still
-provides a temporary guest preview. See [website and wallet notes](bouncer/docs/WEB.md).
+The Vercel build publishes **only the 16 allowlisted static website files**,
+not the checkout, credentials or journals, plus the separately deployed Google
+session and restricted WalletConnect relay functions. Shared guest and GitHub
+Pages origins do not allow wallet sessions and cannot host Google sign-in.
+See [website and sign-in notes](bouncer/docs/WEB.md).
 
 ## AI assistant access (MCP)
 
@@ -157,8 +159,9 @@ tools—it does not itself provide a model or access to the new planning/executi
 
 Bouncer is a resource-buying agent; the on-chain firewall is its spending
 kernel, not the whole product. These are connections to the tracks, not claims
-that all six are complete. See the [interoperability roadmap](bouncer/docs/INTEROPERABILITY_ROADMAP.md)
-for the independent-seller gap, experimental authentication and outstanding swap-accounting work.
+that all six are complete. See the [current blockers and track map](bouncer/docs/BLOCKERS_AND_TRACKS.md)
+and [interoperability roadmap](bouncer/docs/INTEROPERABILITY_ROADMAP.md) for the independent-seller gap,
+experimental authentication and outstanding swap-accounting work.
 
 | Track | Evidence today | Still needed |
 | --- | --- | --- |

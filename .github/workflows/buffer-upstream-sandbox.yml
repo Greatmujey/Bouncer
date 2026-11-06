@@ -1,0 +1,95 @@
+# Source-built Buffer and mock FT on a disposable loopback chain only.
+# No public-chain account, real Circle, seller endpoint, secret or real money.
+name: Buffer source-built isolated sandbox
+
+on:
+  push:
+    branches: ['arena/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  upstream-buffer:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[buffer-upstream-sandbox]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: bouncer
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+      - name: Install dependencies and test offline gates
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          node --test tests/buffer-forwarder.test.mjs tests/buffer-delivery-evidence.test.mjs tests/buffer-evidence-cli.test.mjs tests/buffer-upstream-sandbox.test.mjs tests/paypercall-forwarder-experimental.test.mjs
+      - name: Recover pinned Buffer source, V12 and mock FT
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/buffer-src/src"
+          fetch_blob() {
+            local repo="$1" blob="$2" target="$3"
+            gh api "repos/$repo/git/blobs/$blob" --jq .content | base64 --decode > "$target"
+            test "$(git hash-object "$target")" = "$blob"
+          }
+          # Exact blobs from Chima30/buffer@9bc5ef0cbdc84074e94995cb50d334fc615f9b96.
+          fetch_blob Chima30/buffer 34a9011cc085c1115cc6584fc307693129cf96a6 "$RUNNER_TEMP/buffer-src/Cargo.toml"
+          fetch_blob Chima30/buffer cfbbac93dc23c381e129ba75af45a0613fb948bb "$RUNNER_TEMP/buffer-src/Cargo.lock"
+          fetch_blob Chima30/buffer f13f8304470aea083e2ba45e16209ac681085e84 "$RUNNER_TEMP/buffer-src/rust-toolchain.toml"
+          fetch_blob Chima30/buffer 45b4444f00245fbde226a55a8e32aa5221c20753 "$RUNNER_TEMP/buffer-src/src/lib.rs"
+          fetch_blob Chima30/buffer c6e2cf36ff32e9dbfc93d75ab57f230b72f68475 "$RUNNER_TEMP/buffer-src/src/evm.rs"
+          fetch_blob Chima30/buffer e670a466244fe0d6fab3abf2a2b8ac04c82216e9 "$RUNNER_TEMP/buffer-src/src/tests.rs"
+          fetch_blob Greatmujey/Bouncer 16785505eaed13609d8e569e7b1665f89683d9eb "$RUNNER_TEMP/bouncer-v12.wasm"
+          fetch_blob near/nearcore 3ab410d723c8029e70993b0829a17ddd52d8b135 "$RUNNER_TEMP/mock-ft.wasm"
+          echo '033f255c5822ff97495809f7d60fddf66f266f20c36285fe71296b66decc6d12  '"$RUNNER_TEMP/bouncer-v12.wasm" | sha256sum -c -
+          echo 'b10ed11ac6d60698c6809ef7e96b578f2e5768354fe4b15d044843c2b6ab8a04  '"$RUNNER_TEMP/mock-ft.wasm" | sha256sum -c -
+          BOUNCER_V12_WASM_PATH="$RUNNER_TEMP/bouncer-v12.wasm" node --test tests/buffer-forwarder.test.mjs
+      - name: Build pinned Buffer source for local testing
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.93.0 --profile minimal --target wasm32-unknown-unknown
+          # near-sdk 5.29 requires --cfg near; this is a non-reproducible local
+          # build and does not identify or prove the deployed seller binary.
+          if ! RUSTFLAGS='--cfg near -C link-arg=-s' cargo +1.93.0 build --locked --release --target wasm32-unknown-unknown --lib \
+              --manifest-path "$RUNNER_TEMP/buffer-src/Cargo.toml" > "$RUNNER_TEMP/buffer-build.log" 2>&1; then
+            python3 -c 'import os; s=open(os.environ["RUNNER_TEMP"]+"/buffer-build.log").read()[-5000:]; print("::error title=Buffer fixture build failed::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
+            exit 1
+          fi
+          cp "$RUNNER_TEMP/buffer-src/target/wasm32-unknown-unknown/release/buffer_desk.wasm" "$RUNNER_TEMP/buffer.wasm"
+          sha256sum "$RUNNER_TEMP/buffer.wasm" | tee "$RUNNER_TEMP/buffer.sha256"
+      - name: Download and verify the isolated nearcore executable
+        run: |
+          set -euo pipefail
+          curl --fail --show-error --silent --location --proto '=https' --tlsv1.2 --max-time 180 --retry 2 --max-filesize 419430400 \
+            'https://s3-us-west-1.amazonaws.com/build.nearprotocol.com/nearcore/Linux-x86_64/2.14.0/near-sandbox.tar.gz' \
+            --output "$RUNNER_TEMP/near-sandbox.tar.gz"
+          python3 scripts/extract-pinned-near-sandbox.py "$RUNNER_TEMP/near-sandbox.tar.gz" "$RUNNER_TEMP/near-sandbox"
+      - name: Run Buffer, V12 and mock FT on loopback only
+        env:
+          BOUNCER_V12_WASM_PATH: ${{ runner.temp }}/bouncer-v12.wasm
+          BOUNCER_MOCK_FT_WASM_PATH: ${{ runner.temp }}/mock-ft.wasm
+          BOUNCER_SANDBOX_BIN: ${{ runner.temp }}/near-sandbox
+          BOUNCER_BUFFER_FIXTURE_WASM: ${{ runner.temp }}/buffer.wasm
+        run: |
+          set -euo pipefail
+          ulimit -Sn 65535
+          export BOUNCER_BUFFER_FIXTURE_SHA256="$(cut -d' ' -f1 "$RUNNER_TEMP/buffer.sha256")"
+          if ! node integration/buffer-upstream-sandbox.mjs > "$RUNNER_TEMP/buffer-result.json" 2> "$RUNNER_TEMP/buffer-error.log"; then
+            python3 -c 'import os; s=open(os.environ["RUNNER_TEMP"]+"/buffer-error.log").read()[-5000:]; print("::error title=Isolated Buffer scenario failed::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
+            exit 1
+          fi
+          {
+            echo '## Source-built Buffer on isolated nearcore'
+            echo 'The source-built contract and mock token are local fixtures, not the deployed seller or Circle. No seller HTTP service, actual independent report, public-chain purchase or audit is implied.'
+            echo '```json'
+            cat "$RUNNER_TEMP/buffer-result.json"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

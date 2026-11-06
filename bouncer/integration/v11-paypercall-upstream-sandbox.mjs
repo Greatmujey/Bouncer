@@ -22,13 +22,16 @@ import nearApi from 'near-api-js';
 import { buildExperimentalForwarder } from '../experiments/paypercall-forwarder/build.mjs';
 import { CIRCLE_TESTNET_USDC as TOKEN } from '../scripts/circle-testnet-setup.mjs';
 import { PAYPERCALL_TESTNET_ESCROW as ESCROW } from '../agent/paypercall-inspect.mjs';
+import { collectPayPerCallHistoricalSnapshots, verifyPayPerCallForwarderEvidence,
+  collectPayPerCallReturnSnapshots, verifyPayPerCallForwarderReturn } from '../agent/paypercall-forwarder-evidence.mjs';
 import { loopbackSandboxUrl, withSandboxOnlyFetch } from './v11-sandbox-setup-rpc.mjs';
 import { V11_SHA256, MOCK_FT_SHA256, SANDBOX_SHA256, SANDBOX_CHAIN_ID, readVerifiedFile,
   assertSandboxStatus, requireFinalSuccess } from './v11-sandbox-support.mjs';
 import { startSandbox, stopSandboxChild } from './v11-nearcore-sandbox.mjs';
 
 const BUYER = 'upstream-buyer.testnet', VAULT = 'vault.upstream-buyer.testnet';
-const ADAPTER = 'bridge.upstream-buyer.testnet', PROVIDER = 'upstream-provider.testnet';
+const ADAPTER = 'bridge.upstream-buyer.testnet', FULFILLED_ADAPTER = 'answer.upstream-buyer.testnet';
+const PROVIDER = 'upstream-provider.testnet';
 const NEAR = 10n ** 24n, TGAS = 10n ** 12n, { transactions: tx } = nearApi;
 const key = () => nearApi.KeyPair.fromRandom('ed25519');
 const pub = pair => String(pair.getPublicKey());
@@ -37,7 +40,7 @@ const fn = (method, args = {}, deposit = 0n, gas = 100n * TGAS) => tx.functionCa
 const hash = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const codeHash = bytes => nearApi.utils.serialize.base_encode(crypto.createHash('sha256').update(bytes).digest());
 const escrowExports = ['new', 'register_service', 'storage_deposit', 'storage_withdraw', 'get_storage_credit',
-  'ft_on_transfer', 'reject', 'claim', 'get_call', 'get_owed'];
+  'ft_on_transfer', 'fulfill', 'reject', 'claim', 'get_call', 'get_owed'];
 
 /** Offline validation of a self-hashed, source-built fixture. A matching digest
  * does not authenticate the compiler, source or any deployed escrow contract. */
@@ -94,9 +97,10 @@ export async function exerciseUpstreamPayPerCall({ rpcUrl, root, tokenOwner, was
 async function exercise({ endpoint, root, tokenOwner, wasm, escrowWasm, upstream, storageMin, checkpoint }) {
   const provider = new nearApi.providers.JsonRpcProvider({ url: endpoint });
   assertSandboxStatus(await provider.status());
-  const buyerKey = key(), sellerKey = key(), vaultKey = key(), bridgeKey = key(), faultKey = key();
+  const buyerKey = key(), sellerKey = key(), vaultKey = key(), bridgeKey = key(), answerBridgeKey = key(), faultKey = key();
   const buyer = account(BUYER, provider, buyerKey), seller = account(PROVIDER, provider, sellerKey);
   const vaultAgent = account(BUYER, provider, vaultKey), bridgeAgent = account(BUYER, provider, bridgeKey);
+  const answerBridgeAgent = account(BUYER, provider, answerBridgeKey);
   const call = (signer, receiverId, method, args = {}, deposit = 0n, gas = 100n * TGAS) =>
     signer.signAndSendTransaction({ receiverId, actions: [fn(method, args, deposit, gas)], waitUntil: 'FINAL', throwOnFailure: false });
   const must = async (signer, receiverId, method, args = {}, deposit = 0n, gas = 100n * TGAS) => {
@@ -201,18 +205,132 @@ async function exercise({ endpoint, root, tokenOwner, wasm, escrowWasm, upstream
   await must(buyer, ADAPTER, 'return_native', { amount: (10n ** 22n).toString() }, 1n);
   assert.deepEqual((await provider.viewAccessKeyList(ADAPTER, { finality: 'final' })).keys, []);
   checkpoint('source-built PayPerCall rejection, forced payout failure, owed claim and V11 ledger return checked');
+
+  // A separate one-shot forwarder exercises the positive path. The answer is
+  // local fixture bytes, not an independently retrieved seller response.
+  const secondBlock = await provider.viewBlock({ finality: 'final' });
+  const secondNow = Number(BigInt(secondBlock.header.timestamp_nanosec) / 1_000_000n);
+  const answerTerms = { owner: BUYER, vault: VAULT, adapter: FULFILLED_ADAPTER,
+    vault_agent_public_key: pub(vaultKey), forwarder_agent_public_key: pub(answerBridgeKey), policy_id: 'fulfilled', intent_id: 'pc-2',
+    amount: '100', service_id: 0, request: 'wrap.testnet', expires_at_ms: secondNow + 60 * 60 * 1000,
+    native_return_cap: NEAR.toString(), native_reserve: NEAR.toString() };
+  const answerArtifact = await buildExperimentalForwarder(answerTerms, { nowMs: secondNow });
+  await batch(buyer, FULFILLED_ADAPTER, [tx.createAccount(), tx.transfer(3n * NEAR), tx.deployContract(answerArtifact.wasm)],
+    'create separate keyless answer forwarder');
+  assert.equal((await provider.viewAccount(FULFILLED_ADAPTER, { finality: 'final' })).code_hash, codeHash(answerArtifact.wasm));
+  assert.deepEqual((await provider.viewAccessKeyList(FULFILLED_ADAPTER, { finality: 'final' })).keys, []);
+  for (const id of [FULFILLED_ADAPTER, PROVIDER]) {
+    await must(tokenOwner, TOKEN, 'storage_deposit', { account_id: id, registration_only: true }, BigInt(storageMin), 50n * TGAS);
+  }
+  await batch(buyer, BUYER, [tx.addKey(answerBridgeKey.getPublicKey(),
+    tx.functionCallAccessKey(FULFILLED_ADAPTER, ['open', 'return_tokens', 'claim'], NEAR))], 'install separate answer forwarder key');
+  await must(buyer, VAULT, 'set_policy', { policy_id: 'fulfilled', token: TOKEN, per_tx_cap: '100', daily_cap: '100' }, 1n);
+  await must(buyer, VAULT, 'allow_payee', { policy_id: 'fulfilled', payee: FULFILLED_ADAPTER }, 1n);
+  await must(buyer, VAULT, 'grant_agent_key', { policy_id: 'fulfilled', public_key: pub(vaultKey) }, 1n);
+  await must(buyer, VAULT, 'lock_ft_policy_to_intents', { policy_id: 'fulfilled' }, 1n);
+  await must(buyer, VAULT, 'set_exact_ft_intent', { intent_id: 'pc-2', policy_id: 'fulfilled', expected_token: TOKEN,
+    payee: FULFILLED_ADAPTER, amount: '100', memo: answerArtifact.review.intent_memo,
+    review_hash: answerArtifact.review.review_sha256, expires_at_ms: String(answerArtifact.review.expires_at_ms),
+    agent_public_key: pub(vaultKey) }, 1n);
+  await must(buyer, ESCROW, 'storage_deposit', { account_id: FULFILLED_ADAPTER }, prepaid);
+  const answerFunding = await must(vaultAgent, VAULT, 'execute_exact_ft', { intent_id: 'pc-2' }, 0n, 200n * TGAS);
+  const answerOpened = await must(answerBridgeAgent, FULFILLED_ADAPTER, 'open', {}, 0n, 300n * TGAS);
+  const answerOrder = await view(ESCROW, 'get_call', { call_id: 1 });
+  assert.equal(answerOrder.payer, FULFILLED_ADAPTER); assert.equal(answerOrder.token, TOKEN);
+  assert.equal(answerOrder.amount, '60'); assert.equal(answerOrder.request_hash, answerArtifact.review.request_hash);
+  assert.equal(answerOrder.status, 'Open');
+  const answer = Buffer.from('{"token":"wrap.testnet","source":"isolated fixture"}\n');
+  const fulfilled = await must(seller, ESCROW, 'fulfill', { call_id: 1, result_hash: hash(answer), result_uri: null }, 0n, 250n * TGAS);
+  const completed = await view(ESCROW, 'get_call', { call_id: 1 });
+  assert.equal(completed.status, 'Fulfilled'); assert.equal(completed.result_hash, hash(answer));
+  assert.equal(await ft(PROVIDER), '60'); assert.equal(await ft(ESCROW), '0');
+  assert.equal(await ft(FULFILLED_ADAPTER), '40');
+  assert.equal(await view(VAULT, 'daily_spent', { policy_id: 'fulfilled' }), '100');
+  expectFailure(await call(answerBridgeAgent, FULFILLED_ADAPTER, 'open', {}, 0n, 300n * TGAS), /FORWARDER BLOCKED/);
+  checkpoint('isolated exact-FT funding, one escrow call, committed fixture answer and detached mock-token payout checked');
+  const fundingReceipts = await provider.txStatusReceipts(answerFunding.transaction_outcome.id, BUYER, 'FINAL');
+  const openingReceipts = await provider.txStatusReceipts(answerOpened.transaction_outcome.id, BUYER, 'FINAL');
+  const fulfillmentReceipts = await provider.txStatusReceipts(fulfilled.transaction_outcome.id, PROVIDER, 'FINAL');
+  const fundingEvidence = { txHash: answerFunding.transaction_outcome.id, result: fundingReceipts };
+  const openingEvidence = { txHash: answerOpened.transaction_outcome.id, result: openingReceipts };
+  const fulfillmentEvidence = { txHash: fulfilled.transaction_outcome.id, result: fulfillmentReceipts };
+  const offer = { provider: PROVIDER, operator: PROVIDER, price: '60', vault_code_hash: codeHash(wasm),
+    token_code_hash: (await provider.viewAccount(TOKEN, { finality: 'final' })).code_hash, escrow_code_hash: codeHash(escrowWasm) };
+  const evidenceArgs = { terms: answerTerms, offer, funding: fundingEvidence, opening: openingEvidence,
+    fulfillment: fulfillmentEvidence, answerBytes: answer };
+  // The collector has no network identity override. It is intentionally used
+  // here only inside the already-fenced loopback sandbox with the mock token.
+  const snapshots = await collectPayPerCallHistoricalSnapshots({ ...evidenceArgs, provider });
+  const correlated = await verifyPayPerCallForwarderEvidence({ ...evidenceArgs, snapshots });
+  assert.equal(correlated.guarded_forwarder_funding_verified, true);
+  assert.equal(correlated.provider_token_payout_verified, true);
+  assert.equal(correlated.answer_hash_matches_onchain_commitment, true);
+  assert.equal(correlated.independent_fulfillment_verified, false);
+  checkpoint('independent receipt verifier correlated the isolated graphs, pinned views and fixture answer');
+
+  // Complete the same successful-order path: the unused 40 mock units must
+  // leave the fixed forwarder through ft_transfer_call and actually credit the
+  // vault ledger. The conservative rolling policy still counts the original
+  // 100, even though the provider was paid 60 and 40 were returned. These
+  // are state and receipt assertions in a disposable chain, not a public-chain
+  // return or proof of an independently delivered answer.
+  assert.equal(await ft(VAULT), '0'); assert.equal(await tracked(), '0');
+  const answerReturn = await must(answerBridgeAgent, FULFILLED_ADAPTER, 'return_tokens', { amount: '40' }, 0n, 300n * TGAS);
+  assert.equal(await ft(FULFILLED_ADAPTER), '0'); assert.equal(await ft(VAULT), '40');
+  assert.equal(await tracked(), '40'); assert.equal(await ft(PROVIDER), '60');
+  assert.equal(await view(VAULT, 'daily_spent', { policy_id: 'fulfilled' }), '100');
+  const answerReturnReceipts = await provider.txStatusReceipts(answerReturn.transaction_outcome.id, BUYER, 'FINAL');
+  const returnEvidence = { txHash: answerReturn.transaction_outcome.id, result: answerReturnReceipts };
+  const returnArgs = { terms: answerTerms, offer, returned: returnEvidence, amount: '40' };
+  const returnSnapshots = await collectPayPerCallReturnSnapshots({ ...returnArgs, provider });
+  const returnProof = await verifyPayPerCallForwarderReturn({ ...returnArgs, snapshots: returnSnapshots });
+  assert.equal(returnProof.forwarder_to_vault_return_verified, true);
+  assert.equal(returnProof.order_refund_origin_verified, false);
+  assert.equal(returnProof.independent_fulfillment_verified, false);
+  checkpoint('read-only verifier correlated the isolated 40-unit return receipt, vault hook and token resolver');
+  // An independently owner-pinned sandbox-only probe has enough actual and
+  // tracked funds, but the already consumed daily cap must still block it.
+  await must(buyer, VAULT, 'set_exact_ft_intent', { intent_id: 'rolling-cap-probe', policy_id: 'fulfilled',
+    expected_token: TOKEN, payee: FULFILLED_ADAPTER, amount: '40', memo: 'sandbox:rolling-cap-probe',
+    review_hash: '0'.repeat(64), expires_at_ms: String(answerArtifact.review.expires_at_ms),
+    agent_public_key: pub(vaultKey) }, 1n);
+  expectFailure(await call(vaultAgent, VAULT, 'execute_exact_ft', { intent_id: 'rolling-cap-probe' }, 0n, 250n * TGAS),
+    /daily cap exceeded/);
+  assert.equal(await ft(VAULT), '40'); assert.equal(await tracked(), '40'); assert.equal(await ft(FULFILLED_ADAPTER), '0');
+  assert.equal(await view(VAULT, 'daily_spent', { policy_id: 'fulfilled' }), '100');
+  checkpoint('isolated fulfilled order returned the unused mock tokens; a new intent remained blocked by the rolling cap');
+  const compactOutcome = o => ({ executor_id: o?.executor_id, status: o?.status, receipt_ids: o?.receipt_ids, logs: o?.logs });
+  const graph = result => ({ final_execution_status: result.final_execution_status, status: result.status,
+    transaction: { hash: result.transaction?.hash, signer_id: result.transaction?.signer_id,
+      receiver_id: result.transaction?.receiver_id, public_key: result.transaction?.public_key, actions: result.transaction?.actions },
+    transaction_outcome: { id: result.transaction_outcome?.id, block_hash: result.transaction_outcome?.block_hash,
+      outcome: compactOutcome(result.transaction_outcome?.outcome) },
+    receipts: result.receipts?.map(r => ({ receipt_id: r.receipt_id, predecessor_id: r.predecessor_id,
+      receiver_id: r.receiver_id, actions: r.receipt?.Action?.actions,
+      input_data_ids: r.receipt?.Action?.input_data_ids, output_data_receivers: r.receipt?.Action?.output_data_receivers })),
+    receipts_outcome: result.receipts_outcome?.map(o => ({ id: o.id, block_hash: o.block_hash, outcome: compactOutcome(o.outcome) })) });
   return { scope: 'ISOLATED nearcore with PayPerCall compiled from pinned source and an example mock FT; NOT Circle, deployed escrow or seller delivery',
     source_revision: '9159811bc6443ce29ae3c32482d0808f094caa87', source_built_escrow_sha256: upstream.sha256,
     forwarder_sha256: artifact.wasm_sha256, keyless_after_deliberate_fault: true,
     artificial_temporary_sandbox_key_for_mock_ft_unregistration: true, real_circle_or_real_testnet_used: false,
     upstream_storage_credit_checked: true, source_rejection_recorded: true, failed_mock_ft_payout_recorded_as_owed: true,
     forwarder_claim_paid_owed_to_forwarder: true, forwarded_refund_credited_vault: true,
-    final_vault_actual: '100', final_vault_tracked: '100', conservative_spend: '100',
+    refund_scenario_vault_actual_after_return: '100', refund_scenario_vault_tracked_after_return: '100',
+    refund_scenario_conservative_spend: '100',
     partial_refund: '40', claimed_late_refund: '60', owner_native_storage_return_checked: true,
+    isolated_fulfillment: { funding_final: true, escrow_open: true, locally_supplied_answer_hash_matched: true,
+      detached_mock_token_payout: '60', unused_forwarder_return: '40', final_vault_actual_and_tracked: '40',
+      final_forwarder_balance: '0', conservative_rolling_spend: '100', subsequent_intent_blocked_by_daily_cap: true,
+      answer_sha256: hash(answer), independent_receipt_verifier_passed: true,
+      return_receipt_verifier_passed: true, return_order_origin_proven: false, independent_provider_delivery: false },
     seller_contacted: false, independent_fulfillment_verified: false,
     local_hashes: { to_forwarder: toAdapter.transaction_outcome.id, opened: opened.transaction_outcome.id,
       partial_return: partial.transaction_outcome.id, rejection: rejected.transaction_outcome.id,
-      claim: claim.transaction_outcome.id, late_return: returnLate.transaction_outcome.id } };
+      claim: claim.transaction_outcome.id, late_return: returnLate.transaction_outcome.id,
+      answer_funding: answerFunding.transaction_outcome.id, answer_open: answerOpened.transaction_outcome.id,
+      answer_fulfillment: fulfilled.transaction_outcome.id, answer_unused_return: answerReturn.transaction_outcome.id },
+    isolated_receipt_graphs: { funding: graph(fundingReceipts), opening: graph(openingReceipts),
+      fulfillment: graph(fulfillmentReceipts), returned: graph(answerReturnReceipts) } };
 }
 
 async function main() {

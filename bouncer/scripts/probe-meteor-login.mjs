@@ -34,7 +34,7 @@ try {
   await page.waitForFunction(() => !document.querySelector('[data-wallet-id="meteor-wallet"]').disabled);
   await page.locator('.top-connect').click();
   await page.locator('[data-wallet-id="meteor-wallet"]').click();
-  const button = page.frameLocator('iframe').first().getByRole('button', { name: 'Meteor Web' });
+  const button = page.frameLocator('.hot-connector-popup iframe').first().getByRole('button', { name: 'Meteor Web' });
   await button.waitFor({ timeout: 30_000 });
   const popupPromise = page.waitForEvent('popup', { timeout: 30_000 });
   await button.click();

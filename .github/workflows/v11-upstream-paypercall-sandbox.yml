@@ -28,7 +28,7 @@ jobs:
       - name: Install existing lockfile and exercise offline guards
         run: |
           npm ci --ignore-scripts --no-audit --no-fund
-          node --test tests/v11-upstream-paypercall-sandbox.test.mjs tests/v11-sandbox-harness.test.mjs tests/v11-sandbox-setup-rpc.test.mjs
+          node --test tests/v11-upstream-paypercall-sandbox.test.mjs tests/v11-sandbox-harness.test.mjs tests/v11-sandbox-setup-rpc.test.mjs tests/paypercall-forwarder-evidence.test.mjs tests/paypercall-forwarder-return.test.mjs tests/paypercall-evidence-cli.test.mjs tests/multiagency-exact-ft.test.mjs
       - name: Recover and verify pinned source inputs, V11 and mock FT
         env:
           GH_TOKEN: ${{ github.token }}
@@ -86,6 +86,21 @@ jobs:
             python3 -c 'import os; s=open(os.environ["RUNNER_TEMP"]+"/upstream-error.log").read()[-5000:]; print("::error title=Isolated scenario failed::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
             exit 1
           fi
+          # All three graphs are from disposable synthetic accounts and a mock
+          # token. Expose their receipt shape for verifier development, never
+          # transaction bytes or credentials from a real network.
+          python3 - <<'PY'
+          import json, os
+          p = os.environ['RUNNER_TEMP'] + '/upstream-result.json'
+          graphs = json.load(open(p))['isolated_receipt_graphs']
+          for name, graph in graphs.items():
+              s = json.dumps(graph, separators=(',', ':'), ensure_ascii=True)
+              if len(s) > 60000:
+                  raise SystemExit('isolated receipt graph exceeds annotation limit')
+              chunks = [s[i:i+3000] for i in range(0, len(s), 3000)]
+              for i, chunk in enumerate(chunks, 1):
+                  print(f'::notice title=Isolated {name} receipt graph part {i} of {len(chunks)}::' + chunk.replace('%','%25').replace('\n','%0A').replace('\r','%0D'))
+          PY
           {
             echo '## Source-built PayPerCall on isolated nearcore'
             echo 'Source and lockfile are pinned, but the compiler output is not a reproducible build or evidence of currently deployed code. The token is a nearcore example FT, not Circle. The seller and refund fault are local simulations; no independent fulfillment.'

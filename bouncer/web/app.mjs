@@ -1,5 +1,5 @@
 import { RUN, explorerTx, formatUnits, readCurrentBalances, shortId } from './evidence.mjs';
-import { setupTour } from './tour.mjs';
+import { setupTour } from './tour.mjs?v=2';
 
 setupTour();
 

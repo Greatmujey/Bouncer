@@ -69,6 +69,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
   const wcErrorDetail = doc.querySelector('#walletconnect-error-detail');
   const wcReady = doc.querySelector('#walletconnect-ready');
   const walletSafety = doc.querySelector('#wallet-safety');
+  const googlePicker = doc.querySelector('.google-picker');
   if (!dialog || !closeButton || !optionsBox || !options.length || !openers.length || !disconnect || !status || !dialogStatus) return;
 
   const approved = doc.querySelector('meta[name="bouncer-wallet-origin"]')?.content || '';
@@ -95,6 +96,9 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     optionsBox.hidden = connected || wcPairing;
     if (wcPanel) wcPanel.hidden = !wcPairing;
     if (walletSafety) walletSafety.hidden = wcPairing;
+    // Keep the QR pairing screen focused and uncluttered. Google identity is
+    // separate and returns as soon as the user goes back to the picker.
+    if (googlePicker) googlePicker.hidden = wcPairing;
     dialog.dataset.walletView = wcPairing ? 'pairing' : connected ? 'connected' : 'options';
     options.forEach(button => {
       const isWc = button.dataset.walletId === 'wallet-connect';
@@ -104,15 +108,15 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     if (wcCaption) wcCaption.textContent = wcProjectId ? 'NEAR testnet · encrypted fallback' : 'Not configured · Project ID required';
     if (wcBadge) wcBadge.textContent = wcProjectId ? 'CONNECT' : 'SETUP';
     disconnect.hidden = !connected; disconnect.disabled = busyState;
-    if (walletTitle) walletTitle.textContent = connected ? 'Wallet connected' : wcPairing ? 'Connect your wallet' : 'Connect a wallet';
+    if (walletTitle) walletTitle.textContent = connected ? 'Wallet connected' : wcPairing ? 'Connect your wallet' : 'Connect an account';
     if (walletDescription) walletDescription.textContent = connected
-      ? 'Your testnet account is connected. You can disconnect below.'
+      ? 'Your testnet wallet is connected. Google sign-in is separate.'
       : wcPairing ? 'Scan with a NEAR testnet wallet, or open it. Approve and return here.'
-        : 'Choose a testnet wallet. NEAR Mobile and NEAR CLI use an off-chain login message; no access key or payment is requested.';
+        : 'Choose a testnet wallet or continue with Google. Connecting does not grant spending access.';
     openers.forEach(button => {
       button.disabled = busyState;
       button.dataset.walletState = connected ? 'connected' : 'disconnected';
-      button.setAttribute('aria-label', connected ? `Connected: ${connectedAccount}. Manage wallet` : 'Connect wallet');
+      button.setAttribute('aria-label', connected ? `Connected: ${connectedAccount}. Manage accounts` : 'Connect wallet or Google account');
     });
   }
   function busy(value) { busyState = value; renderControls(); }
@@ -154,6 +158,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     hideBanner();
     dialog.showModal();
     doc.body?.classList.add('wallet-dialog-open');
+    if (typeof win.CustomEvent === 'function') win.dispatchEvent(new win.CustomEvent('bouncer:account-picker-open'));
     (connected ? disconnect : options.find(button => !button.disabled) || closeButton).focus();
   }
   for (const button of openers) {
@@ -165,7 +170,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
   dialog.addEventListener('cancel', event => { event.preventDefault(); closePicker(); });
   dialog.addEventListener('keydown', event => {
     if (event.key !== 'Tab') return;
-    const focusable = [...dialog.querySelectorAll('button:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])')]
+    const focusable = [...dialog.querySelectorAll('button:not([disabled]), a[href], iframe, summary, input:not([disabled]), [tabindex]:not([tabindex="-1"])')]
       .filter(element => !element.closest('[hidden]') && element.getClientRects().length > 0);
     if (!focusable.length) { event.preventDefault(); return; }
     const first = focusable[0], last = focusable[focusable.length - 1];
@@ -473,26 +478,29 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     }
   }
 
-  // NEAR Connect's sandbox popup has no visible close control for this wallet.
-  // Add an accessible parent-side cancel button; the existing backdrop handler
-  // rejects the pending call rather than approving or signing anything.
-  function decorateMobilePopup() {
-    doc.body?.classList.add('near-mobile-active');
-    if (!win.MutationObserver || !doc.body) return () => doc.body?.classList.remove('near-mobile-active');
+  // Mobile, Nightly and Ledger's sandbox popups can lack a visible close control.
+  // The parent-side cancel invokes the existing rejection handler; it never
+  // approves a request, signs a message or sends a transaction.
+  function decorateWalletPopup(walletId) {
+    const mobile = walletId === 'near-mobile';
+    if (mobile) doc.body?.classList.add('near-mobile-active');
+    if (!win.MutationObserver || !doc.body) return () => { if (mobile) doc.body?.classList.remove('near-mobile-active'); };
     const observer = new win.MutationObserver(() => {
       const root = [...doc.querySelectorAll('.hot-connector-popup')].find(node => node.style.display !== 'none' && node.querySelector('iframe'));
       const content = root?.querySelector('.modal-content');
       const backdrop = root?.querySelector('.modal-container');
-      if (!content || !backdrop || content.querySelector('.bouncer-mobile-close')) return;
+      const className = mobile ? 'bouncer-mobile-close' : 'bouncer-wallet-close';
+      if (!content || !backdrop || content.querySelector(`.${className}`)) return;
       const cancel = doc.createElement('button');
-      cancel.type = 'button'; cancel.className = 'bouncer-mobile-close';
-      cancel.setAttribute('aria-label', 'Cancel NEAR Mobile connection');
+      cancel.type = 'button'; cancel.className = className;
+      const label = mobile ? 'NEAR Mobile' : walletId === 'ledger' ? 'Ledger' : 'Nightly Wallet';
+      cancel.setAttribute('aria-label', `Cancel ${label} connection`);
       cancel.textContent = '×';
       cancel.addEventListener('click', () => backdrop.click());
       content.appendChild(cancel);
     });
     observer.observe(doc.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['style'] });
-    return () => { observer.disconnect(); doc.body?.classList.remove('near-mobile-active'); };
+    return () => { observer.disconnect(); if (mobile) doc.body?.classList.remove('near-mobile-active'); };
   }
 
   for (const button of options) {
@@ -511,11 +519,11 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
       // The NEAR Connect executor uses its own iframe overlay. A native dialog
       // is in the top layer, so close ours before opening the wallet UI.
       closePicker();
-      let reopen = false, stopMobilePresentation = () => {};
+      let reopen = false, stopWalletPresentation = () => {};
       try {
         trimUntrustedWallets();
         if (mobile) {
-          stopMobilePresentation = decorateMobilePopup();
+          stopWalletPresentation = decorateWalletPopup(walletId);
           // Upstream NEAR Mobile signIn requests an AddKey transaction (and
           // can request FullAccess). Never call it or its key-deleting signOut.
           // A fresh NEP-413 signature identifies the account without an on-chain
@@ -546,6 +554,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
           await verifyCliLogin({ account, message, nonce, recipient, crypto: win.crypto, fetch: win.fetch.bind(win) });
           acceptAccounts(wallet, [account], 'near-cli');
         } else {
+          if (walletId === 'nightly-wallet' || walletId === 'ledger') stopWalletPresentation = decorateWalletPopup(walletId);
           if (walletId === 'intear-wallet') {
             // Intear's app-session protocol needs native WebCrypto Ed25519.
             // Fail clearly on older browsers rather than opening a broken UI.
@@ -584,7 +593,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
                           : 'Wallet connection was cancelled or unavailable. No transaction was sent.');
         reopen = true;
       } finally {
-        stopMobilePresentation();
+        stopWalletPresentation();
         busy(false);
         if (reopen) { hideBanner(); openPicker(opener); }
       }

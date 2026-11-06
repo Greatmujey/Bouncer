@@ -1,285 +1,118 @@
-# Website and testnet wallet
+# Website, testnet wallets and Google sign-in
 
-`bouncer/web/` is Bouncer’s responsive testnet product walkthrough. It shows
-real transaction links and historical examples, but it is **not** a live
-purchasing dashboard. Independent FT-paid provider delivery, refund recovery
-and an independent vault audit remain open.
+`bouncer/web/` is the responsive Bouncer testnet walkthrough, not a live
+purchasing dashboard. The Workspace, Overview, Resources, Guardrails, On-chain
+proof, Wallet & AI, optional tour, and three evenly spaced animated resource
+icons remain. Motion respects the browser's reduced-motion setting. Recorded
+examples and transactions are explicitly labeled; independent FT-paid delivery,
+refund recovery and an independent vault audit remain open.
 
-## Workspace and connecting a wallet
+The account picker offers NEAR Mobile, Meteor, Intear, Nightly, Ledger, NEAR CLI
+and WalletConnect QR on testnet, with Google sign-in last. WalletConnect uses
+the existing public project configuration, so users do not need to supply a
+project ID. The new Google flow has **not been verified with a real Google
+account**. Site updates reach production only after review and deployment.
 
-Overview, Resources, Guardrails, On-chain proof, and Wallet & AI are separate
-views within the Workspace, with linkable URL fragments and browser history.
-Both `#overview` and `#workspace`, plus existing `#connect`, `#proof`,
-`#how-it-works`, and recorded-resource links continue to work. Overview has a
-keyboard-accessible resource selector and links to recorded examples; its
-orbiting network and flow are conceptual, not a live activity feed. With
-JavaScript disabled the document remains readable. Decorative motion respects
-the browser's reduced-motion preference.
+Wallet sessions are restricted to approved dedicated, top-level origins, with
+GitHub Pages and shared guest origins blocked. The curated executors are
+sandboxed and their pinned bytes are SHA-256 verified before use. NEAR Mobile
+and CLI use fresh, off-chain login messages checked against testnet; the other
+wallets report an account but do not independently prove ownership to Bouncer.
+No transaction, access key or vault spending authority is requested by this
+picker. Wallet extensions, provider availability and real-device sign-in still
+need end-to-end testing; unit and mocked-browser tests are not live logins.
 
-The Connect button opens a keyboard-accessible wallet picker (a bottom sheet on
-phones, a centered dialog on desktop). It uses pinned NEAR Connect on **testnet**
-with NEAR Mobile, Meteor, Intear, Nightly, Ledger and NEAR CLI choices. Testnet
-support is advertised by the corresponding adapters but real sign-ins have not
-been independently verified. NEAR Mobile's testnet availability depends on the
-installed app and its configuration; its upstream manifests disagree about testnet.
+WalletConnect requests only `near_getAccounts` on `near:testnet` and rejects
+broader permissions. Pairing keys remain in the browser; a limited fallback
+may relay encrypted messages through Bouncer's server. Pairing QR codes contain
+sensitive information: do not publish or reuse a photographed code. Cancel and
+generate a fresh one if it has been shared.
 
-The normal connection path requests an account only: no access key, signature,
-or transaction. **NEAR Mobile and NEAR CLI are different**: Bouncer asks them
-to sign a fresh NEP-413 login message off-chain. The pinned Fastnear Mobile
-adapter verifies the signature and signing key against testnet RPC. Its ordinary
-`signIn` may request a FullAccess AddKey transaction and `signOut` may delete a
-key, so Bouncer calls neither method; Mobile's session requires a new message
-after reload. The pinned Fastnear executor saves native `fetch` as a class
-method, which fails with “Illegal invocation” in browsers. After the executor
-bytes pass integrity checking, Bouncer binds `fetch` to the sandbox window
-before running them. Its message-only UI is adapted after verification with a
-high-contrast QR, testnet/return instructions, responsive sizing and a cancel
-button; the signed payload is unchanged. The browser test covers the real
-executor with a synthetic signer and RPC; it is not a live phone login. Live
-probe `41613171918` prepared an unsigned message request and QR through the
-actual Mobile backend; it did not use a real wallet or approve a signature.
+## Configure Google Identity Services
 
-**NEAR CLI:** choose the CLI option, enter a testnet account ID, choose your
-OS keychain, local `~/.near-credentials` file, or Ledger, then run the displayed
-`near message sign-nep413` command in a terminal with `near-cli-rs` installed.
-The Credentials file option uses `sign-with-legacy-keychain`, which works for
-legacy CLI credential files without an OS keychain. Bouncer adds that choice
-to the pinned adapter after integrity verification. Paste the command's JSON
-output into the prompt, not your seed phrase or private key. Bouncer verifies
-the signature locally and checks via a read-only final-block testnet RPC query
-that the public key is a current Full Access key for the entered account. A
-limited key, invalid signature, unavailable RPC, or unsupported Ed25519 browser
-fails closed. This proves control of that key at the time of the RPC response,
-not an audit or a lasting authorization. An old manually typed CLI account is
-not restored as a verified login; a new challenge is required after reload.
-GitHub browser smoke `41606224793` exercised the pinned adapter and real
-`near-cli-rs` with a temporary synthetic credential, mock RPC, successful
-signature verification and disconnect. It did not use an actual user's CLI
-wallet or prove a live account login.
+The public Google OAuth client ID supplied by the owner is configured as
+`BOUNCER_GOOGLE_CLIENT_ID` in Vercel for production and preview deployments.
+The corresponding **Web application** client in [Google Auth Platform](https://console.cloud.google.com/auth/clients)
+must have a configured consent screen (including test users if in testing
+mode) and include this exact **Authorized JavaScript origin**:
 
-The other returned accounts are wallet-reported rather than cryptographic proof
-of ownership. Once connected, all Connect controls show a green indicator and
-`Connected`; opening one shows the account and disconnect control. No connection
-creates a vault or grants spending access. Never enter a seed phrase or private
-key into Bouncer. Named `.testnet` accounts and 64-hex implicit accounts are
-accepted; the connector is fixed to testnet. If browser storage is unavailable,
-the connector keeps its selection in memory, though individual wallet executors
-may still need storage.
-
-Intear creates an off-chain application communication key in browser storage;
-this is not a NEAR account access key. It requires browser WebCrypto Ed25519
-support (for example Chrome 137+, Firefox 129+, or Safari 17+). Its adapter is
-separately licensed under AGPL-3.0 and built from vendored source pinned to
-`INTEARnear/wallet@e958da12017cdd43b41947e4f201e72aa1135bf6`. The picker links
-to its corresponding source archive. Regenerate it with
-`python3 bouncer/scripts/build-intear-source.py` after updating the source.
-
-The Mobile adapter’s generic “Sign transaction” button is relabeled “Open NEAR
-Mobile” in Bouncer’s message-only flow. Once the adapter verifies the signed
-message and checks the key on testnet, the header and wallet panel show the
-account as connected. On a phone, return to the same browser tab after approval;
-reloading intentionally clears the message-only session.
-
-WalletConnect uses a separately bundled SignClient and is available only when
-an owned Reown project ID is configured. It proposes **only** `near:testnet`
-and `near_getAccounts`, displays the approved wallet-reported CAIP account, and
-never sends a wallet RPC request or asks for transaction signing, `near_signIn`,
-`near_signOut`, or an access key. SignClient 2.26 moves the namespace to
-`optionalNamespaces` on the wire, but Bouncer still requires that exact
-identity-only NEAR testnet namespace in the approved session. A wallet granting
-extra methods or networks is rejected; a broader session update closes the connection. Pairing material
-and the session stay in tab memory and are discarded on reload or disconnect.
-The pairing QR and mobile `wc:` link are bearer secrets: share them only with
-your chosen wallet. Cancellation is best effort on the remote wallet; check its
-own session list if in doubt. This is account display, **not proof of ownership**.
-The QR view distinguishes component loading, pairing setup and wallet approval.
-The initial download plus setup has a 50-second outer deadline; before a QR is
-shown, Bouncer tries the documented `.org` relay and then `.com`, allowing up
-to 18 seconds per attempt (the SDK's own connection timeout is 15 seconds).
-It never changes a visible pairing or replays a wallet request. Retry uses fresh
-in-memory storage and an isolated SDK core; a previous browser build did not
-reliably disable the SDK's shared global core. The browser bundle also uses
-standard Uint8Array APIs rather than an extension-injected Node `Buffer`.
-
-A working QR and the `Open wallet app`/copy link represent the same private
-pairing. After a compatible wallet approves the account-only proposal, Bouncer
-updates to Connected automatically; scanning alone is not approval. Mobile
-`wc:` link handling depends on the installed wallet and browser. The pairing
-layout adapts to short screens/high zoom. A synthetic QR decoded at 500×304
-and 683×304 CSS pixels with the controls and disclosure fully visible in local
-Chromium, but the actual user's camera and app have not been tested. If the browser cannot draw a valid QR, the link remains
-available. If neither relay works, Bouncer cannot generate a working pairing:
-retry, switch networks or use another listed wallet. Diagnostics show only
-bounded `WC-…` stage codes, not raw SDK errors or pairing secrets. If a
-same-origin HTTP Date suggests a large clock discrepancy, the interface offers
-that as a possible explanation, not a confirmed cause. Not every wallet
-supports NEAR testnet and this minimal namespace; no real WalletConnect wallet
-session has been verified yet. Without an ID the picker says setup is required.
-Do not borrow another project's ID.
-
-### Candidate relay fallback (not yet deployed)
-
-The working branch also contains an experimental third transport for the
-approved origin only. Before a QR is shown it tries `.org` and `.com` directly
-for up to 10 seconds each, then a Bouncer same-origin gateway for up to 18
-seconds, within the existing 50-second outer deadline. It never switches an
-already displayed QR. The gateway's only upstream is the fixed official
-`wss://relay.walletconnect.org` endpoint. The browser signs the relay JWT for
-that canonical audience and sends it to the gateway in its first TLS-protected
-WebSocket frame, **not** in the gateway URL. Pairing URIs and symmetric keys
-stay in tab memory; the gateway does see relay authentication, the public
-project ID, connection/IP information, routing topics/metadata, and encrypted
-relay payloads. The interface discloses this fallback. This is not a privacy or
-security audit, and a compromised client/server still presents risks.
-
-The candidate validates the site origin, project ID, JWT signature/audience and
-expiry, and fixed upstream; it bounds payload size, traffic, handshake duration,
-connection lifetime, and per-IP/per-instance concurrency/rate. Those counters
-are **not global**: instances can scale independently, an Origin header is not
-proof of a trustworthy client, and distributed abuse could exhaust the team's
-Vercel quota. Before enabling the public endpoint, configure and verify a
-Vercel WAF rate limit for `/api/wc-relay`, consider a globally shared quota and
-monitor Function usage. The current connector does not expose WAF configuration;
-no such rule has been installed or verified here. The team's Hobby plan is
-non-commercial and may suspend features after usage limits are reached. Confirm
-plan and Reown terms for any commercial deployment.
-
-Unit tests use mock sockets. Candidate runs `41625060310` and `41625945318`
-passed all eight Windows/Linux browser scenarios, including synthetic wallet approval and
-remote disconnect over the real Reown relay with both direct browser relay
-hosts blocked. In those gateway cases Playwright forwards the browser socket to
-an in-runner gateway; it does **not** test Vercel WebSockets. The all-transports
-blocked case returned a truthful error without a QR or Connected state. The
-regression workflows `41625060278` and `41625945287` also passed. These are not real-wallet or
-user-device tests. A real wallet, the user's Windows connection and Vercel's
-WebSocket deployment remain unverified. On 3 November 2026 Vercel rejected the isolated test deployment with
-`api-deployments-free-per-day` (100 Hobby deployments per day); the temporary
-empty test project was removed. The existing production deployment was not
-changed. `vercel.json` disables automatic preview deployments for this Arena
-branch only, to avoid consuming the daily deployment quota on test/docs pushes;
-`main` and explicit deployments are unaffected. Do not describe the candidate
-as live until the quota resets, the Vercel endpoint and edge protections are
-tested, and a suitable release is explicitly deployed. The earlier protected
-preview at `a306135` used a `.cjs` entry, which Vercel's zero-config API detector
-does not match. The candidate now builds `api/wc-relay.mjs`; local tests verify
-its export, but only a new deployed test can verify Vercel discovers and runs it.
-
-To enable the deployed site, the owner creates a project at
-`https://dashboard.reown.com/sign-up`, copies its public **Project ID**, and
-allowlists `https://bouncer-near.vercel.app` in the dashboard. Allowlist changes
-can take up to 15 minutes. Set `BOUNCER_WALLETCONNECT_PROJECT_ID` as a Vercel
-production build environment variable and redeploy. Staging validates the
-32-hex identifier and generates `walletconnect-config.json`; it is public in
-the browser and is not a wallet credential. Never put a password, seed phrase,
-private key or dashboard API key there. The source template stays blank.
-
-The separately pinned `@walletconnect/sign-client` 2.26.0 includes Reown's
-**WalletConnect Community License**, not Apache-2.0. Its redistribution notice
-and complete license are included in `walletconnect-NOTICES.txt` and linked in
-the picker. The license includes network, usage, commercial-threshold and
-dispute-resolution terms; the project owner should review it and Reown's terms
-before enabling. The WalletConnect icon comes from its official brand toolkit
-(Git blob `d90457adfdfffa9394fbacfd9632ff650ffe5396`); it does not imply an
-endorsement. No payment has been made. `npm audit` found no reported
-vulnerabilities in the locked WalletConnect dependency tree on 3 November 2026;
-that is not an independent security audit.
-
-The Ethereum-wallet bridge is omitted because its current sign-in may onboard
-an account with an AddKey transaction, contrary to this identity-only policy.
-
-The dedicated `https://bouncer-near.vercel.app/` origin is explicitly approved
-for wallet connection. Hosting on Vercel is not itself a security audit: the
-host, DNS, browser, wallet integrations and wallet provider remain trust
-boundaries. The site is unaudited and intended for testnet only. NEAR Connect’s
-executor cache is bypassed. Remote executor URLs use immutable Git commits, and
-all executor bytes, including the locally built Intear component, are checked
-against SHA-256 digests before execution. This is not a security audit or proof
-that upstream wallet services are safe. Arbitrary debug, injected, and parent
-frame wallet manifests are not trusted.
-
-Wallet connection remains disabled inside iframes and on path-shared guest
-hosts, including `madethis.website` and GitHub Pages; those environments share
-browser storage or can obscure the real origin. A visible link opens the site in
-a new tab instead. Localhost, top-level Codespaces and Arena port hosts are also
-supported for development. A stable URL does not prove real wallet sign-in:
-the sandbox bridge is exercised with a **mock** wallet in browser tests, and the
-pinned Meteor UI was opened and cancelled with its backend blocked. An actual
-wallet login has not yet been independently verified end to end.
-
-The welcome tour is optional and can be opened from the header; it does not
-block the first visit. Compatible local MCP clients can inspect policies and
-preview quotes without receiving wallet secrets. Hosted MCP authentication and
-model conversations are not yet verified.
-
-## Brand mark
-
-The selected Bouncer mark—the lowercase b and upward arrow, without the
-outer arc—lives in `bouncer/web/favicon.svg`. The same vector paths appear in
-desktop and mobile navigation, the welcome tour and the browser tab. The mark
-is decorative next to the accessible Bouncer wordmark; its main color is
-lightened against the dark sidebar.
-
-## Build and deployment
-
-```sh
-npm ci --prefix bouncer
-npm ci --prefix bouncer/walletconnect
-npm run build:web --prefix bouncer
-node --test bouncer/tests/cli-login.test.mjs bouncer/tests/wallet.test.mjs bouncer/tests/walletconnect.test.mjs bouncer/tests/web.test.mjs bouncer/tests/public-web-staging.test.mjs
+```
+https://bouncer-near.vercel.app
 ```
 
-Vercel’s `bouncer` project uses `bouncer/web` as its root and
-`node ../scripts/stage-public-web.mjs public-site` as its build command. Staging
-copies only fifteen explicit public assets, including the bundled connectors,
-WalletConnect notices and public configuration, local font and its OFL license,
-and the Intear executor and corresponding source. It rejects symlinks, existing
-output directories, invalid project IDs and any wallet-origin override
-other than the exact dedicated origin. It does not publish checkout files,
-credentials, journals or private evidence.
-`bouncer/web/vercel.json` sets basic response headers; no production-ready
-security or CSP review is implied. The public repository is
-`https://github.com/Greatmujey/Bouncer`.
+The GIS JavaScript popup flow uses a callback rather than a redirect URI. The
+client ID is public; do **not** send a Google client secret, password, private
+key, access token or one-time code. Origin authorization and consent settings
+have not been independently verified. A new deployment is required for the
+configured environment variable to take effect. Then test a real sign-in and
+sign-out on the dedicated origin, including a page reload.
 
-The project’s production branch is `main`; working-branch previews and the
-production domain can therefore serve different commits. On 3 November 2026 UTC,
-working-branch commit `32f6519` was deployed to `bouncer-near.vercel.app`
-without merging to `main` (Vercel deployment `dpl_8bCrkP1Mq9qDaaCTz11YkFeNktKf`).
-The owner-supplied public Reown project ID is configured for production. The
-owner reported that WalletConnect still failed on their Windows browser after
-an earlier deployment; the cause has not been established or independently
-verified on that device. The new build addresses several possible startup and
-caching issues and provides sanitized failure codes, but does not establish
-that their original problem is fixed.
+The optional static GitHub Pages address is
+https://greatmujey.github.io/Bouncer/ if Pages is enabled for this repository;
+it cannot run the Google session function and is not the sign-in origin.
 
-Candidate run `41619985533` and live run `41620193010` passed the relay checks
-with synthetic wallets on Windows and Linux, including a deliberately blocked
-primary, an injected broken browser `Buffer`, short/high-zoom layout, and
-deliberate blockage of both relays. The successful relay cases decoded the real
-QR and approved/disconnected an identity-only synthetic session; the blocked
-case verified retry and an error without displaying a fake QR. The live run also
-checked public bytes/cache headers, an unsigned Mobile backend request,
-and real near-cli-rs with an ephemeral synthetic key and mock RPC. Local QR
-screenshots decoded at phone sizes and at 683×304 CSS pixels; local tests passed
-1,146 cases with 113 skipped before the last additional focused tests. These
-checks do not use a real wallet, transaction, or the user's browser, and they
-do not establish actual wallet compatibility.
-A future production build from `main` could replace the site. The deployed Intear source ZIP has
-SHA-256 `2fe277baae87ff16d7b1efee9853cba26a46b1f9813302bf507f5ca53d2e0291`.
-Verify deployed assets and wallet behavior after deployment rather than assuming
-a branch push updated production.
-GitHub Pages could use
-`https://greatmujey.github.io/Bouncer/` if enabled and deployed, but it has not
-been reverified as live. Its shared origin is deliberately not wallet-enabled.
+If the client ID is missing or malformed, the endpoint returns 503 and the
+page says sign-in is not configured; it never invents an identity. The backend
+rejects identity requests on other domains. GitHub Pages, temporary guest sites,
+Arena previews and `localhost` cannot host a working production sign-in merely
+by copying the static files. A successful synthetic test is not a live login.
 
-The browser tests exercise responsive layouts, keyboard navigation, an optional
-tour, historical data, origin restrictions, integrity-check rejection, and
-mocked wallet backends through the connector bridge and pinned Mobile, Intear,
-and CLI executors. The WalletConnect browser test uses a synthetic SignClient
-interface and the real QR renderer; unit tests check namespace limits and
-cancellation. Opt-in CI probes can create and cancel a real Reown pairing,
-approve and disconnect a synthetic wallet session over the relay, or run
-near-cli-rs against an ephemeral synthetic credential and mock RPC. None proves
-a real wallet session. If hosted headless Chromium does not deliver a nested-frame tap, the protocol test
-reports and uses programmatic activation; that fallback does
-not verify touch input. Tests do not demonstrate a real wallet login, an
-independent security review or provider delivery.
+## Security and boundaries
+
+The actual Google-rendered button is loaded inside the account picker. The
+server supplies a 5-minute random nonce in a secure host-only HttpOnly cookie.
+The Google credential is sent over same-origin JSON; the API requires a custom
+header, exact Origin and fetch-site checks. It uses the fixed Google HTTPS
+JWKS endpoint and verifies an RSA signature, issuer, exact audience, authorized
+party if present, expiry/issuance, and nonce before accepting the stable Google
+`sub` as identity. JWKS rotation is supported and verification fails closed.
+No email is used as an identity key.
+
+A host-only `Secure; HttpOnly; SameSite=Lax` cookie holds the signed ID token
+for at most one hour, and the server re-verifies it on session reads. Sign-out
+clears this browser's cookie; this stateless prototype has **no server-side
+revocation list**, so a copied token may remain usable until expiration. Only a
+small profile is returned to the browser and it is rendered as text, never
+HTML. Tokens are not placed in `localStorage`, URLs, logs or Git. This is an
+unaudited testnet prototype and not yet a production account system.
+
+**Google identity is not NEAR authority.** Login does not create a NEAR
+account or vault, control a private key, approve owner policy changes, or let
+an AI agent spend. Those capabilities need a separate secure custody and
+explicit authorization design; never put seed phrases in the website. The
+1-yoctoNEAR owner-policy boundary remains independent of Google sign-in.
+
+## Preview and tests
+
+```sh
+cd bouncer
+npm ci
+npm ci --prefix walletconnect --ignore-scripts
+npm run build:web
+node --test tests/google-session.test.mjs tests/wallet.test.mjs tests/cli-login.test.mjs tests/walletconnect.test.mjs tests/walletconnect-bridge.test.mjs tests/web.test.mjs tests/public-web-staging.test.mjs
+# Run separately to serve the site: node scripts/dev-web.mjs
+```
+
+`dev-web.mjs` binds to `0.0.0.0` for preview, serves only the reviewed public
+assets, and uses relative API URLs. Its account endpoint deliberately refuses
+non-production hosts. The optional public `BOUNCER_WALLETCONNECT_PROJECT_ID`
+environment variable enables direct-relay QR testing; the fallback gateway is
+restricted to the production origin. Open the preview in its own tab to use
+testnet wallets; embedded iframes are blocked by the wallet-origin policy.
+
+`scripts/test-web-browser.mjs` uses synthetic Google responses, a mocked Meteor
+wallet, and the real vendored Intear adapter with a synthetic wallet page.
+`scripts/test-walletconnect-browser.mjs` checks the real QR renderer and
+synthetic pairing/cancellation, including independence from Google identity.
+`scripts/test-wallet-adapters.mjs` optionally tests the other pinned executors:
+Meteor, Nightly and Ledger prompts open and cancel; Mobile and CLI validate
+synthetic signatures against a mocked read-only RPC and reject forgeries. CI
+obtains and hash-checks the pinned public blobs. No real wallet, extension,
+Ledger device, Google login or transaction is tested. `google-session.test.mjs`
+uses locally generated RSA keys to test signatures, claims, nonce, CSRF,
+expiry, restoration, sign-out and key rotation.
+
+`stage-public-web.mjs` publishes only the 16 allowlisted website files. Vercel
+separately detects `web/api/google-session.mjs` and `web/api/wc-relay.mjs`;
+neither function is published as a static source file. The public URL is
+https://bouncer-near.vercel.app/. The site and functions remain unaudited.

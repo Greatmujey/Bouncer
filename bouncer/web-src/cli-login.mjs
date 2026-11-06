@@ -1,4 +1,4 @@
-import { isTestnetAccount } from './walletconnect-core.mjs';
+import { isTestnetAccount } from './wallet-utils.mjs';
 
 // NEP-413: SHA-256(Borsh(2^31+413, message, nonce, recipient, no callback)).
 // A CLI login is proof only after checking both the signature and the current

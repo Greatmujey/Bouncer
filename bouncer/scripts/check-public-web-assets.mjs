@@ -52,4 +52,7 @@ for (const file of ['.git/HEAD', '.github/workflows/ci.yml', 'bouncer/agent/proc
   const response = await fetch(new URL(file, origin), { redirect: 'error', signal: AbortSignal.timeout(15_000) });
   assert.equal(response.status, 404, `Unexpected public response for ${file}: HTTP ${response.status}`);
 }
-console.log(`Public website: ${PUBLIC_WEB_FILES.length - 1} files match the reviewed checkout, WalletConnect configuration is valid, and sampled private paths returned 404.`);
+const account = await fetch(new URL('api/google-session', origin), { redirect: 'error', cache: 'no-store', signal: AbortSignal.timeout(15_000) });
+assert.ok([200, 503].includes(account.status), `Unexpected Google session endpoint status ${account.status}`);
+assert.match(account.headers.get('cache-control') || '', /no-store/);
+console.log(`Public website: ${PUBLIC_WEB_FILES.length - 1} files match, WalletConnect configuration is valid, and sampled private paths returned 404. No sign-in was attempted.`);

@@ -32,6 +32,13 @@ The contract's code hash and access-key counts are observations, not an audit
 or proof that the code equals the referenced source. `payment_ready` is always
 false.
 
+A [fresh read-only scan](https://github.com/Greatmujey/Bouncer/actions/runs/42210554203)
+on 6 November at a FINAL block saw two active listings, both native-NEAR-priced,
+zero Circle candidates and no Circle storage registration for the escrow.
+One listing contains a localhost endpoint; HTTPS-shaped syntax on the other
+is not proof of a reachable compatible operator. The escrow had one full-access
+key at that view. No operator was contacted and no payment was attempted.
+
 A [read-only testnet snapshot](https://github.com/Greatmujey/Bouncer/actions/runs/41476638933)
 on 2 November 2026 at block `HmhKfsNMEjRYqQ5SBeaqVTWgQ4n2sQsiVJtXaNhLgeeD`
 found two readable services, no Circle candidate, and no Circle storage
@@ -53,6 +60,99 @@ availability, a Bouncer payment, provider payout nor independent delivery.
 `Refunded` is a reported call state, not proof that the token transfer succeeded
 or that the vault credited it. Unresolved operations must not be retried
 blindly. Requests may be public in chain events; never put secrets in them.
+
+## Correlating a forwarder-funded call (experimental)
+
+`agent/paypercall-forwarder-evidence.mjs` adds a separate, **read-only**
+verification API for the experimental one-shot forwarder. Given its original
+public build terms, a separately retained provider/operator/price and code-hash
+pin, three original transaction hashes, and the exact answer bytes, it checks:
+
+1. The FINAL restricted-key `execute_exact_ft` transaction, owner-pinned intent,
+   keyless reviewed vault, token event and successful callback for the transfer
+   to the specific generated forwarder.
+2. The forwarder's own FINAL `open` transaction, fixed transfer-call message,
+   token resolver and matching PayPerCall `call_requested` event. The generated
+   forwarder bytecode and keylessness must match at the relevant historical
+   blocks. Earlier and later block-pinned token balances must also be consistent
+   with an initially empty forwarder, and funding must precede opening.
+3. The operator/provider's FINAL `fulfill` call, exact answer-byte hash and
+   matching on-chain call view, followed by the **separately linked successful
+   FT payout receipt and token event** to the expected provider. A successful
+   `fulfill` status alone is not a payout.
+
+`inspectPayPerCallForwarderEvidence` requests only those original receipts and
+historical views, insists that the RPC reports `testnet`, and requires the
+reviewed Circle testnet token code hash. It has no signer, seller HTTP client,
+transaction-submission or automatic retry. Missing receipts, pruned historical
+state, changed code, wrong balances, a failed payout or mismatched terms stop
+verification. `verifyPayPerCallForwarderEvidence` and the separate historical
+collector can also run on caller-supplied graphs, but those lower-level inputs
+are not authenticated and can be synthetic. Neither is a buying runner.
+
+Once an actual order exists, the same inspector can be run with its retained
+public review and the exact locally saved answer bytes:
+
+```sh
+npm run inspect-paypercall-evidence -- --rpc https://test.rpc.fastnear.com \
+  --review ./public-review.json --answer ./answer.bin
+```
+
+To additionally inspect **one already-recorded** forwarder-to-vault return,
+append `--return-hash <original-hash> --return-amount <atoms>`. Both flags are
+required together. The separate return check follows the linked token transfer,
+vault `ft_on_transfer` callback and token resolver; checks the callback's promise
+data ID, a complete used amount, and pinned historical code/key views; and
+rejects changed or unavailable evidence. The exact-FT funding callback must
+consume its transfer's result, and the token resolver for the opening must
+consume the exact escrow callback's promise result. All views still rely on the
+caller's archival RPC. Never resend an unresolved return.
+
+A successful return establishes a correlated forwarder-to-vault transfer and
+vault callback under these assumptions. It does **not** establish that fungible
+units came from that particular order, that a seller delivered anything, that a
+rolling budget was restored, or that deployed code matches published source.
+The CLI reports the order and return separately and leaves refund origin
+unverified. This is read-only evidence, not a purchasing or recovery runner.
+
+The review file contains exactly `format`, `terms`, `offer`, `funding_hash`,
+`opening_hash`, `fulfillment_hash` and `fulfillment_signer`. Its `format` is
+`bouncer-paypercall-forwarder-evidence-v1`; `terms` are the original public
+inputs to `buildExperimentalForwarder`, and `offer` contains `provider`,
+`operator`, `price`, `vault_code_hash`, `token_code_hash` and
+`escrow_code_hash`. Amounts and hashes must match the original retained review;
+`expires_at_ms` is a JSON integer. The CLI accepts regular files only, does not
+print or transmit the answer bytes, and does not create a review or order. Do
+not place credentials, bearer transactions, secrets or private requests in the
+review. The seller's answer may itself contain private or untrusted data: keep
+it private and inspect before publishing.
+
+This is **correlation under trust assumptions**, not a proof of independent
+delivery. The forwarder review currently fixes the service ID and maximum but
+**does not enforce the provider, operator or exact price on-chain**; checking a
+separately retained offer after execution cannot prevent a change in flight.
+The escrow and token code hashes are pins, not proof that deployed bytecode
+matches the reviewed source or cannot change between observations. An RPC can
+lie; block-level balances do not attribute fungible token units or exclude
+intervening same-block transfers. An answer hash does not authenticate the
+HTTP peer or establish correctness. A successful payout and matching bytes
+still do not show that the seller returned those bytes to the buyer. A separate
+return check can correlate a vault credit but does not establish that its
+fungible units originated in this order or fully settle a late-refund claim.
+The verifier never resends an original or makes a failed verification a retry
+signal.
+
+The receipt checker [passed on disposable nearcore](https://github.com/Greatmujey/Bouncer/actions/runs/41676762624)
+with the source-built PayPerCall contract, a mock FT, a locally supplied fixture
+answer, historical block views and the detached provider payout. In that same
+isolated fulfilled scenario, state checks showed 40 unused mock units returned
+to the vault and a new 40-unit intent blocked by the still-full 100-unit rolling
+budget. A [newer isolated run](https://github.com/Greatmujey/Bouncer/actions/runs/42211109011)
+also verified the linked 40-unit forwarder-to-vault return receipts and the
+receiver-to-resolver promise data ID. A [follow-up isolated run](https://github.com/Greatmujey/Bouncer/actions/runs/42211753462)
+also checked the exact-FT transfer-to-callback dependency. These used a mock
+token on a disposable chain, not Circle, a public-chain purchase, independent
+provider fulfillment or an audit.
 
 ## V11 compatibility boundary
 

@@ -1,0 +1,59 @@
+name: WalletConnect candidate relay smoke
+
+on:
+  push:
+    branches: ['arena/6d538ba2-near-hub']
+
+permissions:
+  contents: read
+
+jobs:
+  candidate-session:
+    # Explicit marker; only synthetic accounts and real relay transport. No
+    # wallet keys, signatures, NEAR transactions, or deployment changes.
+    if: contains(github.event.head_commit.message, '[test-walletconnect-session]')
+    name: Candidate relay (${{ matrix.mode }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - mode: primary
+            block_primary: '0'
+            block_both: '0'
+            local_gateway: '0'
+          - mode: alternate
+            block_primary: '1'
+            block_both: '0'
+            local_gateway: '0'
+          - mode: local-gateway
+            block_primary: '0'
+            block_both: '1'
+            local_gateway: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Pair a synthetic wallet and disconnect
+        shell: bash
+        env:
+          BOUNCER_CANDIDATE_SITE: '1'
+          BOUNCER_BLOCK_PRIMARY_WC: ${{ matrix.block_primary }}
+          BOUNCER_BLOCK_BOTH_WC: ${{ matrix.block_both }}
+          BOUNCER_GATEWAY_LOCAL: ${{ matrix.local_gateway }}
+        run: |
+          set -e
+          npm ci --prefix bouncer/walletconnect --ignore-scripts --no-audit --no-fund
+          npm install --prefix "$RUNNER_TEMP/bouncer-browser" --no-save --no-audit --no-fund playwright-core@1.64.1
+          # Never print or upload the raw log: a third-party SDK could emit a
+          # bearer URI, relay token or topic even when our script is silent.
+          if node bouncer/scripts/test-walletconnect-real-session.mjs > "$RUNNER_TEMP/wc-candidate-private.log" 2>&1; then
+            echo 'Synthetic wallet paired and disconnected through the real relay. No NEAR wallet signature or transaction was used.'
+          else
+            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8");const m=s.match(/^WalletConnect probe failed during ([a-z ]+) \(([A-Za-z][A-Za-z0-9]{0,40})\); no session data logged\.$/m);console.error(m ? `WalletConnect candidate failed during ${m[1]} (${m[2]}).` : "WalletConnect candidate failed; raw session output was withheld.")' "$RUNNER_TEMP/wc-candidate-private.log"
+            exit 1
+          fi

@@ -2,7 +2,7 @@
 name: Diagnose both V3 registration originals (read only)
 on:
   push:
-    branches: ['arena/25a7aaf6-near-hub']
+    branches: ['arena/25a7aaf6-near-hub', 'arena/6d538ba2-near-hub']
 permissions:
   contents: read
 jobs:
