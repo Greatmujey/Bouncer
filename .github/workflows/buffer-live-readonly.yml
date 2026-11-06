@@ -84,3 +84,21 @@ jobs:
           { echo '## Unsigned setup review — no wallet approval or transaction';
             echo 'A keyless deployment may lock its storage stake. Recheck each stage, obtain separate wallet approval and reconcile by original transaction before continuing.';
             echo '```json'; cat "$RUNNER_TEMP/buffer-wallet-plan.json"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: Probe the retired wallet redirect with inert request lengths
+        run: |
+          set -euo pipefail
+          node --test tests/mynearwallet-redirect-probe.test.mjs
+          if ! node scripts/inspect-mynearwallet-redirect.mjs "$RUNNER_TEMP/buffer-wallet.json" "$RUNNER_TEMP/v12-reviewed.wasm" > "$RUNNER_TEMP/wallet-url-probe.json" 2> "$RUNNER_TEMP/wallet-url-probe-error.log"; then
+            echo '::warning title=Wallet URL probe unavailable::No transaction or wallet request was sent; compatibility remains unknown.'
+            exit 0
+          fi
+          python3 - <<'PY'
+          import json, os
+          data = json.load(open(os.environ['RUNNER_TEMP'] + '/wallet-url-probe.json'))
+          s = json.dumps(data, separators=(',', ':'), ensure_ascii=True)
+          assert len(s) < 12000
+          print('::notice title=MyNearWallet inert URL-size probe::' + s.replace('%','%25').replace('\n','%0A').replace('\r','%0D'))
+          PY
+          { echo '## MyNearWallet URL compatibility probe — no transaction or sign-in';
+            echo 'Only HEAD requests containing inert padding. HTTP acceptance does not establish that any browser session or signing works.';
+            echo '```json'; cat "$RUNNER_TEMP/wallet-url-probe.json"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
