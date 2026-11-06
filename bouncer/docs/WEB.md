@@ -28,7 +28,7 @@ The public Google OAuth client ID supplied by the owner is configured as
 `BOUNCER_GOOGLE_CLIENT_ID` in Vercel for production and preview deployments.
 The corresponding **Web application** client in [Google Auth Platform](https://console.cloud.google.com/auth/clients)
 must have a configured consent screen (including test users if in testing
-mode) and exactly this **Authorized JavaScript origin**:
+mode) and include this exact **Authorized JavaScript origin**:
 
 ```
 https://bouncer-near.vercel.app
