@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import nearApi from 'near-api-js';
 import { inspectBufferSpendingStage } from '../agent/buffer-wallet-spending-preflight.mjs';
 import { buildBufferWalletSpendingPlan } from '../agent/buffer-wallet-spending-plan.mjs';
+import { buildBufferForwarderWalletPlan } from '../agent/buffer-forwarder-wallet-plan.mjs';
 import { buildBufferForwarder, BUFFER_TESTNET_CONTRACT as SELLER } from '../experiments/buffer-forwarder/build.mjs';
 import { CIRCLE_TESTNET_USDC as TOKEN } from '../scripts/circle-testnet-setup.mjs';
 import { CIRCLE_TESTNET_CODE_HASH } from '../agent/keyless-vault-v12-readiness.mjs';
@@ -28,14 +29,20 @@ const terms = (custom = false) => ({ owner: OWNER, vault: VAULT, adapter: ADAPTE
   sku: custom ? 'custom-brief' : 'weekly-market-brief', brief_sha256: 'a'.repeat(64) });
 const artifact = await buildBufferForwarder(terms(), { nowMs: NOW });
 const customArtifact = await buildBufferForwarder(terms(true), { nowMs: NOW });
-const STAGES = PLAN.batches.map(batch => batch.id);
+const forwarderPlan = async (custom = false) => buildBufferForwarderWalletPlan({ terms: terms(custom), spendingReview: PLAN.review,
+  trustedSpendingReviewHash: PLAN.review.review_sha256, trustedOwnerPublicKey: ownerKey,
+  registrationDepositYocto: '1250000000000000000000', nowMs: NOW });
+const PIN_PLAN = await forwarderPlan(), CUSTOM_PIN_PLAN = await forwarderPlan(true);
+const STAGES = [...PLAN.batches.map(batch => batch.id), 'pin_buffer_exact_intent'];
 const registration = () => ({ total: '1250000000000000000000', available: '0' });
 
 function snapshot(index = 0, custom = false) {
   const a = custom ? customArtifact : artifact;
   const ownerKeys = [{ public_key: ownerKey, access_key: { permission: 'FullAccess' } }];
-  if (index === 2) ownerKeys.push({ public_key: vaultKey, access_key: { permission: { FunctionCall: {
+  if (index >= 2) ownerKeys.push({ public_key: vaultKey, access_key: { permission: { FunctionCall: {
     receiver_id: VAULT, method_names: ['execute_exact_ft'], allowance: PLAN.review.stages[1].actions[0].allowance_yocto } } } });
+  if (index >= 3) ownerKeys.push({ public_key: forwarderKey, access_key: { permission: { FunctionCall: {
+    receiver_id: ADAPTER, method_names: ['open', 'return_tokens'], allowance: PLAN.review.stages[2].actions[0].allowance_yocto } } } });
   const account = (code_hash, amount = 8n * 10n ** 24n) => ({ block_hash: BLOCK, code_hash, amount, storage_usage: 10_000 });
   return {
     network: 'testnet', block: { header: { hash: BLOCK, height: 123, timestamp_nanosec: String(BigInt(NOW) * 1_000_000n) } },
@@ -97,15 +104,18 @@ function providerFor(s) {
 }
 function input(s, index = 0, custom = false, extra = {}) {
   const a = custom ? customArtifact : artifact;
+  const pin = custom ? CUSTOM_PIN_PLAN : PIN_PLAN;
   return { review: structuredClone(PLAN.review), trustedReviewHash: PLAN.review.review_sha256, trustedOwnerPublicKey: ownerKey,
     stageId: STAGES[index], forwarderTerms: terms(custom), trustedForwarderReviewHash: a.review.review_sha256,
-    trustedForwarderWasmSha256: a.wasm_sha256, trustedSellerCodeHash: SELLER_HASH, provider: providerFor(s), now: () => NOW, ...extra };
+    trustedForwarderWasmSha256: a.wasm_sha256, trustedSellerCodeHash: SELLER_HASH,
+    forwarderWalletReview: structuredClone(pin.review), trustedForwarderWalletReviewHash: pin.review.review_sha256,
+    provider: providerFor(s), now: () => NOW, ...extra };
 }
 
 test('each stage checks exact reviewed code, scoped keys and one FINAL block without granting spending', async () => {
-  for (let i = 0; i < 3; i++) {
+  for (let i = 0; i < 4; i++) {
     const s = snapshot(i), result = await inspectBufferSpendingStage(input(s, i));
-    assert.equal(result.status, 'READ_ONLY_SPENDING_STAGE_PROFILE_MATCH', STAGES[i]);
+    assert.equal(result.status, i === 3 ? 'READ_ONLY_INTENT_STAGE_PROFILE_MATCH' : 'READ_ONLY_SPENDING_STAGE_PROFILE_MATCH', STAGES[i]);
     assert.deepEqual(result.blockers, []);
     assert.ok(Object.values(result.checks).every(value => value === 'PASS'));
     assert.equal(result.block_hash, BLOCK);
@@ -180,6 +190,39 @@ test('code, key, policy, balance, registration and seller drift each block the n
     assert.equal(result.checks[check], 'BLOCKED', check);
     assert.equal(result.execution_authorized, false);
   }
+});
+
+test('intent preflight requires the independently retained exact review and both installed scoped keys', async () => {
+  const good = snapshot(3), checked = await inspectBufferSpendingStage(input(good, 3));
+  assert.equal(checked.status, 'READ_ONLY_INTENT_STAGE_PROFILE_MATCH');
+  assert.equal(checked.forwarder_wallet_review_sha256, PIN_PLAN.review.review_sha256);
+  assert.equal(checked.execution_authorized, false);
+  for (const mutate of [
+    a => { a.trustedForwarderWalletReviewHash = '0'.repeat(64); },
+    a => { delete a.forwarderWalletReview; },
+    a => { a.forwarderWalletReview.stages[2].actions[0].deposit_yocto = '0'; },
+    a => { a.forwarderWalletReview.stages[2].actions[0].args.amount = '20000001'; },
+    a => { a.forwarderWalletReview.stages[2].actions[0].args.payee = 'thief.testnet'; },
+  ]) {
+    const s = snapshot(3), args = input(s, 3); mutate(args);
+    await assert.rejects(inspectBufferSpendingStage(args));
+    assert.deepEqual(s.calls, [], 'bad review must fail before any RPC');
+  }
+  for (const change of [
+    s => { s.ownerKeys.keys.pop(); },
+    s => { s.ownerKeys.keys[2].access_key.permission = 'FullAccess'; },
+    s => { s.ownerKeys.keys[2].access_key.permission.FunctionCall.receiver_id = VAULT; },
+    s => { s.ownerKeys.keys[2].access_key.permission.FunctionCall.method_names.push('new'); },
+    s => { s.ownerKeys.keys[2].access_key.permission.FunctionCall.allowance = null; },
+    s => { s.ownerKeys.keys[1].access_key.permission.FunctionCall.method_names = ['execute']; },
+  ]) {
+    const s = snapshot(3); change(s);
+    const result = await inspectBufferSpendingStage(input(s, 3));
+    assert.equal(result.checks.exact_owner_key_state, 'BLOCKED');
+    assert.equal(result.execution_authorized, false);
+  }
+  const custom = snapshot(3, true);
+  assert.equal((await inspectBufferSpendingStage(input(custom, 3, true))).status, 'READ_ONLY_INTENT_STAGE_PROFILE_MATCH');
 });
 
 test('mixed blocks and unavailable views are blocked or unknown, never guessed', async () => {

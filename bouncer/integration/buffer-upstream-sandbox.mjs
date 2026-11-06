@@ -188,6 +188,16 @@ async function exercise({ endpoint, root, tokenOwner, v12, sellerWasm, sellerFix
       vaultAgentInstalled = true;
     }
     await verifiedBatch(2);
+    if (label === 'reject') {
+      const snapshot = await inspectBufferSpendingStage({ review: retained, trustedReviewHash, trustedOwnerPublicKey: pub(buyerKey),
+        stageId: 'pin_buffer_exact_intent', forwarderTerms: terms, trustedForwarderReviewHash: artifact.review.review_sha256,
+        trustedForwarderWasmSha256: artifact.wasm_sha256, trustedSellerCodeHash: codeHash(sellerWasm),
+        forwarderWalletReview: forwarderReview, trustedForwarderWalletReviewHash: forwarderReview.review_sha256,
+        provider: sandboxViews });
+      assert.equal(snapshot.status, 'BLOCKED_OR_UNKNOWN', 'mock token must not pass the real Circle code pin');
+      assert.deepEqual(snapshot.blockers, [{ check: 'circle_and_seller_code_pins', status: 'BLOCKED' }]);
+      assert.equal(snapshot.execution_authorized, false); spendingPreflightsChecked++;
+    }
     await applyForwarderStage(2);
     const signer = account(BUYER, provider, adapterKey);
     const funding = await must(vaultAgent, VAULT, 'execute_exact_ft', { intent_id: terms.intent_id }, 0n, 200n * TGAS);
@@ -303,7 +313,7 @@ async function exercise({ endpoint, root, tokenOwner, v12, sellerWasm, sellerFix
   assert.equal(await balance(VAULT), '35000000'); assert.equal(await tracked(), '35000000');
   assert.equal(await spend('custom'), CUSTOM_PRICE);
   assert.equal(spendingReceiptsChecked, 9, 'all synthetic policy and scoped-key originals must be reconciled');
-  assert.equal(spendingPreflightsChecked, 3, 'sandbox views checked all three stages while the mock-Circle pin blocked');
+  assert.equal(spendingPreflightsChecked, 4, 'sandbox views checked policy, keys and intent while the mock-Circle pin blocked');
   assert.equal(forwarderBatchesChecked, 12, 'four local scenarios executed all three reviewed forwarder batches');
   return { scope: 'ISOLATED nearcore, source-built Buffer contract and mock FT; not Circle or a public-chain order',
     buffer_source_revision: '9bc5ef0cbdc84074e94995cb50d334fc615f9b96', source_built_sha256: sellerFixture.sha256,

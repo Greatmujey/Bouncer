@@ -82,7 +82,9 @@ may leave storage locked. Each action still requires fresh checks, owner
 approval and independent prompt/receipt recovery.
 
 `agent/buffer-wallet-spending-preflight.mjs` performs read-only, fresh,
-same-FINAL-block checks for the next policy/key stage, including the independently
+same-FINAL-block checks for the next policy/key stage or the separately retained
+exact-intent stage, including both installed method-scoped keys for that final
+stage, and the independently
 retained V12/forwarder/seller code pins, native reserve estimates, token balances
 and registration, exact policy and scoped keys, unconsumed intent and seller
 terms. It rebuilds the forwarder from reviewed terms and checks its configuration.

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import nearApi from 'near-api-js';
 import { buildBufferWalletSpendingPlan } from '../agent/buffer-wallet-spending-plan.mjs';
-import { buildBufferForwarderWalletPlan, BUFFER_FORWARDER_FUNDING_YOCTO } from '../agent/buffer-forwarder-wallet-plan.mjs';
+import { buildBufferForwarderWalletPlan, verifyBufferForwarderWalletReview, BUFFER_FORWARDER_FUNDING_YOCTO } from '../agent/buffer-forwarder-wallet-plan.mjs';
 import { assertSvalinBatchMatchesReview } from '../agent/svalin-setup-plan.mjs';
 import { CIRCLE_TESTNET_USDC as CIRCLE } from '../scripts/circle-testnet-setup.mjs';
 
@@ -63,6 +63,27 @@ test('wrong accounts, agents, terms, limits, registration or expiry fail closed'
   ];
   for (const change of changes) { const next = structuredClone(f); change(next); await assert.rejects(buildBufferForwarderWalletPlan(next)); }
   const custom = fixture({ custom: true }); custom.terms.amount = '4999999'; await assert.rejects(buildBufferForwarderWalletPlan(custom));
+});
+
+test('retained forwarder review is rebuilt, not trusted from an editable action summary', async () => {
+  const f = fixture(), plan = await buildBufferForwarderWalletPlan(f);
+  const args = { review: plan.review, trustedReviewHash: plan.review.review_sha256, terms: f.terms,
+    spendingReview: f.spendingReview, trustedSpendingReviewHash: f.trustedSpendingReviewHash,
+    trustedOwnerPublicKey: f.trustedOwnerPublicKey, nowMs: NOW };
+  const rebuilt = await verifyBufferForwarderWalletReview(args);
+  assert.deepEqual(rebuilt.review, plan.review);
+  for (const mutate of [
+    a => { a.trustedReviewHash = '0'.repeat(64); },
+    a => { a.review.stages[2].actions[0].deposit_yocto = '0'; },
+    a => { a.review.stages[2].actions[0].args.payee = 'thief.testnet'; },
+    a => { a.review.registration_deposit_yocto = '1'; },
+    a => { a.terms.amount = '1'; },
+    a => { a.trustedOwnerPublicKey = pk(); },
+    a => { a.spendingReview.daily_cap_atoms = '1'; },
+  ]) {
+    const next = structuredClone(args); mutate(next);
+    await assert.rejects(verifyBufferForwarderWalletReview(next));
+  }
 });
 
 test('rebuilding the same public terms is deterministic and never creates a quote', async () => {

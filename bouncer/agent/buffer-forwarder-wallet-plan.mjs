@@ -6,6 +6,7 @@
  * approval, fresh same-FINAL checks and durable original-hash reconciliation.
  */
 import crypto from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import nearApi from 'near-api-js';
 import { buildBufferForwarder, BUFFER_FIXED_SKUS } from '../experiments/buffer-forwarder/build.mjs';
 import { verifyBufferSpendingReview } from './buffer-wallet-spending-evidence.mjs';
@@ -92,4 +93,21 @@ export async function buildBufferForwarderWalletPlan({ terms: inputTerms, spendi
     ], signing_or_broadcast_authorized: false, wallet_approval_obtained: false, independently_fulfilled: false };
   return { review: { ...review, review_sha256: sha(Buffer.from(JSON.stringify(review))) }, batches,
     forwarder_wasm: artifact.wasm, forwarder_review: artifact.review };
+}
+
+/** Rebuild an independently retained review from constrained public terms.
+ * Neither a matching hash nor this offline verifier proves approval, account
+ * state, a durable prompt reservation, or a genuine provider order. */
+export async function verifyBufferForwarderWalletReview({ review: rawReview, trustedReviewHash, terms: rawTerms,
+  spendingReview: rawSpendingReview, trustedSpendingReviewHash, trustedOwnerPublicKey, nowMs = Date.now() } = {}) {
+  const review = structuredClone(rawReview), terms = structuredClone(rawTerms), spendingReview = structuredClone(rawSpendingReview);
+  if (!review || typeof trustedReviewHash !== 'string' || !/^[a-f0-9]{64}$/.test(trustedReviewHash) ||
+      review.review_sha256 !== trustedReviewHash) throw new Error('independently retained forwarder wallet review required');
+  let rebuilt;
+  try {
+    rebuilt = await buildBufferForwarderWalletPlan({ terms, spendingReview, trustedSpendingReviewHash,
+      trustedOwnerPublicKey, registrationDepositYocto: review.stages[1].actions[0].deposit_yocto, nowMs });
+    if (!isDeepStrictEqual(review, rebuilt.review)) throw Error('review differs');
+  } catch { throw new Error('forwarder wallet review differs from its constrained public terms'); }
+  return { review: rebuilt.review, batches: rebuilt.batches };
 }

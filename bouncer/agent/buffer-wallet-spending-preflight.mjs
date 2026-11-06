@@ -1,6 +1,7 @@
 /**
  * Read-only, same-FINAL-block checks for the NEXT unsigned Buffer policy/key
- * stage. This is NOT a wallet runner, durable journal, owner approval, order,
+ * stage or separately retained exact-intent stage. This is NOT a wallet runner,
+ * durable journal, owner approval, order,
  * purchase or delivery. All RPC data and the clock are assumptions; current
  * state can race or change after this function returns. The caller must retain
  * the independently reviewed hashes, fence BEFORE any wallet prompt and
@@ -9,6 +10,7 @@
 import { isDeepStrictEqual } from 'node:util';
 import nearApi from 'near-api-js';
 import { verifyBufferSpendingReview } from './buffer-wallet-spending-evidence.mjs';
+import { verifyBufferForwarderWalletReview } from './buffer-forwarder-wallet-plan.mjs';
 import { sellerTerms } from './buffer-live-readiness.mjs';
 import { readPinnedJsonView } from './read-only-near-rpc.mjs';
 import { CIRCLE_TESTNET_CODE_HASH } from './keyless-vault-v12-readiness.mjs';
@@ -21,7 +23,7 @@ import { pinnedAccessKeyNonce } from '../shared/pinned-access-key-nonce.mjs';
 import { assertFreshFinalBlock } from '../shared/fresh-final-block.mjs';
 import { isTransactionHash } from '../shared/direct-payment-settlement.mjs';
 
-const STAGES = ['configure_buffer_locked_policy', 'install_buffer_vault_agent', 'install_buffer_forwarder_agent'];
+const STAGES = ['configure_buffer_locked_policy', 'install_buffer_vault_agent', 'install_buffer_forwarder_agent', 'pin_buffer_exact_intent'];
 const MAX = (1n << 128n) - 1n, OWNER_RESERVE = 10n ** 24n, VAULT_RESERVE = 10n ** 23n;
 const VAULT_STORAGE_MARGIN = 50_000n, MIN_INTENT_WINDOW_MS = 60_000;
 const record = x => x !== null && typeof x === 'object' && !Array.isArray(x);
@@ -46,12 +48,17 @@ function keyList(value, hash, identity, index, review) {
       !keys.some(k => k.public_key === identity.owner_public_key && k.access_key.permission === 'FullAccess')) return false;
   const vault = keys.find(k => k.public_key === identity.vault_agent_public_key);
   const forwarder = keys.find(k => k.public_key === identity.forwarder_agent_public_key);
-  if (forwarder !== undefined || (index < 2 && vault !== undefined)) return false;
+  if ((index < 3 && forwarder !== undefined) || (index < 2 && vault !== undefined)) return false;
   if (index < 2) return true;
-  const wrapper = vault?.access_key?.permission, permission = wrapper?.FunctionCall;
-  return keysAre(wrapper, ['FunctionCall']) && keysAre(permission, ['allowance', 'receiver_id', 'method_names']) &&
-    permission.receiver_id === identity.vault && isDeepStrictEqual(permission.method_names, ['execute_exact_ft']) &&
-    amount(permission.allowance) === amount(review.stages[1].actions[0].allowance_yocto);
+  const exactPermission = (item, receiver, methods, allowance) => {
+    const wrapper = item?.access_key?.permission, permission = wrapper?.FunctionCall;
+    return keysAre(wrapper, ['FunctionCall']) && keysAre(permission, ['allowance', 'receiver_id', 'method_names']) &&
+      permission.receiver_id === receiver && isDeepStrictEqual(permission.method_names, methods) &&
+      amount(permission.allowance) === amount(allowance);
+  };
+  if (!exactPermission(vault, identity.vault, ['execute_exact_ft'], review.stages[1].actions[0].allowance_yocto)) return false;
+  return index < 3 || exactPermission(forwarder, identity.adapter, ['open', 'return_tokens'],
+    review.stages[2].actions[0].allowance_yocto);
 }
 function available(account, hash, cost, reserve, margin = 0n) {
   const n = amount(account?.amount);
@@ -89,10 +96,11 @@ async function bounded(tasks, limit = 4) {
  * routine does not inspect a durable journal or any earlier transaction. */
 export async function inspectBufferSpendingStage({ review: rawReview, trustedReviewHash, trustedOwnerPublicKey, stageId,
   forwarderTerms: rawForwarderTerms, trustedForwarderReviewHash, trustedForwarderWasmSha256, trustedSellerCodeHash,
-  provider, now = Date.now } = {}) {
+  forwarderWalletReview: rawForwarderWalletReview, trustedForwarderWalletReviewHash, provider, now = Date.now } = {}) {
   // Snapshot public inputs before the first await so caller mutation cannot
   // change which plan is being assessed midway through a pinned read.
-  const review = structuredClone(rawReview), terms = structuredClone(rawForwarderTerms);
+  const review = structuredClone(rawReview), terms = structuredClone(rawForwarderTerms),
+    forwarderWalletReview = structuredClone(rawForwarderWalletReview);
   const identity = verifyBufferSpendingReview({ review, trustedReviewHash, trustedOwnerPublicKey });
   const index = STAGES.indexOf(stageId);
   if (index < 0 || typeof trustedForwarderReviewHash !== 'string' || !/^[a-f0-9]{64}$/.test(trustedForwarderReviewHash) ||
@@ -112,6 +120,14 @@ export async function inspectBufferSpendingStage({ review: rawReview, trustedRev
       terms.policy_id !== review.policy_id || terms.vault_agent_public_key !== identity.vault_agent_public_key ||
       terms.forwarder_agent_public_key !== identity.forwarder_agent_public_key || amount(terms.amount) > amount(review.per_tx_cap_atoms) ||
       amount(terms.amount) > amount(review.daily_cap_atoms)) throw new Error('forwarder differs from independently retained spending review or code');
+  if (index === 3) {
+    const retained = await verifyBufferForwarderWalletReview({ review: forwarderWalletReview,
+      trustedReviewHash: trustedForwarderWalletReviewHash, terms, spendingReview: review,
+      trustedSpendingReviewHash: trustedReviewHash, trustedOwnerPublicKey, nowMs: started });
+    if (retained.review.forwarder_review_sha256 !== trustedForwarderReviewHash ||
+        retained.review.forwarder_wasm_sha256 !== trustedForwarderWasmSha256 ||
+        retained.review.stages[2].id !== stageId) throw new Error('intent stage differs from retained forwarder review');
+  }
   const expectedForwarderCodeHash = nearApi.utils.serialize.base_encode(Buffer.from(artifact.wasm_sha256, 'hex'));
   if ((await provider.viewNodeStatus())?.chain_id !== 'testnet') throw new Error('testnet RPC required');
   const block = await provider.viewBlock({ finality: 'final' });
@@ -221,10 +237,11 @@ export async function inspectBufferSpendingStage({ review: rawReview, trustedRev
   catch { checks.final_block_fresh_at_completion = 'BLOCKED'; }
   checks.intent_window_remaining = terms.expires_at_ms - finished >= MIN_INTENT_WINDOW_MS ? 'PASS' : 'BLOCKED';
   const blockers = Object.entries(checks).filter(([, status]) => status !== 'PASS').map(([check, status]) => ({ check, status }));
-  return { status: blockers.length ? 'BLOCKED_OR_UNKNOWN' : 'READ_ONLY_SPENDING_STAGE_PROFILE_MATCH', stage_id: stageId,
+  return { status: blockers.length ? 'BLOCKED_OR_UNKNOWN' : index === 3 ? 'READ_ONLY_INTENT_STAGE_PROFILE_MATCH' : 'READ_ONLY_SPENDING_STAGE_PROFILE_MATCH', stage_id: stageId,
     network: 'testnet', block_hash: hash, block_height: block.header.height, checked_at: new Date(finished).toISOString(),
     owner: identity.owner, vault: identity.vault, adapter: identity.adapter, seller: SELLER,
     review_sha256: trustedReviewHash, forwarder_review_sha256: trustedForwarderReviewHash,
+    forwarder_wallet_review_sha256: index === 3 ? trustedForwarderWalletReviewHash : null,
     forwarder_wasm_sha256: trustedForwarderWasmSha256, seller_code_hash: trustedSellerCodeHash,
     checks, blockers, execution_authorized: false, owner_approval_verified: false, durable_fence_verified: false,
     prior_originals_reconciled: false, deployed_source_equivalence_verified: false, receipt_consensus_verified: false,
