@@ -162,3 +162,18 @@ body.wallet-dialog-open{overflow:hidden}
   .walletconnect-pairing .walletconnect-loading,.walletconnect-pairing .walletconnect-error{gap:4px}
   .walletconnect-pairing .walletconnect-loading p,.walletconnect-pairing .walletconnect-error p{font-size:10px;line-height:1.35}
 }
+
+/* A typed account is a public lookup, never a signing session. */
+.account-entry,.account-view{margin-top:18px;padding:17px;border:1px solid #3b5344;border-radius:16px;background:linear-gradient(150deg,#20372a,#17271d 72%)}
+.account-entry label{display:block;color:#e2f4df;font-size:12px;font-weight:800}
+.account-entry input{display:block;width:100%;min-height:48px;margin-top:8px;padding:11px 13px;border:1px solid #57745d;border-radius:10px;background:#0f1a13;color:#f7fcf5;font-family:inherit;font-size:14px;font-weight:600;line-height:1.3;outline:none}
+.account-entry input:focus{border-color:#c1ef80;box-shadow:0 0 0 3px #c1ef8030}.account-entry input::placeholder{color:#8aa28d}
+.account-entry p,.account-view-warning,.account-view-status,.account-view-footnote{margin-top:10px;color:#b9cfbc;font-size:11px;line-height:1.6}
+.account-entry p strong{color:#e4f8ce}.account-entry .account-entry-error{color:#ffd2ba}
+.account-entry-primary,.account-entry-secondary,.account-entry-cli button{width:100%;min-height:44px;margin-top:13px;padding:10px 12px;border:1px solid #c1ef80;border-radius:10px;background:#c1ef80;color:#173220;font-size:12px;font-weight:800}
+.account-entry-secondary{min-height:38px;margin-top:8px;border-color:#49634f;background:transparent;color:#d0e7cc}
+.account-entry-cli{margin-top:14px;padding-top:12px;border-top:1px solid #3b5344;color:#b3c8b7;font-size:10px}.account-entry-cli summary{cursor:pointer;font-weight:700;color:#c9e2c4}.account-entry-cli button{margin-top:8px;border-color:#49634f;background:#20372a;color:#e2f4df}
+.account-view-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}.account-view-head div{min-width:0}.account-view-head small{display:block;color:#a4c99c;font-size:9px;font-weight:800;letter-spacing:.9px}.account-view-head strong{display:block;margin-top:6px;color:#f4fff0;font-size:15px;overflow-wrap:anywhere}.account-view-head span{flex:none;padding:5px 7px;border:1px solid #77936a;border-radius:7px;color:#d3ecba;font-size:9px;font-weight:800;letter-spacing:.4px}
+.account-view-warning{color:#e1edca}.account-view-balances{margin:14px 0 0;padding:4px 12px;border:1px solid #3c5543;border-radius:10px;background:#13251a}.account-view-balances div{display:flex;justify-content:space-between;align-items:baseline;gap:12px;padding:8px 0}.account-view-balances div+div{border-top:1px solid #304636}.account-view-balances dt{color:#aac3ad;font-size:11px}.account-view-balances dd{margin:0;color:#f2ffed;font-size:12px;font-weight:800;overflow-wrap:anywhere;text-align:right}.account-view-status{color:#cee6c6}.account-view-footnote{color:#96ad9a;font-size:10px}
+@media(max-width:740px){.account-entry,.account-view{margin-top:13px;padding:15px}.account-entry input{font-size:16px}}
+.ethereum-logo{background:linear-gradient(145deg,#29355d,#536fbd);color:#d8e3ff}.ethereum-logo svg{stroke-width:1.8}.ethereum-info>strong{display:block;color:#eaf9e4;font-size:14px}.ethereum-info code{color:#e6f5d6;overflow-wrap:anywhere}

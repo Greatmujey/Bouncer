@@ -1,0 +1,95 @@
+# Test the REAL pinned near-cli-rs against synthetic, unsigned plan bytes.
+# This job holds no wallet credentials and has no signing or broadcast step.
+name: Official NEAR CLI vault compatibility (offline fixture)
+
+on:
+  push:
+    branches: ['arena/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  offline-cli:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[near-cli-vault-offline]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: bouncer
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+      - name: Install locked verification dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Retrieve the reviewed V12 WASM
+        env:
+          BOUNCER_V12_WASM_PATH: ${{ runner.temp }}/v12-cli-fixture.wasm
+        run: |
+          set -euo pipefail
+          gh api repos/Greatmujey/Bouncer/git/blobs/16785505eaed13609d8e569e7b1665f89683d9eb --jq .content | base64 -d > "$BOUNCER_V12_WASM_PATH"
+          printf '%s  %s\n' '033f255c5822ff97495809f7d60fddf66f266f20c36285fe71296b66decc6d12' "$BOUNCER_V12_WASM_PATH" | sha256sum -c -
+          test "$(wc -c < "$BOUNCER_V12_WASM_PATH")" -eq 536651
+          node --test tests/buffer-wallet-setup-plan.test.mjs
+      - name: Download and verify the official pinned CLI
+        run: |
+          set -euo pipefail
+          dir="$RUNNER_TEMP/near-cli-offline"
+          mkdir -p "$dir/bin"
+          gh release download v0.31.1 --repo near/near-cli-rs \
+            --pattern near-cli-rs-x86_64-unknown-linux-gnu.tar.gz --dir "$dir"
+          printf '%s  %s\n' '8b92f4f79f324a882ad79b58d61b91dccc676dd653dc72a1f23693aa5db99e21' \
+            "$dir/near-cli-rs-x86_64-unknown-linux-gnu.tar.gz" | sha256sum -c -
+          tar -xzf "$dir/near-cli-rs-x86_64-unknown-linux-gnu.tar.gz" -C "$dir/bin"
+          mapfile -t binaries < <(find "$dir/bin" -type f -name near)
+          test "${#binaries[@]}" -eq 1
+          printf '%s\n' "${binaries[0]}" > "$dir/binary-path"
+      - name: Check CLI import logging with an unfunded disposable key
+        run: |
+          set -euo pipefail
+          near="$(cat "$RUNNER_TEMP/near-cli-offline/binary-path")"
+          node scripts/test-near-cli-import-exposure.mjs "$near" > "$RUNNER_TEMP/near-cli-import-fixture.json"
+          python3 - <<'PY'
+          import json, os
+          data = json.load(open(os.path.join(os.environ['RUNNER_TEMP'], 'near-cli-import-fixture.json')))
+          report = json.dumps(data, separators=(',', ':'), ensure_ascii=True)
+          assert len(report) < 12000 and not data['user_key_used'] and not data['broadcast']
+          print('::notice title=Disposable CLI import logging probe::' + report.replace('%','%25').replace('\n','%0A').replace('\r','%0D'))
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as f:
+              f.write('## CLI import safety — disposable key only\n\n')
+              f.write('No user key was used. The generated fixture and temporary files were deleted.\n\n```json\n')
+              f.write(json.dumps(data, indent=2) + '\n```\n')
+          PY
+      - name: Compare three synthetic unsigned CLI transactions
+        env:
+          BOUNCER_V12_WASM_PATH: ${{ runner.temp }}/v12-cli-fixture.wasm
+        run: |
+          set -euo pipefail
+          near="$(cat "$RUNNER_TEMP/near-cli-offline/binary-path")"
+          if ! node scripts/test-near-cli-buffer-offline.mjs "$near" "$BOUNCER_V12_WASM_PATH" > "$RUNNER_TEMP/near-cli-fixture.json" 2> "$RUNNER_TEMP/near-cli-fixture-error.txt"; then
+            python3 - <<'PY'
+          import os, pathlib
+          error = pathlib.Path(os.environ['RUNNER_TEMP'], 'near-cli-fixture-error.txt').read_text()[:2500]
+          print('::error title=Offline CLI fixture failed::' + error.replace('%','%25').replace('\n','%0A').replace('\r','%0D'))
+          PY
+            exit 1
+          fi
+          python3 - <<'PY'
+          import json, os
+          data = json.load(open(os.path.join(os.environ['RUNNER_TEMP'], 'near-cli-fixture.json')))
+          assert data['all_exact'] and not data['signed'] and not data['broadcast']
+          report = json.dumps(data, separators=(',', ':'), ensure_ascii=True)
+          assert len(report) < 12000
+          print('::notice title=Official CLI unsigned fixture::' + report.replace('%','%25').replace('\n','%0A').replace('\r','%0D'))
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as f:
+              f.write('## Official CLI — offline synthetic compatibility fixture\n\n')
+              f.write('No signing, broadcast, real wallet account, key import, vault deployment or seller order. This is not approval or delivery.\n\n```json\n')
+              f.write(json.dumps(data, indent=2) + '\n```\n')
+          PY

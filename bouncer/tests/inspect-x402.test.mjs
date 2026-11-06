@@ -46,6 +46,28 @@ test('a matching advertisement is only a wire candidate, with no nonce leakage o
   }
 });
 
+test('flags standard-looking NEAR exact separately from Bouncer compatibility and custom methods', async () => {
+  const rail = { scheme: 'exact', network: 'near:testnet', asset: TOKEN, payTo: 'seller.testnet', amount: '2000',
+    maxTimeoutSeconds: 120, extra: { paymentFlow: 'authorization', privateNonce: 'never-print' } };
+  const out = await inspectX402({ url, fetchImpl: fetchFor(challenge([rail])) });
+  assert.equal(out.offers[0].default_near_exact_shape, true);
+  assert.equal(out.offers[0].wire_candidate, false);
+  assert.doesNotMatch(JSON.stringify(out), /never-print/);
+  const unknown = structuredClone(rail); unknown.extra.assetTransferMethod = 'never-print-an-unknown-value';
+  const unknownOut = await inspectX402({ url, fetchImpl: fetchFor(challenge([unknown])) });
+  assert.equal(unknownOut.offers[0].transfer_method, '<other>');
+  assert.equal(unknownOut.offers[0].default_near_exact_shape, false);
+  assert.doesNotMatch(JSON.stringify(unknownOut), /never-print-an-unknown-value/);
+  for (const change of [r => { r.extra.assetTransferMethod = 'leash'; }, r => { r.amount = '0'; },
+    r => { r.network = 'near:mainnet'; }, r => { r.asset = 'usdc.fakes.testnet'; },
+    r => { r.amount = '999999999999999999999999999999999999999'; }]) {
+    const bad = structuredClone(rail); change(bad);
+    const result = await inspectX402({ url, fetchImpl: fetchFor(challenge([bad])) });
+    assert.equal(result.offers[0].default_near_exact_shape, false);
+    assert.equal(result.offers[0].wire_candidate, false);
+  }
+});
+
 test('invalid endpoints, challenges and injected control characters fail closed without leaking fields', async () => {
   for (const bad of ['http://seller.example/api', 'https://user:secret@seller.example/api', 'https://seller.example/api?q=secret',
     'https://seller.example/api#fragment', 'https://seller.example/a/../api']) {

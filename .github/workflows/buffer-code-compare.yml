@@ -1,0 +1,92 @@
+# Read-only comparison only: no seller endpoint, wallet, secret or chain send.
+name: Compare Buffer testnet code with pinned source build
+
+on:
+  push:
+    branches: ['arena/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[buffer-code-compare]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: bouncer
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+      - name: Install locked dependencies and test offline comparisons
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          node --test tests/buffer-code-comparison.test.mjs
+      - name: Recover exact public source blobs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/buffer-src/src"
+          fetch_blob() {
+            local blob="$1" target="$2"
+            gh api "repos/Chima30/buffer/git/blobs/$blob" --jq .content | base64 --decode > "$target"
+            test "$(git hash-object "$target")" = "$blob"
+          }
+          # Chima30/buffer@9bc5ef0cbdc84074e94995cb50d334fc615f9b96.
+          fetch_blob 34a9011cc085c1115cc6584fc307693129cf96a6 "$RUNNER_TEMP/buffer-src/Cargo.toml"
+          fetch_blob cfbbac93dc23c381e129ba75af45a0613fb948bb "$RUNNER_TEMP/buffer-src/Cargo.lock"
+          fetch_blob f13f8304470aea083e2ba45e16209ac681085e84 "$RUNNER_TEMP/buffer-src/rust-toolchain.toml"
+          fetch_blob 45b4444f00245fbde226a55a8e32aa5221c20753 "$RUNNER_TEMP/buffer-src/src/lib.rs"
+          fetch_blob c6e2cf36ff32e9dbfc93d75ab57f230b72f68475 "$RUNNER_TEMP/buffer-src/src/evm.rs"
+          fetch_blob e670a466244fe0d6fab3abf2a2b8ac04c82216e9 "$RUNNER_TEMP/buffer-src/src/tests.rs"
+      - name: Build the pinned public source without owner credentials
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.93.0 --profile minimal --target wasm32-unknown-unknown
+          # This build is not assumed reproducible; a mismatch is reported as a
+          # mismatch, not proof of malicious code. Build scripts are untrusted.
+          if ! RUSTFLAGS='--cfg near -C link-arg=-s' cargo +1.93.0 build --locked --release --target wasm32-unknown-unknown --lib \
+              --manifest-path "$RUNNER_TEMP/buffer-src/Cargo.toml" > "$RUNNER_TEMP/buffer-build.log" 2>&1; then
+            python3 -c 'import os; s=open(os.environ["RUNNER_TEMP"]+"/buffer-build.log").read()[-5000:]; print("::error title=Buffer comparison build failed::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
+            exit 1
+          fi
+          cp "$RUNNER_TEMP/buffer-src/target/wasm32-unknown-unknown/release/buffer_desk.wasm" "$RUNNER_TEMP/buffer-plain.wasm"
+      - name: Build with the seller-documented cargo-near command
+        run: |
+          set -euo pipefail
+          # Version 0.22.0 was the latest stable before this seller source was
+          # published; this is only one candidate, not a claim about deployment.
+          curl --fail --show-error --silent --location --proto '=https' --tlsv1.2 --max-time 180 --retry 2 --max-filesize 25000000 \
+            'https://github.com/near/cargo-near/releases/download/cargo-near-v0.22.0/cargo-near-x86_64-unknown-linux-gnu.tar.gz' \
+            --output "$RUNNER_TEMP/cargo-near.tar.gz"
+          echo '9429064e30a427e96523f539cb255f3688d2345e5000d7d4e4873a8247247d1a  '"$RUNNER_TEMP/cargo-near.tar.gz" | sha256sum -c -
+          python3 -c 'import os,tarfile,shutil; root=os.environ["RUNNER_TEMP"]; t=tarfile.open(root+"/cargo-near.tar.gz"); xs=[m for m in t.getmembers() if m.isfile() and m.name.split("/")[-1]=="cargo-near" and m.size<100_000_000]; assert len(xs)==1; f=t.extractfile(xs[0]); out=root+"/cargo-near"; shutil.copyfileobj(f,open(out,"wb")); os.chmod(out,0o755)'
+          export PATH="$RUNNER_TEMP:$PATH"
+          if ! (cd "$RUNNER_TEMP/buffer-src" && cargo +1.93.0 near build non-reproducible-wasm --locked) > "$RUNNER_TEMP/buffer-near-build.log" 2>&1; then
+            python3 -c 'import os; s=open(os.environ["RUNNER_TEMP"]+"/buffer-near-build.log").read()[-5000:]; print("::error title=Documented Buffer build failed::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
+            exit 1
+          fi
+          test -s "$RUNNER_TEMP/buffer-src/target/near/buffer_desk.wasm"
+      - name: Compare to fresh public testnet FINAL blocks
+        run: |
+          set -euo pipefail
+          for variant in plain cargo-near; do
+            if [ "$variant" = plain ]; then wasm="$RUNNER_TEMP/buffer-plain.wasm"; else wasm="$RUNNER_TEMP/buffer-src/target/near/buffer_desk.wasm"; fi
+            node scripts/inspect-buffer-code.mjs --wasm "$wasm" > "$RUNNER_TEMP/buffer-code-$variant.json"
+            RESULT="$(node -e 'process.stdout.write(JSON.stringify(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"))))' "$RUNNER_TEMP/buffer-code-$variant.json")"
+            echo "::notice title=Buffer $variant read-only bytecode comparison::$RESULT"
+            {
+              echo "## Buffer testnet code comparison: $variant"
+              echo 'One local source build compared with one trusted-RPC FINAL account code hash. No seller endpoint, transaction, delivery or audit.'
+              echo '```json'
+              cat "$RUNNER_TEMP/buffer-code-$variant.json"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          done

@@ -171,6 +171,30 @@ export const WALLET_MANIFEST = {
       }
     },
     {
+      "id": "ethereum-wallets",
+      "name": "Ethereum Wallets",
+      "description": "Use an Ethereum wallet to approve actions for its 0x account on NEAR testnet.",
+      "icon": "https://evm-on-near.dev/ethereum.svg",
+      "website": "https://evm-on-near.dev/",
+      "version": "0.1.4",
+      "executor": "/ethereum-wallet.executor.js",
+      "type": "sandbox",
+      "platform": ["web"],
+      "features": {
+        "signMessage": false,
+        "signTransaction": false,
+        "signAndSendTransaction": true,
+        "signAndSendTransactions": true,
+        "signInWithoutAddKey": true,
+        "signInAndSignMessage": false,
+        "signInWithFunctionCallKey": false,
+        "signDelegateActions": false,
+        "testnet": true
+      },
+      "permissions": { "storage": true, "allowsOpen": ["https://evm-on-near.dev/"] },
+      "metadata": { "signPageURL": "https://evm-on-near.dev/" }
+    },
+    {
       "id": "near-cli",
       "name": "NEAR CLI",
       "icon": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='64' height='64' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%231a1a2e'/%3E%3Cpolyline points='18 40 28 30 18 20' fill='none' stroke='%2300d4aa' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cline x1='32' y1='42' x2='46' y2='42' stroke='%2300d4aa' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E",

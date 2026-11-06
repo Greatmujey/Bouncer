@@ -27,7 +27,7 @@ jobs:
       - name: Read one fixed public offer
         run: |
           set -euo pipefail
-          if ! node agent/inspect-x402.mjs --url https://svalin-api.noobshole.workers.dev/v1/portfolio/near.testnet > "$RUNNER_TEMP/svalin-offer.json" 2> "$RUNNER_TEMP/svalin-error.log"; then
+          if ! node agent/inspect-x402.mjs --url https://svalin-api.noobshole.workers.dev/v1/portfolio/root.near > "$RUNNER_TEMP/svalin-offer.json" 2> "$RUNNER_TEMP/svalin-error.log"; then
             python3 -c 'import os; s=open(os.environ["RUNNER_TEMP"]+"/svalin-error.log").read()[-2000:]; print("::error title=Anonymous Svalin offer unavailable::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
             exit 1
           fi

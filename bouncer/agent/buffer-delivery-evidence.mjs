@@ -14,7 +14,7 @@ import { experimentalReceiptGraph as g, CIRCLE_TESTNET_REVIEWED_CODE_HASH } from
 import { verifyReviewedExactFtReceipts, multiAgencyExactExecutionBlock } from './multiagency-exact-ft.mjs';
 import { readPinnedJsonView } from './read-only-near-rpc.mjs';
 import { readBoundedBytes } from '../shared/bounded-json.mjs';
-import { isTestnetAccount } from '../shared/account-id.mjs';
+import { isTestnetAccount, isImplicitNearAccount } from '../shared/account-id.mjs';
 import { isTransactionHash } from '../shared/direct-payment-settlement.mjs';
 
 export const BUFFER_V12_CODE_HASH = 'Dg53QzTrw3cDWdgYTptmpkqvoeUpSXQsxL5HLcoF6Cq';
@@ -55,7 +55,8 @@ export async function fetchBufferPrivateOrder({ orderId, accessToken, fetchImpl 
 export async function prepareBufferDeliveryEvidence(terms, pins) {
   if (!fields(pins, ['vault_code_hash', 'token_code_hash', 'seller_code_hash', 'fulfillment_signer']) ||
       pins.vault_code_hash !== BUFFER_V12_CODE_HASH || !isTransactionHash(pins.token_code_hash) ||
-      !isTransactionHash(pins.seller_code_hash) || !isTestnetAccount(pins.fulfillment_signer) ||
+      !isTransactionHash(pins.seller_code_hash) ||
+      !(isTestnetAccount(pins.fulfillment_signer) || isImplicitNearAccount(pins.fulfillment_signer)) ||
       !Number.isSafeInteger(terms?.expires_at_ms) || terms.expires_at_ms <= 1) {
     throw new Error('invalid owner-reviewed Buffer evidence pins');
   }
@@ -279,7 +280,7 @@ export async function inspectBufferDeliveryEvidence({ terms, pins, fundingHash, 
   if ((await provider.viewNodeStatus())?.chain_id !== 'testnet') throw new Error('RPC must report testnet');
   const results = await Promise.all([provider.txStatusReceipts(fundingHash, r.owner, 'FINAL'),
     provider.txStatusReceipts(openingHash, r.owner, 'FINAL'),
-    provider.txStatusReceipts(fulfillmentHash, pins.fulfillment_signer, 'FINAL')]);
+    provider.txStatusReceipts(fulfillmentHash, pins.fulfillment_signer, 'FINAL', { allowImplicitTestnet: true })]);
   const funding = { txHash: fundingHash, result: results[0] }, opening = { txHash: openingHash, result: results[1] },
     fulfillment = { txHash: fulfillmentHash, result: results[2] };
   const snapshots = await collectBufferDeliverySnapshots({ terms, pins, funding, opening, fulfillment, privateOrder, provider });

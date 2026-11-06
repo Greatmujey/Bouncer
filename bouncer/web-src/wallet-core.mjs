@@ -2,6 +2,7 @@ import { WALLET_MANIFEST } from './wallet-manifest.mjs';
 import { loadVerifiedExecutor } from './wallet-executor.mjs';
 import { isTestnetAccount, isWalletConnectProjectId, pairingTopic } from './walletconnect-core.mjs';
 import { verifyCliLogin } from './cli-login.mjs';
+import { formatPublicAmount, isNearAccountId, readPublicTestnetAccount } from './account-view.mjs';
 
 // HTTP Date is coarse and can be cached. Only flag a large discrepancy when
 // the response provides a valid Date/Age and the request was reasonably fast.
@@ -35,10 +36,12 @@ export function walletOriginAllowed(location, isTopLevel, approvedOrigin = '') {
 }
 
 /**
- * Identity-only NEAR Connect integration. No add-key or transaction methods
- * are called. NEAR Mobile and CLI require an off-chain login message;
- * other accounts are wallet-reported, not proof of ownership. The picker is
- * our own accessible dialog; wallet executors remain sandboxed.
+ * Identity-only NEAR Connect integration. Bouncer calls no transaction or
+ * add-key methods, but the Ethereum provider may request its own approved
+ * relayer-onboarding transaction during sign-in. A typed account is a separate,
+ * unverified public view, not a wallet session. Mobile and optional CLI use
+ * off-chain login messages; other accounts are wallet-reported. Executors are
+ * sandboxed and the picker is our own accessible dialog.
  */
 export async function initWallet({ window: win, document: doc, NearConnector, SandboxWallet, loadWalletConnect, walletConnectStartTimeoutMs = 50_000 }) {
   const dialog = doc.querySelector('#wallet-dialog');
@@ -70,12 +73,36 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
   const wcReady = doc.querySelector('#walletconnect-ready');
   const walletSafety = doc.querySelector('#wallet-safety');
   const googlePicker = doc.querySelector('.google-picker');
-  if (!dialog || !closeButton || !optionsBox || !options.length || !openers.length || !disconnect || !status || !dialogStatus) return;
+  const accountEntryPanel = doc.querySelector('#wallet-account-entry');
+  const accountForm = doc.querySelector('#wallet-account-form');
+  const accountInput = doc.querySelector('#wallet-account-id');
+  const accountError = doc.querySelector('#wallet-account-error');
+  const accountBack = doc.querySelector('#wallet-account-back');
+  const cliVerify = doc.querySelector('#wallet-cli-verify');
+  const accountViewPanel = doc.querySelector('#wallet-account-view');
+  const accountName = doc.querySelector('#wallet-account-name');
+  const accountBadge = doc.querySelector('#wallet-account-badge');
+  const accountWarning = doc.querySelector('#wallet-account-warning');
+  const accountNear = doc.querySelector('#wallet-account-near');
+  const accountUsdc = doc.querySelector('#wallet-account-usdc');
+  const accountBalanceStatus = doc.querySelector('#wallet-account-balance-status');
+  const accountUseWallet = doc.querySelector('#wallet-account-use-wallet');
+  const accountRefresh = doc.querySelector('#wallet-account-refresh');
+  const ethereumInfoPanel = doc.querySelector('#wallet-ethereum-info');
+  const ethereumContinue = doc.querySelector('#wallet-ethereum-continue');
+  const ethereumBack = doc.querySelector('#wallet-ethereum-back');
+  if (!dialog || !closeButton || !optionsBox || !options.length || !openers.length || !disconnect || !status || !dialogStatus ||
+      !accountEntryPanel || !accountForm || !accountInput || !accountError || !accountBack || !cliVerify || !accountViewPanel ||
+      !accountName || !accountBadge || !accountWarning || !accountNear || !accountUsdc || !accountBalanceStatus || !accountUseWallet || !accountRefresh ||
+      !ethereumInfoPanel || !ethereumContinue || !ethereumBack) return;
 
   const approved = doc.querySelector('meta[name="bouncer-wallet-origin"]')?.content || '';
   const allowedIds = new Set([...WALLET_MANIFEST.wallets.map(wallet => wallet.id), 'wallet-connect']);
   let connector, selectedWallet = null, connected = false, connectedAccount = '', ready = false, busyState = false, opener = null;
   let wcProjectId = '', wcHandle = null, wcAbort = null, wcPairing = false, wcUri = '', wcClockSkew = false;
+  // A name-only view never populates selectedWallet, connectedAccount or the
+  // connector's session storage. It cannot be used as a wallet or signer.
+  let accountEntry = false, ethereumInfo = false, viewedAccount = '', accountRead = null, accountReadVersion = 0;
   let bannerTimer;
   const trusted = new Set(WALLET_MANIFEST.wallets);
   function setWalletLabels(label) {
@@ -93,13 +120,22 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
   }
   function hideBanner() { clearTimeout(bannerTimer); if (banner) banner.hidden = true; }
   function renderControls() {
-    optionsBox.hidden = connected || wcPairing;
+    const viewing = Boolean(viewedAccount);
+    optionsBox.hidden = connected || wcPairing || accountEntry || ethereumInfo || viewing;
     if (wcPanel) wcPanel.hidden = !wcPairing;
-    if (walletSafety) walletSafety.hidden = wcPairing;
-    // Keep the QR pairing screen focused and uncluttered. Google identity is
-    // separate and returns as soon as the user goes back to the picker.
-    if (googlePicker) googlePicker.hidden = wcPairing;
-    dialog.dataset.walletView = wcPairing ? 'pairing' : connected ? 'connected' : 'options';
+    accountEntryPanel.hidden = !accountEntry;
+    accountViewPanel.hidden = !viewing && !connected;
+    accountBadge.textContent = connected ? 'CONNECTED' : 'VIEW ONLY';
+    accountWarning.textContent = connected
+      ? 'Public balances for the connected testnet account. Connecting alone does not grant Bouncer spending access.'
+      : 'Unverified account name. No wallet is connected and no spending access was granted.';
+    accountUseWallet.hidden = connected;
+    ethereumInfoPanel.hidden = !ethereumInfo;
+    if (walletSafety) walletSafety.hidden = wcPairing || accountEntry || ethereumInfo || viewing;
+    // Keep each focused panel uncluttered. Google is separate and returns
+    // when the user goes back to the picker.
+    if (googlePicker) googlePicker.hidden = wcPairing || accountEntry || ethereumInfo || viewing;
+    dialog.dataset.walletView = wcPairing ? 'pairing' : accountEntry ? 'account-entry' : ethereumInfo ? 'ethereum-info' : viewing ? 'account-view' : connected ? 'connected' : 'options';
     options.forEach(button => {
       const isWc = button.dataset.walletId === 'wallet-connect';
       button.disabled = !ready || busyState || connected || !allowedIds.has(button.dataset.walletId) ||
@@ -107,33 +143,86 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     });
     if (wcCaption) wcCaption.textContent = wcProjectId ? 'NEAR testnet · encrypted fallback' : 'Not configured · Project ID required';
     if (wcBadge) wcBadge.textContent = wcProjectId ? 'CONNECT' : 'SETUP';
-    disconnect.hidden = !connected; disconnect.disabled = busyState;
-    if (walletTitle) walletTitle.textContent = connected ? 'Wallet connected' : wcPairing ? 'Connect your wallet' : 'Connect an account';
+    disconnect.hidden = !connected && !viewing; disconnect.disabled = busyState;
+    disconnect.textContent = viewing ? 'Remove account' : 'Disconnect wallet';
+    if (walletTitle) walletTitle.textContent = connected ? 'Wallet connected' : wcPairing ? 'Connect your wallet'
+      : accountEntry ? 'Enter an account' : ethereumInfo ? 'Before you connect' : viewing ? 'Account view' : 'Connect an account';
     if (walletDescription) walletDescription.textContent = connected
       ? 'Your testnet wallet is connected. Google sign-in is separate.'
       : wcPairing ? 'Scan with a NEAR testnet wallet, or open it. Approve and return here.'
-        : 'Choose a testnet wallet or continue with Google. Connecting does not grant spending access.';
+        : accountEntry ? 'Choose an account without a terminal. This does not connect a wallet.'
+          : ethereumInfo ? 'Please review this wallet’s setup before continuing.'
+            : viewing ? 'This public view cannot sign, pay, or prove ownership.'
+              : 'Choose a testnet wallet or continue with Google. Connecting does not grant spending access.';
     openers.forEach(button => {
       button.disabled = busyState;
-      button.dataset.walletState = connected ? 'connected' : 'disconnected';
-      button.setAttribute('aria-label', connected ? `Connected: ${connectedAccount}. Manage accounts` : 'Connect wallet or Google account');
+      button.dataset.walletState = connected ? 'connected' : viewing ? 'view-only' : 'disconnected';
+      button.setAttribute('aria-label', connected ? `Connected: ${connectedAccount}. Manage accounts`
+        : viewing ? `Viewing ${viewedAccount}, unverified. Manage account` : 'Connect wallet or Google account');
     });
   }
   function busy(value) { busyState = value; renderControls(); }
+  function clearAccountView() {
+    accountReadVersion++;
+    accountRead?.abort(); accountRead = null;
+    accountEntry = false; ethereumInfo = false; viewedAccount = '';
+    accountName.textContent = ''; accountNear.textContent = '—'; accountUsdc.textContent = '—';
+    accountBalanceStatus.textContent = ''; accountError.hidden = true; accountError.textContent = ''; accountRefresh.disabled = false;
+    accountRefresh.textContent = 'Load public balances';
+  }
+  function prepareConnectedBalance(id) {
+    accountName.textContent = id;
+    accountBalanceStatus.textContent = 'Tap below to load public testnet balances. No signature is requested.';
+  }
+  function displayedAccount() { return connected ? connectedAccount : viewedAccount; }
+  async function refreshAccountView() {
+    const id = displayedAccount();
+    if (!id) return;
+    const version = ++accountReadVersion;
+    accountRead?.abort();
+    const controller = new AbortController(); accountRead = controller;
+    const timer = setTimeout(() => controller.abort(), 15_000);
+    accountNear.textContent = '—'; accountUsdc.textContent = '—';
+    accountBalanceStatus.textContent = 'Checking public NEAR testnet balances…';
+    accountRefresh.textContent = 'Refresh public balances';
+    accountRefresh.disabled = true;
+    try {
+      const result = await readPublicTestnetAccount(id, { fetch: win.fetch.bind(win), signal: controller.signal });
+      if (version !== accountReadVersion || displayedAccount() !== id) return;
+      accountUsdc.textContent = formatPublicAmount(result.circle, 6);
+      if (!result.exists) {
+        accountBalanceStatus.textContent = `No native account found for this exact ID on testnet at final block ${result.blockHeight}. The token ledger is not proof of control or spendability; .near is not changed to .testnet.`;
+      } else {
+        accountNear.textContent = formatPublicAmount(result.near, 24, 6);
+        accountBalanceStatus.textContent = `Public testnet RPC · final block ${result.blockHeight}. Balances can change.`;
+      }
+    } catch {
+      if (version === accountReadVersion && displayedAccount() === id) {
+        accountBalanceStatus.textContent = 'Could not load live testnet balances. No balance is being guessed; try refreshing.';
+      }
+    } finally {
+      clearTimeout(timer);
+      if (version === accountReadVersion) { accountRead = null; accountRefresh.disabled = false; }
+    }
+  }
   function showDisconnected(message = 'Choose a testnet wallet to connect.') {
+    clearAccountView();
     selectedWallet = null; connected = false; connectedAccount = '';
     if (wcHandle) { const handle = wcHandle; wcHandle = null; void Promise.resolve().then(() => handle.disconnect()).catch(() => {}); }
     setStatus(message); setWalletLabels('Connect wallet'); renderControls();
   }
   function acceptAccounts(wallet, accounts, verifiedBy = '') {
     const id = accounts?.[0]?.accountId;
-    if (!wallet || !(wallet instanceof SandboxWallet) || !trusted.has(wallet.manifest) || !isTestnetAccount(id) ||
+    const validId = wallet?.manifest?.id === 'ethereum-wallets' ? /^0x[0-9a-f]{40}$/.test(id || '') : isTestnetAccount(id);
+    if (!wallet || !(wallet instanceof SandboxWallet) || !trusted.has(wallet.manifest) || !validId ||
         (['near-cli', 'near-mobile'].includes(wallet.manifest.id) && verifiedBy !== wallet.manifest.id)) {
       showDisconnected('The wallet did not return a verified testnet account. No account was connected.');
       void storage.remove('selected-wallet').catch(() => {});
       return false;
     }
+    clearAccountView();
     selectedWallet = wallet; connected = true; connectedAccount = id;
+    prepareConnectedBalance(id);
     setWalletLabels('Connected');
     const evidence = verifiedBy === 'near-cli' ? 'CLI login verified against testnet'
       : verifiedBy === 'near-mobile' ? 'NEAR Mobile login verified against testnet' : 'wallet-reported';
@@ -159,7 +248,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     dialog.showModal();
     doc.body?.classList.add('wallet-dialog-open');
     if (typeof win.CustomEvent === 'function') win.dispatchEvent(new win.CustomEvent('bouncer:account-picker-open'));
-    (connected ? disconnect : options.find(button => !button.disabled) || closeButton).focus();
+    (accountEntry ? accountInput : ethereumInfo ? ethereumContinue : viewedAccount ? accountUseWallet : connected ? disconnect : options.find(button => !button.disabled) || closeButton).focus();
   }
   for (const button of openers) {
     button.setAttribute('aria-haspopup', 'dialog');
@@ -292,6 +381,45 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     ready = false; renderControls();
     return;
   }
+
+  accountForm.addEventListener('submit', event => {
+    event.preventDefault();
+    if (!ready || busyState || connected || !accountEntry) return;
+    const id = String(accountInput.value || '').trim();
+    if (!isNearAccountId(id)) {
+      accountError.textContent = 'Enter a valid lowercase NEAR account ID, such as your-name.testnet.';
+      accountError.hidden = false; accountInput.focus(); return;
+    }
+    clearAccountView();
+    viewedAccount = id; accountName.textContent = id;
+    setWalletLabels('Account view');
+    setStatus(`Viewing ${id} on testnet (unverified). No wallet is connected; no spending access was granted.`);
+    renderControls(); closePicker();
+    notify(`Viewing ${id} on testnet only. A wallet is needed to sign.`);
+    void refreshAccountView();
+  });
+  accountBack.addEventListener('click', () => {
+    if (!accountEntry || busyState) return;
+    accountEntry = false; accountError.hidden = true; accountError.textContent = '';
+    setStatus('Choose a testnet wallet to connect.'); renderControls();
+    options.find(button => !button.disabled)?.focus();
+  });
+  accountUseWallet.addEventListener('click', () => {
+    if (!viewedAccount || busyState) return;
+    showDisconnected('Choose a wallet to connect. Account-name viewing cannot sign.');
+    options.find(button => !button.disabled)?.focus();
+  });
+  accountRefresh.addEventListener('click', () => { void refreshAccountView(); });
+  // Verified CLI login remains available as an explicit, optional path.
+  cliVerify.addEventListener('click', async () => { if (accountEntry && !busyState) await startWallet('near-cli'); });
+  ethereumBack.addEventListener('click', () => {
+    if (!ethereumInfo || busyState) return;
+    ethereumInfo = false; setStatus('Choose a testnet wallet to connect.'); renderControls();
+    options.find(button => !button.disabled)?.focus();
+  });
+  ethereumContinue.addEventListener('click', async () => {
+    if (ethereumInfo && !busyState) await startWallet('ethereum-wallets');
+  });
 
   function clearWalletConnectPairing() {
     wcUri = '';
@@ -427,7 +555,9 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
       if (controller.signal.aborted) { await handle.disconnect(); showDisconnected('WalletConnect pairing cancelled.'); return; }
       if (endedBeforeHandle) { await handle.disconnect(); throw new Error('WalletConnect session ended before connection'); }
       if (!isTestnetAccount(handle.accountId)) { await handle.disconnect(); throw new Error('invalid account'); }
+      clearAccountView();
       wcHandle = handle; selectedWallet = null; connected = true; connectedAccount = handle.accountId; wcPairing = false;
+      prepareConnectedBalance(handle.accountId);
       setWalletLabels('Connected');
       setStatus(`Connected: ${handle.accountId} (wallet-reported). No vault or spending access is granted.`);
       closePicker(); notify('Testnet account connected. No spending access was granted.');
@@ -503,18 +633,18 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     return () => { observer.disconnect(); if (mobile) doc.body?.classList.remove('near-mobile-active'); };
   }
 
-  for (const button of options) {
-    button.addEventListener('click', async () => {
-      const walletId = button.dataset.walletId;
-      if (!ready || busyState || connected || !allowedIds.has(walletId)) return;
+  async function startWallet(walletId) {
+      if (!ready || busyState || connected || viewedAccount || !allowedIds.has(walletId)) return;
       if (walletId === 'wallet-connect') { await openWalletConnect(); return; }
+      accountEntry = false; ethereumInfo = false;
       const name = WALLET_MANIFEST.wallets.find(wallet => wallet.id === walletId).name;
-      const mobile = walletId === 'near-mobile', cli = walletId === 'near-cli';
+      const mobile = walletId === 'near-mobile', cli = walletId === 'near-cli', ethereum = walletId === 'ethereum-wallets';
       busy(true);
       const opening = mobile
         ? 'NEAR Mobile: approve a login message only. No access key or payment is requested.'
         : cli ? 'NEAR CLI: enter your testnet account, then sign the login message in your terminal.'
-          : `Opening ${name} on testnet…`;
+          : ethereum ? 'Opening Ethereum Wallets on testnet. The wallet may request a setup transaction.'
+            : `Opening ${name} on testnet…`;
       setStatus(opening); notify(opening, true);
       // The NEAR Connect executor uses its own iframe overlay. A native dialog
       // is in the top layer, so close ours before opening the wallet UI.
@@ -561,7 +691,9 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
             try { await win.crypto.subtle.generateKey({ name: 'Ed25519' }, false, ['sign', 'verify']); }
             catch { throw new Error('INTEAR_ED25519_UNAVAILABLE'); }
           }
-          // Explicit choice; no addFunctionCallKey, signing or transaction.
+          // Explicit choice; Bouncer supplies no addFunctionCallKey. The
+          // Ethereum provider may independently request relayer onboarding in
+          // its approval page, as disclosed before opening it.
           await connector.connect({ walletId });
         }
         if (!connected) {
@@ -572,7 +704,10 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
       } catch (error) {
         await storage.remove('selected-wallet');
         const reason = typeof error === 'string' ? error : error?.message || '';
-        showDisconnected(reason === 'INTEAR_ED25519_UNAVAILABLE'
+        const ethereumHash = ethereum ? reason.match(/0x[0-9a-fA-F]{64}/)?.[0] : '';
+        showDisconnected(ethereum
+          ? `Ethereum wallet connection did not finish. Setup may have been submitted; do not retry until ${ethereumHash ? `original transaction ${ethereumHash}` : 'the original transaction'} is identified and reconciled.`
+          : reason === 'INTEAR_ED25519_UNAVAILABLE'
           ? 'Intear needs a newer browser with Ed25519 support. No transaction was sent.'
           : reason === 'CLI_ED25519_UNAVAILABLE'
             ? 'NEAR CLI login needs a newer browser with Ed25519 support. No transaction was sent.'
@@ -597,10 +732,28 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
         busy(false);
         if (reopen) { hideBanner(); openPicker(opener); }
       }
+  }
+  for (const button of options) {
+    button.addEventListener('click', async () => {
+      const walletId = button.dataset.walletId;
+      if (!ready || busyState || connected || viewedAccount || !allowedIds.has(walletId)) return;
+      if (walletId === 'near-cli') {
+        accountEntry = true; accountInput.value = ''; accountError.hidden = true; accountError.textContent = '';
+        setStatus('Enter an account ID for a public testnet view. No terminal or wallet is required.');
+        renderControls(); accountInput.focus(); return;
+      }
+      if (walletId === 'ethereum-wallets') {
+        ethereumInfo = true;
+        setStatus('Ethereum Wallets may request a one-time testnet setup transaction.');
+        renderControls(); ethereumContinue.focus(); return;
+      }
+      await startWallet(walletId);
     });
   }
   disconnect.addEventListener('click', async () => {
-    if ((!selectedWallet && !wcHandle) || busyState) return;
+    if (busyState) return;
+    if (viewedAccount) { showDisconnected('Account view removed.'); return; }
+    if (!selectedWallet && !wcHandle) return;
     busy(true); setStatus('Disconnecting your wallet…');
     try {
       if (wcHandle) {

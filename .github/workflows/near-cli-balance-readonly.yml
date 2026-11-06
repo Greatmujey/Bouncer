@@ -1,0 +1,69 @@
+# Official NEAR CLI, public testnet reads only. No imported credentials,
+# wallet session, signature, transfer, contract deployment, or transaction.
+name: Official NEAR CLI testnet balance (read only)
+
+on:
+  push:
+    branches: ['arena/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  balance:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[near-cli-balance-readonly]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      NO_COLOR: '1'
+      TERM: dumb
+    steps:
+      - name: Download and verify the official pinned NEAR CLI
+        run: |
+          set -euo pipefail
+          dir="$RUNNER_TEMP/near-cli-readonly"
+          mkdir -p "$dir/bin" "$dir/home" "$dir/config"
+          gh release download v0.31.1 --repo near/near-cli-rs \
+            --pattern near-cli-rs-x86_64-unknown-linux-gnu.tar.gz --dir "$dir"
+          printf '%s  %s\n' '8b92f4f79f324a882ad79b58d61b91dccc676dd653dc72a1f23693aa5db99e21' \
+            "$dir/near-cli-rs-x86_64-unknown-linux-gnu.tar.gz" | sha256sum -c -
+          tar -xzf "$dir/near-cli-rs-x86_64-unknown-linux-gnu.tar.gz" -C "$dir/bin"
+          mapfile -t binaries < <(find "$dir/bin" -type f -name near)
+          test "${#binaries[@]}" -eq 1
+          printf '%s\n' "${binaries[0]}" > "$dir/binary-path"
+          "${binaries[0]}" --version
+      - name: Query the same account directly with NEAR CLI
+        run: |
+          set -euo pipefail
+          dir="$RUNNER_TEMP/near-cli-readonly"
+          export HOME="$dir/home" XDG_CONFIG_HOME="$dir/config"
+          near="$(cat "$dir/binary-path")"
+          # Explicitly named public account, network, token and finality. No
+          # local keys are generated, accessed or imported for these views.
+          timeout 70s "$near" tokens great_mujey.testnet view-near-balance \
+            network-config testnet now > "$dir/near.txt" 2>&1
+          timeout 70s "$near" tokens great_mujey.testnet view-ft-balance \
+            3e2210e1184b45b64c8a434c0a7e7b23cc04ea7eb7a6c3c32520d03d4afcb8af \
+            network-config testnet now > "$dir/circle.txt" 2>&1
+          python3 - <<'PY'
+          import json, os, pathlib, re
+          directory = pathlib.Path(os.environ['RUNNER_TEMP']) / 'near-cli-readonly'
+          native = (directory / 'near.txt').read_text()
+          circle = (directory / 'circle.txt').read_text()
+          # Never report a successful balance from an empty or unexpected CLI output.
+          assert 'great_mujey.testnet' in native and 'NEAR' in native
+          assert 'great_mujey.testnet' in circle and 'USDC' in circle
+          report = {'network':'testnet', 'account':'great_mujey.testnet',
+                    'near_cli_version':'0.31.1', 'native':native.strip(), 'circle':circle.strip(),
+                    'signing_access_proven':False, 'credentials_imported':False, 'transaction_sent':False,
+                    'scope':'Two public latest-FINAL CLI views, potentially at different blocks; values can change.'}
+          text = json.dumps(report, separators=(',', ':'), ensure_ascii=True)
+          assert len(text) < 12000
+          print('::notice title=Official NEAR CLI public balance::' + text.replace('%','%25').replace('\n','%0A').replace('\r','%0D'))
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as f:
+              f.write('## Official NEAR CLI — public testnet balances\n\n')
+              f.write('Read-only views. The CLI has not been given a key and cannot sign for this account.\n\n```text\n')
+              f.write(native.strip() + '\n\n' + circle.strip() + '\n```\n')
+          PY

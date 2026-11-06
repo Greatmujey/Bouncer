@@ -22,12 +22,12 @@ test('public staging copies only reviewed wallet and Google assets, never creden
   fs.writeFileSync(path.join(source, 'credentials.txt'), 'private');
   fs.mkdirSync(path.join(source, 'journals'));
   fs.writeFileSync(path.join(source, 'journals', 'recovery.json'), 'private');
-  assert.equal(PUBLIC_WEB_FILES.length, 16);
+  assert.equal(PUBLIC_WEB_FILES.length, 18);
   assert.ok(PUBLIC_WEB_FILES.includes('google-signin.mjs'));
   assert.ok(PUBLIC_WEB_FILES.includes('hero-orbit.jpg'));
   assert.ok(PUBLIC_WEB_FILES.includes('manrope-latin.woff2'));
   assert.ok(PUBLIC_WEB_FILES.includes('manrope-OFL.txt'));
-  for (const file of ['wallet.bundle.js', 'intear-wallet.executor.js', 'intear-wallet-source.zip', 'walletconnect.bundle.js', 'walletconnect-config.json', 'walletconnect-NOTICES.txt']) assert.ok(PUBLIC_WEB_FILES.includes(file));
+  for (const file of ['wallet.bundle.js', 'intear-wallet.executor.js', 'intear-wallet-source.zip', 'ethereum-wallet.executor.js', 'ethereum-wallet-NOTICE.txt', 'walletconnect.bundle.js', 'walletconnect-config.json', 'walletconnect-NOTICES.txt']) assert.ok(PUBLIC_WEB_FILES.includes(file));
   assert.ok(PUBLIC_WEB_FILES.every(file => !/^api\//i.test(file)));
   assert.deepEqual(stagePublicWeb(dest, source), [...PUBLIC_WEB_FILES]);
   assert.deepEqual(fs.readdirSync(dest).sort(), [...PUBLIC_WEB_FILES].sort());
@@ -85,8 +85,9 @@ test('public staging requires six wallets, WalletConnect, then Google', t => {
   const original = fs.readFileSync(index, 'utf8');
   for (const altered of [
     original.replace('google-signin.mjs?v=2', 'old.mjs?v=2'),
-    original.replace('wallet.bundle.js?v=14', 'old-wallet.js?v=14'),
+    original.replace('wallet.bundle.js?v=18', 'old-wallet.js?v=18'),
     original.replace('data-wallet-id="near-cli"', 'data-wallet-id="other"'),
+    original.replace('data-wallet-id="ethereum-wallets"', 'data-wallet-id="other"'),
     original.replace('data-wallet-id="wallet-connect"', 'data-wallet-id="other"'),
     original.replace('id="google-start"', 'id="missing-google"'),
     original.replace('id="walletconnect-pairing"', 'id="missing-pairing"'),
@@ -127,6 +128,6 @@ test('Google session and WalletConnect relay are server functions, never public 
 test('staging CLI runs from the web root and publishes only allowlisted files', t => {
   const { dest } = fixture(t);
   const output = execFileSync(process.execPath, [script, dest], { cwd: realSource, encoding: 'utf8' });
-  assert.match(output, /Staged 16 reviewed public website files/);
+  assert.match(output, /Staged 18 reviewed public website files/);
   assert.deepEqual(fs.readdirSync(dest).sort(), [...PUBLIC_WEB_FILES].sort());
 });

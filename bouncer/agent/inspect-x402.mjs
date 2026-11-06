@@ -37,7 +37,20 @@ function inspectRail(rail, challenge, header, url) {
         resource_url: url, max_quote_age_seconds: 120, accept_public_proof_risk: true, accept_unbound_resource_risk: true }, header);
     } catch { reasons.push('offer, resource binding or challenge is unsupported or ambiguous'); }
   }
+  // An advertised exact NEAR rail is a useful lead, not compatibility with
+  // this onchain-proof buyer. Custom exact transfer methods (for example
+  // Leash) are not the standard delegated FT wire format. Never expose other
+  // extra fields: some sellers include challenge nonces or bearer material.
+  const transferMethod = object(r.extra) ? r.extra.assetTransferMethod : undefined;
+  const defaultExact = transferMethod === undefined || transferMethod === 'default';
+  const parsedAmount = amount(r.amount);
+  const validPaidAmount = parsedAmount !== '<invalid>' && BigInt(parsedAmount) > 0n && BigInt(parsedAmount) < (1n << 128n);
+  const standardNearExactAdvertised = r.scheme === 'exact' && r.network === 'near:testnet' &&
+    r.asset === CIRCLE_TESTNET_USDC && isTestnetAccount(r.payTo) && validPaidAmount && defaultExact;
   return { scheme: label(r.scheme), network: label(r.network), asset: label(r.asset), payee: label(r.payTo), amount: amount(r.amount),
+    transfer_method: transferMethod === undefined ? null :
+      ['default', 'leash'].includes(transferMethod) ? transferMethod : '<other>',
+    default_near_exact_shape: standardNearExactAdvertised,
     wire_candidate: reasons.length === 0 && challenge.x402Version === 2, reasons };
 }
 

@@ -57,6 +57,81 @@ try {
     } finally { await browserReal.close(); }
   }
 
+  // Exercise the exact vendored Ethereum executor in a real near-connect
+  // sandbox. The approval page is synthetic; no real wallet or chain is used.
+  {
+    const ethBrowser = await chromium.launch({ executablePath, args: browserArgs, headless: true });
+    try {
+      const context = await ethBrowser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+      const page = await context.newPage(), errors = [], requests = [], rpc = [];
+      page.on('pageerror', error => errors.push(error.message));
+      const fakeApprovalPage = `<!doctype html><button id="approve">Approve synthetic request</button><p id="kind"></p><script>
+        const params = new URLSearchParams(location.hash.slice(1)), origin = params.get('origin'), requestId = params.get('requestId');
+        const channel = 'ethereum-near-connect/v1'; let payload;
+        const ready = () => opener.postMessage({ channel, requestId, type: 'READY' }, origin);
+        addEventListener('message', event => {
+          if (event.origin !== origin || event.source !== opener || event.data?.channel !== channel || event.data?.requestId !== requestId || event.data?.type !== 'REQUEST') return;
+          payload = event.data.payload; document.querySelector('#kind').textContent = payload.kind + ':' + payload.network;
+        });
+        document.querySelector('#approve').onclick = () => {
+          if (!payload) return;
+          opener.postMessage({ channel, requestId, type: 'RESULT', result: payload.kind === 'signIn' ? [{accountId:'0x${'a'.repeat(40)}'}] : null }, origin);
+        };
+        setInterval(ready, 250); ready();
+      <\/script>`;
+      await context.route('https://evm-on-near.dev/**', route => route.fulfill({ status: 200, contentType: 'text/html', body: fakeApprovalPage }));
+      await context.route('https://test.rpc.fastnear.com/**', route => {
+        const cors = { 'access-control-allow-origin': '*', 'access-control-allow-methods': 'POST, OPTIONS', 'access-control-allow-headers': 'content-type' };
+        if (route.request().method() === 'OPTIONS') return route.fulfill({ status: 204, headers: cors });
+        const body = route.request().postDataJSON(); rpc.push(body);
+        const block = 'B'.repeat(44), height = 276000123;
+        const result = body.method === 'block' ? { header: { hash: block, height } }
+          : body.params.request_type === 'view_account'
+            ? { amount: '16000000000000000000000000', block_hash: block, block_height: height }
+            : { result: [...Buffer.from('"20000000"')], block_hash: block, block_height: height };
+        return route.fulfill({ status: 200, headers: cors, contentType: 'application/json', body: JSON.stringify({ jsonrpc: '2.0', id: body.id, result }) });
+      });
+      await context.route('**/api/google-session**', route => route.fulfill({ status: 503, contentType: 'application/json', body: '{}' }));
+      page.on('request', request => { if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method())) requests.push(request.url()); });
+      await page.goto(url, { waitUntil: 'networkidle' });
+      await page.waitForFunction(() => !document.querySelector('[data-wallet-id="ethereum-wallets"]').disabled);
+      await page.locator('.top-connect').click();
+      await page.locator('[data-wallet-id="ethereum-wallets"]').click();
+      assert.equal(await page.locator('#wallet-ethereum-info').isVisible(), true);
+      assert.match(await page.locator('#wallet-ethereum-info').innerText(), /setup transaction/);
+      const popupPromise = page.waitForEvent('popup');
+      await page.locator('#wallet-ethereum-continue').click();
+      const popup = await popupPromise;
+      await popup.locator('#kind').waitFor();
+      await popup.waitForFunction(() => document.querySelector('#kind').textContent === 'signIn:testnet');
+      await popup.locator('#approve').click();
+      await page.waitForFunction(() => document.querySelector('#wallet-status').textContent.includes('0x' + 'a'.repeat(40)));
+      assert.match(await page.locator('#wallet-status').textContent(), /wallet-reported.*No vault or spending access/);
+      assert.equal(await page.locator('.top-connect').getAttribute('data-wallet-state'), 'connected');
+      await page.locator('.top-connect').click();
+      assert.equal(await page.locator('#wallet-account-badge').textContent(), 'CONNECTED');
+      assert.match(await page.locator('#wallet-account-warning').textContent(), /does not grant Bouncer spending access/);
+      assert.equal(await page.locator('#wallet-account-use-wallet').isVisible(), false);
+      await page.locator('#wallet-account-refresh').click();
+      await page.waitForFunction(() => document.querySelector('#wallet-account-usdc').textContent === '20');
+      assert.equal(await page.locator('#wallet-account-near').textContent(), '16');
+      assert.deepEqual(rpc.map(call => call.method === 'block' ? 'block' : call.params.request_type), ['block', 'view_account', 'call_function']);
+      assert.equal(rpc[1].params.account_id, `0x${'a'.repeat(40)}`);
+      assert.equal(JSON.parse(Buffer.from(rpc[2].params.args_base64, 'base64')).account_id, `0x${'a'.repeat(40)}`);
+      const signOutPopup = page.waitForEvent('popup');
+      await page.locator('#wallet-disconnect').click({ noWaitAfter: true });
+      const disconnectPopup = await signOutPopup;
+      await disconnectPopup.waitForFunction(() => document.querySelector('#kind').textContent === 'signOut:testnet');
+      await disconnectPopup.locator('#approve').click();
+      await page.waitForFunction(() => document.querySelector('#wallet-status').textContent.includes('disconnected'));
+      assert.equal(requests.length, 3);
+      assert.ok(requests.every(url => url === 'https://test.rpc.fastnear.com/'), 'only read-only RPC requests were sent');
+      assert.deepEqual(errors, []);
+      console.log('Vendored Ethereum executor completed a synthetic testnet connect, public balance view and disconnect through a mock popup. No real wallet, relayer or transaction was tested.');
+      await context.close();
+    } finally { await ethBrowser.close(); }
+  }
+
   if (process.env.BOUNCER_CLI_EXECUTOR) {
     const executor = fs.readFileSync(process.env.BOUNCER_CLI_EXECUTOR);
     assert.equal(crypto.createHash('sha256').update(executor).digest('hex'), WALLET_EXECUTOR_SHA256['near-cli']);
@@ -64,23 +139,49 @@ try {
     try {
       const page = await cliBrowser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
       const errors = [], writes = [], rpc = [];
+      let cliLoads = 0;
       const pair = KeyPair.fromRandom('ed25519'); // synthetic key, never submitted to a real network
       const publicKey = pair.getPublicKey().toString();
       page.on('pageerror', error => errors.push(error.message));
       page.on('request', request => { if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method())) writes.push(request.url()); });
-      await page.route('**/near-cli-connect/*/dist/near-cli.js*', route => route.fulfill({ status: 200, contentType: 'text/javascript', body: executor }));
+      await page.route('**/near-cli-connect/*/dist/near-cli.js*', route => { cliLoads++; return route.fulfill({ status: 200, contentType: 'text/javascript', body: executor }); });
       const cors = { 'access-control-allow-origin': '*', 'access-control-allow-methods': 'GET, POST, OPTIONS', 'access-control-allow-headers': 'content-type' };
       await page.route('https://test.rpc.fastnear.com/**', async route => {
         if (route.request().method() === 'OPTIONS') return route.fulfill({ status: 204, headers: cors });
         const body = route.request().postDataJSON(); rpc.push(body);
-        return route.fulfill({ status: 200, headers: cors, contentType: 'application/json', body: JSON.stringify({ jsonrpc: '2.0', id: body.id, result: { permission: 'FullAccess' } }) });
+        const block = 'B'.repeat(44), height = 276000123;
+        const result = body.method === 'block' ? { header: { hash: block, height } }
+          : body.params.request_type === 'view_account'
+            ? { amount: '16019958035075000000000000', block_hash: block, block_height: height }
+            : body.params.request_type === 'call_function'
+              ? { result: [...Buffer.from('"20000000"')], block_hash: block, block_height: height }
+              : { permission: 'FullAccess' };
+        return route.fulfill({ status: 200, headers: cors, contentType: 'application/json', body: JSON.stringify({ jsonrpc: '2.0', id: body.id, result }) });
       });
       await page.route('**/api/google-session**', route => route.fulfill({ status: 503, contentType: 'application/json', body: '{}' }));
       await page.goto(url, { waitUntil: 'networkidle' });
       await page.waitForFunction(() => !document.querySelector('[data-wallet-id="near-cli"]').disabled);
+      // The phone-friendly account view never loads the CLI executor or asks
+      // for a key/signature. Real-looking values here are synthetic RPC data.
+      await page.locator('.top-connect').click();
+      await page.locator('[data-wallet-id="near-cli"]').click();
+      await page.locator('#wallet-account-id').fill('cli-synthetic.testnet');
+      await page.locator('#wallet-account-id').press('Enter');
+      await page.waitForFunction(() => document.querySelector('#wallet-account-usdc').textContent === '20');
+      assert.equal(await page.locator('.top-connect').getAttribute('data-wallet-state'), 'view-only');
+      assert.match(await page.locator('#wallet-status').textContent(), /unverified.*No wallet is connected/);
+      assert.equal(cliLoads, 0, 'typed account does not execute the CLI adapter');
+      assert.deepEqual(rpc.map(request => request.method === 'block' ? 'block' : request.params.request_type), ['block', 'view_account', 'call_function']);
+      await page.locator('.top-connect').click();
+      assert.equal(await page.locator('#wallet-account-view').isVisible(), true);
+      await page.locator('#wallet-disconnect').click();
+      await page.locator('#wallet-close').click();
+      rpc.length = 0; writes.length = 0;
       async function submitCliSignature(corrupt = false) {
         await page.locator('.top-connect').click();
         await page.locator('[data-wallet-id="near-cli"]').click();
+        if (await page.locator('.account-entry-cli').getAttribute('open') === null) await page.locator('.account-entry-cli summary').click();
+        await page.locator('#wallet-cli-verify').click();
         const frame = page.frameLocator('.hot-connector-popup iframe').first();
         await frame.locator('#account-id').fill('cli-synthetic.testnet', { timeout: 20_000 });
         await frame.locator('#account-id').press('Enter');

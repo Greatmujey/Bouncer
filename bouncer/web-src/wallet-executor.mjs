@@ -7,6 +7,7 @@ export const WALLET_EXECUTOR_SHA256 = Object.freeze({
   'nightly-wallet': '6e769f105fb30d37501439287ec901b4d858a503ab195e2e99c06c172c5b5d48',
   'ledger': 'e3b4569f91aa57fe0c4217c4b0cc394a991f582ae7961fb60b0abed5ade51729',
   'near-cli': '522f2a52403f6da84384a409718c54b49ed4432cdfd583363d35109be8c8e318',
+  'ethereum-wallets': '8149d556df4544682d89dc62cd74b3843bd28d536d86928a029f4ce1f186056c',
 });
 
 const MAX_EXECUTOR_BYTES = 4 * 1024 * 1024;
@@ -61,8 +62,11 @@ export async function loadVerifiedExecutor(manifest, { fetch, crypto, location }
   const expected = WALLET_EXECUTOR_SHA256[manifest?.id];
   if (!expected || !crypto?.subtle || typeof fetch !== 'function') throw new Error('Wallet integrity check unavailable');
   const url = new URL(manifest.executor, location.origin);
-  const localIntear = manifest.id === 'intear-wallet' && url.origin === location.origin && url.pathname === '/intear-wallet.executor.js';
-  if (!localIntear && (url.protocol !== 'https:' || url.hostname !== 'raw.githubusercontent.com')) {
+  const localExecutor = url.origin === location.origin && (
+    (manifest.id === 'intear-wallet' && url.pathname === '/intear-wallet.executor.js') ||
+    (manifest.id === 'ethereum-wallets' && url.pathname === '/ethereum-wallet.executor.js')
+  );
+  if (!localExecutor && (url.protocol !== 'https:' || url.hostname !== 'raw.githubusercontent.com')) {
     throw new Error('Unapproved wallet executor origin');
   }
   const controller = new AbortController();

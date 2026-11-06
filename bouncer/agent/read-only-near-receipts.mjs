@@ -4,14 +4,24 @@
  * This is recovery evidence from a trusted RPC, not a consensus proof. */
 import { ReadOnlyNearRpcProvider } from './read-only-near-rpc.mjs';
 import { readBoundedJson } from '../shared/bounded-json.mjs';
-import { isTestnetAccount } from '../shared/account-id.mjs';
+import { isTestnetAccount, isImplicitNearAccount } from '../shared/account-id.mjs';
 import { isTransactionHash } from '../shared/direct-payment-settlement.mjs';
 const record = x => x !== null && typeof x === 'object' && !Array.isArray(x);
 
 export class ReadOnlyNearReceiptProvider extends ReadOnlyNearRpcProvider {
-  async txStatusReceipts(hash, owner, waitUntil = 'FINAL') {
-    if (!isTransactionHash(hash) || !isTestnetAccount(owner) || waitUntil !== 'FINAL') {
+  async txStatusReceipts(hash, owner, waitUntil = 'FINAL', options = {}) {
+    if (!record(options) || Object.keys(options).some(k => k !== 'allowImplicitTestnet') ||
+        (options.allowImplicitTestnet !== undefined && typeof options.allowImplicitTestnet !== 'boolean')) {
+      throw new Error('invalid receipt lookup options');
+    }
+    const implicit = isImplicitNearAccount(owner);
+    if (!isTransactionHash(hash) || !(isTestnetAccount(owner) || (implicit && options.allowImplicitTestnet === true)) || waitUntil !== 'FINAL') {
       throw new Error('receipt recovery requires the original testnet hash and FINAL');
+    }
+    // A 64-hex implicit ID is valid on every NEAR network. Opting in is not
+    // sufficient: independently confirm testnet before even looking up the hash.
+    if (implicit && (await this.viewNodeStatus())?.chain_id !== 'testnet') {
+      throw new Error('implicit receipt recovery requires a testnet RPC');
     }
     const id = 'bouncer-read-only-receipts';
     const response = await this.readOnlyFetch(this.connection.url, { method: 'POST', redirect: 'error',

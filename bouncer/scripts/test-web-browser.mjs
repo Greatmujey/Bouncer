@@ -27,7 +27,7 @@ server.listen(0, '127.0.0.1');
 await once(server, 'listening');
 const url = `http://127.0.0.1:${server.address().port}/`;
 const browser = await chromium.launch({ executablePath, args: ['--no-sandbox', '--disable-gpu'], headless: true });
-const expected = ['near-mobile', 'meteor-wallet', 'intear-wallet', 'nightly-wallet', 'ledger', 'near-cli', 'wallet-connect'];
+const expected = ['near-mobile', 'meteor-wallet', 'intear-wallet', 'nightly-wallet', 'ledger', 'ethereum-wallets', 'near-cli', 'wallet-connect'];
 try {
   for (const [width, height] of [[320, 844], [390, 844], [1440, 844], [844, 390]]) {
     const page = await browser.newPage({ viewport: { width, height }, isMobile: width < 650, hasTouch: width < 650, reducedMotion: 'reduce' });
@@ -80,7 +80,8 @@ try {
     assert.equal(await page.evaluate(() => document.activeElement === document.querySelector('.top-connect')), true, 'close returns focus to opener');
     await page.locator(width <= 740 ? '.mobile-nav a[href="#connect"]' : '.side-link[href="#connect"]').click();
     await page.locator('[data-route-view="connect"]').waitFor({ state: 'visible' });
-    assert.match(await page.locator('.account-card').innerText(), /Neither connection creates a vault, grants spending access or sends a transaction/i);
+    assert.match(await page.locator('.account-card').innerText(), /does not create a Bouncer vault or grant agent spending access/i);
+    assert.match(await page.locator('.account-card').innerText(), /Ethereum wallet setup may require an approved testnet transaction/i);
     await page.locator('#wallet-connect').click();
     assert.equal(await picker.evaluate(el => el.open), true);
     await page.locator('#wallet-close').click();
