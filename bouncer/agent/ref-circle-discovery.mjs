@@ -67,7 +67,7 @@ function sortedRoutes(pools) {
 async function mapLimit(items, concurrency, fn) {
   const result = new Array(items.length); let next = 0;
   await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, async () => {
-    while (true) { const i = next++; if (i >= items.length) return; result[i] = await fn(items[i]); }
+    while (true) { const i = next++; if (i >= items.length) return; result[i] = await fn(items[i], i); }
   }));
   return result;
 }
@@ -156,4 +156,95 @@ export async function inspectRefCirclePaths({ provider, now = Date.now } = {}) {
     dcl_contract: DCL, dcl_direct_fee_tiers: dcl,
     signed: false, sent: false, execution_authorized: false, owner_funds_or_history_checked: false,
     scope: 'single trusted FINAL RPC block; simple pools and at most 20 pre-ranked paths plus four direct DCL tiers, no token/code audit or executable quote; split routes, actual settlement, gas, storage and slippage not checked' };
+}
+
+// Three disjoint, previously observed Ref testnet routes. This diagnostic
+// searches a 0.01-NEAR allocation grid with constant-product estimates, then
+// asks the *same* FINAL snapshot for independent returns on the selected legs.
+// It is deliberately not an exhaustive router or a swap transaction builder.
+const SPLIT_ROUTES = [
+  { ids: [17, 2527], tokens: [WRAP, 'ref.fakes.testnet', CIRCLE] },
+  { ids: [1845], tokens: [WRAP, CIRCLE] },
+  { ids: [2206], tokens: [WRAP, CIRCLE] },
+];
+const SPLIT_STEP = 10n ** 22n; // 0.01 test NEAR
+const SPLIT_BUDGETS = [100, 200, 300, 400, 450, 500, 700, 800];
+
+/** Fixed-route, same-block research only; does not inspect balances or sign. */
+export async function inspectRefCircleSplits({ provider, now = Date.now } = {}) {
+  if (!provider || ['viewNodeStatus', 'viewBlock', 'callFunctionRaw'].some(k => typeof provider[k] !== 'function') ||
+      typeof now !== 'function') throw new Error('read-only testnet provider required');
+  if ((await provider.viewNodeStatus())?.chain_id !== 'testnet') throw new Error('RPC must report testnet');
+  const block = await provider.viewBlock({ finality: 'final' });
+  const start = now(), { hash } = assertFreshFinalBlock(block, start);
+  if (!Number.isSafeInteger(block.header.height) || block.header.height < 1) throw new Error('invalid FINAL block height');
+  const view = (method, args) => readPinnedJsonView(provider, hash, REF, method, args);
+  const ids = SPLIT_ROUTES.flatMap(r => r.ids);
+  if (new Set(ids).size !== ids.length) throw new Error('split routes must not share a pool');
+  const pools = await mapLimit(ids, 4, async id => {
+    const result = simplePool(await view('get_pool', { pool_id: id }), id);
+    if (!result) throw new Error(`pool ${id} is unavailable or not a valid simple pool`);
+    return result;
+  });
+  const byId = new Map(pools.map(p => [p.id, p]));
+  const routes = SPLIT_ROUTES.map(route => {
+    const legs = route.ids.map(id => byId.get(id));
+    for (let i = 0; i < legs.length; i++) {
+      if (!legs[i].tokens.includes(route.tokens[i]) || !legs[i].tokens.includes(route.tokens[i + 1])) {
+        throw new Error(`pool ${legs[i].id} tokens differ from the reviewed research path`);
+      }
+    }
+    return { ...route, legs };
+  });
+  const maximum = SPLIT_BUDGETS.at(-1);
+  // Estimate every path at every allocation size. BigInt arithmetic avoids
+  // precision loss; Ref's actual returns are separately checked below.
+  const estimated = routes.map(r => Array.from({ length: maximum + 1 }, (_, units) => {
+    let n = BigInt(units) * SPLIT_STEP;
+    for (let i = 0; i < r.legs.length; i++) n = rough(r.legs[i], r.tokens[i], n);
+    return n;
+  }));
+  let dp = Array.from({ length: maximum + 1 }, (_, n) => n === 0 ? { value: 0n, allocation: [] } : null);
+  for (let index = 0; index < routes.length; index++) {
+    const next = Array(maximum + 1).fill(null);
+    for (let total = 0; total <= maximum; total++) {
+      for (let units = 0; units <= total; units++) {
+        const prior = dp[total - units];
+        if (!prior) continue;
+        const value = prior.value + estimated[index][units];
+        if (!next[total] || value > next[total].value) next[total] = { value, allocation: [...prior.allocation, units] };
+      }
+    }
+    dp = next;
+  }
+  const scenarios = await mapLimit(SPLIT_BUDGETS, 2, async units => {
+    const selected = dp[units];
+    const legs = await mapLimit(routes, 3, async (route, index) => {
+      const input = BigInt(selected.allocation[index]) * SPLIT_STEP;
+      let output = input, usable = true;
+      if (input !== 0n) {
+        try {
+          for (let i = 0; i < route.ids.length; i++) {
+            const value = await view('get_return', { pool_id: route.ids[i], token_in: route.tokens[i],
+              amount_in: output.toString(), token_out: route.tokens[i + 1] });
+            if (!uint(value) || value === '0') throw new Error('unavailable return');
+            output = BigInt(value);
+          }
+        } catch { usable = false; }
+      }
+      return { pool_ids: route.ids, input_yocto: input.toString(), output_atoms: usable ? output.toString() : null };
+    });
+    const complete = legs.every(l => l.output_atoms !== null);
+    return { input_yocto: (BigInt(units) * SPLIT_STEP).toString(), estimate_atoms: selected.value.toString(), legs,
+      observed_sum_atoms: complete ? legs.reduce((sum, l) => sum + BigInt(l.output_atoms), 0n).toString() : null,
+      quote_complete: complete };
+  });
+  const end = now();
+  if (!Number.isSafeInteger(end) || end < start) throw new Error('local clock moved backwards');
+  assertFreshFinalBlock(block, end);
+  return { version: 1, network: 'testnet', block_hash: hash, block_height: block.header.height,
+    observed_at: new Date(end).toISOString(), step_yocto: SPLIT_STEP.toString(),
+    routes: routes.map(r => ({ pool_ids: r.ids, tokens: r.tokens })), scenarios,
+    signed: false, sent: false, execution_authorized: false,
+    scope: 'fixed disjoint simple pools and 0.01-NEAR allocation grid; estimates choose allocations and same-block views quote each leg independently; not an executable quote or exhaustive route search; balances, storage, deployment costs, slippage, intermediate-token safety and settlement are unverified' };
 }

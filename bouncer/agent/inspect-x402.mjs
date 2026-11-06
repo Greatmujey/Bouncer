@@ -48,7 +48,8 @@ function inspectRail(rail, challenge, header, url) {
   const standardNearExactAdvertised = r.scheme === 'exact' && r.network === 'near:testnet' &&
     r.asset === CIRCLE_TESTNET_USDC && isTestnetAccount(r.payTo) && validPaidAmount && defaultExact;
   return { scheme: label(r.scheme), network: label(r.network), asset: label(r.asset), payee: label(r.payTo), amount: amount(r.amount),
-    transfer_method: transferMethod === undefined ? null : label(transferMethod),
+    transfer_method: transferMethod === undefined ? null :
+      ['default', 'leash'].includes(transferMethod) ? transferMethod : '<other>',
     default_near_exact_shape: standardNearExactAdvertised,
     wire_candidate: reasons.length === 0 && challenge.x402Version === 2, reasons };
 }

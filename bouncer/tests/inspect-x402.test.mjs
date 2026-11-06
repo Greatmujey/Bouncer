@@ -53,6 +53,11 @@ test('flags standard-looking NEAR exact separately from Bouncer compatibility an
   assert.equal(out.offers[0].default_near_exact_shape, true);
   assert.equal(out.offers[0].wire_candidate, false);
   assert.doesNotMatch(JSON.stringify(out), /never-print/);
+  const unknown = structuredClone(rail); unknown.extra.assetTransferMethod = 'never-print-an-unknown-value';
+  const unknownOut = await inspectX402({ url, fetchImpl: fetchFor(challenge([unknown])) });
+  assert.equal(unknownOut.offers[0].transfer_method, '<other>');
+  assert.equal(unknownOut.offers[0].default_near_exact_shape, false);
+  assert.doesNotMatch(JSON.stringify(unknownOut), /never-print-an-unknown-value/);
   for (const change of [r => { r.extra.assetTransferMethod = 'leash'; }, r => { r.amount = '0'; },
     r => { r.network = 'near:mainnet'; }, r => { r.asset = 'usdc.fakes.testnet'; },
     r => { r.amount = '999999999999999999999999999999999999999'; }]) {

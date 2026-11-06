@@ -27,7 +27,7 @@ jobs:
       - name: Test discovery boundaries
         run: |
           npm ci --ignore-scripts --no-audit --no-fund
-          node --test tests/ref-circle-discovery.test.mjs
+          node --test tests/ref-circle-discovery.test.mjs tests/ref-circle-splits.test.mjs
       - name: Inspect bounded routes at one FINAL block
         run: |
           set -euo pipefail
@@ -43,3 +43,17 @@ jobs:
           { echo '## Ref testnet Circle paths: read-only, bounded search';
             echo 'No trade, order, signature, seller contact or payment. Intermediate tokens, owner history, storage and swap execution are not verified.';
             echo '```json'; cat "$RUNNER_TEMP/ref-paths.json"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: Inspect fixed disjoint-pool allocations at one FINAL block
+        run: |
+          set -euo pipefail
+          node scripts/inspect-ref-circle-splits.mjs > "$RUNNER_TEMP/ref-splits.json"
+          python3 - <<'PY'
+          import json, os
+          data = json.load(open(os.environ['RUNNER_TEMP'] + '/ref-splits.json'))
+          text = json.dumps(data, separators=(',', ':'), ensure_ascii=True)
+          assert len(text) < 12000
+          print('::notice title=Ref testnet Circle split estimates::' + text.replace('%','%25').replace('\n','%0A').replace('\r','%0D'))
+          PY
+          { echo '## Fixed-route split estimates: read-only, not executable';
+            echo 'Only three disjoint simple routes are considered. No balances, signer, trade, seller order or payment.';
+            echo '```json'; cat "$RUNNER_TEMP/ref-splits.json"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
