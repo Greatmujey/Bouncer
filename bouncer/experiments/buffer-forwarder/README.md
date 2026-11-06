@@ -54,6 +54,17 @@ not permission to retry. Matches do not verify deployed code/current state,
 wallet approval, seller payment or delivery. These offline checks do not open
 a wallet or implement a prompt fence.
 
+`agent/buffer-wallet-setup-preflight.mjs` assesses each of those three stages
+and a post-funding view against one fresh FINAL block, after matching all
+required earlier original receipt graphs in order. It checks the specific
+owner FullAccess key and nonce, absent or keyless pinned V12 vault, Circle code,
+registration and tracked/actual balance, native estimates and the retained
+seller code/price. In the isolated harness the mock token must block the real
+Circle pin. A matching view is not wallet consent, an exclusive durable journal,
+proof of absence of unrecorded attempts, an audit, a seller payment, or a
+promise that mutable code and chain state will not change. Estimates are not
+fee or storage guarantees; never retry an ambiguous prompt.
+
 `agent/buffer-wallet-spending-plan.mjs` now prepares an additional **unsigned**
 owner review for a locked, exact-intent policy and two distinct, receiver- and
 method-scoped agent keys. The trial limits are at most 20 test USDC per

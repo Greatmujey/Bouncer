@@ -16,6 +16,7 @@ import { buildBufferForwarder, checkBufferQuoteResponse, BUFFER_TESTNET_CONTRACT
 import { buildBufferWalletSpendingPlan, assertBufferSpendingBatchMatchesReview } from '../agent/buffer-wallet-spending-plan.mjs';
 import { buildBufferWalletSetup } from '../agent/buffer-wallet-setup-plan.mjs';
 import { prepareBufferWalletSetupAttempt, inspectBufferWalletSetupAttempt } from '../agent/buffer-wallet-setup-evidence.mjs';
+import { inspectBufferWalletSetupStage } from '../agent/buffer-wallet-setup-preflight.mjs';
 import { CIRCLE_TESTNET_CODE_HASH, VAULT_NATIVE_FUNDING_YOCTO } from '../agent/keyless-vault-v12-readiness.mjs';
 import { buildBufferForwarderWalletPlan } from '../agent/buffer-forwarder-wallet-plan.mjs';
 import { prepareBufferForwarderWalletAttempt, inspectBufferForwarderWalletAttempt } from '../agent/buffer-forwarder-wallet-evidence.mjs';
@@ -115,6 +116,11 @@ async function exercise({ endpoint, root, tokenOwner, v12, sellerWasm, sellerFix
     owner: PROVIDER, agent: AGENT, token_id: TOKEN, owner_payout: PROVIDER, contributor: PROVIDER,
     contributor_bps: 0, purchase_approval_above: '0', order_ttl_ns: 86_400_000_000_000,
   })], 'deploy source-built Buffer fixture');
+  await must(tokenOwner, TOKEN, 'storage_deposit', { account_id: SELLER, registration_only: true }, BigInt(storageMin), 50n * TGAS);
+  await must(sellerOwner, SELLER, 'set_product', { sku: SKU, price: PRICE, max_expense: '0', active: true });
+  await must(sellerOwner, SELLER, 'set_product', { sku: CUSTOM_SKU, price: CUSTOM_PRICE, max_expense: '1000000', active: true });
+  await must(sellerOwner, SELLER, 'set_quote_rules', { sku: CUSTOM_SKU, min_price: CUSTOM_PRICE, max_price: '50000000',
+    max_expense_bps: 5000, max_ttl_ns: 1800000000000, active: true });
 
   // Separate synthetic buyer: exercise the exact three unsigned setup batches
   // and compare their actual local original-hash receipt graphs. The snapshot
@@ -142,8 +148,18 @@ async function exercise({ endpoint, root, tokenOwner, v12, sellerWasm, sellerFix
       fixed_products: [{ sku: SKU, active: true, price_atoms: PRICE }] } };
   const setupPlan = buildBufferWalletSetup({ snapshot: setupSnapshot, wasmBytes: v12, nowMs: setupNow });
   const setupReview = structuredClone(setupPlan.review);
-  let setupReceiptsChecked = 0;
-  for (const b of setupPlan.batches) {
+  let setupReceiptsChecked = 0, setupPreflightsChecked = 0;
+  const setupOriginals = [];
+  for (let i = 0; i <= setupPlan.batches.length; i++) {
+    const b = setupPlan.batches[i], stageId = b?.id ?? 'verify_funded_vault';
+    const preflight = await inspectBufferWalletSetupStage({ review: setupReview, snapshot: setupSnapshot, wasmBytes: v12,
+      trustedReviewHash: setupReview.review_sha256, trustedOwnerPublicKey: pub(setupKey),
+      trustedSellerCodeHash: codeHash(sellerWasm), stageId, priorOriginals: setupOriginals, provider: sandboxViews });
+    assert.equal(preflight.status, 'BLOCKED_OR_UNKNOWN', 'mock token must not pass the real Circle code pin');
+    assert.deepEqual(preflight.blockers, [{ check: 'circle_and_seller_code_pins', status: 'BLOCKED' }]);
+    assert.equal(preflight.prior_receipt_graphs_matched, i); assert.equal(preflight.execution_authorized, false);
+    setupPreflightsChecked++;
+    if (!b) break;
     const executed = await batch(setupOwner, b.receiverId, b.actions, `sandbox setup stage ${b.id}`);
     const evidenceInput = { review: setupReview, snapshot: setupSnapshot, wasmBytes: v12,
       trustedReviewHash: setupReview.review_sha256, trustedOwnerPublicKey: pub(setupKey),
@@ -153,6 +169,7 @@ async function exercise({ endpoint, root, tokenOwner, v12, sellerWasm, sellerFix
     const proof = inspectBufferWalletSetupAttempt({ ...evidenceInput, attempt, result });
     assert.equal(proof.status, b.id === 'fund_vault_circle' ? 'FINAL_FUNDING_RECEIPTS_MATCH' : 'FINAL_SETUP_RECEIPT_MATCH');
     assert.equal(proof.do_not_resend, true); setupReceiptsChecked++;
+    setupOriginals.push({ trustedOriginalHash: evidenceInput.trustedOriginalHash, attempt, result });
   }
   assert.equal((await provider.viewAccount(setupVaultId, { finality: 'final' })).code_hash, codeHash(v12));
   assert.deepEqual((await provider.viewAccessKeyList(setupVaultId, { finality: 'final' })).keys, []);
@@ -163,17 +180,14 @@ async function exercise({ endpoint, root, tokenOwner, v12, sellerWasm, sellerFix
     'create keyless V12 sandbox vault');
   assert.equal((await provider.viewAccount(SELLER, { finality: 'final' })).code_hash, codeHash(sellerWasm));
   assert.equal((await provider.viewAccount(VAULT, { finality: 'final' })).code_hash, codeHash(v12));
-  for (const id of [VAULT, SELLER, PROVIDER]) {
+  assert.deepEqual((await provider.viewAccessKeyList(SELLER, { finality: 'final' })).keys, []);
+  for (const id of [VAULT, PROVIDER]) {
     if (id !== PROVIDER) assert.deepEqual((await provider.viewAccessKeyList(id, { finality: 'final' })).keys, []);
     await must(tokenOwner, TOKEN, 'storage_deposit', { account_id: id, registration_only: true }, BigInt(storageMin), 50n * TGAS);
   }
   let vaultAgentInstalled = false, spendingReceiptsChecked = 0, spendingPreflightsChecked = 0,
     forwarderBatchesChecked = 0, forwarderReceiptsChecked = 0, forwarderPreflightsChecked = 0;
   await must(tokenOwner, TOKEN, 'ft_transfer_call', { receiver_id: VAULT, amount: '60000000', msg: '' }, 1n, 300n * TGAS);
-  await must(sellerOwner, SELLER, 'set_product', { sku: SKU, price: PRICE, max_expense: '0', active: true });
-  await must(sellerOwner, SELLER, 'set_product', { sku: CUSTOM_SKU, price: CUSTOM_PRICE, max_expense: '1000000', active: true });
-  await must(sellerOwner, SELLER, 'set_quote_rules', { sku: CUSTOM_SKU, min_price: CUSTOM_PRICE, max_price: '50000000',
-    max_expense_bps: 5000, max_ttl_ns: 1800000000000, active: true });
   assert.equal(await balance(VAULT), '60000000'); assert.equal(await tracked(), '60000000');
 
   async function prepare(label, onchainId, apiId, { amount = PRICE, sku = SKU, expiryMs, precheck } = {}) {
@@ -383,6 +397,7 @@ async function exercise({ endpoint, root, tokenOwner, v12, sellerWasm, sellerFix
   assert.equal(await balance(VAULT), '35000000'); assert.equal(await tracked(), '35000000');
   assert.equal(await spend('custom'), CUSTOM_PRICE);
   assert.equal(setupReceiptsChecked, 3, 'all synthetic vault setup originals must be reconciled');
+  assert.equal(setupPreflightsChecked, 4, 'all setup checks must block the mock Circle code pin');
   assert.equal(spendingReceiptsChecked, 9, 'all synthetic policy and scoped-key originals must be reconciled');
   assert.equal(spendingPreflightsChecked, 4, 'sandbox views checked policy, keys and intent while the mock-Circle pin blocked');
   assert.equal(forwarderBatchesChecked, 12, 'four local scenarios executed all three reviewed forwarder batches');
@@ -392,6 +407,7 @@ async function exercise({ endpoint, root, tokenOwner, v12, sellerWasm, sellerFix
     buffer_source_revision: '9bc5ef0cbdc84074e94995cb50d334fc615f9b96', source_built_sha256: sellerFixture.sha256,
     v12_sha256: V12_SHA256, unsigned_wallet_spending_plan_exercised_locally: true,
     synthetic_original_vault_setup_receipts_checked: setupReceiptsChecked,
+    sandbox_vault_setup_preflights_checked_with_mock_token_pin_blocked: setupPreflightsChecked,
     synthetic_forwarder_wallet_batches_exercised: forwarderBatchesChecked,
     synthetic_original_forwarder_receipts_checked: forwarderReceiptsChecked,
     sandbox_forwarder_preflights_checked_with_mock_token_pin_blocked: forwarderPreflightsChecked,
