@@ -13,6 +13,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import nearApi from 'near-api-js';
 import { buildBufferForwarder, BUFFER_TESTNET_CONTRACT as SELLER } from '../experiments/buffer-forwarder/build.mjs';
+import { collectBufferDeliverySnapshots, verifyBufferDeliveryEvidence } from '../agent/buffer-delivery-evidence.mjs';
 import { CIRCLE_TESTNET_USDC as TOKEN } from '../scripts/circle-testnet-setup.mjs';
 import { loopbackSandboxUrl, withSandboxOnlyFetch } from './v11-sandbox-setup-rpc.mjs';
 import { MOCK_FT_SHA256, SANDBOX_SHA256, SANDBOX_CHAIN_ID, readVerifiedFile,
@@ -130,9 +131,9 @@ async function exercise({ endpoint, root, tokenOwner, v12, sellerWasm, sellerFix
       expected_token: TOKEN, payee: adapter, amount: PRICE, memo: artifact.review.intent_memo,
       review_hash: artifact.review.review_sha256, expires_at_ms: String(terms.expires_at_ms), agent_public_key: pub(vaultKey) }, 1n);
     const signer = account(BUYER, provider, adapterKey);
-    const funding = await must(vaultAgent, VAULT, 'execute_exact_ft', { intent_id: terms.intent_id }, 0n, 300n * TGAS);
+    const funding = await must(vaultAgent, VAULT, 'execute_exact_ft', { intent_id: terms.intent_id }, 0n, 200n * TGAS);
     assert.equal(await balance(adapter), PRICE); assert.equal(await spend(policy), PRICE);
-    return { ...terms, artifact, signer, funding };
+    return { ...terms, terms, artifact, signer, funding };
   }
   async function open(item) {
     const result = await must(item.signer, item.adapter, 'open', {}, 0n, 300n * TGAS);
@@ -183,10 +184,29 @@ async function exercise({ endpoint, root, tokenOwner, v12, sellerWasm, sellerFix
   const deliveryOpen = await open(delivered);
   assert.equal(JSON.parse(Buffer.from(deliveryOpen.status.SuccessValue, 'base64').toString()), PRICE);
   assert.equal((await order(delivered.onchain_order_id)).customer, delivered.adapter);
-  const fixtureReport = Buffer.from('Isolated fixture report. '.repeat(20)), digest = sha(fixtureReport);
-  await must(sellerAgent, SELLER, 'mark_fulfilled', { order_id: delivered.onchain_order_id, report_hash: digest });
+  const reportText = 'Isolated fixture report. '.repeat(20).trim(), digest = sha(Buffer.from(reportText));
+  const fulfillmentTx = await must(sellerAgent, SELLER, 'mark_fulfilled', { order_id: delivered.onchain_order_id, report_hash: digest });
   const fulfilled = await order(delivered.onchain_order_id);
   assert.equal(fulfilled.state, 'Fulfilled'); assert.equal(fulfilled.report_hash, digest);
+  const [fundingReceipts, openingReceipts, fulfillmentReceipts] = await Promise.all([
+    provider.txStatusReceipts(delivered.funding.transaction_outcome.id, BUYER, 'FINAL'),
+    provider.txStatusReceipts(deliveryOpen.transaction_outcome.id, BUYER, 'FINAL'),
+    provider.txStatusReceipts(fulfillmentTx.transaction_outcome.id, AGENT, 'FINAL'),
+  ]);
+  const evidence = { terms: delivered.terms,
+    pins: { vault_code_hash: codeHash(v12), token_code_hash: (await provider.viewAccount(TOKEN, { finality: 'final' })).code_hash,
+      seller_code_hash: codeHash(sellerWasm), fulfillment_signer: AGENT },
+    funding: { txHash: delivered.funding.transaction_outcome.id, result: fundingReceipts },
+    opening: { txHash: deliveryOpen.transaction_outcome.id, result: openingReceipts },
+    fulfillment: { txHash: fulfillmentTx.transaction_outcome.id, result: fulfillmentReceipts },
+    privateOrder: { id: delivered.api_order_id, onchainOrderId: delivered.onchain_order_id, contractId: SELLER,
+      tokenContract: TOKEN, sku: SKU, priceUnits: PRICE, state: 'DELIVERED', authorised: true,
+      brief: 'isolated fixture request', report: { content: reportText, content_hash: digest } } };
+  const snapshots = await collectBufferDeliverySnapshots({ ...evidence, provider });
+  const correlated = await verifyBufferDeliveryEvidence({ ...evidence, snapshots });
+  assert.equal(correlated.seller_payment_receipt_verified, true);
+  assert.equal(correlated.report_hash_matches_onchain_commitment, true);
+  assert.equal(correlated.independent_fulfillment_verified, false);
   await must(sellerAgent, SELLER, 'settle', { order_id: delivered.onchain_order_id, claims: [] }, 0n, 300n * TGAS);
   const settled = await order(delivered.onchain_order_id);
   assert.equal(settled.state, 'Settled'); assert.equal(settled.report_hash, digest);
@@ -199,8 +219,8 @@ async function exercise({ endpoint, root, tokenOwner, v12, sellerWasm, sellerFix
     accepted_order_customer_matches_forwarder: true, later_plain_ft_refund_returned_to_vault: true,
     refund_vault_actual_and_tracked: '60000000', refund_conservative_rolling_spend: PRICE,
     next_refund_policy_intent_blocked_by_cap: true, fixture_report_sha256: digest,
-    fixture_report_hash_recorded_onchain: true, local_mock_token_provider_payout: PRICE,
-    final_vault_actual_and_tracked: '40000000', one_shot_replay_blocked: true,
+    fixture_report_hash_recorded_onchain: true, separate_receipt_and_report_verifier_passed: true,
+    local_mock_token_provider_payout: PRICE, final_vault_actual_and_tracked: '40000000', one_shot_replay_blocked: true,
     real_circle_or_real_testnet_used: false, independent_provider_delivery_verified: false, seller_contacted: false };
 }
 

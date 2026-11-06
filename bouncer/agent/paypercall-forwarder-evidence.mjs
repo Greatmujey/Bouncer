@@ -572,3 +572,10 @@ export async function inspectPayPerCallForwarderEvidence({ terms, offer, funding
   return { ...result, network: 'testnet', rpc_trust: 'testnet and historical blocks reported by the caller-selected RPC; not consensus proofs',
     historical_views_collected: true, operator_contacted: false };
 }
+
+// Shared, bounded receipt-graph primitives for other experimental verifiers.
+// They only check caller-supplied evidence and are not an authorization API.
+export const experimentalReceiptGraph = Object.freeze({
+  graph, root, oneReceipt, linked, linkedPromiseResult, json, success, transferEvent,
+  codeAt, keylessAt, pinnedView, blockAt, balanceAt,
+});

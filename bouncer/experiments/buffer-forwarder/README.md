@@ -61,6 +61,46 @@ checked at the relevant historical state; a `configuration` view is not proof
 of the deployed bytecode. No unrestricted owner or legacy key should be used as
 a substitute for the missing recovery and fencing checks.
 
+## Correlating an existing delivery (read-only)
+
+`agent/buffer-delivery-evidence.mjs` and `scripts/inspect-buffer-delivery.mjs`
+correlate **already-recorded** original FINAL transaction hashes with historical
+vault, adapter, token and seller code/intent/order views, the seller's payment
+and fulfillment events, and the SHA-256 of a separately retained report. The
+inspector is testnet-only and requires the reviewed V12 and Circle token code
+pins. The seller code hash and fulfillment signer are separately reviewed pins,
+not proof that deployed code matches public source. The evidence contains an
+output hash, **not** the private brief, report or access token.
+
+For an actual order, privately retain the seller's authorized JSON response and
+prepare a public JSON review with exactly these fields:
+
+- `format`: `bouncer-buffer-delivery-evidence-v1`
+- `terms`: the exact arguments used to build the reviewed forwarder
+- `pins`: `vault_code_hash`, `token_code_hash`, `seller_code_hash`, and
+  `fulfillment_signer`
+- `funding_hash`, `opening_hash`, `fulfillment_hash`: the three distinct,
+  original transaction hashes; never replacement transactions
+
+Then, from `bouncer/`, run:
+
+```sh
+node scripts/inspect-buffer-delivery.mjs --rpc https://rpc.testnet.near.org \
+  --review PUBLIC_REVIEW.json --private-order PRIVATE_ORDER.json
+```
+
+Keep the private response in an ignored, access-controlled location, not in Git,
+and never put the access token or keys in the public review. The file reader
+refuses symlinks, hardlinks and oversized files. The inspector does not contact
+Buffer, create an order, sign, broadcast, notify the seller or retry. The
+accompanying API offers a separate, fixed-origin private-order GET; that GET
+contacts Buffer and discloses the bearer token to Buffer, so use it only
+intentionally and never log the URL. HTTP response provenance, independent seller
+fulfillment, report accuracy and deployed-source equivalence remain unproven.
+A missing receipt is unknown, not permission to resend. The source-built sandbox
+is being extended to exercise this correlator against actual isolated nearcore
+receipt graphs; that remains different from real seller delivery.
+
 ## Tests and status
 
 Local offline tests exercise the fixed interface, strict response matching,
@@ -70,15 +110,19 @@ hash-pinned V12 WASM. They do not model a real token or actual receipts.
 The optional `.github/workflows/buffer-upstream-sandbox.yml` builds Buffer from
 [pinned source](https://github.com/Chima30/buffer/tree/9bc5ef0cbdc84074e94995cb50d334fc615f9b96/contract)
 and runs it with the pinned V12 and an example mock FT on an isolated nearcore
-chain. It is designed to check a changed-price rejection, later plain-token
-refund, restored vault balance, conservative rolling budget, fixture report hash
-and synthetic seller payout. **The workflow has not yet passed for this new
-integration**; inspect its actual result rather than inferring success. It has
-no network identity, real USDC, private project key or independent report.
+chain. [Run 42215812897](https://github.com/Greatmujey/Bouncer/actions/runs/42215812897)
+passed: its assertions checked a changed-price rejection, an accepted order,
+later plain-token refund routed into the tracked vault balance, conservative
+rolling budget and a blocked next intent, a fixture report hash, and a synthetic
+seller payout. The final mock-token and tracked vault balances were 40,000,000
+atoms; each policy's recorded spend stayed at 20,000,000 atoms. This used a
+local source build, not proof of the deployed code, and no real Circle, private
+project key, seller contact or independent report.
 
 ```sh
 cd bouncer
-node --test tests/buffer-forwarder.test.mjs tests/buffer-upstream-sandbox.test.mjs
+node --test tests/buffer-forwarder.test.mjs tests/buffer-delivery-evidence.test.mjs \
+  tests/buffer-evidence-cli.test.mjs tests/buffer-upstream-sandbox.test.mjs
 # Optionally add BOUNCER_V12_WASM_PATH pointing to the exact 536,651-byte
 # artifact with SHA-256 033f255c5822ff97495809f7d60fddf66f266f20c36285fe71296b66decc6d12.
 ```
