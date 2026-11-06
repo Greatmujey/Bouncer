@@ -28,6 +28,16 @@ jobs:
         run: |
           npm ci --ignore-scripts --no-audit --no-fund
           node --test tests/buffer-live-readiness.test.mjs tests/buffer-wallet-readiness.test.mjs tests/buffer-delivery-evidence.test.mjs tests/read-only-near-receipts.test.mjs
+      - name: Retrieve the pinned V12 artifact and test unsigned wallet setup
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          BOUNCER_V12_WASM_PATH: ${{ runner.temp }}/v12-reviewed.wasm
+        run: |
+          set -euo pipefail
+          gh api repos/Greatmujey/Bouncer/git/blobs/16785505eaed13609d8e569e7b1665f89683d9eb --jq .content | base64 -d > "$BOUNCER_V12_WASM_PATH"
+          printf '%s  %s\n' '033f255c5822ff97495809f7d60fddf66f266f20c36285fe71296b66decc6d12' "$BOUNCER_V12_WASM_PATH" | sha256sum -c -
+          test "$(wc -c < "$BOUNCER_V12_WASM_PATH")" -eq 536651
+          node --test tests/buffer-wallet-setup-plan.test.mjs
       - name: Inspect V12, Buffer and indicative Ref returns at one FINAL block
         run: |
           set -euo pipefail
@@ -57,3 +67,20 @@ jobs:
           { echo '## User-named testnet account: read-only funding indication';
             echo 'Only public account, token, seller and protocol views. No wallet ownership, consent, deployment, seller order or payment is established.';
             echo '```json'; cat "$RUNNER_TEMP/buffer-wallet.json"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: Prepare an unsigned reviewed setup, if all wallet checks pass
+        run: |
+          set -euo pipefail
+          if ! node scripts/prepare-buffer-wallet-setup.mjs "$RUNNER_TEMP/buffer-wallet.json" "$RUNNER_TEMP/v12-reviewed.wasm" > "$RUNNER_TEMP/buffer-wallet-plan.json" 2> "$RUNNER_TEMP/buffer-wallet-plan-error.log"; then
+            echo '::warning title=Unsigned wallet setup unavailable::The snapshot is blocked, changed or stale. No action or wallet request was made.'
+            exit 0
+          fi
+          python3 - <<'PY'
+          import json, os
+          data = json.load(open(os.environ['RUNNER_TEMP'] + '/buffer-wallet-plan.json'))
+          s = json.dumps(data, separators=(',', ':'), ensure_ascii=True)
+          assert len(s) < 12000
+          print('::notice title=Unsigned wallet setup review::' + s.replace('%','%25').replace('\n','%0A').replace('\r','%0D'))
+          PY
+          { echo '## Unsigned setup review — no wallet approval or transaction';
+            echo 'A keyless deployment may lock its storage stake. Recheck each stage, obtain separate wallet approval and reconcile by original transaction before continuing.';
+            echo '```json'; cat "$RUNNER_TEMP/buffer-wallet-plan.json"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"

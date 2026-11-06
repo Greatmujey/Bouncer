@@ -80,7 +80,8 @@ export async function inspectBufferWalletReadiness({ owner, vault, provider, now
   if (!Number.isSafeInteger(end) || end < start) throw new Error('local clock moved backwards');
   assertFreshFinalBlock(block, end);
   return { version: 1, network: 'testnet', owner, candidate_vault: vault,
-    block_hash: hash, block_height: block.header.height, observed_at: new Date(end).toISOString(),
+    block_hash: hash, block_height: block.header.height, block_timestamp_nanosec: block.header.timestamp_nanosec,
+    observed_at: new Date(end).toISOString(),
     owner_native_yocto: account.amount, estimated_available_native_yocto: (available > 0n ? available : 0n).toString(),
     owner_circle_atoms: balance, circle_token: CIRCLE, circle_code_hash: token.code_hash,
     circle_registration_min_yocto: bounds.min, planned_vault_native_yocto: VAULT_NATIVE_FUNDING_YOCTO,

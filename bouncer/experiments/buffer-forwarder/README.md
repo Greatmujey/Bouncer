@@ -21,7 +21,22 @@ users, and neither executed nor a promise of liquidity. The user subsequently
 confirmed control of `great_mujey.testnet`; a public index showed it held 20
 Circle test USDC and roughly 16 test NEAR. The newly added wallet-owner
 preflight checks this alternative without a Ref swap and without using the
-previous V3 owner. A public view alone is not a wallet signature. Bouncer has
+previous V3 owner. A [pinned FINAL check](https://github.com/Greatmujey/Bouncer/actions/runs/42255987354)
+observed 20,000,000 Circle atoms, enough test NEAR under the estimate, an absent
+`vault.great_mujey.testnet` direct child, and the seller's active 20-test-USDC
+fixed product. All listed read-only checks passed at that block. They do not
+prove the user can sign or that future state, seller availability or delivery
+will match. The candidate is not deployed.
+
+`agent/buffer-wallet-setup-plan.mjs` prepares and commits **unsigned** action
+reviews for creating the keyless vault with 6 test NEAR, registering it with
+Circle, and depositing exactly 20 test USDC via `ft_transfer_call`. Those 20
+are the user's entire observed test-USDC balance, not a provider charge. The
+keyless vault may permanently lock its native storage stake. Each action needs
+separate owner-wallet approval, fresh checks and original-transaction
+reconciliation; never resend an ambiguous action. This does not yet configure
+policy, create an order, install agent keys or pay Buffer. A public view alone
+is not a wallet signature. Bouncer has
 not created an order or quote, contacted the seller's paid workflow, or paid or
 obtained a report. The contract source below is pinned for investigation; it
 is not proof that the live deployment matches that source.
