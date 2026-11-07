@@ -26,6 +26,7 @@ jobs:
         run: |
           set -euo pipefail
           npm ci --ignore-scripts --no-audit --no-fund
+          npm install --prefix "$RUNNER_TEMP/bouncer-browser" --no-save --no-audit --no-fund playwright-core@1.64.1
           gh api repos/Greatmujey/Bouncer/git/blobs/16785505eaed13609d8e569e7b1665f89683d9eb --jq .content | base64 -d > "$RUNNER_TEMP/v12-reviewed.wasm"
           printf '%s  %s\n' '033f255c5822ff97495809f7d60fddf66f266f20c36285fe71296b66decc6d12' "$RUNNER_TEMP/v12-reviewed.wasm" | sha256sum -c -
       - name: Generate the one-use read-only handoff public key
