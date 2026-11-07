@@ -28,6 +28,8 @@ jobs:
           if (!response.ok || text.length > 12000) throw new Error(`Encrypted relay unavailable (HTTP ${response.status})`);
           const envelope = JSON.parse(text);
           if (envelope.version !== 1 || !envelope.ciphertext_base64 || !envelope.encrypted_key_base64) throw new Error('Missing encrypted result');
-          console.log('::notice title=Encrypted relay response::' + JSON.stringify(envelope).replaceAll('%', '%25'));
+          const packed = JSON.stringify(envelope);
+          const count = Math.ceil(packed.length / 2000);
+          for (let i = 0; i < count; i++) console.log(`::notice title=Encrypted relay part ${i + 1} of ${count}::` + packed.slice(i * 2000, (i + 1) * 2000).replaceAll('%', '%25'));
           console.log('Read-only encrypted response returned. The GitHub runner cannot decrypt or verify it.');
           NODE
