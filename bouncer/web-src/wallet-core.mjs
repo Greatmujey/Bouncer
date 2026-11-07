@@ -6,6 +6,7 @@ import { verifyConnectedWalletOwner } from './wallet-owner-verification.mjs';
 import { formatPublicAmount, isNearAccountId, readPublicTestnetAccount } from './account-view.mjs';
 import { fetchBufferReadinessPreview } from './buffer-readiness-preview.mjs';
 import { createWitnessedSetupClient } from './witnessed-setup-client.mjs';
+import { createOwnerKeyFallbackFetch } from './read-only-owner-key-fallback.mjs';
 
 // HTTP Date is coarse and can be cached. Only flag a large discrepancy when
 // the response provides a valid Date/Age and the request was reasonably fast.
@@ -121,6 +122,8 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
   let ownerVerification = null, ownerSessionVersion = 0, setupRecoveryAvailable = false, setupRecoverySelection = null, matchedOriginal = null;
   let bannerTimer;
   const trusted = new Set(WALLET_MANIFEST.wallets);
+  const walletReadFetch = createOwnerKeyFallbackFetch({ fetch:win.fetch.bind(win),
+    enabled:/^4173-[a-z0-9-]+\.e2b\.app$/i.test(win.location.hostname) });
   function setWalletLabels(label) {
     doc.querySelectorAll('[data-wallet-label]').forEach(node => { node.textContent = label; });
   }
@@ -486,7 +489,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
       if (['near-mobile', 'nightly-wallet', 'ledger'].includes(wallet.manifest.id)) stopWalletPresentation = decorateWalletPopup(wallet.manifest.id);
       let timeout;
       const attempt = verifyConnectedWalletOwner({ wallet, accountId, location: win.location,
-        crypto: win.crypto, fetch: win.fetch.bind(win) });
+        crypto: win.crypto, fetch: walletReadFetch });
       let proof;
       try {
         proof = await Promise.race([attempt, new Promise((_, reject) => {
@@ -505,7 +508,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
       // opens a transaction or turns on purchasing.
       if (/^4173-[a-z0-9-]+\.e2b\.app$/i.test(win.location.hostname) && accountId === 'great_mujey.testnet') {
         const client = createWitnessedSetupClient({ wallet, accountId, ownerPublicKey:proof.publicKey,
-          location:win.location, crypto:win.crypto, fetch:win.fetch.bind(win), isCurrent:stillCurrent });
+          location:win.location, crypto:win.crypto, fetch:walletReadFetch, isCurrent:stillCurrent });
         void client.enabled().then(enabled => { if (stillCurrent()) { setupRecoveryAvailable = enabled; renderControls(); } });
       }
     } catch (error) {
@@ -539,7 +542,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     try {
       if (['near-mobile', 'nightly-wallet', 'ledger'].includes(wallet.manifest.id)) stopWalletPresentation = decorateWalletPopup(wallet.manifest.id);
       const client = createWitnessedSetupClient({ wallet, accountId, ownerPublicKey:proof.publicKey,
-        location:win.location, crypto:win.crypto, fetch:win.fetch.bind(win), isCurrent:stillCurrent,
+        location:win.location, crypto:win.crypto, fetch:walletReadFetch, isCurrent:stillCurrent,
         onProgress:message => { if (stillCurrent() && setupRecoveryStatus) setupRecoveryStatus.textContent = message; } });
       const result = await Promise.race([client.inspect(), new Promise((_,reject) => {
         timeout = setTimeout(() => reject(new Error('RECOVERY_TIMEOUT')), 120_000);
@@ -588,7 +591,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     try {
       if (['near-mobile', 'nightly-wallet', 'ledger'].includes(wallet.manifest.id)) stopWalletPresentation = decorateWalletPopup(wallet.manifest.id);
       const client = createWitnessedSetupClient({wallet,accountId,ownerPublicKey:proof.publicKey,location:win.location,
-        crypto:win.crypto,fetch:win.fetch.bind(win),isCurrent:stillCurrent,
+        crypto:win.crypto,fetch:walletReadFetch,isCurrent:stillCurrent,
         onProgress:message => { if (stillCurrent() && setupRecoveryStatus) setupRecoveryStatus.textContent = message; }});
       const result = await Promise.race([client.previewOriginal({stageId:selection.stageId,originalHash}), new Promise((_,reject) => {
         timeout = setTimeout(() => reject(new Error('RECOVERY_TIMEOUT')), 120_000);
@@ -624,7 +627,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     try {
       if (['near-mobile', 'nightly-wallet', 'ledger'].includes(wallet.manifest.id)) stopWalletPresentation = decorateWalletPopup(wallet.manifest.id);
       const client = createWitnessedSetupClient({wallet,accountId,ownerPublicKey:proof.publicKey,location:win.location,
-        crypto:win.crypto,fetch:win.fetch.bind(win),isCurrent:stillCurrent,
+        crypto:win.crypto,fetch:walletReadFetch,isCurrent:stillCurrent,
         onProgress:message => { if (stillCurrent() && setupRecoveryStatus) setupRecoveryStatus.textContent = message; }});
       const result = await Promise.race([client.recordOriginal(selected), new Promise((_,reject) => {
         timeout = setTimeout(() => reject(new Error('RECOVERY_TIMEOUT')), 120_000);
@@ -915,7 +918,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
           const message = `Connect to Bouncer on NEAR testnet.\n\nThis login message does not approve a transaction, transfer funds, or add an access key.\n\nSite: ${win.location.origin}`;
           const accounts = await wallet.signInAndSignMessage({ network: 'testnet', messageParams: { message, nonce, recipient } });
           const account = accounts?.[0];
-          await verifyCliLogin({ account, message, nonce, recipient, crypto: win.crypto, fetch: win.fetch.bind(win) });
+          await verifyCliLogin({ account, message, nonce, recipient, crypto: win.crypto, fetch: walletReadFetch });
           acceptAccounts(wallet, [account], 'near-cli');
         } else {
           if (walletId === 'nightly-wallet' || walletId === 'ledger') stopWalletPresentation = decorateWalletPopup(walletId);

@@ -8,7 +8,8 @@ const useServer = async fn => {
     submit: (job, h, input, token) => { seen.push(['submit', job, h, input.toString(), token]); return token === 't'.repeat(100); },
     takeForBrowser: job => ({ job_id: job }), submitEncrypted: envelope => envelope.accept === true };
   const server = createReadOnlyPreviewService({ bridge, siteOrigin: site,
-    inspectReadiness: async () => ({ public_balance: '40' }), makeReview: async () => ({ signed: false }) });
+    inspectReadiness: async () => ({ public_balance: '40' }), makeReview: async () => ({ signed: false }),
+    inspectOwnerKey: async input => { seen.push(['key',input]); return {full_access:true}; } });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const base = `http://127.0.0.1:${server.address().port}`;
   try { await fn(base, seen); } finally { await new Promise(resolve => server.close(resolve)); }
@@ -36,4 +37,14 @@ test('internal callbacks require the bridge to accept authorization', async () =
   assert.equal((await fetch(`${base}/internal/read-only-results/${id}/${hash}`, { method: 'POST',
     headers: { ...headers, 'content-type': 'application/json' }, body: '{}' })).status, 200);
   assert.equal(seen.at(-1)[3], '{}');
+}));
+
+
+test('owner-key route permits only the fixed same-origin read-only operation', async () => useServer(async (base,seen) => {
+  const headers={origin:site,'x-bouncer-preview':'read-only','content-type':'application/json'};
+  const send=(body,h=headers)=>fetch(`${base}/api/read-only/owner-key`,{method:'POST',headers:h,body:JSON.stringify(body)});
+  assert.equal((await send({owner:'a.testnet',publicKey:'ed25519:key'}, {...headers,origin:'https://evil.test'})).status,403);
+  assert.equal((await send({owner:'a.testnet',publicKey:'ed25519:key',method:'send'})).status,400);
+  assert.deepEqual(await (await send({owner:'a.testnet',publicKey:'ed25519:key'})).json(),{full_access:true});
+  assert.deepEqual(seen.at(-1),['key',{owner:'a.testnet',publicKey:'ed25519:key'}]);
 }));

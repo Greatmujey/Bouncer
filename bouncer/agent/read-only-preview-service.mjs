@@ -30,17 +30,18 @@ async function bytes(req, limit) {
 }
 
 /** No client-selected owner, vault, RPC URL, account data or transaction. */
-export function createReadOnlyPreviewService({ bridge, siteOrigin, relayUrl, inspectReadiness, makeReview, setupFactory, now = Date.now } = {}) {
+export function createReadOnlyPreviewService({ bridge, siteOrigin, relayUrl, inspectReadiness, makeReview, inspectOwnerKey, setupFactory, now = Date.now } = {}) {
   const site = fixedOrigin(siteOrigin);
   if (relayUrl !== undefined && relayUrl !== 'https://bouncer-testnet-readonly-relay-tau.vercel.app/api/read') {
     throw new Error('fixed experimental relay URL required');
   }
   if (!bridge || ['pending', 'take', 'submit', 'takeForBrowser', 'submitEncrypted'].some(k => typeof bridge[k] !== 'function') ||
       typeof inspectReadiness !== 'function' || typeof makeReview !== 'function' || typeof now !== 'function' ||
-      (setupFactory !== undefined && typeof setupFactory !== 'function')) {
+      (setupFactory !== undefined && typeof setupFactory !== 'function') ||
+      (inspectOwnerKey !== undefined && typeof inspectOwnerKey !== 'function')) {
     throw new Error('read-only preview dependencies required');
   }
-  const tasks = new Map(); let active = false;
+  const tasks = new Map(); let active = false, activeKeys = 0, keyRequests = 0, keyWindow = now();
   function prune() {
     const current = now();
     const retentionMs = setupFactory ? 30 * 60_000 : 120_000;
@@ -74,6 +75,28 @@ export function createReadOnlyPreviewService({ bridge, siteOrigin, relayUrl, ins
       }
       if (pathname === '/api/read-only/config' && req.method === 'GET') {
         return relayUrl ? reply(res, 200, { relay_url: relayUrl }) : reply(res, 503, { error: 'relay not configured' });
+      }
+      if (pathname === '/api/read-only/owner-key' && req.method === 'POST' && inspectOwnerKey) {
+        if (req.headers.origin !== site || !/^application\/json(?:\s*;|$)/i.test(req.headers['content-type'] ?? '')) {
+          return reply(res, 403, {error:'unavailable'});
+        }
+        const clock = now();
+        if (!Number.isSafeInteger(clock) || clock < keyWindow) return reply(res, 503, {error:'unavailable'});
+        if (clock - keyWindow >= 120_000) { keyWindow = clock; keyRequests = 0; }
+        if (activeKeys >= 4 || keyRequests >= 80) return reply(res, 429, {error:'unavailable'});
+        activeKeys++; keyRequests++;
+        try {
+          const timer = setTimeout(() => req.destroy(), 10_000); timer.unref?.();
+          let raw; try { raw = await bytes(req, 2048); } finally { clearTimeout(timer); }
+          let input;
+          try { input = JSON.parse(raw.toString('utf8')); } catch { return reply(res,400,{error:'unavailable'}); }
+          if (!input || Object.getPrototypeOf(input) !== Object.prototype || Object.keys(input).sort().join(',') !== 'owner,publicKey') {
+            return reply(res,400,{error:'unavailable'});
+          }
+          const result = await inspectOwnerKey(input);
+          if (typeof result?.full_access !== 'boolean') throw Error();
+          return reply(res,200,{full_access:result.full_access});
+        } finally { activeKeys--; }
       }
       if (pathname === '/api/read-only/pending' && req.method === 'GET') return reply(res, 200, { jobs: bridge.pending() });
       match = /^\/api\/read-only\/jobs\/([a-f0-9]{32})$/.exec(pathname);

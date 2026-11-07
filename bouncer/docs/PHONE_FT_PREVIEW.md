@@ -33,6 +33,15 @@ real browser job-pump module, not the complete app UI, a real phone or a wallet.
 A prior artifact download failed because the sandbox cannot reach the artifact
 host; the successful run did not download an artifact or submit a transaction.
 
+The opt-in Arena preview now has a read-only fallback for a phone browser that
+cannot directly reach the public key RPC. After a wallet supplies an off-chain
+signature, the backend checks the exact public testnet key at a fresh pinned
+FINAL block through the encrypted relay; the signature is still verified in
+the browser. The route is same-origin and bounded, accepts no transaction or
+private key, and a missing/limited key fails closed. The fallback is exercised
+with a synthetic phone-sized browser and synthetic RPC; it has not yet been
+verified on a real phone. It is not enabled on the production site.
+
 A public archival/readiness run on November 7 observed 40 Circle test USDC in
 `great_mujey.testnet`, the reviewed Buffer fixed product at 20 test USDC, and a
 planned **6 test NEAR** keyless vault deposit. The actual state can change; a

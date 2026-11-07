@@ -13,6 +13,7 @@ import { createWitnessedSetupHttpHandler } from '../agent/witnessed-setup-http.m
 import { ReadOnlyNearReceiptProvider } from '../agent/read-only-near-receipts.mjs';
 import { createVercelOidcVerifier, createOidcReadOnlyRpcBridge } from '../agent/oidc-readonly-rpc-bridge.mjs';
 import { inspectBufferWalletReadiness } from '../agent/buffer-wallet-readiness.mjs';
+import { inspectReadOnlyOwnerKey } from '../agent/read-only-owner-key.mjs';
 import { buildBufferWalletSetup } from '../agent/buffer-wallet-setup-plan.mjs';
 import { createReadOnlyPreviewService } from '../agent/read-only-preview-service.mjs';
 import { PREVIEW_SIGNING_PUBLIC_KEY, PREVIEW_ENCRYPTION_PUBLIC_KEY } from '../testnet-relay/session-public-keys.mjs';
@@ -63,6 +64,7 @@ if (process.env.BOUNCER_ENABLE_WITNESSED_TESTNET_SETUP === '1') {
   };
 }
 const service = createReadOnlyPreviewService({ bridge, siteOrigin, relayUrl, setupFactory,
+  inspectOwnerKey: input => inspectReadOnlyOwnerKey({ ...input, provider }),
   inspectReadiness: () => inspectBufferWalletReadiness({ owner: 'great_mujey.testnet', vault: 'vault.great_mujey.testnet', provider }),
   makeReview: snapshot => buildBufferWalletSetup({ snapshot, wasmBytes: wasm }).review,
 });

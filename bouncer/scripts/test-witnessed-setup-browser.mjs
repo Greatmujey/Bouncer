@@ -49,16 +49,14 @@ try {
     await page.route('**/*', async route => {
       const request = route.request(), u = new URL(request.url()); calls.push(`${request.method()} ${u.pathname}`);
       if (u.pathname.endsWith('meteor-near-connect-latest.js')) return route.fulfill({status:200,contentType:'text/javascript',body:mock});
-      if (u.origin === 'https://test.rpc.fastnear.com') {
-        const headers = {'access-control-allow-origin':'*','access-control-allow-methods':'POST, OPTIONS','access-control-allow-headers':'content-type'};
-        if (request.method()==='OPTIONS') return route.fulfill({status:204,headers});
-        return route.fulfill({status:200,headers,contentType:'application/json',body:JSON.stringify({jsonrpc:'2.0',id:'bouncer-cli-login',result:{permission:'FullAccess'}})});
-      }
+      if (u.origin === 'https://test.rpc.fastnear.com') return route.abort('failed'); // exercise the read-only fallback
+
       if (u.origin !== origin) return route.abort();
       if (u.pathname === '/api/google-session') return reply(route,{authenticated:false});
       if (u.pathname === '/api/wallet-setup/config') return reply(route,{enabled:true,network:'testnet',owner});
       if (u.pathname === '/api/read-only/config') return reply(route,{relay_url:'https://bouncer-testnet-readonly-relay-tau.vercel.app/api/read'});
       if (u.pathname === '/api/read-only/pending') return reply(route,{jobs:[]});
+      if (u.pathname === '/api/read-only/owner-key') return reply(route,{full_access:true});
       if (['/api/wallet-setup/inspect-challenge','/api/wallet-setup/original-challenge'].includes(u.pathname)) {
         const recording = u.pathname.endsWith('/original-challenge');
         const ctx = recording ? {purpose:'record_original_hash',owner,ownerPublicKey:publicKey,identity,stageId:stage,originalHash:hash}
@@ -95,6 +93,7 @@ try {
     await page.waitForFunction(() => /recorded for recovery.*not a purchase or delivery/i.test(document.querySelector('#wallet-setup-recovery-status').textContent));
     assert.equal(await page.locator('#wallet-setup-recovery-form').isVisible(),false);
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+    assert.ok(calls.some(x=>x.endsWith('/api/read-only/owner-key')));
     assert.ok(!calls.some(x=>/wallet-setup\/(claim|reserve|broadcast)/.test(x)));
     assert.deepEqual(errors,[]); await page.close();
   }
