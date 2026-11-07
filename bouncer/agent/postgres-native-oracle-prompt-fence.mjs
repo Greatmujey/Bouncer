@@ -227,11 +227,13 @@ export function createPostgresNativeOraclePromptFence({ pool, authenticate, wasm
     const s = await client.query(`SELECT ${STAGE_COLUMNS} FROM ${SCHEMA}.stages WHERE owner=$1 ORDER BY stage_index${lock ? ' FOR UPDATE' : ''}`, [owner]);
     return validated(p.rows[0], s.rows, wasm);
   }
-  function target(row, request) {
+  function target(row, request, alreadyClaimed = false) {
     const index = STAGES.indexOf(request.stageId), stage = row.stages[index];
     if (row.owner_public_key !== request.ownerPublicKey || row.operation_id !== request.operationId || row.review_sha256 !== request.reviewSha256 ||
         !stage || stage.action_commitment_sha256 !== request.actionCommitmentSha256) throw fail('MISMATCH');
-    if (stage.claimed) throw fail('ALREADY_CLAIMED');
+    if (alreadyClaimed ? !stage.claimed || stage.original_hash !== null : stage.claimed) {
+      throw fail(alreadyClaimed ? 'CLAIM_NO_LONGER_RECHECKABLE' : 'ALREADY_CLAIMED');
+    }
     const prior = row.stages.slice(0, index);
     if (prior.some(s => !s.claimed || !s.original_hash)) throw fail('PRIOR_UNRESOLVED');
     return { index, hashes: prior.map(s => s.original_hash) };
@@ -240,6 +242,32 @@ export function createPostgresNativeOraclePromptFence({ pool, authenticate, wasm
     const checked = Date.parse(preflight?.observed_at), clock = now();
     if (!Number.isSafeInteger(clock) || !Number.isSafeInteger(checked) || clock < checked || clock - checked > 5000) throw fail('PREFLIGHT_STALE');
   };
+  // Independently re-fetch every earlier original and a single FINAL state.
+  // This helper never claims a stage, signs or submits a transaction.
+  async function stagePreflight(retained, request) {
+    const { owner, ownerPublicKey, reviewSha256, stageId, actionCommitmentSha256 } = request;
+    let preflight;
+    try {
+      if ((await readStatus())?.chain_id !== 'testnet') throw Error();
+      const prior = [];
+      for (let i = 0; i < retained.target.hashes.length; i++) {
+        const trustedOriginalHash = retained.target.hashes[i];
+        const attempt = prepareNativeOracleWalletAttempt({ review: retained.row.review, wasmBytes: wasm, trustedReviewHash: reviewSha256,
+          trustedOwnerPublicKey: ownerPublicKey, stageId: STAGES[i], trustedOriginalHash });
+        const result = structuredClone(await readReceipts(trustedOriginalHash, owner, 'FINAL'));
+        prior.push({ attempt, trustedOriginalHash, result });
+      }
+      preflight = await inspectNativeOracleWalletStage({ review: retained.row.review, wasmBytes: wasm, trustedReviewHash: reviewSha256,
+        trustedOwnerPublicKey: ownerPublicKey, stageId, prior, provider, now });
+    } catch { throw fail('PREFLIGHT_UNAVAILABLE'); }
+    if (preflight.status !== 'STATE_CHECKS_PASSED_NOT_AUTHORIZED' || preflight.owner !== owner || preflight.review_sha256 !== reviewSha256 ||
+        preflight.stage_id !== stageId || preflight.action_commitment_sha256 !== actionCommitmentSha256 ||
+        !isDeepStrictEqual(preflight.prior_original_hashes, retained.target.hashes) || !Array.isArray(preflight.blockers) || preflight.blockers.length) {
+      throw fail('PREFLIGHT_BLOCKED');
+    }
+    checkFresh(preflight);
+    return preflight;
+  }
   return Object.freeze({
     async reserve({ review: rawReview, trustedReviewHash, trustedOwnerPublicKey, evidence } = {}) {
       const review = structuredClone(rawReview); let id;
@@ -282,26 +310,7 @@ export function createPostgresNativeOraclePromptFence({ pool, authenticate, wasm
       const globalIdentity = { owner, flow: 'native_oracle', operationId, ownerPublicKey, reviewSha256 };
       const retained = await transaction(pool, async client => { const row = await load(client, owner);
         await assertPostgresWalletOwnerFence(client, globalIdentity); return { row, target: target(row, request) }; });
-      let preflight;
-      try {
-        if ((await readStatus())?.chain_id !== 'testnet') throw Error();
-        const prior = [];
-        for (let i = 0; i < retained.target.hashes.length; i++) {
-          const trustedOriginalHash = retained.target.hashes[i];
-          const attempt = prepareNativeOracleWalletAttempt({ review: retained.row.review, wasmBytes: wasm, trustedReviewHash: reviewSha256,
-            trustedOwnerPublicKey: ownerPublicKey, stageId: STAGES[i], trustedOriginalHash });
-          const result = structuredClone(await readReceipts(trustedOriginalHash, owner, 'FINAL'));
-          prior.push({ attempt, trustedOriginalHash, result });
-        }
-        preflight = await inspectNativeOracleWalletStage({ review: retained.row.review, wasmBytes: wasm, trustedReviewHash: reviewSha256,
-          trustedOwnerPublicKey: ownerPublicKey, stageId, prior, provider, now });
-      } catch { throw fail('PREFLIGHT_UNAVAILABLE'); }
-      if (preflight.status !== 'STATE_CHECKS_PASSED_NOT_AUTHORIZED' || preflight.owner !== owner || preflight.review_sha256 !== reviewSha256 ||
-          preflight.stage_id !== stageId || preflight.action_commitment_sha256 !== actionCommitmentSha256 ||
-          !isDeepStrictEqual(preflight.prior_original_hashes, retained.target.hashes) || !Array.isArray(preflight.blockers) || preflight.blockers.length) {
-        throw fail('PREFLIGHT_BLOCKED');
-      }
-      checkFresh(preflight);
+      const preflight = await stagePreflight(retained, request);
       const claimed = await transaction(pool, async client => {
         const row = await load(client, owner, true), current = target(row, request);
         await assertPostgresWalletOwnerFence(client, globalIdentity);
@@ -318,6 +327,32 @@ export function createPostgresNativeOraclePromptFence({ pool, authenticate, wasm
       });
       try { checkFresh(preflight); } catch { throw fail('CLAIM_COMMITTED_PREFLIGHT_STALE'); }
       return claimed;
+    },
+    /** Coordinator-only read. After the existing one-shot DB and Git claims
+     * have committed, independently recheck the same stage, its prior originals
+     * and the owner hold. This does not create or reissue a claim and has no
+     * HTTP route. If it fails, the claimed stage remains consumed. */
+    async recheckClaimBeforePrompt(request = {}) {
+      requireIdentity(request);
+      const { owner, ownerPublicKey, operationId, reviewSha256, stageId, actionCommitmentSha256 } = request;
+      const globalIdentity = { owner, flow:'native_oracle', operationId, ownerPublicKey, reviewSha256 };
+      const retained = await transaction(pool, async client => {
+        const row = await load(client, owner);
+        await assertPostgresWalletOwnerFence(client, globalIdentity);
+        return { row, target:target(row, request, true) };
+      });
+      const preflight = await stagePreflight(retained, request);
+      await transaction(pool, async client => {
+        const row = await load(client, owner), current = target(row, request, true);
+        await assertPostgresWalletOwnerFence(client, globalIdentity);
+        if (!isDeepStrictEqual(current.hashes, retained.target.hashes)) throw fail('MISMATCH');
+        checkFresh(preflight);
+      });
+      checkFresh(preflight);
+      return { owner, operation_id:operationId, review_sha256:reviewSha256, stage_id:stageId,
+        action_commitment_sha256:actionCommitmentSha256, status:'CLAIM_PREFLIGHT_RECHECKED_NOT_AUTHORIZED',
+        preflight_block_hash:preflight.block_hash, preflight_checked_at:preflight.observed_at,
+        do_not_retry:true, execution_authorized:false };
     },
     /** Read-only verification of ALL four retained originals and installed
      * state. This never authorizes or sends a provider request. */

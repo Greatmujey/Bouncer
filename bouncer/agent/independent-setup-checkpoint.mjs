@@ -10,8 +10,9 @@
  * forged by a privileged operator; retain/monitor the latest revision in yet
  * another independently controlled system. Compromised monitor code, stolen
  * operator credentials, old clients, RPC, wallet or site are out of scope.
- * Slow Git/network calls may exceed the existing five-second preflight window;
- * an expired/uncertain claim is consumed and MUST NOT be retried.
+ * Slow Git/network calls can consume a preflight window. Native setup rechecks
+ * its already-claimed stage after this monitor responds; FT has its existing
+ * freshness check. Any expired/uncertain claim is consumed and MUST NOT be retried.
  */
 import crypto from 'node:crypto';
 import fs from 'node:fs';

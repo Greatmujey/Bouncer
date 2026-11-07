@@ -29,6 +29,8 @@ function fences(n, f, barrier = async () => {}) {
   const native = { async reserve() { counts.native++; await barrier(); return { ...n,review:review(n),status:'RESERVED_NOT_CLAIMED',
     execution_authorized:false,stages:n.stages.map(s=>({...s,claimed:false,original_hash:null})) }; },
     async inspect() {}, async claim({stageId}) { counts.nativeClaims++; return claim(n,stageId); },
+    async recheckClaimBeforePrompt({stageId}) { return { ...claim(n,stageId),
+      status:'CLAIM_PREFLIGHT_RECHECKED_NOT_AUTHORIZED', preflight_block_hash:nearApi.utils.serialize.base_encode(Buffer.alloc(32,9)) }; },
     async recordOriginal() {}, async verifyCompletion() {} };
   const ft = { async reserve() { counts.ft++; await barrier(); return {...f,review:review(f),stage_id:ftStages[0],setup_snapshot:{}}; },
     async claimPrompt({stageId}) { counts.ftClaims++; return claim(f,stageId); }, async claimSetupStage() {},
@@ -94,6 +96,17 @@ test('an intervening other-flow witness blocks the claim before its database cal
   await ft.reserve(f);
   await assert.rejects(nc.claim({identity:reserved.identity,stageId:nativeStages[0]}),e=>e.code==='CROSS_FLOW_WITNESSED');
   assert.equal(db.counts.nativeClaims,0);
+}));
+
+test('a mismatched post-witness recheck stops permanently without a second database claim',async()=>fixture(async({native,ft,n,f})=>{
+  const db=fences(n,f),nc=createWitnessedNativeOracleSetup({fence:db.native,witness:native,otherWitness:ft});
+  const {identity}=await nc.reserve({review:review(n)});
+  const recheck=db.native.recheckClaimBeforePrompt;
+  db.native.recheckClaimBeforePrompt=async request=>({...await recheck(request),operation_id:'f'.repeat(32)});
+  await assert.rejects(nc.claim({identity,stageId:nativeStages[0]}),e=>e.code==='WITNESSED_POSTCHECK_UNAVAILABLE');
+  assert.equal(db.counts.nativeClaims,1);assert.equal((await native.inspect(n.owner)).state.phase,'claimed');
+  await assert.rejects(nc.claim({identity,stageId:nativeStages[0]}),e=>e.code==='WITNESS_NOT_CLAIMABLE');
+  assert.equal(db.counts.nativeClaims,1);
 }));
 
 test('head mismatch, a missing peer, or a changed owner cannot yield a reservation',async()=>fixture(async({native,ft,n,f})=>{

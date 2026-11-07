@@ -240,7 +240,8 @@ dbtest('independent witness plus PostgreSQL permits one checked stage and record
   await assert.rejects(coordinator.recordOriginal({ identity, stageId, originalHash: hash(11), evidence: 'synthetic-auth' }), e => e.code === 'WITNESS_MISMATCH');
   f.state.stage = 1;
   const next = await coordinator.claim({ identity, stageId: f.review.stages[1].id, evidence: 'synthetic-auth' });
-  assert.equal(next.independently_witnessed, true); assert.deepEqual(f.calls, [hash(10)]);
+  assert.equal(next.independently_witnessed, true); assert.deepEqual(f.calls, [hash(10),hash(10)],
+    'the earlier original is checked before and after the witness acknowledgement');
   await assert.rejects(coordinator.verifyCompletion({ identity, evidence: 'synthetic-auth' }), e => e.code === 'WITNESS_MISMATCH');
 }));
 
@@ -257,15 +258,64 @@ dbtest('lost witness acknowledgement leaves both systems claimed and cannot yiel
   assert.equal(dbState.stages[0].claimed, true); assert.equal(dbState.stages[0].original_hash, null);
 }));
 
-dbtest('a witness acknowledgement after preflight expiry cannot return a claim or permit retry', async () => resources(async db => {
+dbtest('slow witness acknowledgement triggers a fresh post-witness preflight without a second claim', async () => resources(async db => {
   let clock = Date.now(); const now = () => clock, f = scenario(db, { now }), store = memoryWitnessStore();
   const originalWitness = createNativeOraclePromptWitness({ store });
   const witness = { ...originalWitness, async claim(...args) { const saved = await originalWitness.claim(...args); clock += 5001; return saved; } };
   const coordinator = createWitnessedNativeOracleSetup({ fence: f.fence, witness, otherWitness: emptyCrossWitness(witness), now });
   const { identity } = await coordinator.reserve(f.reserve), stageId = f.review.stages[0].id;
-  await assert.rejects(coordinator.claim({ identity, stageId, evidence: 'synthetic-auth' }), e => e.code === 'WITNESSED_CLAIM_STALE');
+  const claim = await coordinator.claim({ identity, stageId, evidence: 'synthetic-auth' });
+  assert.equal(claim.independently_witnessed,true);assert.equal(claim.preflight_checked_at,new Date(clock).toISOString());
   assert.equal((await originalWitness.inspect(identity.owner)).state.phase, 'claimed');
   await assert.rejects(coordinator.claim({ identity, stageId, evidence: 'synthetic-auth' }), e => e.code === 'WITNESS_NOT_CLAIMABLE');
+}));
+
+dbtest('an expired post-witness snapshot is never returned and cannot be reclaimed', async () => resources(async db => {
+  const f=scenario(db),witness=createNativeOraclePromptWitness({store:memoryWitnessStore()});
+  const coordinator=createWitnessedNativeOracleSetup({fence:f.fence,witness,otherWitness:emptyCrossWitness(witness),now:()=>Date.now()+6000});
+  const {identity}=await coordinator.reserve(f.reserve),stageId=f.review.stages[0].id;
+  await assert.rejects(coordinator.claim({identity,stageId,evidence:'synthetic-auth'}),e=>e.code==='WITNESSED_CLAIM_STALE');
+  assert.equal((await witness.inspect(identity.owner)).state.phase,'claimed');
+  await assert.rejects(coordinator.claim({identity,stageId,evidence:'synthetic-auth'}),e=>e.code==='WITNESS_NOT_CLAIMABLE');
+}));
+
+dbtest('post-witness recheck is read-only and cannot reissue a stage with an original', async () => resources(async db => {
+  const f=scenario(db),reserved=await f.fence.reserve(f.reserve),request=f.req(reserved,0);
+  await assert.rejects(f.fence.recheckClaimBeforePrompt(request),e=>e.code==='CLAIM_NO_LONGER_RECHECKABLE');
+  await f.fence.claim(request);
+  const checked=await f.fence.recheckClaimBeforePrompt(request);
+  assert.equal(checked.status,'CLAIM_PREFLIGHT_RECHECKED_NOT_AUTHORIZED');
+  assert.equal(checked.execution_authorized,false);assert.equal(checked.do_not_retry,true);
+  assert.equal((await f.fence.inspect({owner:f.ownerId,ownerPublicKey:f.ownerKey,evidence:'synthetic-auth'})).stages[0].original_hash,null);
+  await f.fence.recordOriginal({...request,originalHash:hash(10)});
+  await assert.rejects(f.fence.recheckClaimBeforePrompt(request),e=>e.code==='CLAIM_NO_LONGER_RECHECKABLE');
+  await assert.rejects(f.fence.claim(request),e=>e.code==='ALREADY_CLAIMED');
+}));
+
+dbtest('an original recorded during the post-witness RPC check prevents returning a usable claim', async () => resources(async db => {
+  const f=scenario(db),reserved=await f.fence.reserve(f.reserve),request=f.req(reserved,0);
+  await f.fence.claim(request);
+  let started,release;const entered=new Promise(resolve=>{started=resolve}),gate=new Promise(resolve=>{release=resolve});
+  const slowProvider={...f.options.preflightProvider,async viewBlock(...args){started();await gate;return f.options.preflightProvider.viewBlock(...args)}};
+  const fence=createPostgresNativeOraclePromptFence({...f.options,preflightProvider:slowProvider});
+  const pending=fence.recheckClaimBeforePrompt(request);await entered;
+  try { await f.fence.recordOriginal({...request,originalHash:hash(10)}); } finally { release(); }
+  await assert.rejects(pending,e=>e.code==='CLAIM_NO_LONGER_RECHECKABLE');
+  const state=await f.fence.inspect({owner:f.ownerId,ownerPublicKey:f.ownerKey,evidence:'synthetic-auth'});
+  assert.equal(state.stages[0].original_hash,hash(10));
+}));
+
+dbtest('changed state after witnessing consumes the claim but never returns it to a wallet', async () => resources(async db => {
+  const f = scenario(db), store = memoryWitnessStore(), originalWitness = createNativeOraclePromptWitness({ store });
+  const witness = { ...originalWitness, async claim(...args) { const saved = await originalWitness.claim(...args); f.state.blocked = true; return saved; } };
+  const coordinator = createWitnessedNativeOracleSetup({ fence:f.fence, witness, otherWitness:emptyCrossWitness(witness) });
+  const { identity } = await coordinator.reserve(f.reserve), stageId = f.review.stages[0].id;
+  await assert.rejects(coordinator.claim({ identity, stageId, evidence:'synthetic-auth' }), e => e.code === 'WITNESSED_POSTCHECK_UNAVAILABLE');
+  const current = await f.fence.inspect({ owner:f.ownerId, ownerPublicKey:f.ownerKey, evidence:'synthetic-auth' });
+  assert.equal(current.stages[0].claimed,true);assert.equal(current.stages[0].original_hash,null);
+  assert.equal((await originalWitness.inspect(identity.owner)).state.phase,'claimed');
+  f.state.blocked = false;
+  await assert.rejects(coordinator.claim({ identity, stageId, evidence:'synthetic-auth' }), e => e.code === 'WITNESS_NOT_CLAIMABLE');
 }));
 
 
@@ -399,7 +449,10 @@ dbtest('synthetic browser prompts, owner challenges, PostgreSQL, local Git and p
   assert.equal(completion.status, 'FOUR_ORIGINALS_AND_STATE_MATCH_NOT_AUTHORIZED');
   assert.equal(completion.independently_witnessed, true); assert.equal(completion.execution_authorized, false);
   assert.equal(completion.independent_delivery_verified, false); assert.equal(prompted, 4); assert.equal(signed, 12);
-  assert.deepEqual(f.calls, [hash(10), hash(10), hash(10), hash(11), hash(10), hash(11), hash(12), hash(10), hash(11), hash(12), hash(13)]);
+  assert.deepEqual(f.calls, [hash(10), hash(10), hash(10),
+    hash(10), hash(11), hash(10), hash(11),
+    hash(10), hash(11), hash(12), hash(10), hash(11), hash(12),
+    hash(10), hash(11), hash(12), hash(13)]);
   const alteredWitness = { ...witness, async inspect(owner) {
     const snapshot = await witness.inspect(owner), altered = structuredClone(snapshot);
     altered.state.records.find(r => r.event === 'original').original_hash = hash(99);

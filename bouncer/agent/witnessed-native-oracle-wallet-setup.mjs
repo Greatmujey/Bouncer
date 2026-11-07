@@ -2,10 +2,11 @@
  * Experimental two-system coordinator for the four native wallet stages.
  * PostgreSQL authenticates the exact owner action and verifies all prior
  * original receipt graphs plus a fresh same-block preflight. An independently
- * retained Git CAS witness must acknowledge and re-read the matching claim
- * before the coordinator returns it. No wallet or chain action occurs here.
+ * retained Git CAS witness must acknowledge and re-read the matching claim;
+ * then the same claimed stage and prior receipts are checked again at a fresh
+ * FINAL block before the coordinator returns. No wallet or chain action occurs.
  *
- * An unknown DB/Git acknowledgment, stale preflight or missing original is a
+ * An unknown DB/Git acknowledgment, failed postcheck or missing original is a
  * permanent stop for that stage, not a reason to open another wallet prompt.
  * The independent latest Git head still requires outside retention/monitoring;
  * administrators, simultaneous rollback, bypassing clients, provider lies,
@@ -13,6 +14,7 @@
  * spending authorization. Real owner approval is still a separate boundary.
  */
 import { WalletWitnessError } from './git-wallet-prompt-witness.mjs';
+import { isTransactionHash } from '../shared/direct-payment-settlement.mjs';
 
 const STAGES = ['create_keyless_native_vault', 'configure_native_oracle_policy', 'fund_native_vault', 'install_native_oracle_agent'];
 const fail = code => new WalletWitnessError(code, 'native wallet setup is uncertain or no longer fresh; stop and reconcile, never repeat a claimed prompt');
@@ -41,7 +43,8 @@ function checkFresh(claim, id, stageId, now) {
   if (claim?.owner !== id.owner || claim.operation_id !== id.operation_id || claim.review_sha256 !== id.review_sha256 ||
       claim.stage_id !== stageId || claim.action_commitment_sha256 !== id.stages.find(s => s.stage_id === stageId)?.action_commitment_sha256 ||
       claim.status !== 'PROMPT_CLAIMED_NO_HASH' || claim.do_not_retry !== true || claim.execution_authorized !== false ||
-      !Number.isSafeInteger(clock) || !Number.isSafeInteger(checked) || clock < checked || clock - checked > 5000) throw fail('WITNESSED_CLAIM_STALE');
+      !isTransactionHash(claim.preflight_block_hash) || !Number.isSafeInteger(clock) || !Number.isSafeInteger(checked) ||
+      clock < checked || clock - checked > 5000) throw fail('WITNESSED_CLAIM_STALE');
 }
 // Both namespace witnesses must share the same physical branch/CAS and,
 // for live use, the same independent latest-head anchor. Matching heads alone
@@ -54,7 +57,7 @@ async function assertOtherFlowEmpty(other, owner, expectedHead) {
   if (result.state !== null) throw fail('CROSS_FLOW_WITNESSED');
 }
 export function createWitnessedNativeOracleSetup({ fence, witness, otherWitness, now = Date.now } = {}) {
-  if (!fence || ['reserve','inspect','claim','recordOriginal','verifyCompletion'].some(m => typeof fence[m] !== 'function') || !witness ||
+  if (!fence || ['reserve','inspect','claim','recheckClaimBeforePrompt','recordOriginal','verifyCompletion'].some(m => typeof fence[m] !== 'function') || !witness ||
       ['inspect','reserve','assertClaimable','claim','recordOriginal'].some(m => typeof witness[m] !== 'function') ||
       !otherWitness || otherWitness === witness || typeof otherWitness.inspect !== 'function' || typeof now !== 'function') {
     throw Error('authenticated native PostgreSQL fence and both same-branch setup witnesses required');
@@ -81,10 +84,23 @@ export function createWitnessedNativeOracleSetup({ fence, witness, otherWitness,
       // If this write or acknowledgement fails, the database claim may already
       // exist. No prompt is returned; never try to claim the same stage again.
       const saved = await witness.claim(identity, stageId, checkpoint);
-      checkFresh(claim, identity, stageId, now);
-      return { ...claim, witness_head: saved.head, independently_witnessed: true,
+      // Git and checkpoint round trips can consume the original five-second
+      // window. Recheck the SAME already-claimed stage after acknowledgement;
+      // never claim again, extend a stale snapshot, or retry a wallet prompt.
+      let recheck;
+      try { recheck = await fence.recheckClaimBeforePrompt(args); }
+      catch { throw fail('WITNESSED_POSTCHECK_UNAVAILABLE'); }
+      if (recheck?.status !== 'CLAIM_PREFLIGHT_RECHECKED_NOT_AUTHORIZED' || recheck.owner !== identity.owner ||
+          recheck.operation_id !== identity.operation_id || recheck.review_sha256 !== identity.review_sha256 ||
+          recheck.stage_id !== stageId || recheck.action_commitment_sha256 !== args.actionCommitmentSha256 ||
+          recheck.do_not_retry !== true || recheck.execution_authorized !== false || !isTransactionHash(recheck.preflight_block_hash)) {
+        throw fail('WITNESSED_POSTCHECK_UNAVAILABLE');
+      }
+      const currentClaim = { ...claim, preflight_block_hash:recheck.preflight_block_hash, preflight_checked_at:recheck.preflight_checked_at };
+      checkFresh(currentClaim, identity, stageId, now);
+      return { ...currentClaim, witness_head: saved.head, independently_witnessed: true,
         execution_authorized: false, wallet_invocation_verified: false,
-        scope: 'independently witnessed native stage claim only; not owner consent, a wallet invocation, transaction or delivery' };
+        scope: 'independently witnessed native stage claim with a post-witness FINAL recheck; not owner consent, a wallet invocation, transaction or delivery' };
     },
     /** A complete witness means originals are retained, not that they are
      * successful. Recheck every receipt and exact installed state before

@@ -97,9 +97,11 @@ examples were **self-hosted development services**.
   needs a dedicated operator, least-privilege checkpoint DB role, HTTPS reverse
   proxy, verified complete baseline, independent latest-revision monitoring,
   incident procedures and performance testing. A privileged monitor or DB
-  operator can still forge or roll back the checkpoint. If the added network
-  round trips make a claim's five-second preflight expire, stop and reconcile;
-  do not reopen the wallet prompt.
+  operator can still forge or roll back the checkpoint. The native coordinator
+  now rechecks the same claimed stage and prior originals after the witness
+  acknowledgement, instead of extending an old snapshot. A failed, uncertain
+  or expired postcheck consumes the claim: stop and reconcile, never reopen the
+  wallet prompt. FT retains its existing preflight behavior.
 - `postgres-native-oracle-prompt-fence.mjs` atomically retains one review and
   four stage rows, checks earlier original receipts and fresh native preflights,
   and claims each prompt once. `witnessed-native-oracle-wallet-setup.mjs`
@@ -115,10 +117,13 @@ examples were **self-hosted development services**.
   checks do not cover older/bypassing clients, every non-setup FT operation,
   independent wallets, an unanchored or compromised Git history, or release.
   This is not a hosted service or live wallet integration. The latest Git head
-  still needs independent retention and monitoring. A claim whose preflight
-  expires while waiting for the witness is consumed and
-  cannot be retried. Those server modules do not invoke a transaction-signing
-  wallet; the unconnected browser adapter below can do so after a valid claim.
+  still needs independent retention and monitoring. After the witness commits,
+  the native coordinator re-fetches the prior original receipts and performs a
+  new same-block FINAL preflight, verifying that the exact DB claim and shared
+  owner hold still match before returning it. A failed or stale postcheck is a
+  stop, not a new claim; it cannot guarantee that chain state stays unchanged
+  while the wallet is open. Those server modules do not invoke a transaction-
+  signing wallet; the unconnected browser adapter can do so after a valid claim.
 - `postgres-wallet-owner-fence.mjs` now reserves a shared per-owner holder in
   the **same PostgreSQL transaction** as either the native or existing FT
   prompt reservation; both flows must match it before a new claim. Independent
@@ -179,8 +184,9 @@ examples were **self-hosted development services**.
   Native-only preview does not require the V12 FT artifact. Both transport
   switches are off by default. This wiring and its disposable DB/local Git
   tests are **not** an independently operated deployment, live phone flow or
-  approval to fund a vault. Review retention is still process-local and the
-  five-second claim freshness window may be consumed by Git/network latency.
+  approval to fund a vault. Review retention is still process-local. The new
+  post-witness check reduces the Git-delay problem but the resulting five-second
+  window can still expire during database, network or browser latency.
 - `web-src/native-oracle-device-key.mjs` can generate and retain one local,
   non-extractable Ed25519 WebCrypto key per owner and test its possession
   without exporting the private key. It has no transaction-signing, network or
