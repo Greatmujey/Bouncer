@@ -1,3 +1,4 @@
+import { emptyCrossWitness } from './fixtures/empty-cross-witness.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
@@ -14,7 +15,8 @@ import { V11_SELECTED_WASM_FEATURES } from '../agent/svalin-setup-preflight.mjs'
 import { NO_LOCAL_CONTRACT_HASH } from '../shared/plain-owner-profile.mjs';
 import { createPostgresNativeOraclePromptFence, initializePostgresNativeOraclePromptFence } from '../agent/postgres-native-oracle-prompt-fence.mjs';
 import { createNativeOraclePromptWitness } from '../agent/git-native-oracle-prompt-witness.mjs';
-import { createGitNativeOraclePromptWitnessStore } from '../agent/git-branch-witness-store.mjs';
+import { createWalletPromptWitness } from '../agent/git-wallet-prompt-witness.mjs';
+import { createGitNativeOraclePromptWitnessStore, createGitBranchWitnessStore } from '../agent/git-branch-witness-store.mjs';
 import { createWitnessedNativeOracleSetup } from '../agent/witnessed-native-oracle-wallet-setup.mjs';
 import { createPostgresWalletPromptAuth, initializePostgresWalletPromptAuth } from '../agent/postgres-wallet-prompt-auth.mjs';
 import { nativeSetupAuthAction, signReviewedNativeSetupChallenge } from '../web-src/native-oracle-setup-auth.mjs';
@@ -216,7 +218,7 @@ function memoryWitnessStore() {
 
 dbtest('independent witness plus PostgreSQL permits one checked stage and records exactly its original', async () => resources(async db => {
   const f = scenario(db), store = memoryWitnessStore(), witness = createNativeOraclePromptWitness({ store });
-  const coordinator = createWitnessedNativeOracleSetup({ fence: f.fence, witness });
+  const coordinator = createWitnessedNativeOracleSetup({ fence: f.fence, witness, otherWitness: emptyCrossWitness(witness) });
   const reserved = await coordinator.reserve(f.reserve), identity = reserved.identity;
   assert.equal(reserved.status, 'RESERVED_NOT_CLAIMED'); assert.equal(reserved.execution_authorized, false);
   await assert.rejects(coordinator.reserve(f.reserve), e => e.code === 'OWNER_ALREADY_WITNESSED');
@@ -236,7 +238,7 @@ dbtest('independent witness plus PostgreSQL permits one checked stage and record
 
 dbtest('lost witness acknowledgement leaves both systems claimed and cannot yield another prompt', async () => resources(async db => {
   const f = scenario(db), store = memoryWitnessStore(), witness = createNativeOraclePromptWitness({ store });
-  const coordinator = createWitnessedNativeOracleSetup({ fence: f.fence, witness });
+  const coordinator = createWitnessedNativeOracleSetup({ fence: f.fence, witness, otherWitness: emptyCrossWitness(witness) });
   const { identity } = await coordinator.reserve(f.reserve), stageId = f.review.stages[0].id;
   store.loseAck(true);
   await assert.rejects(coordinator.claim({ identity, stageId, evidence: 'synthetic-auth' }), e => e.code === 'WITNESS_COMMIT_UNKNOWN');
@@ -251,7 +253,7 @@ dbtest('a witness acknowledgement after preflight expiry cannot return a claim o
   let clock = Date.now(); const now = () => clock, f = scenario(db, { now }), store = memoryWitnessStore();
   const originalWitness = createNativeOraclePromptWitness({ store });
   const witness = { ...originalWitness, async claim(...args) { const saved = await originalWitness.claim(...args); clock += 5001; return saved; } };
-  const coordinator = createWitnessedNativeOracleSetup({ fence: f.fence, witness, now });
+  const coordinator = createWitnessedNativeOracleSetup({ fence: f.fence, witness, otherWitness: emptyCrossWitness(witness), now });
   const { identity } = await coordinator.reserve(f.reserve), stageId = f.review.stages[0].id;
   await assert.rejects(coordinator.claim({ identity, stageId, evidence: 'synthetic-auth' }), e => e.code === 'WITNESSED_CLAIM_STALE');
   assert.equal((await originalWitness.inspect(identity.owner)).state.phase, 'claimed');
@@ -268,7 +270,7 @@ dbtest('synthetic NEP-413 wallet challenges bind native reserve, claim and origi
   const authenticator = createPostgresWalletPromptAuth({ pool: db, origin: site.origin, provider: authProvider });
   const fence = createPostgresNativeOraclePromptFence({ ...f.options, authenticate: authenticator.authenticate });
   const witness = createNativeOraclePromptWitness({ store: memoryWitnessStore() });
-  const coordinator = createWitnessedNativeOracleSetup({ fence, witness });
+  const coordinator = createWitnessedNativeOracleSetup({ fence, witness, otherWitness: emptyCrossWitness(witness) });
   let walletMessages = 0, walletTransactions = 0;
   const wallet = { manifest: { id: 'near-mobile' }, async signMessage(p) {
     walletMessages++; assert.equal(p.accountId, f.ownerId);
@@ -331,7 +333,8 @@ dbtest('synthetic browser prompts, owner challenges, PostgreSQL, local Git and p
   const authenticator = createPostgresWalletPromptAuth({ pool: db, origin: site.origin, provider: authProvider });
   const fence = createPostgresNativeOraclePromptFence({ ...f.options, authenticate: authenticator.authenticate });
   const witness = createNativeOraclePromptWitness({ store: createGitNativeOraclePromptWitnessStore({ repo: work, branch, initialHead }) });
-  const coordinator = createWitnessedNativeOracleSetup({ fence, witness });
+  const otherWitness = createWalletPromptWitness({ store: createGitBranchWitnessStore({ repo: work, branch, initialHead }) });
+  const coordinator = createWitnessedNativeOracleSetup({ fence, witness, otherWitness });
   let signed = 0, prompted = 0;
   const wallet = { manifest: { id: 'near-mobile', features: { signAndSendTransaction: true } }, async signMessage(p) {
     signed++; const digest = crypto.createHash('sha256').update(nep413Payload(p)).digest();
@@ -374,13 +377,13 @@ dbtest('synthetic browser prompts, owner challenges, PostgreSQL, local Git and p
     altered.state.records.find(r => r.event === 'original').original_hash = hash(99);
     return altered;
   } };
-  const disagreeing = createWitnessedNativeOracleSetup({ fence, witness: alteredWitness });
+  const disagreeing = createWitnessedNativeOracleSetup({ fence, witness: alteredWitness, otherWitness: emptyCrossWitness(alteredWitness) });
   await assert.rejects(disagreeing.verifyCompletion({ identity, evidence: await sign(verifyContext) }), e => e.code === 'WITNESS_MISMATCH');
   let reads = 0;
   const changingWitness = { ...witness, async inspect(owner) {
     const snapshot = await witness.inspect(owner); if (++reads === 2) return { ...snapshot, head: 'e'.repeat(40) }; return snapshot;
   } };
-  const changing = createWitnessedNativeOracleSetup({ fence, witness: changingWitness });
+  const changing = createWitnessedNativeOracleSetup({ fence, witness: changingWitness, otherWitness: emptyCrossWitness(changingWitness) });
   await assert.rejects(changing.verifyCompletion({ identity, evidence: await sign(verifyContext) }), e => e.code === 'WITNESS_MISMATCH');
   f.state.blocked = true;
   const changed = await coordinator.verifyCompletion({ identity, evidence: await sign(verifyContext) });

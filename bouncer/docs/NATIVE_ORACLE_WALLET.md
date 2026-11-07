@@ -45,7 +45,8 @@ examples were **self-hosted development services**.
   owner session or independent latest-head retention/monitoring. Git
   administrators or a simultaneous rollback can still defeat it. A hash in this log alone does
   **not** establish a valid receipt or allow a later wallet prompt.
-- `anchored-witness-store.mjs` and `git-witness-history-audit.mjs` provide an
+- `anchored-witness-store.mjs`, `git-witness-history-audit.mjs` and
+  `anchored-setup-witness-pair.mjs` provide an
   **experimental adapter**, not a deployed monitor. Given an already trusted
   checkpoint from a separate durable CAS service, each witness append must
   advance and read back that external head before it is acknowledged. The Git
@@ -63,6 +64,13 @@ examples were **self-hosted development services**.
   native action to a fresh Ed25519 FullAccess-key view (not EVM/0x support).
   Synthetic signatures, disposable PostgreSQL, local Git and in-memory CAS stores
   exercise concurrency, lost acknowledgments, schema tampering and stale checks.
+  Both setup coordinators now require the other flow's witness on the **same**
+  Git head before reservation or claim; the reservation CAS is tied to that
+  checked head. Synthetic tests race separate databases and show at most one
+  same-owner witness. A shared-configuration anchored-pair factory prevents
+  accidentally selecting two Git branches with a common old head. The setup
+  checks do not cover older/bypassing clients, every non-setup FT operation,
+  independent wallets, an unanchored or compromised Git history, or release.
   This is not a hosted service or live wallet integration. The latest Git head
   still needs independent retention and monitoring. A claim whose preflight
   expires while waiting for the witness is consumed and

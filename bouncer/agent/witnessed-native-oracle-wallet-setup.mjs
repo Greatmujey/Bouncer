@@ -43,18 +43,32 @@ function checkFresh(claim, id, stageId, now) {
       claim.status !== 'PROMPT_CLAIMED_NO_HASH' || claim.do_not_retry !== true || claim.execution_authorized !== false ||
       !Number.isSafeInteger(clock) || !Number.isSafeInteger(checked) || clock < checked || clock - checked > 5000) throw fail('WITNESSED_CLAIM_STALE');
 }
-export function createWitnessedNativeOracleSetup({ fence, witness, now = Date.now } = {}) {
+// Both namespace witnesses must share the same physical branch/CAS and,
+// for live use, the same independent latest-head anchor. Matching heads alone
+// cannot prove two operator-supplied backends are the same service.
+async function assertOtherFlowEmpty(other, owner, expectedHead) {
+  const result = await other.inspect(owner);
+  if (!result || typeof result.head !== 'string' || !result.head || result.head !== expectedHead || !Object.hasOwn(result, 'state')) {
+    throw fail('WITNESS_HEAD_CHANGED');
+  }
+  if (result.state !== null) throw fail('CROSS_FLOW_WITNESSED');
+}
+export function createWitnessedNativeOracleSetup({ fence, witness, otherWitness, now = Date.now } = {}) {
   if (!fence || ['reserve','inspect','claim','recordOriginal','verifyCompletion'].some(m => typeof fence[m] !== 'function') || !witness ||
-      ['inspect','reserve','assertClaimable','claim','recordOriginal'].some(m => typeof witness[m] !== 'function') || typeof now !== 'function') {
-    throw Error('authenticated native PostgreSQL fence and independent CAS witness required');
+      ['inspect','reserve','assertClaimable','claim','recordOriginal'].some(m => typeof witness[m] !== 'function') ||
+      !otherWitness || otherWitness === witness || typeof otherWitness.inspect !== 'function' || typeof now !== 'function') {
+    throw Error('authenticated native PostgreSQL fence and both same-branch setup witnesses required');
   }
   return Object.freeze({
     async reserve(request = {}) {
-      const existing = await witness.inspect(request?.review?.owner);
+      const owner = request?.review?.owner, existing = await witness.inspect(owner);
       if (existing.state) throw fail('OWNER_ALREADY_WITNESSED');
-      // No prompt is returned if either separately retained commit is uncertain.
+      await assertOtherFlowEmpty(otherWitness, owner, existing.head);
+      // The witness CAS is tied to the head at which BOTH namespaces were
+      // checked, even if a different flow or database races this reservation.
       const reservation = await fence.reserve(request), identity = identityFrom(reservation);
-      const saved = await witness.reserve(identity);
+      if (identity.owner !== owner) throw fail('WITNESS_MISMATCH');
+      const saved = await witness.reserve(identity, existing.head);
       return { identity, review: reservation.review, witness_head: saved.head, status: 'RESERVED_NOT_CLAIMED',
         execution_authorized: false, wallet_invocation_verified: false,
         scope: 'native testnet reservation and public independent witness only; no approval, wallet, transaction or provider work' };
@@ -62,6 +76,7 @@ export function createWitnessedNativeOracleSetup({ fence, witness, now = Date.no
     async claim({ identity: raw, stageId, evidence } = {}) {
       const identity = structuredClone(raw), args = common(identity, stageId, evidence);
       const checkpoint = await witness.assertClaimable(identity, stageId);
+      await assertOtherFlowEmpty(otherWitness, identity.owner, checkpoint.head);
       const claim = await fence.claim(args);
       // If this write or acknowledgement fails, the database claim may already
       // exist. No prompt is returned; never try to claim the same stage again.

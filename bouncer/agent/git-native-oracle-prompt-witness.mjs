@@ -118,9 +118,14 @@ export function createNativeOraclePromptWitness({ store } = {}) {
   function assertIdentity(state, id) { if (!state || !same(state.identity, identity(id))) throw blocked('WITNESS_MISMATCH'); }
   return Object.freeze({
     inspect: read,
-    async reserve(raw) {
+    async reserve(raw, expectedHead) {
       const id = identity(structuredClone(raw)), snapshot = await read(id.owner);
       if (snapshot.state) throw blocked('OWNER_ALREADY_WITNESSED');
+      // A cross-flow coordinator may have checked the other namespace at this
+      // exact branch head. Never advance from a different snapshot afterward.
+      if (expectedHead !== undefined && (typeof expectedHead !== 'string' || !expectedHead || snapshot.head !== expectedHead)) {
+        throw blocked('WITNESS_HEAD_CHANGED');
+      }
       return append(snapshot, id.owner, firstRecord(id));
     },
     async assertClaimable(raw, stageId) {

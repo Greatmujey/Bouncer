@@ -15,8 +15,9 @@ import { createReadOnlyPreviewService } from '../agent/read-only-preview-service
 import { createWitnessedSetupHttpHandler } from '../agent/witnessed-setup-http.mjs';
 import { createPostgresWalletPromptAuth, initializePostgresWalletPromptAuth } from '../agent/postgres-wallet-prompt-auth.mjs';
 import { createPostgresWalletPromptFence, initializePostgresWalletPromptFence } from '../agent/postgres-wallet-prompt-fence.mjs';
-import { createGitBranchWitnessStore } from '../agent/git-branch-witness-store.mjs';
+import { createGitBranchWitnessStore, createGitNativeOraclePromptWitnessStore } from '../agent/git-branch-witness-store.mjs';
 import { createWalletPromptWitness } from '../agent/git-wallet-prompt-witness.mjs';
+import { createNativeOraclePromptWitness } from '../agent/git-native-oracle-prompt-witness.mjs';
 import { createWitnessedWalletSetup } from '../agent/witnessed-wallet-setup.mjs';
 import { createAuthenticatedWitnessedSetupService } from '../agent/authenticated-witnessed-setup-service.mjs';
 import { wasm, NOW, snapshot as makeSnapshot, fixture as receiptFixture } from './buffer-wallet-setup-fixture.mjs';
@@ -57,8 +58,11 @@ async function runScenario({ loseClaimAck = false, unknownWallet = false } = {})
     const auth = createPostgresWalletPromptAuth({pool:db,origin:site,provider});
     const fence = createPostgresWalletPromptFence({pool:db,authenticate:auth.authenticate,setupWasmBytes:wasm,
       setupPreflightProvider:provider,setupReceiptProvider:receipts});
-    const store = createGitBranchWitnessStore({repo:work,branch,initialHead:git(work,['rev-parse','HEAD'])});
-    const witness = createWalletPromptWitness({store}), coordinator = createWitnessedWalletSetup({fence,witness});
+    const initialHead = git(work,['rev-parse','HEAD']);
+    const store = createGitBranchWitnessStore({repo:work,branch,initialHead});
+    const witness = createWalletPromptWitness({store});
+    const otherWitness = createNativeOraclePromptWitness({store:createGitNativeOraclePromptWitnessStore({repo:work,branch,initialHead})});
+    const coordinator = createWitnessedWalletSetup({fence,witness,otherWitness});
     const bridge = {pending:()=>[],take:()=>null,submit:()=>false,takeForBrowser:()=>null,submitEncrypted:()=>false};
     server = createReadOnlyPreviewService({bridge,siteOrigin:site,relayUrl:'https://bouncer-testnet-readonly-relay-tau.vercel.app/api/read',
       inspectReadiness:async()=>structuredClone(snap),makeReview:async()=>structuredClone(review),

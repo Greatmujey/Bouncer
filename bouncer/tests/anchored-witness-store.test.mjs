@@ -6,11 +6,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import nearApi from 'near-api-js';
-import { createAnchoredWitnessStore } from '../agent/anchored-witness-store.mjs';
+import { createAnchoredSetupWitnessPair } from '../agent/anchored-setup-witness-pair.mjs';
 import { createGitWitnessHistoryAudit } from '../agent/git-witness-history-audit.mjs';
-import { createGitBranchWitnessStore, createGitNativeOraclePromptWitnessStore } from '../agent/git-branch-witness-store.mjs';
-import { createWalletPromptWitness } from '../agent/git-wallet-prompt-witness.mjs';
-import { createNativeOraclePromptWitness } from '../agent/git-native-oracle-prompt-witness.mjs';
 
 const branch = 'arena/0e4386ea-near-hub';
 const git = (cwd, args) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore','pipe','pipe'] }).trim();
@@ -44,9 +41,8 @@ async function repository(run) {
     fs.writeFileSync(path.join(work,'README.md'),'Synthetic only\n'); git(work,['add','README.md']);
     git(work,['commit','-m','Initial synthetic baseline']); git(work,['push','origin',branch]);
     const base = git(work,['rev-parse','HEAD']), anchor = checkpoint(base), audit = createGitWitnessHistoryAudit({ repo: work });
-    const setup = { repo: work, branch, initialHead: base };
-    const ft = createWalletPromptWitness({ store: createAnchoredWitnessStore({ store: createGitBranchWitnessStore(setup), anchor, audit }) });
-    const native = createNativeOraclePromptWitness({ store: createAnchoredWitnessStore({ store: createGitNativeOraclePromptWitnessStore(setup), anchor, audit }) });
+    const pair = createAnchoredSetupWitnessPair({ repo: work, branch, initialHead: base, anchor });
+    const ft = pair.wallet, native = pair.native;
     await run({ work, base, anchor, audit, ft, native });
   } finally { fs.rmSync(root,{ recursive:true,force:true }); }
 }

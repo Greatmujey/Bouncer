@@ -1,3 +1,4 @@
+import { emptyCrossWitness } from './fixtures/empty-cross-witness.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
@@ -83,7 +84,7 @@ test('coordinator blocks restored database or uncertain witness before returning
       status: 'PROMPT_CLAIMED_NO_HASH', do_not_retry: true, execution_authorized: false, preflight_checked_at: new Date().toISOString() }; },
     async claimSetupStage() { throw Error('unused'); }, async recordOriginalHash() { throw Error('unused'); }, async recordSetupStageOriginal() { throw Error('unused'); },
   };
-  const coordinated = createWitnessedWalletSetup({ fence, witness });
+  const coordinated = createWitnessedWalletSetup({ fence, witness, otherWitness: emptyCrossWitness(witness) });
   const reserved = await coordinated.reserve({ review });
   assert.deepEqual(reserved.identity, identity); assert.equal(reserved.execution_authorized, false);
   store.loseAck(true);
@@ -106,7 +107,7 @@ test('an elapsed preflight never becomes usable after an independent claim', asy
       stage_id: stages[0], action_commitment_sha256: identity.stages[0].action_commitment_sha256, status: 'PROMPT_CLAIMED_NO_HASH',
       do_not_retry: true, execution_authorized: false, preflight_checked_at: new Date(clock - 5001).toISOString() }; },
     async claimSetupStage() {}, async recordOriginalHash() {}, async recordSetupStageOriginal() {} };
-  const coordinated = createWitnessedWalletSetup({ fence, witness, now: () => clock });
+  const coordinated = createWitnessedWalletSetup({ fence, witness, otherWitness: emptyCrossWitness(witness), now: () => clock });
   await coordinated.reserve({ review });
   await assert.rejects(coordinated.claim({ identity, stageId: stages[0], evidence: 'synthetic' }), e => e.code === 'WITNESSED_CLAIM_STALE');
   assert.equal((await witness.inspect(identity.owner)).state.phase, 'claimed');
