@@ -114,6 +114,15 @@ function canonicalReview(review, identity, device, origin) {
     agent_key_installed: false, independent_delivery_verified: false };
   return canonical;
 }
+/** Reconstruct and hash the exact pinned setup review on the device. This is
+ * not evidence that the setup happened, current state, consent or authority. */
+export async function verifyNativeOracleSetupReview({ review, identity, deviceKey, origin, crypto = globalThis.crypto } = {}) {
+  if (!crypto?.subtle || typeof origin !== 'string') throw fail();
+  const canonical = canonicalReview(structuredClone(review), structuredClone(identity), structuredClone(deviceKey), origin);
+  if (await digest(crypto, bytes(JSON.stringify(canonical))) !== review.review_sha256) throw fail();
+  return canonical;
+}
+
 function walletActions(stage, code) {
   return stage.actions.map(a => {
     if (a.type === 'create_account') return { type: 'CreateAccount' };
@@ -141,8 +150,7 @@ export async function prepareNativeOracleSetupWalletPrompt({ wallet, review: raw
   } catch { throw fail(); }
   const review = structuredClone(rawReview), identity = structuredClone(rawIdentity), device = structuredClone(rawDevice), index = STAGES.indexOf(stageId);
   if (index < 0) throw fail();
-  const canonical = canonicalReview(review, identity, device, origin);
-  if (await digest(crypto, bytes(JSON.stringify(canonical))) !== review.review_sha256) throw fail();
+  const canonical = await verifyNativeOracleSetupReview({ review, identity, deviceKey: device, origin, crypto });
   let code = null;
   if (index === 0) {
     if (!(wasmBytes instanceof Uint8Array) || wasmBytes.length !== WASM_BYTES) throw fail();

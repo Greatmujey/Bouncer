@@ -2,10 +2,11 @@
  * EXPERIMENTAL, local-only custody for ONE testnet agent key per owner.
  *
  * Generates an Ed25519 WebCrypto private CryptoKey as non-extractable and
- * stores it in IndexedDB. Only public metadata is returned; this module cannot
- * sign transactions, invoke a wallet, call an RPC or authorize spending. It
- * signs a fixed domain-separated possession challenge internally and verifies
- * it against the stored public key before reporting local availability.
+ * stores it in IndexedDB. The opt-in trial method can sign exactly one pinned
+ * native-oracle transaction after a checked setup snapshot and a local original
+ * hash record. It never invokes a wallet, calls an RPC or broadcasts. It also
+ * signs a domain-separated possession challenge internally before reporting
+ * local availability. The signing method is not connected to the live UI.
  *
  * This is NOT a backup, independent fence, secure enclave guarantee or proof
  * of an on-chain grant. The browser/OS may lose or roll back storage; clearing
@@ -18,6 +19,10 @@
  * before any real deployment or spending UI uses this module.
  */
 import { isTestnetAccount } from './wallet-utils.mjs';
+import { verifyNativeOracleSetupReview } from './native-oracle-setup-wallet-prompt.mjs';
+import { buildNativeOracleTrialBytes, appendNativeOracleSignature, encodeBase58 } from './native-oracle-transaction.mjs';
+import { retainLocalNativeOriginal, inspectLocalNativeOriginal } from './native-oracle-local-attempt.mjs';
+import { assertNativeOracleCompletion } from './native-oracle-completion.mjs';
 
 const DB_NAME = 'bouncer-native-oracle-device-key-v1', STORE = 'device-keys';
 // This previously used owner has unresolved original hashes; it is excluded
@@ -28,7 +33,7 @@ const FIELDS = ['version', 'network', 'owner', 'vault', 'origin', 'public_key', 
 const plain = x => x !== null && typeof x === 'object' && !Array.isArray(x) && Object.getPrototypeOf(x) === Object.prototype;
 const exact = (x, fields) => plain(x) && Object.keys(x).length === fields.length && fields.every(k => Object.hasOwn(x, k));
 const fail = message => new Error(message);
-
+const unavailable = () => fail('native oracle signing unavailable or uncertain; stop and reconcile, never retry automatically');
 function directChild(vault, owner) {
   if (!isTestnetAccount(owner) || !owner.endsWith('.testnet') || owner === EXCLUDED_OWNER ||
       !isTestnetAccount(vault) || !vault.endsWith(`.${owner}`)) return false;
@@ -189,6 +194,54 @@ export async function openNativeOracleDeviceKey({ indexedDB, storage, crypto, or
       if (row === undefined) return { network: 'testnet', owner, vault, status: 'NO_LOCAL_DEVICE_KEY',
         local_storage_only: true, prior_installation_disproved: false, independent_backup_verified: false, signing_authorized: false };
       return validate(row, owner, vault, expected);
+    },
+    /** Signs only the reviewed 0.1-NEAR-maximum pinned oracle call, not an
+     * arbitrary transaction. The UI must separately show the terms and obtain
+     * explicit owner consent. This method records the original hash locally
+     * before releasing the signature and never broadcasts. Local storage is
+     * NOT independent durable recovery; a live caller still needs an external
+     * original-hash fence and must reconcile any uncertain result. */
+    async signNativeOracleTrial(value) {
+      ensureOpen();
+      if (!exact(value,['review','identity','completion','ownerConfirmed','expectedTransactionHash']) || value.ownerConfirmed!==true ||
+          typeof value.expectedTransactionHash!=='string') throw unavailable();
+      const review=structuredClone(value.review),identity=structuredClone(value.identity),completion=structuredClone(value.completion);
+      input({owner:review?.owner,vault:review?.vault});
+      const row=await run(db,'readonly',(store,done)=>{const get=store.get(review.owner);get.onsuccess=()=>done(get.result)});
+      const device=await validate(row,review.owner,review.vault,review.agent_public_key);
+      const canonical=await verifyNativeOracleSetupReview({review,identity,deviceKey:device,origin,crypto});
+      assertNativeOracleCompletion(completion,review,now());
+      const built=buildNativeOracleTrialBytes(canonical,completion);
+      if (typeof crypto.subtle.digest!=='function') throw unavailable();
+      const hash=new Uint8Array(await crypto.subtle.digest('SHA-256',built.unsigned));
+      if (hash.length!==32) throw unavailable();
+      const txHash=encodeBase58(hash),created=now();
+      if(txHash!==value.expectedTransactionHash)throw unavailable();
+      assertNativeOracleCompletion(completion,review,created);
+      const record={review_sha256:review.review_sha256,operation_id:identity.operation_id,
+        owner:canonical.owner,vault:canonical.vault,agent_public_key:canonical.agent_public_key,tx_hash:txHash,
+        block_hash:built.block_hash,nonce:built.nonce,created_at_ms:created};
+      // A committed or uncertain local claim is never cleared or replaced.
+      await retainLocalNativeOriginal(indexedDB,record);
+      assertNativeOracleCompletion(completion,review,now());
+      const signature=new Uint8Array(await crypto.subtle.sign('Ed25519',row.private_key,hash));
+      if(signature.length!==64 || await crypto.subtle.verify('Ed25519',row.public_crypto_key,signature,hash)!==true)throw unavailable();
+      const saved=await inspectLocalNativeOriginal(indexedDB,record.review_sha256);
+      if(!saved || Object.keys(record).some(k=>saved[k]!==record[k]))throw unavailable();
+      const current=await run(db,'readonly',(store,done)=>{const get=store.get(review.owner);get.onsuccess=()=>done(get.result)});
+      await validate(current,review.owner,review.vault,review.agent_public_key);
+      assertNativeOracleCompletion(completion,review,now());
+      return {status:'SIGNED_NOT_BROADCAST',tx_hash:txHash,signed_transaction:appendNativeOracleSignature(built.unsigned,signature),
+        owner:canonical.owner,vault:canonical.vault,review_sha256:review.review_sha256,maximum_native_yocto:canonical.per_tx_cap_yocto,
+        attached_deposit_yocto:'0',do_not_retry:true,local_original_retained:true,independent_backup_verified:false,
+        broadcast_authorized:false,transaction_sent:false,provider_delivery_verified:false};
+    },
+    /** Local-only original inspection. Missing local state never proves that
+     * the original did not exist or that another signature is safe. */
+    async inspectNativeOracleOriginal({reviewSha256}={}) {
+      ensureOpen();const record=await inspectLocalNativeOriginal(indexedDB,reviewSha256);
+      return {status:record?'LOCAL_ORIGINAL_RETAINED':'NO_LOCAL_ORIGINAL',record,do_not_retry:true,
+        independent_backup_verified:false,transaction_sent:false};
     },
     close() { if (!closed) { closed = true; db.close(); } },
   });

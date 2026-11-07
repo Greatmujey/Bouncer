@@ -194,15 +194,30 @@ examples were **self-hosted development services**.
   instances but is not an independent historical backup. The post-witness
   check reduces the Git-delay problem but the resulting five-second window can
   still expire during database, network or browser latency.
-- `web-src/native-oracle-device-key.mjs` can generate and retain one local,
-  non-extractable Ed25519 WebCrypto key per owner and test its possession
-  without exporting the private key. It has no transaction-signing, network or
-  wallet API and is not connected to the UI. Synthetic IndexedDB tests and a
-  390px Chromium test cover concurrent creation and reload, not real phones or
-  durable backups. Storage eviction or device/origin loss can lose this key;
-  same-origin scripts/XSS can still use it. Missing local data does not prove
-  an on-chain key was never installed. Owner-led on-chain revocation and a
-  complete recovery process are still required before funding.
+- `web-src/native-oracle-device-key.mjs` generates a local non-extractable
+  Ed25519 key and can now sign **one fixed native oracle trial**, without
+  exposing the private key. It reconstructs the reviewed terms, checks the
+  supplied completion's shape and five-second freshness, derives the nonce and
+  block, and commits the original transaction hash to a strict IndexedDB record
+  before releasing a verified signature. The `ownerConfirmed` input is only an
+  integration flag, not proof that a person saw or approved anything. A caller
+  must authenticate the completion source and display the terms. The module
+  has no network, wallet or broadcast API and is not mounted in the UI.
+- `agent/native-oracle-phone-signer.mjs` adapts the existing native OutLayer
+  runner to a callback which can return that phone signature. It checks the
+  full unsigned transaction and signature, while the runner records the
+  original in its own journal before the single send. The transport callback,
+  authenticated UI and independent journal are not deployed or connected.
+  Synthetic tests compare Borsh bytes against the NEAR SDK, verify signatures,
+  race two tabs, simulate an unknown send, and check a fabricated result/refund
+  through the runner; a mobile-sized Chromium test uses a real WebCrypto key
+  but fabricated setup evidence and no network send.
+- The local original record coordinates cooperating tabs **only in one browser
+  profile**. Storage deletion, rollback, eviction, another device/origin or
+  bypassing clients can defeat it; no local record does not prove a prior
+  transaction absent. Same-origin scripts/XSS can use the key. Local storage
+  is not an independent backup or a distributed payment fence. Owner-led
+  on-chain revocation and complete recovery are still required before funding.
 - `native-oracle-wallet-recovery.mjs` prepares an unsigned owner recovery
   review that deletes the exact agent access key, then calls
   `revoke_agent_key` with 1 yocto. If the key is already absent it can prepare

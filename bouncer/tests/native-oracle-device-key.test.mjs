@@ -49,7 +49,7 @@ test('non-extractable device key survives local reopen and matches a caller-supp
   assert.equal(recovered.public_key, created.public_key); assert.equal(recovered.expected_public_key_matched, true);
   assert.equal(recovered.independent_backup_verified, false); assert.equal(recovered.on_chain_state_verified, false);
   assert.equal(recovered.independently_retained_review_verified, false);
-  assert.deepEqual(Object.keys(second).sort(), ['close', 'create', 'inspect']);
+  assert.deepEqual(Object.keys(second).sort(), ['close', 'create', 'inspect', 'inspectNativeOracleOriginal', 'signNativeOracleTrial']);
   await assert.rejects(second.inspect({ ...params, expected_public_key: String(nearApi.KeyPair.fromRandom('ed25519').getPublicKey()) }), /mismatched/);
   await assert.rejects(second.create(params), /already exists/);
   second.close();
