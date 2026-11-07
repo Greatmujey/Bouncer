@@ -185,6 +185,18 @@
   <section class="account-view" id="wallet-account-view" aria-label="Public testnet account" hidden>
     <div class="account-view-head"><div><small>PUBLIC TESTNET ACCOUNT</small><strong id="wallet-account-name"></strong></div><span id="wallet-account-badge">VIEW ONLY</span></div>
     <p class="account-view-warning" id="wallet-account-warning">Unverified account name. No wallet is connected and no spending access was granted.</p>
+    <button class="account-entry-primary" id="wallet-owner-verify" type="button" hidden>Verify account in wallet</button>
+    <p class="account-view-status" id="wallet-owner-status" role="status" aria-live="polite" hidden></p>
+    <button class="account-entry-secondary" id="wallet-buffer-readiness" type="button" hidden>Review Buffer testnet setup →</button>
+    <p class="account-view-status" id="wallet-buffer-readiness-status" role="status" aria-live="polite" hidden></p>
+    <button class="account-entry-secondary" id="wallet-setup-recovery" type="button" hidden>Check setup recovery →</button>
+    <p class="account-view-status" id="wallet-setup-recovery-status" role="status" aria-live="polite" hidden></p>
+    <div class="setup-recovery" id="wallet-setup-recovery-form" hidden>
+      <label for="wallet-setup-original">Original transaction hash from wallet history</label>
+      <input id="wallet-setup-original" type="text" maxlength="50" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Paste the original hash" />
+      <button class="account-entry-secondary" id="wallet-setup-check-original" type="button">Check original on testnet →</button>
+      <button class="account-entry-primary" id="wallet-setup-record-original" type="button" hidden>Record this original →</button>
+    </div>
     <dl class="account-view-balances"><div><dt>Account NEAR*</dt><dd id="wallet-account-near">—</dd></div><div><dt>Circle test USDC</dt><dd id="wallet-account-usdc">—</dd></div></dl>
     <p id="wallet-account-balance-status" class="account-view-status" role="status" aria-live="polite"></p>
     <p class="account-view-footnote">*NEAR may include funds reserved for storage; staked NEAR is not included. These are public balances, not a spendable quote.</p>
@@ -235,7 +247,7 @@
   </dialog>
   <dialog class="tour-dialog" id="welcome-tour" aria-labelledby="tour-title" aria-describedby="tour-description"><div class="tour-topline"><span class="brand-mark" aria-hidden="true"><svg viewBox="16 17 300 300"><use href="#i-bouncer"/></svg></span><span class="tour-count" id="tour-count">STEP 1 OF 4</span><button type="button" class="tour-close" id="tour-skip" aria-label="Close the tour">×</button></div><div class="tour-progress" aria-hidden="true"><span></span><span></span><span></span><span></span></div><div class="tour-copy" aria-live="polite"><div class="section-kicker" id="tour-kicker">WELCOME TO BOUNCER</div><h2 id="tour-title">Meet your resource agent.</h2><p id="tour-description">Bouncer helps an agent get compute, storage and API services while your on-chain rules guard its spending.</p><div class="tour-callout" id="tour-callout">Bouncer is a testnet prototype, not an open marketplace.</div></div><div class="tour-actions"><button class="button tour-back" type="button" id="tour-back" disabled>Back</button><button class="button tour-next" type="button" id="tour-next">Next →</button></div></dialog>
   <script type="module" src="./app.mjs?v=7"></script>
-  <script type="module" src="./wallet.bundle.js?v=18"></script>
+  <script type="module" src="./wallet.bundle.js?v=19"></script>
   <script type="module" src="./google-signin.mjs?v=2"></script>
 </body>
 </html>

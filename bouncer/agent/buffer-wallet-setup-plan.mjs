@@ -119,6 +119,9 @@ export function buildBufferWalletSetup({ snapshot, wasmBytes, nowMs = Date.now()
     vault_wasm_sha256: V12_EXPECTED_SHA256, vault_wasm_near_hash: V12_NEAR_CODE_HASH,
     stages, signing_or_broadcast_authorized: false, wallet_approval_obtained: false,
     safety: 'Testnet only. A keyless deployment can lock its NEAR storage stake; Circle deposit is NOT a seller payment. Reconcile each original before the next stage and never retry an ambiguous send. This does not configure policy or prove delivery.' };
+  // This digest commits the canonical public review, not a signed transaction
+  // or proof of the snapshot. Retain it separately before any wallet prompt.
+  review.review_sha256 = sha(Buffer.from(JSON.stringify(review)));
   for (let i = 0; i < batches.length; i++) assertBufferWalletBatchMatchesReview(batches[i], review.stages[i]);
   return { review, batches };
 }

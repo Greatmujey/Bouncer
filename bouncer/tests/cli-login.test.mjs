@@ -15,7 +15,7 @@ function sign(pair, params = challenge) {
   const publicKey = pair.getPublicKey().toString();
   return { accountId: 'cli.testnet', publicKey, signedMessage: { accountId: 'cli.testnet', publicKey, signature: Buffer.from(pair.sign(digest).signature).toString('base64') } };
 }
-const goodResponse = { ok: true, text: async () => JSON.stringify({ result: { permission: 'FullAccess' } }) };
+const goodResponse = { ok: true, text: async () => JSON.stringify({ jsonrpc: '2.0', id: 'bouncer-cli-login', result: { permission: 'FullAccess' } }) };
 
 test('CLI NEP-413 payload matches the independently encoded standard', () => {
   assert.deepEqual(Buffer.from(nep413Payload(challenge)), independentlyEncode(challenge));
@@ -53,11 +53,12 @@ test('CLI rejects tampered messages, identities, keys and signatures before cont
 test('CLI refuses limited, missing or unreachable testnet keys and unsupported browser crypto', async () => {
   const account = sign(KeyPair.fromRandom('ed25519'));
   const verify = (fetch, crypto = webcrypto) => verifyCliLogin({ account, ...challenge, crypto, fetch });
-  const response = result => async () => ({ ok: true, text: async () => JSON.stringify(result) });
+  const response = result => async () => ({ ok: true, text: async () => JSON.stringify({ jsonrpc: '2.0', id: 'bouncer-cli-login', ...result }) });
   await assert.rejects(verify(response({ result: { permission: { FunctionCall: {} } } })), /CLI_KEY_NOT_FULL_ACCESS/);
   await assert.rejects(verify(response({ error: { message: 'Unknown access key' } })), /CLI_KEY_NOT_FULL_ACCESS/);
   await assert.rejects(verify(async () => { throw new Error('offline'); }), /CLI_RPC_UNAVAILABLE/);
   await assert.rejects(verify(async () => ({ ok: false })), /CLI_RPC_UNAVAILABLE/);
+  await assert.rejects(verify(async () => ({ ok: true, text: async () => JSON.stringify({ jsonrpc: '2.0', id: 'wrong', result: { permission: 'FullAccess' } }) })), /CLI_RPC_UNAVAILABLE/);
   await assert.rejects(verify(async () => ({ ok: true, text: async () => ' '.repeat(16385) })), /CLI_RPC_UNAVAILABLE/);
   await assert.rejects(verify(async () => goodResponse, { subtle: { importKey: async () => { throw new Error('unsupported'); } } }), /CLI_ED25519_UNAVAILABLE/);
 });

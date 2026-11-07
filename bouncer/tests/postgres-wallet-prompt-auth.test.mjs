@@ -5,6 +5,9 @@ import pg from 'pg';
 import nearApi from 'near-api-js';
 import { nep413Payload } from '../web-src/cli-login.mjs';
 import { buildBufferWalletSpendingPlan } from '../agent/buffer-wallet-spending-plan.mjs';
+import { buildBufferWalletSetup } from '../agent/buffer-wallet-setup-plan.mjs';
+import { wasm as V12, NOW as SETUP_NOW, snapshot as setupSnapshot, fixture as setupFixture } from './buffer-wallet-setup-fixture.mjs';
+import { firstSetupPreflightFixture, setSyntheticSetupStage } from './fixtures/wallet-setup-preflight-provider.mjs';
 import { createPostgresWalletPromptFence, initializePostgresWalletPromptFence } from '../agent/postgres-wallet-prompt-fence.mjs';
 import { createPostgresWalletPromptAuth, initializePostgresWalletPromptAuth } from '../agent/postgres-wallet-prompt-auth.mjs';
 
@@ -13,6 +16,7 @@ import { createPostgresWalletPromptAuth, initializePostgresWalletPromptAuth } fr
 const url = process.env.BOUNCER_TEST_POSTGRES_URL;
 if (process.env.BOUNCER_REQUIRE_POSTGRES_TESTS === '1' && !url) throw new Error('PostgreSQL integration test URL is required');
 const dbtest = url ? test : test.skip;
+const setupDbTest = url && V12 ? test : test.skip;
 const origin = 'https://bouncer.example';
 const blockHash = nearApi.utils.serialize.base_encode(Buffer.alloc(32, 21));
 const hash = n => nearApi.utils.serialize.base_encode(Buffer.alloc(32, n));
@@ -124,6 +128,19 @@ dbtest('authenticated fence reserves only the exact signed review, then records 
   await assert.rejects(fence.reserve(request), error => error.code === 'UNAUTHENTICATED');
   const second = await auth.issue(f.action);
   await assert.rejects(fence.reserve({ ...request, evidence: signed(second, f) }), error => error.code === 'OWNER_FENCED');
+  const claimAction = { format: f.action.format, network: 'testnet', purpose: 'claim_prompt', owner: f.owner,
+    owner_public_key: pk(f.ownerKey), operation_id: reservation.operation_id, review_sha256: f.review.review_sha256,
+    stage_id: f.action.stage_id, action_commitment_sha256: f.action.action_commitment_sha256 };
+  const claimChallenge = await auth.issue(claimAction), claimEvidence = signed(claimChallenge, f);
+  const claimArgs = { owner: f.owner, ownerPublicKey: pk(f.ownerKey), operationId: reservation.operation_id,
+    reviewSha256: f.review.review_sha256, stageId: f.action.stage_id,
+    actionCommitmentSha256: f.action.action_commitment_sha256, evidence: claimEvidence };
+  await assert.rejects(fence.claimPrompt({ ...claimArgs, actionCommitmentSha256: '0'.repeat(64) }), error => error.code === 'UNAUTHENTICATED');
+  const claimed = await fence.claimPrompt(claimArgs);
+  assert.equal(claimed.status, 'PROMPT_CLAIMED_NO_HASH'); assert.equal(claimed.execution_authorized, false);
+  await assert.rejects(fence.claimPrompt(claimArgs), error => error.code === 'UNAUTHENTICATED');
+  const freshClaim = await auth.issue(claimAction);
+  await assert.rejects(fence.claimPrompt({ ...claimArgs, evidence: signed(freshClaim, f) }), error => error.code === 'ALREADY_CLAIMED');
   const recordAction = { format: f.action.format, network: 'testnet', purpose: 'record_original_hash', owner: f.owner,
     owner_public_key: pk(f.ownerKey), operation_id: reservation.operation_id, original_hash: hash(31) };
   const c = await auth.issue(recordAction);
@@ -133,6 +150,91 @@ dbtest('authenticated fence reserves only the exact signed review, then records 
   const inspectAction = { format: f.action.format, network: 'testnet', purpose: 'inspect', owner: f.owner, owner_public_key: pk(f.ownerKey) };
   const inspect = await auth.issue(inspectAction);
   assert.equal((await fence.inspect({ owner: f.owner, ownerPublicKey: pk(f.ownerKey), evidence: signed(inspect, f) })).original_hash, hash(31));
+}));
+
+setupDbTest('signed NEP-413 challenges bind the first pinned vault-creation reservation and claim', async () => resources(async (db, rpc, auth) => {
+  const f = fixture(), snapshot = setupSnapshot();
+  snapshot.owner = f.owner; snapshot.candidate_vault = `vault.${f.owner}`;
+  const review = buildBufferWalletSetup({ snapshot, wasmBytes: V12, nowMs: SETUP_NOW }).review;
+  const originals = [0, 1, 2].map(i => setupFixture(i, 35 + i, { owner: f.owner, ownerKey: pk(f.ownerKey) }));
+  const [original] = originals;
+  const provider = { async viewNodeStatus() { return { chain_id: 'testnet' }; },
+    async txStatusReceipts(hash, owner, finality) {
+      assert.equal(owner, f.owner); assert.equal(finality, 'FINAL');
+      const found = originals.find(item => item.trustedOriginalHash === hash); if (!found) throw new Error('unknown synthetic hash');
+      return found.result;
+    } };
+  const { provider: setupPreflightProvider, state: setupState, blockHash: setupBlock } =
+    firstSetupPreflightFixture({ owner: f.owner, ownerKey: pk(f.ownerKey) });
+  const fence = createPostgresWalletPromptFence({ pool: db, authenticate: auth.authenticate, setupWasmBytes: V12,
+    setupReceiptProvider: provider, setupPreflightProvider });
+  const action = { format: f.action.format, network: 'testnet', purpose: 'reserve', owner: f.owner,
+    owner_public_key: pk(f.ownerKey), review_sha256: review.review_sha256, stage_id: 'create_keyless_vault',
+    action_commitment_sha256: review.stages[0].action_commitment_sha256 };
+  const challenge = await auth.issue(action);
+  const reservation = await fence.reserve({ review, setupSnapshot: snapshot, trustedReviewHash: review.review_sha256,
+    trustedOwnerPublicKey: pk(f.ownerKey), stageId: action.stage_id, evidence: signed(challenge, f) });
+  assert.equal(reservation.claim_status, 'AVAILABLE');
+  const claimAction = { ...action, purpose: 'claim_prompt', operation_id: reservation.operation_id };
+  const c = await auth.issue(claimAction);
+  const claimArgs = { owner: f.owner, ownerPublicKey: pk(f.ownerKey), operationId: reservation.operation_id,
+    reviewSha256: review.review_sha256, stageId: action.stage_id,
+    actionCommitmentSha256: action.action_commitment_sha256, evidence: signed(c, f) };
+  const claim = await fence.claimPrompt(claimArgs);
+  assert.equal(claim.status, 'PROMPT_CLAIMED_NO_HASH');
+  assert.equal(claim.execution_authorized, false); assert.equal(claim.wallet_invocation_verified, false);
+  await assert.rejects(fence.claimPrompt(claimArgs), e => e.code === 'UNAUTHENTICATED');
+  const recordAction = { format: f.action.format, network: 'testnet', purpose: 'record_original_hash', owner: f.owner,
+    owner_public_key: pk(f.ownerKey), operation_id: reservation.operation_id, original_hash: original.trustedOriginalHash };
+  const recordChallenge = await auth.issue(recordAction);
+  await fence.recordOriginalHash({ owner: f.owner, ownerPublicKey: pk(f.ownerKey), operationId: reservation.operation_id,
+    originalHash: original.trustedOriginalHash, evidence: signed(recordChallenge, f) });
+  const receiptAction = { ...claimAction, purpose: 'reconcile_setup_original', original_hash: original.trustedOriginalHash };
+  const receiptChallenge = await auth.issue(receiptAction);
+  const receiptArgs = { ...claimArgs, originalHash: original.trustedOriginalHash, evidence: signed(receiptChallenge, f) };
+  await assert.rejects(fence.reconcileSetupOriginal({ ...receiptArgs, originalHash: hash(36) }), e => e.code === 'UNAUTHENTICATED');
+  const proof = await fence.reconcileSetupOriginal(receiptArgs);
+  assert.equal(proof.status, 'FINAL_SETUP_RECEIPT_MATCH'); assert.equal(proof.later_stage_unlocked, false);
+  await assert.rejects(fence.reconcileSetupOriginal(receiptArgs), e => e.code === 'UNAUTHENTICATED');
+
+  const common = { format: f.action.format, network: 'testnet', owner: f.owner, owner_public_key: pk(f.ownerKey) };
+  const progressAction = { ...common, purpose: 'inspect_setup_progress' };
+  const progressChallenge = await auth.issue(progressAction);
+  assert.equal((await fence.inspectSetupProgress({ owner: f.owner, ownerPublicKey: pk(f.ownerKey),
+    evidence: signed(progressChallenge, f) })).stages[0].original_hash, original.trustedOriginalHash);
+  const nextAction = index => ({ ...common, purpose: 'claim_setup_stage', operation_id: reservation.operation_id,
+    review_sha256: review.review_sha256, stage_id: review.stages[index].id,
+    action_commitment_sha256: review.stages[index].action_commitment_sha256 });
+  const nextArgs = (index, evidence) => ({ owner: f.owner, ownerPublicKey: pk(f.ownerKey), operationId: reservation.operation_id,
+    reviewSha256: review.review_sha256, stageId: review.stages[index].id,
+    actionCommitmentSha256: review.stages[index].action_commitment_sha256, evidence });
+  for (const index of [1, 2]) {
+    setSyntheticSetupStage(setupState, setupBlock, index);
+    const next = nextAction(index), nextChallenge = await auth.issue(next), nextEvidence = signed(nextChallenge, f);
+    // A stage-bound signature cannot be redirected to a different setup stage.
+    const wrong = index === 1 ? 2 : 1;
+    await assert.rejects(fence.claimSetupStage(nextArgs(wrong, nextEvidence)), e => e.code === 'UNAUTHENTICATED');
+    assert.equal((await fence.claimSetupStage(nextArgs(index, nextEvidence))).status, 'PROMPT_CLAIMED_NO_HASH');
+    await assert.rejects(fence.claimSetupStage(nextArgs(index, nextEvidence)), e => e.code === 'UNAUTHENTICATED');
+    const originalHash = originals[index].trustedOriginalHash;
+    const recordNext = { ...next, purpose: 'record_setup_stage_original', original_hash: originalHash };
+    const recordNextChallenge = await auth.issue(recordNext), recordNextEvidence = signed(recordNextChallenge, f);
+    await assert.rejects(fence.recordSetupStageOriginal({ ...nextArgs(index, recordNextEvidence), originalHash: hash(80) }), e => e.code === 'UNAUTHENTICATED');
+    await fence.recordSetupStageOriginal({ ...nextArgs(index, recordNextEvidence), originalHash });
+    const reconcile = { ...next, purpose: 'reconcile_setup_stage', original_hash: originalHash };
+    const reconcileChallenge = await auth.issue(reconcile);
+    const laterProof = await fence.reconcileSetupStage({ ...nextArgs(index, signed(reconcileChallenge, f)), originalHash });
+    assert.equal(laterProof.status, index === 1 ? 'FINAL_SETUP_RECEIPT_MATCH' : 'FINAL_FUNDING_RECEIPTS_MATCH');
+    assert.equal(laterProof.execution_authorized, false);
+  }
+  setSyntheticSetupStage(setupState, setupBlock, 3);
+  const fundedAction = { ...common, purpose: 'verify_setup_funded', operation_id: reservation.operation_id, review_sha256: review.review_sha256 };
+  const fundedChallenge = await auth.issue(fundedAction), fundedEvidence = signed(fundedChallenge, f);
+  const funded = await fence.verifySetupFunded({ owner: f.owner, ownerPublicKey: pk(f.ownerKey), operationId: reservation.operation_id,
+    reviewSha256: review.review_sha256, evidence: fundedEvidence });
+  assert.equal(funded.spending_unlocked, false); assert.equal(funded.independent_delivery_verified, false);
+  await assert.rejects(fence.verifySetupFunded({ owner: f.owner, ownerPublicKey: pk(f.ownerKey), operationId: reservation.operation_id,
+    reviewSha256: review.review_sha256, evidence: fundedEvidence }), e => e.code === 'UNAUTHENTICATED');
 }));
 
 dbtest('a lost challenge-consumption acknowledgement never grants authentication', async () => resources(async (db, rpc, normal) => {

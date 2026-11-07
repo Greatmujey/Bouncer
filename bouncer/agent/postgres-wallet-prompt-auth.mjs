@@ -19,6 +19,7 @@ import { nep413Payload } from '../web-src/cli-login.mjs';
 import { isTestnetAccount } from '../shared/account-id.mjs';
 import { isTransactionHash } from '../shared/direct-payment-settlement.mjs';
 import { assertFreshFinalBlock } from '../shared/fresh-final-block.mjs';
+import { validateBufferOrderIdentity } from './git-buffer-order-witness.mjs';
 
 const SCHEMA = 'bouncer_wallet_auth_v1';
 const MAX_LIFETIME_MS = 120_000, MAX_CLOCK_SKEW_MS = 30_000;
@@ -41,7 +42,8 @@ BEGIN
 END;
 `;
 const HEX32 = /^[a-f0-9]{32}$/, HEX64 = /^[a-f0-9]{64}$/;
-const STAGES = ['configure_buffer_locked_policy', 'install_buffer_vault_agent', 'install_buffer_forwarder_agent'];
+const STAGES = ['configure_buffer_locked_policy', 'install_buffer_vault_agent', 'install_buffer_forwarder_agent', 'create_keyless_vault'];
+const NEXT_SETUP_STAGES = ['register_vault_circle', 'fund_vault_circle'];
 const record = x => x !== null && typeof x === 'object' && !Array.isArray(x) &&
   [Object.prototype, null].includes(Object.getPrototypeOf(x));
 const exact = (value, names) => {
@@ -63,13 +65,38 @@ function actionFields(action) {
   const purpose = Object.getOwnPropertyDescriptor(action, 'purpose');
   if (!purpose || !Object.hasOwn(purpose, 'value')) throw new Error('invalid owner authorization action');
   const common = ['format', 'network', 'purpose', 'owner', 'owner_public_key'];
-  const extra = purpose.value === 'reserve' ? ['review_sha256', 'stage_id', 'action_commitment_sha256'] :
-    purpose.value === 'record_original_hash' ? ['operation_id', 'original_hash'] : purpose.value === 'inspect' ? [] : null;
+  const orderAction = ['reserve_buffer_order','claim_buffer_order','record_buffer_order','inspect_buffer_order'].includes(purpose.value);
+  const orderFields = ['attempt_id','site','key_sha256','key_record_sha256','review_sha256','request_commitment_sha256','draft_sha256'];
+  const extra = orderAction ? [...orderFields, ...(purpose.value === 'record_buffer_order' ? ['capsule_sha256'] : [])] : purpose.value === 'reserve' ? ['review_sha256', 'stage_id', 'action_commitment_sha256'] :
+    ['claim_prompt', 'claim_setup_stage'].includes(purpose.value) ? ['operation_id', 'review_sha256', 'stage_id', 'action_commitment_sha256'] :
+    ['reconcile_setup_original', 'record_setup_stage_original', 'reconcile_setup_stage'].includes(purpose.value) ?
+      ['operation_id', 'review_sha256', 'stage_id', 'action_commitment_sha256', 'original_hash'] :
+    purpose.value === 'verify_setup_funded' ? ['operation_id', 'review_sha256'] :
+    purpose.value === 'record_original_hash' ? ['operation_id', 'original_hash'] :
+    ['inspect', 'inspect_setup_progress'].includes(purpose.value) ? [] : null;
   if (!extra || !exact(action, [...common, ...extra]) || action.format !== 'bouncer-wallet-prompt-auth-v1' ||
       action.network !== 'testnet' || !isTestnetAccount(action.owner)) throw new Error('invalid owner authorization action');
   parseOwnerKey(action.owner_public_key);
-  if (action.purpose === 'reserve' && (!HEX64.test(action.review_sha256 ?? '') || !STAGES.includes(action.stage_id) ||
-      !HEX64.test(action.action_commitment_sha256 ?? ''))) throw new Error('invalid reservation authorization action');
+  if (orderAction) {
+    validateBufferOrderIdentity({owner:action.owner,owner_public_key:action.owner_public_key,
+      ...Object.fromEntries(orderFields.map(k=>[k,action[k]]))});
+    if (action.purpose==='record_buffer_order' && !HEX64.test(action.capsule_sha256 ?? '')) throw new Error('invalid order commitment');
+  }
+  const laterStageAction = ['claim_setup_stage', 'record_setup_stage_original', 'reconcile_setup_stage'].includes(action.purpose);
+  if ((['reserve', 'claim_prompt', 'reconcile_setup_original'].includes(action.purpose) || laterStageAction) &&
+      (!HEX64.test(action.review_sha256 ?? '') || !(laterStageAction ? NEXT_SETUP_STAGES : STAGES).includes(action.stage_id) ||
+        !HEX64.test(action.action_commitment_sha256 ?? ''))) {
+    throw new Error('invalid reservation authorization action');
+  }
+  if ((['claim_prompt', 'reconcile_setup_original', 'verify_setup_funded'].includes(action.purpose) || laterStageAction) &&
+      !HEX32.test(action.operation_id ?? '')) {
+    throw new Error('invalid prompt operation authorization action');
+  }
+  if (action.purpose === 'verify_setup_funded' && !HEX64.test(action.review_sha256 ?? '')) throw new Error('invalid funded review authorization action');
+  if ((action.purpose === 'reconcile_setup_original' && action.stage_id !== 'create_keyless_vault') ||
+      (['reconcile_setup_original', 'record_setup_stage_original', 'reconcile_setup_stage'].includes(action.purpose) && !isTransactionHash(action.original_hash))) {
+    throw new Error('invalid original setup receipt authorization action');
+  }
   if (action.purpose === 'record_original_hash' && (!HEX32.test(action.operation_id ?? '') || !isTransactionHash(action.original_hash))) {
     throw new Error('invalid original-hash authorization action');
   }
@@ -89,8 +116,13 @@ function fixedOrigin(value) {
   return value;
 }
 function challengeMessage(action, digest, origin, issued, expires) {
-  const what = action.purpose === 'reserve' ? `Reserve setup prompt: ${action.stage_id}` :
-    action.purpose === 'record_original_hash' ? 'Record the original transaction hash' : 'Inspect the retained prompt';
+  const orderLabels = {reserve_buffer_order:'Reserve an encrypted Buffer order',claim_buffer_order:'Claim one Buffer order attempt',
+    record_buffer_order:'Record the encrypted Buffer order',inspect_buffer_order:'Inspect the encrypted Buffer order'};
+  const what = orderLabels[action.purpose] ?? (action.purpose === 'reserve' ? `Reserve setup prompt: ${action.stage_id}` :
+    ['claim_prompt', 'claim_setup_stage'].includes(action.purpose) ? `Claim one setup prompt: ${action.stage_id}` :
+    ['reconcile_setup_original', 'reconcile_setup_stage'].includes(action.purpose) ? `Reconcile original: ${action.stage_id}` :
+    ['record_original_hash', 'record_setup_stage_original'].includes(action.purpose) ? 'Record the original transaction hash' :
+    action.purpose === 'verify_setup_funded' ? 'Verify funded vault state' : 'Inspect the retained prompt');
   return `Bouncer testnet owner authentication\n${what}\nAccount: ${action.owner}\n` +
     `Public key: ${action.owner_public_key}\nAction SHA-256: ${digest}\nSite: ${origin}\n` +
     `Issued: ${new Date(issued).toISOString()}\nExpires: ${new Date(expires).toISOString()}\n` +
@@ -197,6 +229,7 @@ export function createPostgresWalletPromptAuth({ pool, origin, provider } = {}) 
   }
   async function issue(inputAction) {
     const action = actionFields(inputAction), digest = actionHash(action);
+    if (action.purpose.endsWith('_buffer_order') && action.site !== siteOrigin) throw new Error('order site differs');
     const id = crypto.randomBytes(16).toString('hex'), nonce = crypto.randomBytes(32);
     return transaction(pool, async c => {
       await verifySchema(c);
@@ -214,6 +247,7 @@ export function createPostgresWalletPromptAuth({ pool, origin, provider } = {}) 
   async function authenticate({ action: inputAction, evidence } = {}) {
     try {
       const action = actionFields(inputAction), digest = actionHash(action);
+      if (action.purpose.endsWith('_buffer_order') && action.site !== siteOrigin) return false;
       if (!exact(evidence, ['challenge_id','accountId','publicKey','signature']) || !HEX32.test(evidence.challenge_id ?? '') ||
           evidence.accountId !== action.owner || evidence.publicKey !== action.owner_public_key) return false;
       const key = parseOwnerKey(evidence.publicKey), signature = signatureBytes(evidence.signature);

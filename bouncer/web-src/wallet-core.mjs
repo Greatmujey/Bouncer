@@ -2,7 +2,11 @@ import { WALLET_MANIFEST } from './wallet-manifest.mjs';
 import { loadVerifiedExecutor } from './wallet-executor.mjs';
 import { isTestnetAccount, isWalletConnectProjectId, pairingTopic } from './walletconnect-core.mjs';
 import { verifyCliLogin } from './cli-login.mjs';
+import { verifyConnectedWalletOwner } from './wallet-owner-verification.mjs';
 import { formatPublicAmount, isNearAccountId, readPublicTestnetAccount } from './account-view.mjs';
+import { fetchBufferReadinessPreview } from './buffer-readiness-preview.mjs';
+import { createWitnessedSetupClient } from './witnessed-setup-client.mjs';
+import { createOwnerKeyFallbackFetch } from './read-only-owner-key-fallback.mjs';
 
 // HTTP Date is coarse and can be cached. Only flag a large discrepancy when
 // the response provides a valid Date/Age and the request was reasonably fast.
@@ -88,6 +92,16 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
   const accountBalanceStatus = doc.querySelector('#wallet-account-balance-status');
   const accountUseWallet = doc.querySelector('#wallet-account-use-wallet');
   const accountRefresh = doc.querySelector('#wallet-account-refresh');
+  const ownerVerify = doc.querySelector('#wallet-owner-verify');
+  const ownerStatus = doc.querySelector('#wallet-owner-status');
+  const bufferReadiness = doc.querySelector('#wallet-buffer-readiness');
+  const bufferReadinessStatus = doc.querySelector('#wallet-buffer-readiness-status');
+  const setupRecovery = doc.querySelector('#wallet-setup-recovery');
+  const setupRecoveryStatus = doc.querySelector('#wallet-setup-recovery-status');
+  const setupRecoveryForm = doc.querySelector('#wallet-setup-recovery-form');
+  const setupOriginal = doc.querySelector('#wallet-setup-original');
+  const setupCheckOriginal = doc.querySelector('#wallet-setup-check-original');
+  const setupRecordOriginal = doc.querySelector('#wallet-setup-record-original');
   const ethereumInfoPanel = doc.querySelector('#wallet-ethereum-info');
   const ethereumContinue = doc.querySelector('#wallet-ethereum-continue');
   const ethereumBack = doc.querySelector('#wallet-ethereum-back');
@@ -103,8 +117,13 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
   // A name-only view never populates selectedWallet, connectedAccount or the
   // connector's session storage. It cannot be used as a wallet or signer.
   let accountEntry = false, ethereumInfo = false, viewedAccount = '', accountRead = null, accountReadVersion = 0;
+  // In-memory proof only, bound to the selected session. It never grants
+  // spending access, authenticates a backend, or survives account changes.
+  let ownerVerification = null, ownerSessionVersion = 0, setupRecoveryAvailable = false, setupRecoverySelection = null, matchedOriginal = null;
   let bannerTimer;
   const trusted = new Set(WALLET_MANIFEST.wallets);
+  const walletReadFetch = createOwnerKeyFallbackFetch({ fetch:win.fetch.bind(win),
+    enabled:/^4173-[a-z0-9-]+\.e2b\.app$/i.test(win.location.hostname) });
   function setWalletLabels(label) {
     doc.querySelectorAll('[data-wallet-label]').forEach(node => { node.textContent = label; });
   }
@@ -125,10 +144,29 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     if (wcPanel) wcPanel.hidden = !wcPairing;
     accountEntryPanel.hidden = !accountEntry;
     accountViewPanel.hidden = !viewing && !connected;
-    accountBadge.textContent = connected ? 'CONNECTED' : 'VIEW ONLY';
-    accountWarning.textContent = connected
-      ? 'Public balances for the connected testnet account. Connecting alone does not grant Bouncer spending access.'
-      : 'Unverified account name. No wallet is connected and no spending access was granted.';
+    const ownerVerified = connected && ownerVerification?.wallet === selectedWallet && ownerVerification?.accountId === connectedAccount;
+    accountBadge.textContent = ownerVerified ? 'OWNER VERIFIED' : connected ? 'CONNECTED' : 'VIEW ONLY';
+    accountWarning.textContent = ownerVerified
+      ? 'Your wallet signed an off-chain message and its Full Access key was checked on testnet. This does not approve transactions, create a vault, or grant spending access.'
+      : connected ? 'Public balances for the connected testnet account. Connecting alone does not grant Bouncer spending access.'
+        : 'Unverified account name. No wallet is connected and no spending access was granted.';
+    if (ownerVerify) {
+      ownerVerify.hidden = !connected || !selectedWallet?.manifest?.features?.signMessage || !isTestnetAccount(connectedAccount);
+      ownerVerify.disabled = busyState;
+      ownerVerify.textContent = ownerVerified ? 'Verify account again' : 'Verify account in wallet';
+    }
+    if (bufferReadiness) {
+      const experimentalPreview = /^4173-[a-z0-9-]+\.e2b\.app$/i.test(win.location.hostname);
+      bufferReadiness.hidden = !(experimentalPreview && ownerVerified && connectedAccount === 'great_mujey.testnet');
+      bufferReadiness.disabled = busyState;
+    }
+    if (setupRecovery) {
+      setupRecovery.hidden = !(setupRecoveryAvailable && ownerVerified && connectedAccount === 'great_mujey.testnet');
+      setupRecovery.disabled = busyState;
+    }
+    if (setupRecoveryForm) setupRecoveryForm.hidden = !(setupRecoveryAvailable && ownerVerified && setupRecoverySelection);
+    if (setupCheckOriginal) setupCheckOriginal.disabled = busyState;
+    if (setupRecordOriginal) { setupRecordOriginal.hidden = !matchedOriginal || !setupRecoverySelection; setupRecordOriginal.disabled = busyState; }
     accountUseWallet.hidden = connected;
     ethereumInfoPanel.hidden = !ethereumInfo;
     if (walletSafety) walletSafety.hidden = wcPairing || accountEntry || ethereumInfo || viewing;
@@ -164,6 +202,11 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
   function busy(value) { busyState = value; renderControls(); }
   function clearAccountView() {
     accountReadVersion++;
+    ownerSessionVersion++; ownerVerification = null; setupRecoveryAvailable = false; setupRecoverySelection = null; matchedOriginal = null;
+    if (ownerStatus) { ownerStatus.hidden = true; ownerStatus.textContent = ''; }
+    if (bufferReadinessStatus) { bufferReadinessStatus.hidden = true; bufferReadinessStatus.textContent = ''; }
+    if (setupRecoveryStatus) { setupRecoveryStatus.hidden = true; setupRecoveryStatus.textContent = ''; }
+    if (setupOriginal) setupOriginal.value = '';
     accountRead?.abort(); accountRead = null;
     accountEntry = false; ethereumInfo = false; viewedAccount = '';
     accountName.textContent = ''; accountNear.textContent = '—'; accountUsdc.textContent = '—';
@@ -410,6 +453,200 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     options.find(button => !button.disabled)?.focus();
   });
   accountRefresh.addEventListener('click', () => { void refreshAccountView(); });
+  bufferReadiness?.addEventListener('click', async () => {
+    const wallet = selectedWallet, accountId = connectedAccount, version = ownerSessionVersion;
+    if (busyState || !connected || accountId !== 'great_mujey.testnet' || ownerVerification?.wallet !== wallet ||
+        ownerVerification?.accountId !== accountId) return;
+    const stillCurrent = () => connected && selectedWallet === wallet && connectedAccount === accountId && ownerSessionVersion === version;
+    busy(true);
+    if (bufferReadinessStatus) { bufferReadinessStatus.hidden = false; bufferReadinessStatus.textContent = 'Checking testnet. No transaction will be requested.'; }
+    try {
+      const result = await fetchBufferReadinessPreview({ fetch: win.fetch.bind(win), onProgress: message => {
+        if (stillCurrent() && bufferReadinessStatus) bufferReadinessStatus.textContent = message;
+      } });
+      if (!stillCurrent()) return;
+      const s = result.snapshot, review = result.review;
+      if (s?.owner !== accountId || review?.owner !== accountId || review?.signing_or_broadcast_authorized !== false ||
+          review?.wallet_approval_obtained !== false || s?.signed !== false || s?.sent !== false) throw new Error('READ_ONLY_UNAVAILABLE');
+      const balance = formatPublicAmount(s.owner_circle_atoms, 6), price = formatPublicAmount(review.fixed_product_price_atoms, 6);
+      if (bufferReadinessStatus) bufferReadinessStatus.textContent = `Read-only review: ${balance} test USDC observed; Buffer brief ${price} test USDC. ` +
+        `The proposed keyless vault needs 6 test NEAR, which may remain locked as storage. No wallet transaction was requested. ` +
+        `This is not a purchase or spending permission; a durable one-shot journal and wallet approvals are still required.`;
+      setStatus('Testnet setup reviewed. No transaction or purchase has been made.');
+    } catch {
+      if (stillCurrent() && bufferReadinessStatus) bufferReadinessStatus.textContent = 'The read-only setup check is unavailable. No transaction was requested; nothing was spent.';
+    } finally { busy(false); if (stillCurrent()) renderControls(); }
+  });
+  ownerVerify?.addEventListener('click', async () => {
+    const wallet = selectedWallet, accountId = connectedAccount, version = ownerSessionVersion;
+    if (busyState || !connected || !wallet?.manifest?.features?.signMessage || !isTestnetAccount(accountId)) return;
+    const stillCurrent = () => connected && selectedWallet === wallet && connectedAccount === accountId && ownerSessionVersion === version;
+    let stopWalletPresentation = () => {};
+    busy(true); closePicker();
+    setStatus('Approve the identity message in your wallet. Bouncer is not requesting a transaction.');
+    notify('Approve the identity message in your wallet. No transaction is requested.', true);
+    try {
+      if (['near-mobile', 'nightly-wallet', 'ledger'].includes(wallet.manifest.id)) stopWalletPresentation = decorateWalletPopup(wallet.manifest.id);
+      let timeout;
+      const attempt = verifyConnectedWalletOwner({ wallet, accountId, location: win.location,
+        crypto: win.crypto, fetch: walletReadFetch });
+      let proof;
+      try {
+        proof = await Promise.race([attempt, new Promise((_, reject) => {
+          timeout = setTimeout(() => reject(new Error('WALLET_OWNER_TIMEOUT')), 90_000);
+        })]);
+      } finally { clearTimeout(timeout); }
+      if (!stillCurrent()) return;
+      ownerVerification = { wallet, accountId: proof.accountId, publicKey: proof.publicKey };
+      if (ownerStatus) {
+        ownerStatus.hidden = false;
+        ownerStatus.textContent = 'Identity verified for this session. This is not spending permission.';
+      }
+      setStatus(`Verified testnet wallet control for ${accountId}. No vault or spending access is granted.`);
+      // Recovery is deliberately optional and only becomes visible when the
+      // experimental same-origin backend explicitly advertises it. This never
+      // opens a transaction or turns on purchasing.
+      if (/^4173-[a-z0-9-]+\.e2b\.app$/i.test(win.location.hostname) && accountId === 'great_mujey.testnet') {
+        const client = createWitnessedSetupClient({ wallet, accountId, ownerPublicKey:proof.publicKey,
+          location:win.location, crypto:win.crypto, fetch:walletReadFetch, isCurrent:stillCurrent });
+        void client.enabled().then(enabled => { if (stillCurrent()) { setupRecoveryAvailable = enabled; renderControls(); } });
+      }
+    } catch (error) {
+      if (!stillCurrent()) return;
+      ownerVerification = null; setupRecoveryAvailable = false; setupRecoverySelection = null; matchedOriginal = null;
+      const reason = error?.message || '';
+      const message = reason === 'CLI_ED25519_UNAVAILABLE'
+        ? 'This browser cannot verify Ed25519 signatures. Try an up-to-date browser.'
+        : reason === 'WALLET_OWNER_TIMEOUT' ? 'The wallet identity request timed out.'
+        : reason === 'CLI_RPC_UNAVAILABLE' ? 'Could not check the signing key on testnet. Check your connection and try again.'
+          : reason === 'CLI_KEY_NOT_FULL_ACCESS' ? 'The signing key is not a current testnet Full Access key.'
+            : 'Identity verification was cancelled or the signed message could not be verified.';
+      if (ownerStatus) { ownerStatus.hidden = false; ownerStatus.textContent = `${message} No spending access was granted.`; }
+      setStatus(`${message} No spending access was granted.`);
+    } finally {
+      stopWalletPresentation(); busy(false);
+      if (stillCurrent()) { renderControls(); hideBanner(); openPicker(opener); }
+    }
+  });
+  setupRecovery?.addEventListener('click', async () => {
+    const wallet = selectedWallet, accountId = connectedAccount, version = ownerSessionVersion, proof = ownerVerification;
+    if (busyState || !setupRecoveryAvailable || !connected || accountId !== 'great_mujey.testnet' ||
+        proof?.wallet !== wallet || proof.accountId !== accountId) return;
+    const stillCurrent = () => connected && selectedWallet === wallet && connectedAccount === accountId &&
+      ownerSessionVersion === version && ownerVerification === proof;
+    let stopWalletPresentation = () => {}, timeout;
+    busy(true); closePicker();
+    setStatus('Approve the recovery identity message. No transaction is requested.');
+    notify('Approve the recovery identity message in your wallet. No transaction is requested.', true);
+    if (setupRecoveryStatus) { setupRecoveryStatus.hidden = false; setupRecoveryStatus.textContent = 'Checking the retained setup. No transaction is requested.'; }
+    try {
+      if (['near-mobile', 'nightly-wallet', 'ledger'].includes(wallet.manifest.id)) stopWalletPresentation = decorateWalletPopup(wallet.manifest.id);
+      const client = createWitnessedSetupClient({ wallet, accountId, ownerPublicKey:proof.publicKey,
+        location:win.location, crypto:win.crypto, fetch:walletReadFetch, isCurrent:stillCurrent,
+        onProgress:message => { if (stillCurrent() && setupRecoveryStatus) setupRecoveryStatus.textContent = message; } });
+      const result = await Promise.race([client.inspect(), new Promise((_,reject) => {
+        timeout = setTimeout(() => reject(new Error('RECOVERY_TIMEOUT')), 120_000);
+      })]);
+      if (!stillCurrent()) return;
+      const last = result?.witnessed_records?.at(-1);
+      setupRecoverySelection = result.status === 'WITNESSED' && last?.event === 'claim' && result.identity
+        ? { identity:result.identity, stageId:last.stage_id } : null;
+      matchedOriginal = null; if (setupOriginal) setupOriginal.value = '';
+      const message = result.status === 'NO_LOCAL_RECORD'
+        ? 'No setup is recorded in this witness. That does not prove there was no prompt elsewhere. No transaction was requested.'
+        : result.status === 'RECOVERY_REQUIRED'
+          ? 'The database record is missing but a witness remains. Do not repeat a prompt or transaction.'
+          : last?.event === 'claim'
+            ? `The ${last.stage_id} prompt was claimed but no original hash is recorded. Do not repeat it. Check wallet history for the original.`
+            : last?.event === 'original'
+              ? `Witnessed ${last.stage_id} original: ${last.original_hash}. This alone does not prove final execution. Do not resend it.`
+              : 'A setup reservation is recorded. No transaction or delivery is verified.';
+      if (setupRecoveryStatus) setupRecoveryStatus.textContent = message;
+      setStatus('Recovery check complete. No transaction was requested.');
+    } catch {
+      if (stillCurrent()) {
+        if (setupRecoveryStatus) setupRecoveryStatus.textContent = 'Recovery could not be checked. Do not repeat an uncertain wallet prompt or transaction.';
+        setStatus('Recovery check unavailable. No transaction was requested.');
+      }
+    } finally {
+      clearTimeout(timeout); stopWalletPresentation(); busy(false);
+      if (stillCurrent()) { renderControls(); hideBanner(); openPicker(opener); }
+    }
+  });
+  setupOriginal?.addEventListener('input', () => { matchedOriginal = null; renderControls(); });
+  setupCheckOriginal?.addEventListener('click', async () => {
+    const wallet = selectedWallet, accountId = connectedAccount, version = ownerSessionVersion, proof = ownerVerification;
+    const selection = setupRecoverySelection, originalHash = setupOriginal?.value?.trim() || '';
+    if (busyState || !setupRecoveryAvailable || !selection || !proof || proof.wallet !== wallet ||
+        !/^[1-9A-HJ-NP-Za-km-z]{32,50}$/.test(originalHash)) {
+      if (setupRecoveryStatus) setupRecoveryStatus.textContent = 'Paste the original transaction hash from your wallet history. Do not submit another transaction.';
+      return;
+    }
+    const stillCurrent = () => connected && selectedWallet === wallet && connectedAccount === accountId &&
+      ownerSessionVersion === version && ownerVerification === proof && setupRecoverySelection === selection;
+    let stopWalletPresentation = () => {}, timeout;
+    matchedOriginal = null; busy(true); closePicker();
+    setStatus('Approve the off-chain original-check message. No transaction is requested.');
+    notify('Approve the original-check message. No transaction is requested.', true);
+    try {
+      if (['near-mobile', 'nightly-wallet', 'ledger'].includes(wallet.manifest.id)) stopWalletPresentation = decorateWalletPopup(wallet.manifest.id);
+      const client = createWitnessedSetupClient({wallet,accountId,ownerPublicKey:proof.publicKey,location:win.location,
+        crypto:win.crypto,fetch:walletReadFetch,isCurrent:stillCurrent,
+        onProgress:message => { if (stillCurrent() && setupRecoveryStatus) setupRecoveryStatus.textContent = message; }});
+      const result = await Promise.race([client.previewOriginal({stageId:selection.stageId,originalHash}), new Promise((_,reject) => {
+        timeout = setTimeout(() => reject(new Error('RECOVERY_TIMEOUT')), 120_000);
+      })]);
+      if (!stillCurrent() || setupOriginal?.value?.trim() !== originalHash) return;
+      if (!['FINAL_SETUP_RECEIPT_MATCH','FINAL_FUNDING_RECEIPTS_MATCH','FINAL_FAILURE_NEEDS_RECONCILIATION'].includes(result?.status) ||
+          result.tx_hash !== originalHash || result.stage_id !== selection.stageId || result.original_recorded !== false) throw Error();
+      matchedOriginal = { ...selection, originalHash };
+      if (setupRecoveryStatus) setupRecoveryStatus.textContent = result.status === 'FINAL_FAILURE_NEEDS_RECONCILIATION'
+        ? `Original ${originalHash} matches a FINAL failure. Do not resend. Record it for recovery; state still needs inspection.`
+        : `Original ${originalHash} matches the reviewed testnet receipt. No payment or delivery is proven. Record this exact hash for recovery.`;
+      setStatus('Original checked. No transaction was requested.');
+    } catch {
+      if (stillCurrent() && setupRecoveryStatus) setupRecoveryStatus.textContent = 'The original could not be verified yet. Keep the hash and do not retry the wallet transaction.';
+    } finally {
+      clearTimeout(timeout); stopWalletPresentation(); busy(false);
+      if (stillCurrent()) { renderControls(); hideBanner(); openPicker(opener); }
+    }
+  });
+  setupRecordOriginal?.addEventListener('click', async () => {
+    const wallet = selectedWallet, accountId = connectedAccount, version = ownerSessionVersion, proof = ownerVerification;
+    const selected = matchedOriginal;
+    if (busyState || !setupRecoveryAvailable || !selected || !proof || proof.wallet !== wallet ||
+        setupOriginal?.value?.trim() !== selected.originalHash || setupRecoverySelection?.identity !== selected.identity ||
+        setupRecoverySelection?.stageId !== selected.stageId) return;
+    const sameSession = () => connected && selectedWallet === wallet && connectedAccount === accountId &&
+      ownerSessionVersion === version && ownerVerification === proof;
+    const stillCurrent = () => sameSession() && matchedOriginal === selected;
+    let stopWalletPresentation = () => {}, timeout;
+    busy(true); closePicker();
+    setStatus('Approve the off-chain hash-recording message. No transaction is requested.');
+    notify('Approve the hash-recording message. No transaction is requested.', true);
+    try {
+      if (['near-mobile', 'nightly-wallet', 'ledger'].includes(wallet.manifest.id)) stopWalletPresentation = decorateWalletPopup(wallet.manifest.id);
+      const client = createWitnessedSetupClient({wallet,accountId,ownerPublicKey:proof.publicKey,location:win.location,
+        crypto:win.crypto,fetch:walletReadFetch,isCurrent:stillCurrent,
+        onProgress:message => { if (stillCurrent() && setupRecoveryStatus) setupRecoveryStatus.textContent = message; }});
+      const result = await Promise.race([client.recordOriginal(selected), new Promise((_,reject) => {
+        timeout = setTimeout(() => reject(new Error('RECOVERY_TIMEOUT')), 120_000);
+      })]);
+      if (!stillCurrent()) return;
+      if (result?.status !== 'ORIGINAL_RECORDED' || result.original_hash !== selected.originalHash || result.stage_id !== selected.stageId) throw Error();
+      if (setupRecoveryStatus) setupRecoveryStatus.textContent = `Original ${selected.originalHash} was recorded for recovery. Do not resend it; this is not a purchase or delivery.`;
+      matchedOriginal = null; setupRecoverySelection = null;
+      setStatus('Original recorded. No transaction was requested.');
+    } catch {
+      if (stillCurrent()) {
+        matchedOriginal = null;
+        if (setupRecoveryStatus) setupRecoveryStatus.textContent = 'Recording may have completed without an acknowledgement. Check setup recovery again; do not resend the transaction.';
+      }
+    } finally {
+      clearTimeout(timeout); stopWalletPresentation(); busy(false);
+      if (sameSession()) { renderControls(); hideBanner(); openPicker(opener); }
+    }
+  });
   // Verified CLI login remains available as an explicit, optional path.
   cliVerify.addEventListener('click', async () => { if (accountEntry && !busyState) await startWallet('near-cli'); });
   ethereumBack.addEventListener('click', () => {
@@ -681,7 +918,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
           const message = `Connect to Bouncer on NEAR testnet.\n\nThis login message does not approve a transaction, transfer funds, or add an access key.\n\nSite: ${win.location.origin}`;
           const accounts = await wallet.signInAndSignMessage({ network: 'testnet', messageParams: { message, nonce, recipient } });
           const account = accounts?.[0];
-          await verifyCliLogin({ account, message, nonce, recipient, crypto: win.crypto, fetch: win.fetch.bind(win) });
+          await verifyCliLogin({ account, message, nonce, recipient, crypto: win.crypto, fetch: walletReadFetch });
           acceptAccounts(wallet, [account], 'near-cli');
         } else {
           if (walletId === 'nightly-wallet' || walletId === 'ledger') stopWalletPresentation = decorateWalletPopup(walletId);

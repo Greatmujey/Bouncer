@@ -42,6 +42,33 @@ obtained a report. A later read-only source-build comparison matched the
 deployed contract hash at one FINAL block, as described below; it does not
 establish seller service, audited code or delivery.
 
+`agent/buffer-wallet-setup-evidence.mjs` can separately reconcile the original
+hashes for those three setup batches against receipt-inclusive FINAL data from
+a trusted RPC. It rebuilds the canonical review from the retained historical
+snapshot and the exact pinned V12 artifact, checks the owner key, actions and
+root receipt, and for funding matches the token transfer event, vault callback,
+linked resolver and the entire linked action-receipt graph, allowing only
+protocol gas refunds to the original signer. The same closure check matched
+one [historical 6,898-atom V3 vault funding transaction](https://github.com/Greatmujey/Bouncer/actions/runs/42318044565)
+against an archival testnet RPC; that earlier transfer is not this new setup
+or an independent seller purchase. The historical snapshot is **not** a fresh preflight or
+proof of wallet control. The caller must retain the review digest, snapshot,
+owner key and original hash independently; a missing or ambiguous original is
+not permission to retry. Matches do not verify deployed code/current state,
+wallet approval, seller payment or delivery. These offline checks do not open
+a wallet or implement a prompt fence.
+
+`agent/buffer-wallet-setup-preflight.mjs` assesses each of those three stages
+and a post-funding view against one fresh FINAL block, after matching all
+required earlier original receipt graphs in order. It checks the specific
+owner FullAccess key and nonce, absent or keyless pinned V12 vault, Circle code,
+registration and tracked/actual balance, native estimates and the retained
+seller code/price. In the isolated harness the mock token must block the real
+Circle pin. A matching view is not wallet consent, an exclusive durable journal,
+proof of absence of unrecorded attempts, an audit, a seller payment, or a
+promise that mutable code and chain state will not change. Estimates are not
+fee or storage guarantees; never retry an ambiguous prompt.
+
 `agent/buffer-wallet-spending-plan.mjs` now prepares an additional **unsigned**
 owner review for a locked, exact-intent policy and two distinct, receiver- and
 method-scoped agent keys. The trial limits are at most 20 test USDC per
@@ -132,14 +159,26 @@ wallet prompt to this primitive.
 
 `agent/postgres-wallet-prompt-fence.mjs` is an additional **server-side
 prototype**, tested with a disposable PostgreSQL 17 primary. Cooperating
-processes compete for one owner-wide reservation, which stores the complete
-canonical Buffer spending review and stage commitment before any possible
-prompt. The first recorded original hash is immutable; the database trigger
-also rejects ordinary updates or deletion, and the service checks its critical
-indexes, trigger, row visibility, primary status, fsync and synchronous commit.
-A lost commit acknowledgement is treated as unknown. There is deliberately no
-unlock, expiry, payment, endpoint or wallet call. Its authenticator is an
-injected trust boundary. A separate experimental
+processes compete for one owner-wide reservation, storing the complete canonical
+Buffer spending review or pinned V12 setup review and original snapshot. For a
+new setup reservation it atomically creates immutable one-shot stage rows for
+vault registration and funding. The first claim requires a configured testnet
+receipt provider and a fresh same-block preflight; each later claim additionally
+requires the retained original hashes and matching FINAL receipt graphs for
+**all** preceding stages. A separate
+read-only check can inspect the funded vault only after all three originals
+match. The reviewed V12 artifact is hash-checked in server memory, not stored
+in PostgreSQL. Two cooperating processes cannot both claim a stage. Legacy
+reservations are not backfilled or started because they might already have
+been used. Each original hash is immutable; triggers reject ordinary updates
+or deletion, and the service checks its critical indexes, triggers, row
+visibility, primary status, fsync and synchronous commit. A lost reservation,
+claim or hash commit acknowledgement is unknown and **not** permission to
+retry. Missing, incomplete or changed results remain unknown, and a FINAL
+failure remains blocked. The receipt provider and authenticator are injected
+trust boundaries. This is still only a setup journal: there is no policy/key
+progression, spending preflight integration, endpoint, wallet call, payment
+or automatic purchase. A separate experimental
 `agent/postgres-wallet-prompt-auth.mjs` implements one-use, origin- and
 exact-action-bound NEP-413 challenges, checking an Ed25519 FullAccess key at a
 fresh trusted-RPC testnet FINAL block; it signs and sends nothing. Tests connect
@@ -148,10 +187,13 @@ real phone or wallet. NEP-413 is not available for the EVM adapter. Local
 concurrency, corruption and lost-ack tests do not establish backup, rollback
 protection, database failover, actual wallet interoperability, genuine
 on-chain approval, current chain state or safe live spending. A DB administrator,
-stale restore, alternate database or bypassing wallet can still defeat
-coordination. The database enforces one **record**, not one invocation of a
-wallet: future client code must never reuse a reservation to reopen a prompt.
-No Supabase project or production database was created or modified.
+stale restore, alternate database, old software or bypassing wallet can still
+defeat coordination. The database enforces one **claim**, not one invocation of
+a wallet: a returned claim could still be reused by client code. Additional
+client-side protection, authenticated sessions/CSRF defenses, independent
+durability, complete policy/forwarder stage sequencing and spending checks are
+required before any live wallet wiring. No Supabase project or production
+database was created or modified.
 
 [Read-only code comparison 42276988446](https://github.com/Greatmujey/Bouncer/actions/runs/42276988446)
 first found that a plain Cargo build did **not** match the deployed code hash.

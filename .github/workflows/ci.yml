@@ -55,6 +55,8 @@ jobs:
         run: |
           npm install --prefix "$RUNNER_TEMP/bouncer-browser" --no-save --no-audit --no-fund playwright-core@1.64.1
           node scripts/test-web-browser.mjs
+          node scripts/test-witnessed-setup-browser.mjs
+          node scripts/test-buffer-private-order-browser.mjs
           node scripts/test-walletconnect-browser.mjs
           node scripts/test-wallet-prompt-fence-browser.mjs
       - name: Test pinned wallet adapters with synthetic signers
@@ -87,6 +89,15 @@ jobs:
       # Isolated, lockfile-pinned third-party seller SDK. Its NEAR driver is
       # wrapped only in tests because the published preset is mainnet-only.
       - run: npm ci --prefix interop/piprail --ignore-scripts --legacy-peer-deps --no-audit --no-fund
+      - name: Recover exact public V12 test fixture
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api repos/Greatmujey/Bouncer/git/blobs/16785505eaed13609d8e569e7b1665f89683d9eb --jq .content | base64 --decode > "$RUNNER_TEMP/bouncer-v12.wasm"
+          echo '033f255c5822ff97495809f7d60fddf66f266f20c36285fe71296b66decc6d12  '"$RUNNER_TEMP/bouncer-v12.wasm" | sha256sum -c -
+          echo "BOUNCER_V12_WASM_PATH=$RUNNER_TEMP/bouncer-v12.wasm" >> "$GITHUB_ENV"
       - name: Run JavaScript test suite
         shell: bash
         run: |
@@ -99,8 +110,21 @@ jobs:
           exit "$result"
         env:
           BOUNCER_PIPRAIL_PACKAGE_ROOT: ${{ github.workspace }}/bouncer/interop/piprail/node_modules/@piprail/sdk
+      # Some integration tests deliberately disable DB guards. Run the DB files
+      # serially so that other tests cannot observe that temporary sabotage.
+      - name: Run PostgreSQL integration tests without cross-file guard races
+        shell: bash
+        env:
           BOUNCER_TEST_POSTGRES_URL: postgresql://bouncer:bouncer-ci-only@127.0.0.1:5432/bouncer_test
           BOUNCER_REQUIRE_POSTGRES_TESTS: '1'
+        run: |
+          set +e
+          npm run test:postgres 2>&1 | tee "$RUNNER_TEMP/bouncer-postgres-tests.log"
+          result=${PIPESTATUS[0]}
+          if [ "$result" -ne 0 ]; then
+            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8");const lines=s.split("\n");const failed=[];for(let i=0;i<lines.length;i++)if(/^not ok\b/.test(lines[i]))failed.push(lines.slice(i,i+24).join("\n"));const text=(failed.join("\n---\n")||s.slice(-4000)).slice(0,7500).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=PostgreSQL tests failed::"+text)' "$RUNNER_TEMP/bouncer-postgres-tests.log"
+          fi
+          exit "$result"
       - name: Test offline V11 artifact transport and static inspection
         # Python tests use synthetic data; the exact-artifact case skips unless
         # its local inputs are explicitly supplied. No chain or seller access.
