@@ -30,8 +30,14 @@ jobs:
       - name: Check the one existing original receipt graph
         shell: bash
         run: |
-          set -euo pipefail
-          node scripts/check-historical-circle-funding.mjs | tee "$RUNNER_TEMP/historical-circle-funding.json"
+          set +e
+          node scripts/check-historical-circle-funding.mjs > "$RUNNER_TEMP/historical-circle-funding.log" 2>&1
+          result=$?
+          cat "$RUNNER_TEMP/historical-circle-funding.log"
+          if [ "$result" -ne 0 ]; then
+            node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-5000).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=Historical read-only receipt check failed::"+s)' "$RUNNER_TEMP/historical-circle-funding.log"
+            exit "$result"
+          fi
           printf '## Historical testnet funding only — no new payment\n\n```json\n' >> "$GITHUB_STEP_SUMMARY"
-          cat "$RUNNER_TEMP/historical-circle-funding.json" >> "$GITHUB_STEP_SUMMARY"
+          cat "$RUNNER_TEMP/historical-circle-funding.log" >> "$GITHUB_STEP_SUMMARY"
           printf '\n```\n' >> "$GITHUB_STEP_SUMMARY"

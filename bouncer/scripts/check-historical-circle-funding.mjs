@@ -25,8 +25,29 @@ const batch = { actions: [nearApi.transactions.functionCall('ft_transfer_call',
   { receiver_id: vault, amount, msg: '' }, 200_000_000_000_000n, 1n)] };
 const attempt = { stage_id: 'fund_vault_circle', tx_hash: originalHash, signer_id: owner,
   signer_public_key: signerPublicKey, receiver_id: token };
-const g = graph(result), root = rootOf(result, batch, attempt, g);
-const funding = fundingEvidence(result, root, g, { owner, vault, token, amount, signerPublicKey });
+let g, funding;
+try {
+  g = graph(result);
+  const root = rootOf(result, batch, attempt, g);
+  funding = fundingEvidence(result, root, g, { owner, vault, token, amount, signerPublicKey });
+} catch (error) {
+  // Only public action-receipt metadata, never signed transaction bytes. This
+  // bounded diagnostic helps distinguish legitimate nearcore shapes from an
+  // incomplete/unexpected graph without weakening the verifier.
+  const receipts = Array.isArray(result.receipts) ? result.receipts.slice(0, 12).map(r => {
+    const a = r?.receipt?.Action;
+    return { id: r.receipt_id, from: r.predecessor_id, to: r.receiver_id, kind: Object.keys(r.receipt ?? {}),
+      signer: a?.signer_id, key: a?.signer_public_key, gas_price: a?.gas_price,
+      inputs: a?.input_data_ids, outputs: a?.output_data_receivers,
+      promise: a?.is_promise_yield, refund_to: a?.refund_to,
+      actions: a?.actions?.map(x => ({ type: typeof x === 'string' ? x : Object.keys(x)[0],
+        method: x?.FunctionCall?.method_name, deposit: x?.Transfer?.deposit ?? x?.FunctionCall?.deposit })) };
+  }) : [];
+  const outcomes = Array.isArray(result.receipts_outcome) ? result.receipts_outcome.slice(0, 12).map(x =>
+    ({ id: x.id, executor: x.outcome?.executor_id, status: x.outcome?.status, children: x.outcome?.receipt_ids })) : [];
+  console.error('PUBLIC_RECEIPT_SHAPE ' + JSON.stringify({ receipts, outcomes }));
+  throw error;
+}
 const report = { status: 'HISTORICAL_FUNDING_GRAPH_MATCHED', network: 'testnet', original_hash: originalHash,
   amount_atoms: amount, linked_action_receipts: g.receipts.size, linked_outcomes: g.outcomes.size,
   vault_callback_receipt: funding.vault_callback_receipt, token_resolver_receipt: funding.token_resolver_receipt,
