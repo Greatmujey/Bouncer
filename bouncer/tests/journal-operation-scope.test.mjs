@@ -29,3 +29,11 @@ test('scope is released on failure; unscoped callers cannot reuse it after a new
   });
   await assert.rejects(withExclusiveJournalOperation(null, () => {}, {}), /invalid journal operation scope/);
 });
+
+test('shared-buyer local contention preserves OWNER_BUSY without claiming a database lock', async () => {
+  const journal = { sharedDirectV3: true };
+  await withExclusiveJournalOperation(journal, async () => {
+    await assert.rejects(withExclusiveJournalOperation(journal, () => {}), error =>
+      error.code === 'OWNER_BUSY' && /another payment operation/.test(error.message));
+  });
+});

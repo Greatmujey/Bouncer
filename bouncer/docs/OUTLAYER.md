@@ -105,6 +105,24 @@ is the worker's, not a verified market-observation time; no TEE attestation,
 consensus, accuracy, commercial SLA or production readiness was established.
 See [Coinbase's public endpoint documentation](https://docs.cdp.coinbase.com/coinbase-business/track-apis/prices).
 
+## Journal concurrency and original hashes
+
+The native OutLayer/oracle runners, mixed mission, resource agent and direct
+procurement now reject overlapping participating operations sharing the **same journal
+object** in one process. The local `FileJournal` also locks its exact file
+against cooperating processes. Before the one-shot native broadcast, the runner
+rejects a newly appeared original, requires a synchronous journal write and
+reads back the exact pending record. A timeout, missing readback or uncertain
+completion remains a stop-and-reconcile condition; do not resend.
+
+These controls do **not** coordinate another journal file, another machine,
+noncooperating clients or a restored backup. Readback alone does not prove fsync
+or independent durability; the `FileJournal` implementation performs its own
+fsync, but its local filesystem and latest copy remain trusted. Distributed
+original-hash fencing and independent checkpoint deployment are still required
+before a real phone/device-key spending flow. Tests exercise synthetic
+transports and local files; they are not provider purchases.
+
 ## Asset and policy semantics
 
 - `deposit_native` tracks an explicit native vault balance, distinct from FTs,

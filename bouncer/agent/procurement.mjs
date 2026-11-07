@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { withExclusiveJournalOperation } from './journal-operation.mjs';
 import { pathToFileURL } from 'node:url';
 import nearApi from 'near-api-js';
 import { validateRpcEndpoint } from '../shared/rpc-endpoint.mjs';
@@ -91,14 +92,15 @@ export function requestFingerprint(request) {
  * is sent. An unresolved pending entry is never retried automatically.
  */
 export async function runProcurement(options) {
-  // The shared journal's owner fence must cover nonce preparation and signing,
-  // not just the later database insert. It stays held until this batch returns;
-  // any unresolved hash blocks other participating journals for the owner.
-  if (options?.execute && options?.journal?.sharedDirectV3 === true) {
-    if (typeof options.journal.withOwnerFence !== 'function') throw new Error('shared buyer owner payment fence is required');
-    return options.journal.withOwnerFence(() => runProcurementCore(options));
-  }
-  return runProcurementCore(options);
+  return withExclusiveJournalOperation(options?.journal, async () => {
+    // Shared journals additionally need their database owner fence across all
+    // cooperating processes; the in-process guard cannot replace it.
+    if (options?.execute && options?.journal?.sharedDirectV3 === true) {
+      if (typeof options.journal.withOwnerFence !== 'function') throw new Error('shared buyer owner payment fence is required');
+      return options.journal.withOwnerFence(() => runProcurementCore(options));
+    }
+    return runProcurementCore(options);
+  }, options?.exclusiveJournalScope);
 }
 
 async function runProcurementCore({ plan: rawPlan, provider, account, publicKey, journal, journalRoutes, claimOrigins, intentIds, execute = false,
@@ -463,6 +465,10 @@ export class FileJournal {
   assertAvailable() {
     if (this.lockFd === null) throw new Error('journal is closed');
     if (this.failed) throw new Error('journal has a failed write; close, reopen and reconcile it before continuing');
+  }
+  assertScope(contractId, ownerId) {
+    this.assertAvailable();
+    if (contractId !== this.#contractId || ownerId !== this.#ownerId) throw new Error('journal belongs to a different contract/account');
   }
   get(id) { this.assertAvailable(); return this.data.entries.find(entry => entry.id === id); }
   // A snapshot lets protocols reject reused seller challenges across this

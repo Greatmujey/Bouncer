@@ -247,3 +247,16 @@ test('live native execution requires one-shot transport and never falls back to 
   assert.equal(f.state.size, 0); assert.equal(legacy, 0); assert.equal(f.sends(), 0);
   assert.deepEqual(await run(f), { status: 'READY' });
 });
+
+test('simultaneous native requests on one journal cannot sign or broadcast twice', async () => {
+  const f=fixture(), entered=Promise.withResolvers(), release=Promise.withResolvers(), status=f.provider.viewNodeStatus;
+  f.provider.viewNodeStatus=async()=>{entered.resolve();await release.promise;return status()};
+  const first=run(f,{execute:true});await entered.promise;
+  try {
+    await assert.rejects(run(f,{execute:true}),/another payment operation is already running/);
+    await assert.rejects(recoverOutlayerGoal({goal,provider:f.provider,journal:f.journal,log:()=>{}}),/another payment operation is already running/);
+    assert.equal(f.sends(),0);
+  } finally { release.resolve(); }
+  assert.equal((await first).status,'FULFILLED');assert.equal(f.sends(),1);
+  assert.equal((await run(f,{execute:true})).status,'REUSED');assert.equal(f.sends(),1);
+});

@@ -10,6 +10,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRuntime, openConfiguredFileJournal, normalizeProviderRoute, requestFingerprint, runProcurement, validatePlan } from './procurement.mjs';
 import { assertJournalScope, writeJournal } from './journal-write.mjs';
+import { withExclusiveJournalOperation } from './journal-operation.mjs';
 import { reservePreview } from './preflight.mjs';
 import { readBoundedBytes, readBoundedJson } from '../shared/bounded-json.mjs';
 import { validateProviderOrigin } from '../shared/provider-origin.mjs';
@@ -190,8 +191,11 @@ export async function fulfillPaidResource({ goal, request, contractId, ownerAcco
  * completed but delivery failed, rerunning reuses that payment and requests the
  * same order again. The provider must implement its own replay protection.
  */
-export async function runResourceAgent({ contractId, ownerAccountId, goals, getQuote, fulfill, readStorage, repositoryLookup, providerUrl, onPlan = () => {},
-  beforePayment = async () => {}, beforeBroadcast = () => {}, beforeBroadcastCheckpoint, provider, account, publicKey, runtimeFactory, journal, execute = false, durablePayment = false, log = console.log }) {
+export async function runResourceAgent(options) {
+  return withExclusiveJournalOperation(options?.journal, scope => runResourceAgentUnlocked(options, scope), options?.exclusiveJournalScope);
+}
+async function runResourceAgentUnlocked({ contractId, ownerAccountId, goals, getQuote, fulfill, readStorage, repositoryLookup, providerUrl, onPlan = () => {},
+  beforePayment = async () => {}, beforeBroadcast = () => {}, beforeBroadcastCheckpoint, provider, account, publicKey, runtimeFactory, journal, execute = false, durablePayment = false, log = console.log }, exclusiveJournalScope) {
   if (Array.isArray(goals)) goals = structuredClone(goals);
   if (execute && (typeof fulfill !== 'function' || typeof journal?.get !== 'function' || typeof journal?.put !== 'function')) {
     throw new Error('live execution requires a readable/writable journal and fulfillment source');
@@ -263,7 +267,7 @@ export async function runResourceAgent({ contractId, ownerAccountId, goals, getQ
   // The views are non-atomic: the contract still decides each real payment,
   // and another actor can change state after this preview.
   const checks = [], blockedReasons = new Map();
-  const preview = await runProcurement({ plan, provider, account, publicKey, journal, journalRoutes, claimOrigins, intentIds, execute: false, log: () => {}, onCheck: check => {
+  const preview = await runProcurement({ plan, provider, account, publicKey, journal, journalRoutes, claimOrigins, intentIds, exclusiveJournalScope, execute: false, log: () => {}, onCheck: check => {
     checks.push({ id: check.id, status: check.status });
     if (check.status === 'BLOCKED') blockedReasons.set(check.id, typeof check.reason === 'string' ? check.reason.replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 200) : 'Policy rejected the request.');
   } });
@@ -284,7 +288,7 @@ export async function runResourceAgent({ contractId, ownerAccountId, goals, getQ
   if (execute && !summary.blocked) {
     log('[resource-agent] Batch preflight passed; these non-atomic views are not a guarantee.');
     const indexById = new Map(plan.requests.map((request, index) => [request.id, index]));
-    payments = await runProcurement({ plan, provider, account, publicKey, journal, journalRoutes, claimOrigins, intentIds, execute: true, durablePayment, log, stopOnBlocked: true,
+    payments = await runProcurement({ plan, provider, account, publicKey, journal, journalRoutes, claimOrigins, intentIds, exclusiveJournalScope, execute: true, durablePayment, log, stopOnBlocked: true,
       beforePayment, beforeBroadcast, beforeBroadcastCheckpoint,
       onCheck: check => {
         if (check.status === 'BLOCKED' || check.status === 'DEFERRED') {

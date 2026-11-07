@@ -15,5 +15,10 @@ export function writeJournal(journal, id, entry) {
 }
 
 export function assertJournalScope(journal, contractId, ownerAccountId) {
-  if (typeof journal?.assertScope === 'function') journal.assertScope(contractId, ownerAccountId);
+  if (typeof journal?.assertScope !== 'function') return;
+  const result = journal.assertScope(contractId, ownerAccountId);
+  if (result && typeof result.then === 'function') {
+    Promise.resolve(result).catch(() => {});
+    throw new Error('journal scope check must be synchronous; stop and reconcile');
+  }
 }
