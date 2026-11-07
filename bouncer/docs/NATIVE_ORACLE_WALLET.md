@@ -54,6 +54,15 @@ examples were **self-hosted development services**.
   same-origin scripts/XSS can still use it. Missing local data does not prove
   an on-chain key was never installed. Owner-led on-chain revocation and a
   complete recovery process are still required before funding.
+- `native-oracle-wallet-recovery.mjs` prepares an unsigned owner recovery
+  review that deletes the exact agent access key, then calls
+  `revoke_agent_key` with 1 yocto. If the key is already absent it can prepare
+  only the grant removal. `native-oracle-recovery-preflight.mjs` checks a
+  fresh testnet FINAL block and, when applicable, the retained original key
+  deletion and its receipt graph before the grant stage. This remains offline
+  scaffolding: no authenticated UI, durable recovery prompt fence, wallet
+  approval or real-phone revocation is implemented. In-flight requests may
+  finish, and removing the key does not recover locked storage collateral.
 - The native OutLayer runners require a **bounded one-shot** sender. They
   record the original signed hash before the single submission and recover
   using that hash; they do not fall back to a retrying sender. Their existing

@@ -13,6 +13,7 @@ import { assertNativeOracleBatchMatchesReview } from './native-oracle-wallet-pla
 const { nearActionsToConnectorActions } = nearConnect;
 const SETUP = ['create_keyless_vault', 'register_vault_circle', 'fund_vault_circle'];
 const NATIVE = ['create_keyless_native_vault', 'configure_native_oracle_policy', 'fund_native_vault', 'install_native_oracle_agent'];
+const RECOVERY = ['remove_native_oracle_access_key', 'revoke_native_oracle_vault_grant'];
 const OTHER = ['configure_buffer_locked_policy', 'install_buffer_vault_agent', 'install_buffer_forwarder_agent',
   'create_buffer_forwarder', 'register_buffer_forwarder_circle', 'pin_buffer_exact_intent'];
 const record = x => x !== null && typeof x === 'object' && !Array.isArray(x);
@@ -31,6 +32,8 @@ function convertedMatches(expected, actual) {
       p.gas === e.gas.toString() && p.deposit === e.deposit.toString() &&
       Buffer.from(JSON.stringify(p.args)).equals(Buffer.from(e.args));
   }
+  if (expected.enum === 'deleteKey') return exactKeys(actual, ['type', 'params']) && actual.type === 'DeleteKey' &&
+    exactKeys(actual.params, ['publicKey']) && actual.params.publicKey === String(expected.deleteKey.publicKey);
   if (expected.enum === 'addKey') {
     const e = expected.addKey, p = actual?.params, k = p?.accessKey, permission = k?.permission, restricted = e.accessKey.permission.functionCall;
     return exactKeys(actual, ['type', 'params']) && actual.type === 'AddKey' && exactKeys(p, ['publicKey', 'accessKey']) &&
@@ -66,6 +69,7 @@ export function inspectBufferConnectorCompatibility({ batch, retainedStage } = {
   if (SETUP.includes(batch.id)) assertBufferWalletBatchMatchesReview(batch, retainedStage);
   else if (OTHER.includes(batch.id)) assertSvalinBatchMatchesReview(batch, retainedStage);
   else if (NATIVE.includes(batch.id)) assertNativeOracleBatchMatchesReview(batch, retainedStage);
+  else if (RECOVERY.includes(batch.id)) assertSvalinBatchMatchesReview(batch, retainedStage);
   else throw new Error('known reviewed Buffer or native oracle stage required');
   if (batch.actions.some(a => a.enum === 'deployContract' &&
       (!(a.deployContract.code instanceof Uint8Array) || a.deployContract.code.length > 1_000_000))) {
@@ -91,5 +95,11 @@ export function inspectBufferConnectorCompatibility({ batch, retainedStage } = {
  * remains a converter test, not evidence of a working phone or wallet. */
 export function inspectNativeOracleConnectorCompatibility({ batch, retainedStage } = {}) {
   if (!NATIVE.includes(batch?.id)) throw new Error('known reviewed native oracle stage required');
+  return inspectBufferConnectorCompatibility({ batch, retainedStage });
+}
+
+/** Offline conversion only: not a real wallet capability or revocation. */
+export function inspectNativeOracleRecoveryConnectorCompatibility({ batch, retainedStage } = {}) {
+  if (!RECOVERY.includes(batch?.id)) throw new Error('known reviewed native recovery stage required');
   return inspectBufferConnectorCompatibility({ batch, retainedStage });
 }

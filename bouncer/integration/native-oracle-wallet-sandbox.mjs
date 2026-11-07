@@ -14,6 +14,8 @@ import { buildNativeOracleWalletPlan, assertNativeOracleBatchMatchesReview, NATI
   NATIVE_ORACLE_V9_CODE_HASH, NATIVE_ORACLE_DEFAULT_GAS_ALLOWANCE } from '../agent/native-oracle-wallet-plan.mjs';
 import { inspectNativeOracleWalletStage } from '../agent/native-oracle-wallet-preflight.mjs';
 import { prepareNativeOracleWalletAttempt, inspectNativeOracleWalletAttempt } from '../agent/native-oracle-wallet-evidence.mjs';
+import { buildNativeOracleRevocationPlan, prepareNativeOracleRevocationAttempt, inspectNativeOracleRevocationAttempt } from '../agent/native-oracle-wallet-recovery.mjs';
+import { inspectNativeOracleRevocationStage } from '../agent/native-oracle-recovery-preflight.mjs';
 import { ORACLE_TESTNET_PROGRAM, ORACLE_PROJECT_ID, ORACLE_PROJECT_UUID } from '../agent/oracle-outlayer.mjs';
 import { ReadOnlyNearRpcProvider } from '../agent/read-only-near-rpc.mjs';
 import { withSandboxOnlyFetch } from './v11-sandbox-setup-rpc.mjs';
@@ -119,11 +121,43 @@ async function main() {
         amount: tooMuch, expected_route: route }, 0n, 300n * TGAS)]), 'per-transaction cap', /amount exceeds per-tx cap/);
       assert.equal(await view('vault_balance', { token: 'native' }), review.vault_deposit_yocto);
       assert.equal(await view('daily_spent', { policy_id: review.policy_id }), '0');
+      // Exercise the owner-led recovery plan using only these disposable local
+      // keys. A zero-yocto revoke fails; the two reviewed original hashes and
+      // fresh state must match before each subsequent action.
+      const recovery = buildNativeOracleRevocationPlan({ setupReview: review, wasmBytes: wasm,
+        trustedSetupReviewHash: review.review_sha256, trustedOwnerPublicKey: pub(buyerKey), expectedAccessKeyPresent: true });
+      const anchors = { setupReview: review, wasmBytes: wasm, trustedSetupReviewHash: review.review_sha256,
+        trustedOwnerPublicKey: pub(buyerKey), recoveryReview: recovery.review, trustedRecoveryReviewHash: recovery.review.review_sha256 };
+      expectFailure(await send(buyer, VAULT, [call('revoke_agent_key', { policy_id: review.policy_id, public_key: pub(agentKey) })]),
+        'zero-yocto recovery guard', /exactly 1 yoctoNEAR/);
+      assert.equal(await view('is_agent_key_allowed', { policy_id: review.policy_id, public_key: pub(agentKey) }), true);
+      const recoveryPrior = [], recoveryProofs = [];
+      for (let i = 0; i < recovery.batches.length; i++) {
+        const batch = recovery.batches[i];
+        const preflight = await inspectNativeOracleRevocationStage({ ...anchors, stageId: batch.id, prior: recoveryPrior, provider: sandboxViews });
+        assert.equal(preflight.status, 'STATE_CHECKS_PASSED_NOT_AUTHORIZED', `recovery preflight ${batch.id}: ${JSON.stringify(preflight.blockers)}`);
+        assert.equal(preflight.wallet_prompt_authorized, false);
+        const sent = await must(buyer, batch.receiverId, batch.actions, `sandbox native recovery ${batch.id}`);
+        const trustedOriginalHash = sent.transaction_outcome.id;
+        const attempt = prepareNativeOracleRevocationAttempt({ ...anchors, stageId: batch.id, trustedOriginalHash });
+        const receiptResult = await provider.txStatusReceipts(trustedOriginalHash, BUYER, 'FINAL');
+        const proof = inspectNativeOracleRevocationAttempt({ ...anchors, trustedOriginalHash, attempt, result: receiptResult });
+        assert.ok(['FINAL_NATIVE_RECOVERY_RECEIPT_MATCH', 'FINAL_LOCAL_DELETE_KEY_OUTCOME_MATCH'].includes(proof.status));
+        assert.equal(proof.do_not_resend, true); recoveryProofs.push(proof.status);
+        recoveryPrior.push({ attempt, trustedOriginalHash, result: receiptResult });
+      }
+      const remaining = await provider.viewAccessKeyList(BUYER, { finality: 'final' });
+      assert.equal(remaining.keys.some(k => k.public_key === pub(agentKey)), false);
+      assert.equal(await view('is_agent_key_allowed', { policy_id: review.policy_id, public_key: pub(agentKey) }), false);
+      assert.equal(await view('vault_balance', { token: 'native' }), review.vault_deposit_yocto);
       return { scope: 'isolated loopback nearcore with fabricated OutLayer registry views; no provider request or independent delivery',
         four_reviewed_setup_stages_checked: preflights, four_original_receipts_checked: outcomes,
         pinned_v9_and_keyless_vault_checked: true, one_method_agent_key_checked: true,
         zero_yocto_guard_rejected: true, restricted_key_one_yocto_rejected: true, over_cap_rejected: true,
-        native_balance_unchanged_after_rejections: true, signed_or_sent_to_public_chain: false,
+        native_balance_unchanged_after_rejections: true, zero_yocto_recovery_guard_rejected: true,
+        two_reviewed_recovery_stages_checked: recovery.batches.map(batch => batch.id), two_recovery_original_receipts_checked: recoveryProofs,
+        agent_access_key_and_grant_absent_after_recovery: true, native_balance_unchanged_after_recovery: true,
+        signed_or_sent_to_public_chain: false,
         independent_delivery_verified: false };
     });
     assertSandboxStatus(await provider.status());

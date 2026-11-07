@@ -24,7 +24,7 @@ jobs:
       - name: Install and test gates
         run: |
           npm ci --ignore-scripts --no-audit --no-fund
-          node --test tests/native-oracle-wallet-plan.test.mjs tests/native-oracle-wallet-evidence.test.mjs tests/native-oracle-wallet-preflight.test.mjs
+          node --test tests/native-oracle-wallet-plan.test.mjs tests/native-oracle-wallet-evidence.test.mjs tests/native-oracle-wallet-preflight.test.mjs tests/native-oracle-wallet-recovery.test.mjs tests/native-oracle-recovery-preflight.test.mjs
       - name: Download and verify pinned isolated nearcore
         run: |
           set -euo pipefail
@@ -32,7 +32,7 @@ jobs:
             'https://s3-us-west-1.amazonaws.com/build.nearprotocol.com/nearcore/Linux-x86_64/2.14.0/near-sandbox.tar.gz' \
             --output "$RUNNER_TEMP/near-sandbox.tar.gz"
           python3 scripts/extract-pinned-near-sandbox.py "$RUNNER_TEMP/near-sandbox.tar.gz" "$RUNNER_TEMP/near-sandbox"
-      - name: Exercise exact native wallet stages, receipts and guard on loopback
+      - name: Exercise exact native setup, recovery, receipts and guard on loopback
         env:
           BOUNCER_SANDBOX_BIN: ${{ runner.temp }}/near-sandbox
         run: |
