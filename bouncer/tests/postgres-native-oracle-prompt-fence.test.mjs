@@ -453,6 +453,14 @@ dbtest('synthetic browser prompts, owner challenges, PostgreSQL, local Git and p
     hash(10), hash(11), hash(10), hash(11),
     hash(10), hash(11), hash(12), hash(10), hash(11), hash(12),
     hash(10), hash(11), hash(12), hash(13)]);
+  const trial={goal_id:'native-oracle-trial-1',goal_sha256:'d'.repeat(64),
+    agent_public_key:f.review.agent_public_key,original_hash:hash(50)};
+  const claimedTrial=await witness.claimTrial(identity,trial,completion.witness_head);
+  const refreshedChallenge=await service.issueCompletion({identity});
+  const refreshed=await service.verifyCompletion({identity,evidence:await sign(verifyContext,refreshedChallenge)});
+  assert.equal(refreshed.status,'FOUR_ORIGINALS_AND_STATE_MATCH_NOT_AUTHORIZED');
+  assert.equal(refreshed.witness_head,claimedTrial.head);assert.equal(refreshed.agent_key_nonce,completion.agent_key_nonce);
+  assert.equal((await witness.inspect(f.ownerId)).state.trial.original_hash,hash(50));
   const alteredWitness = { ...witness, async inspect(owner) {
     const snapshot = await witness.inspect(owner), altered = structuredClone(snapshot);
     altered.state.records.find(r => r.event === 'original').original_hash = hash(99);

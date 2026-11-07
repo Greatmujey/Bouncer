@@ -94,15 +94,21 @@ try {
   const tx=nearApi.transactions.createTransaction(params.owner,nearApi.utils.PublicKey.from(result.public_key),params.vault,78n,
     [nearApi.transactions.functionCall('execute_outlayer_native_project',args,300n*10n**12n,0n)],Buffer.alloc(32,9));
   const expectedHash=nearApi.utils.serialize.base_encode(createHash('sha256').update(nearApi.transactions.encodeTransaction(tx)).digest());
-  const input={review,identity,completion,ownerConfirmed:true,expectedTransactionHash:expectedHash};
+  const goal={id:'native-oracle-trial-1',contract_id:params.vault,owner_account_id:params.owner,policy_id:review.policy_id,
+    amount:review.per_tx_cap_yocto,route:args.expected_route,max_age_seconds:300};
+  const goalSha=createHash('sha256').update(JSON.stringify(goal)).digest('hex'),head='d'.repeat(40);
+  const witness={status:'TRIAL_ORIGINAL_WITNESSED',owner:params.owner,operation_id:identity.operation_id,review_sha256:review.review_sha256,
+    goal_id:goal.id,goal_sha256:goalSha,agent_public_key:result.public_key,original_hash:expectedHash,witness_head:head,
+    independently_witnessed:true,do_not_retry:true,execution_authorized:false,transaction_sent:false};
+  const input={review,identity,completion,freshCompletion:{...completion,witness_head:head},witness,ownerConfirmed:true,expectedTransactionHash:expectedHash};
   const signed=await Promise.all([a,b].map(page=>page.evaluate(async value=>{
-    try {const out=await window.__keys.signNativeOracleTrial(value);return {ok:true,hash:out.tx_hash,bytes:Array.from(out.signed_transaction)}}
+    try {const out=await window.__keys.signNativeOracleTrial(value);return {ok:true,hash:out.tx_hash,witnessed:out.witnessed_original_matched,bytes:Array.from(out.signed_transaction)}}
     catch(error){return {ok:false,error:error.message}}
   },input)));
   assert.equal(signed.filter(x=>x.ok).length,1);assert.equal(signed.filter(x=>!x.ok).length,1);
   const winner=signed.find(x=>x.ok),decoded=nearApi.transactions.SignedTransaction.decode(Uint8Array.from(winner.bytes));
   const digest=createHash('sha256').update(nearApi.transactions.encodeTransaction(decoded.transaction)).digest();
-  assert.equal(winner.hash,expectedHash);assert.equal(nearApi.utils.serialize.base_encode(digest),expectedHash);
+  assert.equal(winner.hash,expectedHash);assert.equal(winner.witnessed,true);assert.equal(nearApi.utils.serialize.base_encode(digest),expectedHash);
   assert.equal(nearApi.utils.PublicKey.from(result.public_key).verify(digest,Uint8Array.from(decoded.signature.ed25519Signature.data)),true);
   const original=await b.evaluate(id=>window.__keys.inspectNativeOracleOriginal({reviewSha256:id}),review.review_sha256);
   assert.equal(original.status,'LOCAL_ORIGINAL_RETAINED');assert.equal(original.record.tx_hash,expectedHash);

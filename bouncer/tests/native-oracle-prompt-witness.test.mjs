@@ -125,3 +125,42 @@ test('a local disposable Git remote isolates native and existing FT witness name
     await assert.rejects(native.inspect(id.owner), e => e.code === 'WITNESS_UNAVAILABLE');
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
+
+async function completed(witness,id) {
+  await witness.reserve(id);
+  for(let i=0;i<stages.length;i++){
+    await claim(witness,id,i);await witness.recordOriginal(id,stages[i],tx(i+1));
+  }
+}
+const trial = () => ({goal_id:'native-oracle-trial-1',goal_sha256:'d'.repeat(64),agent_public_key:key(),original_hash:tx(50)});
+
+test('the exact trial original is retained before any signature and can never be replaced',async()=>{
+  const store=memoryStore(),witness=createNativeOraclePromptWitness({store}),id=identity(),request=trial();
+  await completed(witness,id); const previous=await witness.inspect(id.owner);
+  await assert.rejects(witness.claimTrial(id,request,'stale-head'),e=>e.code==='WITNESS_NOT_CLAIMABLE');
+  await assert.rejects(witness.claimTrial(id,{...request,original_hash:tx(1)},previous.head),e=>e.code==='WITNESS_NOT_CLAIMABLE');
+  const claim=await witness.claimTrial(id,request,previous.head);
+  assert.equal(claim.state.phase,'trial_claimed');assert.deepEqual(claim.state.trial,request);
+  assert.equal(claim.state.records.length,10);assert.equal(claim.state.records.at(-1).original_hash,request.original_hash);
+  await assert.rejects(witness.claimTrial(id,request,claim.head),e=>e.code==='WITNESS_NOT_CLAIMABLE');
+  await assert.rejects(witness.claimTrial(id,{...request,original_hash:tx(51)},claim.head),e=>e.code==='WITNESS_NOT_CLAIMABLE');
+  const fresh=createNativeOraclePromptWitness({store});
+  assert.deepEqual((await fresh.inspect(id.owner)).state.trial,request,'fresh process recovers the original');
+  const text=store.snapshot().text;
+  // Parsing alone cannot detect rewriting the last line; the separately
+  // retained head and append-only Git audit are what catch that rollback.
+  assert.equal(parseNativeOraclePromptWitness(text.replace(request.original_hash,tx(51)),id.owner).trial.original_hash,tx(51));
+  assert.throws(()=>parseNativeOraclePromptWitness(text+'{}\n',id.owner),e=>e.code==='WITNESS_INVALID');
+});
+
+test('competing trial claims and a lost acknowledgment cannot grant a second trial',async()=>{
+  const store=memoryStore(),witness=createNativeOraclePromptWitness({store}),id=identity(),request=trial();
+  await completed(witness,id); const head=(await witness.inspect(id.owner)).head;
+  const outcomes=await Promise.allSettled([witness.claimTrial(id,request,head),witness.claimTrial(id,{...request,original_hash:tx(51)},head)]);
+  assert.equal(outcomes.filter(x=>x.status==='fulfilled').length,1);assert.equal(outcomes.filter(x=>x.status==='rejected').length,1);
+  const otherStore=memoryStore(),other=createNativeOraclePromptWitness({store:otherStore}),id2=identity('other.testnet'),request2=trial();
+  await completed(other,id2);const head2=(await other.inspect(id2.owner)).head;otherStore.loseAck(true);
+  await assert.rejects(other.claimTrial(id2,request2,head2),e=>e.code==='WITNESS_COMMIT_UNKNOWN');
+  otherStore.loseAck(false);assert.equal((await other.inspect(id2.owner)).state.trial.original_hash,request2.original_hash);
+  await assert.rejects(other.claimTrial(id2,request2,head2),e=>e.code==='WITNESS_NOT_CLAIMABLE');
+});

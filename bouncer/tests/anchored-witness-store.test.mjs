@@ -187,3 +187,25 @@ test('full baseline audit rejects shallow histories and non-commit heads', async
   await assert.rejects(createGitWitnessRangeAudit({repo:work})(base,'a'.repeat(40)),/unavailable|unsafe/);
   assert.equal((await auditFullGitWitnessHistory({repo:work,head:base})).wallet_or_transaction_authorized,false);
 }));
+
+test('anchored Git retains the trial original across instances and rejects a rewritten last hash',async()=>repository(async ({work,base,anchor,native})=>{
+  const iden=id('trial-recovery.testnet',true),tx=n=>nearApi.utils.serialize.base_encode(Buffer.alloc(32,n));
+  await native.reserve(iden);
+  for(let i=0;i<iden.stages.length;i++){
+    const stage=iden.stages[i].stage_id,prior=await native.assertClaimable(iden,stage);
+    await native.claim(iden,stage,prior);await native.recordOriginal(iden,stage,tx(i+1));
+  }
+  const before=anchor.snapshot(),trial={goal_id:'native-oracle-trial-1',goal_sha256:'d'.repeat(64),
+    agent_public_key:key(),original_hash:tx(50)};
+  const claim=await native.claimTrial(iden,trial,before.head);
+  assert.equal(claim.head,anchor.snapshot().head);assert.equal((await native.inspect(iden.owner)).state.trial.original_hash,tx(50));
+  const freshPair=createAnchoredSetupWitnessPair({repo:work,branch,initialHead:base,anchor});
+  assert.deepEqual((await freshPair.native.inspect(iden.owner)).state.trial,trial);
+  assert.equal(await createGitWitnessRangeAudit({repo:work})(before.head,claim.head),true);
+  const file=path.join(work,fileFor(iden.owner,'native-oracle-prompt-witness-v1'));
+  fs.writeFileSync(file,fs.readFileSync(file,'utf8').replace(tx(50),tx(51)));
+  const rewritten=commit(work,'Rewrite a synthetic trial original');
+  await assert.rejects(createGitWitnessRangeAudit({repo:work})(claim.head,rewritten));
+  await assert.rejects(freshPair.native.inspect(iden.owner),e=>e.code==='WITNESS_UNAVAILABLE');
+  assert.equal(anchor.snapshot().head,claim.head);
+}));

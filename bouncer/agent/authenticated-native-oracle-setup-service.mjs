@@ -109,11 +109,11 @@ export function createAuthenticatedNativeOracleSetupService({ auth, fence, witne
       return coordinator.recordOriginal({identity,stageId,originalHash,evidence});
     },
     async issueCompletion({ identity:raw } = {}) {
-      const {identity,state} = await witnessed(raw); if (state.phase!=='complete') throw fail();
+      const {identity,state} = await witnessed(raw); if (!['complete','trial_claimed'].includes(state.phase)) throw fail();
       return auth.issue(action('verify_native_setup_completion',identity.owner_public_key,{identity}));
     },
     async verifyCompletion({ identity:raw, evidence } = {}) {
-      const {identity,state} = await witnessed(raw); if (state.phase!=='complete') throw fail();
+      const {identity,state} = await witnessed(raw); if (!['complete','trial_claimed'].includes(state.phase)) throw fail();
       return coordinator.verifyCompletion({identity,evidence});
     },
     async issueInspect({ ownerPublicKey } = {}) { return auth.issue(action('inspect_native_setup',ownerPublicKey)); },

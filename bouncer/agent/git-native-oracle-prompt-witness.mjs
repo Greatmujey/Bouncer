@@ -1,6 +1,7 @@
 /**
  * Experimental independent public witness for ONE named testnet owner's
- * four-stage native-oracle setup. This records only public hashes/account IDs and owner public key, never private keys,
+ * four-stage native-oracle setup and ONE subsequent native trial. This records
+ * only public hashes, account IDs and public keys, never private keys,
  * signatures, wallet requests, seller credentials or signed transactions.
  *
  * Every append uses a compare-and-swap against one remote Git branch. A
@@ -56,6 +57,20 @@ function nextRecord(state, event, stageIndex, originalHash) {
     ...(event === 'original' ? { original_hash: originalHash } : {}), previous_sha256: state.last_hash };
   return record;
 }
+function trialValues(value, id) {
+  if (!exact(value, ['goal_id','goal_sha256','agent_public_key','original_hash']) ||
+      typeof value.goal_id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(value.goal_id) ||
+      !HEX64.test(value.goal_sha256 ?? '') || !ownerKey(value.agent_public_key) ||
+      value.agent_public_key === id.owner_public_key || !isTransactionHash(value.original_hash)) throw blocked('WITNESS_INVALID');
+  return { goal_id:value.goal_id, goal_sha256:value.goal_sha256,
+    agent_public_key:value.agent_public_key, original_hash:value.original_hash };
+}
+function trialRecord(state, raw) {
+  const trial = trialValues(raw, state.identity);
+  return { version:1, sequence:state.records.length+1, event:'trial_claim', owner:state.identity.owner,
+    operation_id:state.identity.operation_id, review_sha256:state.identity.review_sha256,
+    ...trial, previous_sha256:state.last_hash };
+}
 function step(state, record) {
   if (!state) {
     if (!exact(record, ['format','version','sequence','event','owner','owner_public_key','operation_id','review_sha256','stages','previous_sha256']) ||
@@ -64,6 +79,15 @@ function step(state, record) {
       review_sha256: record.review_sha256, stages: record.stages });
     if (!same(record, firstRecord(id))) throw blocked('WITNESS_INVALID');
     return { identity: id, records: [record], last_hash: sha(JSON.stringify(record)), stage_index: 0, phase: 'reserved' };
+  }
+  if (state.phase === 'complete') {
+    if (!obj(record)) throw blocked('WITNESS_INVALID');
+    const trial=trialValues({goal_id:record.goal_id,goal_sha256:record.goal_sha256,
+      agent_public_key:record.agent_public_key,original_hash:record.original_hash},state.identity);
+    if (record.event !== 'trial_claim' || state.records.some(r => r.original_hash === trial.original_hash) ||
+        !same(record,trialRecord(state,trial))) throw blocked('WITNESS_INVALID');
+    return {identity:state.identity,records:[...state.records,record],last_hash:sha(JSON.stringify(record)),
+      stage_index:state.stage_index,phase:'trial_claimed',trial};
   }
   const expectEvent = state.phase === 'reserved' || state.phase === 'original' ? 'claim' : state.phase === 'claimed' ? 'original' : null;
   const index = state.phase === 'original' ? state.stage_index + 1 : state.stage_index;
@@ -80,7 +104,7 @@ function step(state, record) {
 export function parseNativeOraclePromptWitness(text, expectedOwner) {
   if (typeof text !== 'string' || text.length > 32_768 || (text && !text.endsWith('\n'))) throw blocked('WITNESS_INVALID');
   if (!text) return null;
-  const lines = text.slice(0, -1).split('\n'); if (lines.length > 1 + STAGES.length * 2 || lines.some(line => !line)) throw blocked('WITNESS_INVALID');
+  const lines = text.slice(0, -1).split('\n'); if (lines.length > 2 + STAGES.length * 2 || lines.some(line => !line)) throw blocked('WITNESS_INVALID');
   let state = null;
   for (const line of lines) {
     let record; try { record = JSON.parse(line); } catch { throw blocked('WITNESS_INVALID'); }
@@ -142,6 +166,16 @@ export function createNativeOraclePromptWitness({ store } = {}) {
       if (!exact(prior, ['head','last_hash','stage_id']) || prior.head !== snapshot.head || prior.last_hash !== s.last_hash ||
           prior.stage_id !== stageId || index < 0 || index >= STAGES.length || STAGES[index] !== stageId) throw blocked('WITNESS_NOT_CLAIMABLE');
       return append(snapshot, id.owner, nextRecord(s, 'claim', index));
+    },
+    /** Atomically retain the only trial hash BEFORE phone signing. This is a
+     * claim, not evidence of a signature, submission or delivery. A lost
+     * acknowledgment consumes the claim and must never be retried. */
+    async claimTrial(raw, rawTrial, expectedHead) {
+      const id=identity(structuredClone(raw)),trial=trialValues(structuredClone(rawTrial),id),snapshot=await read(id.owner);
+      assertIdentity(snapshot.state,id);
+      if (snapshot.state.phase!=='complete' || typeof expectedHead!=='string' || expectedHead!==snapshot.head ||
+          snapshot.state.records.some(r=>r.original_hash===trial.original_hash)) throw blocked('WITNESS_NOT_CLAIMABLE');
+      return append(snapshot,id.owner,trialRecord(snapshot.state,trial));
     },
     async recordOriginal(raw, stageId, originalHash) {
       const id = identity(structuredClone(raw)), snapshot = await read(id.owner);

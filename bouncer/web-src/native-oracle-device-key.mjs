@@ -203,37 +203,72 @@ export async function openNativeOracleDeviceKey({ indexedDB, storage, crypto, or
      * original-hash fence and must reconcile any uncertain result. */
     async signNativeOracleTrial(value) {
       ensureOpen();
-      if (!exact(value,['review','identity','completion','ownerConfirmed','expectedTransactionHash']) || value.ownerConfirmed!==true ||
-          typeof value.expectedTransactionHash!=='string') throw unavailable();
+      const base=['review','identity','completion','ownerConfirmed','expectedTransactionHash'];
+      const witnessed=exact(value,[...base,'freshCompletion','witness']);
+      if ((!witnessed && !exact(value,base)) || value.ownerConfirmed!==true || typeof value.expectedTransactionHash!=='string') throw unavailable();
       const review=structuredClone(value.review),identity=structuredClone(value.identity),completion=structuredClone(value.completion);
+      const fresh=witnessed?structuredClone(value.freshCompletion):completion, witness=witnessed?structuredClone(value.witness):null;
       input({owner:review?.owner,vault:review?.vault});
       const row=await run(db,'readonly',(store,done)=>{const get=store.get(review.owner);get.onsuccess=()=>done(get.result)});
       const device=await validate(row,review.owner,review.vault,review.agent_public_key);
       const canonical=await verifyNativeOracleSetupReview({review,identity,deviceKey:device,origin,crypto});
-      assertNativeOracleCompletion(completion,review,now());
+      const checkFresh=clock=>{
+        // Witnessing the original can take longer than five seconds. Keep the
+        // original block/nonce, but demand a new five-second state recheck with
+        // the SAME nonce and original setup receipts after that witness.
+        assertNativeOracleCompletion(completion,review,clock,witnessed?{maxAgeMs:120_000}:undefined);
+        assertNativeOracleCompletion(fresh,review,clock);
+        if(witnessed && (fresh.agent_key_nonce!==completion.agent_key_nonce || fresh.block_height<completion.block_height ||
+            (fresh.block_height===completion.block_height && (fresh.block_hash!==completion.block_hash ||
+              fresh.block_timestamp_nanosec!==completion.block_timestamp_nanosec)) ||
+            (fresh.block_height>completion.block_height && (fresh.block_hash===completion.block_hash ||
+              BigInt(fresh.block_timestamp_nanosec)<BigInt(completion.block_timestamp_nanosec))) ||
+            Date.parse(fresh.observed_at)<Date.parse(completion.observed_at) ||
+            JSON.stringify(fresh.prior_original_hashes)!==JSON.stringify(completion.prior_original_hashes)))throw unavailable();
+      };
+      checkFresh(now());
+      if(witnessed) {
+        const fields=['status','owner','operation_id','review_sha256','goal_id','goal_sha256','agent_public_key','original_hash',
+          'witness_head','independently_witnessed','do_not_retry','execution_authorized','transaction_sent'];
+        if(!exact(witness,fields) || witness.status!=='TRIAL_ORIGINAL_WITNESSED' || witness.owner!==review.owner ||
+            witness.operation_id!==identity.operation_id || witness.review_sha256!==review.review_sha256 ||
+            witness.agent_public_key!==review.agent_public_key || witness.original_hash!==value.expectedTransactionHash ||
+            typeof witness.goal_id!=='string' || !/^[A-Za-z0-9_-]{1,64}$/.test(witness.goal_id) ||
+            !/^[a-f0-9]{64}$/.test(witness.goal_sha256??'') || !/^[a-f0-9]{40}$/.test(witness.witness_head??'') ||
+            witness.witness_head!==fresh.witness_head || witness.witness_head===completion.witness_head ||
+            witness.independently_witnessed!==true || witness.do_not_retry!==true || witness.execution_authorized!==false ||
+            witness.transaction_sent!==false)throw unavailable();
+        const goal={id:witness.goal_id,contract_id:canonical.vault,owner_account_id:canonical.owner,policy_id:canonical.policy_id,
+          amount:canonical.per_tx_cap_yocto,route:{project:canonical.project,route_revision:1,policy_revision:1,payee_revision:1,active:true},
+          max_age_seconds:300};
+        const goalDigest=new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(JSON.stringify(goal))));
+        const goalHex=Array.from(goalDigest,b=>b.toString(16).padStart(2,'0')).join('');
+        if(goalHex!==witness.goal_sha256)throw unavailable();
+      }
       const built=buildNativeOracleTrialBytes(canonical,completion);
       if (typeof crypto.subtle.digest!=='function') throw unavailable();
       const hash=new Uint8Array(await crypto.subtle.digest('SHA-256',built.unsigned));
       if (hash.length!==32) throw unavailable();
       const txHash=encodeBase58(hash),created=now();
       if(txHash!==value.expectedTransactionHash)throw unavailable();
-      assertNativeOracleCompletion(completion,review,created);
+      checkFresh(created);
       const record={review_sha256:review.review_sha256,operation_id:identity.operation_id,
         owner:canonical.owner,vault:canonical.vault,agent_public_key:canonical.agent_public_key,tx_hash:txHash,
         block_hash:built.block_hash,nonce:built.nonce,created_at_ms:created};
       // A committed or uncertain local claim is never cleared or replaced.
       await retainLocalNativeOriginal(indexedDB,record);
-      assertNativeOracleCompletion(completion,review,now());
+      checkFresh(now());
       const signature=new Uint8Array(await crypto.subtle.sign('Ed25519',row.private_key,hash));
       if(signature.length!==64 || await crypto.subtle.verify('Ed25519',row.public_crypto_key,signature,hash)!==true)throw unavailable();
       const saved=await inspectLocalNativeOriginal(indexedDB,record.review_sha256);
       if(!saved || Object.keys(record).some(k=>saved[k]!==record[k]))throw unavailable();
       const current=await run(db,'readonly',(store,done)=>{const get=store.get(review.owner);get.onsuccess=()=>done(get.result)});
       await validate(current,review.owner,review.vault,review.agent_public_key);
-      assertNativeOracleCompletion(completion,review,now());
+      checkFresh(now());
       return {status:'SIGNED_NOT_BROADCAST',tx_hash:txHash,signed_transaction:appendNativeOracleSignature(built.unsigned,signature),
         owner:canonical.owner,vault:canonical.vault,review_sha256:review.review_sha256,maximum_native_yocto:canonical.per_tx_cap_yocto,
         attached_deposit_yocto:'0',do_not_retry:true,local_original_retained:true,independent_backup_verified:false,
+        witnessed_original_matched:witnessed,
         broadcast_authorized:false,transaction_sent:false,provider_delivery_verified:false};
     },
     /** Local-only original inspection. Missing local state never proves that

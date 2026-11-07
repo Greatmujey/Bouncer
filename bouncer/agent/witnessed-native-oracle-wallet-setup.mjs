@@ -107,7 +107,7 @@ export function createWitnessedNativeOracleSetup({ fence, witness, otherWitness,
      * reporting any completion evidence, and compare both retained histories. */
     async verifyCompletion({ identity: raw, evidence } = {}) {
       const identity = structuredClone(raw), checkpoint = await witness.inspect(identity?.owner), state = checkpoint.state;
-      if (!state || state.phase !== 'complete' || JSON.stringify(state.identity) !== JSON.stringify(identity)) throw fail('WITNESS_MISMATCH');
+      if (!state || !['complete','trial_claimed'].includes(state.phase) || JSON.stringify(state.identity) !== JSON.stringify(identity)) throw fail('WITNESS_MISMATCH');
       const originals = state.records.filter(r => r.event === 'original').map(r => r.original_hash);
       if (originals.length !== STAGES.length) throw fail('WITNESS_MISMATCH');
       const result = await fence.verifyCompletion({ owner: identity.owner, ownerPublicKey: identity.owner_public_key,

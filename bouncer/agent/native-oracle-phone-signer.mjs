@@ -10,7 +10,9 @@
  * never automatically requested a second time. Not mounted by default.
  */
 import crypto from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import nearApi from 'near-api-js';
+import { validateOracleGoal } from './oracle-outlayer.mjs';
 import { verifyNativeOracleWalletReview } from './native-oracle-wallet-evidence.mjs';
 import { assertNativeOracleCompletion } from '../web-src/native-oracle-completion.mjs';
 import { decodeNativeHash32 } from '../web-src/native-oracle-transaction.mjs';
@@ -106,6 +108,85 @@ export function createNativeOraclePhoneAccount({review:rawReview,completion:rawC
         preparedHash=utils.serialize.base_encode(crypto.createHash('sha256').update(transactions.encodeTransaction(tx)).digest());
         preparedCompletion=completion;return tx;
       }catch{throw fail()}
+    },
+  });
+}
+
+/** Reconstruct the exact native trial shared by the phone, runner and witness.
+ * This checks identity and reviewed arguments, not owner consent or an RPC. */
+export function validateWitnessedNativeOracleTrial({goal:rawGoal,review:rawReview,identity:rawIdentity,
+  wasmBytes,trustedReviewHash,trustedOwnerPublicKey}={}) {
+  const review=structuredClone(rawReview),identity=structuredClone(rawIdentity);
+  let trusted,goal,expected;
+  try {
+    trusted=verifyNativeOracleWalletReview({review,wasmBytes,trustedReviewHash,trustedOwnerPublicKey});
+    const expectedIdentity={owner:review.owner,owner_public_key:trustedOwnerPublicKey,operation_id:identity.operation_id,
+      review_sha256:trustedReviewHash,stages:review.stages.map(stage=>({stage_id:stage.id,action_commitment_sha256:stage.action_commitment_sha256}))};
+    if(!/^[a-f0-9]{32}$/.test(identity.operation_id??'') || !isDeepStrictEqual(identity,expectedIdentity))throw Error();
+    goal=validateOracleGoal(structuredClone(rawGoal));
+    expected=validateOracleGoal({id:goal.id,contract_id:review.vault,owner_account_id:review.owner,policy_id:review.policy_id,
+      amount:review.per_tx_cap_yocto,route:{project:review.project,route_revision:1,policy_revision:1,payee_revision:1,active:true},max_age_seconds:300});
+    if(!isDeepStrictEqual(goal,expected) || trusted.agent_public_key!==review.agent_public_key)throw Error();
+  }catch{throw fail()}
+  const goalSha256=crypto.createHash('sha256').update(JSON.stringify(goal)).digest('hex');
+  return {goal,identity,review,goalSha256,agentPublicKey:trusted.agent_public_key};
+}
+
+/** Verify what the anchored store currently retains, not merely its previous
+ * acknowledgment. The configured witness must itself use an independently
+ * operated, rollback-monitored anchor; this function cannot create one. */
+export function assertWitnessedNativeOracleTrial(snapshot,identity,trial) {
+  if(!snapshot || !/^[a-f0-9]{40}$/.test(snapshot.head??'') || snapshot.state?.phase!=='trial_claimed' ||
+      !isDeepStrictEqual(snapshot.state.identity,identity) || !isDeepStrictEqual(snapshot.state.trial,trial))throw fail();
+  return true;
+}
+
+/** Phone account that requires an anchored original BEFORE asking the phone
+ * to sign, then refreshes completion at the now-witnessed head. The witness
+ * claim is write-once: a lost response, changed nonce, stale recheck or phone
+ * failure never creates a replacement. The existing runner must re-read this
+ * same witness after its local journal commit and before the one send. */
+export function createWitnessedNativeOraclePhoneAccount({goal,review,identity,wasmBytes,trustedReviewHash,trustedOwnerPublicKey,
+  getFreshCompletion,requestPhoneSignature,witness,now=Date.now}={}) {
+  const checked=validateWitnessedNativeOracleTrial({goal,review,identity,wasmBytes,trustedReviewHash,trustedOwnerPublicKey});
+  if(!witness || typeof witness.claimTrial!=='function' || typeof witness.inspect!=='function' ||
+      typeof getFreshCompletion!=='function' || typeof requestPhoneSignature!=='function' || typeof now!=='function')throw fail();
+  let retained;
+  const account=createNativeOraclePhoneAccount({review:checked.review,wasmBytes,trustedReviewHash,trustedOwnerPublicKey,
+    getFreshCompletion,now,requestPhoneSignature:async request=>{
+      const trial={goal_id:checked.goal.id,goal_sha256:checked.goalSha256,agent_public_key:checked.agentPublicKey,
+        original_hash:request.transactionHash};
+      // Only a complete witnessed setup at the precise completion head can
+      // produce this claim. No signature leaves the phone before readback.
+      const saved=await witness.claimTrial(checked.identity,trial,request.completion.witness_head);
+      assertWitnessedNativeOracleTrial(saved,checked.identity,trial);
+      const reread=await witness.inspect(checked.identity.owner);
+      assertWitnessedNativeOracleTrial(reread,checked.identity,trial);
+      if(reread.head!==saved.head)throw fail();
+      retained=structuredClone(trial);
+      const fresh=structuredClone(await getFreshCompletion());
+      assertNativeOracleCompletion(fresh,checked.review,now());
+      if(fresh.witness_head!==saved.head || fresh.agent_key_nonce!==request.completion.agent_key_nonce ||
+          fresh.block_height<request.completion.block_height ||
+          (fresh.block_height===request.completion.block_height && (fresh.block_hash!==request.completion.block_hash ||
+            fresh.block_timestamp_nanosec!==request.completion.block_timestamp_nanosec)) ||
+          (fresh.block_height>request.completion.block_height && (fresh.block_hash===request.completion.block_hash ||
+            BigInt(fresh.block_timestamp_nanosec)<BigInt(request.completion.block_timestamp_nanosec))) ||
+          Date.parse(fresh.observed_at)<Date.parse(request.completion.observed_at) ||
+          !isDeepStrictEqual(fresh.prior_original_hashes,request.completion.prior_original_hashes))throw fail();
+      const proof={status:'TRIAL_ORIGINAL_WITNESSED',owner:checked.identity.owner,operation_id:checked.identity.operation_id,
+        review_sha256:checked.identity.review_sha256,...trial,witness_head:saved.head,independently_witnessed:true,
+        do_not_retry:true,execution_authorized:false,transaction_sent:false};
+      const result=await requestPhoneSignature({...request,freshCompletion:fresh,witness:proof});
+      if(result?.witnessed_original_matched!==true)throw fail();
+      return result;
+    }});
+  return Object.freeze({...account,requiresWitnessedOriginal:true,
+    async assertWitnessedOriginal(txHash){
+      if(!retained || retained.original_hash!==txHash)throw fail();
+      const snapshot=await witness.inspect(checked.identity.owner);
+      assertWitnessedNativeOracleTrial(snapshot,checked.identity,retained);
+      return {status:'WITNESSED_ORIGINAL_MATCH',owner:checked.identity.owner,original_hash:txHash,witness_head:snapshot.head};
     },
   });
 }

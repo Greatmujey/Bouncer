@@ -83,3 +83,22 @@ test('a device-key mismatch or changed review blocks before any wallet transacti
     crypto:crypto.webcrypto,fetch:fetchImpl,isCurrent:()=>false,isTopLevel:true,relay:({work})=>work()});
   await assert.rejects(switched.reserve({taskId:f.review.review_sha256,review:f.review}),e=>e.code==='NATIVE_SETUP_SESSION_CHANGED');
 });
+
+test('completion can be freshly authenticated after the original trial hash is witnessed',async()=>{
+  const f=fixture();await f.witness.reserve(f.identity);
+  for(let i=0;i<f.identity.stages.length;i++){
+    const stage=f.identity.stages[i].stage_id,prior=await f.witness.assertClaimable(f.identity,stage);
+    await f.witness.claim(f.identity,stage,prior);await f.witness.recordOriginal(f.identity,stage,hash(i+1));
+    f.plan.stages[i].claimed=true;f.plan.stages[i].original_hash=hash(i+1);
+  }
+  f.setState('present');
+  const prior=await f.witness.inspect(OWNER),trial={goal_id:'native-oracle-trial-1',goal_sha256:'d'.repeat(64),
+    agent_public_key:f.review.agent_public_key,original_hash:hash(40)};
+  const claimed=await f.witness.claimTrial(f.identity,trial,prior.head);
+  assert.equal(claimed.state.phase,'trial_claimed');
+  assert.equal((await f.service.issueCompletion({identity:f.identity})).action.purpose,'verify_native_setup_completion');
+  assert.deepEqual(await f.service.verifyCompletion({identity:f.identity,evidence:'synthetic'}),{});
+  const recovered=await f.service.inspect({ownerPublicKey:f.ownerKey,evidence:'synthetic'});
+  assert.equal(recovered.status,'WITNESSED');assert.equal(recovered.witnessed_records.at(-1).original_hash,trial.original_hash);
+  await assert.rejects(f.service.issueCompletion({identity:{...f.identity,operation_id:'f'.repeat(32)}}));
+});

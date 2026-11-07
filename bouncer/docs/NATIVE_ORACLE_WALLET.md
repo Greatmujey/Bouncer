@@ -204,23 +204,24 @@ examples were **self-hosted development services**.
   must authenticate the completion source and display the terms. The module
   has no network, wallet or broadcast API and is not mounted in the UI.
 - `agent/native-oracle-phone-signer.mjs` adapts the existing native OutLayer
-  runner to a callback which can return that phone signature. It checks the
-  full unsigned transaction and signature, while the runner records the
-  original in its own journal before the single send. A completion supplier can
-  run after the runner's view checks, reducing time lost from the five-second
-  freshness window; it does not guarantee a timely response or reserve chain
-  state. The transport callback, authenticated UI and independent journal are
-  not deployed or connected.
+  runner to a callback which can return that phone signature. Its witnessed
+  variant retains the original hash at the separately anchored witness before
+  requesting a signature, refreshes completion and requires a witness readback
+  after the runner's local journal write and before its single send. The
+  completion supplier does not reserve chain state. The transport callback and
+  authenticated owner interface remain to be integrated.
   Synthetic tests compare Borsh bytes against the NEAR SDK, verify signatures,
-  race two tabs, simulate an unknown send, and check a fabricated result/refund
-  through the runner; a mobile-sized Chromium test uses a real WebCrypto key
-  but fabricated setup evidence and no network send.
+  race two tabs and independent journals, simulate unknown sends, and check a
+  fabricated result/refund recovered through the runner. A mobile-sized
+  Chromium test uses a real WebCrypto key but fabricated setup evidence and no
+  network send.
 - The local original record coordinates cooperating tabs **only in one browser
   profile**. Storage deletion, rollback, eviction, another device/origin or
   bypassing clients can defeat it; no local record does not prove a prior
   transaction absent. Same-origin scripts/XSS can use the key. Local storage
   is not an independent backup or a distributed payment fence. Owner-led
-  on-chain revocation and complete recovery are still required before funding.
+  on-chain revocation and integrated device recovery are still required before
+  funding.
 - `native-oracle-wallet-recovery.mjs` prepares an unsigned owner recovery
   review that deletes the exact agent access key, then calls
   `revoke_agent_key` with 1 yocto. If the key is already absent it can prepare
@@ -242,6 +243,57 @@ examples were **self-hosted development services**.
   also removed the agent access key, rejected a zero-yocto revoke, verified both
   recovery originals and confirmed that the grant and key were absent. The NEAR Connect converter is separately checked
   offline; that is **not** a real-wallet or real-phone compatibility test.
+
+## Independently retained native-trial original
+
+The experimental witnessed path is deliberately one-shot. After the four setup
+originals and current policy/key state match, the runner constructs the exact
+unsigned transaction and its NEAR hash. `createWitnessedNativeOraclePhoneAccount`
+checks the pinned review, owner key, identity and goal, then calls the anchored
+native witness's `claimTrial` **before** it asks the device to sign. The new
+`trial_claim` record binds the operation and
+review to the goal fingerprint, agent public key and original hash. It uses
+compare-and-append plus readback; an uncertain acknowledgement consumes the
+claim rather than permitting a replacement. The next completion snapshot must
+match the witness head, the four originals and the agent nonce, and be at least
+as recent as the initial block. The phone validates both snapshots and the
+fixed goal; the runner writes and rereads its journal and witness before its
+single submission. Initial completion may be at most 120 seconds old in this
+path; the post-witness completion must still be within five seconds at signing.
+These checks cannot prevent chain state changing after the snapshot.
+
+For integration, create the guarded account with the same `goal`, `review`,
+`identity`, pinned WASM bytes, trusted review hash and owner public key used
+by setup, an anchored `witness`, a fresh authenticated completion supplier,
+and a phone-signature callback. Pass this account to `runOracleGoal`; its
+`requiresWitnessedOriginal` guard performs the pre-send witness readback.
+For receipt-only recovery on another cooperating device or process, call
+`recoverWitnessedNativeOracle` with the same goal/review/identity and trust
+anchors, a witness, a scoped durable journal and a trusted provider. It copies
+the witnessed original into an empty journal, or checks an existing matching
+journal, then verifies the original's receipt graph. It never signs or sends.
+A missing original, conflicting journal, unknown receipt, witness outage or
+lost acknowledgement is a stop for reconciliation, not proof of non-execution
+and not permission to retry. A recovered old result still has its normal
+freshness limit when used.
+
+**Trust and deployment:** The signing module checks the shape and consistency
+of the supplied witness/completion evidence; caller-supplied booleans are not
+cryptographic attestation, proof of an independent anchor, or proof of human
+consent. The integrating service must authenticate the owner and the exact trial
+claim, securely transport the evidence to the phone, display the terms and
+obtain real consent. Its witness must use a separately operated, independently
+retained and rollback-monitored latest-head checkpoint, with append-only Git
+history auditing. A local in-memory store or a public Git repository alone does
+not provide that guarantee; privileged or simultaneous rollback of all trusted
+systems, bypassing clients, compromised RPCs and same-origin XSS remain outside
+it. The tenth witness record changes the format: upgrade all witness readers and
+checkpoint monitors together; older readers reject it. The authenticated setup
+inspection returns witnessed records, including the trial hash, but the phone
+transport, trial-claim authentication, separate checkpoint deployment and
+owner UI are not supplied by this module. No device key is restored by copying
+an original hash; a replacement device needs a separate owner-led key-revocation
+and installation procedure.
 
 ## Funding and refunds
 

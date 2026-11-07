@@ -10,7 +10,8 @@ const fail=()=>new Error('native oracle signing unavailable or uncertain; stop a
 const CHECKS=['plain_owner','exact_owner_key','owner_native_estimate','protocol_and_selected_features',
   'agent_gas_allowance_estimate','pinned_project_identity_and_native_pricing','exact_agent_key','exact_keyless_vault',
   'native_policy_state','vault_native_balance','onchain_policy_check'];
-export function assertNativeOracleCompletion(snapshot,review,clock) {
+export function assertNativeOracleCompletion(snapshot,review,clock,{maxAgeMs=5000}={}) {
+  if (!Number.isSafeInteger(maxAgeMs) || maxAgeMs<1 || maxAgeMs>120_000) throw fail();
   const observed=Date.parse(snapshot?.observed_at);
   if (!plain(snapshot) || snapshot.version!==1 || snapshot.network!=='testnet' ||
       snapshot.status!=='FOUR_ORIGINALS_AND_STATE_MATCH_NOT_AUTHORIZED' || snapshot.stage_id!=='verify_native_setup_completion' ||
@@ -22,7 +23,7 @@ export function assertNativeOracleCompletion(snapshot,review,clock) {
       new Set(snapshot.prior_original_hashes).size!==4 || !plain(snapshot.checks) ||
       CHECKS.some(k=>snapshot.checks[k]!==true) || Object.values(snapshot.checks).some(v=>v!==true) ||
       !Array.isArray(snapshot.blockers) || snapshot.blockers.length || !Number.isSafeInteger(clock) || clock<1 ||
-      !Number.isSafeInteger(observed) || new Date(observed).toISOString()!==snapshot.observed_at || clock<observed || clock-observed>5000 ||
+      !Number.isSafeInteger(observed) || new Date(observed).toISOString()!==snapshot.observed_at || clock<observed || clock-observed>maxAgeMs ||
       !Number.isSafeInteger(snapshot.block_height) || snapshot.block_height<1 ||
       typeof snapshot.block_timestamp_nanosec!=='string' || !/^[1-9][0-9]{0,19}$/.test(snapshot.block_timestamp_nanosec) ||
       typeof snapshot.agent_key_nonce!=='string' || !/^(?:0|[1-9][0-9]{0,15})$/.test(snapshot.agent_key_nonce) ||

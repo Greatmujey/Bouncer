@@ -209,6 +209,9 @@ async function runOracleGoalUnlocked({ goal: rawGoal, provider, account, publicK
   const goal = validateOracleGoal(rawGoal);
   assertJournalScope(journal, goal.contract_id, goal.owner_account_id);
   if (!account || account.accountId !== goal.owner_account_id || !publicKey) throw new Error('agent key account does not match the owner');
+  if (account.requiresWitnessedOriginal === true && typeof account.assertWitnessedOriginal !== 'function') {
+    throw new Error('witnessed phone account requires original-hash verification');
+  }
   if (execute && (!journal || typeof journal.get !== 'function' || typeof journal.put !== 'function')) throw new Error('live execution requires a journal');
   if ((await provider.viewNodeStatus())?.chain_id !== 'testnet') throw new Error('RPC must report testnet');
   const final = { finality: 'final' };
@@ -242,6 +245,18 @@ async function runOracleGoalUnlocked({ goal: rawGoal, provider, account, publicK
   const pending = { fingerprint: fp, status: 'pending', oracle_goal: goal, agent_public_key: String(publicKey),
     tx_hash: txHash, started_at: new Date().toISOString() };
   writeConfirmedNativeJournal(journal, goal.id, pending, null);
+  if (account.requiresWitnessedOriginal === true) {
+    // The independently retained original must still match after the local
+    // write. Any lost acknowledgement or changed journal is reconciliation,
+    // never a reason to send or sign a replacement.
+    const witnessed = await account.assertWitnessedOriginal(txHash), current = readNativeJournal(journal,goal.id);
+    if (witnessed?.status !== 'WITNESSED_ORIGINAL_MATCH' || witnessed.owner !== goal.owner_account_id ||
+        witnessed.original_hash !== txHash || !/^[a-f0-9]{40}$/.test(witnessed.witness_head ?? '') ||
+        !current || current.status !== pending.status || current.fingerprint !== pending.fingerprint ||
+        current.tx_hash !== pending.tx_hash || current.agent_public_key !== pending.agent_public_key || !equal(current.oracle_goal,pending.oracle_goal)) {
+      throw new Error('witnessed native original changed or is uncertain; stop and reconcile');
+    }
+  }
   try {
     // Exactly one submission; even an explicit expiry or timeout is not retried.
     const sent = await provider.sendTransactionOnce(signed, 'FINAL');
