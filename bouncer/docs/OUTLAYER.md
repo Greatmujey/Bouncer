@@ -10,6 +10,10 @@ public price; the FT-funded compute, storage and text-API services in that
 mission remain self-hosted development services. This is unaudited software;
 do not use real funds.
 
+The new [native oracle wallet path](NATIVE_ORACLE_WALLET.md) adds an unsigned
+owner review, stage-specific checks and original-receipt verification for a
+small named-wallet testnet trial. It is not yet an enabled phone purchase.
+
 ## What has been demonstrated
 
 The [guarded live job](https://github.com/Greatmujey/Bouncer/actions/runs/40682550107/job/122797278579)

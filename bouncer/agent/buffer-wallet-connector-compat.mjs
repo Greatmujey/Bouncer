@@ -8,9 +8,11 @@ import { isDeepStrictEqual } from 'node:util';
 import nearConnect from '@hot-labs/near-connect';
 import { assertSvalinBatchMatchesReview } from './svalin-setup-plan.mjs';
 import { assertBufferWalletBatchMatchesReview } from './buffer-wallet-setup-plan.mjs';
+import { assertNativeOracleBatchMatchesReview } from './native-oracle-wallet-plan.mjs';
 
 const { nearActionsToConnectorActions } = nearConnect;
 const SETUP = ['create_keyless_vault', 'register_vault_circle', 'fund_vault_circle'];
+const NATIVE = ['create_keyless_native_vault', 'configure_native_oracle_policy', 'fund_native_vault', 'install_native_oracle_agent'];
 const OTHER = ['configure_buffer_locked_policy', 'install_buffer_vault_agent', 'install_buffer_forwarder_agent',
   'create_buffer_forwarder', 'register_buffer_forwarder_circle', 'pin_buffer_exact_intent'];
 const record = x => x !== null && typeof x === 'object' && !Array.isArray(x);
@@ -63,7 +65,8 @@ export function inspectBufferConnectorCompatibility({ batch, retainedStage } = {
   if (!batch || typeof batch.id !== 'string') throw new Error('reviewed Buffer batch required');
   if (SETUP.includes(batch.id)) assertBufferWalletBatchMatchesReview(batch, retainedStage);
   else if (OTHER.includes(batch.id)) assertSvalinBatchMatchesReview(batch, retainedStage);
-  else throw new Error('known reviewed Buffer stage required');
+  else if (NATIVE.includes(batch.id)) assertNativeOracleBatchMatchesReview(batch, retainedStage);
+  else throw new Error('known reviewed Buffer or native oracle stage required');
   if (batch.actions.some(a => a.enum === 'deployContract' &&
       (!(a.deployContract.code instanceof Uint8Array) || a.deployContract.code.length > 1_000_000))) {
     throw new Error('bounded reviewed contract bytes required');
@@ -82,4 +85,11 @@ export function inspectBufferConnectorCompatibility({ batch, retainedStage } = {
     actual_wallet_or_phone_tested: false, transport_size_limit_verified: false, wallet_approval_obtained: false,
     execution_authorized: false, transaction_signed: false, transaction_sent: false,
     scope: 'Offline converter consistency and illustrative encodings only; not real-wallet compatibility, approval or payment.' };
+}
+
+/** Same byte-for-byte offline check for the four native-oracle stages. It
+ * remains a converter test, not evidence of a working phone or wallet. */
+export function inspectNativeOracleConnectorCompatibility({ batch, retainedStage } = {}) {
+  if (!NATIVE.includes(batch?.id)) throw new Error('known reviewed native oracle stage required');
+  return inspectBufferConnectorCompatibility({ batch, retainedStage });
 }
