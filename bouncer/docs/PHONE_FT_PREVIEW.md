@@ -1,7 +1,7 @@
 # Phone testnet FT path: current preview and safety boundaries
 
 This is an experimental testnet path, **not a completed autonomous purchase**.
-The phone preview can connect a supported NEAR wallet, request an off-chain
+The phone preview offers a supported NEAR wallet connection, requests an off-chain
 NEP-413 identity message and prepare an unsigned Buffer vault review. It does
 not yet request setup transactions, configure an agent, create a Buffer order,
 transfer test USDC to Buffer or prove delivery. Name-only viewing and an
@@ -24,9 +24,14 @@ keys, stale jobs, broken CORS or an unavailable relay fail closed.
 The Vercel relay live status smoke [42322073524](https://github.com/Greatmujey/Bouncer/actions/runs/42322073524)
 returned encrypted bytes; the local backend decrypted them and verified the
 pinned deployment's OIDC signature and `testnet` chain ID. This was a read,
-not a payment or a real-device wallet test. A separate attempt to download a
-GitHub Actions encrypted artifact from the sandbox failed because the artifact
-host is not reachable; it did not submit a transaction.
+not a payment or a real-device wallet test. The full unsigned review later
+passed [run 42324777068](https://github.com/Greatmujey/Bouncer/actions/runs/42324777068):
+phone-sized Chromium fetched 18 live encrypted relay results with actual CORS,
+while the preview origin was routed to a local backend in the runner. Its
+snapshot reported 40 test USDC and no readiness blockers. This exercised the
+real browser job-pump module, not the complete app UI, a real phone or a wallet.
+A prior artifact download failed because the sandbox cannot reach the artifact
+host; the successful run did not download an artifact or submit a transaction.
 
 A public archival/readiness run on November 7 observed 40 Circle test USDC in
 `great_mujey.testnet`, the reviewed Buffer fixed product at 20 test USDC, and a
@@ -56,9 +61,9 @@ exercised together with disposable owner keys, PostgreSQL, synthetic chain
 views and a separate local Git remote. They only sign off-chain messages and
 return no wallet transaction. The disposable preview PostgreSQL is **not** a
 durable hosted production database; the witness and wallet invocation are not
-wired into the phone preview. Do not open a real setup prompt on this prototype until the hosted
-authenticated backend, independent restore procedures, wallet transport and
-original-hash recovery have been integrated and verified.
+wired into the phone preview. Do not open a real setup prompt on this prototype
+until the hosted authenticated backend, independent restore procedures, wallet
+transport and original-hash recovery have been integrated and verified.
 
 A live GitHub transport check used the deliberately synthetic, unowned name
 `synthetic-witness-2bd2741a.testnet`: reservation and a claimed marker were
