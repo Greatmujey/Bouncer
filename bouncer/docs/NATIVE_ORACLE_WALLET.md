@@ -36,6 +36,15 @@ examples were **self-hosted development services**.
   signer, receiver, linked receipts and bounded protocol gas refunds. It does
   not prove current state, wallet consent or independent delivery. A missing,
   failed or uncertain original must be reconciled; never automatically retry.
+- `git-native-oracle-prompt-witness.mjs` adds a separate public, hash-linked
+  reservation/claim/original log for the four stages. The Git-backed store
+  uses a branch CAS and checks the acknowledged remote head. A lost claim
+  acknowledgment blocks another claim. This is an experimental independent
+  checkpoint, not a complete authorization service: the owner session,
+  PostgreSQL coordinator, prior receipt/preflight gates and independent latest
+  head retention/monitoring are not connected. Git administrators or a
+  simultaneous rollback can still defeat it. A hash in this log alone does
+  **not** establish a valid receipt or allow a later wallet prompt.
 - The native OutLayer runners require a **bounded one-shot** sender. They
   record the original signed hash before the single submission and recover
   using that hash; they do not fall back to a retrying sender. Their existing
@@ -75,7 +84,7 @@ is not proof of global absence or a compatible wallet transport.
 
 ## Before enabling a real phone flow
 
-1. Provide a durable, independently monitored per-owner prompt fence and
+1. Complete the independently monitored per-owner prompt fence and
    authenticated owner session for these **four** exact stages. Preserve the
    separately anchored review and every original hash across crashes, lost
    responses, browser changes and database or witness rollback. A local browser
