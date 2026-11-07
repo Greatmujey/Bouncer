@@ -45,6 +45,17 @@ examples were **self-hosted development services**.
   owner session or independent latest-head retention/monitoring. Git
   administrators or a simultaneous rollback can still defeat it. A hash in this log alone does
   **not** establish a valid receipt or allow a later wallet prompt.
+- `anchored-witness-store.mjs` and `git-witness-history-audit.mjs` provide an
+  **experimental adapter**, not a deployed monitor. Given an already trusted
+  checkpoint from a separate durable CAS service, each witness append must
+  advance and read back that external head before it is acknowledged. The Git
+  audit checks ancestry **and every protected owner's witness files**, so an
+  ordinary fast-forward commit that deletes or rewrites a different owner's
+  claim is rejected too. Tests use a local Git remote and an in-memory
+  checkpoint, not independent infrastructure. The checkpoint must be seeded
+  with the latest complete history, operated separately, protected against its
+  own rollback, and made mandatory in the live coordinator; otherwise it gives
+  no rollback guarantee. An uncertain checkpoint or commit is a stop.
 - `postgres-native-oracle-prompt-fence.mjs` atomically retains one review and
   four stage rows, checks earlier original receipts and fresh native preflights,
   and claims each prompt once. `witnessed-native-oracle-wallet-setup.mjs`
@@ -52,11 +63,22 @@ examples were **self-hosted development services**.
   native action to a fresh Ed25519 FullAccess-key view (not EVM/0x support).
   Synthetic signatures, disposable PostgreSQL, local Git and in-memory CAS stores
   exercise concurrency, lost acknowledgments, schema tampering and stale checks.
-  This is not a hosted service or live wallet integration. The latest Git head needs independent monitoring; separate
-  FT and native namespaces do not yet give a global cross-flow owner lock. A
-  claim whose preflight expires while waiting for the witness is consumed and
+  This is not a hosted service or live wallet integration. The latest Git head
+  still needs independent retention and monitoring. A claim whose preflight
+  expires while waiting for the witness is consumed and
   cannot be retried. Those server modules do not invoke a transaction-signing
   wallet; the unconnected browser adapter below can do so after a valid claim.
+- `postgres-wallet-owner-fence.mjs` now reserves a shared per-owner holder in
+  the **same PostgreSQL transaction** as either the native or existing FT
+  prompt reservation; both flows must match it before a new claim. Independent
+  synthetic processes racing the same disposable database produce at most one
+  winner. This is deliberately a **permanent hold** in V1: there is no release
+  or handoff, so one owner cannot subsequently start the other flow. Old rows
+  without a holder are not silently enrolled or newly claimed; their retained
+  originals remain inspectable and recordable for reconciliation. The lock
+  applies only to upgraded, cooperating clients sharing one intact database.
+  It does not prevent use of an older client or another database, a privileged
+  rollback/fork, Git witness rollback, a compromised host or another wallet.
 - The read-only completion check requires all four original receipt graphs and
   then verifies the exact keyless V9 vault, native policy, pinned provider route,
   deposit and restricted one-method agent key at one fresh FINAL block. The
@@ -134,9 +156,10 @@ is not proof of global absence or a compatible wallet transport.
 
 ## Before enabling a real phone flow
 
-1. Deploy and independently monitor the per-owner prompt fence and authenticated
-   owner session for these **four** exact stages; add a global cross-flow owner
-   lock and a safe operational recovery procedure. Preserve the
+1. Finish, deploy and independently monitor the per-owner prompt fence and
+   authenticated owner session for these **four** exact stages. Extend the
+   single-database cross-flow hold to an independently anchored, safely
+   reconciled handoff/release and establish an operational recovery procedure. Preserve the
    separately anchored review and every original hash across crashes, lost
    responses, browser changes and database or witness rollback. A local browser
    cache alone is insufficient. An uncertain claim or prompt is a stop, not a

@@ -7,7 +7,7 @@
   "scripts": {
     "test": "node --test packages/policy/policy.test.mjs tests/*.test.mjs",
     "test:all": "node --test packages/policy/policy.test.mjs tests/*.test.mjs",
-    "test:postgres": "node --test --test-concurrency=1 tests/postgres-buffer-order-fence.test.mjs tests/postgres-native-oracle-prompt-fence.test.mjs tests/postgres-wallet-prompt-auth.test.mjs tests/postgres-wallet-prompt-fence.test.mjs tests/postgres-witnessed-wallet-setup.test.mjs tests/shared-buyer-journal.test.mjs tests/shared-resource-provider.test.mjs tests/witnessed-setup-flow.test.mjs",
+    "test:postgres": "node --test --test-concurrency=1 tests/postgres-buffer-order-fence.test.mjs tests/postgres-native-oracle-prompt-fence.test.mjs tests/postgres-wallet-owner-fence.test.mjs tests/postgres-wallet-prompt-auth.test.mjs tests/postgres-wallet-prompt-fence.test.mjs tests/postgres-witnessed-wallet-setup.test.mjs tests/shared-buyer-journal.test.mjs tests/shared-resource-provider.test.mjs tests/witnessed-setup-flow.test.mjs",
     "test:svalin-upstream": "node scripts/test-svalin-upstream.mjs",
     "build": "bash scripts/build.sh",
     "agent": "node agent/procurement.mjs",

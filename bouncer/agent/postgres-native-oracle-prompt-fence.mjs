@@ -23,6 +23,8 @@ import { verifyNativeOracleWalletReview, prepareNativeOracleWalletAttempt } from
 import { inspectNativeOracleWalletStage, inspectNativeOracleWalletCompletion } from './native-oracle-wallet-preflight.mjs';
 import { isTestnetAccount } from '../shared/account-id.mjs';
 import { isTransactionHash } from '../shared/direct-payment-settlement.mjs';
+import { WalletOwnerFenceError, initializePostgresWalletOwnerFence, reservePostgresWalletOwnerFence,
+  assertPostgresWalletOwnerFence } from './postgres-wallet-owner-fence.mjs';
 
 const SCHEMA = 'bouncer_native_wallet_prompt_v1';
 const STAGES = Object.freeze(['create_keyless_native_vault', 'configure_native_oracle_policy', 'fund_native_vault', 'install_native_oracle_agent']);
@@ -71,6 +73,7 @@ async function transaction(pool, work) {
   } catch (error) {
     destroy = true; if (client && begun) { try { await client.query('ROLLBACK'); } catch { /* poisoned/unknown connection */ } }
     if (error instanceof NativePromptFenceError) throw error;
+    if (error instanceof WalletOwnerFenceError) throw fail(error.code === 'GLOBAL_OWNER_FENCED' ? 'OWNER_FENCED' : error.code);
     throw fail('DATABASE_UNKNOWN');
   } finally { client?.release(destroy); }
 }
@@ -124,6 +127,7 @@ export async function initializePostgresNativeOraclePromptFence({ pool } = {}) {
   if (!pool || typeof pool.connect !== 'function') throw fail('UNSAFE_DATABASE');
   return transaction(pool, async client => {
     await client.query("SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtext('bouncer-native-wallet-prompt-v1'))");
+    await initializePostgresWalletOwnerFence(client);
     const found = await client.query('SELECT 1 FROM pg_catalog.pg_namespace WHERE nspname=$1', [SCHEMA]);
     if (found.rows.length === 0) await client.query(`
       CREATE SCHEMA ${SCHEMA};
@@ -236,6 +240,8 @@ export function createPostgresNativeOraclePromptFence({ pool, authenticate, wasm
       const operation = crypto.randomBytes(16).toString('hex');
       return transaction(pool, async client => {
         await verifySchema(client);
+        await reservePostgresWalletOwnerFence(client, { owner: id.owner, flow: 'native_oracle', operationId: operation,
+          ownerPublicKey: id.owner_public_key, reviewSha256: trustedReviewHash });
         const inserted = await client.query(`INSERT INTO ${SCHEMA}.plans(owner,operation_id,owner_public_key,review_sha256,review)
           VALUES($1,$2,$3,$4,$5::jsonb) ON CONFLICT DO NOTHING RETURNING owner`,
         [id.owner, operation, id.owner_public_key, trustedReviewHash, JSON.stringify(review)]);
@@ -262,7 +268,9 @@ export function createPostgresNativeOraclePromptFence({ pool, authenticate, wasm
       const { owner, ownerPublicKey, operationId, reviewSha256, stageId, actionCommitmentSha256, evidence } = request;
       await authorize(action('claim_native_setup_stage', owner, ownerPublicKey, { operation_id: operationId, review_sha256: reviewSha256,
         stage_id: stageId, action_commitment_sha256: actionCommitmentSha256 }), evidence);
-      const retained = await transaction(pool, async client => { const row = await load(client, owner); return { row, target: target(row, request) }; });
+      const globalIdentity = { owner, flow: 'native_oracle', operationId, ownerPublicKey, reviewSha256 };
+      const retained = await transaction(pool, async client => { const row = await load(client, owner);
+        await assertPostgresWalletOwnerFence(client, globalIdentity); return { row, target: target(row, request) }; });
       let preflight;
       try {
         if ((await readStatus())?.chain_id !== 'testnet') throw Error();
@@ -285,6 +293,7 @@ export function createPostgresNativeOraclePromptFence({ pool, authenticate, wasm
       checkFresh(preflight);
       const claimed = await transaction(pool, async client => {
         const row = await load(client, owner, true), current = target(row, request);
+        await assertPostgresWalletOwnerFence(client, globalIdentity);
         if (!isDeepStrictEqual(current.hashes, retained.target.hashes)) throw fail('MISMATCH');
         checkFresh(preflight);
         const updated = await client.query(`UPDATE ${SCHEMA}.stages SET claimed=true,claimed_at=pg_catalog.clock_timestamp()
