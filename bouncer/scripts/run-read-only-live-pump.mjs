@@ -12,9 +12,11 @@ const callback = 'https://8787-inmo7hprqq1v5gwehl2sd.e2b.app';
 const relay = 'https://bouncer-testnet-readonly-relay-tau.vercel.app/api/read';
 const runId = process.env.GITHUB_RUN_ID, token = process.env.GH_TOKEN, temp = process.env.RUNNER_TEMP;
 if (!/^\d{1,20}$/.test(runId ?? '') || !token || !temp) throw Error('workflow context unavailable');
-const { publicKey, privateKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
-const der = publicKey.export({ type: 'spki', format: 'der' }), fingerprint = crypto.createHash('sha256').update(der).digest('hex');
-console.log(`::notice title=BOUNCER_READ_ONLY_SESSION_PUBLIC_KEY::${der.toString('base64')}`);
+const handoffPath = path.join(temp, 'bouncer-read-only-handoff-private.pem');
+const privateKey = crypto.createPrivateKey(fs.readFileSync(handoffPath));
+if (privateKey.asymmetricKeyType !== 'rsa' || privateKey.asymmetricKeyDetails?.modulusLength !== 2048) throw Error('invalid handoff key');
+const der = crypto.createPublicKey(privateKey).export({ type: 'spki', format: 'der' });
+const fingerprint = crypto.createHash('sha256').update(der).digest('hex');
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const url = `https://api.github.com/repos/Greatmujey/Bouncer/contents/bouncer/evidence/relay-live-pump/${runId}.json?ref=arena%2F0ee9ab70-near-hub`;
 let envelope;
@@ -97,4 +99,5 @@ try {
   backend?.kill('SIGTERM');
   try { fs.unlinkSync(signPath); } catch { /* runner filesystem is ephemeral */ }
   try { fs.unlinkSync(decryptPath); } catch { /* runner filesystem is ephemeral */ }
+  try { fs.unlinkSync(handoffPath); } catch { /* runner filesystem is ephemeral */ }
 }
