@@ -28,12 +28,25 @@ const localCode = x => record(x) && (x.global_contract_hash === undefined || x.g
 /** All arguments and receipt results are PUBLIC. Caller must independently
  * retain review/hash, owner key and each original hash. A caller-supplied RPC
  * can lie; an eligible snapshot is a necessary observation, not approval. */
-export async function inspectNativeOracleWalletStage({ review: rawReview, wasmBytes, trustedReviewHash, trustedOwnerPublicKey,
-  stageId, prior = [], provider, now = Date.now } = {}) {
+export async function inspectNativeOracleWalletStage(args = {}) {
+  return inspectNativeOracleWalletState(args, false);
+}
+
+/** Recheck all FOUR original receipts and the installed one-method agent key
+ * at one fresh FINAL block. This is read-only evidence, not permission to sign
+ * or spend, proof of local key custody, provider fulfillment, or a guarantee
+ * that chain state will remain unchanged after the snapshot. */
+export async function inspectNativeOracleWalletCompletion(args = {}) {
+  if (Object.hasOwn(args, 'stageId')) throw new Error('completion does not accept a wallet stage');
+  return inspectNativeOracleWalletState({ ...args, stageId: 'verify_native_setup_completion' }, true);
+}
+
+async function inspectNativeOracleWalletState({ review: rawReview, wasmBytes, trustedReviewHash, trustedOwnerPublicKey,
+  stageId, prior = [], provider, now = Date.now } = {}, completion = false) {
   if (!(wasmBytes instanceof Uint8Array)) throw new Error('pinned native artifact required');
   const wasm = Buffer.from(wasmBytes), review = structuredClone(rawReview), previous = structuredClone(prior);
   const identity = verifyNativeOracleWalletReview({ review, wasmBytes: wasm, trustedReviewHash, trustedOwnerPublicKey });
-  const index = STAGES.indexOf(stageId);
+  const index = completion ? STAGES.length : STAGES.indexOf(stageId);
   if (index < 0 || !Array.isArray(previous) || previous.length !== index) {
     throw new Error('exactly the earlier original native stages are required');
   }
@@ -76,6 +89,7 @@ export async function inspectNativeOracleWalletStage({ review: rawReview, wasmBy
     throw new Error('malformed or mixed-block native setup views');
   }
   const ownerKey = ownerKeys.keys.find(k => k.public_key === identity.owner_public_key), nonce = pinnedAccessKeyNonce(ownerKey?.access_key?.nonce);
+  const agentKey = ownerKeys.keys.find(k => k.public_key === identity.agent_public_key), agentNonce = pinnedAccessKeyNonce(agentKey?.access_key?.nonce);
   const ownerStorage = BigInt(owner.storage_usage) * cost, available = ownerAmount > ownerStorage ? ownerAmount - ownerStorage : 0n;
   const requiredOwner = OWNER_RESERVE + (index === 0 ? BigInt(NATIVE_ORACLE_VAULT_FUNDING) : 0n) +
     (index <= 2 ? BigInt(review.vault_deposit_yocto) : 0n);
@@ -85,7 +99,6 @@ export async function inspectNativeOracleWalletStage({ review: rawReview, wasmBy
   const checks = {
     plain_owner: hasPlainOwnerProfileAt(owner, hash),
     exact_owner_key: !!ownerKey && ownerKey.access_key.permission === 'FullAccess' && nonce !== null,
-    agent_key_absent: !ownerKeys.keys.some(k => k.public_key === identity.agent_public_key),
     owner_native_estimate: available >= requiredOwner,
     protocol_and_selected_features: protocol?.chain_id === 'testnet' && Number.isSafeInteger(protocol.protocol_version) &&
       protocol.protocol_version >= MIN_V11_TESTNET_PROTOCOL && selectedV11WasmFeaturesEnabled(protocol),
@@ -94,13 +107,20 @@ export async function inspectNativeOracleWalletStage({ review: rawReview, wasmBy
       project?.owner === 'zavodil2.testnet' && version?.wasm_hash === ORACLE_TESTNET_PROGRAM.sha256 &&
       isDeepStrictEqual(version?.source, expectedSource) && pricing === null,
   };
+  if (completion) {
+    const permission = agentKey?.access_key?.permission?.FunctionCall, allowance = amount(permission?.allowance);
+    checks.exact_agent_key = exact(agentKey?.access_key?.permission, ['FunctionCall']) &&
+      exact(permission, ['allowance', 'receiver_id', 'method_names']) && permission.receiver_id === review.vault &&
+      isDeepStrictEqual(permission.method_names, ['execute_outlayer_native_project']) && agentNonce !== null && allowance !== null &&
+      allowance >= gasEstimate && allowance <= BigInt(review.agent_gas_allowance_yocto);
+  } else checks.agent_key_absent = !agentKey;
   let vaultState = null;
   if (index === 0) {
     checks.new_direct_child_absent = child.exists === false;
     checks.vault_storage_estimate = BigInt(NATIVE_ORACLE_VAULT_FUNDING) >= (BigInt(NATIVE_ORACLE_V9_BYTES) + 50_000n) * cost + VAULT_RESERVE;
   } else if (child.exists === false) {
     checks.exact_keyless_vault = false; checks.native_policy_state = false; checks.vault_native_balance = false;
-    if (index === 3) checks.onchain_policy_check = false;
+    if (index >= 3) checks.onchain_policy_check = false;
   } else {
     const vaultAccount = child.account;
     const [vaultKeys, contractVersion, vaultOwner, policy, route, grant, tracked, verdict] = await Promise.all([
@@ -109,7 +129,7 @@ export async function inspectNativeOracleWalletStage({ review: rawReview, wasmBy
       view(review.vault, 'get_outlayer_native_project', { policy_id: review.policy_id }),
       view(review.vault, 'is_agent_key_allowed', { policy_id: review.policy_id, public_key: identity.agent_public_key }),
       view(review.vault, 'vault_balance', { token: 'native' }),
-      index === 3 ? view(review.vault, 'check', { policy_id: review.policy_id, payee: NATIVE_ORACLE_PAYEE, amount: review.per_tx_cap_yocto }) : null,
+      index >= 3 ? view(review.vault, 'check', { policy_id: review.policy_id, payee: NATIVE_ORACLE_PAYEE, amount: review.per_tx_cap_yocto }) : null,
     ]);
     const native = amount(vaultAccount?.amount), trackedAmount = amount(tracked);
     if (vaultAccount?.block_hash !== hash || native === null || !Number.isSafeInteger(vaultAccount.storage_usage) || vaultAccount.storage_usage < 0 ||
@@ -124,18 +144,20 @@ export async function inspectNativeOracleWalletStage({ review: rawReview, wasmBy
       exactPolicy && isDeepStrictEqual(route, expectedRoute) && grant === true;
     checks.vault_native_balance = trackedAmount === (index < 3 ? 0n : BigInt(review.vault_deposit_yocto)) &&
       native >= (BigInt(vaultAccount.storage_usage) + (index < 3 ? 50_000n : 0n)) * cost + trackedAmount + VAULT_RESERVE;
-    if (index === 3) checks.onchain_policy_check = Array.isArray(verdict) && verdict.length === 2 && verdict[0] === true;
+    if (index >= 3) checks.onchain_policy_check = Array.isArray(verdict) && verdict.length === 2 && verdict[0] === true;
     vaultState = { code_hash: vaultAccount.code_hash, key_count: vaultKeys.keys.length, tracked_native_yocto: trackedAmount.toString() };
   }
   const finished = now();
   if (!Number.isSafeInteger(finished) || finished < started) throw new Error('local clock moved backwards');
   assertFreshFinalBlock(block, finished);
   const blockers = Object.keys(checks).filter(name => !checks[name]);
-  return { version: 1, network: 'testnet', status: blockers.length ? 'BLOCKED_OR_UNKNOWN' : 'STATE_CHECKS_PASSED_NOT_AUTHORIZED',
+  return { version: 1, network: 'testnet', status: blockers.length ? 'BLOCKED_OR_UNKNOWN' :
+      completion ? 'FOUR_ORIGINALS_AND_STATE_MATCH_NOT_AUTHORIZED' : 'STATE_CHECKS_PASSED_NOT_AUTHORIZED',
     owner: review.owner, vault: review.vault, stage_id: stageId, review_sha256: trustedReviewHash,
-    action_commitment_sha256: review.stages[index].action_commitment_sha256, prior_original_hashes: [...hashes],
+    action_commitment_sha256: completion ? null : review.stages[index].action_commitment_sha256, prior_original_hashes: [...hashes],
     block_hash: hash, block_height: block.header.height, block_timestamp_nanosec: block.header.timestamp_nanosec,
     observed_at: new Date(finished).toISOString(), owner_key_nonce: nonce?.toString() ?? null,
+    ...(completion ? { agent_key_nonce: agentNonce?.toString() ?? null, local_key_custody_verified: false, no_inflight_request_proven: false } : {}),
     owner_estimated_available_yocto: available.toString(), estimated_owner_minimum_yocto: requiredOwner.toString(),
     gas_price_yocto_per_gas: gasPrice.toString(), estimated_agent_gas_yocto: gasEstimate.toString(), vault_state: vaultState,
     checks, blockers, owner_approval_obtained: false, wallet_prompt_authorized: false, signing_authorized: false,

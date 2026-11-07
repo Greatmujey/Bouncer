@@ -44,7 +44,7 @@ function checkFresh(claim, id, stageId, now) {
       !Number.isSafeInteger(clock) || !Number.isSafeInteger(checked) || clock < checked || clock - checked > 5000) throw fail('WITNESSED_CLAIM_STALE');
 }
 export function createWitnessedNativeOracleSetup({ fence, witness, now = Date.now } = {}) {
-  if (!fence || ['reserve','inspect','claim','recordOriginal'].some(m => typeof fence[m] !== 'function') || !witness ||
+  if (!fence || ['reserve','inspect','claim','recordOriginal','verifyCompletion'].some(m => typeof fence[m] !== 'function') || !witness ||
       ['inspect','reserve','assertClaimable','claim','recordOriginal'].some(m => typeof witness[m] !== 'function') || typeof now !== 'function') {
     throw Error('authenticated native PostgreSQL fence and independent CAS witness required');
   }
@@ -70,6 +70,22 @@ export function createWitnessedNativeOracleSetup({ fence, witness, now = Date.no
       return { ...claim, witness_head: saved.head, independently_witnessed: true,
         execution_authorized: false, wallet_invocation_verified: false,
         scope: 'independently witnessed native stage claim only; not owner consent, a wallet invocation, transaction or delivery' };
+    },
+    /** A complete witness means originals are retained, not that they are
+     * successful. Recheck every receipt and exact installed state before
+     * reporting any completion evidence, and compare both retained histories. */
+    async verifyCompletion({ identity: raw, evidence } = {}) {
+      const identity = structuredClone(raw), checkpoint = await witness.inspect(identity?.owner), state = checkpoint.state;
+      if (!state || state.phase !== 'complete' || JSON.stringify(state.identity) !== JSON.stringify(identity)) throw fail('WITNESS_MISMATCH');
+      const originals = state.records.filter(r => r.event === 'original').map(r => r.original_hash);
+      if (originals.length !== STAGES.length) throw fail('WITNESS_MISMATCH');
+      const result = await fence.verifyCompletion({ owner: identity.owner, ownerPublicKey: identity.owner_public_key,
+        operationId: identity.operation_id, reviewSha256: identity.review_sha256, evidence });
+      if (!Array.isArray(result?.prior_original_hashes) || JSON.stringify(result.prior_original_hashes) !== JSON.stringify(originals)) throw fail('WITNESS_MISMATCH');
+      const after = await witness.inspect(identity.owner);
+      if (after.head !== checkpoint.head || JSON.stringify(after.state) !== JSON.stringify(state)) throw fail('WITNESS_MISMATCH');
+      return { ...result, independently_witnessed: true, witness_head: checkpoint.head, execution_authorized: false,
+        scope: 'four original receipt graphs and current setup at one trusted-RPC FINAL block; not local custody, provider execution, spending approval or a state reservation' };
     },
     async recordOriginal({ identity: raw, stageId, originalHash, evidence } = {}) {
       const identity = structuredClone(raw), args = common(identity, stageId, evidence), before = await witness.inspect(identity.owner);

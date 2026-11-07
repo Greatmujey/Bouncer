@@ -43,6 +43,9 @@ test('native auth covers all exact stages, reservation, original recording and i
   const reserve = nativeSetupAuthAction({ ...common, purpose: 'reserve_native_setup', review: f.review });
   assert.equal(reserve.stage_id, STAGES[0]); assert.equal(reserve.review_sha256, f.review.review_sha256);
   assert.equal(nativeSetupAuthAction({ ...common, purpose: 'inspect_native_setup' }).purpose, 'inspect_native_setup');
+  const complete = nativeSetupAuthAction({ ...common, purpose: 'verify_native_setup_completion', identity: f.identity });
+  assert.equal(complete.operation_id, f.identity.operation_id); assert.equal(complete.review_sha256, f.identity.review_sha256);
+  assert.equal(Object.hasOwn(complete, 'stage_id'), false);
   for (let i = 0; i < STAGES.length; i++) {
     const context = { ...common, identity: f.identity, stageId: STAGES[i] };
     assert.equal(nativeSetupAuthAction({ ...context, purpose: 'claim_native_setup_stage' }).action_commitment_sha256, String(i + 1).repeat(64));

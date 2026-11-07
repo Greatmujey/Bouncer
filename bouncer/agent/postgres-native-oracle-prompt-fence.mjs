@@ -20,7 +20,7 @@ import crypto from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { NATIVE_ORACLE_V9_BYTES, NATIVE_ORACLE_V9_SHA256 } from './native-oracle-wallet-plan.mjs';
 import { verifyNativeOracleWalletReview, prepareNativeOracleWalletAttempt } from './native-oracle-wallet-evidence.mjs';
-import { inspectNativeOracleWalletStage } from './native-oracle-wallet-preflight.mjs';
+import { inspectNativeOracleWalletStage, inspectNativeOracleWalletCompletion } from './native-oracle-wallet-preflight.mjs';
 import { isTestnetAccount } from '../shared/account-id.mjs';
 import { isTransactionHash } from '../shared/direct-payment-settlement.mjs';
 
@@ -298,6 +298,38 @@ export function createPostgresNativeOraclePromptFence({ pool, authenticate, wasm
       });
       try { checkFresh(preflight); } catch { throw fail('CLAIM_COMMITTED_PREFLIGHT_STALE'); }
       return claimed;
+    },
+    /** Read-only verification of ALL four retained originals and installed
+     * state. This never authorizes or sends a provider request. */
+    async verifyCompletion({ owner, ownerPublicKey, operationId, reviewSha256, evidence } = {}) {
+      if (!isTestnetAccount(owner) || typeof ownerPublicKey !== 'string' || !hex32(operationId) || !hex64(reviewSha256)) throw fail('INVALID_REQUEST');
+      await authorize(action('verify_native_setup_completion', owner, ownerPublicKey, { operation_id: operationId, review_sha256: reviewSha256 }), evidence);
+      const completeHashes = row => {
+        if (row.owner_public_key !== ownerPublicKey || row.operation_id !== operationId || row.review_sha256 !== reviewSha256) throw fail('MISMATCH');
+        if (row.stages.some(stage => !stage.claimed || !stage.original_hash)) throw fail('PRIOR_UNRESOLVED');
+        return row.stages.map(stage => stage.original_hash);
+      };
+      const retained = await transaction(pool, async client => { const row = await load(client, owner); return { row, hashes: completeHashes(row) }; });
+      let result;
+      try {
+        if ((await readStatus())?.chain_id !== 'testnet') throw Error();
+        const prior = [];
+        for (let i = 0; i < STAGES.length; i++) {
+          const trustedOriginalHash = retained.hashes[i];
+          const attempt = prepareNativeOracleWalletAttempt({ review: retained.row.review, wasmBytes: wasm, trustedReviewHash: reviewSha256,
+            trustedOwnerPublicKey: ownerPublicKey, stageId: STAGES[i], trustedOriginalHash });
+          const chainResult = structuredClone(await readReceipts(trustedOriginalHash, owner, 'FINAL'));
+          prior.push({ attempt, trustedOriginalHash, result: chainResult });
+        }
+        result = await inspectNativeOracleWalletCompletion({ review: retained.row.review, wasmBytes: wasm, trustedReviewHash: reviewSha256,
+          trustedOwnerPublicKey: ownerPublicKey, prior, provider, now });
+      } catch { throw fail('PREFLIGHT_UNAVAILABLE'); }
+      const currentHashes = await transaction(pool, async client => completeHashes(await load(client, owner)));
+      if (!isDeepStrictEqual(currentHashes, retained.hashes) || !isDeepStrictEqual(result?.prior_original_hashes, retained.hashes) ||
+          result.owner !== owner || result.review_sha256 !== reviewSha256 || !['BLOCKED_OR_UNKNOWN', 'FOUR_ORIGINALS_AND_STATE_MATCH_NOT_AUTHORIZED'].includes(result.status)) {
+        throw fail('MISMATCH');
+      }
+      return { ...result, execution_authorized: false, independently_witnessed: false };
     },
     async recordOriginal(request = {}) {
       requireIdentity(request);

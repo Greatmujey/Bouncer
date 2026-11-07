@@ -2,6 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import pg from 'pg';
 import nearApi from 'near-api-js';
 import { buildNativeOracleWalletPlan, NATIVE_ORACLE_DEFAULT_GAS_ALLOWANCE, NATIVE_ORACLE_V9_CODE_HASH,
@@ -11,10 +14,12 @@ import { V11_SELECTED_WASM_FEATURES } from '../agent/svalin-setup-preflight.mjs'
 import { NO_LOCAL_CONTRACT_HASH } from '../shared/plain-owner-profile.mjs';
 import { createPostgresNativeOraclePromptFence, initializePostgresNativeOraclePromptFence } from '../agent/postgres-native-oracle-prompt-fence.mjs';
 import { createNativeOraclePromptWitness } from '../agent/git-native-oracle-prompt-witness.mjs';
+import { createGitNativeOraclePromptWitnessStore } from '../agent/git-branch-witness-store.mjs';
 import { createWitnessedNativeOracleSetup } from '../agent/witnessed-native-oracle-wallet-setup.mjs';
 import { createPostgresWalletPromptAuth, initializePostgresWalletPromptAuth } from '../agent/postgres-wallet-prompt-auth.mjs';
 import { nativeSetupAuthAction, signReviewedNativeSetupChallenge } from '../web-src/native-oracle-setup-auth.mjs';
 import { nep413Payload } from '../web-src/cli-login.mjs';
+import { prepareNativeOracleSetupWalletPrompt } from '../web-src/native-oracle-setup-wallet-prompt.mjs';
 
 // Disposable PostgreSQL, fabricated RPC data and keys. No real auth, wallet,
 // public-chain transaction or provider work. Never use a production database.
@@ -73,7 +78,9 @@ function scenario(db, overrides = {}) {
         code_hash: NO_LOCAL_CONTRACT_HASH, storage_usage: 300, amount: String(20n * NEAR) };
       if (q.request_type === 'view_account' && q.account_id === 'outlayer.testnet') return { block_hash: BLOCK, code_hash: hash(72) };
       if (q.request_type === 'view_access_key_list' && q.account_id === ownerId) return { block_hash: BLOCK,
-        keys: [{ public_key: ownerKey, access_key: { permission: state.blocked ? { FunctionCall: {} } : 'FullAccess', nonce: 100 } }] };
+        keys: [{ public_key: ownerKey, access_key: { permission: state.blocked ? { FunctionCall: {} } : 'FullAccess', nonce: 100 } },
+          ...(state.stage >= 4 ? [{ public_key: agentKey, access_key: { nonce: 100, permission: { FunctionCall: { receiver_id: vault,
+            method_names: ['execute_outlayer_native_project'], allowance: review.agent_gas_allowance_yocto } } } }] : [])] };
       if (q.request_type === 'view_access_key_list' && q.account_id === vault) return { block_hash: BLOCK, keys: [] };
       throw Error('unexpected synthetic query');
     },
@@ -81,7 +88,7 @@ function scenario(db, overrides = {}) {
       assert.equal(id, vault); assert.equal(block, BLOCK);
       if (state.stage === 0) return { block_hash: BLOCK, exists: false };
       return { block_hash: BLOCK, exists: true, account: { block_hash: BLOCK, code_hash: NATIVE_ORACLE_V9_CODE_HASH,
-        storage_usage: 455_000, amount: String(BigInt(NATIVE_ORACLE_VAULT_FUNDING) + (state.stage === 3 ? NEAR / 10n : 0n)) } };
+        storage_usage: 455_000, amount: String(BigInt(NATIVE_ORACLE_VAULT_FUNDING) + (state.stage >= 3 ? NEAR / 10n : 0n)) } };
     },
     async experimental_protocolConfig() { return { chain_id: 'testnet', protocol_version: 90,
       runtime_config: { storage_amount_per_byte: '10000000000000000000', wasm_config: Object.fromEntries(V11_SELECTED_WASM_FEATURES.map(f => [f, true])) } }; },
@@ -98,7 +105,7 @@ function scenario(db, overrides = {}) {
       else if (id === vault && method === 'get_outlayer_native_project') result = state.stage === 1 ? null :
         { project: review.project, route_revision: 1, policy_revision: 1, payee_revision: 1, active: true };
       else if (id === vault && method === 'is_agent_key_allowed') result = state.stage !== 1;
-      else if (id === vault && method === 'vault_balance') result = state.stage === 3 ? review.vault_deposit_yocto : '0';
+      else if (id === vault && method === 'vault_balance') result = state.stage >= 3 ? review.vault_deposit_yocto : '0';
       else if (id === vault && method === 'check') result = [true, 'ok'];
       else throw Error(`unexpected synthetic view ${method}`);
       return { block_hash: BLOCK, result: [...Buffer.from(JSON.stringify(result))] };
@@ -199,10 +206,10 @@ dbtest('RPC unavailability, changed chain state and schema guard tampering block
 }));
 
 function memoryWitnessStore() {
-  let head = '0', text = '', loseAck = false;
+  let head = '0'.repeat(40), counter = 0, text = '', loseAck = false;
   return { async read() { return { head, text }; }, async append(request) {
     if (request.expectedHead !== head || request.expectedText !== text) throw Error('CAS conflict');
-    text = request.text; head = String(Number(head) + 1); if (loseAck) throw Error('lost acknowledgment');
+    text = request.text; head = (++counter).toString(16).padStart(40, '0'); if (loseAck) throw Error('lost acknowledgment');
     return { confirmed: true, head };
   }, loseAck(v) { loseAck = v; } };
 }
@@ -224,6 +231,7 @@ dbtest('independent witness plus PostgreSQL permits one checked stage and record
   f.state.stage = 1;
   const next = await coordinator.claim({ identity, stageId: f.review.stages[1].id, evidence: 'synthetic-auth' });
   assert.equal(next.independently_witnessed, true); assert.deepEqual(f.calls, [hash(10)]);
+  await assert.rejects(coordinator.verifyCompletion({ identity, evidence: 'synthetic-auth' }), e => e.code === 'WITNESS_MISMATCH');
 }));
 
 dbtest('lost witness acknowledgement leaves both systems claimed and cannot yield another prompt', async () => resources(async db => {
@@ -302,4 +310,81 @@ dbtest('a preflight that expires while committing consumes the claim but is neve
   const fence = createPostgresNativeOraclePromptFence({ ...f.options, pool: slow });
   await assert.rejects(fence.claim(f.req(reserved, 0)), e => e.code === 'CLAIM_COMMITTED_PREFLIGHT_STALE');
   await assert.rejects(f.fence.claim(f.req(reserved, 0)), e => e.code === 'ALREADY_CLAIMED');
+}));
+
+dbtest('synthetic browser prompts, owner challenges, PostgreSQL, local Git and prior receipts cover all four stages', async () => resources(async db => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bouncer-native-browser-db-git-'));
+  try {
+  const bare = path.join(root, 'remote.git'), work = path.join(root, 'work'), branch = 'arena/0e4386ea-near-hub';
+  const git = (cwd, args) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  fs.mkdirSync(work); git(root, ['init', '--bare', '--initial-branch', branch, bare]);
+  git(work, ['init', '--initial-branch', branch]); git(work, ['config', 'user.email', 'synthetic@example.test']);
+  git(work, ['config', 'user.name', 'Synthetic test']); git(work, ['remote', 'add', 'origin', bare]);
+  fs.writeFileSync(path.join(work, 'README.md'), 'Synthetic test only\n'); git(work, ['add', 'README.md']);
+  git(work, ['commit', '-m', 'Initial synthetic commit']); git(work, ['push', 'origin', branch]);
+  const initialHead = git(work, ['rev-parse', 'HEAD']);
+  const f = scenario(db), site = { origin: 'https://bouncer.example', host: 'bouncer.example' };
+  const authProvider = { async viewNodeStatus() { return { chain_id: 'testnet' }; },
+    async viewBlock() { return { header: { hash: BLOCK, timestamp_nanosec: String(BigInt(Date.now()) * 1_000_000n) } }; },
+    async viewAccessKey(owner, publicKey, ref) { assert.equal(owner, f.ownerId); assert.equal(publicKey, f.ownerKey);
+      assert.equal(ref.blockId, BLOCK); return { block_hash: BLOCK, permission: 'FullAccess' }; } };
+  const authenticator = createPostgresWalletPromptAuth({ pool: db, origin: site.origin, provider: authProvider });
+  const fence = createPostgresNativeOraclePromptFence({ ...f.options, authenticate: authenticator.authenticate });
+  const witness = createNativeOraclePromptWitness({ store: createGitNativeOraclePromptWitnessStore({ repo: work, branch, initialHead }) });
+  const coordinator = createWitnessedNativeOracleSetup({ fence, witness });
+  let signed = 0, prompted = 0;
+  const wallet = { manifest: { id: 'near-mobile', features: { signAndSendTransaction: true } }, async signMessage(p) {
+    signed++; const digest = crypto.createHash('sha256').update(nep413Payload(p)).digest();
+    return { accountId: f.ownerId, publicKey: f.ownerKey, signature: Buffer.from(f.ownerPair.sign(digest).signature).toString('base64') };
+  }, async signAndSendTransaction(p) {
+    assert.equal(p.network, 'testnet'); assert.equal(p.signerId, f.ownerId);
+    assert.equal(p.receiverId, prompted === 3 ? f.ownerId : f.review.vault);
+    return { transaction: { hash: hash(10 + prompted++) } }; // fabricated; no network or actual wallet
+  } };
+  const fetch = async () => ({ ok: true, text: async () => JSON.stringify({ jsonrpc: '2.0', id: 'bouncer-cli-login', result: { permission: 'FullAccess' } }) });
+  const sign = async context => signReviewedNativeSetupChallenge({ wallet, context,
+    challenge: await authenticator.issue(nativeSetupAuthAction(context)), location: site, crypto: crypto.webcrypto, fetch });
+  const common = { owner: f.ownerId, ownerPublicKey: f.ownerKey };
+  const reservation = await coordinator.reserve({ ...f.reserve, evidence: await sign({ ...common, purpose: 'reserve_native_setup', review: f.review }) });
+  const identity = reservation.identity;
+  const deviceKey = { status: 'LOCAL_DEVICE_KEY_AVAILABLE', origin: site.origin, owner: f.ownerId, vault: f.review.vault,
+    public_key: f.review.agent_public_key, expected_public_key_matched: true, private_key_exportable: false,
+    local_storage_only: true, signing_authorized: false }; // synthetic metadata; real device custody is separately required
+  for (let i = 0; i < 4; i++) {
+    const stageId = f.review.stages[i].id;
+    const prompt = await prepareNativeOracleSetupWalletPrompt({ wallet, identity, review: reservation.review, deviceKey, stageId,
+      wasmBytes: wasm, location: site, isTopLevel: true, crypto: crypto.webcrypto });
+    const claim = await coordinator.claim({ identity, stageId, evidence: await sign({ ...common, purpose: 'claim_native_setup_stage', identity, stageId }) });
+    const outcome = await prompt.invoke(claim);
+    assert.equal(outcome.original_hash, hash(10 + i)); assert.equal(outcome.final_execution_verified, false);
+    const record = { ...common, purpose: 'record_native_setup_original', identity, stageId, originalHash: outcome.original_hash };
+    await coordinator.recordOriginal({ identity, stageId, originalHash: outcome.original_hash, evidence: await sign(record) });
+    f.state.stage = i + 1;
+  }
+  assert.equal(prompted, 4); assert.equal(signed, 9);
+  assert.equal((await witness.inspect(f.ownerId)).state.phase, 'complete');
+  const verifyContext = { ...common, purpose: 'verify_native_setup_completion', identity };
+  const completion = await coordinator.verifyCompletion({ identity, evidence: await sign(verifyContext) });
+  assert.equal(completion.status, 'FOUR_ORIGINALS_AND_STATE_MATCH_NOT_AUTHORIZED');
+  assert.equal(completion.independently_witnessed, true); assert.equal(completion.execution_authorized, false);
+  assert.equal(completion.independent_delivery_verified, false); assert.equal(prompted, 4); assert.equal(signed, 10);
+  assert.deepEqual(f.calls, [hash(10), hash(10), hash(11), hash(10), hash(11), hash(12), hash(10), hash(11), hash(12), hash(13)]);
+  const alteredWitness = { ...witness, async inspect(owner) {
+    const snapshot = await witness.inspect(owner), altered = structuredClone(snapshot);
+    altered.state.records.find(r => r.event === 'original').original_hash = hash(99);
+    return altered;
+  } };
+  const disagreeing = createWitnessedNativeOracleSetup({ fence, witness: alteredWitness });
+  await assert.rejects(disagreeing.verifyCompletion({ identity, evidence: await sign(verifyContext) }), e => e.code === 'WITNESS_MISMATCH');
+  let reads = 0;
+  const changingWitness = { ...witness, async inspect(owner) {
+    const snapshot = await witness.inspect(owner); if (++reads === 2) return { ...snapshot, head: 'e'.repeat(40) }; return snapshot;
+  } };
+  const changing = createWitnessedNativeOracleSetup({ fence, witness: changingWitness });
+  await assert.rejects(changing.verifyCompletion({ identity, evidence: await sign(verifyContext) }), e => e.code === 'WITNESS_MISMATCH');
+  f.state.blocked = true;
+  const changed = await coordinator.verifyCompletion({ identity, evidence: await sign(verifyContext) });
+  assert.equal(changed.status, 'BLOCKED_OR_UNKNOWN'); assert(changed.blockers.includes('exact_owner_key'));
+  assert.equal(prompted, 4); assert.notEqual(git(work, ['rev-parse', 'HEAD']), initialHead);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 }));

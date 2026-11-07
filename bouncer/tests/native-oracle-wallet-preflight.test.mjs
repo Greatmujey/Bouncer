@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import nearApi from 'near-api-js';
-import { inspectNativeOracleWalletStage } from '../agent/native-oracle-wallet-preflight.mjs';
+import { inspectNativeOracleWalletStage, inspectNativeOracleWalletCompletion } from '../agent/native-oracle-wallet-preflight.mjs';
 import { buildNativeOracleWalletPlan, NATIVE_ORACLE_DEFAULT_GAS_ALLOWANCE, NATIVE_ORACLE_V9_CODE_HASH,
   NATIVE_ORACLE_VAULT_FUNDING } from '../agent/native-oracle-wallet-plan.mjs';
 import { prepareNativeOracleWalletAttempt } from '../agent/native-oracle-wallet-evidence.mjs';
@@ -26,6 +26,9 @@ function rpcAction(action) {
   if (action.enum === 'deployContract') return { DeployContract: { code: crypto.createHash('sha256').update(action.deployContract.code).digest('base64') } };
   if (action.enum === 'functionCall') return { FunctionCall: { method_name: action.functionCall.methodName,
     args: Buffer.from(action.functionCall.args).toString('base64'), gas: Number(action.functionCall.gas), deposit: action.functionCall.deposit.toString() } };
+  if (action.enum === 'addKey') { const k = action.addKey, p = k.accessKey.permission.functionCall;
+    return { AddKey: { public_key: String(k.publicKey), access_key: { nonce: Number(k.accessKey.nonce),
+      permission: { FunctionCall: { allowance: p.allowance.toString(), receiver_id: p.receiverId, method_names: [...p.methodNames] } } } } }; }
   throw Error('unexpected stage action');
 }
 function original(index) {
@@ -36,7 +39,7 @@ function original(index) {
   const result = { final_execution_status: 'FINAL', status: { SuccessValue: '' },
     transaction: { hash: trustedOriginalHash, signer_id: owner, public_key: ownerKey, receiver_id: batch.receiverId, actions: structuredClone(actions) },
     transaction_outcome: { id: trustedOriginalHash, outcome: { executor_id: owner, receipt_ids: [root], status: { SuccessReceiptId: root } } },
-    receipts: [{ receipt_id: root, predecessor_id: owner, receiver_id: batch.receiverId, receipt: { Action: {
+    receipts: index === 3 ? [] : [{ receipt_id: root, predecessor_id: owner, receiver_id: batch.receiverId, receipt: { Action: {
       signer_id: owner, signer_public_key: ownerKey, input_data_ids: [], output_data_receivers: [], actions: structuredClone(actions) } } }],
     receipts_outcome: [{ id: root, outcome: { executor_id: batch.receiverId, status: { SuccessValue: '' }, receipt_ids: [],
       logs: index === 2 ? ['BOUNCER native deposit received'] : [] } }] };
@@ -61,7 +64,13 @@ function fixture(index = 0, opts = {}) {
         if (q.request_type === 'view_account' && q.account_id === 'outlayer.testnet') return { block_hash: BLOCK, code_hash: hash(73) };
         if (q.request_type === 'view_access_key_list' && q.account_id === owner) return { block_hash: BLOCK, keys: [
           { public_key: ownerKey, access_key: { permission: opts.ownerRestricted ? { FunctionCall: {} } : 'FullAccess', nonce: 100 } },
-          ...(opts.agentPresent ? [{ public_key: agentKey, access_key: { permission: 'FullAccess', nonce: 0 } }] : []),
+          ...(index === 4 && !opts.agentMissing ? [{ public_key: agentKey, access_key: {
+            nonce: opts.agentBadNonce ? -1 : 100, permission: opts.agentFullAccess ? 'FullAccess' : { FunctionCall: {
+              receiver_id: opts.agentWrongReceiver ? 'evil.testnet' : vault,
+              method_names: opts.agentWrongMethod ? ['set_policy'] : ['execute_outlayer_native_project'],
+              allowance: opts.agentAllowanceLow ? '1' : opts.agentAllowanceAbove ? String(ONE) : review.agent_gas_allowance_yocto,
+            } },
+          } }] : opts.agentPresent ? [{ public_key: agentKey, access_key: { permission: 'FullAccess', nonce: 0 } }] : []),
         ] };
         if (q.request_type === 'view_access_key_list' && q.account_id === vault) return { block_hash: BLOCK, keys: opts.vaultHasKey ? [{ public_key: agentKey }] : [] };
         throw Error('unexpected query');
@@ -70,7 +79,7 @@ function fixture(index = 0, opts = {}) {
         calls.push('presence'); assert.equal(id, vault); assert.equal(h, BLOCK);
         if (index === 0 || opts.childMissing) return { block_hash: BLOCK, exists: !!opts.childExists };
         return { block_hash: BLOCK, exists: true, account: { block_hash: BLOCK, code_hash: opts.badVaultCode ? hash(74) : NATIVE_ORACLE_V9_CODE_HASH,
-          storage_usage: 455_000, amount: String(BigInt(NATIVE_ORACLE_VAULT_FUNDING) + (index === 3 ? ONE / 10n : 0n)) } };
+          storage_usage: 455_000, amount: String(BigInt(NATIVE_ORACLE_VAULT_FUNDING) + (index >= 3 ? ONE / 10n : 0n)) } };
       },
       async experimental_protocolConfig() { calls.push('protocol'); return { chain_id: 'testnet', protocol_version: 90,
         runtime_config: { storage_amount_per_byte: '10000000000000000000', wasm_config: Object.fromEntries(V11_SELECTED_WASM_FEATURES.map(f => [f, !opts.featureOff])) } }; },
@@ -86,7 +95,7 @@ function fixture(index = 0, opts = {}) {
           { token: 'native', per_tx_cap: opts.badCap ? '1' : review.per_tx_cap_yocto, daily_cap: review.daily_cap_yocto };
         else if (id === vault && method === 'get_outlayer_native_project') value = index === 1 ? null : opts.routeInactive ? { ...route, active: false } : route;
         else if (id === vault && method === 'is_agent_key_allowed') value = index === 1 ? false : !opts.noGrant;
-        else if (id === vault && method === 'vault_balance') value = index === 3 ? (opts.badBalance ? '0' : review.vault_deposit_yocto) : '0';
+        else if (id === vault && method === 'vault_balance') value = index >= 3 ? (opts.badBalance ? '0' : review.vault_deposit_yocto) : '0';
         else if (id === vault && method === 'check') value = [!opts.checkBlocked, opts.checkBlocked ? 'blocked' : 'ok'];
         else throw Error(`unexpected view ${method}`);
         return { block_hash: opts.mixedView ? hash(71) : BLOCK, result: [...Buffer.from(JSON.stringify(value))] };
@@ -132,4 +141,43 @@ test('changed keys, code, funds, provider terms, policy, route and tracked balan
 
 test('mainnet, stale and mixed-block RPC data fail closed', async () => {
   for (const o of [{ mainnet: true }, { stale: true }, { mixed: true }, { mixedView: true }]) await assert.rejects(inspectNativeOracleWalletStage(fixture(0, o)));
+});
+
+
+test('completion requires all four original receipt graphs and a fresh exact one-method agent key', async () => {
+  const { stageId, ...f } = fixture(4), result = await inspectNativeOracleWalletCompletion(f);
+  assert.equal(result.status, 'FOUR_ORIGINALS_AND_STATE_MATCH_NOT_AUTHORIZED');
+  assert.deepEqual(result.blockers, []); assert.equal(result.stage_id, 'verify_native_setup_completion');
+  assert.deepEqual(result.prior_original_hashes, [hash(10), hash(11), hash(12), hash(13)]);
+  assert.equal(result.checks.exact_agent_key, true); assert.equal(result.agent_key_nonce, '100');
+  assert.equal(result.wallet_prompt_authorized, false); assert.equal(result.signing_authorized, false);
+  assert.equal(result.independent_delivery_verified, false); assert.equal(result.local_key_custody_verified, false);
+  assert.equal(result.no_inflight_request_proven, false);
+  await assert.rejects(inspectNativeOracleWalletCompletion({ ...f, stageId: 'install_native_oracle_agent' }));
+});
+
+test('missing, changed, full-access or underfunded agent keys cannot pass completion', async () => {
+  for (const opts of [{ agentMissing: true }, { agentFullAccess: true }, { agentWrongReceiver: true },
+    { agentWrongMethod: true }, { agentAllowanceLow: true }, { agentAllowanceAbove: true }, { agentBadNonce: true }]) {
+    const { stageId, ...f } = fixture(4, opts), result = await inspectNativeOracleWalletCompletion(f);
+    assert.equal(result.status, 'BLOCKED_OR_UNKNOWN'); assert(result.blockers.includes('exact_agent_key'));
+  }
+  for (const [opts, blocker] of [[{ noGrant: true }, 'native_policy_state'], [{ badVaultCode: true }, 'exact_keyless_vault'],
+    [{ badBalance: true }, 'vault_native_balance'], [{ checkBlocked: true }, 'onchain_policy_check']]) {
+    const { stageId, ...f } = fixture(4, opts), result = await inspectNativeOracleWalletCompletion(f);
+    assert.equal(result.status, 'BLOCKED_OR_UNKNOWN'); assert(result.blockers.includes(blocker));
+  }
+});
+
+test('completion rejects an unresolved or altered fourth original before reading state', async () => {
+  for (const mutate of [
+    f => { f.prior.pop(); },
+    f => { f.prior[3].trustedOriginalHash = hash(99); },
+    f => { f.prior[3].result.final_execution_status = 'EXECUTED'; },
+    f => { f.prior[3].result.transaction.actions[0].AddKey.access_key.permission.FunctionCall.method_names = ['set_policy']; },
+    f => { f.prior[3].result.status = { Failure: { ActionError: {} } }; f.prior[3].result.receipts_outcome[0].outcome.status = { Failure: { ActionError: {} } }; },
+  ]) {
+    const { stageId, ...f } = fixture(4); mutate(f);
+    await assert.rejects(inspectNativeOracleWalletCompletion(f)); assert.deepEqual(f.calls, []);
+  }
 });

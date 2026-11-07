@@ -42,20 +42,39 @@ examples were **self-hosted development services**.
   acknowledgment blocks another claim. This is an experimental independent
   checkpoint, not a complete authorization service. The PostgreSQL coordinator,
   receipt gates and NEP-413 checks are composed only in tests; there is no hosted
-  owner session or independent latest-head retention/monitoring. Git administrators or a
-  simultaneous rollback can still defeat it. A hash in this log alone does
+  owner session or independent latest-head retention/monitoring. Git
+  administrators or a simultaneous rollback can still defeat it. A hash in this log alone does
   **not** establish a valid receipt or allow a later wallet prompt.
 - `postgres-native-oracle-prompt-fence.mjs` atomically retains one review and
   four stage rows, checks earlier original receipts and fresh native preflights,
   and claims each prompt once. `witnessed-native-oracle-wallet-setup.mjs`
   combines it with the separate Git witness; NEP-413 challenges bind the exact
-  native action to a fresh Ed25519 FullAccess-key view (not EVM/0x support). Synthetic signatures and a
-  disposable PostgreSQL, local Git and in-memory CAS stores exercise concurrency,
-  lost acknowledgments, schema tampering and stale checks. This is not a hosted service or live
-  wallet integration. The latest Git head needs independent monitoring; separate
+  native action to a fresh Ed25519 FullAccess-key view (not EVM/0x support).
+  Synthetic signatures, disposable PostgreSQL, local Git and in-memory CAS stores
+  exercise concurrency, lost acknowledgments, schema tampering and stale checks.
+  This is not a hosted service or live wallet integration. The latest Git head needs independent monitoring; separate
   FT and native namespaces do not yet give a global cross-flow owner lock. A
   claim whose preflight expires while waiting for the witness is consumed and
-  cannot be retried. No code here invokes a transaction-signing wallet.
+  cannot be retried. Those server modules do not invoke a transaction-signing
+  wallet; the unconnected browser adapter below can do so after a valid claim.
+- The read-only completion check requires all four original receipt graphs and
+  then verifies the exact keyless V9 vault, native policy, pinned provider route,
+  deposit and restricted one-method agent key at one fresh FINAL block. The
+  authenticated coordinator compares those hashes with its separate witness.
+  It proves neither local private-key custody nor absence of an in-flight
+  request, and does not authorize or establish provider execution.
+- `web-src/native-oracle-setup-wallet-prompt.mjs` is an unconnected one-shot
+  adapter that reconstructs all four reviewed action lists, checks the pinned
+  V9 bytes and device-key metadata, and requires a fresh witnessed claim before
+  calling a wallet. It also rejects repeated calls in one page; reloads and
+  other devices still rely on the durable fence. A synthetic end-to-end test
+  combined the browser adapter, one-use NEP-413 signatures, disposable
+  PostgreSQL, a local bare Git remote and fabricated prior receipts. It did not
+  contact a real wallet, public chain or provider, and is not a real-phone test.
+  A separate test composes a non-extractable WebCrypto key with a simulated
+  IndexedDB store; that store is not a verified durable backup.
+  A wallet-returned hash is not FINAL evidence. Preflight can race state changes
+  while the owner is approving, and unknown or rejected results must not retry.
 - `web-src/native-oracle-device-key.mjs` can generate and retain one local,
   non-extractable Ed25519 WebCrypto key per owner and test its possession
   without exporting the private key. It has no transaction-signing, network or

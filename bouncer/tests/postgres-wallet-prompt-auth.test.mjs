@@ -279,11 +279,12 @@ dbtest('native setup challenges bind all four exact stages, originals and the on
   const stages = ['create_keyless_native_vault','configure_native_oracle_policy','fund_native_vault','install_native_oracle_agent'];
   const reserve = { ...base, purpose: 'reserve_native_setup', review_sha256: 'a'.repeat(64), stage_id: stages[0], action_commitment_sha256: 'b'.repeat(64) };
   const inspect = { ...base, purpose: 'inspect_native_setup' };
+  const complete = { ...base, purpose: 'verify_native_setup_completion', operation_id: 'c'.repeat(32), review_sha256: 'a'.repeat(64) };
   const actions = [reserve, inspect, ...stages.flatMap((stage_id, i) => {
     const stage = { ...base, operation_id: 'c'.repeat(32), review_sha256: 'a'.repeat(64), stage_id,
       action_commitment_sha256: 'b'.repeat(64) };
     return [{ ...stage, purpose: 'claim_native_setup_stage' }, { ...stage, purpose: 'record_native_setup_original', original_hash: hash(60 + i) }];
-  })];
+  }), complete];
   for (const action of actions) {
     const challenge = await auth.issue(action), evidence = signed(challenge, f);
     assert.match(challenge.message, /not a transaction/);
@@ -294,6 +295,7 @@ dbtest('native setup challenges bind all four exact stages, originals and the on
     { ...reserve, stage_id: stages[1] }, { ...reserve, review_sha256: 'A'.repeat(64) },
     { ...reserve, owner: 'buyer.near' }, { ...reserve, owner: 'bouncer-owner-12f343b795633e357ae5560d.testnet' },
     { ...reserve, extra: 'unexpected' }, { ...actions[2], operation_id: '0'.repeat(31) },
-    { ...actions[3], original_hash: 'bad' },
+    { ...actions[3], original_hash: 'bad' }, { ...complete, operation_id: 'x'.repeat(32) },
+    { ...complete, review_sha256: 'A'.repeat(64) }, { ...complete, stage_id: stages[0] },
   ]) await assert.rejects(auth.issue(bad));
 }));
