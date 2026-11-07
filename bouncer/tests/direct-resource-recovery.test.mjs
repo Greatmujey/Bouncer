@@ -82,3 +82,17 @@ test('failed delivery after key-free settlement stays paid and unverified, never
     fulfill: async ({ input: order }) => ({ ...computeResult(order), result: '0'.repeat(64) }) }), /verification failed after confirmed payment/);
   assert.equal(f.entry.status, 'completed'); assert.equal(f.entry.tx_hash, hash); assert.equal(f.entry.delivery.status, 'unverified');
 });
+
+test('overlapping delivery recovery is rejected before a second provider call and changed state is never overwritten', async () => {
+  const f=fixture(), entered=Promise.withResolvers(), release=Promise.withResolvers();let calls=0;
+  const options={goal,contractId:config.contract_id,ownerAccountId:config.owner_account_id,providerUrl:config.provider_url,
+    provider:f.provider,journal:f.journal,log:()=>{},fulfill:async ({input:order})=>{calls++;entered.resolve();await release.promise;return computeResult(order)}};
+  const first=recoverResourceDelivery(options), settled=first.then(value=>({value}),error=>({error}));await entered.promise;
+  try {
+    await assert.rejects(recoverResourceDelivery(options),/another payment operation is already running/);
+    await assert.rejects(recover(f),/another payment operation is already running/);
+    const original=f.entry;f.journal.put(goal.id,{...original,tx_hash:nearApi.utils.serialize.base_encode(Buffer.alloc(32,32))});
+  }finally{release.resolve()}
+  const result=await settled;assert.match(result.error?.message??'',/record changed during fulfillment/);
+  assert.equal(calls,1);assert.equal(f.entry.status,'completed');assert.notEqual(f.entry.tx_hash,hash);assert.equal(f.entry.delivery,undefined);
+});

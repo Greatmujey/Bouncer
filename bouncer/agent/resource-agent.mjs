@@ -7,9 +7,10 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { createRuntime, openConfiguredFileJournal, normalizeProviderRoute, requestFingerprint, runProcurement, validatePlan } from './procurement.mjs';
-import { assertJournalScope, writeJournal } from './journal-write.mjs';
+import { assertJournalScope, readJournalSnapshot, writeJournal } from './journal-write.mjs';
 import { withExclusiveJournalOperation } from './journal-operation.mjs';
 import { reservePreview } from './preflight.mjs';
 import { readBoundedBytes, readBoundedJson } from '../shared/bounded-json.mjs';
@@ -132,10 +133,14 @@ export async function planFromQuotes({ contractId, ownerAccountId, goals, getQuo
  * `request` to the reviewed goal (planFromQuotes or durable recovery does so).
  * A provider must make redemption of the same transaction/order idempotent.
  */
-export async function fulfillPaidResource({ goal, request, contractId, ownerAccountId, providerUrl, journal, fulfill, readStorage,
+export async function fulfillPaidResource(options) {
+  return withExclusiveJournalOperation(options?.journal, () => fulfillPaidResourceUnlocked(options), options?.exclusiveJournalScope);
+}
+async function fulfillPaidResourceUnlocked({ goal, request, contractId, ownerAccountId, providerUrl, journal, fulfill, readStorage,
   repositoryLookup, required = false, expectedTx = null, log = console.log }) {
   if (!goal || !request) throw new Error('missing goal for confirmed payment');
-  const entry = journal?.get(goal.id);
+  assertJournalScope(journal, contractId, ownerAccountId);
+  const entry = journal ? readJournalSnapshot(journal, goal.id) : undefined;
   if (!entry || entry.status !== 'completed' || !entry.tx_hash) {
     if (required) throw new Error(`${goal.id}: confirmed payment is missing from the journal; stop and reconcile manually`);
     return null;
@@ -167,19 +172,23 @@ export async function fulfillPaidResource({ goal, request, contractId, ownerAcco
   } catch (error) {
     // Preserve a successful receipt if a later replay fails. Otherwise mark
     // only delivery unverified: the confirmed payment must never be repeated.
-    if (entry.delivery?.status !== 'verified') await writeJournal(journal, goal.id, { ...entry,
-      delivery: { status: 'unverified', stage, attempted_at: new Date().toISOString() } });
+    if (entry.delivery?.status !== 'verified') {
+      if (!isDeepStrictEqual(readJournalSnapshot(journal, goal.id), entry)) throw new Error(`${goal.id}: payment/delivery record changed during fulfillment; stop and reconcile`);
+      await writeJournal(journal, goal.id, { ...entry, delivery: { status: 'unverified', stage, attempted_at: new Date().toISOString() } });
+    }
     const message = String(error?.message || 'delivery failed').replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 200);
     throw new Error(`${goal.id}: ${stage} failed after confirmed payment ${entry.tx_hash}; no automatic repayment: ${message}`, { cause: error });
   }
   let receipt = entry.delivery?.receipt;
   if (receipt) {
+    if (!isDeepStrictEqual(readJournalSnapshot(journal, goal.id), entry)) throw new Error(`${goal.id}: payment/delivery record changed during fulfillment; stop and reconcile`);
     if (receipt.result_sha256 !== deliveryResultHash(verified.result)) {
       throw new Error(`${goal.id}: replayed delivery differs from the existing receipt; reconcile manually`);
     }
   } else {
     receipt = createDeliveryReceipt({ contractId, ownerAccountId, request, txHash: entry.tx_hash,
       providerId: goal.provider_id, providerOrigin: goal.provider_url ?? providerUrl, result: verified.result, verification: verified.verification });
+    if (!isDeepStrictEqual(readJournalSnapshot(journal, goal.id), entry)) throw new Error(`${goal.id}: payment/delivery record changed during fulfillment; stop and reconcile`);
     await writeJournal(journal, goal.id, { ...entry, delivery: { status: 'verified', receipt } });
   }
   log(`[resource-agent] FULFILLED ${goal.id} (${goal.resource}); checked ${verified.verification.scope}; receipt in journal`);
@@ -276,7 +285,7 @@ async function runResourceAgentUnlocked({ contractId, ownerAccountId, goals, get
   async function deliverPaid(i, required = false, expectedTx = null) {
     const goal = goals[i], request = plan.requests[i];
     const delivery = await fulfillPaidResource({ goal, request, contractId, ownerAccountId, providerUrl, journal, fulfill, readStorage,
-      repositoryLookup, required, expectedTx, log });
+      repositoryLookup, required, expectedTx, log, exclusiveJournalScope });
     if (delivery) delivered.set(goal.id, delivery);
   }
   // Recheck/recover already-paid deliveries before spending on any new goal.

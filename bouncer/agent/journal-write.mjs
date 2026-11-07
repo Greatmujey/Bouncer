@@ -22,3 +22,17 @@ export function assertJournalScope(journal, contractId, ownerAccountId) {
     throw new Error('journal scope check must be synchronous; stop and reconcile');
   }
 }
+
+/** Direct-payment journals expose synchronous snapshot reads, even when their
+ * durable writes are asynchronous. Never mistake a promise or malformed row
+ * for an original, and avoid unhandled late read failures. */
+export function readJournalSnapshot(journal, id) {
+  if (!journal || typeof journal.get !== 'function' || typeof id !== 'string' || !id) throw new Error('original journal read unavailable; stop and reconcile');
+  const value = journal.get(id);
+  if (value && typeof value.then === 'function') {
+    Promise.resolve(value).catch(() => {});
+    throw new Error('original journal read must be synchronous; stop and reconcile');
+  }
+  if (value !== undefined && (!value || typeof value !== 'object' || Array.isArray(value))) throw new Error('original journal record is invalid; stop and reconcile');
+  return value === undefined ? value : structuredClone(value);
+}

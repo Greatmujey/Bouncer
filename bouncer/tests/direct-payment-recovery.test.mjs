@@ -195,3 +195,22 @@ test('recovery refuses a changed stored request or settlement and can verify rea
   f.journal.put(request.id, { ...saved, settlement: { ...saved.settlement, amount: '101' } });
   await assert.rejects(recover(f), /differs from chain/);
 });
+
+test('payment recovery holds the same journal lock and detects an externally changed original', async () => {
+  const f=fixture();f.setLost(true);await assert.rejects(run(f),/lost RPC response/);assert.equal(f.sends,1);
+  const entered=Promise.withResolvers(), release=Promise.withResolvers(), original=f.provider.txStatusReceipts;
+  f.provider.txStatusReceipts=async(...args)=>{entered.resolve();await release.promise;return original(...args)};
+  const first=recover(f), settled=first.then(value=>({value}),error=>({error}));await entered.promise;
+  try {
+    await assert.rejects(recover(f),/another payment operation is already running/);
+    await assert.rejects(run(f),/another payment operation is already running/);
+    const old=f.journal.get(request.id);f.journal.put(request.id,{...old,tx_hash:nearApi.utils.serialize.base_encode(Buffer.alloc(32,33))});
+  }finally{release.resolve()}
+  const result=await settled;assert.match(result.error?.message??'',/original payment changed during recovery/);
+  assert.equal(f.sends,1);assert.notEqual(f.journal.get(request.id).tx_hash,hash);assert.equal(f.journal.get(request.id).status,'pending');
+});
+
+test('an async original-record read cannot be mistaken for a recoverable direct payment', async () => {
+  const f=fixture({get:()=>Promise.reject(Error('late synthetic read failure')),put:()=>{throw Error('unexpected write')}});
+  await assert.rejects(recover(f),/journal read must be synchronous/);assert.equal(f.sends,0);assert.equal(f.signs,0);
+});

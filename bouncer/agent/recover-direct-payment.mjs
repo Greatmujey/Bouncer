@@ -12,17 +12,21 @@ import { isDeepStrictEqual } from 'node:util';
 import { pathToFileURL } from 'node:url';
 import { PaymentRpcProvider } from './near-account.mjs';
 import { openConfiguredFileJournal, normalizeProviderRoute, requestFingerprint, validatePlan } from './procurement.mjs';
-import { assertJournalScope, writeJournal } from './journal-write.mjs';
+import { assertJournalScope, readJournalSnapshot, writeJournal } from './journal-write.mjs';
+import { withExclusiveJournalOperation } from './journal-operation.mjs';
 import { planFromQuotes, fulfillPaidResource } from './resource-agent.mjs';
 import { isTransactionHash, verifyDirectPayment } from '../shared/direct-payment-settlement.mjs';
 
-export async function recoverDirectPayment({ plan: rawPlan, requestId, provider, journal, update = true, log = console.log }) {
+export async function recoverDirectPayment(options) {
+  return withExclusiveJournalOperation(options?.journal, () => recoverDirectPaymentUnlocked(options), options?.exclusiveJournalScope);
+}
+async function recoverDirectPaymentUnlocked({ plan: rawPlan, requestId, provider, journal, update = true, log = console.log }) {
   const plan = validatePlan(rawPlan);
   const request = plan.requests.find(item => item.id === requestId);
   if (!request) throw new Error('request ID is not in the reviewed plan');
   if (!journal || typeof journal.get !== 'function' || typeof journal.put !== 'function') throw new Error('recovery requires the original journal');
   assertJournalScope(journal, plan.contract_id, plan.owner_account_id);
-  const previous = journal.get(requestId);
+  const previous = readJournalSnapshot(journal, requestId);
   if (!previous || previous.fingerprint !== requestFingerprint(request) || !isDeepStrictEqual(previous.request, request)) {
     throw new Error(`${requestId}: journal does not match the reviewed payment`);
   }
@@ -36,16 +40,22 @@ export async function recoverDirectPayment({ plan: rawPlan, requestId, provider,
   const settlement = verifyDirectPayment({ result: chain, contractId: plan.contract_id, ownerAccountId: plan.owner_account_id,
     request, publicKey: previous.agent_public_key, txHash: previous.tx_hash });
   if (previous.status === 'completed' && !isDeepStrictEqual(previous.settlement, settlement)) throw new Error(`${requestId}: recorded settlement differs from chain`);
-  if (update && previous.status === 'pending') await writeJournal(journal, requestId, { ...previous, status: 'completed', settlement, completed_at: new Date().toISOString() });
+  if (!isDeepStrictEqual(readJournalSnapshot(journal, requestId), previous)) throw new Error(`${requestId}: original payment changed during recovery; stop and reconcile`);
+  if (update && previous.status === 'pending') {
+    await writeJournal(journal, requestId, { ...previous, status: 'completed', settlement, completed_at: new Date().toISOString() });
+  }
   log(`[direct-recovery] REUSED ${requestId}: ${settlement.tx_hash}; no new payment; delivery is not established`);
   return { status: 'REUSED', settlement };
 }
 /** Recover against the original resource goals without contacting a quote source. */
-export async function recoverDirectResourcePayment({ config, requestId, provider, journal, update = true, log = console.log }) {
+export async function recoverDirectResourcePayment(options) {
+  return withExclusiveJournalOperation(options?.journal, scope => recoverDirectResourcePaymentUnlocked(options, scope), options?.exclusiveJournalScope);
+}
+async function recoverDirectResourcePaymentUnlocked({ config, requestId, provider, journal, update = true, log = console.log }, exclusiveJournalScope) {
   if (!config || typeof config !== 'object' || !Array.isArray(config.goals)) throw new Error('invalid original resource goals');
   const matching = config.goals.filter(goal => goal?.id === requestId);
   if (matching.length !== 1) throw new Error('request ID must appear exactly once in the original goals');
-  const goal = matching[0], previous = journal?.get(requestId);
+  const goal = matching[0], previous = readJournalSnapshot(journal, requestId);
   if (!previous || !previous.request || previous.provider_route === undefined || !['pending', 'completed'].includes(previous.status)) {
     throw new Error(`${requestId}: original journal lacks the recorded resource request and route`);
   }
@@ -58,7 +68,8 @@ export async function recoverDirectResourcePayment({ config, requestId, provider
   const facade = { get: id => id === requestId ? { ...previous, status: 'completed' } : undefined };
   const plan = await planFromQuotes({ contractId: config.contract_id, ownerAccountId: config.owner_account_id, goals: [goal], providerUrl: config.provider_url,
     getQuote: async () => { throw new Error('recovery must not request a quote'); }, journal: facade });
-  return recoverDirectPayment({ plan, requestId, provider, journal, update, log });
+  if (!isDeepStrictEqual(readJournalSnapshot(journal, requestId), previous)) throw new Error(`${requestId}: original resource record changed during recovery; stop and reconcile`);
+  return recoverDirectPayment({ plan, requestId, provider, journal, update, log, exclusiveJournalScope });
 }
 /**
  * Reconcile an existing durable payment, then replay/verify its exact delivery
@@ -66,13 +77,16 @@ export async function recoverDirectResourcePayment({ config, requestId, provider
  * journal with confirmed settlement and a verified/unverified delivery; the
  * approved provider must implement idempotent redemption for that transaction.
  */
-export async function recoverResourceDelivery({ goal, contractId, ownerAccountId, providerUrl, provider, journal,
-  fulfill, readStorage, repositoryLookup, log = console.log }) {
+export async function recoverResourceDelivery(options) {
+  return withExclusiveJournalOperation(options?.journal, scope => recoverResourceDeliveryUnlocked(options, scope), options?.exclusiveJournalScope);
+}
+async function recoverResourceDeliveryUnlocked({ goal, contractId, ownerAccountId, providerUrl, provider, journal,
+  fulfill, readStorage, repositoryLookup, log = console.log }, exclusiveJournalScope) {
   const config = { contract_id: contractId, owner_account_id: ownerAccountId, provider_url: providerUrl, goals: [goal] };
-  await recoverDirectResourcePayment({ config, requestId: goal?.id, provider, journal, update: true, log });
-  const entry = journal.get(goal.id);
+  await recoverDirectResourcePayment({ config, requestId: goal?.id, provider, journal, update: true, log, exclusiveJournalScope });
+  const entry = readJournalSnapshot(journal, goal.id);
   const delivery = await fulfillPaidResource({ goal, request: entry.request, contractId, ownerAccountId, providerUrl, journal,
-    fulfill, readStorage, repositoryLookup, required: true, expectedTx: entry.tx_hash, log });
+    fulfill, readStorage, repositoryLookup, required: true, expectedTx: entry.tx_hash, log, exclusiveJournalScope });
   if (!delivery) throw new Error(`${goal.id}: recovered payment has no verified delivery`);
   return delivery;
 }
