@@ -45,9 +45,12 @@ function createStore({ repo, branch, remote = 'origin', initialHead } = {}, kind
   if (typeof repo !== 'string' || !path.isAbsolute(repo) || typeof branch !== 'string' ||
       !/^arena\/[a-z0-9][a-z0-9-]{2,99}$/.test(branch) || remote !== 'origin' || !objectId(initialHead)) throw failed();
   const root = fs.realpathSync(repo);
+  // Git replacement objects must not make the witness store read a different
+  // history from the independently audited, original commit graph.
+  const gitEnv = { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_NO_REPLACE_OBJECTS: '1', GIT_NO_LAZY_FETCH: '1' };
   function git(args) {
     try { return execFileSync('git', args, { cwd: root, encoding: 'utf8', timeout: 30_000, maxBuffer: 128_000,
-      stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } }).trimEnd(); }
+      stdio: ['ignore', 'pipe', 'pipe'], env: gitEnv }).trimEnd(); }
     catch { throw failed(); }
   }
   if (git(['rev-parse', '--show-toplevel']) !== root || git(['branch', '--show-current']) !== branch ||
@@ -68,8 +71,8 @@ function createStore({ repo, branch, remote = 'origin', initialHead } = {}, kind
     if (!objectId(head) || local !== head) throw failed();
     // Never accept a remote revision before the operator's baseline.
     try {
-      execFileSync('git', ['merge-base', '--is-ancestor', initialHead, head], { cwd: root, stdio: 'ignore', timeout: 10_000 });
-      execFileSync('git', ['merge-base', '--is-ancestor', lastSeenHead, head], { cwd: root, stdio: 'ignore', timeout: 10_000 });
+      execFileSync('git', ['merge-base', '--is-ancestor', initialHead, head], { cwd: root, stdio: 'ignore', timeout: 10_000, env: gitEnv });
+      execFileSync('git', ['merge-base', '--is-ancestor', lastSeenHead, head], { cwd: root, stdio: 'ignore', timeout: 10_000, env: gitEnv });
     } catch { throw failed(); }
     lastSeenHead = head;
     return head;

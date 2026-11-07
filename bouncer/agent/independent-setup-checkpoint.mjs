@@ -18,7 +18,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import http from 'node:http';
 import { execFileSync } from 'node:child_process';
-import { createGitWitnessHistoryAudit } from './git-witness-history-audit.mjs';
+import { createGitWitnessRangeAudit } from './git-witness-range-audit.mjs';
 
 const tokenOk=x=>typeof x==='string' && /^[A-Za-z0-9_-]{43}$/.test(x);
 const head=x=>typeof x==='string' && /^[a-f0-9]{40}$/.test(x);
@@ -91,7 +91,7 @@ export function createIndependentSetupCheckpointServer({anchor,resolveRemoteHead
 }
 /** Convenience wiring for an independently provisioned monitor checkout. */
 export function createGitAuditedSetupCheckpointServer({anchor,repo,branch,remoteUrl,token,allowLocalForTests=false}={}){
-  return createIndependentSetupCheckpointServer({anchor,token,audit:createGitWitnessHistoryAudit({repo}),
+  return createIndependentSetupCheckpointServer({anchor,token,audit:createGitWitnessRangeAudit({repo}),
     resolveRemoteHead:createIndependentGitHeadResolver({repo,branch,remoteUrl,allowLocalForTests})});
 }
 async function bounded(response){

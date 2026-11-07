@@ -92,9 +92,16 @@ async function legacyTables(client, owner) {
     ['bouncer_native_wallet_prompt_v1.plans', 'owner'],
   ];
   for (const [table, column] of known) {
-    const found = await client.query('SELECT pg_catalog.to_regclass($1) IS NOT NULL AS present', [table]);
-    if (found.rows.length !== 1 || typeof found.rows[0].present !== 'boolean') throw fail('GLOBAL_FENCE_UNSAFE');
-    if (found.rows[0].present) {
+    const found = await client.query(`SELECT c.relkind,c.relpersistence,c.relrowsecurity,c.relforcerowsecurity
+      FROM pg_catalog.pg_class c WHERE c.oid=pg_catalog.to_regclass($1)`, [table]);
+    if (found.rows.length > 1) throw fail('GLOBAL_FENCE_UNSAFE');
+    if (found.rows.length === 1) {
+      const relation = found.rows[0];
+      // An opposite-flow table with row-level security or a substituted view
+      // could hide a legacy reservation. Never treat its filtered result as
+      // proof that an owner was not already prompted.
+      if (relation.relkind !== 'r' || relation.relpersistence !== 'p' ||
+          relation.relrowsecurity !== false || relation.relforcerowsecurity !== false) throw fail('GLOBAL_FENCE_UNSAFE');
       const values = owner === undefined ? [] : [owner];
       const rows = await client.query(`SELECT 1 FROM ${table}${owner === undefined ? '' : ` WHERE ${column}=$1`} LIMIT 1`, values);
       if (rows.rows.length) return true;

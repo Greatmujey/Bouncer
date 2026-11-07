@@ -4,6 +4,9 @@
  * previously checkpointed bytes as a prefix. This checks every owner and all
  * three known witness namespaces, not just the owner making the current call.
  * A Git descendant that deletes or rewrites a prior claim is therefore unsafe.
+ * This is an edge/net-tree primitive: on its own it cannot detect a deletion
+ * followed by restoration between heads. For checkpoint updates use
+ * git-witness-range-audit.mjs, which checks every newly reachable parent edge.
  *
  * The trusted starting commit must already include all known prior witness
  * records and be stored by a genuinely independent, non-rollbackable monitor;
@@ -37,7 +40,7 @@ export function createGitWitnessHistoryAudit({ repo } = {}) {
   try { root = fs.realpathSync(repo); } catch { throw error(); }
   function git(args, maxBuffer = 1_048_576) {
     try { return execFileSync('git', args, { cwd: root, timeout: 30_000, maxBuffer,
-      stdio: ['ignore','pipe','pipe'], env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_NO_REPLACE_OBJECTS: '1' } }); }
+      stdio: ['ignore','pipe','pipe'], env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_NO_REPLACE_OBJECTS: '1', GIT_NO_LAZY_FETCH: '1' } }); }
     catch { throw error(); }
   }
   try { if (git(['rev-parse','--show-toplevel']).toString('utf8').trimEnd() !== root) throw Error(); }
@@ -69,7 +72,7 @@ export function createGitWitnessHistoryAudit({ repo } = {}) {
   return async function audit(fromHead, toHead) {
     if (!objectId(fromHead) || !objectId(toHead)) throw error();
     try { execFileSync('git', ['merge-base','--is-ancestor',fromHead,toHead], { cwd: root, timeout: 10_000,
-      stdio: 'ignore', env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_NO_REPLACE_OBJECTS: '1' } }); }
+      stdio: 'ignore', env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_NO_REPLACE_OBJECTS: '1', GIT_NO_LAZY_FETCH: '1' } }); }
     catch { throw error(); }
     const bytes = git(['diff','--no-ext-diff','--no-textconv','--no-renames','--name-only','-z',fromHead,toHead,'--',...folders]);
     const parts = bytes.length ? bytes.toString('utf8').split('\0') : [];

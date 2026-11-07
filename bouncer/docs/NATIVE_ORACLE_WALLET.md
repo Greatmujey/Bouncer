@@ -41,19 +41,22 @@ examples were **self-hosted development services**.
   uses a branch CAS and checks the acknowledged remote head. A lost claim
   acknowledgment blocks another claim. Git alone is **not** an independent
   latest-head checkpoint or a complete authorization service. The PostgreSQL coordinator,
-  receipt gates and NEP-413 checks are composed only in tests; there is no hosted
-  owner session or independent latest-head retention/monitoring. Git
+  receipt gates and NEP-413 checks are wired into an opt-in experimental runtime
+  and exercised with synthetic data; there is no hosted owner session or
+  independent latest-head retention/monitoring. Git
   administrators or a simultaneous rollback can still defeat it. A hash in this log alone does
   **not** establish a valid receipt or allow a later wallet prompt.
-- `anchored-witness-store.mjs`, `git-witness-history-audit.mjs` and
-  `anchored-setup-witness-pair.mjs` provide an
+- `anchored-witness-store.mjs`, `git-witness-history-audit.mjs`,
+  `git-witness-range-audit.mjs` and `anchored-setup-witness-pair.mjs` provide an
   **experimental adapter**, not a deployed monitor. Given an already trusted
   checkpoint from a separate durable CAS service, each witness append must
   advance and read back that external head before it is acknowledged. The Git
-  audit checks ancestry **and every protected owner's witness files**, so an
-  ordinary fast-forward commit that deletes or rewrites a different owner's
-  claim is rejected too. Tests use a local Git remote and in-memory or disposable
-  PostgreSQL checkpoints, not independently operated infrastructure. The checkpoint must be seeded
+  audit checks ancestry **and every protected owner's witness files on every
+  newly reachable parent edge**, including merge-side histories. It rejects a
+  witness deleted and later restored between checkpoint updates; a net tree
+  comparison alone would miss that. Shallow, grafted, unrelated-root or
+  overlong ranges fail closed. Tests use a local Git remote and in-memory or
+  disposable PostgreSQL checkpoints, not independently operated infrastructure. The checkpoint must be seeded
   with the latest complete history, operated separately, protected against its
   own rollback, and made mandatory in the live coordinator; otherwise it gives
   no rollback guarantee. An uncertain checkpoint or commit is a stop.
@@ -167,6 +170,17 @@ examples were **self-hosted development services**.
   Creating a device key does not provide a verified backup or prove an older
   installation absent. Independent checkpoint operations and an authenticated
   recovery/handoff still must be completed before live funding or deployment.
+- `experimental-phone-setup-runtime.mjs` and the opt-in preview backend now
+  compose both same-branch anchored witnesses, the shared owner fence and the
+  independently configured checkpoint. Startup checks the existing native,
+  FT and authentication schemas without creating or repairing them and requires
+  the separately retained head to match the configured branch. A missing,
+  stale or uncertain checkpoint stops startup; it is not automatically reset.
+  Native-only preview does not require the V12 FT artifact. Both transport
+  switches are off by default. This wiring and its disposable DB/local Git
+  tests are **not** an independently operated deployment, live phone flow or
+  approval to fund a vault. Review retention is still process-local and the
+  five-second claim freshness window may be consumed by Git/network latency.
 - `web-src/native-oracle-device-key.mjs` can generate and retain one local,
   non-extractable Ed25519 WebCrypto key per owner and test its possession
   without exporting the private key. It has no transaction-signing, network or
@@ -238,6 +252,26 @@ reads an existing native journal without signing keys or new payments. A stale
 recovered price is marked unsuitable for current use, not automatically bought
 again. The single resource cannot establish a complete compute/storage/API
 mission, and the local journal is not distributed rollback protection.
+
+## Experimental backend configuration (not a live-use checklist)
+
+`read-only-preview-backend.mjs` keeps setup routes disabled unless an operator
+explicitly sets `BOUNCER_ACK_EXPERIMENTAL_SETUP=testnet-transport-only` and
+one or both of `BOUNCER_ENABLE_NATIVE_ORACLE_TESTNET_SETUP=1` and
+`BOUNCER_ENABLE_WITNESSED_TESTNET_SETUP=1`. It also requires an already
+provisioned dedicated setup database, an absolute checkout path, the actual
+session branch, a fully verified baseline, and a separately operated HTTPS
+checkpoint. Their configuration names are `BOUNCER_TESTNET_SETUP_DATABASE_URL`,
+`BOUNCER_TESTNET_WITNESS_GIT_REPO`, `BOUNCER_TESTNET_WITNESS_BRANCH`,
+`BOUNCER_TESTNET_WITNESS_BASELINE`, `BOUNCER_TESTNET_CHECKPOINT_ORIGIN` and
+`BOUNCER_TESTNET_CHECKPOINT_TOKEN_FILE`. The bearer must be a canonical
+32-byte base64url token in an owner-only regular file; never commit it, put it in
+browser code or include it in logs. FT setup additionally requires the pinned
+`BOUNCER_V12_WASM_PATH`; native-only setup does not. The relay session settings
+remain separate. There is no automatic checkpoint seeding, schema creation or
+safe release of an existing hold. A branch advance must be independently
+reviewed and checkpointed before startup. These settings are deliberately not
+a recommendation to expose the current prototype or lock testnet funds.
 
 ## Before enabling a real phone flow
 

@@ -24,7 +24,7 @@ import { inspectNativeOracleWalletStage, inspectNativeOracleWalletCompletion } f
 import { isTestnetAccount } from '../shared/account-id.mjs';
 import { isTransactionHash } from '../shared/direct-payment-settlement.mjs';
 import { WalletOwnerFenceError, initializePostgresWalletOwnerFence, reservePostgresWalletOwnerFence,
-  assertPostgresWalletOwnerFence } from './postgres-wallet-owner-fence.mjs';
+  assertPostgresWalletOwnerFence, verifyPostgresWalletOwnerFence } from './postgres-wallet-owner-fence.mjs';
 
 const SCHEMA = 'bouncer_native_wallet_prompt_v1';
 const STAGES = Object.freeze(['create_keyless_native_vault', 'configure_native_oracle_policy', 'fund_native_vault', 'install_native_oracle_agent']);
@@ -119,6 +119,17 @@ async function verifySchema(client) {
   const keys = new Set(indexes.rows.map(r => `${r.table_name}:${r.columns.join(',')}`));
   if (!['meta:singleton','plans:owner','plans:operation_id','stages:owner,stage_index','stages:operation_id,stage_index','stages:owner,stage_id']
       .every(k => keys.has(k))) throw fail('UNSAFE_SCHEMA');
+}
+
+/** Check existing native and shared-owner fences without creating, repairing,
+ * reserving or releasing anything. This is not rollback or consent proof. */
+export async function inspectPostgresNativeOraclePromptFenceSchema({ pool } = {}) {
+  if (!pool || typeof pool.connect !== 'function') throw fail('UNSAFE_DATABASE');
+  return transaction(pool, async client => {
+    await verifySchema(client);
+    await verifyPostgresWalletOwnerFence(client);
+    return { status: 'SCHEMA_CHECKED', prompt_authorized: false };
+  });
 }
 
 /** Privileged setup ONLY for a dedicated disposable/testnet database. Existing

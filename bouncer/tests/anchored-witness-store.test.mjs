@@ -8,6 +8,8 @@ import { execFileSync } from 'node:child_process';
 import nearApi from 'near-api-js';
 import { createAnchoredSetupWitnessPair } from '../agent/anchored-setup-witness-pair.mjs';
 import { createGitWitnessHistoryAudit } from '../agent/git-witness-history-audit.mjs';
+import { createGitWitnessRangeAudit } from '../agent/git-witness-range-audit.mjs';
+import { createGitAuditedSetupCheckpointServer } from '../agent/independent-setup-checkpoint.mjs';
 
 const branch = 'arena/0e4386ea-near-hub';
 const git = (cwd, args) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore','pipe','pipe'] }).trim();
@@ -43,7 +45,7 @@ async function repository(run) {
     const base = git(work,['rev-parse','HEAD']), anchor = checkpoint(base), audit = createGitWitnessHistoryAudit({ repo: work });
     const pair = createAnchoredSetupWitnessPair({ repo: work, branch, initialHead: base, anchor });
     const ft = pair.wallet, native = pair.native;
-    await run({ work, base, anchor, audit, ft, native });
+    await run({ work, bare, base, anchor, audit, ft, native });
   } finally { fs.rmSync(root,{ recursive:true,force:true }); }
 }
 const fileFor = (owner, folder) => `bouncer/evidence/${folder}/${crypto.createHash('sha256').update(owner).digest('hex')}.jsonl`;
@@ -104,15 +106,73 @@ test('an unavailable or dishonest checkpoint never acknowledges an independent c
   await assert.rejects(ft.assertClaimable(a,a.stages[0].stage_id),e => e.code === 'WITNESS_NOT_CLAIMABLE');
 }));
 
-test('full reachable baseline audit catches deletion followed by restoration that a net diff misses', async () => repository(async ({ work, base, ft, audit }) => {
+test('incremental and full audits catch deletion followed by restoration that a net diff misses', async () => repository(async ({ work, bare, base, anchor, ft, audit }) => {
   const { auditFullGitWitnessHistory } = await import('../agent/full-git-witness-history-audit.mjs');
   const a = id('baseline-audit.testnet'); await ft.reserve(a);
-  const initial = git(work,['rev-parse','HEAD']), file = path.join(work,fileFor(a.owner,'wallet-prompt-witness-v1'));
+  const trusted = anchor.snapshot(), initial = git(work,['rev-parse','HEAD']);
+  const file = path.join(work,fileFor(a.owner,'wallet-prompt-witness-v1'));
   const original = fs.readFileSync(file); fs.unlinkSync(file); commit(work,'Delete earlier synthetic claim');
   fs.writeFileSync(file,original); const restored = commit(work,'Restore earlier synthetic claim');
   assert.equal(await audit(base,restored),true,'net tree alone cannot see the temporary removal');
   assert.equal((await auditFullGitWitnessHistory({repo:work,head:initial})).reachable_history_only,true);
   await assert.rejects(auditFullGitWitnessHistory({repo:work,head:restored}),/unsafe|append-only/);
+  await assert.rejects(createGitWitnessRangeAudit({repo:work})(initial,restored),/unsafe|append-only/);
+  await assert.rejects(ft.inspect(a.owner), e => e.code === 'WITNESS_UNAVAILABLE');
+  assert.deepEqual(anchor.snapshot(), trusted);
+
+  // Exercise the actual independently audited server factory, not a stub audit.
+  const token = crypto.randomBytes(32).toString('base64url');
+  const server = createGitAuditedSetupCheckpointServer({anchor,repo:work,branch,remoteUrl:bare,token,allowLocalForTests:true});
+  await new Promise(resolve => server.listen(0,'127.0.0.1',resolve));
+  try {
+    const response = await fetch(`http://127.0.0.1:${server.address().port}/v1/compare-and-set`, {
+      method:'POST',headers:{authorization:`Bearer ${token}`,'content-type':'application/json'},
+      body:JSON.stringify({expected:trusted,nextHead:restored}),
+    });
+    assert.equal(response.status,503);
+    assert.deepEqual(anchor.snapshot(),trusted,'monitor must not advance over a temporarily deleted witness');
+  } finally { await new Promise(resolve => server.close(resolve)); }
+}));
+
+test('incremental audit checks all merge parents, including a side-history deletion and restoration', async () => repository(async ({ work, anchor, ft, audit }) => {
+  const a = id('side-history.testnet'); await ft.reserve(a);
+  const trusted = anchor.snapshot(), initial = trusted.head;
+  const filename = fileFor(a.owner,'wallet-prompt-witness-v1');
+  const index = path.join(path.dirname(work),'synthetic-index');
+  const indexGit = args => execFileSync('git',args,{cwd:work,encoding:'utf8',stdio:['ignore','pipe','pipe'],
+    env:{...process.env,GIT_INDEX_FILE:index}}).trim();
+  indexGit(['read-tree',initial]); indexGit(['update-index','--force-remove','--',filename]);
+  const deletedTree = indexGit(['write-tree']), originalTree = git(work,['rev-parse',`${initial}^{tree}`]);
+  const deleted = git(work,['commit-tree',deletedTree,'-p',initial,'-m','Synthetic side deletion']);
+  const restored = git(work,['commit-tree',originalTree,'-p',deleted,'-m','Synthetic side restoration']);
+  git(work,['commit','--allow-empty','-m','Synthetic safe mainline']);
+  const main = git(work,['rev-parse','HEAD']);
+  const merge = git(work,['commit-tree',originalTree,'-p',main,'-p',restored,'-m','Synthetic merge']);
+  git(work,['update-ref',`refs/heads/${branch}`,merge,main]); git(work,['push','origin',branch]);
+  assert.equal(await audit(initial,merge),true,'both end trees are identical');
+  await assert.rejects(createGitWitnessRangeAudit({repo:work})(initial,merge),/unsafe|append-only/);
+  await assert.rejects(ft.inspect(a.owner), e => e.code === 'WITNESS_UNAVAILABLE');
+  assert.deepEqual(anchor.snapshot(),trusted);
+}));
+
+test('local Git replacement objects cannot hide an existing witness from the paired store', async () => repository(async ({ work, base, anchor, ft }) => {
+  const a = id('replacement-object.testnet'); await ft.reserve(a);
+  const trusted = anchor.snapshot(), treeWithoutWitness = git(work,['rev-parse',`${base}^{tree}`]);
+  const replacement = git(work,['commit-tree',treeWithoutWitness,'-p',base,'-m','Synthetic replacement without witness']);
+  git(work,['replace',trusted.head,replacement]);
+  assert.equal((await ft.inspect(a.owner)).state.phase,'reserved');
+  assert.deepEqual(anchor.snapshot(),trusted);
+}));
+
+test('incremental audit accepts an append-only merge with two safe parents', async () => repository(async ({ work, ft }) => {
+  const a = id('safe-merge.testnet'); await ft.reserve(a);
+  const initial = git(work,['rev-parse','HEAD']), tree = git(work,['rev-parse',`${initial}^{tree}`]);
+  const side = git(work,['commit-tree',tree,'-p',initial,'-m','Synthetic safe side']);
+  git(work,['commit','--allow-empty','-m','Synthetic safe main']); const main = git(work,['rev-parse','HEAD']);
+  const merge = git(work,['commit-tree',tree,'-p',main,'-p',side,'-m','Synthetic safe merge']);
+  git(work,['update-ref',`refs/heads/${branch}`,merge,main]); git(work,['push','origin',branch]);
+  assert.equal(await createGitWitnessRangeAudit({repo:work})(initial,merge),true);
+  assert.equal((await ft.inspect(a.owner)).state.phase,'reserved');
 }));
 
 test('full baseline audit rejects shallow histories and non-commit heads', async () => repository(async ({ work, base }) => {
@@ -122,6 +182,8 @@ test('full baseline audit rejects shallow histories and non-commit heads', async
   git(path.dirname(work),['clone','--depth=1',`file://${work}`,shallow]);
   assert.equal(git(shallow,['rev-parse','--is-shallow-repository']),'true');
   await assert.rejects(auditFullGitWitnessHistory({repo:shallow,head:git(shallow,['rev-parse','HEAD'])}),/unavailable or unsafe/);
+  await assert.rejects(createGitWitnessRangeAudit({repo:shallow})(base,git(shallow,['rev-parse','HEAD'])),/incomplete or unsafe/);
   await assert.rejects(auditFullGitWitnessHistory({repo:work,head:'a'.repeat(40)}),/unavailable or unsafe/);
+  await assert.rejects(createGitWitnessRangeAudit({repo:work})(base,'a'.repeat(40)),/unavailable|unsafe/);
   assert.equal((await auditFullGitWitnessHistory({repo:work,head:base})).wallet_or_transaction_authorized,false);
 }));

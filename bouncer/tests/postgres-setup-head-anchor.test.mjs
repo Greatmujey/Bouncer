@@ -124,18 +124,25 @@ dbtest('separate synthetic HTTP checkpoint independently audits Git before CAS a
     const raw=createNativeOraclePromptWitness({store:createGitNativeOraclePromptWitnessStore({repo:work,branch,initialHead:base})});
     const reserved=await raw.reserve(identity),after=await client.compareAndSet({expected:before,nextHead:reserved.head});
     assert.equal(after.confirmed,true);assert.equal(after.head,reserved.head);assert.equal(after.revision,'1');
-    const file=`bouncer/evidence/native-oracle-prompt-witness-v1/${crypto.createHash('sha256').update(owner).digest('hex')}.jsonl`;
-    const old=fs.readFileSync(path.join(work,file));fs.unlinkSync(path.join(work,file));git(work,['add','-A']);git(work,['commit','-m','Malicious synthetic deletion']);
-    git(work,['push','origin',branch]);const unsafe=git(work,['rev-parse','HEAD']);
-    await assert.rejects(client.compareAndSet({expected:{head:after.head,revision:after.revision},nextHead:unsafe}));
-    assert.deepEqual(await client.read(),{head:after.head,revision:after.revision});
-    fs.writeFileSync(path.join(work,file),old);git(work,['add','-A']);git(work,['commit','-m','Restore synthetic witness']);git(work,['push','origin',branch]);
-    const repaired=git(work,['rev-parse','HEAD']);let lost=true;
+    // First lose the acknowledgement of a genuinely append-only update.
+    fs.appendFileSync(path.join(work,'README.md'),'Safe synthetic change\n');git(work,['add','README.md']);
+    git(work,['commit','-m','Safe synthetic change']);git(work,['push','origin',branch]);
+    const safe=git(work,['rev-parse','HEAD']);let lost=true;
     const uncertain=createIndependentSetupCheckpointClient({origin,token,fetch:async(address,init)=>{
       const response=await fetchImpl(address,init);if(address.endsWith('/compare-and-set')&&lost){lost=false;await response.body?.cancel();throw Error('synthetic lost response')}return response;
     }});
-    await assert.rejects(uncertain.compareAndSet({expected:{head:after.head,revision:after.revision},nextHead:repaired}));
-    assert.deepEqual(await client.read(),{head:repaired,revision:'2'});
-    await assert.rejects(client.compareAndSet({expected:{head:after.head,revision:after.revision},nextHead:repaired}));
+    await assert.rejects(uncertain.compareAndSet({expected:{head:after.head,revision:after.revision},nextHead:safe}));
+    const trusted={head:safe,revision:'2'};assert.deepEqual(await client.read(),trusted);
+    await assert.rejects(client.compareAndSet({expected:{head:after.head,revision:after.revision},nextHead:safe}));
+
+    const file=`bouncer/evidence/native-oracle-prompt-witness-v1/${crypto.createHash('sha256').update(owner).digest('hex')}.jsonl`;
+    const old=fs.readFileSync(path.join(work,file));fs.unlinkSync(path.join(work,file));git(work,['add','-A']);git(work,['commit','-m','Malicious synthetic deletion']);
+    git(work,['push','origin',branch]);const unsafe=git(work,['rev-parse','HEAD']);
+    await assert.rejects(client.compareAndSet({expected:trusted,nextHead:unsafe}));
+    assert.deepEqual(await client.read(),trusted);
+    fs.writeFileSync(path.join(work,file),old);git(work,['add','-A']);git(work,['commit','-m','Restore synthetic witness']);git(work,['push','origin',branch]);
+    const restored=git(work,['rev-parse','HEAD']);
+    await assert.rejects(client.compareAndSet({expected:trusted,nextHead:restored}));
+    assert.deepEqual(await client.read(),trusted,'restoring an unsafe intermediate deletion cannot make the range safe');
   }finally{if(server)await new Promise(resolve=>server.close(resolve));fs.rmSync(root,{recursive:true,force:true})}
 }));

@@ -151,6 +151,20 @@ dbtest('missing or wrong shared hold blocks a new claim but never hides legacy s
   await assert.rejects(f.native.reserve(s.nativeReq), e => e.code === 'OWNER_FENCED');
 }));
 
+dbtest('row-level security on the opposite-flow table cannot hide a legacy reservation', async () => resources(async (db, f) => {
+  const nativeOwner = scenario(), ftOwner = scenario();
+  await db.query('ALTER TABLE bouncer_wallet_prompt_v1.prompts ENABLE ROW LEVEL SECURITY');
+  try {
+    await assert.rejects(f.native.reserve(nativeOwner.nativeReq), e => e.code === 'GLOBAL_FENCE_UNSAFE');
+    assert.equal((await db.query('SELECT count(*)::integer AS n FROM bouncer_wallet_owner_fence_v1.holders WHERE owner=$1', [nativeOwner.owner])).rows[0].n, 0);
+  } finally { await db.query('ALTER TABLE bouncer_wallet_prompt_v1.prompts DISABLE ROW LEVEL SECURITY'); }
+  await db.query('ALTER TABLE bouncer_native_wallet_prompt_v1.plans ENABLE ROW LEVEL SECURITY');
+  try {
+    await assert.rejects(f.ft.reserve(ftOwner.ftReq), e => e.code === 'GLOBAL_FENCE_UNSAFE');
+    assert.equal((await db.query('SELECT count(*)::integer AS n FROM bouncer_wallet_owner_fence_v1.holders WHERE owner=$1', [ftOwner.owner])).rows[0].n, 0);
+  } finally { await db.query('ALTER TABLE bouncer_native_wallet_prompt_v1.plans DISABLE ROW LEVEL SECURITY'); }
+}));
+
 dbtest('a legacy database with old prompt rows is never silently enrolled as safe', async () => {
   const admin = pool(), name = `bouncer_legacy_${crypto.randomBytes(6).toString('hex')}`; let legacy;
   try {

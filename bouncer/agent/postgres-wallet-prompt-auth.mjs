@@ -215,6 +215,17 @@ async function verifySchema(client) {
       !Array.isArray(g.proconfig) || g.proconfig.length !== 1 || g.proconfig[0] !== 'search_path=pg_catalog') throw new Error('unsafe schema');
 }
 
+/** Inspect an already provisioned schema without creating, repairing or
+ * issuing a challenge. A successful check does not prove that history was not
+ * rolled back or authorize a wallet prompt. */
+export async function inspectPostgresWalletPromptAuthSchema({ pool } = {}) {
+  if (!pool || typeof pool.connect !== 'function') throw new Error('PostgreSQL pool required');
+  return transaction(pool, async client => {
+    await verifySchema(client);
+    return { status: 'SCHEMA_CHECKED', prompt_authorized: false };
+  });
+}
+
 /** Privileged, explicit setup in a dedicated testnet database. */
 export async function initializePostgresWalletPromptAuth({ pool } = {}) {
   if (!pool || typeof pool.connect !== 'function') throw new Error('PostgreSQL pool required');

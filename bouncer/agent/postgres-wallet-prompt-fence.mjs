@@ -33,7 +33,7 @@ import { V12_EXPECTED_BYTES, V12_EXPECTED_SHA256 } from './keyless-vault-v12-rea
 import { isTestnetAccount } from '../shared/account-id.mjs';
 import { isTransactionHash } from '../shared/direct-payment-settlement.mjs';
 import { WalletOwnerFenceError, initializePostgresWalletOwnerFence, reservePostgresWalletOwnerFence,
-  assertPostgresWalletOwnerFence } from './postgres-wallet-owner-fence.mjs';
+  assertPostgresWalletOwnerFence, verifyPostgresWalletOwnerFence } from './postgres-wallet-owner-fence.mjs';
 
 const SCHEMA = 'bouncer_wallet_prompt_v1';
 // Guard accidental writes by cooperating services/roles. A database owner can
@@ -195,6 +195,17 @@ async function verifySchema(client) {
       throw fail('UNSAFE_SCHEMA', 'prompt fence immutable-record trigger is missing or changed');
     }
   }
+}
+
+/** Check existing prompt and shared-owner fences without creating, repairing,
+ * reserving or releasing anything. This is not rollback or consent proof. */
+export async function inspectPostgresWalletPromptFenceSchema({ pool } = {}) {
+  if (!pool || typeof pool.connect !== 'function') throw new Error('PostgreSQL pool required');
+  return transaction(pool, async client => {
+    await verifySchema(client);
+    await verifyPostgresWalletOwnerFence(client);
+    return { status: 'SCHEMA_CHECKED', prompt_authorized: false };
+  });
 }
 
 /** Privileged testnet schema initialization; does not contact NEAR or wallets. */
