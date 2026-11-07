@@ -218,6 +218,8 @@ artifactDbtest('one synthetic seller POST is encrypted and witnessed after owner
   const {openPrivateOrderDraft,openPrivateOrder}=await import('../web-src/buffer-private-order-capsule.mjs');
   const {firstSetupPreflightFixture,setSyntheticSetupStage}=await import('./fixtures/wallet-setup-preflight-provider.mjs');
   const {createBufferOrderWitness}=await import('../agent/git-buffer-order-witness.mjs');
+  const {createGitBufferOrderWitnessStore}=await import('../agent/git-branch-witness-store.mjs');
+  const fs=await import('node:fs'),os=await import('node:os'),path=await import('node:path'),{execFileSync}=await import('node:child_process');
   const {createWitnessedBufferOrderJournal}=await import('../agent/witnessed-buffer-order-journal.mjs');
   const {buildBufferWalletSpendingPlan}=await import('../agent/buffer-wallet-spending-plan.mjs');
   const {createFixedBufferOrderOnce}=await import('../agent/buffer-fixed-order-once.mjs');
@@ -225,8 +227,15 @@ artifactDbtest('one synthetic seller POST is encrypted and witnessed after owner
   const {CIRCLE_TESTNET_CODE_HASH}=await import('../agent/keyless-vault-v12-readiness.mjs');
   const {CIRCLE_TESTNET_USDC}=await import('../scripts/circle-testnet-setup.mjs');
   const {BUFFER_TESTNET_CONTRACT}=await import('../experiments/buffer-forwarder/build.mjs');
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'bouncer-order-e2e-')),bare=path.join(dir,'remote.git'),work=path.join(dir,'work'),branch='arena/0ee9ab70-near-hub';
+  const git=(cwd,args)=>execFileSync('git',args,{cwd,encoding:'utf8',stdio:['ignore','pipe','pipe']}).trim();
   const pool=new pg.Pool({connectionString:url,max:5});
   try {
+    fs.mkdirSync(work);git(dir,['init','--bare','--initial-branch',branch,bare]);git(work,['init','--initial-branch',branch]);
+    git(work,['config','user.email','synthetic@example.test']);git(work,['config','user.name','Synthetic test']);
+    git(work,['remote','add','origin',bare]);fs.writeFileSync(path.join(work,'README.md'),'Synthetic only\n');
+    git(work,['add','README.md']);git(work,['commit','-m','Initial']);git(work,['push','origin',branch]);
+    const initialHead=git(work,['rev-parse','HEAD']);
     await initializePostgresWalletPromptAuth({pool});await initializePostgresBufferOrderFence({pool});const f=await fixture();
     const agent1=String(nearApi.KeyPair.fromRandom('ed25519').getPublicKey()),agent2=String(nearApi.KeyPair.fromRandom('ed25519').getPublicKey());
     const {review}=buildBufferWalletSpendingPlan({owner:f.owner,vault:`vault.${f.owner}`,adapter:`forward.${f.owner}`,policy_id:'test',
@@ -237,9 +246,8 @@ artifactDbtest('one synthetic seller POST is encrypted and witnessed after owner
     setSyntheticSetupStage(chainState,blockHash,3);
     const auth=createBufferOrderAuthenticator({auth:createPostgresWalletPromptAuth({pool,origin:site,provider})});
     const fence=createPostgresBufferOrderFence({pool,authenticate:auth.authenticate,crypto:crypto.webcrypto});
-    let text='',head='0';const store={async read(){return {text,head}},async append(input){
-      if(input.expectedHead!==head || input.expectedText!==text)throw Error();text=input.text;head=String(+head+1);return {head,confirmed:true}}};
-    const witness=createBufferOrderWitness({store}),journal=createWitnessedBufferOrderJournal({fence,witness});
+    const witness=createBufferOrderWitness({store:createGitBufferOrderWitnessStore({repo:work,branch,initialHead})}),
+      journal=createWitnessedBufferOrderJournal({fence,witness});
     const signed=async purpose=>{const context={purpose,identity:f.identity};
       return signReviewedBufferOrderChallenge({wallet:f.wallet,context,challenge:await auth.issue(context),location,crypto:crypto.webcrypto,fetch:f.fetch})};
     await journal.reserve({identity:f.identity,keyRecord:f.keyRecord,draftCapsule:f.draft.capsule,evidence:await signed('reserve')});
@@ -265,7 +273,7 @@ artifactDbtest('one synthetic seller POST is encrypted and witnessed after owner
     const opened=await openPrivateOrder({wallet:f.wallet,keyRecord:f.keyRecord,capsule:state.capsule,trustedCapsuleSha256:state.capsule_sha256,
       location,crypto:crypto.webcrypto,fetch:f.fetch});assert.equal(opened.accessToken,f.order.accessToken);
     await assert.rejects(executor.submit(input));assert.equal(posts,1);assert.equal(result.delivery_verified,false);
-  } finally {await pool.end();}
+  } finally {await pool.end();fs.rmSync(dir,{recursive:true,force:true});}
 });
 
 dbtest('same-process retention handle is not reconstructible or reusable from JSON',async()=>{
