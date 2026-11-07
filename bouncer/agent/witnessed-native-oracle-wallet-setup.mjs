@@ -1,0 +1,89 @@
+/**
+ * Experimental two-system coordinator for the four native wallet stages.
+ * PostgreSQL authenticates the exact owner action and verifies all prior
+ * original receipt graphs plus a fresh same-block preflight. An independently
+ * retained Git CAS witness must acknowledge and re-read the matching claim
+ * before the coordinator returns it. No wallet or chain action occurs here.
+ *
+ * An unknown DB/Git acknowledgment, stale preflight or missing original is a
+ * permanent stop for that stage, not a reason to open another wallet prompt.
+ * The independent latest Git head still requires outside retention/monitoring;
+ * administrators, simultaneous rollback, bypassing clients, provider lies,
+ * XSS and compromised wallet/host are not defeated. This is not a live UI or
+ * spending authorization. Real owner approval is still a separate boundary.
+ */
+import { WalletWitnessError } from './git-wallet-prompt-witness.mjs';
+
+const STAGES = ['create_keyless_native_vault', 'configure_native_oracle_policy', 'fund_native_vault', 'install_native_oracle_agent'];
+const fail = code => new WalletWitnessError(code, 'native wallet setup is uncertain or no longer fresh; stop and reconcile, never repeat a claimed prompt');
+function identityFrom(prompt) {
+  if (!prompt || prompt.status !== 'RESERVED_NOT_CLAIMED' || prompt.execution_authorized !== false ||
+      prompt.review?.owner !== prompt.owner || prompt.review?.review_sha256 !== prompt.review_sha256 ||
+      !Array.isArray(prompt.review?.stages) || prompt.review.stages.length !== STAGES.length ||
+      !Array.isArray(prompt.stages) || prompt.stages.length !== STAGES.length) throw fail('WITNESS_MISMATCH');
+  return { owner: prompt.owner, owner_public_key: prompt.owner_public_key, operation_id: prompt.operation_id,
+    review_sha256: prompt.review_sha256, stages: prompt.review.stages.map((stage, index) => {
+      if (stage?.id !== STAGES[index] || prompt.stages[index]?.stage_id !== stage.id || prompt.stages[index]?.claimed !== false ||
+          prompt.stages[index]?.original_hash !== null || prompt.stages[index]?.action_commitment_sha256 !== stage.action_commitment_sha256) {
+        throw fail('WITNESS_MISMATCH');
+      }
+      return { stage_id: stage.id, action_commitment_sha256: stage.action_commitment_sha256 };
+    }) };
+}
+function common(identity, stageId, evidence) {
+  const stage = identity?.stages?.find(s => s.stage_id === stageId);
+  if (!stage || !STAGES.includes(stageId)) throw fail('WITNESS_MISMATCH');
+  return { owner: identity.owner, ownerPublicKey: identity.owner_public_key, operationId: identity.operation_id,
+    reviewSha256: identity.review_sha256, stageId, actionCommitmentSha256: stage.action_commitment_sha256, evidence };
+}
+function checkFresh(claim, id, stageId, now) {
+  const clock = now(), checked = Date.parse(claim?.preflight_checked_at);
+  if (claim?.owner !== id.owner || claim.operation_id !== id.operation_id || claim.review_sha256 !== id.review_sha256 ||
+      claim.stage_id !== stageId || claim.action_commitment_sha256 !== id.stages.find(s => s.stage_id === stageId)?.action_commitment_sha256 ||
+      claim.status !== 'PROMPT_CLAIMED_NO_HASH' || claim.do_not_retry !== true || claim.execution_authorized !== false ||
+      !Number.isSafeInteger(clock) || !Number.isSafeInteger(checked) || clock < checked || clock - checked > 5000) throw fail('WITNESSED_CLAIM_STALE');
+}
+export function createWitnessedNativeOracleSetup({ fence, witness, now = Date.now } = {}) {
+  if (!fence || ['reserve','inspect','claim','recordOriginal'].some(m => typeof fence[m] !== 'function') || !witness ||
+      ['inspect','reserve','assertClaimable','claim','recordOriginal'].some(m => typeof witness[m] !== 'function') || typeof now !== 'function') {
+    throw Error('authenticated native PostgreSQL fence and independent CAS witness required');
+  }
+  return Object.freeze({
+    async reserve(request = {}) {
+      const existing = await witness.inspect(request?.review?.owner);
+      if (existing.state) throw fail('OWNER_ALREADY_WITNESSED');
+      // No prompt is returned if either separately retained commit is uncertain.
+      const reservation = await fence.reserve(request), identity = identityFrom(reservation);
+      const saved = await witness.reserve(identity);
+      return { identity, review: reservation.review, witness_head: saved.head, status: 'RESERVED_NOT_CLAIMED',
+        execution_authorized: false, wallet_invocation_verified: false,
+        scope: 'native testnet reservation and public independent witness only; no approval, wallet, transaction or provider work' };
+    },
+    async claim({ identity: raw, stageId, evidence } = {}) {
+      const identity = structuredClone(raw), args = common(identity, stageId, evidence);
+      const checkpoint = await witness.assertClaimable(identity, stageId);
+      const claim = await fence.claim(args);
+      // If this write or acknowledgement fails, the database claim may already
+      // exist. No prompt is returned; never try to claim the same stage again.
+      const saved = await witness.claim(identity, stageId, checkpoint);
+      checkFresh(claim, identity, stageId, now);
+      return { ...claim, witness_head: saved.head, independently_witnessed: true,
+        execution_authorized: false, wallet_invocation_verified: false,
+        scope: 'independently witnessed native stage claim only; not owner consent, a wallet invocation, transaction or delivery' };
+    },
+    async recordOriginal({ identity: raw, stageId, originalHash, evidence } = {}) {
+      const identity = structuredClone(raw), args = common(identity, stageId, evidence), before = await witness.inspect(identity.owner);
+      if (!before.state || JSON.stringify(before.state.identity) !== JSON.stringify(identity)) throw fail('WITNESS_MISMATCH');
+      const last = before.state.records.at(-1);
+      if (before.state.phase !== 'claimed' && !(['original','complete'].includes(before.state.phase) &&
+          last.stage_id === stageId && last.original_hash === originalHash)) throw fail('WITNESS_MISMATCH');
+      if (before.state.phase === 'claimed' && before.state.identity.stages[before.state.stage_index].stage_id !== stageId) throw fail('WITNESS_MISMATCH');
+      const saved = await fence.recordOriginal({ ...args, originalHash });
+      if (saved?.original_hash !== originalHash) throw fail('WITNESS_MISMATCH');
+      const checkpoint = await witness.recordOriginal(identity, stageId, originalHash);
+      return { owner: identity.owner, operation_id: identity.operation_id, stage_id: stageId, original_hash: originalHash,
+        witness_head: checkpoint.head, status: 'ORIGINAL_RECORDED', do_not_retry: true, execution_authorized: false,
+        scope: 'original hash retained in two systems; FINAL receipt and current state still require verification' };
+    },
+  });
+}

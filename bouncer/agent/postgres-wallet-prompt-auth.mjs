@@ -65,6 +65,26 @@ function actionFields(action) {
   const purpose = Object.getOwnPropertyDescriptor(action, 'purpose');
   if (!purpose || !Object.hasOwn(purpose, 'value')) throw new Error('invalid owner authorization action');
   const common = ['format', 'network', 'purpose', 'owner', 'owner_public_key'];
+  const native = ['reserve_native_setup', 'claim_native_setup_stage', 'record_native_setup_original', 'inspect_native_setup'];
+  if (native.includes(purpose.value)) {
+    const stages = ['create_keyless_native_vault', 'configure_native_oracle_policy', 'fund_native_vault', 'install_native_oracle_agent'];
+    const extra = purpose.value === 'inspect_native_setup' ? [] : purpose.value === 'reserve_native_setup'
+      ? ['review_sha256', 'stage_id', 'action_commitment_sha256']
+      : ['operation_id', 'review_sha256', 'stage_id', 'action_commitment_sha256',
+        ...(purpose.value === 'record_native_setup_original' ? ['original_hash'] : [])];
+    if (!exact(action, [...common, ...extra]) || action.format !== 'bouncer-wallet-prompt-auth-v1' || action.network !== 'testnet' ||
+        !isTestnetAccount(action.owner) || !action.owner.endsWith('.testnet') ||
+        action.owner === 'bouncer-owner-12f343b795633e357ae5560d.testnet') throw new Error('invalid native owner authorization action');
+    parseOwnerKey(action.owner_public_key);
+    if (purpose.value !== 'inspect_native_setup' && (!HEX64.test(action.review_sha256 ?? '') ||
+        !HEX64.test(action.action_commitment_sha256 ?? '') || !stages.includes(action.stage_id) ||
+        (purpose.value === 'reserve_native_setup' && action.stage_id !== stages[0]))) throw new Error('invalid native reviewed action');
+    if (['claim_native_setup_stage', 'record_native_setup_original'].includes(purpose.value) && !HEX32.test(action.operation_id ?? '')) {
+      throw new Error('invalid native prompt operation');
+    }
+    if (purpose.value === 'record_native_setup_original' && !isTransactionHash(action.original_hash)) throw new Error('invalid native original');
+    return Object.freeze(Object.fromEntries([...common, ...extra].map(name => [name, action[name]])));
+  }
   const orderAction = ['reserve_buffer_order','claim_buffer_order','record_buffer_order','inspect_buffer_order'].includes(purpose.value);
   const orderFields = ['attempt_id','site','key_sha256','key_record_sha256','review_sha256','request_commitment_sha256','draft_sha256'];
   const extra = orderAction ? [...orderFields, ...(purpose.value === 'record_buffer_order' ? ['capsule_sha256'] : [])] : purpose.value === 'reserve' ? ['review_sha256', 'stage_id', 'action_commitment_sha256'] :
@@ -118,7 +138,10 @@ function fixedOrigin(value) {
 function challengeMessage(action, digest, origin, issued, expires) {
   const orderLabels = {reserve_buffer_order:'Reserve an encrypted Buffer order',claim_buffer_order:'Claim one Buffer order attempt',
     record_buffer_order:'Record the encrypted Buffer order',inspect_buffer_order:'Inspect the encrypted Buffer order'};
-  const what = orderLabels[action.purpose] ?? (action.purpose === 'reserve' ? `Reserve setup prompt: ${action.stage_id}` :
+  const nativeLabels = { reserve_native_setup: `Reserve native setup prompt: ${action.stage_id}`,
+    claim_native_setup_stage: `Claim one native setup prompt: ${action.stage_id}`,
+    record_native_setup_original: `Record native setup original: ${action.stage_id}`, inspect_native_setup: 'Inspect retained native setup' };
+  const what = orderLabels[action.purpose] ?? nativeLabels[action.purpose] ?? (action.purpose === 'reserve' ? `Reserve setup prompt: ${action.stage_id}` :
     ['claim_prompt', 'claim_setup_stage'].includes(action.purpose) ? `Claim one setup prompt: ${action.stage_id}` :
     ['reconcile_setup_original', 'reconcile_setup_stage'].includes(action.purpose) ? `Reconcile original: ${action.stage_id}` :
     ['record_original_hash', 'record_setup_stage_original'].includes(action.purpose) ? 'Record the original transaction hash' :

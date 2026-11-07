@@ -273,3 +273,27 @@ dbtest('unsafe schema, unsupported keys and malformed signatures fail closed', a
   } finally { await db.query('ALTER TABLE bouncer_wallet_auth_v1.challenges ENABLE TRIGGER challenge_immutable'); }
   assert.equal(await auth.authenticate({ action: f.action, evidence }), true);
 }));
+
+dbtest('native setup challenges bind all four exact stages, originals and the one-use owner key', async () => resources(async (db, rpc, auth) => {
+  const f = fixture(), base = { format: 'bouncer-wallet-prompt-auth-v1', network: 'testnet', owner: f.owner, owner_public_key: pk(f.ownerKey) };
+  const stages = ['create_keyless_native_vault','configure_native_oracle_policy','fund_native_vault','install_native_oracle_agent'];
+  const reserve = { ...base, purpose: 'reserve_native_setup', review_sha256: 'a'.repeat(64), stage_id: stages[0], action_commitment_sha256: 'b'.repeat(64) };
+  const inspect = { ...base, purpose: 'inspect_native_setup' };
+  const actions = [reserve, inspect, ...stages.flatMap((stage_id, i) => {
+    const stage = { ...base, operation_id: 'c'.repeat(32), review_sha256: 'a'.repeat(64), stage_id,
+      action_commitment_sha256: 'b'.repeat(64) };
+    return [{ ...stage, purpose: 'claim_native_setup_stage' }, { ...stage, purpose: 'record_native_setup_original', original_hash: hash(60 + i) }];
+  })];
+  for (const action of actions) {
+    const challenge = await auth.issue(action), evidence = signed(challenge, f);
+    assert.match(challenge.message, /not a transaction/);
+    assert.equal(await auth.authenticate({ action, evidence }), true);
+    assert.equal(await auth.authenticate({ action, evidence }), false);
+  }
+  for (const bad of [
+    { ...reserve, stage_id: stages[1] }, { ...reserve, review_sha256: 'A'.repeat(64) },
+    { ...reserve, owner: 'buyer.near' }, { ...reserve, owner: 'bouncer-owner-12f343b795633e357ae5560d.testnet' },
+    { ...reserve, extra: 'unexpected' }, { ...actions[2], operation_id: '0'.repeat(31) },
+    { ...actions[3], original_hash: 'bad' },
+  ]) await assert.rejects(auth.issue(bad));
+}));

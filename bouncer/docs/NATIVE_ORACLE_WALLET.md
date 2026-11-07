@@ -40,11 +40,22 @@ examples were **self-hosted development services**.
   reservation/claim/original log for the four stages. The Git-backed store
   uses a branch CAS and checks the acknowledged remote head. A lost claim
   acknowledgment blocks another claim. This is an experimental independent
-  checkpoint, not a complete authorization service: the owner session,
-  PostgreSQL coordinator, prior receipt/preflight gates and independent latest
-  head retention/monitoring are not connected. Git administrators or a
+  checkpoint, not a complete authorization service. The PostgreSQL coordinator,
+  receipt gates and NEP-413 checks are composed only in tests; there is no hosted
+  owner session or independent latest-head retention/monitoring. Git administrators or a
   simultaneous rollback can still defeat it. A hash in this log alone does
   **not** establish a valid receipt or allow a later wallet prompt.
+- `postgres-native-oracle-prompt-fence.mjs` atomically retains one review and
+  four stage rows, checks earlier original receipts and fresh native preflights,
+  and claims each prompt once. `witnessed-native-oracle-wallet-setup.mjs`
+  combines it with the separate Git witness; NEP-413 challenges bind the exact
+  native action to a fresh Ed25519 FullAccess-key view (not EVM/0x support). Synthetic signatures and a
+  disposable PostgreSQL, local Git and in-memory CAS stores exercise concurrency,
+  lost acknowledgments, schema tampering and stale checks. This is not a hosted service or live
+  wallet integration. The latest Git head needs independent monitoring; separate
+  FT and native namespaces do not yet give a global cross-flow owner lock. A
+  claim whose preflight expires while waiting for the witness is consumed and
+  cannot be retried. No code here invokes a transaction-signing wallet.
 - `web-src/native-oracle-device-key.mjs` can generate and retain one local,
   non-extractable Ed25519 WebCrypto key per owner and test its possession
   without exporting the private key. It has no transaction-signing, network or
@@ -71,7 +82,9 @@ examples were **self-hosted development services**.
   exercised all four stages, the exact receipt verifiers, the zero-yocto guard,
   the restricted-key 1-yocto rejection and an over-cap rejection. The OutLayer
   registry in that test was fabricated, and no provider request or public-chain
-  transaction occurred. The NEAR Connect converter is separately checked
+  transaction occurred. A [later isolated run](https://github.com/Greatmujey/Bouncer/actions/runs/42399638463)
+  also removed the agent access key, rejected a zero-yocto revoke, verified both
+  recovery originals and confirmed that the grant and key were absent. The NEAR Connect converter is separately checked
   offline; that is **not** a real-wallet or real-phone compatibility test.
 
 ## Funding and refunds
@@ -102,8 +115,9 @@ is not proof of global absence or a compatible wallet transport.
 
 ## Before enabling a real phone flow
 
-1. Complete the independently monitored per-owner prompt fence and
-   authenticated owner session for these **four** exact stages. Preserve the
+1. Deploy and independently monitor the per-owner prompt fence and authenticated
+   owner session for these **four** exact stages; add a global cross-flow owner
+   lock and a safe operational recovery procedure. Preserve the
    separately anchored review and every original hash across crashes, lost
    responses, browser changes and database or witness rollback. A local browser
    cache alone is insufficient. An uncertain claim or prompt is a stop, not a
