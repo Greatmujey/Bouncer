@@ -103,3 +103,25 @@ test('an unavailable or dishonest checkpoint never acknowledges an independent c
   anchor.mode('normal'); assert.equal((await ft.inspect(a.owner)).state.phase,'claimed');
   await assert.rejects(ft.assertClaimable(a,a.stages[0].stage_id),e => e.code === 'WITNESS_NOT_CLAIMABLE');
 }));
+
+test('full reachable baseline audit catches deletion followed by restoration that a net diff misses', async () => repository(async ({ work, base, ft, audit }) => {
+  const { auditFullGitWitnessHistory } = await import('../agent/full-git-witness-history-audit.mjs');
+  const a = id('baseline-audit.testnet'); await ft.reserve(a);
+  const initial = git(work,['rev-parse','HEAD']), file = path.join(work,fileFor(a.owner,'wallet-prompt-witness-v1'));
+  const original = fs.readFileSync(file); fs.unlinkSync(file); commit(work,'Delete earlier synthetic claim');
+  fs.writeFileSync(file,original); const restored = commit(work,'Restore earlier synthetic claim');
+  assert.equal(await audit(base,restored),true,'net tree alone cannot see the temporary removal');
+  assert.equal((await auditFullGitWitnessHistory({repo:work,head:initial})).reachable_history_only,true);
+  await assert.rejects(auditFullGitWitnessHistory({repo:work,head:restored}),/unsafe|append-only/);
+}));
+
+test('full baseline audit rejects shallow histories and non-commit heads', async () => repository(async ({ work, base }) => {
+  const { auditFullGitWitnessHistory } = await import('../agent/full-git-witness-history-audit.mjs');
+  fs.appendFileSync(path.join(work,'README.md'),'Second commit\n'); commit(work,'Second synthetic commit');
+  const shallow = path.join(path.dirname(work),'shallow');
+  git(path.dirname(work),['clone','--depth=1',`file://${work}`,shallow]);
+  assert.equal(git(shallow,['rev-parse','--is-shallow-repository']),'true');
+  await assert.rejects(auditFullGitWitnessHistory({repo:shallow,head:git(shallow,['rev-parse','HEAD'])}),/unavailable or unsafe/);
+  await assert.rejects(auditFullGitWitnessHistory({repo:work,head:'a'.repeat(40)}),/unavailable or unsafe/);
+  assert.equal((await auditFullGitWitnessHistory({repo:work,head:base})).wallet_or_transaction_authorized,false);
+}));

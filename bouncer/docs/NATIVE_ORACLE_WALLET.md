@@ -68,6 +68,20 @@ examples were **self-hosted development services**.
   checkpoint, so independent administration and a further independently
   retained latest revision remain essential. It cannot make the setup DB safe
   merely by placing both schemas in the same database.
+- `full-git-witness-history-audit.mjs` walks **every parent edge** of an
+  unshallowed reachable Git history, not just the first-to-last tree diff.
+  It rejects a deleted witness even if later restored, shallow histories,
+  unsupported roots and overlong histories. The read-only operator command
+  `npm run audit:witness-history` also compares local and remote branch heads
+  both before and after inspection; it neither provisions nor authorizes
+  anything. At branch head `af7d91a4c4c55af53ea676086e334a1a3be2a6fb` on
+  7 November 2026, the working-tree audit inspected 664 commits and 680 parent
+  edges successfully. GitHub API checks of the 14 then-visible branch tips
+  found the same single synthetic wallet witness only on this branch, its
+  predecessor branch and main; no native or Buffer witness was visible there.
+  This is a **limited observation**, not a complete baseline: deleted refs,
+  forks, noncooperating clients, off-Git history and races outside the checked
+  branch are not covered. No independent head or checkpoint was deployed.
 - `independent-setup-checkpoint.mjs` adds an authenticated machine-to-machine
   checkpoint service/client. The separate monitor fetches the exact configured
   Git branch and independently audits ancestry and every protected witness file

@@ -51,6 +51,7 @@
     "simulation": "echo \"Offline simulation only: open demo/index.html; no transactions are sent.\"",
     "build:web": "node scripts/build-web.mjs && node --check web/google-signin.mjs && node --check web/api/google-session.mjs",
     "checkpoint:monitor": "node scripts/start-independent-setup-checkpoint.mjs",
+    "audit:witness-history": "node scripts/audit-witness-baseline.mjs",
     "mcp": "node mcp/server.mjs"
   },
   "license": "MIT",

@@ -6,6 +6,11 @@ can change; re-read them before any submission. The current deadline is
 14 November 2026 at 23:59 UTC (15 November at 00:59 in Lagos). Testnet-only
 projects are eligible; integrations named in the track hints are not mandatory.
 
+**Scope update, 7 November:** an independently paid FT purchase is no longer
+on the critical path. Preserve FT support, but prioritize a genuine bounded
+native-NEAR resource flow and the eventual compute/storage/API mission. Older
+FT observations below remain historical research, not a new requirement.
+
 ## What exists and what it does not prove
 
 - The owner-only 1-yocto policy guard, restricted keys and spending caps have
@@ -37,6 +42,17 @@ projects are eligible; integrations named in the track hints are not mandatory.
 | Perform guarded swaps and cross-chain settlement | Previous Ref testnet swaps were owner setup, not a finished agent-guarded swap with reliable output accounting. A cross-chain Intents path is not complete. No real-money Intents transaction is authorized. | **Unstoppable DeFi** |
 | Coordinate a genuine agent swarm | One coordinator sequences work; there is no demonstrated independent multi-agent bidding, hiring or secure handoff economy. | **AI Swarms** |
 | Verify security at production strength | There is no independent audit of the vault, experimental forwarder or deployed relay. Receipt correlation still trusts the RPC and cannot prove source/build equivalence or isolate every same-block transfer. Seller output remains untrusted. | **AI Security & Defense**; affects every track |
+
+**Storage lead, not a working purchase:** Textile's historical
+[NEAR/Filecoin bridge SDK](https://github.com/textileio/near-storage-js) and
+[successor](https://github.com/textileio/storage-js) are archived. Their docs
+describe a refundable anti-Sybil testnet deposit, not proof of a current paid
+storage order. The [bridge account's transaction listing](https://testnet.nearblocks.io/address/filecoin-bridge.testnet)
+showed its latest listed incoming `addDeposit` as approximately four years old
+when checked on 7 November 2026; the documented broker endpoint could not be
+fetched. This does not prove the contract or every possible broker inactive,
+but is insufficient to send funds or claim independent storage delivery. No
+storage order, provider payment or deposit was made.
 
 **Svalin pay-per-call lead:** An [anonymous x402 offer refresh](https://github.com/Greatmujey/Bouncer/actions/runs/42253070781)
 on 6 November advertised an `exact` NEAR testnet route for **2,000 Circle
@@ -78,10 +94,10 @@ claimed.
 
 ## Recommended focus, not automatic track selection
 
-1. **Agent Economy + AI Security & Defense:** make one real testnet purchase
-   from an independent seller, with bounded policy, trustworthy delivery checks,
-   a confirmed payout and a recoverable, separately verified refund path. Do
-   not call a synthetic test a purchase.
+1. **Agent Economy + AI Security & Defense:** pursue the bounded native-NEAR
+   OutLayer path first, with owner approval, original-hash recovery and verified
+   provider results. An independent FT seller is optional afterward; do not
+   call a synthetic test or historical transaction a new purchase.
 2. Fix and verify the real wallet approval flow, without adding transaction or
    AddKey authority to an identity-only connection. Protect the live relay.
 3. Expand the same working purchase into compute, storage and API/data, rather
