@@ -4,6 +4,7 @@ import { isTestnetAccount, isWalletConnectProjectId, pairingTopic } from './wall
 import { verifyCliLogin } from './cli-login.mjs';
 import { verifyConnectedWalletOwner } from './wallet-owner-verification.mjs';
 import { formatPublicAmount, isNearAccountId, readPublicTestnetAccount } from './account-view.mjs';
+import { fetchBufferReadinessPreview } from './buffer-readiness-preview.mjs';
 
 // HTTP Date is coarse and can be cached. Only flag a large discrepancy when
 // the response provides a valid Date/Age and the request was reasonably fast.
@@ -91,6 +92,8 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
   const accountRefresh = doc.querySelector('#wallet-account-refresh');
   const ownerVerify = doc.querySelector('#wallet-owner-verify');
   const ownerStatus = doc.querySelector('#wallet-owner-status');
+  const bufferReadiness = doc.querySelector('#wallet-buffer-readiness');
+  const bufferReadinessStatus = doc.querySelector('#wallet-buffer-readiness-status');
   const ethereumInfoPanel = doc.querySelector('#wallet-ethereum-info');
   const ethereumContinue = doc.querySelector('#wallet-ethereum-continue');
   const ethereumBack = doc.querySelector('#wallet-ethereum-back');
@@ -142,6 +145,11 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
       ownerVerify.disabled = busyState;
       ownerVerify.textContent = ownerVerified ? 'Verify account again' : 'Verify account in wallet';
     }
+    if (bufferReadiness) {
+      const experimentalPreview = /^4173-[a-z0-9-]+\.e2b\.app$/i.test(win.location.hostname);
+      bufferReadiness.hidden = !(experimentalPreview && ownerVerified && connectedAccount === 'great_mujey.testnet');
+      bufferReadiness.disabled = busyState;
+    }
     accountUseWallet.hidden = connected;
     ethereumInfoPanel.hidden = !ethereumInfo;
     if (walletSafety) walletSafety.hidden = wcPairing || accountEntry || ethereumInfo || viewing;
@@ -179,6 +187,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     accountReadVersion++;
     ownerSessionVersion++; ownerVerification = null;
     if (ownerStatus) { ownerStatus.hidden = true; ownerStatus.textContent = ''; }
+    if (bufferReadinessStatus) { bufferReadinessStatus.hidden = true; bufferReadinessStatus.textContent = ''; }
     accountRead?.abort(); accountRead = null;
     accountEntry = false; ethereumInfo = false; viewedAccount = '';
     accountName.textContent = ''; accountNear.textContent = '—'; accountUsdc.textContent = '—';
@@ -425,6 +434,30 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     options.find(button => !button.disabled)?.focus();
   });
   accountRefresh.addEventListener('click', () => { void refreshAccountView(); });
+  bufferReadiness?.addEventListener('click', async () => {
+    const wallet = selectedWallet, accountId = connectedAccount, version = ownerSessionVersion;
+    if (busyState || !connected || accountId !== 'great_mujey.testnet' || ownerVerification?.wallet !== wallet ||
+        ownerVerification?.accountId !== accountId) return;
+    const stillCurrent = () => connected && selectedWallet === wallet && connectedAccount === accountId && ownerSessionVersion === version;
+    busy(true);
+    if (bufferReadinessStatus) { bufferReadinessStatus.hidden = false; bufferReadinessStatus.textContent = 'Checking testnet. No transaction will be requested.'; }
+    try {
+      const result = await fetchBufferReadinessPreview({ fetch: win.fetch.bind(win), onProgress: message => {
+        if (stillCurrent() && bufferReadinessStatus) bufferReadinessStatus.textContent = message;
+      } });
+      if (!stillCurrent()) return;
+      const s = result.snapshot, review = result.review;
+      if (s?.owner !== accountId || review?.owner !== accountId || review?.signing_or_broadcast_authorized !== false ||
+          review?.wallet_approval_obtained !== false || s?.signed !== false || s?.sent !== false) throw new Error('READ_ONLY_UNAVAILABLE');
+      const balance = formatPublicAmount(s.owner_circle_atoms, 6), price = formatPublicAmount(review.fixed_product_price_atoms, 6);
+      if (bufferReadinessStatus) bufferReadinessStatus.textContent = `Read-only review: ${balance} test USDC observed; Buffer brief ${price} test USDC. ` +
+        `The proposed keyless vault needs 6 test NEAR, which may remain locked as storage. No wallet transaction was requested. ` +
+        `This is not a purchase or spending permission; a durable one-shot journal and wallet approvals are still required.`;
+      setStatus('Testnet setup reviewed. No transaction or purchase has been made.');
+    } catch {
+      if (stillCurrent() && bufferReadinessStatus) bufferReadinessStatus.textContent = 'The read-only setup check is unavailable. No transaction was requested; nothing was spent.';
+    } finally { busy(false); if (stillCurrent()) renderControls(); }
+  });
   ownerVerify?.addEventListener('click', async () => {
     const wallet = selectedWallet, accountId = connectedAccount, version = ownerSessionVersion;
     if (busyState || !connected || !wallet?.manifest?.features?.signMessage || !isTestnetAccount(accountId)) return;
