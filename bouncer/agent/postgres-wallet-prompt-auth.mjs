@@ -42,6 +42,7 @@ END;
 `;
 const HEX32 = /^[a-f0-9]{32}$/, HEX64 = /^[a-f0-9]{64}$/;
 const STAGES = ['configure_buffer_locked_policy', 'install_buffer_vault_agent', 'install_buffer_forwarder_agent', 'create_keyless_vault'];
+const NEXT_SETUP_STAGES = ['register_vault_circle', 'fund_vault_circle'];
 const record = x => x !== null && typeof x === 'object' && !Array.isArray(x) &&
   [Object.prototype, null].includes(Object.getPrototypeOf(x));
 const exact = (value, names) => {
@@ -64,20 +65,28 @@ function actionFields(action) {
   if (!purpose || !Object.hasOwn(purpose, 'value')) throw new Error('invalid owner authorization action');
   const common = ['format', 'network', 'purpose', 'owner', 'owner_public_key'];
   const extra = purpose.value === 'reserve' ? ['review_sha256', 'stage_id', 'action_commitment_sha256'] :
-    purpose.value === 'claim_prompt' ? ['operation_id', 'review_sha256', 'stage_id', 'action_commitment_sha256'] :
-    purpose.value === 'reconcile_setup_original' ? ['operation_id', 'review_sha256', 'stage_id', 'action_commitment_sha256', 'original_hash'] :
-    purpose.value === 'record_original_hash' ? ['operation_id', 'original_hash'] : purpose.value === 'inspect' ? [] : null;
+    ['claim_prompt', 'claim_setup_stage'].includes(purpose.value) ? ['operation_id', 'review_sha256', 'stage_id', 'action_commitment_sha256'] :
+    ['reconcile_setup_original', 'record_setup_stage_original', 'reconcile_setup_stage'].includes(purpose.value) ?
+      ['operation_id', 'review_sha256', 'stage_id', 'action_commitment_sha256', 'original_hash'] :
+    purpose.value === 'verify_setup_funded' ? ['operation_id', 'review_sha256'] :
+    purpose.value === 'record_original_hash' ? ['operation_id', 'original_hash'] :
+    ['inspect', 'inspect_setup_progress'].includes(purpose.value) ? [] : null;
   if (!extra || !exact(action, [...common, ...extra]) || action.format !== 'bouncer-wallet-prompt-auth-v1' ||
       action.network !== 'testnet' || !isTestnetAccount(action.owner)) throw new Error('invalid owner authorization action');
   parseOwnerKey(action.owner_public_key);
-  if (['reserve', 'claim_prompt', 'reconcile_setup_original'].includes(action.purpose) &&
-      (!HEX64.test(action.review_sha256 ?? '') || !STAGES.includes(action.stage_id) || !HEX64.test(action.action_commitment_sha256 ?? ''))) {
+  const laterStageAction = ['claim_setup_stage', 'record_setup_stage_original', 'reconcile_setup_stage'].includes(action.purpose);
+  if ((['reserve', 'claim_prompt', 'reconcile_setup_original'].includes(action.purpose) || laterStageAction) &&
+      (!HEX64.test(action.review_sha256 ?? '') || !(laterStageAction ? NEXT_SETUP_STAGES : STAGES).includes(action.stage_id) ||
+        !HEX64.test(action.action_commitment_sha256 ?? ''))) {
     throw new Error('invalid reservation authorization action');
   }
-  if (['claim_prompt', 'reconcile_setup_original'].includes(action.purpose) && !HEX32.test(action.operation_id ?? '')) {
+  if ((['claim_prompt', 'reconcile_setup_original', 'verify_setup_funded'].includes(action.purpose) || laterStageAction) &&
+      !HEX32.test(action.operation_id ?? '')) {
     throw new Error('invalid prompt operation authorization action');
   }
-  if (action.purpose === 'reconcile_setup_original' && (action.stage_id !== 'create_keyless_vault' || !isTransactionHash(action.original_hash))) {
+  if (action.purpose === 'verify_setup_funded' && !HEX64.test(action.review_sha256 ?? '')) throw new Error('invalid funded review authorization action');
+  if ((action.purpose === 'reconcile_setup_original' && action.stage_id !== 'create_keyless_vault') ||
+      (['reconcile_setup_original', 'record_setup_stage_original', 'reconcile_setup_stage'].includes(action.purpose) && !isTransactionHash(action.original_hash))) {
     throw new Error('invalid original setup receipt authorization action');
   }
   if (action.purpose === 'record_original_hash' && (!HEX32.test(action.operation_id ?? '') || !isTransactionHash(action.original_hash))) {
@@ -100,9 +109,10 @@ function fixedOrigin(value) {
 }
 function challengeMessage(action, digest, origin, issued, expires) {
   const what = action.purpose === 'reserve' ? `Reserve setup prompt: ${action.stage_id}` :
-    action.purpose === 'claim_prompt' ? `Claim one setup prompt: ${action.stage_id}` :
-      action.purpose === 'reconcile_setup_original' ? 'Reconcile the original vault-creation transaction' :
-        action.purpose === 'record_original_hash' ? 'Record the original transaction hash' : 'Inspect the retained prompt';
+    ['claim_prompt', 'claim_setup_stage'].includes(action.purpose) ? `Claim one setup prompt: ${action.stage_id}` :
+    ['reconcile_setup_original', 'reconcile_setup_stage'].includes(action.purpose) ? `Reconcile original: ${action.stage_id}` :
+    ['record_original_hash', 'record_setup_stage_original'].includes(action.purpose) ? 'Record the original transaction hash' :
+    action.purpose === 'verify_setup_funded' ? 'Verify funded vault state' : 'Inspect the retained prompt';
   return `Bouncer testnet owner authentication\n${what}\nAccount: ${action.owner}\n` +
     `Public key: ${action.owner_public_key}\nAction SHA-256: ${digest}\nSite: ${origin}\n` +
     `Issued: ${new Date(issued).toISOString()}\nExpires: ${new Date(expires).toISOString()}\n` +

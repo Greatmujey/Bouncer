@@ -1,15 +1,14 @@
 /**
  * EXPERIMENTAL server-side write-ahead fence for an unsigned Buffer spending
- * review or the first vault-creation stage of a pinned setup review. This
- * module has no HTTP endpoint, signer, wallet integration, unlock, expiry, or
- * payment operation. An optional injected read-only RPC can reconcile the first
- * original hash; that is not permission to advance. One named testnet owner may
- * reserve at most ONE prompt record in this database, ever. A separate
- * claim is committed at most once before a cooperating caller could invoke a
- * wallet; a returned claim cannot prevent a malicious or bypassing caller
- * from invoking a wallet twice. The first setup claim additionally requires a
- * fresh same-block preflight from a configured trusted RPC; that does not
- * authorize execution or protect later stages. The first public original hash is immutable.
+ * review or a three-stage pinned vault setup review. This module has no HTTP
+ * endpoint, signer, wallet integration, policy unlock, expiry, or payment
+ * operation. One named testnet owner may reserve at most ONE setup or spending
+ * review in this database, ever. New setup reservations atomically retain two
+ * further one-shot stage rows. Each later setup claim requires matching FINAL
+ * receipts for every preceding original and a fresh same-block trusted-RPC
+ * preflight. A claim is committed at most once before a cooperating caller
+ * could invoke a wallet; a returned claim cannot prevent a malicious or
+ * bypassing caller from invoking a wallet twice. Public original hashes are immutable.
  * A reservation or claim without a hash remains blocked after a crash or lost
  * wallet response, and is never permission to retry.
  *
@@ -72,10 +71,36 @@ BEGIN
   RETURN NEW;
 END;
 `;
+// Two subsequent setup rows are created atomically with a new first-stage
+// reservation. Their identity is immutable; each may transition once from
+// unclaimed to claimed, and once from no hash to its first original hash.
+const SETUP_STAGE_GUARD_SOURCE = `
+BEGIN
+  IF TG_OP = 'DELETE' THEN
+    RAISE EXCEPTION 'setup stage records cannot be deleted';
+  END IF;
+  IF NEW.owner_account_id IS DISTINCT FROM OLD.owner_account_id OR
+     NEW.operation_id IS DISTINCT FROM OLD.operation_id OR
+     NEW.stage_index IS DISTINCT FROM OLD.stage_index OR
+     NEW.stage_id IS DISTINCT FROM OLD.stage_id OR
+     NEW.action_commitment_sha256 IS DISTINCT FROM OLD.action_commitment_sha256 OR
+     NEW.created_at IS DISTINCT FROM OLD.created_at THEN
+    RAISE EXCEPTION 'setup stage identity is immutable';
+  END IF;
+  IF NOT OLD.claimed AND NEW.claimed AND OLD.claimed_at IS NULL AND NEW.claimed_at IS NOT NULL AND
+     OLD.original_hash IS NULL AND NEW.original_hash IS NULL THEN
+    RETURN NEW;
+  END IF;
+  IF OLD.claimed AND NEW.claimed AND OLD.claimed_at IS NOT NULL AND NEW.claimed_at IS NOT DISTINCT FROM OLD.claimed_at AND
+     OLD.original_hash IS NULL AND NEW.original_hash IS NOT NULL THEN
+    RETURN NEW;
+  END IF;
+  RAISE EXCEPTION 'setup stage claims and original hashes are immutable and single use';
+END;
+`;
 const SPENDING_STAGES = Object.freeze(['configure_buffer_locked_policy', 'install_buffer_vault_agent', 'install_buffer_forwarder_agent']);
-// There is deliberately no stage progression/unlock yet. Supporting the first
-// setup reservation must not make later stages claimable without a journal.
 const SETUP_STAGE = 'create_keyless_vault';
+const NEXT_SETUP_STAGES = Object.freeze(['register_vault_circle', 'fund_vault_circle']);
 const STAGES = Object.freeze([...SPENDING_STAGES, SETUP_STAGE]);
 const SETUP_RECORD = 'bouncer-buffer-setup-fence-review-v1';
 // A fresh FINAL-block profile is still only a trusted RPC snapshot. Limit the
@@ -135,9 +160,10 @@ async function verifySchema(client) {
       AND i.indisunique AND i.indisvalid AND i.indisready AND i.indpred IS NULL AND i.indexprs IS NULL
     GROUP BY i.indexrelid, t.relname`);
   const indexes = new Set(found.rows.map(row => `${row.table_name}:${row.columns.join(',')}`));
-  if (!['meta:singleton', 'prompts:owner_account_id', 'prompts:operation_id', 'claims:owner_account_id', 'claims:operation_id']
+  if (!['meta:singleton', 'prompts:owner_account_id', 'prompts:operation_id', 'claims:owner_account_id', 'claims:operation_id',
+    'setup_stages:owner_account_id,stage_index', 'setup_stages:operation_id,stage_index', 'setup_stages:owner_account_id,stage_id']
       .every(key => indexes.has(key))) throw fail('UNSAFE_SCHEMA', 'prompt fence is missing an essential unique index');
-  for (const table of ['prompts', 'claims']) {
+  for (const table of ['prompts', 'claims', 'setup_stages']) {
     const visibility = await client.query(`SELECT t.relrowsecurity, t.relforcerowsecurity
       FROM pg_catalog.pg_class t JOIN pg_catalog.pg_namespace n ON n.oid=t.relnamespace
       WHERE n.nspname='bouncer_wallet_prompt_v1' AND t.relname=$1 AND t.relkind='r'`, [table]);
@@ -148,6 +174,7 @@ async function verifySchema(client) {
   for (const [table, trigger, fn, source] of [
     ['prompts', 'prompt_immutable', 'guard_prompt', GUARD_SOURCE],
     ['claims', 'claim_immutable', 'guard_claim', CLAIM_GUARD_SOURCE],
+    ['setup_stages', 'setup_stage_immutable', 'guard_setup_stage', SETUP_STAGE_GUARD_SOURCE],
   ]) {
     const guards = await client.query(`SELECT g.tgenabled, g.tgtype::integer AS kind, g.tgisinternal,
         p.prosrc, p.pronargs, p.prosecdef, p.provolatile, p.proconfig, lang.lanname
@@ -189,6 +216,16 @@ export async function initializePostgresWalletPromptFence({ pool } = {}) {
       claimed boolean NOT NULL DEFAULT false, created_at timestamptz NOT NULL DEFAULT pg_catalog.clock_timestamp(),
       claimed_at timestamptz
     )`);
+    await client.query(`CREATE TABLE IF NOT EXISTS ${SCHEMA}.setup_stages (
+      owner_account_id text NOT NULL REFERENCES ${SCHEMA}.prompts(owner_account_id),
+      operation_id text NOT NULL REFERENCES ${SCHEMA}.prompts(operation_id),
+      stage_index smallint NOT NULL CHECK (stage_index IN (1,2)), stage_id text NOT NULL,
+      action_commitment_sha256 text NOT NULL, claimed boolean NOT NULL DEFAULT false,
+      claimed_at timestamptz, original_hash text, created_at timestamptz NOT NULL DEFAULT pg_catalog.clock_timestamp(),
+      PRIMARY KEY (owner_account_id,stage_index), UNIQUE (operation_id,stage_index), UNIQUE (owner_account_id,stage_id),
+      CHECK ((stage_index=1 AND stage_id='register_vault_circle') OR (stage_index=2 AND stage_id='fund_vault_circle')),
+      CHECK ((NOT claimed AND claimed_at IS NULL AND original_hash IS NULL) OR (claimed AND claimed_at IS NOT NULL))
+    )`);
     const functions = await client.query(`SELECT p.oid FROM pg_catalog.pg_proc p
       JOIN pg_catalog.pg_namespace n ON n.oid=p.pronamespace
       WHERE n.nspname='bouncer_wallet_prompt_v1' AND p.proname='guard_prompt' AND p.pronargs=0`);
@@ -209,6 +246,16 @@ export async function initializePostgresWalletPromptFence({ pool } = {}) {
       WHERE n.nspname='bouncer_wallet_prompt_v1' AND t.relname='claims' AND g.tgname='claim_immutable'`);
     if (claimTriggers.rows.length === 0) await client.query(`CREATE TRIGGER claim_immutable BEFORE UPDATE OR DELETE ON ${SCHEMA}.claims
       FOR EACH ROW EXECUTE FUNCTION ${SCHEMA}.guard_claim()`);
+    const setupFunctions = await client.query(`SELECT p.oid FROM pg_catalog.pg_proc p
+      JOIN pg_catalog.pg_namespace n ON n.oid=p.pronamespace
+      WHERE n.nspname='bouncer_wallet_prompt_v1' AND p.proname='guard_setup_stage' AND p.pronargs=0`);
+    if (setupFunctions.rows.length === 0) await client.query(`CREATE FUNCTION ${SCHEMA}.guard_setup_stage() RETURNS trigger
+      LANGUAGE plpgsql SET search_path = pg_catalog AS $guard$${SETUP_STAGE_GUARD_SOURCE}$guard$`);
+    const setupTriggers = await client.query(`SELECT g.oid FROM pg_catalog.pg_trigger g JOIN pg_catalog.pg_class t ON t.oid=g.tgrelid
+      JOIN pg_catalog.pg_namespace n ON n.oid=t.relnamespace
+      WHERE n.nspname='bouncer_wallet_prompt_v1' AND t.relname='setup_stages' AND g.tgname='setup_stage_immutable'`);
+    if (setupTriggers.rows.length === 0) await client.query(`CREATE TRIGGER setup_stage_immutable BEFORE UPDATE OR DELETE ON ${SCHEMA}.setup_stages
+      FOR EACH ROW EXECUTE FUNCTION ${SCHEMA}.guard_setup_stage()`);
     // Existing definitions are never silently replaced; mismatch blocks use.
     // Do NOT backfill claims for legacy prompts: we cannot prove they were not opened.
     await verifySchema(client);
@@ -280,6 +327,49 @@ async function claimStatus(client, prompt) {
   return claim.claimed ? 'CLAIMED' : prompt.original_hash ? 'ORIGINAL_ALREADY_RECORDED' : 'AVAILABLE';
 }
 
+const setupStageColumns = `owner_account_id,operation_id,stage_index,stage_id,action_commitment_sha256,
+  claimed,claimed_at,original_hash,created_at`;
+
+async function setupProgress(client, prompt, lock = false) {
+  if (!prompt.setup_snapshot || prompt.stage_id !== SETUP_STAGE) throw fail('MISMATCH', 'a retained setup reservation is required');
+  const firstRows = await client.query(`SELECT owner_account_id,operation_id,claimed,created_at,claimed_at
+    FROM ${SCHEMA}.claims WHERE owner_account_id=$1${lock ? ' FOR UPDATE' : ''}`, [prompt.owner]);
+  if (firstRows.rows.length === 0) throw fail('LEGACY_NOT_CLAIMABLE', 'legacy setup reservation has no atomic claim; stop and reconcile');
+  if (firstRows.rows.length !== 1) throw fail('CORRUPT', 'duplicate setup claim records; stop');
+  const first = checkedClaim(firstRows.rows[0], prompt);
+  const result = await client.query(`SELECT ${setupStageColumns} FROM ${SCHEMA}.setup_stages
+    WHERE owner_account_id=$1 ORDER BY stage_index${lock ? ' FOR UPDATE' : ''}`, [prompt.owner]);
+  if (result.rows.length === 0) throw fail('LEGACY_NOT_CLAIMABLE', 'legacy setup has no atomic later-stage journal; stop and reconcile');
+  if (result.rows.length !== NEXT_SETUP_STAGES.length) throw fail('CORRUPT', 'setup stage journal is incomplete; stop and reconcile');
+  const stages = result.rows.map((row, i) => {
+    const expected = prompt.review.stages[i + 1];
+    if (row.owner_account_id !== prompt.owner || row.operation_id !== prompt.operation_id || row.stage_index !== i + 1 ||
+        row.stage_id !== NEXT_SETUP_STAGES[i] || row.action_commitment_sha256 !== expected.action_commitment_sha256 ||
+        typeof row.claimed !== 'boolean' || !(row.created_at instanceof Date) || !Number.isFinite(row.created_at.getTime()) ||
+        !((!row.claimed && row.claimed_at === null && row.original_hash === null) ||
+          (row.claimed && row.claimed_at instanceof Date && Number.isFinite(row.claimed_at.getTime()) &&
+            (row.original_hash === null || isTransactionHash(row.original_hash))))) {
+      throw fail('CORRUPT', 'setup stage journal differs from its retained review; stop and reconcile');
+    }
+    return row;
+  });
+  if ((stages[0].claimed && (!first.claimed || !prompt.original_hash)) ||
+      (stages[1].claimed && (!stages[0].claimed || !stages[0].original_hash))) {
+    throw fail('CORRUPT', 'setup stage claims are out of order; stop and reconcile');
+  }
+  const hashes = [prompt.original_hash, ...stages.map(stage => stage.original_hash)].filter(Boolean);
+  if (new Set(hashes).size !== hashes.length) throw fail('CORRUPT', 'setup originals cannot be reused across stages');
+  return { first, stages };
+}
+function assertPriorSetupProgress(prompt, progress, index) {
+  if (!progress.first.claimed || !prompt.original_hash ||
+      (index >= 1 && (!progress.stages[0].claimed || !progress.stages[0].original_hash)) ||
+      (index >= 2 && (!progress.stages[1].claimed || !progress.stages[1].original_hash))) {
+    throw fail('PRIOR_STAGE_UNRESOLVED', 'a preceding setup prompt is unclaimed or has no original hash; stop and reconcile');
+  }
+  return [prompt.original_hash, ...progress.stages.slice(0, index).map(stage => stage.original_hash)];
+}
+
 function requiredOwner(owner, ownerPublicKey) {
   // Key validation also occurs via the complete review. The name format alone
   // does not prove account existence or ownership.
@@ -321,6 +411,62 @@ export function createPostgresWalletPromptFence({ pool, authenticate, setupWasmB
   }
   const context = (purpose, owner, key, extra = {}) => Object.freeze({ format: 'bouncer-wallet-prompt-auth-v1',
     network: 'testnet', purpose, owner, owner_public_key: key, ...extra });
+  async function loadSetup(client, { owner, ownerPublicKey, operationId, reviewSha256 }, lock = false) {
+    await verifySchema(client);
+    const found = await client.query(`SELECT ${columns} FROM ${SCHEMA}.prompts WHERE owner_account_id=$1${lock ? ' FOR UPDATE' : ''}`, [owner]);
+    if (found.rows.length !== 1) throw fail('OWNER_FENCED', 'original setup reservation missing; stop and reconcile');
+    const prompt = validatedRow(found.rows[0], pinnedSetupWasm);
+    if (prompt.owner_public_key !== ownerPublicKey || (operationId !== undefined && prompt.operation_id !== operationId) ||
+        (reviewSha256 !== undefined && prompt.review_sha256 !== reviewSha256)) {
+      throw fail('MISMATCH', 'retained setup owner, operation or review differs; stop and reconcile');
+    }
+    return { prompt, progress: await setupProgress(client, prompt, lock) };
+  }
+  function assertStageIdentity(prompt, stage, stageId, commitment) {
+    if (!stage || stage.stage_id !== stageId || stage.action_commitment_sha256 !== commitment ||
+        prompt.review.stages[stage.stage_index]?.action_commitment_sha256 !== commitment) {
+      throw fail('MISMATCH', 'retained setup stage differs from the reviewed action; stop and reconcile');
+    }
+  }
+  function requireSetupProviders() {
+    if (!readStatus || !readReceipts || !preflightProvider) {
+      throw fail('SETUP_PREFLIGHT_UNAVAILABLE', 'trusted receipt and same-block preflight providers are required; no prompt was claimed');
+    }
+  }
+  async function setupPreflight(prompt, hashes, stageId) {
+    try {
+      if ((await readStatus())?.chain_id !== 'testnet') throw new Error('not testnet');
+      const priorOriginals = [];
+      for (let i = 0; i < hashes.length; i++) {
+        const stage = [SETUP_STAGE, ...NEXT_SETUP_STAGES][i];
+        const attempt = prepareBufferWalletSetupAttempt({ review: prompt.review, snapshot: prompt.setup_snapshot,
+          wasmBytes: pinnedSetupWasm, trustedReviewHash: prompt.review_sha256, trustedOwnerPublicKey: prompt.owner_public_key,
+          stageId: stage, trustedOriginalHash: hashes[i] });
+        const result = structuredClone(await readReceipts(hashes[i], prompt.owner, 'FINAL'));
+        priorOriginals.push({ trustedOriginalHash: hashes[i], attempt, result });
+      }
+      return await inspectBufferWalletSetupStage({ review: prompt.review, snapshot: prompt.setup_snapshot,
+        wasmBytes: pinnedSetupWasm, trustedReviewHash: prompt.review_sha256, trustedOwnerPublicKey: prompt.owner_public_key,
+        trustedSellerCodeHash: prompt.review.seller_code_hash_observed, stageId, priorOriginals, provider: preflightProvider });
+    } catch {
+      throw fail('SETUP_PREFLIGHT_UNAVAILABLE', 'preceding originals or fresh same-block setup preflight are unavailable; stop and reconcile');
+    }
+  }
+  function assertSetupProfile(preflight, prompt, stageId, count) {
+    if (preflight.status !== 'READ_ONLY_SETUP_STAGE_PROFILE_MATCH' || preflight.owner !== prompt.owner ||
+        preflight.review_sha256 !== prompt.review_sha256 || preflight.stage_id !== stageId ||
+        preflight.seller_code_hash !== prompt.review.seller_code_hash_observed || preflight.prior_receipt_graphs_matched !== count ||
+        !Array.isArray(preflight.blockers) || preflight.blockers.length !== 0) {
+      throw fail('SETUP_PREFLIGHT_BLOCKED', 'fresh same-block setup checks did not all pass; no wallet prompt was claimed');
+    }
+  }
+  function assertFreshSetupPreflight(preflight) {
+    const checked = Date.parse(preflight.checked_at), now = Date.now();
+    if (!Number.isSafeInteger(checked) || !Number.isSafeInteger(now) || now < checked || now - checked > MAX_SETUP_PREFLIGHT_AGE_MS) {
+      throw fail('SETUP_PREFLIGHT_STALE', 'setup preflight expired before the claim; no wallet prompt was claimed');
+    }
+  }
+  const sameHashes = (a, b) => a.length === b.length && a.every((value, i) => value === b[i]);
 
   return Object.freeze({
     async reserve({ review: inputReview, setupSnapshot: inputSnapshot, trustedReviewHash, trustedOwnerPublicKey, stageId, evidence } = {}) {
@@ -354,6 +500,17 @@ export function createPostgresWalletPromptFence({ pool, authenticate, setupWasmB
         if (eligible.rows.length !== 1 || checkedClaim(eligible.rows[0], prompt).claimed !== false) {
           throw fail('CORRUPT', 'prompt eligibility was not created; stop and reconcile');
         }
+        if (setup) {
+          for (let i = 0; i < NEXT_SETUP_STAGES.length; i++) {
+            const later = review.stages[i + 1];
+            const insertedStage = await client.query(`INSERT INTO ${SCHEMA}.setup_stages
+              (owner_account_id,operation_id,stage_index,stage_id,action_commitment_sha256)
+              VALUES ($1,$2,$3,$4,$5) RETURNING ${setupStageColumns}`,
+            [identity.owner, operation, i + 1, later.id, later.action_commitment_sha256]);
+            if (insertedStage.rows.length !== 1) throw fail('CORRUPT', 'setup stage journal was not created; stop');
+          }
+          await setupProgress(client, prompt);
+        }
         return { ...prompt, claim_status: 'AVAILABLE' };
       });
     },
@@ -369,6 +526,105 @@ export function createPostgresWalletPromptFence({ pool, authenticate, setupWasmB
         const row = validatedRow(found.rows[0], pinnedSetupWasm);
         if (row.owner_public_key !== ownerPublicKey) throw fail('OWNER_KEY_MISMATCH', 'retained owner key differs; stop and reconcile');
         return { ...row, claim_status: await claimStatus(client, row) };
+      });
+    },
+
+    /** Returns only journal state, never wallet invocation or execution proof. */
+    async inspectSetupProgress({ owner, ownerPublicKey, evidence } = {}) {
+      requiredOwner(owner, ownerPublicKey);
+      await authorize(context('inspect_setup_progress', owner, ownerPublicKey), evidence);
+      return transaction(pool, async client => {
+        const { prompt, progress } = await loadSetup(client, { owner, ownerPublicKey });
+        return { owner, operation_id: prompt.operation_id, review_sha256: prompt.review_sha256,
+          stages: [{ stage_id: SETUP_STAGE, action_commitment_sha256: prompt.action_commitment_sha256,
+            claimed: progress.first.claimed, original_hash: prompt.original_hash },
+          ...progress.stages.map(stage => ({ stage_id: stage.stage_id, action_commitment_sha256: stage.action_commitment_sha256,
+            claimed: stage.claimed, original_hash: stage.original_hash }))],
+          execution_authorized: false, independently_durable: false, wallet_invocation_verified: false,
+          scope: 'database journal state only; not a wallet, consent, transaction proof, backup or delivery' };
+      });
+    },
+
+    /** A later stage is claimed once only after ALL preceding originals match
+     * trusted FINAL receipt graphs AND a fresh same-block profile passes. */
+    async claimSetupStage({ owner, ownerPublicKey, operationId, reviewSha256, stageId, actionCommitmentSha256, evidence } = {}) {
+      requiredOwner(owner, ownerPublicKey);
+      const index = NEXT_SETUP_STAGES.indexOf(stageId);
+      if (!hex32(operationId) || !digest(reviewSha256) || index < 0 || !digest(actionCommitmentSha256)) {
+        throw new Error('original setup operation and exact later-stage review are required');
+      }
+      requireSetupProviders();
+      await authorize(context('claim_setup_stage', owner, ownerPublicKey, { operation_id: operationId,
+        review_sha256: reviewSha256, stage_id: stageId, action_commitment_sha256: actionCommitmentSha256 }), evidence);
+      const retained = await transaction(pool, async client => {
+        const value = await loadSetup(client, { owner, ownerPublicKey, operationId, reviewSha256 });
+        const stage = value.progress.stages[index];
+        assertStageIdentity(value.prompt, stage, stageId, actionCommitmentSha256);
+        if (stage.claimed) throw fail('ALREADY_CLAIMED', 'setup prompt was already claimed; never open it again');
+        return { prompt: value.prompt, hashes: assertPriorSetupProgress(value.prompt, value.progress, index) };
+      });
+      const preflight = await setupPreflight(retained.prompt, retained.hashes, stageId);
+      assertSetupProfile(preflight, retained.prompt, stageId, index + 1);
+      assertFreshSetupPreflight(preflight);
+      const claimed = await transaction(pool, async client => {
+        const { prompt, progress } = await loadSetup(client, { owner, ownerPublicKey, operationId, reviewSha256 }, true);
+        const stage = progress.stages[index];
+        assertStageIdentity(prompt, stage, stageId, actionCommitmentSha256);
+        if (stage.claimed) throw fail('ALREADY_CLAIMED', 'setup prompt was already claimed; never open it again');
+        if (!sameHashes(retained.hashes, assertPriorSetupProgress(prompt, progress, index))) {
+          throw fail('MISMATCH', 'preceding setup originals changed; stop and reconcile');
+        }
+        assertFreshSetupPreflight(preflight);
+        const result = await client.query(`UPDATE ${SCHEMA}.setup_stages SET claimed=true,claimed_at=pg_catalog.clock_timestamp()
+          WHERE owner_account_id=$1 AND operation_id=$2 AND stage_index=$3 AND claimed=false AND original_hash IS NULL
+          RETURNING ${setupStageColumns}`, [owner, operationId, index + 1]);
+        if (result.rows.length !== 1) throw fail('MISMATCH', 'setup claim conflicted; stop and reconcile');
+        const checked = await setupProgress(client, prompt);
+        if (!checked.stages[index].claimed) throw fail('CORRUPT', 'setup claim was not retained; stop');
+        return { owner, operation_id: operationId, review_sha256: reviewSha256, stage_id: stageId,
+          action_commitment_sha256: actionCommitmentSha256, status: 'PROMPT_CLAIMED_NO_HASH',
+          claimed_at: checked.stages[index].claimed_at.toISOString(), do_not_retry: true, execution_authorized: false,
+          wallet_invocation_verified: false, independently_durable: false, preflight_block_hash: preflight.block_hash,
+          preflight_checked_at: preflight.checked_at, prior_originals_matched: retained.hashes.length,
+          scope: 'single database claim and trusted-RPC checks only; no wallet, consent, backup or future chain state established' };
+      });
+      try { assertFreshSetupPreflight(preflight); }
+      catch { throw fail('CLAIM_COMMITTED_PREFLIGHT_STALE', 'the claim committed after its preflight expired; do not open or retry the prompt'); }
+      return claimed;
+    },
+
+    /** Persist one first original only after the one-shot claim. A hash is not
+     * proof of execution; it must subsequently match trusted FINAL receipts. */
+    async recordSetupStageOriginal({ owner, ownerPublicKey, operationId, reviewSha256, stageId,
+      actionCommitmentSha256, originalHash, evidence } = {}) {
+      requiredOwner(owner, ownerPublicKey);
+      const index = NEXT_SETUP_STAGES.indexOf(stageId);
+      if (!hex32(operationId) || !digest(reviewSha256) || index < 0 || !digest(actionCommitmentSha256) || !isTransactionHash(originalHash)) {
+        throw new Error('original setup operation, exact reviewed action and first transaction hash required');
+      }
+      await authorize(context('record_setup_stage_original', owner, ownerPublicKey, { operation_id: operationId,
+        review_sha256: reviewSha256, stage_id: stageId, action_commitment_sha256: actionCommitmentSha256, original_hash: originalHash }), evidence);
+      return transaction(pool, async client => {
+        const { prompt, progress } = await loadSetup(client, { owner, ownerPublicKey, operationId, reviewSha256 }, true);
+        const stage = progress.stages[index];
+        assertStageIdentity(prompt, stage, stageId, actionCommitmentSha256);
+        if (!stage.claimed) throw fail('CLAIM_REQUIRED', 'setup prompt was never claimed; do not invent an original');
+        if (stage.original_hash !== null) {
+          if (stage.original_hash !== originalHash) throw fail('MISMATCH', 'original hash is immutable; never replace it');
+          return { owner, operation_id: operationId, stage_id: stageId, original_hash: originalHash,
+            status: 'ORIGINAL_RECORDED', do_not_retry: true, execution_authorized: false };
+        }
+        if ([prompt.original_hash, ...progress.stages.filter((_, i) => i !== index).map(x => x.original_hash)].includes(originalHash)) {
+          throw fail('MISMATCH', 'an original hash cannot be reused across setup stages');
+        }
+        const updated = await client.query(`UPDATE ${SCHEMA}.setup_stages SET original_hash=$1
+          WHERE owner_account_id=$2 AND operation_id=$3 AND stage_index=$4 AND claimed=true AND original_hash IS NULL
+          RETURNING ${setupStageColumns}`, [originalHash, owner, operationId, index + 1]);
+        if (updated.rows.length !== 1) throw fail('MISMATCH', 'original hash update conflicted; stop and reconcile');
+        const verified = await setupProgress(client, prompt);
+        if (verified.stages[index].original_hash !== originalHash) throw fail('CORRUPT', 'original hash was not retained; stop');
+        return { owner, operation_id: operationId, stage_id: stageId, original_hash: originalHash,
+          status: 'ORIGINAL_RECORDED', do_not_retry: true, execution_authorized: false };
       });
     },
 
@@ -404,6 +660,9 @@ export function createPostgresWalletPromptFence({ pool, authenticate, setupWasmB
           const row = validatedRow(selected.rows[0], pinnedSetupWasm);
           assertMatching(row);
           if (!row.setup_snapshot) throw fail('CORRUPT', 'first setup prompt has no retained snapshot; stop');
+          // Legacy setup reservations were not atomically given the later-stage
+          // journal. Do not start a flow that cannot safely advance.
+          await setupProgress(client, row);
           const status = await claimStatus(client, row);
           if (status === 'CLAIMED') throw fail('ALREADY_CLAIMED', 'wallet prompt was already claimed; never open it again');
           if (status === 'LEGACY_NOT_CLAIMABLE') throw fail('LEGACY_NOT_CLAIMABLE', 'legacy prompt may already have been opened; stop and reconcile');
@@ -438,6 +697,7 @@ export function createPostgresWalletPromptFence({ pool, authenticate, setupWasmB
         if (selected.rows.length !== 1) throw fail('OWNER_FENCED', 'original prompt reservation missing; stop and reconcile');
         const row = validatedRow(selected.rows[0], pinnedSetupWasm);
         assertMatching(row);
+        if (stageId === SETUP_STAGE) await setupProgress(client, row, true);
         const claims = await client.query(`SELECT owner_account_id,operation_id,claimed,created_at,claimed_at
           FROM ${SCHEMA}.claims WHERE owner_account_id=$1 FOR UPDATE`, [owner]);
         if (claims.rows.length === 0) throw fail('LEGACY_NOT_CLAIMABLE', 'legacy prompt may already have been opened; stop and reconcile');
@@ -527,6 +787,67 @@ export function createPostgresWalletPromptFence({ pool, authenticate, setupWasmB
       } catch {
         throw fail('RECEIPT_UNKNOWN', 'original setup receipt is unavailable, incomplete or mismatched; preserve it and never resend');
       }
+    },
+
+    /** Reconcile a retained registration or funding original, never a retry. */
+    async reconcileSetupStage({ owner, ownerPublicKey, operationId, reviewSha256, stageId,
+      actionCommitmentSha256, originalHash, evidence } = {}) {
+      requiredOwner(owner, ownerPublicKey);
+      const index = NEXT_SETUP_STAGES.indexOf(stageId);
+      if (!readStatus || !readReceipts) throw fail('RECEIPT_UNAVAILABLE', 'no trusted setup receipt provider is configured; stop and reconcile');
+      if (!hex32(operationId) || !digest(reviewSha256) || index < 0 || !digest(actionCommitmentSha256) || !isTransactionHash(originalHash)) {
+        throw new Error('original setup operation, reviewed action and original hash are required');
+      }
+      await authorize(context('reconcile_setup_stage', owner, ownerPublicKey, { operation_id: operationId,
+        review_sha256: reviewSha256, stage_id: stageId, action_commitment_sha256: actionCommitmentSha256, original_hash: originalHash }), evidence);
+      const retained = await transaction(pool, async client => {
+        const { prompt, progress } = await loadSetup(client, { owner, ownerPublicKey, operationId, reviewSha256 });
+        const stage = progress.stages[index];
+        assertStageIdentity(prompt, stage, stageId, actionCommitmentSha256);
+        if (!stage.claimed || stage.original_hash !== originalHash) throw fail('MISMATCH', 'retained setup original differs; stop and reconcile');
+        return prompt;
+      });
+      try {
+        if ((await readStatus())?.chain_id !== 'testnet') throw new Error('not testnet');
+        const attempt = prepareBufferWalletSetupAttempt({ review: retained.review, snapshot: retained.setup_snapshot,
+          wasmBytes: pinnedSetupWasm, trustedReviewHash: reviewSha256, trustedOwnerPublicKey: ownerPublicKey,
+          stageId, trustedOriginalHash: originalHash });
+        const result = structuredClone(await readReceipts(originalHash, owner, 'FINAL'));
+        const proof = inspectBufferWalletSetupAttempt({ review: retained.review, snapshot: retained.setup_snapshot,
+          wasmBytes: pinnedSetupWasm, trustedReviewHash: reviewSha256, trustedOwnerPublicKey: ownerPublicKey,
+          trustedOriginalHash: originalHash, attempt, result });
+        return { ...proof, owner, operation_id: operationId, review_sha256: reviewSha256,
+          action_commitment_sha256: actionCommitmentSha256, execution_authorized: false, later_stage_unlocked: false,
+          independently_durable: false, provider_trusted_not_consensus_proof: true };
+      } catch {
+        throw fail('RECEIPT_UNKNOWN', 'original setup receipt is unavailable, incomplete or mismatched; preserve it and never resend');
+      }
+    },
+
+    /** After all three originals, verify fresh funded state. This does not
+     * unlock policy configuration, a wallet prompt or spending. */
+    async verifySetupFunded({ owner, ownerPublicKey, operationId, reviewSha256, evidence } = {}) {
+      requiredOwner(owner, ownerPublicKey);
+      if (!hex32(operationId) || !digest(reviewSha256)) throw new Error('original setup operation and review required');
+      requireSetupProviders();
+      await authorize(context('verify_setup_funded', owner, ownerPublicKey, { operation_id: operationId, review_sha256: reviewSha256 }), evidence);
+      const retained = await transaction(pool, async client => {
+        const { prompt, progress } = await loadSetup(client, { owner, ownerPublicKey, operationId, reviewSha256 });
+        return { prompt, hashes: assertPriorSetupProgress(prompt, progress, 2) };
+      });
+      const preflight = await setupPreflight(retained.prompt, retained.hashes, 'verify_funded_vault');
+      assertSetupProfile(preflight, retained.prompt, 'verify_funded_vault', 3);
+      assertFreshSetupPreflight(preflight);
+      await transaction(pool, async client => {
+        const { prompt, progress } = await loadSetup(client, { owner, ownerPublicKey, operationId, reviewSha256 }, true);
+        if (!sameHashes(retained.hashes, assertPriorSetupProgress(prompt, progress, 2))) {
+          throw fail('MISMATCH', 'setup originals changed; stop and reconcile');
+        }
+        assertFreshSetupPreflight(preflight);
+      });
+      assertFreshSetupPreflight(preflight);
+      return { ...preflight, owner, operation_id: operationId, execution_authorized: false,
+        spending_unlocked: false, independently_durable: false, provider_trusted_not_consensus_proof: true };
     },
   });
 }

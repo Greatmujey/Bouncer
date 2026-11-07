@@ -155,24 +155,25 @@ wallet prompt to this primitive.
 
 `agent/postgres-wallet-prompt-fence.mjs` is an additional **server-side
 prototype**, tested with a disposable PostgreSQL 17 primary. Cooperating
-processes compete for one owner-wide reservation, which stores the complete
-canonical Buffer spending review or the **first** pinned V12 vault-creation
-review, its original snapshot and stage commitment. The reviewed V12 artifact
-is hash-checked in server memory and is not stored in PostgreSQL. Each newly
-reserved row gets one atomic, exact-action-bound **claim**; two cooperating
-processes cannot both claim the same row. Legacy reservations are deliberately
-not backfilled, because they might already have been used. The first recorded
-original hash is immutable; triggers reject ordinary updates or deletion, and
-the service checks its critical indexes, triggers, row visibility, primary
-status, fsync and synchronous commit. A lost reservation, claim or hash commit
-acknowledgement is unknown and **not** permission to retry. An optional
-server-owned trusted read-only RPC can fetch and match the original
-vault-creation transaction and its receipt graph; missing, incomplete or
-changed results remain unknown, and a FINAL failure remains blocked. This
-lookup does not unlock the next stage or verify fresh state. There is
-deliberately no progression to the remaining setup stages, unlock, expiry,
-payment, endpoint or wallet call. The receipt provider and authenticator are
-injected trust boundaries. A separate experimental
+processes compete for one owner-wide reservation, storing the complete canonical
+Buffer spending review or pinned V12 setup review and original snapshot. For a
+new setup reservation it atomically creates immutable one-shot stage rows for
+vault registration and funding. The first claim requires a fresh same-block
+preflight; each later claim additionally requires the retained original hashes
+and matching FINAL receipt graphs for **all** preceding stages. A separate
+read-only check can inspect the funded vault only after all three originals
+match. The reviewed V12 artifact is hash-checked in server memory, not stored
+in PostgreSQL. Two cooperating processes cannot both claim a stage. Legacy
+reservations are not backfilled or started because they might already have
+been used. Each original hash is immutable; triggers reject ordinary updates
+or deletion, and the service checks its critical indexes, triggers, row
+visibility, primary status, fsync and synchronous commit. A lost reservation,
+claim or hash commit acknowledgement is unknown and **not** permission to
+retry. Missing, incomplete or changed results remain unknown, and a FINAL
+failure remains blocked. The receipt provider and authenticator are injected
+trust boundaries. This is still only a setup journal: there is no policy/key
+progression, spending preflight integration, endpoint, wallet call, payment
+or automatic purchase. A separate experimental
 `agent/postgres-wallet-prompt-auth.mjs` implements one-use, origin- and
 exact-action-bound NEP-413 challenges, checking an Ed25519 FullAccess key at a
 fresh trusted-RPC testnet FINAL block; it signs and sends nothing. Tests connect
@@ -185,9 +186,9 @@ stale restore, alternate database, old software or bypassing wallet can still
 defeat coordination. The database enforces one **claim**, not one invocation of
 a wallet: a returned claim could still be reused by client code. Additional
 client-side protection, authenticated sessions/CSRF defenses, independent
-durability, prior-receipt validation and stage progression are required before
-any live wallet wiring. No Supabase project or production database was created
-or modified.
+durability, complete policy/forwarder stage sequencing and spending checks are
+required before any live wallet wiring. No Supabase project or production
+database was created or modified.
 
 [Read-only code comparison 42276988446](https://github.com/Greatmujey/Bouncer/actions/runs/42276988446)
 first found that a plain Cargo build did **not** match the deployed code hash.

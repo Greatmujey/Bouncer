@@ -141,7 +141,7 @@ export function inspectSvalinSetupAttempt({ plan, trustedReviewHash, trustedOrig
     scope: 'trusted-RPC failure indication only; inspect all effects before any separately approved action' };
   let funding = null;
   if (attempt.stage_id === 'fund_vault_with_test_usdc') funding = fundingEvidence(result, root, g, { owner: plan.review.goal.owner,
-    vault: plan.review.goal.vault, token: CIRCLE_TESTNET_USDC, amount: SVALIN_TRIAL_MAX_ATOMS });
+    vault: plan.review.goal.vault, token: CIRCLE_TESTNET_USDC, amount: SVALIN_TRIAL_MAX_ATOMS, signerPublicKey: attempt.signer_public_key });
   else if (statusKind(root.outcome.status) !== 'value' || root.outcome.status.SuccessValue !== result.status.SuccessValue) {
     throw new Error('the original setup action receipt is not terminal and successful');
   } else if (attempt.stage_id === 'register_vault_for_test_usdc') {

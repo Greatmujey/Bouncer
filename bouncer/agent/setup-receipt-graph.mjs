@@ -123,14 +123,7 @@ export function rootOf(result, batch, attempt, g) {
 // contract created no promise. Do not mistake that for a storage-deposit refund
 // from the token. Match only the protocol's system transfer to this original
 // signer and key; any unknown/missing child or contract-origin transfer blocks.
-export function onlyProtocolGasRefund(rootOutcome, g, attempt, localRootOmitted = false) {
-  const childCount = rootOutcome.receipt_ids.length;
-  // For these two simple stages, the complete graph consists only of the root
-  // and optionally one gas refund. Reject unlinked or otherwise unknown data.
-  if (childCount > 1 || g.outcomes.size !== 1 + childCount ||
-      g.receipts.size !== (localRootOmitted ? 0 : 1) + childCount) return false;
-  if (childCount === 0) return true;
-  const id = rootOutcome.receipt_ids[0], receipt = g.receipts.get(id), outcome = g.outcomes.get(id);
+function protocolGasRefund(receipt, outcome, attempt) {
   const action = receipt?.receipt?.Action, actions = action?.actions, transfer = actions?.[0]?.Transfer;
   const deposit = numericString(transfer?.deposit);
   const knownActionFields = ['signer_id', 'signer_public_key', 'gas_price', 'input_data_ids', 'output_data_receivers',
@@ -148,6 +141,16 @@ export function onlyProtocolGasRefund(rootOutcome, g, attempt, localRootOmitted 
     BigInt(deposit) <= (1n << 128n) - 1n && outcome?.executor_id === attempt.signer_id &&
     statusKind(outcome?.status) === 'value' && outcome.status.SuccessValue === '' &&
     Array.isArray(outcome.receipt_ids) && outcome.receipt_ids.length === 0;
+}
+export function onlyProtocolGasRefund(rootOutcome, g, attempt, localRootOmitted = false) {
+  const childCount = rootOutcome.receipt_ids.length;
+  // For these simple stages, the complete graph consists only of the root
+  // and optionally one gas refund. Reject unlinked or otherwise unknown data.
+  if (childCount > 1 || g.outcomes.size !== 1 + childCount ||
+      g.receipts.size !== (localRootOmitted ? 0 : 1) + childCount) return false;
+  if (childCount === 0) return true;
+  const id = rootOutcome.receipt_ids[0];
+  return protocolGasRefund(g.receipts.get(id), g.outcomes.get(id), attempt);
 }
 function childCall(g, root, predecessor, receiver, method) {
   const matches = root.receipt_ids.flatMap(id => {
@@ -175,9 +178,12 @@ function exactTransferEvent(root, owner, vault, amount) {
       events[0].data[0]?.old_owner_id !== owner || events[0].data[0]?.new_owner_id !== vault ||
       events[0].data[0]?.amount !== amount) throw new Error('matching Circle token transfer event is missing');
 }
-export function fundingEvidence(result, root, g, { owner, vault, token, amount }) {
+export function fundingEvidence(result, root, g, { owner, vault, token, amount, signerPublicKey }) {
   const out = root.outcome;
-  if (statusKind(out.status) !== 'receipt') throw new Error('funding token resolver is not linked from the original transfer');
+  if (statusKind(out.status) !== 'receipt' || !Array.isArray(result.transaction_outcome?.outcome?.receipt_ids) ||
+      result.transaction_outcome.outcome.receipt_ids.length !== 1 || result.transaction_outcome.outcome.receipt_ids[0] !== root.id) {
+    throw new Error('funding token resolver is not linked from the original transfer');
+  }
   const hook = childCall(g, out, token, vault, 'ft_on_transfer');
   const resolver = childCall(g, out, token, token, 'ft_resolve_transfer');
   // The resolver must consume THIS hook's output, not merely be another
@@ -186,6 +192,8 @@ export function fundingEvidence(result, root, g, { owner, vault, token, amount }
   const inputs = resolver.receipt.receipt.Action.input_data_ids;
   if (!Array.isArray(outputs) || outputs.length !== 1 || outputs[0]?.receiver_id !== token ||
       !isTransactionHash(outputs[0]?.data_id) || !Array.isArray(inputs) || inputs.length !== 1 || inputs[0] !== outputs[0].data_id ||
+      ![hook, resolver].every(child => keysAre(child.receipt.receipt, ['Action']) &&
+        child.receipt.receipt.Action.signer_id === owner && child.receipt.receipt.Action.signer_public_key === signerPublicKey) ||
       out.status.SuccessReceiptId !== resolver.id || numericString(hook.call.deposit) !== '0' ||
       !equal(decodeJson(hook.call.args, 'funding receiver arguments'), { sender_id: owner, amount: amount, msg: '' }) ||
       numericString(resolver.call.deposit) !== '0' ||
@@ -198,6 +206,28 @@ export function fundingEvidence(result, root, g, { owner, vault, token, amount }
     throw new Error('funding callback or resolver does not establish the reviewed full deposit');
   }
   exactTransferEvent(out, owner, vault, amount);
+  // Close the entire action-receipt graph. A successful-looking hook and
+  // resolver must not hide a second transfer, an unlinked outcome or an
+  // unknown descendant. nearcore may emit a system gas refund from each
+  // action receipt; accept only that bounded, signer-directed transfer.
+  const known = new Set([root.id, hook.id, resolver.id]);
+  const checkChildren = (outcome, required) => {
+    if (!Array.isArray(outcome.receipt_ids) || required.some(id => !outcome.receipt_ids.includes(id))) throw new Error('incomplete funding graph');
+    const remaining = outcome.receipt_ids.filter(id => !required.includes(id));
+    if (remaining.length > 1) throw new Error('unexpected funding descendant');
+    for (const id of remaining) {
+      if (known.has(id) || !protocolGasRefund(g.receipts.get(id), g.outcomes.get(id),
+        { signer_id: owner, signer_public_key: signerPublicKey })) throw new Error('unexpected funding descendant');
+      known.add(id);
+    }
+  };
+  checkChildren(out, [hook.id, resolver.id]);
+  checkChildren(hook.outcome, []);
+  checkChildren(resolver.outcome, []);
+  if (g.receipts.size !== known.size || g.outcomes.size !== known.size ||
+      [...g.receipts.keys()].some(id => !known.has(id)) || [...g.outcomes.keys()].some(id => !known.has(id))) {
+    throw new Error('unlinked or unexpected funding receipts');
+  }
   return { token: token, amount_atoms: amount,
     vault_callback_receipt: hook.id, token_resolver_receipt: resolver.id };
 }

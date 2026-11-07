@@ -95,6 +95,44 @@ artifactTest('full funding requires matching event, callback, resolver, promise 
   for (const change of changes) { const result = structuredClone(f.result); change(result); assert.throws(() => inspect({ ...f, result })); }
 });
 
+// Synthetic nearcore-style gas refunds; the public historical Circle funding
+// transaction has one each on the token, callback and resolver action receipts.
+function addGasRefund(result, parentIndex, idByte) {
+  const id = hash(idByte);
+  result.receipts_outcome[parentIndex].outcome.receipt_ids.push(id);
+  result.receipts.push({ receipt_id: id, predecessor_id: 'system', receiver_id: OWNER, receipt: { Action: {
+    signer_id: OWNER, signer_public_key: KEY, gas_price: '0', input_data_ids: [], output_data_receivers: [],
+    actions: [{ Transfer: { deposit: '12345' } }], is_promise_yield: false } } });
+  result.receipts_outcome.push({ id, outcome: { executor_id: OWNER, status: { SuccessValue: '' }, receipt_ids: [], logs: [] } });
+}
+
+artifactTest('funding closes the action graph and accepts only linked signer gas refunds', () => {
+  const f = fixture(2);
+  for (let i = 0; i < 3; i++) addGasRefund(f.result, i, 50 + i);
+  assert.equal(inspect(f).status, 'FINAL_FUNDING_RECEIPTS_MATCH');
+  const changes = [
+    r => { r.transaction_outcome.outcome.receipt_ids.push(hash(20)); },
+    r => { r.receipts[1].receipt.Action.signer_id = 'other.testnet'; },
+    r => { r.receipts[2].receipt.Action.signer_public_key = OTHER_KEY; },
+    r => { r.receipts[3].predecessor_id = TOKEN; },
+    r => { r.receipts[3].receiver_id = 'other.testnet'; },
+    r => { r.receipts[3].receipt.Action.signer_public_key = OTHER_KEY; },
+    r => { r.receipts[3].receipt.Action.gas_price = '1'; },
+    r => { r.receipts[3].receipt.Action.actions[0].Transfer.deposit = '0'; },
+    r => { r.receipts[3].receipt.Action.actions.push({ Transfer: { deposit: '1' } }); },
+    r => { r.receipts_outcome[3].outcome.receipt_ids = [hash(60)]; },
+    r => { r.receipts_outcome[1].outcome.receipt_ids.push(hash(50)); },
+    r => { r.receipts_outcome[0].outcome.receipt_ids = [hash(9), hash(10)]; }, // orphaned refund
+    r => { const extra = structuredClone(r.receipts[3]); extra.receipt_id = hash(60); r.receipts.push(extra); },
+    r => { const extra = structuredClone(r.receipts_outcome[3]); extra.id = hash(60); r.receipts_outcome.push(extra); },
+    r => { r.receipts_outcome[1].outcome.receipt_ids.push(hash(60)); },
+  ];
+  for (const change of changes) {
+    const result = structuredClone(f.result); change(result);
+    assert.throws(() => inspect({ ...f, result }), undefined, String(change));
+  }
+});
+
 artifactTest('FINAL failures never permit a resend or claim funding', () => {
   for (let i = 0; i < 3; i++) {
     const f = fixture(i), result = structuredClone(f.result);

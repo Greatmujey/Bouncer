@@ -100,7 +100,7 @@ export function inspectBufferWalletSetupAttempt({ review, snapshot, wasmBytes, t
   let funding = null;
   if (attempt.stage_id === 'fund_vault_circle') {
     funding = fundingEvidence(result, root, g, { owner: review.owner, vault: review.vault,
-      token: CIRCLE_TESTNET_USDC, amount: BUFFER_FIXED_PRICE_ATOMS });
+      token: CIRCLE_TESTNET_USDC, amount: BUFFER_FIXED_PRICE_ATOMS, signerPublicKey: attempt.signer_public_key });
   } else {
     if (statusKind(root.outcome.status) !== 'value' || root.outcome.status.SuccessValue !== result.status.SuccessValue ||
         result.transaction_outcome.outcome.receipt_ids.length !== 1 || !onlyProtocolGasRefund(root.outcome, g, attempt)) {
