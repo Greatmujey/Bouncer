@@ -9,7 +9,7 @@ import nearApi from 'near-api-js';
 import {createBufferOrderWitness,parseBufferOrderWitness} from '../agent/git-buffer-order-witness.mjs';
 import {createGitBufferOrderWitnessStore,createGitBranchWitnessStore} from '../agent/git-branch-witness-store.mjs';
 const identity=()=>({owner:'buyer.testnet',owner_public_key:String(nearApi.KeyPair.fromRandom('ed25519').getPublicKey()),
-  attempt_id:'a'.repeat(32),site:'https://site.example.test',key_sha256:'b'.repeat(64),review_sha256:'c'.repeat(64),
+  attempt_id:'a'.repeat(32),site:'https://site.example.test',key_sha256:'b'.repeat(64),key_record_sha256:'9'.repeat(64),review_sha256:'c'.repeat(64),
   request_commitment_sha256:'d'.repeat(64),draft_sha256:'e'.repeat(64)});
 function memoryStore() {
   let text='',head='0',lost=false;

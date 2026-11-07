@@ -11,14 +11,14 @@ const ZERO='0'.repeat(64), H=/^[a-f0-9]{64}$/, ID=/^[a-f0-9]{32}$/;
 const sha=x=>crypto.createHash('sha256').update(x).digest('hex');
 const plain=x=>x && typeof x==='object' && !Array.isArray(x) && Object.getPrototypeOf(x)===Object.prototype;
 const exact=(x,fields)=>plain(x) && Object.keys(x).length===fields.length && fields.every(k=>Object.hasOwn(x,k));
-const fields=['owner','owner_public_key','attempt_id','site','key_sha256','review_sha256','request_commitment_sha256','draft_sha256'];
+const fields=['owner','owner_public_key','attempt_id','site','key_sha256','key_record_sha256','review_sha256','request_commitment_sha256','draft_sha256'];
 export class BufferOrderWitnessError extends Error {
   constructor(code='ORDER_WITNESS_UNAVAILABLE') { super('Buffer order witness unavailable, conflicting or uncertain; never repeat an uncertain order'); this.code=code; }
 }
 const fail=()=>new BufferOrderWitnessError();
 export function validateBufferOrderIdentity(input) {
   if (!exact(input,fields) || !isTestnetAccount(input.owner) || !ID.test(input.attempt_id ?? '') ||
-      !['key_sha256','review_sha256','request_commitment_sha256','draft_sha256'].every(k=>H.test(input[k] ?? ''))) throw fail();
+      !['key_sha256','key_record_sha256','review_sha256','request_commitment_sha256','draft_sha256'].every(k=>H.test(input[k] ?? ''))) throw fail();
   try {
     const key=nearApi.utils.PublicKey.from(input.owner_public_key), site=new URL(input.site);
     if (String(key)!==input.owner_public_key || key.keyType!==0 || key.ed25519Key?.data?.length!==32 ||

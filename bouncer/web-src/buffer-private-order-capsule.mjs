@@ -71,6 +71,16 @@ async function checkedPublic(record, crypto) {
   if (key.algorithm.modulusLength!==2048 || b64(key.algorithm.publicExponent)!=='AQAB') throw fail();
   return key;
 }
+/** Validate the public encryption key and wrapper structure only. This does
+ * not prove the owner authorized enrollment or can recover the private key. */
+export async function inspectPrivateOrderKeyRecord({keyRecord,crypto=globalThis.crypto}={}) {
+  try { const record=structuredClone(keyRecord); await checkedPublic(record,crypto);
+    const key_record_sha256=hex(await crypto.subtle.digest('SHA-256',enc.encode(JSON.stringify(['bouncer-buffer-key-record-v1',
+      ...KEY_FIELDS.map(k=>record[k])]))));
+    return {owner:record.owner,owner_public_key:record.owner_public_key,site:record.site,
+      public_key_sha256:record.public_key_sha256,key_record_sha256};
+  } catch { throw fail(); }
+}
 function checkedData(value) {
   if (!exact(value,['brief','sku','orderId','onchainOrderId','accessToken']) || typeof value.brief!=='string' ||
       !value.brief.isWellFormed() || value.brief!==value.brief.trim() || value.brief.length<10 || value.brief.length>4000 ||
