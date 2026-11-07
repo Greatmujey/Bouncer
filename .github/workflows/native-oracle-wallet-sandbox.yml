@@ -1,0 +1,48 @@
+# Disposable loopback nearcore only. No public-chain wallet, funds or seller.
+name: Native oracle wallet isolated sandbox
+on:
+  push:
+    branches: ['arena/**']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  sandbox:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[native-wallet-sandbox]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    defaults:
+      run:
+        working-directory: bouncer
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+      - name: Install and test gates
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          node --test tests/native-oracle-wallet-plan.test.mjs tests/native-oracle-wallet-evidence.test.mjs tests/native-oracle-wallet-preflight.test.mjs
+      - name: Download and verify pinned isolated nearcore
+        run: |
+          set -euo pipefail
+          curl --fail --show-error --silent --location --proto '=https' --tlsv1.2 --max-time 180 --retry 2 --max-filesize 419430400 \
+            'https://s3-us-west-1.amazonaws.com/build.nearprotocol.com/nearcore/Linux-x86_64/2.14.0/near-sandbox.tar.gz' \
+            --output "$RUNNER_TEMP/near-sandbox.tar.gz"
+          python3 scripts/extract-pinned-near-sandbox.py "$RUNNER_TEMP/near-sandbox.tar.gz" "$RUNNER_TEMP/near-sandbox"
+      - name: Exercise exact native wallet stages, receipts and guard on loopback
+        env:
+          BOUNCER_SANDBOX_BIN: ${{ runner.temp }}/near-sandbox
+        run: |
+          set -euo pipefail
+          ulimit -Sn 65535
+          if ! node integration/native-oracle-wallet-sandbox.mjs > "$RUNNER_TEMP/native-wallet-result.json" 2> "$RUNNER_TEMP/native-wallet-error.log"; then
+            python3 -c 'import os; s=open(os.environ["RUNNER_TEMP"]+"/native-wallet-error.log").read()[-5000:]; print("::error title=Isolated native wallet scenario failed::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
+            exit 1
+          fi
+          python3 -c 'import os; s=open(os.environ["RUNNER_TEMP"]+"/native-wallet-result.json").read(); print("::notice title=Isolated native wallet results::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
+          { echo '## Native wallet setup on isolated nearcore';
+            echo 'Fabricated OutLayer registry; no real provider execution, phone, wallet, public-chain payment or independent delivery.';
+            echo '```json'; cat "$RUNNER_TEMP/native-wallet-result.json"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
