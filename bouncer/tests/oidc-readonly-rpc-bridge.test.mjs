@@ -181,3 +181,57 @@ test('public handler enforces exact browser origin and never returns a token', a
   assert.equal(res.code, 502); assert.equal(res.headers['access-control-allow-origin'], site);
   assert.doesNotMatch(JSON.stringify(res.value), /secret/);
 });
+
+test('encrypted browser relay binds job and response without exposing its OIDC token', async () => {
+  const signing = crypto.generateKeyPairSync('ed25519');
+  const encryption = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const pem = key => key.export({ type: key.type === 'private' ? 'pkcs8' : 'spki', format: 'pem' });
+  const bridge = createOidcReadOnlyRpcBridge({ callbackOrigin: callback, defaultAudience, verifyOidc: verify, now: () => now,
+    signingPrivateKey: pem(signing.privateKey), encryptionPrivateKey: pem(encryption.privateKey) });
+  const waiting = bridge.fetch('https://test.rpc.fastnear.com/', rpcOptions(request('status', [])));
+  const [id] = bridge.pending(), job = bridge.takeForBrowser(id);
+  assert.equal(bridge.takeForBrowser(id), null);
+  let tokenText;
+  const execute = async signedJob => {
+    const { executeEncryptedBrowserJob } = await import('../testnet-relay/core.mjs');
+    return executeEncryptedBrowserJob({ signedJob, callbackOrigin: callback, now: () => now,
+      signingPublicKey: pem(signing.publicKey), encryptionPublicKey: pem(encryption.publicKey),
+      getToken: async ({ audience }) => { tokenText = token(audience); return tokenText; },
+      fetchImpl: async (_url, options) => { const rpc = JSON.parse(options.body);
+        return response({ jsonrpc: '2.0', id: rpc.id, result: { chain_id: 'testnet' } }); } });
+  };
+  await assert.rejects(execute({ ...job, request_json: JSON.stringify(request('send_tx', {})) }));
+  await assert.rejects(execute({ ...job, job_id: 'b'.repeat(32) }));
+  await assert.rejects(execute({ ...job, expires_at_ms: job.expires_at_ms + 1 }));
+  const envelope = await execute(job);
+  assert.doesNotMatch(JSON.stringify(envelope), /chain_id|testnet|Bearer/);
+  assert.equal(JSON.stringify(envelope).includes(tokenText), false);
+  assert.equal(bridge.submitEncrypted({ ...envelope, job_id: 'c'.repeat(32) }), false);
+  assert.equal(bridge.submitEncrypted({ ...envelope, request_sha256: 'a'.repeat(64) }), false);
+  const damaged = Buffer.from(envelope.ciphertext_base64, 'base64'); damaged[0] ^= 1;
+  assert.equal(bridge.submitEncrypted({ ...envelope, ciphertext_base64: damaged.toString('base64') }), false);
+  assert.equal(bridge.submitEncrypted(envelope), true);
+  assert.equal(bridge.submitEncrypted(envelope), false);
+  assert.equal((await (await waiting).json()).result.chain_id, 'testnet');
+});
+
+test('a different backend key cannot decrypt or authorize a browser relay result', async () => {
+  const signing = crypto.generateKeyPairSync('ed25519'), otherSigning = crypto.generateKeyPairSync('ed25519');
+  const encryption = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const otherEncryption = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const pem = key => key.export({ type: key.type === 'private' ? 'pkcs8' : 'spki', format: 'pem' });
+  const bridge = createOidcReadOnlyRpcBridge({ callbackOrigin: callback, defaultAudience, verifyOidc: verify, now: () => now,
+    signingPrivateKey: pem(signing.privateKey), encryptionPrivateKey: pem(encryption.privateKey) });
+  const controller = new AbortController();
+  const waiting = bridge.fetch('https://test.rpc.fastnear.com/', { ...rpcOptions(request('status', [])), signal: controller.signal });
+  const job = bridge.takeForBrowser(bridge.pending()[0]);
+  const { executeEncryptedBrowserJob } = await import('../testnet-relay/core.mjs');
+  const opts = { signedJob: job, callbackOrigin: callback, now: () => now,
+    signingPublicKey: pem(signing.publicKey), encryptionPublicKey: pem(otherEncryption.publicKey),
+    getToken: async ({ audience }) => token(audience),
+    fetchImpl: async () => response({ jsonrpc: '2.0', id: 'bouncer-read-only', result: {} }) };
+  await assert.rejects(executeEncryptedBrowserJob({ ...opts, signingPublicKey: pem(otherSigning.publicKey) }));
+  const envelope = await executeEncryptedBrowserJob(opts);
+  assert.equal(bridge.submitEncrypted(envelope), false);
+  controller.abort(); await assert.rejects(waiting, /expired/);
+});

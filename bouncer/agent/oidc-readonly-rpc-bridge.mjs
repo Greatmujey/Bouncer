@@ -7,7 +7,7 @@
  * endpoint capable of mutating NEAR state through this bridge.
  */
 import crypto from 'node:crypto';
-import { validateReadOnlyJob } from '../testnet-relay/core.mjs';
+import { validateReadOnlyJob, browserJobMessage, browserEnvelopeAad } from '../testnet-relay/core.mjs';
 
 const JOB = /^[a-f0-9]{32}$/, DIGEST = /^[a-f0-9]{64}$/;
 const bytesHash = value => crypto.createHash('sha256').update(value).digest('hex');
@@ -81,12 +81,19 @@ export function createVercelOidcVerifier({ jwks, issuer, owner, ownerId, project
 /** Fixed HTTPS callback plus exact default OIDC audience. The returned fetch is
  * designed only for ReadOnlyNearRpcProvider/ReadOnlyNearReceiptProvider. */
 export function createOidcReadOnlyRpcBridge({ callbackOrigin, defaultAudience, verifyOidc, now = Date.now,
-  timeoutMs = 25_000, maxPending = 32 } = {}) {
+  timeoutMs = 25_000, maxPending = 32, signingPrivateKey, encryptionPrivateKey } = {}) {
   const origin = httpsOrigin(callbackOrigin);
   if (typeof defaultAudience !== 'string' || defaultAudience.length < 1 || defaultAudience.length > 255 ||
       typeof verifyOidc !== 'function' || typeof now !== 'function' || !Number.isSafeInteger(timeoutMs) ||
       timeoutMs < 1_000 || timeoutMs > 60_000 || !Number.isSafeInteger(maxPending) || maxPending < 1 || maxPending > 100) {
     throw new Error('bounded authenticated relay configuration required');
+  }
+  let signKey = null, decryptKey = null;
+  if (signingPrivateKey !== undefined || encryptionPrivateKey !== undefined) {
+    try { signKey = crypto.createPrivateKey(signingPrivateKey); decryptKey = crypto.createPrivateKey(encryptionPrivateKey); }
+    catch { throw new Error('both private relay session keys are required'); }
+    if (signKey.asymmetricKeyType !== 'ed25519' || decryptKey.asymmetricKeyType !== 'rsa' ||
+        decryptKey.asymmetricKeyDetails?.modulusLength < 2048) throw new Error('invalid private relay session keys');
   }
   const jobs = new Map();
   function cleanup(id, error) {
@@ -123,11 +130,11 @@ export function createOidcReadOnlyRpcBridge({ callbackOrigin, defaultAudience, v
     job.taken = true;
     return structuredClone(job.request);
   }
-  function submit(id, digest, input, token) {
+  function accept(id, digest, input, token, audience) {
     const job = JOB.test(id ?? '') ? jobs.get(id) : null;
     if (!job || !job.taken || now() >= job.expires || !DIGEST.test(digest ?? '') ||
         !(input instanceof Uint8Array) || input.length < 1 || input.length > 4_000_000 || bytesHash(input) !== digest ||
-        !verifyOidc(token, `${origin}/internal/read-only-results/${id}/${digest}`)) return false;
+        !verifyOidc(token, audience)) return false;
     // Validate the same JSON-RPC envelope and ID a second time at the trusted
     // backend. The downstream provider still validates results and errors.
     let result; try { result = JSON.parse(Buffer.from(input).toString('utf8')); } catch { return false; }
@@ -137,5 +144,48 @@ export function createOidcReadOnlyRpcBridge({ callbackOrigin, defaultAudience, v
     job.resolve(new Response(Buffer.from(input), { status: 200, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } }));
     return true;
   }
-  return Object.freeze({ fetch: readOnlyFetch, pending, take, submit });
+  function submit(id, digest, input, token) {
+    return accept(id, digest, input, token, `${origin}/internal/read-only-results/${id}/${digest}`);
+  }
+  function takeForBrowser(id) {
+    const job = signKey && JOB.test(id ?? '') ? jobs.get(id) : null;
+    if (!job || job.taken || now() >= job.expires) return null;
+    const requestJson = JSON.stringify(job.request);
+    const body = { job_id: id, request_sha256: bytesHash(Buffer.from(requestJson)), expires_at_ms: job.expires,
+      request_json: requestJson };
+    const signature = crypto.sign(null, Buffer.from(browserJobMessage(body)), signKey);
+    job.taken = true;
+    return { ...body, signature_base64: signature.toString('base64') };
+  }
+  function from64(value, limit) {
+    if (typeof value !== 'string' || value.length > limit || !/^[A-Za-z0-9+/]*={0,2}$/.test(value)) throw Error();
+    const raw = Buffer.from(value, 'base64'); if (raw.toString('base64') !== value) throw Error(); return raw;
+  }
+  function submitEncrypted(envelope) {
+    try {
+      const fields = ['version', 'job_id', 'request_sha256', 'encrypted_key_base64', 'iv_base64', 'tag_base64', 'ciphertext_base64'];
+      if (!decryptKey || !plain(envelope) || Object.keys(envelope).sort().join(',') !== fields.sort().join(',') ||
+          envelope.version !== 1 || !JOB.test(envelope.job_id ?? '') || !DIGEST.test(envelope.request_sha256 ?? '')) return false;
+      const job = jobs.get(envelope.job_id);
+      if (!job || !job.taken || now() >= job.expires ||
+          bytesHash(Buffer.from(JSON.stringify(job.request))) !== envelope.request_sha256) return false;
+      const encrypted = from64(envelope.encrypted_key_base64, 1024), iv = from64(envelope.iv_base64, 24),
+        tag = from64(envelope.tag_base64, 32), ciphertext = from64(envelope.ciphertext_base64, 1_900_000);
+      if (iv.length !== 12 || tag.length !== 16 || ciphertext.length < 1) return false;
+      const key = crypto.privateDecrypt({ key: decryptKey, oaepHash: 'sha256', padding: crypto.constants.RSA_PKCS1_OAEP_PADDING }, encrypted);
+      try {
+        if (key.length !== 32) return false;
+        const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+        decipher.setAAD(browserEnvelopeAad(envelope)); decipher.setAuthTag(tag);
+        const plaintext = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+        const content = JSON.parse(plaintext.toString('utf8'));
+        if (!plain(content) || Object.keys(content).sort().join(',') !== 'response_base64,token' ||
+            typeof content.token !== 'string' || content.token.length > 32_768) return false;
+        const response = from64(content.response_base64, 1_400_000), digest = bytesHash(response);
+        const audience = `${origin}/internal/read-only-results/${envelope.job_id}/${envelope.request_sha256}/${digest}`;
+        return accept(envelope.job_id, digest, response, content.token, audience);
+      } finally { key.fill(0); }
+    } catch { return false; }
+  }
+  return Object.freeze({ fetch: readOnlyFetch, pending, take, submit, takeForBrowser, submitEncrypted });
 }

@@ -139,3 +139,97 @@ export function createReadOnlyRelayHandler({ callbackOrigin, siteOrigin, getToke
     }
   };
 }
+
+// Browser-mediated transport for private Arena preview networks. The browser
+// cannot edit the operator-signed job or read the OIDC token: the whole result
+// is encrypted to a pinned, ephemeral backend key. Encrypted data is not an
+// authorization for a wallet or a transaction.
+const SIGNING_DOMAIN = 'bouncer-read-only-job-v1';
+const ENVELOPE_DOMAIN = 'bouncer-read-only-envelope-v1';
+const exact = (x, fields) => record(x) && Object.keys(x).sort().join(',') === [...fields].sort().join(',');
+const canonical64 = (s, max) => {
+  if (typeof s !== 'string' || s.length > max || !/^[A-Za-z0-9+/]*={0,2}$/.test(s)) throw new Error('invalid encoding');
+  const b = Buffer.from(s, 'base64'); if (b.toString('base64') !== s) throw new Error('invalid encoding'); return b;
+};
+export function browserJobMessage({ job_id, request_sha256, expires_at_ms }) {
+  return `${SIGNING_DOMAIN}\n${job_id}\n${request_sha256}\n${expires_at_ms}`;
+}
+export function browserEnvelopeAad({ job_id, request_sha256 }) {
+  return Buffer.from(`${ENVELOPE_DOMAIN}\n${job_id}\n${request_sha256}`, 'utf8');
+}
+
+/** The browser can transport but cannot select an operator-signed RPC job. */
+export async function executeEncryptedBrowserJob({ signedJob, callbackOrigin, signingPublicKey, encryptionPublicKey,
+  getToken, fetchImpl = globalThis.fetch, now = Date.now } = {}) {
+  const origin = httpsOrigin(callbackOrigin);
+  if (!exact(signedJob, ['job_id', 'request_sha256', 'expires_at_ms', 'request_json', 'signature_base64']) ||
+      !isJob(signedJob.job_id) || !/^[a-f0-9]{64}$/.test(signedJob.request_sha256 ?? '') ||
+      !Number.isSafeInteger(signedJob.expires_at_ms) || typeof signedJob.request_json !== 'string' ||
+      Buffer.byteLength(signedJob.request_json) > MAX_INPUT || typeof getToken !== 'function' ||
+      typeof fetchImpl !== 'function' || typeof now !== 'function') throw new Error('invalid signed read-only job');
+  const clock = now();
+  if (!Number.isSafeInteger(clock) || signedJob.expires_at_ms <= clock || signedJob.expires_at_ms > clock + 60_000 ||
+      hash(Buffer.from(signedJob.request_json)) !== signedJob.request_sha256) throw new Error('expired or changed read-only job');
+  let signKey, encKey;
+  try { signKey = crypto.createPublicKey(signingPublicKey); encKey = crypto.createPublicKey(encryptionPublicKey); }
+  catch { throw new Error('invalid session public keys'); }
+  if (signKey.asymmetricKeyType !== 'ed25519' || encKey.asymmetricKeyType !== 'rsa' ||
+      encKey.asymmetricKeyDetails?.modulusLength < 2048 ||
+      !crypto.verify(null, Buffer.from(browserJobMessage(signedJob)), signKey, canonical64(signedJob.signature_base64, 128))) {
+    throw new Error('invalid signed read-only job');
+  }
+  let job; try { job = JSON.parse(signedJob.request_json); } catch { throw new Error('invalid signed read-only job'); }
+  validateReadOnlyJob(job);
+  const rpc = job.method === 'EXPERIMENTAL_tx_status' ? ARCHIVAL_RPC : TESTNET_RPC;
+  const upstream = await fetchImpl(rpc, { method: 'POST', redirect: 'error',
+    headers: { 'content-type': 'application/json', accept: 'application/json' },
+    body: signedJob.request_json, signal: AbortSignal.timeout(15_000) });
+  // Keep the encrypted response well below serverless body limits. Oversized
+  // receipts stay unknown; callers must not infer a failed original.
+  const resultBytes = await bounded(upstream, 1_000_000);
+  let result; try { result = JSON.parse(resultBytes.toString('utf8')); } catch { throw new Error('invalid RPC envelope'); }
+  if (!record(result) || result.jsonrpc !== '2.0' || result.id !== job.id ||
+      (Object.hasOwn(result, 'result') === Object.hasOwn(result, 'error'))) throw new Error('invalid RPC envelope');
+  const responseHash = hash(resultBytes);
+  const audience = `${origin}/internal/read-only-results/${signedJob.job_id}/${signedJob.request_sha256}/${responseHash}`;
+  const oidc = await getToken({ audience });
+  if (typeof oidc !== 'string' || oidc.length < 100 || oidc.length > 32_768) throw new Error('relay identity unavailable');
+  const key = crypto.randomBytes(32), iv = crypto.randomBytes(12);
+  try {
+    const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+    cipher.setAAD(browserEnvelopeAad(signedJob));
+    const plaintext = Buffer.from(JSON.stringify({ token: oidc, response_base64: resultBytes.toString('base64') }));
+    const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+    const encryptedKey = crypto.publicEncrypt({ key: encKey, oaepHash: 'sha256', padding: crypto.constants.RSA_PKCS1_OAEP_PADDING }, key);
+    return { version: 1, job_id: signedJob.job_id, request_sha256: signedJob.request_sha256,
+      encrypted_key_base64: encryptedKey.toString('base64'), iv_base64: iv.toString('base64'),
+      tag_base64: cipher.getAuthTag().toString('base64'), ciphertext_base64: ciphertext.toString('base64') };
+  } finally { key.fill(0); }
+}
+
+/** POST-only encrypted result. Cross-origin requests are limited to the fixed
+ * preview origin; forged CORS headers do not create a valid signed job. */
+export function createEncryptedBrowserRelayHandler({ callbackOrigin, siteOrigin, signingPublicKey, encryptionPublicKey,
+  getToken, fetchImpl = globalThis.fetch } = {}) {
+  httpsOrigin(callbackOrigin); const site = httpsOrigin(siteOrigin);
+  if (!signingPublicKey || !encryptionPublicKey || typeof getToken !== 'function' || typeof fetchImpl !== 'function') throw new Error('relay dependencies required');
+  return async function handler(req, res) {
+    res.setHeader('cache-control', 'no-store'); res.setHeader('x-content-type-options', 'nosniff');
+    const origin = req.headers?.origin;
+    if (origin !== site) return res.status(403).json({ error: 'unavailable' });
+    res.setHeader('access-control-allow-origin', site); res.setHeader('vary', 'Origin');
+    if (req.method === 'OPTIONS') {
+      res.setHeader('access-control-allow-methods', 'POST, OPTIONS');
+      res.setHeader('access-control-allow-headers', 'content-type');
+      return res.status(204).end();
+    }
+    if (req.method !== 'POST' || !/^application\/json(?:\s*;|$)/i.test(req.headers['content-type'] ?? '')) {
+      return res.status(405).json({ error: 'unavailable' });
+    }
+    try {
+      const envelope = await executeEncryptedBrowserJob({ signedJob: req.body, callbackOrigin, signingPublicKey,
+        encryptionPublicKey, getToken, fetchImpl });
+      return res.status(200).json(envelope);
+    } catch { return res.status(502).json({ error: 'read-only request unavailable' }); }
+  };
+}

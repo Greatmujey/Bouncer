@@ -30,9 +30,12 @@ async function bytes(req, limit) {
 }
 
 /** No client-selected owner, vault, RPC URL, account data or transaction. */
-export function createReadOnlyPreviewService({ bridge, siteOrigin, inspectReadiness, makeReview, now = Date.now } = {}) {
+export function createReadOnlyPreviewService({ bridge, siteOrigin, relayUrl, inspectReadiness, makeReview, now = Date.now } = {}) {
   const site = fixedOrigin(siteOrigin);
-  if (!bridge || ['pending', 'take', 'submit'].some(k => typeof bridge[k] !== 'function') ||
+  if (relayUrl !== undefined && relayUrl !== 'https://bouncer-testnet-readonly-relay-tau.vercel.app/api/read') {
+    throw new Error('fixed experimental relay URL required');
+  }
+  if (!bridge || ['pending', 'take', 'submit', 'takeForBrowser', 'submitEncrypted'].some(k => typeof bridge[k] !== 'function') ||
       typeof inspectReadiness !== 'function' || typeof makeReview !== 'function' || typeof now !== 'function') {
     throw new Error('read-only preview dependencies required');
   }
@@ -58,9 +61,26 @@ export function createReadOnlyPreviewService({ bridge, siteOrigin, inspectReadin
           ? reply(res, 200, { accepted: true }) : reply(res, 404, { error: 'unavailable' });
       }
       if (req.headers.origin && req.headers.origin !== site) return reply(res, 403, { error: 'origin rejected' });
+      if (pathname.startsWith('/api/read-only/') && req.headers['x-bouncer-preview'] !== 'read-only') {
+        return reply(res, 403, { error: 'origin rejected' });
+      }
+      if (pathname === '/api/read-only/config' && req.method === 'GET') {
+        return relayUrl ? reply(res, 200, { relay_url: relayUrl }) : reply(res, 503, { error: 'relay not configured' });
+      }
       if (pathname === '/api/read-only/pending' && req.method === 'GET') return reply(res, 200, { jobs: bridge.pending() });
+      match = /^\/api\/read-only\/jobs\/([a-f0-9]{32})$/.exec(pathname);
+      if (match && req.method === 'GET') {
+        const work = bridge.takeForBrowser(match[1]);
+        return work ? reply(res, 200, work) : reply(res, 404, { error: 'unavailable' });
+      }
+      if (pathname === '/api/read-only/results' && req.method === 'POST' && req.headers.origin === site &&
+          /^application\/json(?:\s*;|$)/i.test(req.headers['content-type'] ?? '')) {
+        const raw = await bytes(req, 1_900_000); let envelope;
+        try { envelope = JSON.parse(raw.toString('utf8')); } catch { return reply(res, 400, { error: 'invalid result' }); }
+        return bridge.submitEncrypted(envelope) ? reply(res, 200, { accepted: true }) : reply(res, 404, { error: 'unavailable' });
+      }
       if (pathname === '/api/read-only/review' && req.method === 'POST') {
-        if (req.headers.origin !== site || req.headers['x-bouncer-preview'] !== 'read-only' || Number(req.headers['content-length'] || 0) !== 0) {
+        if (req.headers.origin !== site || req.headers['x-bouncer-preview'] !== 'read-only' || req.headers['transfer-encoding'] || Number(req.headers['content-length'] || 0) !== 0) {
           return reply(res, 403, { error: 'origin rejected' });
         }
         prune();
