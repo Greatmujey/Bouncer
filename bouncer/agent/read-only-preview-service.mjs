@@ -1,5 +1,6 @@
 /** A limited phone-preview API: read-only funding indication and unsigned setup
- * review. It has no signing, spending, wallet-prompt or seller-order routes.
+ * review. Optional authenticated setup transports must be explicitly injected;
+ * the server itself has no signer, broadcaster, payment or seller-order route.
  * Deployment identity and callback origin are supplied by the operator. */
 import crypto from 'node:crypto';
 import http from 'node:http';
@@ -30,7 +31,7 @@ async function bytes(req, limit) {
 }
 
 /** No client-selected owner, vault, RPC URL, account data or transaction. */
-export function createReadOnlyPreviewService({ bridge, siteOrigin, relayUrl, inspectReadiness, makeReview, inspectOwnerKey, setupFactory, now = Date.now } = {}) {
+export function createReadOnlyPreviewService({ bridge, siteOrigin, relayUrl, inspectReadiness, makeReview, inspectOwnerKey, setupFactory, nativeSetupFactory, now = Date.now } = {}) {
   const site = fixedOrigin(siteOrigin);
   if (relayUrl !== undefined && relayUrl !== 'https://bouncer-testnet-readonly-relay-tau.vercel.app/api/read') {
     throw new Error('fixed experimental relay URL required');
@@ -38,6 +39,7 @@ export function createReadOnlyPreviewService({ bridge, siteOrigin, relayUrl, ins
   if (!bridge || ['pending', 'take', 'submit', 'takeForBrowser', 'submitEncrypted'].some(k => typeof bridge[k] !== 'function') ||
       typeof inspectReadiness !== 'function' || typeof makeReview !== 'function' || typeof now !== 'function' ||
       (setupFactory !== undefined && typeof setupFactory !== 'function') ||
+      (nativeSetupFactory !== undefined && typeof nativeSetupFactory !== 'function') ||
       (inspectOwnerKey !== undefined && typeof inspectOwnerKey !== 'function')) {
     throw new Error('read-only preview dependencies required');
   }
@@ -51,12 +53,15 @@ export function createReadOnlyPreviewService({ bridge, siteOrigin, relayUrl, ins
     prune(); const task = tasks.get(id);
     return task?.state === 'complete' ? structuredClone({ snapshot:task.snapshot, review:task.review }) : null;
   } });
-  if (setup !== undefined && typeof setup !== 'function') throw new Error('invalid setup handler');
+  const nativeSetup = nativeSetupFactory?.(); // operator supplies its own independently retained native review store
+  if ((setup !== undefined && typeof setup !== 'function') || (nativeSetup !== undefined && typeof nativeSetup !== 'function')) {
+    throw new Error('invalid setup handler');
+  }
   return http.createServer(async (req, res) => {
     try {
       const url = new URL(req.url, 'http://preview.invalid'), pathname = url.pathname;
       if (url.search || url.hash) return reply(res, 404, { error: 'not found' });
-      if (pathname === '/health' && req.method === 'GET') return reply(res, 200, { status: 'ok', scope: setup ? 'witnessed testnet setup preview' : 'read-only preview' });
+      if (pathname === '/health' && req.method === 'GET') return reply(res, 200, { status: 'ok', scope: setup || nativeSetup ? 'witnessed testnet setup preview' : 'read-only preview' });
       let match = /^\/internal\/read-only-jobs\/([a-f0-9]{32})$/.exec(pathname);
       if (match && req.method === 'GET') {
         const job = bridge.take(match[1], bearer(req));
@@ -70,6 +75,7 @@ export function createReadOnlyPreviewService({ bridge, siteOrigin, relayUrl, ins
       }
       if (req.headers.origin && req.headers.origin !== site) return reply(res, 403, { error: 'origin rejected' });
       if (setup && pathname.startsWith('/api/wallet-setup/')) return await setup(req, res, pathname);
+      if (nativeSetup && pathname.startsWith('/api/native-oracle-setup/')) return await nativeSetup(req, res, pathname);
       if (pathname.startsWith('/api/read-only/') && req.headers['x-bouncer-preview'] !== 'read-only') {
         return reply(res, 403, { error: 'origin rejected' });
       }

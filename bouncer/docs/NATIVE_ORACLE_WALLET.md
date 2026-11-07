@@ -39,8 +39,8 @@ examples were **self-hosted development services**.
 - `git-native-oracle-prompt-witness.mjs` adds a separate public, hash-linked
   reservation/claim/original log for the four stages. The Git-backed store
   uses a branch CAS and checks the acknowledged remote head. A lost claim
-  acknowledgment blocks another claim. This is an experimental independent
-  checkpoint, not a complete authorization service. The PostgreSQL coordinator,
+  acknowledgment blocks another claim. Git alone is **not** an independent
+  latest-head checkpoint or a complete authorization service. The PostgreSQL coordinator,
   receipt gates and NEP-413 checks are composed only in tests; there is no hosted
   owner session or independent latest-head retention/monitoring. Git
   administrators or a simultaneous rollback can still defeat it. A hash in this log alone does
@@ -52,11 +52,22 @@ examples were **self-hosted development services**.
   advance and read back that external head before it is acknowledged. The Git
   audit checks ancestry **and every protected owner's witness files**, so an
   ordinary fast-forward commit that deletes or rewrites a different owner's
-  claim is rejected too. Tests use a local Git remote and an in-memory
-  checkpoint, not independent infrastructure. The checkpoint must be seeded
+  claim is rejected too. Tests use a local Git remote and in-memory or disposable
+  PostgreSQL checkpoints, not independently operated infrastructure. The checkpoint must be seeded
   with the latest complete history, operated separately, protected against its
   own rollback, and made mandatory in the live coordinator; otherwise it gives
   no rollback guarantee. An uncertain checkpoint or commit is a stop.
+- `postgres-setup-head-anchor.mjs` supplies a concrete experimental CAS/head
+  history for a **separately operated** PostgreSQL instance. Explicit one-time
+  provisioning pins a verified baseline, normal operations never recreate a
+  missing database, update/delete/truncate guards and schema checks fail closed,
+  and lost COMMIT acknowledgments stop. Its local tests use disposable databases
+  only. It is not deployed, has a 10,000-entry fail-closed limit, and does not
+  independently audit Git; the paired Git adapter must do that. A privileged
+  writer can bypass the audit and a DB operator can forge or roll back its own
+  checkpoint, so independent administration and a further independently
+  retained latest revision remain essential. It cannot make the setup DB safe
+  merely by placing both schemas in the same database.
 - `postgres-native-oracle-prompt-fence.mjs` atomically retains one review and
   four stage rows, checks earlier original receipts and fresh native preflights,
   and claims each prompt once. `witnessed-native-oracle-wallet-setup.mjs`
@@ -105,6 +116,28 @@ examples were **self-hosted development services**.
   IndexedDB store; that store is not a verified durable backup.
   A wallet-returned hash is not FINAL evidence. Preflight can race state changes
   while the owner is approving, and unknown or rejected results must not retry.
+- `native-oracle-review-cache.mjs` builds a tightly bounded unsigned review
+  for the fixed native testnet trial and retains it temporarily in one process.
+  It is not durable or cross-instance; eviction/expiry cannot establish that
+  no prior prompt exists. The actual authenticated reservation stores its
+  review separately in the fenced database. An existing local device key must
+  match before the prototype client requests a review or reservation.
+- `authenticated-native-oracle-setup-service.mjs`, the opt-in
+  `native-oracle-setup-http.mjs` and `web-src/native-oracle-setup-client.mjs`
+  now compose the owner-message challenges, retained native review, both setup
+  witnesses, device-key check, four one-shot wallet prompts, original-hash
+  preview/recording and completion check. The HTTP bridge is **off by default**
+  and the client is not connected to the hosted wallet UI. A synthetic test
+  exercises that path with real WebCrypto in simulated IndexedDB, throwaway
+  signatures, disposable PostgreSQL, a local Git remote, an **in-memory** head
+  checkpoint, fabricated RPC receipts and a fake wallet; lost claim responses
+  and unknown wallet results stop without a second prompt. Phone-sized Chromium
+  also exercises actual browser WebCrypto/IndexedDB against a fake wallet and
+  fake routes, including a lost-claim response. Neither is an actual phone,
+  independently deployed checkpoint, chain transaction or purchase.
+  Creating a device key does not provide a verified backup or prove an older
+  installation absent. Independent checkpoint operations and an authenticated
+  recovery/handoff still must be completed before live funding or deployment.
 - `web-src/native-oracle-device-key.mjs` can generate and retain one local,
   non-extractable Ed25519 WebCrypto key per owner and test its possession
   without exporting the private key. It has no transaction-signing, network or

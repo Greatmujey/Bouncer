@@ -60,6 +60,7 @@ jobs:
           node scripts/test-walletconnect-browser.mjs
           node scripts/test-wallet-prompt-fence-browser.mjs
           node scripts/test-native-oracle-device-key-browser.mjs
+          node scripts/test-native-oracle-setup-browser.mjs
       - name: Test pinned wallet adapters with synthetic signers
         shell: bash
         env:
