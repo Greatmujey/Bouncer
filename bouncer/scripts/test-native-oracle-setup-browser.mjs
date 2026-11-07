@@ -12,7 +12,8 @@ import { buildNativeOracleWalletPlan,NATIVE_ORACLE_DEFAULT_GAS_ALLOWANCE } from 
 import { nativeSetupAuthAction } from '../web-src/native-oracle-setup-auth.mjs';
 
 const entry=await build({stdin:{contents:"export {createNativeOracleSetupClient} from './web-src/native-oracle-setup-client.mjs';\n"+
-  "export {openNativeOracleDeviceKey} from './web-src/native-oracle-device-key.mjs';",resolveDir:process.cwd(),sourcefile:'synthetic-native-entry.mjs'},
+  "export {openNativeOracleDeviceKey} from './web-src/native-oracle-device-key.mjs';\n"+
+  "export {signReviewedNativeSetupChallenge} from './web-src/native-oracle-setup-auth.mjs';",resolveDir:process.cwd(),sourcefile:'synthetic-native-entry.mjs'},
   bundle:true,format:'esm',platform:'browser',target:['es2020'],write:false});
 const bundle=entry.outputFiles[0].text,wasm=fs.readFileSync(new URL('../../bouncer.wasm',import.meta.url));
 const playwrightPath=process.env.BOUNCER_PLAYWRIGHT_PATH || path.join(process.env.RUNNER_TEMP||'','bouncer-browser/node_modules/playwright-core/index.mjs');
@@ -33,7 +34,7 @@ try{
       const digest=createHash('sha256').update(JSON.stringify(nativeSetupAuthAction(ctx))).digest('hex'),issued=Date.now(),expires=issued+120_000;
       const label={reserve_native_setup:`Reserve native setup prompt: ${review.stages[0].id}`,
         claim_native_setup_stage:`Claim one native setup prompt: ${review.stages[0].id}`,
-        inspect_native_setup:'Inspect retained native setup'}[ctx.purpose];
+        inspect_native_setup:'Inspect retained native setup',claim_native_oracle_trial:'Retain original native trial hash'}[ctx.purpose];
       return {challenge_id:'b'.repeat(32),nonce_base64:Buffer.alloc(32,8).toString('base64'),recipient:new URL(origin).host,expires_at_ms:expires,
         message:`Bouncer testnet owner authentication\n${label}\nAccount: ${owner}\nPublic key: ${publicKey}\nAction SHA-256: ${digest}\n`+
           `Site: ${origin}\nIssued: ${new Date(issued).toISOString()}\nExpires: ${new Date(expires).toISOString()}\n`+
@@ -88,7 +89,9 @@ try{
       stages:review.stages.map(s=>({stage_id:s.id,action_commitment_sha256:s.action_commitment_sha256}))};
     const result=await page.evaluate(async({owner,publicKey,privatePkcs8,review,taskId,originalHash})=>{
       let prompts=0;
+      window.__ownerAuthCalls=0;
       const wallet={manifest:{id:'near-mobile',features:{signAndSendTransaction:true}},async signMessage(p){
+        window.__ownerAuthCalls++;
         const e=new TextEncoder(),m=e.encode(p.message),r=e.encode(p.recipient),payload=new Uint8Array(4+4+m.length+32+4+r.length+1),v=new DataView(payload.buffer);
         let i=0;v.setUint32(i,0x80000000+413,true);i+=4;v.setUint32(i,m.length,true);i+=4;payload.set(m,i);i+=m.length;
         payload.set(p.nonce,i);i+=32;v.setUint32(i,r.length,true);i+=4;payload.set(r,i);i+=r.length;payload[i]=0;
@@ -97,6 +100,7 @@ try{
         return {accountId:owner,publicKey,signature:btoa(String.fromCharCode(...signature))};},
         async signAndSendTransaction(p){prompts++;if(p.signerId!==owner || p.receiverId!==review.vault || p.actions[2].params.code.length!==452675)throw Error('unexpected synthetic action');
           return {transaction:{hash:originalHash}};}};
+      window.__syntheticOwnerWallet=wallet;
       const client=window.__m.createNativeOracleSetupClient({wallet,accountId:owner,ownerPublicKey:publicKey,deviceStore:window.__keys,
         location,crypto,isCurrent:()=>true,isTopLevel:true,relay:({work})=>work()});
       const enabled=await client.enabled(),prepared=await client.createReview({agentPublicKey:review.agent_public_key});
@@ -111,8 +115,20 @@ try{
     if(drop){assert.equal(result.error,'NATIVE_SETUP_RESULT_UNKNOWN');assert.equal(result.prompts,0)}
     else{assert.equal(result.result.status,'ORIGINAL_HASH_RETURNED');assert.equal(result.result.original_hash,originalHash);assert.equal(result.prompts,1)}
     assert.equal(result.secondError,'WITNESS_NOT_CLAIMABLE');assert.deepEqual(errors,[]);
+    const trial={goal_id:'native-oracle-trial-1',goal_sha256:'d'.repeat(64),agent_public_key:review.agent_public_key,
+      original_hash:baseEncode(Buffer.alloc(32,25))};
+    const trialContext={purpose:'claim_native_oracle_trial',owner,ownerPublicKey:publicKey,identity,trial,expectedWitnessHead:'e'.repeat(40)};
+    const trialResult=await page.evaluate(async({trialContext,trialChallenge})=>{
+      const before=window.__ownerAuthCalls,args={wallet:window.__syntheticOwnerWallet,context:trialContext,challenge:trialChallenge,
+        location,crypto,fetch};let changedBlocked=false;
+      try{await window.__m.signReviewedNativeSetupChallenge({...args,context:{...trialContext,trial:{...trialContext.trial,goal_sha256:'f'.repeat(64)}}})}
+      catch{changedBlocked=true}
+      const evidence=await window.__m.signReviewedNativeSetupChallenge(args);
+      return {changedBlocked,ownerCalls:window.__ownerAuthCalls-before,accountId:evidence.accountId,publicKey:evidence.publicKey};
+    },{trialContext,trialChallenge:challenge(trialContext)});
+    assert.deepEqual(trialResult,{changedBlocked:true,ownerCalls:1,accountId:owner,publicKey});
     assert.ok(requests.every(r=>r.includes(origin)||r.includes('https://test.rpc.fastnear.com')));
     await context.close();
   }
-  console.log('Synthetic mobile-sized Chromium native setup: real local WebCrypto/IndexedDB, fake wallet and backend; lost claim never opened a wallet.');
+  console.log('Synthetic mobile-sized Chromium native setup and trial authentication: real WebCrypto/IndexedDB, fake wallet and backend; changed challenge blocked.');
 }finally{await browser.close()}

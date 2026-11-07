@@ -76,3 +76,24 @@ test('changed action, origin, message, expiry or wallet result fails closed befo
   await assert.rejects(signReviewedNativeSetupChallenge({ ...f.args, fetch: limited }), /CLI_KEY_NOT_FULL_ACCESS/);
   assert.equal(f.sends(), 0);
 });
+
+test('trial-hash challenge binds owner, exact goal, agent key, original and witness head', async () => {
+  const f=fixture(),agent=String(nearApi.KeyPair.fromRandom('ed25519').getPublicKey());
+  const trial={goal_id:'native-oracle-trial-1',goal_sha256:'d'.repeat(64),agent_public_key:agent,original_hash:hash(50)};
+  const context={owner:OWNER,ownerPublicKey:f.context.ownerPublicKey,identity:f.identity,purpose:'claim_native_oracle_trial',
+    trial,expectedWitnessHead:'e'.repeat(40)};
+  const action=nativeSetupAuthAction(context),digest=createHash('sha256').update(JSON.stringify(action)).digest('hex');
+  const expires=f.challenge.expires_at_ms,issued=expires-120_000;
+  const challenge={...f.challenge,message:`Bouncer testnet owner authentication\nRetain original native trial hash\nAccount: ${OWNER}\n`+
+    `Public key: ${context.ownerPublicKey}\nAction SHA-256: ${digest}\nSite: ${site.origin}\n`+
+    `Issued: ${new Date(issued).toISOString()}\nExpires: ${new Date(expires).toISOString()}\n`+
+    'This message is not a transaction and does not itself approve spending.'};
+  for(const bad of [{...trial,original_hash:hash(51)},{...trial,goal_sha256:'f'.repeat(64)},
+    {...trial,agent_public_key:context.ownerPublicKey},{...trial,extra:'unexpected'}]) {
+    await assert.rejects(signReviewedNativeSetupChallenge({...f.args,context:{...context,trial:bad},challenge}));
+  }
+  await assert.rejects(signReviewedNativeSetupChallenge({...f.args,context:{...context,expectedWitnessHead:'f'.repeat(40)},challenge}));
+  assert.equal(f.prompts(),0);
+  const signed=await signReviewedNativeSetupChallenge({...f.args,context,challenge});
+  assert.equal(signed.publicKey,context.ownerPublicKey);assert.equal(f.prompts(),1);assert.equal(f.sends(),0);
+});

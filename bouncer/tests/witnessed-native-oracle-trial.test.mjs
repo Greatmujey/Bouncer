@@ -8,6 +8,7 @@ import { buildNativeOracleWalletPlan,NATIVE_ORACLE_DEFAULT_GAS_ALLOWANCE } from 
 import { createNativeOraclePromptWitness } from '../agent/git-native-oracle-prompt-witness.mjs';
 import { createWitnessedNativeOraclePhoneAccount } from '../agent/native-oracle-phone-signer.mjs';
 import { recoverWitnessedNativeOracle } from '../agent/recover-witnessed-native-oracle.mjs';
+import { createAuthenticatedNativeOracleTrialClaim, createOwnerAuthorizedNativeTrialWitness } from '../agent/authenticated-native-oracle-trial-claim.mjs';
 import { openNativeOracleDeviceKey } from '../web-src/native-oracle-device-key.mjs';
 import { runOracleGoal,ORACLE_PROJECT_ID,ORACLE_PROJECT_UUID,ORACLE_TESTNET_PROGRAM } from '../agent/oracle-outlayer.mjs';
 
@@ -207,5 +208,38 @@ test('a second device verifies fabricated FINAL delivery and refund using the in
     assert.equal(result.status,'REUSED');assert.equal(result.delivery.tx_hash,original);assert.equal(result.delivery.charged_yocto,charged);
     assert.equal(result.delivery.refunded_to_owner_yocto,refunded);assert.equal(recovered.get(goal.id).status,'completed');
     assert.equal(f.counts().sends,1);assert.equal(f.counts().signatures,1);
+  }finally{f.device.close()}
+});
+
+test('owner-authenticated witness composes with the phone signer and the one-send runner',async()=>{
+  const f=await fixture();try {
+    let issued,consumed=false,prompts=0;
+    const auth={async issue(action){issued=structuredClone(action);return {challenge_id:'a'.repeat(32)}},
+      async authenticate({action,evidence}){if(consumed || evidence?.owner_signature!=='synthetic' || JSON.stringify(action)!==JSON.stringify(issued))return false;
+        consumed=true;return true}};
+    const otherWitness={async inspect(){return {head:(await f.witness.inspect(OWNER)).head,state:null}}};
+    const claimService=createAuthenticatedNativeOracleTrialClaim({goal:f.goal,review:f.review,identity:f.identity,wasmBytes:wasm,
+      trustedReviewHash:f.review.review_sha256,trustedOwnerPublicKey:f.identity.owner_public_key,auth,witness:f.witness,otherWitness,
+      getFreshCompletion:f.getFreshCompletion,now:()=>base});
+    const authorizedWitness=createOwnerAuthorizedNativeTrialWitness({claimService,identity:f.identity,
+      requestOwnerEvidence:async({trial,challenge})=>{prompts++;assert.equal(trial.goal_id,f.goal.id);
+        return {...challenge,owner_signature:'synthetic'}}});
+    const local=journal();await assert.rejects(run(f,f.makeAccount({witness:authorizedWitness}),local),/unresolved.*do not resend/);
+    assert.equal(prompts,1);assert.equal(consumed,true);assert.equal(f.counts().signatures,1);assert.equal(f.counts().sends,1);
+    assert.equal((await f.witness.inspect(OWNER)).state.trial.original_hash,local.get(f.goal.id).tx_hash);
+  }finally{f.device.close()}
+});
+
+test('owner authentication failure stops before the trial claim, phone signing or send',async()=>{
+  const f=await fixture();try {
+    const auth={async issue(){return {challenge_id:'a'.repeat(32)}},async authenticate(){return false}};
+    const otherWitness={async inspect(){return {head:(await f.witness.inspect(OWNER)).head,state:null}}};
+    const claimService=createAuthenticatedNativeOracleTrialClaim({goal:f.goal,review:f.review,identity:f.identity,wasmBytes:wasm,
+      trustedReviewHash:f.review.review_sha256,trustedOwnerPublicKey:f.identity.owner_public_key,auth,witness:f.witness,otherWitness,
+      getFreshCompletion:f.getFreshCompletion,now:()=>base});
+    const authorizedWitness=createOwnerAuthorizedNativeTrialWitness({claimService,identity:f.identity,
+      requestOwnerEvidence:async()=>({owner_signature:'invalid'})});
+    await assert.rejects(run(f,f.makeAccount({witness:authorizedWitness}),journal()));
+    assert.equal(f.counts().signatures,0);assert.equal(f.counts().sends,0);assert.equal((await f.witness.inspect(OWNER)).state.phase,'complete');
   }finally{f.device.close()}
 });

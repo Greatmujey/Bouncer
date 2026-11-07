@@ -262,10 +262,21 @@ single submission. Initial completion may be at most 120 seconds old in this
 path; the post-witness completion must still be within five seconds at signing.
 These checks cannot prevent chain state changing after the snapshot.
 
-For integration, create the guarded account with the same `goal`, `review`,
-`identity`, pinned WASM bytes, trusted review hash and owner public key used
-by setup, an anchored `witness`, a fresh authenticated completion supplier,
-and a phone-signature callback. Pass this account to `runOracleGoal`; its
+For integration, create `createAuthenticatedNativeOracleTrialClaim` with the
+existing one-use PostgreSQL/NEP-413 authenticator, both anchored setup
+witnesses, the pinned review and a trusted fresh-completion supplier. Its
+challenge binds the owner, setup operation, goal fingerprint, agent key,
+original hash and expected witness head. It authenticates the current owner
+FullAccess key, consumes the challenge once, checks the other setup witness and
+current completion, then appends and rereads the original. Wrap it with
+`createOwnerAuthorizedNativeTrialWitness`; the provided evidence callback must
+securely carry the exact challenge to the owner wallet and its signature back.
+It never treats the off-chain signature as approval to spend.
+
+Create the guarded account with the same `goal`, `review`, `identity`, pinned
+WASM bytes, trusted review hash and owner public key used by setup, this
+owner-authorized witness, a fresh authenticated completion supplier, and a
+phone-signature callback. Pass the account to `runOracleGoal`; its
 `requiresWitnessedOriginal` guard performs the pre-send witness readback.
 For receipt-only recovery on another cooperating device or process, call
 `recoverWitnessedNativeOracle` with the same goal/review/identity and trust
@@ -280,20 +291,20 @@ freshness limit when used.
 **Trust and deployment:** The signing module checks the shape and consistency
 of the supplied witness/completion evidence; caller-supplied booleans are not
 cryptographic attestation, proof of an independent anchor, or proof of human
-consent. The integrating service must authenticate the owner and the exact trial
-claim, securely transport the evidence to the phone, display the terms and
-obtain real consent. Its witness must use a separately operated, independently
-retained and rollback-monitored latest-head checkpoint, with append-only Git
-history auditing. A local in-memory store or a public Git repository alone does
+consent. Integrators must use the authenticated claim service, securely
+transport its challenge and completion evidence to the phone, display the
+terms and obtain real consent. Its witness must use a separately operated,
+independently retained and rollback-monitored latest-head checkpoint, with
+append-only Git history auditing. A local in-memory store or a public Git repository alone does
 not provide that guarantee; privileged or simultaneous rollback of all trusted
 systems, bypassing clients, compromised RPCs and same-origin XSS remain outside
 it. The tenth witness record changes the format: upgrade all witness readers and
 checkpoint monitors together; older readers reject it. The authenticated setup
-inspection returns witnessed records, including the trial hash, but the phone
-transport, trial-claim authentication, separate checkpoint deployment and
-owner UI are not supplied by this module. No device key is restored by copying
-an original hash; a replacement device needs a separate owner-led key-revocation
-and installation procedure.
+inspection returns witnessed records, including the trial hash. The claim
+service and adapter are not mounted as HTTP routes: the phone transport,
+separate checkpoint deployment and owner UI must still be integrated. No device
+key is restored by copying an original hash; a replacement device needs a
+separate owner-led key-revocation and installation procedure.
 
 ## Funding and refunds
 

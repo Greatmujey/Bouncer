@@ -291,11 +291,22 @@ dbtest('native setup challenges bind all four exact stages, originals and the on
     assert.equal(await auth.authenticate({ action, evidence }), true);
     assert.equal(await auth.authenticate({ action, evidence }), false);
   }
+  const trial={...base,purpose:'claim_native_oracle_trial',operation_id:'c'.repeat(32),review_sha256:'a'.repeat(64),
+    goal_id:'native-oracle-trial-1',goal_sha256:'d'.repeat(64),agent_public_key:pk(pair()),original_hash:hash(77),witness_head:'e'.repeat(40)};
+  const challenge=await auth.issue(trial),trialEvidence=signed(challenge,f);
+  for (const changed of [{...trial,original_hash:hash(78)},{...trial,goal_sha256:'f'.repeat(64)},
+    {...trial,agent_public_key:pk(pair())},{...trial,witness_head:'f'.repeat(40)}]) {
+    assert.equal(await auth.authenticate({action:changed,evidence:trialEvidence}),false);
+  }
+  assert.equal(await auth.authenticate({action:trial,evidence:trialEvidence}),true);
+  assert.equal(await auth.authenticate({action:trial,evidence:trialEvidence}),false);
   for (const bad of [
     { ...reserve, stage_id: stages[1] }, { ...reserve, review_sha256: 'A'.repeat(64) },
     { ...reserve, owner: 'buyer.near' }, { ...reserve, owner: 'bouncer-owner-12f343b795633e357ae5560d.testnet' },
     { ...reserve, extra: 'unexpected' }, { ...actions[2], operation_id: '0'.repeat(31) },
     { ...actions[3], original_hash: 'bad' }, { ...complete, operation_id: 'x'.repeat(32) },
     { ...complete, review_sha256: 'A'.repeat(64) }, { ...complete, stage_id: stages[0] },
+    { ...trial, agent_public_key: f.action.owner_public_key },{ ...trial, original_hash:'bad' },
+    { ...trial, witness_head:'g'.repeat(40) },{ ...trial, goal_sha256:'F'.repeat(64) },
   ]) await assert.rejects(auth.issue(bad));
 }));

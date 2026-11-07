@@ -20,6 +20,8 @@ import { createWalletPromptWitness } from '../agent/git-wallet-prompt-witness.mj
 import { createGitNativeOraclePromptWitnessStore, createGitBranchWitnessStore } from '../agent/git-branch-witness-store.mjs';
 import { createWitnessedNativeOracleSetup } from '../agent/witnessed-native-oracle-wallet-setup.mjs';
 import { createAuthenticatedNativeOracleSetupService } from '../agent/authenticated-native-oracle-setup-service.mjs';
+import { createAuthenticatedNativeOracleTrialClaim } from '../agent/authenticated-native-oracle-trial-claim.mjs';
+import { validateWitnessedNativeOracleTrial } from '../agent/native-oracle-phone-signer.mjs';
 import { createAnchoredSetupWitnessPair } from '../agent/anchored-setup-witness-pair.mjs';
 import { createNativeOracleSetupHttpHandler } from '../agent/native-oracle-setup-http.mjs';
 import { createNativeOracleReviewCatalog } from '../agent/native-oracle-review-catalog.mjs';
@@ -453,13 +455,26 @@ dbtest('synthetic browser prompts, owner challenges, PostgreSQL, local Git and p
     hash(10), hash(11), hash(10), hash(11),
     hash(10), hash(11), hash(12), hash(10), hash(11), hash(12),
     hash(10), hash(11), hash(12), hash(13)]);
-  const trial={goal_id:'native-oracle-trial-1',goal_sha256:'d'.repeat(64),
-    agent_public_key:f.review.agent_public_key,original_hash:hash(50)};
-  const claimedTrial=await witness.claimTrial(identity,trial,completion.witness_head);
+  const goal={id:'native-oracle-trial-1',contract_id:f.review.vault,owner_account_id:f.ownerId,policy_id:f.review.policy_id,
+    amount:f.review.per_tx_cap_yocto,route:{project:f.review.project,route_revision:1,policy_revision:1,payee_revision:1,active:true},max_age_seconds:300};
+  const options={goal,review:f.review,identity,wasmBytes:wasm,trustedReviewHash:f.review.review_sha256,trustedOwnerPublicKey:f.ownerKey};
+  const checked=validateWitnessedNativeOracleTrial(options);
+  const trial={goal_id:goal.id,goal_sha256:checked.goalSha256,agent_public_key:f.review.agent_public_key,original_hash:hash(50)};
+  const trialClaims=createAuthenticatedNativeOracleTrialClaim({...options,auth:authenticator,witness,otherWitness,
+    getFreshCompletion:async()=>service.verifyCompletion({identity,evidence:await sign(verifyContext,await service.issueCompletion({identity}))})});
+  const trialChallenge=await trialClaims.issue({trial,expectedWitnessHead:completion.witness_head});
+  const trialContext={...common,purpose:'claim_native_oracle_trial',identity,trial,expectedWitnessHead:completion.witness_head};
+  const trialEvidence=await sign(trialContext,trialChallenge);
+  await assert.rejects(trialClaims.claim({trial:{...trial,original_hash:hash(51)},expectedWitnessHead:completion.witness_head,evidence:trialEvidence}));
+  const claimedTrial=await trialClaims.claim({trial,expectedWitnessHead:completion.witness_head,evidence:trialEvidence});
+  await assert.rejects(trialClaims.claim({trial,expectedWitnessHead:completion.witness_head,evidence:trialEvidence}));
   const refreshedChallenge=await service.issueCompletion({identity});
   const refreshed=await service.verifyCompletion({identity,evidence:await sign(verifyContext,refreshedChallenge)});
   assert.equal(refreshed.status,'FOUR_ORIGINALS_AND_STATE_MATCH_NOT_AUTHORIZED');
   assert.equal(refreshed.witness_head,claimedTrial.head);assert.equal(refreshed.agent_key_nonce,completion.agent_key_nonce);
+  const inspectTrialChallenge=await service.issueInspect({ownerPublicKey:f.ownerKey});
+  const retained=await service.inspect({ownerPublicKey:f.ownerKey,evidence:await sign(inspectContext,inspectTrialChallenge)});
+  assert.equal(retained.status,'WITNESSED');assert.equal(retained.witnessed_records.at(-1).original_hash,hash(50));
   assert.equal((await witness.inspect(f.ownerId)).state.trial.original_hash,hash(50));
   const alteredWitness = { ...witness, async inspect(owner) {
     const snapshot = await witness.inspect(owner), altered = structuredClone(snapshot);

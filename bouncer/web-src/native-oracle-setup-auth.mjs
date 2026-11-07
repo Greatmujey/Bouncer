@@ -10,7 +10,8 @@ import { verifyCliLogin } from './cli-login.mjs';
 
 const FORMAT = 'bouncer-wallet-prompt-auth-v1';
 const STAGES = ['create_keyless_native_vault', 'configure_native_oracle_policy', 'fund_native_vault', 'install_native_oracle_agent'];
-const PURPOSES = ['reserve_native_setup', 'claim_native_setup_stage', 'record_native_setup_original', 'inspect_native_setup', 'verify_native_setup_completion'];
+const PURPOSES = ['reserve_native_setup', 'claim_native_setup_stage', 'record_native_setup_original', 'inspect_native_setup',
+  'verify_native_setup_completion', 'claim_native_oracle_trial'];
 const HEX32 = /^[a-f0-9]{32}$/, HEX64 = /^[a-f0-9]{64}$/, BASE58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
 const fail = () => new Error('NATIVE_SETUP_AUTHENTICATION_UNAVAILABLE');
 const digestHex = bytes => [...new Uint8Array(bytes)].map(n => n.toString(16).padStart(2, '0')).join('');
@@ -27,7 +28,8 @@ function reviewStages(stages, field) {
     s?.[field] === STAGES[i] && HEX64.test(s.action_commitment_sha256 ?? ''));
 }
 /** Fixed field order and stage list exactly match the server's action hash. */
-export function nativeSetupAuthAction({ purpose, owner, ownerPublicKey, identity, review, stageId, originalHash } = {}) {
+export function nativeSetupAuthAction({ purpose, owner, ownerPublicKey, identity, review, stageId, originalHash,
+  trial, expectedWitnessHead } = {}) {
   if (!PURPOSES.includes(purpose) || !isTestnetAccount(owner) || !owner.endsWith('.testnet') ||
       owner === 'bouncer-owner-12f343b795633e357ae5560d.testnet' || typeof ownerPublicKey !== 'string' ||
       !/^ed25519:[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(ownerPublicKey)) throw fail();
@@ -41,6 +43,17 @@ export function nativeSetupAuthAction({ purpose, owner, ownerPublicKey, identity
   if (!identity || identity.owner !== owner || identity.owner_public_key !== ownerPublicKey || !HEX32.test(identity.operation_id ?? '') ||
       !HEX64.test(identity.review_sha256 ?? '') || !reviewStages(identity.stages, 'stage_id')) throw fail();
   if (purpose === 'verify_native_setup_completion') return { ...base, operation_id: identity.operation_id, review_sha256: identity.review_sha256 };
+  if (purpose === 'claim_native_oracle_trial') {
+    const fields=['goal_id','goal_sha256','agent_public_key','original_hash'];
+    if (!trial || ![Object.prototype,null].includes(Object.getPrototypeOf(trial)) || Reflect.ownKeys(trial).length!==fields.length ||
+        fields.some(k=>!Object.hasOwn(Object.getOwnPropertyDescriptor(trial,k)??{},'value')) ||
+        typeof trial.goal_id!=='string' || !/^[A-Za-z0-9_-]{1,64}$/.test(trial.goal_id) || !HEX64.test(trial.goal_sha256 ?? '') ||
+        typeof trial.agent_public_key!=='string' || !trial.agent_public_key.startsWith('ed25519:') ||
+        !validHash(trial.agent_public_key.slice(8)) || trial.agent_public_key===ownerPublicKey || !validHash(trial.original_hash) ||
+        typeof expectedWitnessHead!=='string' || !/^[a-f0-9]{40}$/.test(expectedWitnessHead)) throw fail();
+    return {...base,operation_id:identity.operation_id,review_sha256:identity.review_sha256,goal_id:trial.goal_id,
+      goal_sha256:trial.goal_sha256,agent_public_key:trial.agent_public_key,original_hash:trial.original_hash,witness_head:expectedWitnessHead};
+  }
   const index = STAGES.indexOf(stageId); if (index < 0) throw fail();
   const action = { ...base, operation_id: identity.operation_id, review_sha256: identity.review_sha256,
     stage_id: stageId, action_commitment_sha256: identity.stages[index].action_commitment_sha256 };
@@ -56,6 +69,7 @@ const labels = {
   record_native_setup_original: id => `Record native setup original: ${id}`,
   inspect_native_setup: () => 'Inspect retained native setup',
   verify_native_setup_completion: () => 'Verify native setup originals and state',
+  claim_native_oracle_trial: () => 'Retain original native trial hash',
 };
 
 /** Verify the full challenge, nonce, origin and exact action before opening an
