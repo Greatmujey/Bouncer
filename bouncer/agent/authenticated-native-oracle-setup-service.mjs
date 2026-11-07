@@ -1,7 +1,7 @@
 /**
  * Opt-in service composition for the native setup path, not a live deployment.
- * It binds one-use NEP-413 challenges to a fixed owner and a server-retained,
- * independently reviewed V9 plan; the coordinator remains responsible for the
+ * It binds one-use NEP-413 challenges to a fixed owner and an exactly
+ * reconstructed, pinned V9 plan; the coordinator remains responsible for the
  * database hold, both same-branch witnesses and fresh stage preflights.
  *
  * No private key, wallet call, transaction broadcast, provider purchase or
@@ -59,10 +59,12 @@ export function createAuthenticatedNativeOracleSetupService({ auth, fence, witne
     throw Error('fixed named testnet owner, authenticated fence, both setup witnesses and retained native review required');
   }
   const wasm = Buffer.from(wasmBytes);
-  async function retained(taskId, ownerPublicKey) {
-    if (typeof taskId !== 'string' || !/^[a-f0-9]{32}$/.test(taskId)) throw fail();
-    const value = await getRetainedReview(taskId);
-    if (!value?.review || value.review.owner !== owner) throw fail();
+  async function retained(taskId, ownerPublicKey, agentPublicKey) {
+    if (typeof taskId !== 'string' || !/^[a-f0-9]{64}$/.test(taskId) || typeof agentPublicKey !== 'string' ||
+        !/^ed25519:[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(agentPublicKey)) throw fail();
+    const value = await getRetainedReview(taskId,agentPublicKey);
+    if (!value?.review || value.review.owner !== owner || value.review.agent_public_key !== agentPublicKey ||
+        value.review.review_sha256 !== taskId) throw fail();
     const review = structuredClone(value.review);
     try { verifyNativeOracleWalletReview({ review, wasmBytes:wasm, trustedReviewHash:review.review_sha256, trustedOwnerPublicKey:ownerPublicKey }); }
     catch { throw fail(); }
@@ -77,14 +79,14 @@ export function createAuthenticatedNativeOracleSetupService({ auth, fence, witne
   }
   const action = (purpose, ownerPublicKey, extra={}) => nativeSetupAuthAction({ purpose, owner, ownerPublicKey, ...extra });
   return Object.freeze({
-    async issueReservation({ taskId, ownerPublicKey } = {}) {
-      const review = await retained(taskId,ownerPublicKey), snapshot = await witness.inspect(owner);
+    async issueReservation({ taskId, ownerPublicKey, agentPublicKey } = {}) {
+      const review = await retained(taskId,ownerPublicKey,agentPublicKey), snapshot = await witness.inspect(owner);
       if (snapshot.state) throw fail();
       await checkPeer(otherWitness,owner,snapshot.head);
       return auth.issue(action('reserve_native_setup',ownerPublicKey,{review}));
     },
-    async reserve({ taskId, ownerPublicKey, evidence } = {}) {
-      const review = await retained(taskId,ownerPublicKey);
+    async reserve({ taskId, ownerPublicKey, agentPublicKey, evidence } = {}) {
+      const review = await retained(taskId,ownerPublicKey,agentPublicKey);
       return coordinator.reserve({review,trustedReviewHash:review.review_sha256,trustedOwnerPublicKey:ownerPublicKey,evidence});
     },
     async issueClaim({ identity:raw, stageId } = {}) {

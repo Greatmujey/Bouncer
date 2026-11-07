@@ -5,7 +5,8 @@
  *
  * Startup inspection is not proof of an independently operated checkpoint,
  * an unrolled-back database, owner consent, device-key custody, provider
- * delivery or a safe lock release. The native review cache is process-local;
+ * delivery or a safe lock release. Native pre-reservation reviews are
+ * reconstructed from pinned code and a public key, not independently retained;
  * the native UI is not mounted. Do not use this for real spending or deploy
  * it as a production service without independent review and recovery work.
  */
@@ -19,7 +20,7 @@ import { createAuthenticatedWitnessedSetupService } from './authenticated-witnes
 import { createAuthenticatedNativeOracleSetupService } from './authenticated-native-oracle-setup-service.mjs';
 import { createWitnessedSetupHttpHandler } from './witnessed-setup-http.mjs';
 import { createNativeOracleSetupHttpHandler } from './native-oracle-setup-http.mjs';
-import { createNativeOracleReviewCache } from './native-oracle-review-cache.mjs';
+import { createNativeOracleReviewCatalog } from './native-oracle-review-catalog.mjs';
 
 const OWNER = 'great_mujey.testnet';
 const validCheckpoint = value => value && Object.getPrototypeOf(value) === Object.prototype &&
@@ -66,11 +67,11 @@ export async function createExperimentalPhoneSetupRuntime({ pool, siteOrigin, pr
     const fence = createPostgresNativeOraclePromptFence({ pool, authenticate: auth.authenticate, wasmBytes: nativeWasmBytes,
       receiptProvider: provider, preflightProvider: provider });
     const coordinator = createWitnessedNativeOracleSetup({ fence, witness: pair.native, otherWitness: pair.wallet });
-    const cache = createNativeOracleReviewCache({ wasmBytes: nativeWasmBytes });
+    const catalog = createNativeOracleReviewCatalog({ wasmBytes: nativeWasmBytes });
     const service = createAuthenticatedNativeOracleSetupService({ auth, fence, witness: pair.native, otherWitness: pair.wallet,
-      coordinator, getRetainedReview: cache.getRetainedReview, wasmBytes: nativeWasmBytes, receiptProvider: provider, owner: OWNER });
+      coordinator, getRetainedReview: catalog.getRetainedReview, wasmBytes: nativeWasmBytes, receiptProvider: provider, owner: OWNER });
     const handler = createNativeOracleSetupHttpHandler({ service, siteOrigin, wasmBytes: nativeWasmBytes,
-      owner: OWNER, createReview: cache.create });
+      owner: OWNER, createReview: catalog.create });
     nativeSetupFactory = () => handler;
   }
   return Object.freeze({ setupFactory, nativeSetupFactory, ready_for_real_spending: false,

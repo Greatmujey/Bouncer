@@ -1,8 +1,8 @@
 /**
  * Experimental, opt-in same-origin bridge for authenticated native setup.
  * It does not expose a signer, broadcaster or provider purchase. The operator
- * must supply a separately retained review, both witnessed coordinators and
- * a separately operated latest-head anchor. This handler is not mounted by
+ * must supply an exactly checked review, both witnessed coordinators and a
+ * separately operated latest-head anchor. This handler is not mounted by
  * default and must not be treated as ready for real wallet spending.
  */
 import crypto from 'node:crypto';
@@ -11,7 +11,7 @@ import { NATIVE_ORACLE_V9_BYTES, NATIVE_ORACLE_V9_SHA256 } from './native-oracle
 const MAX=24_576, PREFIX='/api/native-oracle-setup/';
 const specs=Object.freeze({
   review:['createReview',['agentPublicKey']],
-  'reserve-challenge':['issueReservation',['taskId','ownerPublicKey']], reserve:['reserve',['taskId','ownerPublicKey','evidence']],
+  'reserve-challenge':['issueReservation',['taskId','ownerPublicKey','agentPublicKey']], reserve:['reserve',['taskId','ownerPublicKey','agentPublicKey','evidence']],
   'claim-challenge':['issueClaim',['identity','stageId']], claim:['claim',['identity','stageId','evidence']],
   'original-challenge':['issueOriginal',['identity','stageId','originalHash']], original:['recordOriginal',['identity','stageId','originalHash','evidence']],
   'completion-challenge':['issueCompletion',['identity']], completion:['verifyCompletion',['identity','evidence']],

@@ -153,12 +153,18 @@ examples were **self-hosted development services**.
   IndexedDB store; that store is not a verified durable backup.
   A wallet-returned hash is not FINAL evidence. Preflight can race state changes
   while the owner is approving, and unknown or rejected results must not retry.
-- `native-oracle-review-cache.mjs` builds a tightly bounded unsigned review
-  for the fixed native testnet trial and retains it temporarily in one process.
-  It is not durable or cross-instance; eviction/expiry cannot establish that
-  no prior prompt exists. The actual authenticated reservation stores its
-  review separately in the fenced database. An existing local device key must
-  match before the prototype client requests a review or reservation.
+- `native-oracle-review-catalog.mjs` deterministically reconstructs the fixed,
+  unsigned testnet review from the public agent key and pinned artifact. Its
+  public task ID is the complete review SHA-256; it is not a credential or
+  proof of any prior action. Identical instances and restarts reconstruct the
+  same review without a process-local cache; a changed planner rejects old
+  unreserved IDs instead of silently changing terms. There is no task expiry,
+  but each owner challenge and each on-chain preflight still has its own short
+  freshness window. After authenticated reservation the fenced database
+  separately retains the exact review. Missing or reconstructed state never
+  proves that no prior prompt exists. Rate-limit review requests before any
+  exposure; an existing local device key must match before the prototype client
+  requests a review or reservation.
 - `authenticated-native-oracle-setup-service.mjs`, the opt-in
   `native-oracle-setup-http.mjs` and `web-src/native-oracle-setup-client.mjs`
   now compose the owner-message challenges, retained native review, both setup
@@ -184,9 +190,10 @@ examples were **self-hosted development services**.
   Native-only preview does not require the V12 FT artifact. Both transport
   switches are off by default. This wiring and its disposable DB/local Git
   tests are **not** an independently operated deployment, live phone flow or
-  approval to fund a vault. Review retention is still process-local. The new
-  post-witness check reduces the Git-delay problem but the resulting five-second
-  window can still expire during database, network or browser latency.
+  approval to fund a vault. The review catalog is reconstructable across
+  instances but is not an independent historical backup. The post-witness
+  check reduces the Git-delay problem but the resulting five-second window can
+  still expire during database, network or browser latency.
 - `web-src/native-oracle-device-key.mjs` can generate and retain one local,
   non-extractable Ed25519 WebCrypto key per owner and test its possession
   without exporting the private key. It has no transaction-signing, network or

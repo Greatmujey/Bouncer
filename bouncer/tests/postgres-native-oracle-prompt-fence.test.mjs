@@ -22,7 +22,7 @@ import { createWitnessedNativeOracleSetup } from '../agent/witnessed-native-orac
 import { createAuthenticatedNativeOracleSetupService } from '../agent/authenticated-native-oracle-setup-service.mjs';
 import { createAnchoredSetupWitnessPair } from '../agent/anchored-setup-witness-pair.mjs';
 import { createNativeOracleSetupHttpHandler } from '../agent/native-oracle-setup-http.mjs';
-import { createNativeOracleReviewCache } from '../agent/native-oracle-review-cache.mjs';
+import { createNativeOracleReviewCatalog } from '../agent/native-oracle-review-catalog.mjs';
 import { createReadOnlyPreviewService } from '../agent/read-only-preview-service.mjs';
 import { createNativeOracleSetupClient } from '../web-src/native-oracle-setup-client.mjs';
 import { openNativeOracleDeviceKey } from '../web-src/native-oracle-device-key.mjs';
@@ -393,9 +393,9 @@ dbtest('synthetic browser prompts, owner challenges, PostgreSQL, local Git and p
   const witness = createNativeOraclePromptWitness({ store: createGitNativeOraclePromptWitnessStore({ repo: work, branch, initialHead }) });
   const otherWitness = createWalletPromptWitness({ store: createGitBranchWitnessStore({ repo: work, branch, initialHead }) });
   const coordinator = createWitnessedNativeOracleSetup({ fence, witness, otherWitness });
-  const taskId = 'a'.repeat(32);
+  const taskId = f.review.review_sha256;
   const service = createAuthenticatedNativeOracleSetupService({ auth:authenticator, fence, witness, otherWitness, coordinator,
-    getRetainedReview:async id => id===taskId ? {review:f.review} : null, wasmBytes:wasm,
+    getRetainedReview:async (id,k) => id===taskId && k===f.review.agent_public_key ? {review:f.review} : null, wasmBytes:wasm,
     receiptProvider:f.options.receiptProvider, owner:f.ownerId });
   let signed = 0, prompted = 0;
   const wallet = { manifest: { id: 'near-mobile', features: { signAndSendTransaction: true } }, async signMessage(p) {
@@ -414,9 +414,9 @@ dbtest('synthetic browser prompts, owner challenges, PostgreSQL, local Git and p
   const inspectChallenge = await service.issueInspect({ownerPublicKey:f.ownerKey});
   const empty = await service.inspect({ownerPublicKey:f.ownerKey,evidence:await sign(inspectContext,inspectChallenge)});
   assert.equal(empty.status,'NO_LOCAL_RECORD'); assert.equal(empty.execution_authorized,false);
-  await assert.rejects(service.issueReservation({taskId:'f'.repeat(32),ownerPublicKey:f.ownerKey}));
-  const reserveChallenge = await service.issueReservation({taskId,ownerPublicKey:f.ownerKey});
-  const reservation = await service.reserve({taskId,ownerPublicKey:f.ownerKey,
+  await assert.rejects(service.issueReservation({taskId:'f'.repeat(64),ownerPublicKey:f.ownerKey,agentPublicKey:f.review.agent_public_key}));
+  const reserveChallenge = await service.issueReservation({taskId,ownerPublicKey:f.ownerKey,agentPublicKey:f.review.agent_public_key});
+  const reservation = await service.reserve({taskId,ownerPublicKey:f.ownerKey,agentPublicKey:f.review.agent_public_key,
     evidence:await sign({ ...common, purpose:'reserve_native_setup', review:f.review },reserveChallenge)});
   const identity = reservation.identity;
   const deviceKey = { status: 'LOCAL_DEVICE_KEY_AVAILABLE', origin: site.origin, owner: f.ownerId, vault: f.review.vault,
@@ -505,7 +505,7 @@ async function syntheticNativePhone({ dropClaim = false, unknownWallet = false }
         return {block_hash:BLOCK,permission:'FullAccess'}}};
     const auth=createPostgresWalletPromptAuth({pool:db,origin:site.origin,provider:authProvider});
     const fence=createPostgresNativeOraclePromptFence({...f.options,authenticate:auth.authenticate});
-    const coordinator=createWitnessedNativeOracleSetup({fence,witness,otherWitness}),cache=createNativeOracleReviewCache({wasmBytes:wasm});
+    const coordinator=createWitnessedNativeOracleSetup({fence,witness,otherWitness}),cache=createNativeOracleReviewCatalog({wasmBytes:wasm});
     const service=createAuthenticatedNativeOracleSetupService({auth,fence,witness,otherWitness,coordinator,
       getRetainedReview:cache.getRetainedReview,wasmBytes:wasm,receiptProvider:f.options.receiptProvider,owner:ownerId});
     const handler=createNativeOracleSetupHttpHandler({service,siteOrigin:site.origin,wasmBytes:wasm,owner:ownerId,createReview:cache.create});

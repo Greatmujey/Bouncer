@@ -40,9 +40,9 @@ const bridge = createOidcReadOnlyRpcBridge({ callbackOrigin, defaultAudience: `h
 const provider = new ReadOnlyNearReceiptProvider('https://test.rpc.fastnear.com', { fetchImpl: bridge.fetch, timeoutMs: 25_000 });
 // Both transports are OFF by default. Even when explicitly enabled, this is
 // experimental testnet plumbing, not a spending-ready or deployed service.
-// In particular the native review cache is process-local, the UI is unmounted,
-// and the device-key prototype cannot sign. Never use a missing record as
-// evidence that a wallet prompt did not happen.
+// In particular reconstructed reviews are not independent backups, the UI is
+// unmounted, and the device-key prototype cannot sign. Never use a missing
+// record as evidence that a wallet prompt did not happen.
 const enableBuffer = process.env.BOUNCER_ENABLE_WITNESSED_TESTNET_SETUP === '1';
 const enableNative = process.env.BOUNCER_ENABLE_NATIVE_ORACLE_TESTNET_SETUP === '1';
 let setupFactory, nativeSetupFactory, setupPool;

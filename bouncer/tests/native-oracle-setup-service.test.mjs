@@ -29,14 +29,16 @@ function fixture({reorderedReview=false}={}){
   const coordinator=Object.fromEntries(['reserve','claim','recordOriginal','verifyCompletion'].map(x=>[x,async()=>({})]));
   const auth={async issue(action){issued.push(action);return {action}}};
   const service=createAuthenticatedNativeOracleSetupService({auth,fence,witness,otherWitness,coordinator,
-    getRetainedReview:async id=>id==='a'.repeat(32)?{review:reorderedReview?reorder(review):review}:null,wasmBytes:wasm,receiptProvider:{async viewNodeStatus(){return {chain_id:'testnet'}},
+    getRetainedReview:async (id,k)=>id===review.review_sha256 && k===agentKey?{review:reorderedReview?reorder(review):review}:null,wasmBytes:wasm,receiptProvider:{async viewNodeStatus(){return {chain_id:'testnet'}},
       async txStatusReceipts(){throw Error('not available')}},owner:OWNER});
   return {review,identity,plan,witness,otherWitness,service,ownerKey,issued,setState:v=>{state=v},setPeer:v=>{peerState=v}};
 }
 
 test('native service binds challenge to retained plan and never treats absent or disagreeing journals as permission',async()=>{
-  const f=fixture();await assert.rejects(f.service.issueReservation({taskId:'f'.repeat(32),ownerPublicKey:f.ownerKey}));
-  const reservation=await f.service.issueReservation({taskId:'a'.repeat(32),ownerPublicKey:f.ownerKey});
+  const f=fixture();await assert.rejects(f.service.issueReservation({taskId:'f'.repeat(64),ownerPublicKey:f.ownerKey,agentPublicKey:f.review.agent_public_key}));
+  await assert.rejects(f.service.issueReservation({taskId:f.review.review_sha256,ownerPublicKey:f.ownerKey,agentPublicKey:key()}));
+  await assert.rejects(f.service.issueReservation({taskId:f.review.review_sha256,ownerPublicKey:f.ownerKey}));
+  const reservation=await f.service.issueReservation({taskId:f.review.review_sha256,ownerPublicKey:f.ownerKey,agentPublicKey:f.review.agent_public_key});
   assert.equal(reservation.action.purpose,'reserve_native_setup');assert.equal(reservation.action.review_sha256,f.review.review_sha256);
   const none=await f.service.inspect({ownerPublicKey:f.ownerKey,evidence:'synthetic'});assert.equal(none.status,'NO_LOCAL_RECORD');
   assert.match(none.scope,/not proof/);assert.equal(none.execution_authorized,false);
@@ -54,11 +56,11 @@ test('native service binds challenge to retained plan and never treats absent or
 
 test('a JSONB-reordered retained review remains valid, but an existing peer witness requires recovery',async()=>{
   const f=fixture({reorderedReview:true});
-  assert.equal((await f.service.issueReservation({taskId:'a'.repeat(32),ownerPublicKey:f.ownerKey})).action.review_sha256,f.review.review_sha256);
+  assert.equal((await f.service.issueReservation({taskId:f.review.review_sha256,ownerPublicKey:f.ownerKey,agentPublicKey:f.review.agent_public_key})).action.review_sha256,f.review.review_sha256);
   f.setPeer({phase:'claimed'});
   const status=await f.service.inspect({ownerPublicKey:f.ownerKey,evidence:'synthetic'});
   assert.equal(status.status,'RECOVERY_REQUIRED');assert.match(status.scope,/different setup flow/);
-  await assert.rejects(f.service.issueReservation({taskId:'a'.repeat(32),ownerPublicKey:f.ownerKey}));
+  await assert.rejects(f.service.issueReservation({taskId:f.review.review_sha256,ownerPublicKey:f.ownerKey,agentPublicKey:f.review.agent_public_key}));
 });
 
 test('a device-key mismatch or changed review blocks before any wallet transaction or server claim',async()=>{
@@ -72,12 +74,12 @@ test('a device-key mismatch or changed review blocks before any wallet transacti
     throw Error('server claim should not be called')};
   const client=createNativeOracleSetupClient({wallet,accountId:OWNER,ownerPublicKey:f.ownerKey,deviceStore:device,location:site,
     crypto:crypto.webcrypto,fetch:fetchImpl,isCurrent:()=>true,isTopLevel:true,relay:({work})=>work()});
-  await assert.rejects(client.reserve({taskId:'a'.repeat(32),review:f.review}),e=>e.code==='NATIVE_DEVICE_KEY_UNAVAILABLE');
+  await assert.rejects(client.reserve({taskId:f.review.review_sha256,review:f.review}),e=>e.code==='NATIVE_DEVICE_KEY_UNAVAILABLE');
   assert.deepEqual(calls,[]);
   validDevice=true;const changed=structuredClone(f.review);changed.payee='evil.testnet';
   await assert.rejects(client.approveStage({identity:f.identity,review:changed,stageId:changed.stages[0].id}));
   assert.deepEqual(calls,['/api/native-oracle-setup/artifact']);assert.equal(walletCalls,0);
   const switched=createNativeOracleSetupClient({wallet,accountId:OWNER,ownerPublicKey:f.ownerKey,deviceStore:device,location:site,
     crypto:crypto.webcrypto,fetch:fetchImpl,isCurrent:()=>false,isTopLevel:true,relay:({work})=>work()});
-  await assert.rejects(switched.reserve({taskId:'a'.repeat(32),review:f.review}),e=>e.code==='NATIVE_SETUP_SESSION_CHANGED');
+  await assert.rejects(switched.reserve({taskId:f.review.review_sha256,review:f.review}),e=>e.code==='NATIVE_SETUP_SESSION_CHANGED');
 });

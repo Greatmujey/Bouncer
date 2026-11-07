@@ -53,7 +53,7 @@ export function createReadOnlyPreviewService({ bridge, siteOrigin, relayUrl, ins
     prune(); const task = tasks.get(id);
     return task?.state === 'complete' ? structuredClone({ snapshot:task.snapshot, review:task.review }) : null;
   } });
-  const nativeSetup = nativeSetupFactory?.(); // operator supplies its own independently retained native review store
+  const nativeSetup = nativeSetupFactory?.(); // opt-in runtime supplies its own checked native review reconstruction
   if ((setup !== undefined && typeof setup !== 'function') || (nativeSetup !== undefined && typeof nativeSetup !== 'function')) {
     throw new Error('invalid setup handler');
   }

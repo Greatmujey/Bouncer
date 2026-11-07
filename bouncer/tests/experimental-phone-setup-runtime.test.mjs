@@ -92,6 +92,7 @@ dbtest('phone runtime never creates missing schemas and requires both durable fe
     nativeSetupFactory:runtime.nativeSetupFactory});
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   const base=`http://127.0.0.1:${server.address().port}`,headers={'x-bouncer-preview':'native-oracle-setup-v1'};
+  let prepared;
   try {
     const response=await fetch(`${base}/api/native-oracle-setup/config`,{headers});const status=await response.json();
     assert.equal(status.enabled,true);assert.equal(status.ready_for_real_spending,false);
@@ -101,6 +102,7 @@ dbtest('phone runtime never creates missing schemas and requires both durable fe
       headers:{...headers,origin,'content-type':'application/json'},body:JSON.stringify({agentPublicKey})});
     const body=await review.json();assert.equal(review.status,200);assert.equal(body.signing_authorized,false);
     assert.equal(body.transaction_sent,false);assert.equal(body.review.owner,'great_mujey.testnet');
+    prepared={taskId:body.task_id,agentPublicKey};assert.equal(prepared.taskId,body.review.review_sha256);
     assert.equal((await fetch(`${base}/api/native-oracle-setup/broadcast`,{method:'POST',headers,body:'{}'})).status,404);
     assert.deepEqual(await counts(db),initialCounts,'read-only setup and synthetic review did not reserve or prompt');
     assert.equal(anchor.writes(),0);
@@ -123,4 +125,23 @@ dbtest('phone runtime never creates missing schemas and requires both durable fe
       assert.deepEqual(await counts(db),initialCounts);
     } finally { await new Promise(resolve=>dual.close(resolve)); }
   }
+
+  // A new runtime has no pre-reservation process cache. It reconstructs the
+  // exact review using only its pinned artifact and the public key, and still
+  // requires an owner challenge plus both fences before any reservation.
+  const restarted=await createExperimentalPhoneSetupRuntime(config);
+  const next=createReadOnlyPreviewService({bridge,siteOrigin:origin,inspectReadiness:async()=>({}),makeReview:async()=>({}),
+    nativeSetupFactory:restarted.nativeSetupFactory});
+  await new Promise(resolve=>next.listen(0,'127.0.0.1',resolve));
+  try {
+    const url=`http://127.0.0.1:${next.address().port}/api/native-oracle-setup/reserve-challenge`;
+    const post=body=>fetch(url,{method:'POST',headers:{...headers,origin,'content-type':'application/json'},body:JSON.stringify(body)});
+    const ownerPublicKey=String(nearApi.KeyPair.fromRandom('ed25519').getPublicKey());
+    const wrong=await post({...prepared,ownerPublicKey,agentPublicKey:String(nearApi.KeyPair.fromRandom('ed25519').getPublicKey())});
+    assert.equal(wrong.status,409);assert.deepEqual(await counts(db),initialCounts);
+    const response=await post({...prepared,ownerPublicKey});assert.equal(response.status,200);
+    const challenge=await response.json();assert.match(challenge.challenge_id,/^[a-f0-9]{32}$/);
+    assert.deepEqual(await counts(db),{...initialCounts,challenges:initialCounts.challenges+1});
+    assert.equal(anchor.writes(),0);
+  } finally { await new Promise(resolve=>next.close(resolve)); }
 }));

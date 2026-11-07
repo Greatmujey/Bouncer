@@ -75,17 +75,18 @@ export function createNativeOracleSetupClient({wallet,accountId,ownerPublicKey,d
     async createReview({agentPublicKey}={}) {
       await device({owner:OWNER,vault:`native.${OWNER}`,agent_public_key:agentPublicKey});
       const result=await request('review',{agentPublicKey});
-      if(!/^[a-f0-9]{32}$/.test(result?.task_id??'') || result?.review?.owner!==OWNER ||
+      if(!/^[a-f0-9]{64}$/.test(result?.task_id??'') || result.task_id!==result?.review?.review_sha256 || result?.review?.owner!==OWNER ||
          result.review.vault!==`native.${OWNER}` || result.review.agent_public_key!==agentPublicKey ||
          result.signing_authorized!==false || result.transaction_sent!==false)throw fail('NATIVE_SETUP_UNAVAILABLE');
       await device(result.review);return result;
     },
     async reserve({taskId,review}={}) {
-      session();if(!/^[a-f0-9]{32}$/.test(taskId??''))throw fail('NATIVE_SETUP_UNAVAILABLE');
+      session();if(!/^[a-f0-9]{64}$/.test(taskId??'') || taskId!==review?.review_sha256)throw fail('NATIVE_SETUP_UNAVAILABLE');
       await device(review);
-      const challenge=await request('reserve-challenge',{taskId,ownerPublicKey});
+      const agentPublicKey=review.agent_public_key;
+      const challenge=await request('reserve-challenge',{taskId,ownerPublicKey,agentPublicKey});
       const evidence=await sign({...context('reserve_native_setup'),review},challenge);
-      return pump(()=>request('reserve',{taskId,ownerPublicKey,evidence}));
+      return pump(()=>request('reserve',{taskId,ownerPublicKey,agentPublicKey,evidence}));
     },
     /** Call only from an explicit owner action after reviewing this exact stage. */
     async approveStage({identity,review,stageId}={}) {

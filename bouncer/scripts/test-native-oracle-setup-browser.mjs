@@ -21,11 +21,11 @@ const executablePath=process.env.CHROMIUM_PATH || ['/usr/bin/google-chrome','/us
 if(!executablePath)throw Error('No Chromium executable found');
 const browser=await chromium.launch({executablePath,args:['--no-sandbox','--disable-gpu'],headless:true});
 const origin='https://4173-synthetic.e2b.app',owner='great_mujey.testnet',vault=`native.${owner}`,
-  taskId='a'.repeat(32),originalHash=baseEncode(Buffer.alloc(32,6)),blockHash=baseEncode(Buffer.alloc(32,9));
+  originalHash=baseEncode(Buffer.alloc(32,6)),blockHash=baseEncode(Buffer.alloc(32,9));
 try{
   for(const {width,drop} of [{width:390,drop:false},{width:320,drop:true}]){
     const context=await browser.newContext({viewport:{width,height:844},isMobile:true,hasTouch:true}),page=await context.newPage();
-    const errors=[],requests=[];page.on('pageerror',e=>errors.push(e.message));let review,identity,claimed=false;
+    const errors=[],requests=[];page.on('pageerror',e=>errors.push(e.message));let review,identity,taskId,claimed=false;
     const pair=generateKeyPairSync('ed25519'),privatePkcs8=pair.privateKey.export({type:'pkcs8',format:'der'}).toString('base64'),
       publicKey=`ed25519:${baseEncode(Buffer.from(pair.publicKey.export({format:'jwk'}).x,'base64url'))}`;
     const json=(route,data,status=200)=>route.fulfill({status,contentType:'application/json',body:JSON.stringify(data),headers:{'cache-control':'no-store'}});
@@ -50,8 +50,14 @@ try{
       if(u.pathname==='/api/native-oracle-setup/config')return json(route,{enabled:true,network:'testnet',owner,ready_for_real_spending:false});
       if(u.pathname==='/api/native-oracle-setup/artifact')return route.fulfill({status:200,contentType:'application/wasm',body:wasm});
       if(u.pathname==='/api/native-oracle-setup/review')return json(route,{task_id:taskId,review,signing_authorized:false,transaction_sent:false});
-      if(u.pathname==='/api/native-oracle-setup/reserve-challenge')return json(route,challenge({purpose:'reserve_native_setup',owner,ownerPublicKey:publicKey,review}));
-      if(u.pathname==='/api/native-oracle-setup/reserve')return json(route,{status:'RESERVED',identity,execution_authorized:false});
+      if(u.pathname==='/api/native-oracle-setup/reserve-challenge'){
+        assert.deepEqual(req.postDataJSON(),{taskId,ownerPublicKey:publicKey,agentPublicKey:review.agent_public_key});
+        return json(route,challenge({purpose:'reserve_native_setup',owner,ownerPublicKey:publicKey,review}));
+      }
+      if(u.pathname==='/api/native-oracle-setup/reserve'){
+        const data=req.postDataJSON();assert.equal(data.taskId,taskId);assert.equal(data.agentPublicKey,review.agent_public_key);
+        return json(route,{status:'RESERVED',identity,execution_authorized:false});
+      }
       if(u.pathname==='/api/native-oracle-setup/inspect-challenge')return json(route,challenge({purpose:'inspect_native_setup',owner,ownerPublicKey:publicKey}));
       if(u.pathname==='/api/native-oracle-setup/inspect')return json(route,{status:'WITNESSED',identity,database_stages:[{claimed,original_hash:null}],execution_authorized:false});
       if(u.pathname==='/api/native-oracle-setup/claim-challenge'){
@@ -77,6 +83,7 @@ try{
     review=buildNativeOracleWalletPlan({wasmBytes:wasm,terms:{owner,vault,policy_id:'price',agent_public_key:created.public_key,
       per_tx_cap_yocto:'100000000000000000000000',daily_cap_yocto:'100000000000000000000000',vault_deposit_yocto:'100000000000000000000000',
       agent_gas_allowance_yocto:NATIVE_ORACLE_DEFAULT_GAS_ALLOWANCE}}).review;
+    taskId=review.review_sha256;
     identity={owner,owner_public_key:publicKey,operation_id:'1'.repeat(32),review_sha256:review.review_sha256,
       stages:review.stages.map(s=>({stage_id:s.id,action_commitment_sha256:s.action_commitment_sha256}))};
     const result=await page.evaluate(async({owner,publicKey,privatePkcs8,review,taskId,originalHash})=>{
