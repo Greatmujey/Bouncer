@@ -23,6 +23,10 @@ const key = () => String(nearApi.KeyPair.fromRandom('ed25519').getPublicKey());
 const newOwner = () => `prompt-${crypto.randomBytes(8).toString('hex')}.testnet`;
 const pool = () => new pg.Pool({ connectionString: url, max: 12, connectionTimeoutMillis: 5000 });
 const syntheticAuth = async ({ evidence }) => evidence === 'synthetic-auth';
+// Initial-claim tests do not fetch an original, but must configure a provider
+// capable of later reconciliation before starting setup.
+const syntheticReceiptAvailability = { async viewNodeStatus() { return { chain_id: 'testnet' }; },
+  async txStatusReceipts() { throw new Error('no synthetic original requested'); } };
 function fixture() {
   const owner = newOwner(), ownerKey = key();
   const { review } = buildBufferWalletSpendingPlan({ owner, vault: `vault.${owner}`, adapter: `buffer.${owner}`,
@@ -141,7 +145,8 @@ setupDbTest('the first setup prompt binds the pinned V12, retained snapshot, own
   snapshot.owner = owner; snapshot.candidate_vault = `vault.${owner}`;
   const review = buildBufferWalletSetup({ snapshot, wasmBytes: V12, nowMs: SETUP_NOW }).review;
   const { provider: setupPreflightProvider, state, blockHash } = firstSetupPreflightFixture({ owner, ownerKey });
-  const fence = createPostgresWalletPromptFence({ pool: db, authenticate: syntheticAuth, setupWasmBytes: bytes, setupPreflightProvider });
+  const fence = createPostgresWalletPromptFence({ pool: db, authenticate: syntheticAuth, setupWasmBytes: bytes,
+    setupReceiptProvider: syntheticReceiptAvailability, setupPreflightProvider });
   bytes[100] ^= 1; // server retained its own copy before caller mutation
   assert.throws(() => createPostgresWalletPromptFence({ pool: db, authenticate: syntheticAuth, setupWasmBytes: bytes }), /pinned V12/);
   const request = { review, setupSnapshot: snapshot, trustedReviewHash: review.review_sha256,
@@ -160,6 +165,11 @@ setupDbTest('the first setup prompt binds the pinned V12, retained snapshot, own
     actionCommitmentSha256: review.stages[0].action_commitment_sha256, evidence: 'synthetic-auth' };
   const noPreflight = createPostgresWalletPromptFence({ pool: db, authenticate: syntheticAuth, setupWasmBytes: V12 });
   await assert.rejects(noPreflight.claimPrompt(claimArgs), error => error.code === 'SETUP_PREFLIGHT_UNAVAILABLE');
+  const noReceipt = createPostgresWalletPromptFence({ pool: db, authenticate: syntheticAuth, setupWasmBytes: V12, setupPreflightProvider });
+  await assert.rejects(noReceipt.claimPrompt(claimArgs), error => error.code === 'SETUP_PREFLIGHT_UNAVAILABLE');
+  const wrongNetwork = createPostgresWalletPromptFence({ pool: db, authenticate: syntheticAuth, setupWasmBytes: V12, setupPreflightProvider,
+    setupReceiptProvider: { ...syntheticReceiptAvailability, async viewNodeStatus() { return { chain_id: 'mainnet' }; } } });
+  await assert.rejects(wrongNetwork.claimPrompt(claimArgs), error => error.code === 'SETUP_PREFLIGHT_UNAVAILABLE');
   assert.equal((await fence.inspect(read)).claim_status, 'AVAILABLE');
   const claim = await fence.claimPrompt(claimArgs);
   assert.equal(claim.status, 'PROMPT_CLAIMED_NO_HASH'); assert.equal(claim.execution_authorized, false);
@@ -181,7 +191,7 @@ setupDbTest('first setup claims fail closed on stale, changed or unavailable sam
   snapshot.owner = owner; snapshot.candidate_vault = `vault.${owner}`;
   const review = buildBufferWalletSetup({ snapshot, wasmBytes: V12, nowMs: SETUP_NOW }).review;
   const { provider, state } = firstSetupPreflightFixture({ owner, ownerKey });
-  const fence = createPostgresWalletPromptFence({ pool: db, authenticate: syntheticAuth, setupWasmBytes: V12, setupPreflightProvider: provider });
+  const fence = createPostgresWalletPromptFence({ pool: db, authenticate: syntheticAuth, setupWasmBytes: V12, setupReceiptProvider: syntheticReceiptAvailability, setupPreflightProvider: provider });
   const reserved = await fence.reserve({ review, setupSnapshot: snapshot, trustedReviewHash: review.review_sha256,
     trustedOwnerPublicKey: ownerKey, stageId: 'create_keyless_vault', evidence: 'synthetic-auth' });
   const args = { owner, ownerPublicKey: ownerKey, operationId: reserved.operation_id, reviewSha256: review.review_sha256,
@@ -218,7 +228,7 @@ setupDbTest('a newly recorded original during preflight prevents claiming and is
   snapshot.owner = owner; snapshot.candidate_vault = `vault.${owner}`;
   const review = buildBufferWalletSetup({ snapshot, wasmBytes: V12, nowMs: SETUP_NOW }).review;
   const { provider, state } = firstSetupPreflightFixture({ owner, ownerKey });
-  const fence = createPostgresWalletPromptFence({ pool: db, authenticate: syntheticAuth, setupWasmBytes: V12, setupPreflightProvider: provider });
+  const fence = createPostgresWalletPromptFence({ pool: db, authenticate: syntheticAuth, setupWasmBytes: V12, setupReceiptProvider: syntheticReceiptAvailability, setupPreflightProvider: provider });
   const reserved = await fence.reserve({ review, setupSnapshot: snapshot, trustedReviewHash: review.review_sha256,
     trustedOwnerPublicKey: ownerKey, stageId: 'create_keyless_vault', evidence: 'synthetic-auth' });
   const read = { owner, ownerPublicKey: ownerKey, evidence: 'synthetic-auth' };
@@ -236,7 +246,7 @@ setupDbTest('a setup claim whose acknowledgement arrives after freshness expires
   snapshot.owner = owner; snapshot.candidate_vault = `vault.${owner}`;
   const review = buildBufferWalletSetup({ snapshot, wasmBytes: V12, nowMs: SETUP_NOW }).review;
   const { provider } = firstSetupPreflightFixture({ owner, ownerKey });
-  const normal = createPostgresWalletPromptFence({ pool: db, authenticate: syntheticAuth, setupWasmBytes: V12, setupPreflightProvider: provider });
+  const normal = createPostgresWalletPromptFence({ pool: db, authenticate: syntheticAuth, setupWasmBytes: V12, setupReceiptProvider: syntheticReceiptAvailability, setupPreflightProvider: provider });
   const reserved = await normal.reserve({ review, setupSnapshot: snapshot, trustedReviewHash: review.review_sha256,
     trustedOwnerPublicKey: ownerKey, stageId: 'create_keyless_vault', evidence: 'synthetic-auth' });
   let touched = false;
@@ -249,7 +259,7 @@ setupDbTest('a setup claim whose acknowledgement arrives after freshness expires
       return result;
     } };
   } };
-  const slow = createPostgresWalletPromptFence({ pool: delayed, authenticate: syntheticAuth, setupWasmBytes: V12, setupPreflightProvider: provider });
+  const slow = createPostgresWalletPromptFence({ pool: delayed, authenticate: syntheticAuth, setupWasmBytes: V12, setupReceiptProvider: syntheticReceiptAvailability, setupPreflightProvider: provider });
   const args = { owner, ownerPublicKey: ownerKey, operationId: reserved.operation_id, reviewSha256: review.review_sha256,
     stageId: 'create_keyless_vault', actionCommitmentSha256: review.stages[0].action_commitment_sha256, evidence: 'synthetic-auth' };
   await assert.rejects(slow.claimPrompt(args), e => e.code === 'CLAIM_COMMITTED_PREFLIGHT_STALE' && /do not open or retry/.test(e.message));
@@ -279,6 +289,8 @@ setupDbTest('reconciliation reads only the retained setup original and never unl
   await assert.rejects(fence.reconcileSetupOriginal(args), e => e.code === 'MISMATCH');
   assert.deepEqual(observed.calls, []);
   await fence.claimPrompt({ ...args });
+  assert.deepEqual(observed.calls, ['status']); // first claim checks the receipt provider is testnet
+  observed.calls.length = 0;
   await fence.recordOriginalHash({ ...read, operationId: reserved.operation_id, originalHash: f.trustedOriginalHash });
   for (const patch of [{ operationId: '0'.repeat(32) }, { originalHash: hash(34) }, { reviewSha256: '0'.repeat(64) },
     { actionCommitmentSha256: '0'.repeat(64) }, { evidence: 'bad' }]) {

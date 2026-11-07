@@ -638,9 +638,9 @@ export function createPostgresWalletPromptFence({ pool, authenticate, setupWasmB
       if (!hex32(operationId) || !digest(reviewSha256) || !STAGES.includes(stageId) || !digest(actionCommitmentSha256)) {
         throw new Error('original operation and exact reviewed action are required');
       }
-      if (stageId === SETUP_STAGE && !preflightProvider) {
-        throw fail('SETUP_PREFLIGHT_UNAVAILABLE', 'a trusted same-block setup preflight is required before claiming the first prompt');
-      }
+      // Do not start a new vault setup if the backend cannot even be
+      // configured to reconcile its originals for subsequent stages.
+      if (stageId === SETUP_STAGE) requireSetupProviders();
       await authorize(context('claim_prompt', owner, ownerPublicKey, { operation_id: operationId,
         review_sha256: reviewSha256, stage_id: stageId, action_commitment_sha256: actionCommitmentSha256 }), evidence);
       const assertMatching = row => {
@@ -669,6 +669,8 @@ export function createPostgresWalletPromptFence({ pool, authenticate, setupWasmB
           if (status !== 'AVAILABLE') throw fail('MISMATCH', 'original setup prompt is not claimable; stop and reconcile');
           return row;
         });
+        try { if ((await readStatus())?.chain_id !== 'testnet') throw new Error('not testnet'); }
+        catch { throw fail('SETUP_PREFLIGHT_UNAVAILABLE', 'the trusted setup receipt provider is unavailable; no wallet prompt was claimed'); }
         try {
           preflight = await inspectBufferWalletSetupStage({ review: retained.review, snapshot: retained.setup_snapshot,
             wasmBytes: pinnedSetupWasm, trustedReviewHash: reviewSha256, trustedOwnerPublicKey: ownerPublicKey,

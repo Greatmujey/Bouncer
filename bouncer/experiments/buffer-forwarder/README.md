@@ -162,9 +162,10 @@ prototype**, tested with a disposable PostgreSQL 17 primary. Cooperating
 processes compete for one owner-wide reservation, storing the complete canonical
 Buffer spending review or pinned V12 setup review and original snapshot. For a
 new setup reservation it atomically creates immutable one-shot stage rows for
-vault registration and funding. The first claim requires a fresh same-block
-preflight; each later claim additionally requires the retained original hashes
-and matching FINAL receipt graphs for **all** preceding stages. A separate
+vault registration and funding. The first claim requires a configured testnet
+receipt provider and a fresh same-block preflight; each later claim additionally
+requires the retained original hashes and matching FINAL receipt graphs for
+**all** preceding stages. A separate
 read-only check can inspect the funded vault only after all three originals
 match. The reviewed V12 artifact is hash-checked in server memory, not stored
 in PostgreSQL. Two cooperating processes cannot both claim a stage. Legacy
