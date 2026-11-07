@@ -6,9 +6,11 @@ import nearApi from 'near-api-js';
 import {nep413Payload} from '../web-src/cli-login.mjs';
 import {createPrivateOrderKey,preparePrivateOrderDraft,sealPrivateOrder,inspectPrivateOrderKeyRecord} from '../web-src/buffer-private-order-capsule.mjs';
 import {initializePostgresBufferOrderFence,createPostgresBufferOrderFence} from '../agent/postgres-buffer-order-fence.mjs';
+import {wasm as v12, fixture as setupFixture, hash as setupHash} from './buffer-wallet-setup-fixture.mjs';
 const url=process.env.BOUNCER_TEST_POSTGRES_URL;
 if(process.env.BOUNCER_REQUIRE_POSTGRES_TESTS==='1' && !url) throw Error('PostgreSQL integration test URL required');
 const dbtest=url ? test : test.skip;
+const artifactDbtest=url && v12 ? test : test.skip;
 const site='https://site.example.test', location={origin:site,host:'site.example.test'};
 async function fixture() {
   const owner=`order-${crypto.randomBytes(6).toString('hex')}.testnet`, pair=nearApi.KeyPair.fromRandom('ed25519'),ownerPublicKey=String(pair.getPublicKey());
@@ -207,4 +209,79 @@ dbtest('owner-signed order journal and real local Git witness complete without a
     assert.equal(inspected.status,'SEALED'); assert.equal(inspected.capsule_sha256,digest);
     assert.equal(inspected.seller_post_authorized,false); assert.equal(inspected.delivered,false);
   } finally {await pool.end();fs.rmSync(dir,{recursive:true,force:true});}
+});
+
+artifactDbtest('one synthetic seller POST is encrypted and witnessed after owner authentication and real preflight checks',async()=>{
+  const {createPostgresWalletPromptAuth,initializePostgresWalletPromptAuth}=await import('../agent/postgres-wallet-prompt-auth.mjs');
+  const {createBufferOrderAuthenticator}=await import('../agent/buffer-order-auth.mjs');
+  const {signReviewedBufferOrderChallenge}=await import('../web-src/witnessed-buffer-order-auth.mjs');
+  const {openPrivateOrderDraft,openPrivateOrder}=await import('../web-src/buffer-private-order-capsule.mjs');
+  const {firstSetupPreflightFixture,setSyntheticSetupStage}=await import('./fixtures/wallet-setup-preflight-provider.mjs');
+  const {createBufferOrderWitness}=await import('../agent/git-buffer-order-witness.mjs');
+  const {createWitnessedBufferOrderJournal}=await import('../agent/witnessed-buffer-order-journal.mjs');
+  const {buildBufferWalletSpendingPlan}=await import('../agent/buffer-wallet-spending-plan.mjs');
+  const {createFixedBufferOrderOnce}=await import('../agent/buffer-fixed-order-once.mjs');
+  const {createBufferFixedOrderPreflight}=await import('../agent/buffer-fixed-order-preflight.mjs');
+  const {CIRCLE_TESTNET_CODE_HASH}=await import('../agent/keyless-vault-v12-readiness.mjs');
+  const {CIRCLE_TESTNET_USDC}=await import('../scripts/circle-testnet-setup.mjs');
+  const {BUFFER_TESTNET_CONTRACT}=await import('../experiments/buffer-forwarder/build.mjs');
+  const pool=new pg.Pool({connectionString:url,max:5});
+  try {
+    await initializePostgresWalletPromptAuth({pool});await initializePostgresBufferOrderFence({pool});const f=await fixture();
+    const agent1=String(nearApi.KeyPair.fromRandom('ed25519').getPublicKey()),agent2=String(nearApi.KeyPair.fromRandom('ed25519').getPublicKey());
+    const {review}=buildBufferWalletSpendingPlan({owner:f.owner,vault:`vault.${f.owner}`,adapter:`forward.${f.owner}`,policy_id:'test',
+      vault_agent_public_key:agent1,forwarder_agent_public_key:agent2,per_tx_cap_atoms:'20000000',daily_cap_atoms:'20000000',
+      vault_agent_gas_allowance_yocto:'1',forwarder_agent_gas_allowance_yocto:'1'});
+    f.identity.review_sha256=review.review_sha256;
+    const {provider,state:chainState,blockHash}=firstSetupPreflightFixture({owner:f.owner,ownerKey:f.identity.owner_public_key,sellerHash:setupHash(5)});
+    setSyntheticSetupStage(chainState,blockHash,3);
+    const auth=createBufferOrderAuthenticator({auth:createPostgresWalletPromptAuth({pool,origin:site,provider})});
+    const fence=createPostgresBufferOrderFence({pool,authenticate:auth.authenticate,crypto:crypto.webcrypto});
+    let text='',head='0';const store={async read(){return {text,head}},async append(input){
+      if(input.expectedHead!==head || input.expectedText!==text)throw Error();text=input.text;head=String(+head+1);return {head,confirmed:true}}};
+    const witness=createBufferOrderWitness({store}),journal=createWitnessedBufferOrderJournal({fence,witness});
+    const signed=async purpose=>{const context={purpose,identity:f.identity};
+      return signReviewedBufferOrderChallenge({wallet:f.wallet,context,challenge:await auth.issue(context),location,crypto:crypto.webcrypto,fetch:f.fetch})};
+    await journal.reserve({identity:f.identity,keyRecord:f.keyRecord,draftCapsule:f.draft.capsule,evidence:await signed('reserve')});
+    const draft=await openPrivateOrderDraft({wallet:f.wallet,keyRecord:f.keyRecord,capsule:f.draft.capsule,
+      trustedCapsuleSha256:f.draft.draft_sha256,trustedRequestCommitmentSha256:f.draft.request_commitment_sha256,
+      location,crypto:crypto.webcrypto,fetch:f.fetch});
+    const sellerHash=setupHash(5),setup=setupFixture(0,30,{owner:f.owner,ownerKey:f.identity.owner_public_key});
+    const priorOriginals=[0,1,2].map(i=>{const item=setupFixture(i,30+i,{owner:f.owner,ownerKey:f.identity.owner_public_key});
+      return {trustedOriginalHash:item.trustedOriginalHash,attempt:item.attempt,result:item.result}});
+    const preflight=createBufferFixedOrderPreflight({setupReview:setup.review,setupSnapshot:setup.snapshot,wasmBytes:v12,
+      trustedSetupReviewHash:setup.trustedReviewHash,trustedOwnerPublicKey:f.identity.owner_public_key,
+      trustedSellerCodeHash:sellerHash,priorOriginals,provider});
+    const seller={orderId:f.order.orderId,onchainOrderId:f.order.onchainOrderId,accessToken:f.order.accessToken,
+      payment:{tokenContract:CIRCLE_TESTNET_USDC,method:'ft_transfer_call',args:{receiver_id:BUFFER_TESTNET_CONTRACT,amount:'20000000',
+        msg:JSON.stringify({order_id:f.order.onchainOrderId,sku:f.order.sku})},attachedDeposit:'1 yoctoNEAR',gas:'100 Tgas'},nearCliCommand:'unused'};
+    let posts=0;const executor=createFixedBufferOrderOnce({journal,preflight,crypto:crypto.webcrypto,trustedSellerCodeHash:sellerHash,
+      fetch:async()=>{posts++;return new Response(JSON.stringify(seller))}});
+    const config={intent_id:'synthetic',expires_at_ms:Date.now()+20*60_000,native_return_cap:'1000000000000000000000000',native_reserve:'1000000000000000000000000'};
+    const input={identity:f.identity,keyRecord:f.keyRecord,draft,review,config,claimEvidence:await signed('claim')};
+    const result=await executor.submit(input);assert.equal(result.status,'ORDER_RESPONSE_SEALED');assert.equal(posts,1);
+    const state=await journal.inspect({identity:f.identity,evidence:await signed('inspect')});assert.equal(state.status,'SEALED');
+    assert.equal((await witness.inspect(f.owner)).state.phase,'sealed');
+    const opened=await openPrivateOrder({wallet:f.wallet,keyRecord:f.keyRecord,capsule:state.capsule,trustedCapsuleSha256:state.capsule_sha256,
+      location,crypto:crypto.webcrypto,fetch:f.fetch});assert.equal(opened.accessToken,f.order.accessToken);
+    await assert.rejects(executor.submit(input));assert.equal(posts,1);assert.equal(result.delivery_verified,false);
+  } finally {await pool.end();}
+});
+
+dbtest('same-process retention handle is not reconstructible or reusable from JSON',async()=>{
+  const {createBufferOrderWitness}=await import('../agent/git-buffer-order-witness.mjs');
+  const {createWitnessedBufferOrderJournal}=await import('../agent/witnessed-buffer-order-journal.mjs');
+  const pool=new pg.Pool({connectionString:url,max:5});
+  try {
+    await initializePostgresBufferOrderFence({pool});const f=await fixture();let text='',head='0';
+    const store={async read(){return {text,head}},async append(input){if(input.expectedHead!==head || input.expectedText!==text)throw Error();
+      text=input.text;head=String(+head+1);return {head,confirmed:true}}};
+    const witness=createBufferOrderWitness({store}),fence=createPostgresBufferOrderFence({pool,authenticate:auth,crypto:crypto.webcrypto});
+    const journal=createWitnessedBufferOrderJournal({fence,witness});
+    await journal.reserve({identity:f.identity,keyRecord:f.keyRecord,draftCapsule:f.draft.capsule,evidence:'synthetic-auth'});
+    const claim=await journal.claim({identity:f.identity,evidence:'synthetic-auth'});
+    await assert.rejects(journal.retainClaimedResult({claim:JSON.parse(JSON.stringify(claim)),keyRecord:f.keyRecord,capsule:f.capsule}));
+    assert.equal((await journal.retainClaimedResult({claim,keyRecord:f.keyRecord,capsule:f.capsule})).status,'SEALED');
+    await assert.rejects(journal.retainClaimedResult({claim,keyRecord:f.keyRecord,capsule:f.capsule}));
+  } finally {await pool.end();}
 });

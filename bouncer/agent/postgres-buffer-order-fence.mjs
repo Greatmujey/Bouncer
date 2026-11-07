@@ -126,6 +126,26 @@ export function createPostgresBufferOrderFence({pool,authenticate,crypto=globalT
     catch { throw fail('UNAUTHENTICATED'); }
     return id;
   }
+  // Non-serializable in-process capabilities are created only after a
+  // successful authenticated DB claim. They do not survive a restart and
+  // are consumed before a result write; they never authorize another POST.
+  const localClaims=new WeakMap();
+  async function persistResult(id,sealed) {
+    return transaction(pool,async client=>{ await verifySchema(client);
+      const found=await client.query(`SELECT identity,key_record,state,capsule_sha256,capsule FROM ${SCHEMA}.orders
+        WHERE owner=$1 AND attempt_id=$2 FOR UPDATE`,[id.owner,id.attempt_id]);
+      const row=found.rows[0];
+      if(!row || !isDeepStrictEqual(row.identity,id) || !isDeepStrictEqual(row.key_record,sealed.key)) throw fail('NOT_CLAIMABLE');
+      if(row.state==='sealed' && row.capsule_sha256===sealed.digest && isDeepStrictEqual(row.capsule,sealed.data)) {
+        return {identity:id,state:'sealed',capsule_sha256:sealed.digest,do_not_retry:true,seller_post_authorized:false};
+      }
+      if(row.state!=='claimed') throw fail('NOT_CLAIMABLE');
+      const result=await client.query(`UPDATE ${SCHEMA}.orders SET state='sealed',capsule=$3::jsonb,capsule_sha256=$4
+        WHERE owner=$1 AND attempt_id=$2 AND state='claimed' RETURNING state`,[id.owner,id.attempt_id,JSON.stringify(sealed.data),sealed.digest]);
+      if(result.rowCount!==1) throw fail('NOT_CLAIMABLE');
+      return {identity:id,state:'sealed',capsule_sha256:sealed.digest,do_not_retry:true,seller_post_authorized:false};
+    });
+  }
   return Object.freeze({
     async reserve({identity:raw,keyRecord,draftCapsule,evidence}={}) {
       const id=await identityAndAuth(raw,'reserve',evidence), sealed=await validatedCapsule(id,keyRecord,draftCapsule,'bouncer-buffer-private-draft-v1',crypto);
@@ -140,32 +160,29 @@ export function createPostgresBufferOrderFence({pool,authenticate,crypto=globalT
     },
     async claim({identity:raw,evidence}={}) {
       const id=await identityAndAuth(raw,'claim',evidence);
-      return transaction(pool,async client=>{ await verifySchema(client);
+      const claim=await transaction(pool,async client=>{ await verifySchema(client);
         const r=await client.query(`UPDATE ${SCHEMA}.orders SET state='claimed'
           WHERE owner=$1 AND attempt_id=$2 AND identity=$3::jsonb AND state='reserved' RETURNING state`,
           [id.owner,id.attempt_id,JSON.stringify(id)]);
         if(r.rowCount!==1) throw fail('NOT_CLAIMABLE');
-        return {identity:id,state:'claimed',do_not_retry:true,seller_post_authorized:false};
+        return Object.freeze({identity:Object.freeze(id),state:'claimed',do_not_retry:true,seller_post_authorized:false});
       });
+      localClaims.set(claim,id); return claim;
     },
     async record({identity:raw,keyRecord,capsule,evidence}={}) {
       let id; try { id=validateBufferOrderIdentity(structuredClone(raw)); } catch { throw fail('INVALID_ATTEMPT'); }
       const sealed=await validatedCapsule(id,keyRecord,capsule,'bouncer-buffer-private-order-v1',crypto);
       await identityAndAuth(id,'record',evidence,{capsule_sha256:sealed.digest});
-      return transaction(pool,async client=>{ await verifySchema(client);
-        const found=await client.query(`SELECT identity,key_record,state,capsule_sha256,capsule FROM ${SCHEMA}.orders
-          WHERE owner=$1 AND attempt_id=$2 FOR UPDATE`,[id.owner,id.attempt_id]);
-        const row=found.rows[0];
-        if(!row || !isDeepStrictEqual(row.identity,id) || !isDeepStrictEqual(row.key_record,sealed.key)) throw fail('NOT_CLAIMABLE');
-        if(row.state==='sealed' && row.capsule_sha256===sealed.digest && isDeepStrictEqual(row.capsule,sealed.data)) {
-          return {identity:id,state:'sealed',capsule_sha256:sealed.digest,do_not_retry:true,seller_post_authorized:false};
-        }
-        if(row.state!=='claimed') throw fail('NOT_CLAIMABLE');
-        const result=await client.query(`UPDATE ${SCHEMA}.orders SET state='sealed',capsule=$3::jsonb,capsule_sha256=$4
-          WHERE owner=$1 AND attempt_id=$2 AND state='claimed' RETURNING state`,[id.owner,id.attempt_id,JSON.stringify(sealed.data),sealed.digest]);
-        if(result.rowCount!==1) throw fail('NOT_CLAIMABLE');
-        return {identity:id,state:'sealed',capsule_sha256:sealed.digest,do_not_retry:true,seller_post_authorized:false};
-      });
+      return persistResult(id,sealed);
+    },
+    /** Internal result retention only: the handle is the exact object from a
+     * successful claim, never a JSON value or browser credential. */
+    async retainClaimedResult({claim,keyRecord,capsule}={}) {
+      const id=claim && typeof claim==='object' ? localClaims.get(claim) : null;
+      if(!id) throw fail('NOT_CLAIMABLE');
+      localClaims.delete(claim);
+      const sealed=await validatedCapsule(id,keyRecord,capsule,'bouncer-buffer-private-order-v1',crypto);
+      return persistResult(id,sealed);
     },
     async inspect({identity:raw,evidence}={}) {
       const id=await identityAndAuth(raw,'inspect',evidence);

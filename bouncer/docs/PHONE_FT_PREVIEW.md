@@ -79,7 +79,15 @@ and a separately pushed local Git witness. Concurrent claims, altered key
 records and lost database/witness acknowledgements fail closed. This is still
 an opt-in prototype, not wired to a seller, HTTP route or UI; the disposable
 database is not durable hosting, and the Git head must be independently
-retained. There is no order executor, and an uncertain POST must not be retried.
+retained. A disabled one-shot fixed-order executor now checks the funded vault's
+three original receipt graphs and fresh seller/token state before issuing at
+most one unpaid POST, then seals and independently witnesses its response.
+Its integration test used a fabricated seller, fabricated chain data and
+receipts, synthetic wallet, disposable PostgreSQL and a local witness. It is
+not connected to the phone UI or deployed, and has not created a real order.
+An uncertain claim, POST or retention result must not be retried. The public
+forwarder terms also include a plain brief hash, which can be guessable; the
+salted draft commitment does not hide that later public hash.
 
 ## Independent prompt witness
 

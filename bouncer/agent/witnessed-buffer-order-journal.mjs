@@ -12,10 +12,11 @@ export class WitnessedBufferOrderError extends Error {
 }
 const fail=()=>new WitnessedBufferOrderError();
 export function createWitnessedBufferOrderJournal({fence,witness}={}) {
-  if(!fence || ['reserve','claim','record','inspect'].some(k=>typeof fence[k]!=='function') ||
+  if(!fence || ['reserve','claim','record','retainClaimedResult','inspect'].some(k=>typeof fence[k]!=='function') ||
       !witness || ['reserve','claim','seal','inspect'].some(k=>typeof witness[k]!=='function')) throw fail();
   const checked=raw=>{try{return validateBufferOrderIdentity(structuredClone(raw))}catch{throw fail()}};
   const matching=(state,id)=>state && isDeepStrictEqual(state.identity,id);
+  const localClaims=new WeakMap();
   return Object.freeze({
     async reserve({identity:raw,keyRecord,draftCapsule,evidence}={}) {
       const id=checked(raw), remote=await witness.inspect(id.owner);
@@ -42,9 +43,26 @@ export function createWitnessedBufferOrderJournal({fence,witness}={}) {
       const id=checked(raw), remote=await witness.inspect(id.owner);
       if(!matching(remote.state,id) || remote.state.phase!=='reserved') throw fail();
       try {
-        await fence.claim({identity:id,evidence});
+        const receipt=await fence.claim({identity:id,evidence});
         await witness.claim(id);
-        return {identity:id,status:'CLAIMED_NO_RESULT',independently_witnessed:true,do_not_retry:true,seller_post_authorized:false};
+        const claim=Object.freeze({identity:Object.freeze(id),status:'CLAIMED_NO_RESULT',independently_witnessed:true,do_not_retry:true,seller_post_authorized:false});
+        localClaims.set(claim,receipt); return claim;
+      } catch { throw fail(); }
+    },
+    /** Only a same-process claim can retain a checked response immediately.
+     * This capability cannot be reconstructed from a JSON response and does
+     * not let the caller perform or repeat any seller request. */
+    async retainClaimedResult({claim,keyRecord,capsule}={}) {
+      const receipt=claim && typeof claim==='object' ? localClaims.get(claim) : null;
+      if(!receipt) throw fail();
+      localClaims.delete(claim);
+      const id=checked(claim.identity),remote=await witness.inspect(id.owner);
+      if(!matching(remote.state,id) || remote.state.phase!=='claimed') throw fail();
+      try {
+        const row=await fence.retainClaimedResult({claim:receipt,keyRecord,capsule});
+        await witness.seal(id,row.capsule_sha256);
+        return {identity:id,status:'SEALED',capsule_sha256:row.capsule_sha256,independently_witnessed:true,
+          do_not_retry:true,seller_post_authorized:false,delivered:false};
       } catch { throw fail(); }
     },
     async record({identity:raw,keyRecord,capsule,evidence}={}) {
