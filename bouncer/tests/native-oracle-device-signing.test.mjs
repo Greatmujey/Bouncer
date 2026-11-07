@@ -118,14 +118,16 @@ test('the existing native OutLayer runner accepts the phone signature and journa
   const f=await fixture();try {
     const goal={id:'native-oracle-trial-1',contract_id:VAULT,owner_account_id:OWNER,policy_id:'price',amount:f.review.per_tx_cap_yocto,
       route:{project:f.review.project,route_revision:1,policy_revision:1,payee_revision:1,active:true},max_age_seconds:300};
-    const rows=new Map(),journal={get:id=>rows.get(id),put:(id,row)=>rows.set(id,structuredClone(row))};let sends=0,requests=0;
+    const rows=new Map(),journal={get:id=>rows.get(id),put:(id,row)=>rows.set(id,structuredClone(row))};let sends=0,requests=0,preflightDone=false,completionReads=0;
     // PostgreSQL JSONB may return the same review with every object reordered.
     const reverse=x=>Array.isArray(x)?x.map(reverse):x && typeof x==='object'?
       Object.fromEntries(Object.entries(x).reverse().map(([k,v])=>[k,reverse(v)])):x;
-    const account=createNativeOraclePhoneAccount({review:reverse(f.review),completion:f.completion,wasmBytes:wasm,
+    const account=createNativeOraclePhoneAccount({review:reverse(f.review),wasmBytes:wasm,
       trustedReviewHash:f.review.review_sha256,trustedOwnerPublicKey:f.identity.owner_public_key,now:()=>base,
+      getFreshCompletion:async()=>{completionReads++;assert.equal(preflightDone,true);return f.completion},
       requestPhoneSignature:async request=>{
-        requests++;return f.device.signNativeOracleTrial({...f.args,expectedTransactionHash:request.transactionHash});
+        requests++;assert.deepEqual(request.completion,f.completion);
+        return f.device.signNativeOracleTrial({...f.args,completion:request.completion,expectedTransactionHash:request.transactionHash});
       }});
     const key=nearApi.utils.PublicKey.from(f.review.agent_public_key);
     const source={WasmUrl:{url:ORACLE_TESTNET_PROGRAM.url,hash:ORACLE_TESTNET_PROGRAM.sha256,build_target:ORACLE_TESTNET_PROGRAM.build_target}};
@@ -136,7 +138,8 @@ test('the existing native OutLayer runner accepts the phone signature and journa
         if(method==='get_policy')return {token:'native',per_tx_cap:goal.amount,daily_cap:goal.amount};
         if(method==='get_outlayer_native_project')return structuredClone(goal.route);if(method==='is_agent_key_allowed')return true;
         if(method==='check')return [true,'ok'];if(method==='get_project')return {project_id:ORACLE_PROJECT_ID,uuid:ORACLE_PROJECT_UUID,owner:'zavodil2.testnet'};
-        if(method==='get_version')return {wasm_hash:ORACLE_TESTNET_PROGRAM.sha256,source};if(method==='get_project_pricing')return null;
+        if(method==='get_version')return {wasm_hash:ORACLE_TESTNET_PROGRAM.sha256,source};
+        if(method==='get_project_pricing'){preflightDone=true;return null}
         throw Error('unexpected synthetic view');},
       async sendTransactionOnce(signed,wait){
         sends++;assert.equal(wait,'FINAL');const pending=journal.get(goal.id);assert.equal(pending.status,'pending');
@@ -149,7 +152,7 @@ test('the existing native OutLayer runner accepts the phone signature and journa
     };
     const run=()=>runOracleGoal({goal,provider,account,publicKey:key,journal,execute:true,log:()=>{}});
     await assert.rejects(run(),/unresolved.*do not resend/);
-    assert.equal(requests,1);assert.equal(sends,1);assert.equal(journal.get(goal.id).status,'pending');
+    assert.equal(completionReads,1);assert.equal(requests,1);assert.equal(sends,1);assert.equal(journal.get(goal.id).status,'pending');
     await assert.rejects(run(),/synthetic receipt unknown/);
     assert.equal(requests,1);assert.equal(sends,1,'recovery checks the same original and never broadcasts again');
   }finally{f.device.close()}
@@ -173,16 +176,17 @@ test('phone signer refuses a changed action before requesting a signature and ne
 test('the phone account uses the completion nonce/block and stops on stale snapshots or changed receiver',async()=>{
   const f=await fixture();try {
     let clock=base,requests=0;
-    const account=createNativeOraclePhoneAccount({review:f.review,completion:f.completion,wasmBytes:wasm,
+    const makeAccount=()=>createNativeOraclePhoneAccount({review:f.review,completion:f.completion,wasmBytes:wasm,
       trustedReviewHash:f.review.review_sha256,trustedOwnerPublicKey:f.identity.owner_public_key,now:()=>clock,
       requestPhoneSignature:async()=>{requests++;throw Error('not expected')}});
+    const account=makeAccount(),staleAccount=makeAccount();
     const key=await account.signer.getPublicKey(),args={policy_id:'price',amount:f.review.per_tx_cap_yocto,
       expected_route:{project:f.review.project,route_revision:1,policy_revision:1,payee_revision:1,active:true}};
     const actions=[nearApi.transactions.functionCall('execute_outlayer_native_project',args,300n*10n**12n,0n)];
     const tx=await account.createTransaction(VAULT,actions,key);assert.equal(tx.nonce,78n);
     assert.deepEqual([...tx.blockHash],[...Buffer.alloc(32,9)]);
     await assert.rejects(account.createTransaction('evil.testnet',actions,key));
-    clock=base+5001;await assert.rejects(account.createTransaction(VAULT,actions,key));assert.equal(requests,0);
+    clock=base+5001;await assert.rejects(staleAccount.createTransaction(VAULT,actions,key));assert.equal(requests,0);
   }finally{f.device.close()}
 });
 
@@ -272,5 +276,31 @@ test('synthetic phone-signed oracle delivery and refund verify once, then recove
     assert.equal(first.delivery.refunded_to_owner_yocto,refunded);assert.equal(first.delivery.result.price_usd,2.75);
     assert.equal(journal.get(goal.id).status,'completed');assert.equal((await run()).status,'REUSED');
     assert.equal(requests,1);assert.equal(sends,1);
+  }finally{f.device.close()}
+});
+
+test('an uncertain just-in-time completion is not retried and never reaches the phone',async()=>{
+  const f=await fixture();try {
+    let reads=0,requests=0;
+    const account=createNativeOraclePhoneAccount({review:f.review,wasmBytes:wasm,trustedReviewHash:f.review.review_sha256,
+      trustedOwnerPublicKey:f.identity.owner_public_key,now:()=>base,getFreshCompletion:async()=>{reads++;throw Error('synthetic timeout')},
+      requestPhoneSignature:async()=>{requests++;throw Error('unexpected')}});
+    const key=await account.signer.getPublicKey(),args={policy_id:'price',amount:f.review.per_tx_cap_yocto,
+      expected_route:{project:f.review.project,route_revision:1,policy_revision:1,payee_revision:1,active:true}};
+    const actions=[nearApi.transactions.functionCall('execute_outlayer_native_project',args,300n*10n**12n,0n)];
+    await assert.rejects(account.createTransaction(VAULT,actions,key));await assert.rejects(account.createTransaction(VAULT,actions,key));
+    assert.equal(reads,1);assert.equal(requests,0);
+  }finally{f.device.close()}
+});
+
+test('a transaction changed after its completion snapshot never reaches the phone',async()=>{
+  const f=await fixture();try {
+    let requests=0;const account=createNativeOraclePhoneAccount({review:f.review,completion:f.completion,wasmBytes:wasm,
+      trustedReviewHash:f.review.review_sha256,trustedOwnerPublicKey:f.identity.owner_public_key,now:()=>base,
+      requestPhoneSignature:async()=>{requests++;throw Error('unexpected')}});
+    const key=await account.signer.getPublicKey(),args={policy_id:'price',amount:f.review.per_tx_cap_yocto,
+      expected_route:{project:f.review.project,route_revision:1,policy_revision:1,payee_revision:1,active:true}};
+    const tx=await account.createTransaction(VAULT,[nearApi.transactions.functionCall('execute_outlayer_native_project',args,300n*10n**12n,0n)],key);
+    tx.blockHash[0]^=1;await assert.rejects(account.signer.signTransaction(tx));assert.equal(requests,0);
   }finally{f.device.close()}
 });

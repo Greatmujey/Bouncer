@@ -73,25 +73,38 @@ export function createNativeOraclePhoneSigner({review:rawReview,wasmBytes,truste
   });
 }
 
-/** Adapt the existing runner's account interface to the one-block completion.
- * The authenticated completion and callback must come from a trustworthy
- * coordinator. No RPC, authorization, independent backup or broadcast occurs
- * here. A stale completion or changed public key/receiver stops before the
- * phone is contacted; the phone independently checks the same snapshot and
- * the exact unsigned-transaction hash before it signs. */
-export function createNativeOraclePhoneAccount({review:rawReview,completion:rawCompletion,wasmBytes,trustedReviewHash,
-  trustedOwnerPublicKey,requestPhoneSignature,now=Date.now}={}) {
-  const review=structuredClone(rawReview),completion=structuredClone(rawCompletion);
-  if(typeof now!=='function')throw fail();
-  const signer=createNativeOraclePhoneSigner({review,wasmBytes,trustedReviewHash,trustedOwnerPublicKey,requestPhoneSignature});
-  try{assertNativeOracleCompletion(completion,review,now())}catch{throw fail()}
-  const block=decodeNativeHash32(completion.block_hash),nonce=BigInt(completion.agent_key_nonce)+1n;
+/** Adapt the existing runner's account interface to a one-block completion.
+ * `getFreshCompletion` can supply the authenticated snapshot just after the
+ * runner's view preflights, rather than consuming its five-second lifetime
+ * while those views are in flight. The coordinator, completion source and
+ * signature transport must be trustworthy; no RPC, authorization, independent
+ * backup or broadcast occurs here. The exact snapshot is delivered to the
+ * phone along with the expected unsigned hash for independent checking. */
+export function createNativeOraclePhoneAccount({review:rawReview,completion:rawCompletion,getFreshCompletion,
+  wasmBytes,trustedReviewHash,trustedOwnerPublicKey,requestPhoneSignature,now=Date.now}={}) {
+  const review=structuredClone(rawReview),hasStatic=rawCompletion!==undefined,hasProvider=getFreshCompletion!==undefined;
+  if(typeof now!=='function' || typeof requestPhoneSignature!=='function' || hasStatic===hasProvider ||
+      (hasProvider && typeof getFreshCompletion!=='function'))throw fail();
+  const staticCompletion=hasStatic?structuredClone(rawCompletion):undefined;
+  if(hasStatic){try{assertNativeOracleCompletion(staticCompletion,review,now())}catch{throw fail()}}
+  let preparedCompletion,preparedHash,preparationStarted=false;
+  const signer=createNativeOraclePhoneSigner({review,wasmBytes,trustedReviewHash,trustedOwnerPublicKey,
+    requestPhoneSignature:async request=>{
+      if(!preparedCompletion || request.transactionHash!==preparedHash)throw fail();
+      assertNativeOracleCompletion(preparedCompletion,review,now());
+      return requestPhoneSignature({...request,completion:structuredClone(preparedCompletion)});
+    }});
   return Object.freeze({accountId:review.owner,signer,
     async createTransaction(receiver,actions,publicKey){
+      if(preparationStarted || receiver!==review.vault || String(publicKey)!==review.agent_public_key || !Array.isArray(actions))throw fail();
+      preparationStarted=true;
       try {
+        const completion=structuredClone(hasStatic?staticCompletion:await getFreshCompletion());
         assertNativeOracleCompletion(completion,review,now());
-        if(receiver!==review.vault || String(publicKey)!==review.agent_public_key || !Array.isArray(actions))throw Error();
-        return transactions.createTransaction(review.owner,publicKey,receiver,nonce,actions,new Uint8Array(block));
+        const block=decodeNativeHash32(completion.block_hash),nonce=BigInt(completion.agent_key_nonce)+1n;
+        const tx=transactions.createTransaction(review.owner,publicKey,receiver,nonce,actions,new Uint8Array(block));
+        preparedHash=utils.serialize.base_encode(crypto.createHash('sha256').update(transactions.encodeTransaction(tx)).digest());
+        preparedCompletion=completion;return tx;
       }catch{throw fail()}
     },
   });

@@ -206,8 +206,11 @@ examples were **self-hosted development services**.
 - `agent/native-oracle-phone-signer.mjs` adapts the existing native OutLayer
   runner to a callback which can return that phone signature. It checks the
   full unsigned transaction and signature, while the runner records the
-  original in its own journal before the single send. The transport callback,
-  authenticated UI and independent journal are not deployed or connected.
+  original in its own journal before the single send. A completion supplier can
+  run after the runner's view checks, reducing time lost from the five-second
+  freshness window; it does not guarantee a timely response or reserve chain
+  state. The transport callback, authenticated UI and independent journal are
+  not deployed or connected.
   Synthetic tests compare Borsh bytes against the NEAR SDK, verify signatures,
   race two tabs, simulate an unknown send, and check a fabricated result/refund
   through the runner; a mobile-sized Chromium test uses a real WebCrypto key
