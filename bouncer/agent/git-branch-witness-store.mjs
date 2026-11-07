@@ -16,17 +16,23 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { isTestnetAccount } from '../shared/account-id.mjs';
 import { parseWalletWitness, WalletWitnessError } from './git-wallet-prompt-witness.mjs';
+import { parseBufferOrderWitness } from './git-buffer-order-witness.mjs';
 
 const failed = () => new WalletWitnessError('GIT_WITNESS_UNAVAILABLE',
   'remote Git witness is dirty, changed, unavailable or uncertain; stop and reconcile, never repeat a wallet prompt');
 const hash = owner => crypto.createHash('sha256').update(owner).digest('hex');
-const pathFor = owner => `bouncer/evidence/wallet-prompt-witness-v1/${hash(owner)}.jsonl`;
+
 const objectId = value => typeof value === 'string' && /^[a-f0-9]{40}$/.test(value);
 
 /** `repo`, `branch`, `remote` and `initialHead` are operator configuration,
  * never browser input. `initialHead` is an independently recorded lower bound;
  * it is not proof that a later witness was not erased before startup. */
-export function createGitBranchWitnessStore({ repo, branch, remote = 'origin', initialHead } = {}) {
+export function createGitBranchWitnessStore(options = {}) { return createStore(options, 'wallet'); }
+/** Separate fixed namespace, but the same checkout lock and branch discipline. */
+export function createGitBufferOrderWitnessStore(options = {}) { return createStore(options, 'buffer-order'); }
+function createStore({ repo, branch, remote = 'origin', initialHead } = {}, kind) {
+  const parse = kind === 'wallet' ? parseWalletWitness : parseBufferOrderWitness;
+  const pathFor = owner => `bouncer/evidence/${kind === 'wallet' ? 'wallet-prompt-witness-v1' : 'buffer-order-witness-v1'}/${hash(owner)}.jsonl`;
   if (typeof repo !== 'string' || !path.isAbsolute(repo) || typeof branch !== 'string' ||
       !/^arena\/[a-z0-9][a-z0-9-]{2,99}$/.test(branch) || remote !== 'origin' || !objectId(initialHead)) throw failed();
   const root = fs.realpathSync(repo);
@@ -87,7 +93,7 @@ export function createGitBranchWitnessStore({ repo, branch, remote = 'origin', i
       const release = exclusive();
       try {
         const head = sync(), text = remoteText(head, pathFor(owner));
-        parseWalletWitness(text, owner);
+        parse(text, owner);
         return { head, text };
       } finally { release(); }
     },
@@ -95,7 +101,7 @@ export function createGitBranchWitnessStore({ repo, branch, remote = 'origin', i
       if (!isTestnetAccount(owner) || !objectId(expectedHead) || typeof expectedText !== 'string' ||
           typeof text !== 'string' || text.length > 32_768 || !text.startsWith(expectedText) || text === expectedText ||
           (text.slice(expectedText.length).match(/\n/g) ?? []).length !== 1) throw failed();
-      parseWalletWitness(expectedText, owner); parseWalletWitness(text, owner);
+      parse(expectedText, owner); parse(text, owner);
       const release = exclusive();
       try {
         const file = pathFor(owner), head = sync();
@@ -108,7 +114,7 @@ export function createGitBranchWitnessStore({ repo, branch, remote = 'origin', i
         } finally { if (fd !== undefined) fs.closeSync(fd); }
         git(['add', '--', file]);
         if (git(['diff', '--cached', '--name-only']) !== file) throw failed();
-        git(['commit', '-m', 'Record public testnet wallet prompt witness', '--', file]);
+        git(['commit', '-m', kind === 'wallet' ? 'Record public testnet wallet prompt witness' : 'Record public testnet Buffer order witness', '--', file]);
         const committed = git(['rev-parse', 'HEAD']);
         // Push only the configured current arena branch. A failed/unknown push
         // is never retried here and is never returned as a usable claim.

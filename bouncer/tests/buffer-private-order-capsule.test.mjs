@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { webcrypto } from 'node:crypto';
 import { KeyPair } from '@near-js/crypto';
 import { nep413Payload } from '../web-src/cli-login.mjs';
-import { createPrivateOrderKey, sealPrivateOrder, openPrivateOrder, privateOrderCapsuleCommitment } from '../web-src/buffer-private-order-capsule.mjs';
+import { createPrivateOrderKey, sealPrivateOrder, openPrivateOrder, privateOrderCapsuleCommitment, preparePrivateOrderDraft, openPrivateOrderDraft, privateBufferRequestCommitment } from '../web-src/buffer-private-order-capsule.mjs';
 
 const owner='buyer.testnet', location={origin:'https://bouncer.example.test',host:'bouncer.example.test'}, attemptId='ab'.repeat(16);
 const order={brief:'A private research request: assess real testnet markets.',sku:'weekly-market-brief',
@@ -94,4 +94,24 @@ test('seals only a matching fixed Buffer response and returns no plaintext beare
   await assert.rejects(sealCheckedFixedBufferOrder({...input,response:{...response,payment:{...response.payment,tokenContract:'attacker.testnet'}}}),/UNAVAILABLE/);
   await assert.rejects(sealCheckedFixedBufferOrder({...input,trustedPublicKeySha256:'0'.repeat(64)}),/UNAVAILABLE/);
   await assert.rejects(sealCheckedFixedBufferOrder({...input,request:{...request,brief:'Changed private research brief.'}}),/UNAVAILABLE/);
+});
+
+
+test('encrypted draft blinds the request commitment and binds exact private data to an attempt', async () => {
+  const args=setup(), keyRecord=await createPrivateOrderKey(args);
+  const request={brief:order.brief,sku:order.sku,customerAccount:'forward.buyer.testnet'};
+  const a=await preparePrivateOrderDraft({keyRecord,attemptId,request,crypto:webcrypto});
+  const b=await preparePrivateOrderDraft({keyRecord,attemptId,request,crypto:webcrypto});
+  assert.notEqual(a.request_commitment_sha256,b.request_commitment_sha256);
+  assert.notEqual(a.draft_sha256,b.draft_sha256);
+  const serialized=JSON.stringify(a); assert.ok(!serialized.includes(request.brief));
+  const draft=await openPrivateOrderDraft({...args,keyRecord,capsule:a.capsule,trustedCapsuleSha256:a.draft_sha256,
+    trustedRequestCommitmentSha256:a.request_commitment_sha256});
+  assert.equal(draft.brief,request.brief); assert.equal(draft.customerAccount,request.customerAccount);
+  assert.equal(await privateBufferRequestCommitment({keyRecord,attemptId,draft,crypto:webcrypto}),a.request_commitment_sha256);
+  assert.notEqual(await privateBufferRequestCommitment({keyRecord,attemptId,draft:{...draft,brief:'Different private research brief.'},crypto:webcrypto}),a.request_commitment_sha256);
+  await assert.rejects(openPrivateOrderDraft({...args,keyRecord,capsule:a.capsule,trustedCapsuleSha256:a.draft_sha256,
+    trustedRequestCommitmentSha256:b.request_commitment_sha256}),/CAPSULE_UNAVAILABLE/);
+  await assert.rejects(preparePrivateOrderDraft({keyRecord,attemptId,request:{...request,customerAccount:'evil.testnet'},crypto:webcrypto}),/CAPSULE_UNAVAILABLE/);
+  await assert.rejects(openPrivateOrder({...args,keyRecord,capsule:a.capsule,trustedCapsuleSha256:a.draft_sha256}),/CAPSULE_UNAVAILABLE/);
 });

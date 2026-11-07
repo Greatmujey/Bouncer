@@ -9,7 +9,7 @@ import { verifyCliLogin } from './cli-login.mjs';
 
 const enc = new TextEncoder(), dec = new TextDecoder('utf-8', {fatal:true});
 const fail = () => Error('PRIVATE_ORDER_CAPSULE_UNAVAILABLE');
-const KEY_FORMAT = 'bouncer-buffer-private-key-v1', DATA_FORMAT = 'bouncer-buffer-private-order-v1';
+const KEY_FORMAT = 'bouncer-buffer-private-key-v1', DATA_FORMAT = 'bouncer-buffer-private-order-v1', DRAFT_FORMAT = 'bouncer-buffer-private-draft-v1';
 const KEY_FIELDS = ['format','network','owner','owner_public_key','site','nonce','public_spki','public_key_sha256','salt','iv','wrapped_private'];
 const DATA_FIELDS = ['format','network','owner','site','public_key_sha256','attempt_id','wrapped_key','iv','ciphertext'];
 const plain = x => !!x && typeof x === 'object' && !Array.isArray(x) && Object.getPrototypeOf(x) === Object.prototype;
@@ -38,7 +38,7 @@ function meta(record) {
     record.public_key_sha256,record.salt];
 }
 function dataMeta(data) {
-  return [DATA_FORMAT,data.network,data.owner,data.site,data.public_key_sha256,data.attempt_id];
+  return [data.format,data.network,data.owner,data.site,data.public_key_sha256,data.attempt_id];
 }
 function message(owner, publicKey, site) {
   return `Bouncer private Buffer order unlock\nAccount: ${owner}\nPublic key: ${publicKey}\nSite: ${site}\n`+
@@ -81,6 +81,15 @@ function checkedData(value) {
   return value;
 }
 
+function checkedDraft(value,owner) {
+  if (!exact(value,['brief','sku','customerAccount','salt']) || typeof value.brief!=='string' || !value.brief.isWellFormed() ||
+      value.brief!==value.brief.trim() || value.brief.length<10 || value.brief.length>4000 || enc.encode(value.brief).length>16000 ||
+      !['weekly-market-brief','crosschain-brief'].includes(value.sku) || !isTestnetAccount(value.customerAccount) ||
+      !value.customerAccount.endsWith(`.${owner}`) || value.customerAccount.slice(0,-owner.length-1).includes('.')) throw fail();
+  unb64(value.salt,32,32);
+  return value;
+}
+
 /** Enroll a public encryption key, wrapping its private half with a wallet's
  * repeatable off-chain Ed25519 signature. This module does not return or
  * transmit that signature; wallet/browser compromise can still expose it.
@@ -115,18 +124,53 @@ export async function createPrivateOrderKey({wallet,owner,ownerPublicKey,locatio
  * caller must validate seller terms and durably commit the ciphertext before
  * treating the order as retained; sealing alone does not do either. */
 export async function sealPrivateOrder({keyRecord,attemptId,privateOrder,crypto=globalThis.crypto}={}) {
+  try { return await sealData(keyRecord,attemptId,checkedData(structuredClone(privateOrder)),DATA_FORMAT,crypto); }
+  catch { throw fail(); }
+}
+async function sealData(keyRecord,attemptId,data,format,crypto) {
+  const record=structuredClone(keyRecord);
+  if (!/^[a-f0-9]{32}$/.test(attemptId ?? '')) throw fail();
+  const publicKey=await checkedPublic(record,crypto);
+  const aes=await crypto.subtle.generateKey({name:'AES-GCM',length:256},true,['encrypt','decrypt']);
+  const iv=crypto.getRandomValues(new Uint8Array(12));
+  const capsule={format,network:'testnet',owner:record.owner,site:record.site,
+    public_key_sha256:record.public_key_sha256,attempt_id:attemptId,wrapped_key:'',iv:b64(iv),ciphertext:''};
+  capsule.wrapped_key=b64(await crypto.subtle.wrapKey('raw',aes,publicKey,{name:'RSA-OAEP'}));
+  capsule.ciphertext=b64(await crypto.subtle.encrypt({name:'AES-GCM',iv,additionalData:enc.encode(JSON.stringify(dataMeta(capsule)))},
+    aes,enc.encode(JSON.stringify(data))));
+  return capsule;
+}
+
+/** Salt blinds the brief commitment against offline guessing. Keep the salt
+ * inside the encrypted draft, never in a public witness or application log. */
+export async function privateBufferRequestCommitment({keyRecord,attemptId,draft,crypto=globalThis.crypto}={}) {
   try {
-    const record=structuredClone(keyRecord), order=checkedData(structuredClone(privateOrder));
+    const record=structuredClone(keyRecord), value=checkedDraft(structuredClone(draft),record.owner);
+    await checkedPublic(record,crypto);
     if (!/^[a-f0-9]{32}$/.test(attemptId ?? '')) throw fail();
-    const publicKey=await checkedPublic(record,crypto);
-    const aes=await crypto.subtle.generateKey({name:'AES-GCM',length:256},true,['encrypt','decrypt']);
-    const iv=crypto.getRandomValues(new Uint8Array(12));
-    const capsule={format:DATA_FORMAT,network:'testnet',owner:record.owner,site:record.site,
-      public_key_sha256:record.public_key_sha256,attempt_id:attemptId,wrapped_key:'',iv:b64(iv),ciphertext:''};
-    capsule.wrapped_key=b64(await crypto.subtle.wrapKey('raw',aes,publicKey,{name:'RSA-OAEP'}));
-    capsule.ciphertext=b64(await crypto.subtle.encrypt({name:'AES-GCM',iv,additionalData:enc.encode(JSON.stringify(dataMeta(capsule)))},
-      aes,enc.encode(JSON.stringify(order))));
-    return capsule;
+    const salt=unb64(value.salt,32,32);
+    try {
+      const key=await crypto.subtle.importKey('raw',salt,{name:'HMAC',hash:'SHA-256'},false,['sign']);
+      return hex(await crypto.subtle.sign('HMAC',key,enc.encode(JSON.stringify(['bouncer-buffer-private-request-v1',record.owner,
+        record.site,record.public_key_sha256,attemptId,value.sku,value.customerAccount,value.brief]))));
+    } finally { salt.fill(0); }
+  } catch { throw fail(); }
+}
+
+/** Prepare an encrypted draft before any seller POST. The caller must have the
+ * owner authenticate the identity and independently retain both commitments. */
+export async function preparePrivateOrderDraft({keyRecord,attemptId,request,crypto=globalThis.crypto}={}) {
+  try {
+    const record=structuredClone(keyRecord), input=structuredClone(request);
+    if (!exact(input,['brief','sku','customerAccount'])) throw fail();
+    const salt=crypto.getRandomValues(new Uint8Array(32));
+    try {
+      const draft=checkedDraft({...input,salt:b64(salt)},record.owner);
+      const requestCommitment=await privateBufferRequestCommitment({keyRecord:record,attemptId,draft,crypto});
+      const capsule=await sealData(record,attemptId,draft,DRAFT_FORMAT,crypto);
+      return {capsule,draft_sha256:await privateOrderCapsuleCommitment({capsule,crypto}),
+        request_commitment_sha256:requestCommitment};
+    } finally { salt.fill(0); }
   } catch { throw fail(); }
 }
 
@@ -137,7 +181,7 @@ export async function sealPrivateOrder({keyRecord,attemptId,privateOrder,crypto=
 export async function privateOrderCapsuleCommitment({capsule:input,crypto=globalThis.crypto}={}) {
   try {
     const capsule=structuredClone(input);
-    if (!exact(capsule,DATA_FIELDS) || capsule.format!==DATA_FORMAT || capsule.network!=='testnet' ||
+    if (!exact(capsule,DATA_FIELDS) || ![DATA_FORMAT,DRAFT_FORMAT].includes(capsule.format) || capsule.network!=='testnet' ||
         !isTestnetAccount(capsule.owner) || typeof capsule.site!=='string' ||
         !/^[a-f0-9]{64}$/.test(capsule.public_key_sha256 ?? '') || !/^[a-f0-9]{32}$/.test(capsule.attempt_id ?? '')) throw fail();
     unb64(capsule.wrapped_key,256,256); unb64(capsule.iv,12,12); unb64(capsule.ciphertext,17,20000);
@@ -149,13 +193,20 @@ export async function privateOrderCapsuleCommitment({capsule:input,crypto=global
 /** Owner-only local decryption. The independently witnessed commitment is
  * required to prevent substitution; the server should also authenticate a
  * fresh separate challenge before returning the retained ciphertext. */
-export async function openPrivateOrder({wallet,keyRecord,capsule:input,trustedCapsuleSha256,location,crypto=globalThis.crypto,fetch=globalThis.fetch}={}) {
+export async function openPrivateOrder(options={}) { return openData({...options,format:DATA_FORMAT}); }
+export async function openPrivateOrderDraft(options={}) {
+  const draft=await openData({...options,format:DRAFT_FORMAT});
+  const commitment=await privateBufferRequestCommitment({keyRecord:options.keyRecord,attemptId:options.capsule.attempt_id,draft,crypto:options.crypto});
+  if (!/^[a-f0-9]{64}$/.test(options.trustedRequestCommitmentSha256 ?? '') || commitment!==options.trustedRequestCommitmentSha256) throw fail();
+  return draft;
+}
+async function openData({wallet,keyRecord,capsule:input,trustedCapsuleSha256,location,format,crypto=globalThis.crypto,fetch=globalThis.fetch}={}) {
   try {
     const record=structuredClone(keyRecord), capsule=structuredClone(input), site=siteFrom(location);
     await checkedPublic(record,crypto);
     if (!/^[a-f0-9]{64}$/.test(trustedCapsuleSha256 ?? '') ||
         await privateOrderCapsuleCommitment({capsule,crypto})!==trustedCapsuleSha256) throw fail();
-    if (!exact(capsule,DATA_FIELDS) || capsule.format!==DATA_FORMAT || capsule.network!=='testnet' ||
+    if (!exact(capsule,DATA_FIELDS) || capsule.format!==format || ![DATA_FORMAT,DRAFT_FORMAT].includes(format) || capsule.network!=='testnet' ||
         capsule.owner!==record.owner || capsule.site!==record.site || site!==record.site ||
         capsule.public_key_sha256!==record.public_key_sha256 || !/^[a-f0-9]{32}$/.test(capsule.attempt_id ?? '')) throw fail();
     const wrapped=unb64(capsule.wrapped_key,256,256), iv=unb64(capsule.iv,12,12), ciphertext=unb64(capsule.ciphertext,17,20000);
@@ -172,7 +223,8 @@ export async function openPrivateOrder({wallet,keyRecord,capsule:input,trustedCa
           {name:'AES-GCM',length:256},false,['decrypt']);
         const bytes=new Uint8Array(await crypto.subtle.decrypt({name:'AES-GCM',iv,
           additionalData:enc.encode(JSON.stringify(dataMeta(capsule)))},aes,ciphertext));
-        try { return checkedData(JSON.parse(dec.decode(bytes))); } finally { bytes.fill(0); }
+        try { const value=JSON.parse(dec.decode(bytes)); return format===DATA_FORMAT ? checkedData(value) : checkedDraft(value,record.owner); }
+        finally { bytes.fill(0); }
       } finally { privateBytes.fill(0); }
     } finally { signature.fill(0); }
   } catch { throw fail(); }

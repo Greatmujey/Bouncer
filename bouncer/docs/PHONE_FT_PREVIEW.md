@@ -68,6 +68,15 @@ provide durable retention, authenticated key enrollment, unknown-POST recovery,
 order creation, payment or delivery. Synthetic Node and 320/390px Chromium
 round trips passed; no real wallet or phone was used.
 
+An encrypted pre-order draft and a salted HMAC request commitment now allow a
+witness to identify the exact private brief without publishing a guessable
+plain SHA-256 of it. A separate Git witness prototype retains one reservation,
+one claim and one sealed capsule commitment per owner, and shares the existing
+branch lock. Local Git CAS, lost-ack and synthetic crypto tests pass. This is
+not yet an owner-authenticated, durable PostgreSQL order journal or an order
+executor; the private salt must remain encrypted, the Git head independently
+retained, and the seller POST must not be retried after an unknown outcome.
+
 ## Independent prompt witness
 
 `git-wallet-prompt-witness.mjs` models one ordered setup reservation, claims
