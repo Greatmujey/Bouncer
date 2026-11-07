@@ -15,7 +15,9 @@ const token = '3e2210e1184b45b64c8a434c0a7e7b23cc04ea7eb7a6c3c32520d03d4afcb8af'
 const signerPublicKey = 'ed25519:3FQ4vfUxvrWpfBgsxsiu9ER8jx71GeUHff5rUJx4zVog';
 const originalHash = 'CUSSFm9M4sdrUvfphkzbyDxzsZXiDYRrmjdRmDn3jGzw';
 const amount = '6898';
-const provider = new ReadOnlyNearReceiptProvider('https://test.rpc.fastnear.com', { timeoutMs: 25_000 });
+// The original is historical. The public FastNear endpoint is not archival and
+// timed out; use the official archival testnet RPC for this single lookup.
+const provider = new ReadOnlyNearReceiptProvider('https://archival-rpc.testnet.near.org', { timeoutMs: 25_000 });
 
 if ((await provider.viewNodeStatus())?.chain_id !== 'testnet') throw new Error('testnet RPC required');
 const result = await provider.txStatusReceipts(originalHash, owner, 'FINAL');
