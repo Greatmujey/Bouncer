@@ -19,6 +19,52 @@ import { runResourceAgent, routedResourceProvider } from './resource-agent.mjs';
 import { startConfiguredProvider } from '../services/resource-provider.mjs';
 
 /**
+ * One independent native-NEAR resource without an FT prerequisite. This is a
+ * partial resource result, NOT a completed compute/storage/API mission. It
+ * inherits the runner's one-shot original-hash journal and trusted-RPC/provider
+ * assumptions. The journal must be the existing exclusive local journal;
+ * this wrapper is not a distributed fence or a phone/device-key integration.
+ */
+export async function runNativeResource({ outlayer, provider, journal, execute = false, log = console.log, runners = {} } = {}) {
+  if (journal?.sharedDirectV3 === true) throw new Error('shared buyer journal does not coordinate OutLayer payments');
+  if (typeof execute !== 'boolean' || typeof log !== 'function' || !outlayer || !provider || !runners || typeof runners !== 'object') {
+    throw new Error('invalid native resource request');
+  }
+  if (journal && (typeof journal.get !== 'function' || typeof journal.put !== 'function')) throw new Error('invalid native resource journal');
+  if (execute && !journal) throw new Error('native execution requires the exclusive original-hash journal');
+  const kind = outlayer.kind ?? 'random';
+  if (!['random','oracle'].includes(kind)) throw new Error('unsupported independent resource kind');
+  const goal = kind === 'oracle' ? validateOracleGoal(outlayer.goal) : validateOutlayerGoal(outlayer.goal);
+  const run = runners.outlayer ?? (kind === 'oracle' ? runOracleGoal : runOutlayerGoal);
+  const recover = runners.recover ?? (kind === 'oracle' ? recoverOracleGoal : recoverOutlayerGoal);
+  if (typeof run !== 'function' || typeof recover !== 'function') throw new Error('invalid native resource runner');
+  const scope = 'One native testnet resource only; not a full compute, storage and API/data mission.';
+  const previous = journal?.get(goal.id);
+  if (previous) {
+    const independent = await recover({goal,provider,journal,publicKey:outlayer.recoveryPublicKey,update:execute,log});
+    if (independent?.status !== 'REUSED' || !independent.delivery) throw new Error('original native resource delivery is unresolved; never resend');
+    let freshForUse = null;
+    if (kind === 'oracle') { try { assertOracleFreshForUse(independent.delivery); freshForUse = true; } catch { freshForUse = false; } }
+    return {status:'NATIVE_RESOURCE_REUSED',independent,resources:null,scope,oracle_fresh_for_use:freshForUse};
+  }
+  const args = {goal,provider,account:outlayer.account,publicKey:outlayer.publicKey,log};
+  const preview = await run({...args,execute:false});
+  if (preview?.status === 'BLOCKED') return {status:'BLOCKED',stage:'native-preflight',independent:preview,resources:null,scope};
+  if (preview?.status !== 'READY') throw new Error('invalid native resource preflight');
+  if (!execute) return {status:'READY',independent:preview,resources:null,scope};
+  // Recheck after the async preview. A newly recorded original must be
+  // reconciled, not replaced with another signature or broadcast.
+  if (journal.get(goal.id)) throw new Error('native original appeared during preflight; recover it, never resend');
+  const independent = await run({...args,journal,execute:true});
+  if (independent?.status === 'BLOCKED') return {status:'BLOCKED',stage:'native-execution',independent,resources:null,scope};
+  if (!['FULFILLED','REUSED'].includes(independent?.status) || !independent.delivery) throw new Error('native delivery was not verified');
+  let freshForUse = null;
+  if (kind === 'oracle') { try { assertOracleFreshForUse(independent.delivery); freshForUse = true; } catch { freshForUse = false; } }
+  return {status:independent.status === 'REUSED' ? 'NATIVE_RESOURCE_REUSED' : 'NATIVE_RESOURCE_FULFILLED',
+    independent,resources:null,scope,oracle_fresh_for_use:freshForUse};
+}
+
+/**
  * Read-only preview of both asset paths before any new payment, then verify
  * the independent compute before the FT batch. Prior unresolved FT deliveries
  * block a NEW independent payment; once the independent payment is already
@@ -112,6 +158,7 @@ function parseArgs(args) {
     if (arg === '--help') options.help = true;
     else if (arg === '--execute') options.execute = true;
     else if (arg === '--durable') options.durable = true;
+    else if (arg === '--recover-only') options.recoverOnly = true;
     else if (['--mission', '--ft-key', '--outlayer-key', '--journal', '--rpc', '--local-provider'].includes(arg) && args[i + 1] && !args[i + 1].startsWith('--')) {
       const name = arg.slice(2);
       if (options[name]) throw new Error(`duplicate ${arg}`);
@@ -129,26 +176,37 @@ function accountFromFile(file, owner, provider) {
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   if (options.help) {
-    console.log('Usage: node bouncer/agent/mixed-mission.mjs --mission MISSION.json --ft-key FT_KEY.json --outlayer-key COMPUTE_KEY.json [--journal JOURNAL.json] [--rpc URL] [--local-provider CONFIG.json] [--execute] [--durable]');
+    console.log('Usage: node bouncer/agent/mixed-mission.mjs --mission MISSION.json --outlayer-key COMPUTE_KEY.json [--ft-key FT_KEY.json] [--journal JOURNAL.json] [--rpc URL] [--local-provider CONFIG.json] [--execute] [--durable] | --mission MISSION.json --recover-only [--journal JOURNAL.json] [--rpc URL]');
+    console.log('FT key is required only when the mission includes FT resources. Native-only is one resource, not a full mission.');
+    console.log('--recover-only is native-only and reads the original journal without signing keys or new payments.');
     console.log('Default: non-atomic dry-run preflight. --execute spends testnet funds; --durable records direct FT hashes before broadcast.');
     return;
   }
-  if (!options.mission || !options['ft-key'] || !options['outlayer-key']) throw new Error('--mission, --ft-key and --outlayer-key are required');
+  if (!options.mission || (!options.recoverOnly && !options['outlayer-key'])) throw new Error('--mission and --outlayer-key are required');
+  if (options.recoverOnly && (options.execute || options.durable || options['ft-key'] || options['outlayer-key'] || options['local-provider'])) {
+    throw new Error('--recover-only must run without signing keys, execution or local provider');
+  }
   const missionPath = path.resolve(expandHome(options.mission));
   const config = JSON.parse(fs.readFileSync(missionPath, 'utf8'));
   const kind = config?.outlayer_kind ?? 'random';
   if (!['random', 'oracle'].includes(kind)) throw new Error('unsupported independent mission kind');
   const goal = kind === 'oracle' ? validateOracleGoal(config?.outlayer_goal) : validateOutlayerGoal(config?.outlayer_goal);
   const resources = config?.resources;
-  if (!resources || resources.contract_id !== goal.contract_id || resources.owner_account_id !== goal.owner_account_id || !Array.isArray(resources.goals)) {
+  if (resources !== undefined && (!resources || resources.contract_id !== goal.contract_id ||
+      resources.owner_account_id !== goal.owner_account_id || !Array.isArray(resources.goals) || !resources.goals.length)) {
     throw new Error('mission resources must name the same contract and owner as the OutLayer goal');
   }
+  if (options.recoverOnly && resources) throw new Error('--recover-only currently supports native-only missions');
+  if (resources && !options['ft-key']) throw new Error('--ft-key is required when the mission includes FT resources');
+  if (!resources && (options['ft-key'] || options['local-provider'] || options.durable)) {
+    throw new Error('FT and local-provider options require mission resources');
+  }
   const provider = new PaymentRpcProvider(options.rpc || process.env.NEAR_TESTNET_RPC || 'https://test.rpc.fastnear.com');
-  const ft = accountFromFile(options['ft-key'], goal.owner_account_id, provider);
-  const outlayer = accountFromFile(options['outlayer-key'], goal.owner_account_id, provider);
+  const ft = resources ? accountFromFile(options['ft-key'], goal.owner_account_id, provider) : null;
+  const outlayer = options.recoverOnly ? {} : accountFromFile(options['outlayer-key'], goal.owner_account_id, provider);
   const journalPath = path.resolve(expandHome(options.journal || config.journal_path || `${missionPath}.bouncer-journal.json`));
   // Validate all remote origins before starting a local service.
-  routedResourceProvider({ providerUrl: resources.provider_url, goals: resources.goals });
+  if (resources) routedResourceProvider({ providerUrl: resources.provider_url, goals: resources.goals });
   let journal, local;
   try {
     const overrides = new Map();
@@ -164,18 +222,21 @@ async function main() {
       overrides.set(original, local.url);
       console.log(`[mission] Local development provider: ${local.url}`);
     }
-    const client = routedResourceProvider({ providerUrl: resources.provider_url, goals: resources.goals, overrides });
+    const client = resources ? routedResourceProvider({ providerUrl: resources.provider_url, goals: resources.goals, overrides }) : null;
+    if (options.recoverOnly && !fs.existsSync(journalPath)) throw new Error('original journal not found; no payment was sent');
     if (options.execute || fs.existsSync(journalPath)) {
       journal = openConfiguredFileJournal(journalPath, goal.contract_id, goal.owner_account_id, { requireExisting: !options.execute });
     }
-    const result = await runMixedMission({
-      outlayer: { kind, goal, ...outlayer }, provider, journal, execute: options.execute,
+    if (options.recoverOnly && !journal?.get(goal.id)) throw new Error('native original not found in journal; no payment was sent');
+    const common = {outlayer: { kind, goal, ...outlayer }, provider, journal, execute: options.execute};
+    const result = resources ? await runMixedMission({ ...common,
       resources: { contractId: resources.contract_id, ownerAccountId: resources.owner_account_id, providerUrl: resources.provider_url,
         goals: resources.goals, getQuote: client.getQuote, fulfill: client.fulfill, readStorage: client.readStorage, durablePayment: options.durable === true, ...ft },
-    });
+    }) : await runNativeResource(common);
     console.log(`[mission] ${result.status}; non-atomic testnet mission; journal ${journalPath}`);
     if (result.independent?.delivery) console.log(`[mission] Independent delivery: ${JSON.stringify(result.independent.delivery)}`);
     if (result.resources) console.log(`[mission] FT batch: ${JSON.stringify(result.resources.payments)}; deliveries=${result.resources.deliveries.length}`);
+    if (result.scope) console.log(`[mission] ${result.scope}`);
     if (result.status === 'BLOCKED' || result.status === 'INCOMPLETE') process.exitCode = 2;
   } finally {
     journal?.close();

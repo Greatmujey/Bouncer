@@ -195,6 +195,21 @@ The independently operated OutLayer account had a FullAccess key, so its code
 can change. A lookup of global V9 code at one RPC did not return a match; that
 is not proof of global absence or a compatible wallet transport.
 
+## Native-only resource path (not a full mission)
+
+`agent/mixed-mission.mjs` now accepts a native-only oracle/OutLayer goal without
+an FT goal or FT key. The checked-in `examples/native-oracle-resource.example.json`
+is an **unsigned, non-executed example**, not evidence that the candidate vault,
+key, provider purchase or delivery exists. Preview is read-only; execution would
+require the exact installed owner-approved policy and scoped key, a trusted RPC,
+an exclusive local original-hash journal, and an explicit `--execute`. The
+native-only CLI still expects a local restricted-key file, **not** the phone's
+non-extractable key; it is not a live phone solution. Its `--recover-only` mode
+reads an existing native journal without signing keys or new payments. A stale
+recovered price is marked unsuitable for current use, not automatically bought
+again. The single resource cannot establish a complete compute/storage/API
+mission, and the local journal is not distributed rollback protection.
+
 ## Before enabling a real phone flow
 
 1. Finish, deploy and independently monitor the per-owner prompt fence and

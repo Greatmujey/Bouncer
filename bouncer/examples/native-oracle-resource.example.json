@@ -1,0 +1,25 @@
+{
+  "outlayer_kind": "oracle",
+  "outlayer_goal": {
+    "id": "native-oracle-trial-1",
+    "contract_id": "native.great_mujey.testnet",
+    "owner_account_id": "great_mujey.testnet",
+    "policy_id": "price",
+    "amount": "100000000000000000000000",
+    "route": {
+      "project": {
+        "project_id": "zavodil2.testnet/price-oracle",
+        "version_key": "3585b3890f49748713b43ccb9b0ef4148f317d62f4d598db80fdaffc3f3185a0",
+        "input_data": "{\"command\":\"fetch_external\",\"token_id\":\"near\",\"source\":{\"custom\":{\"url\":\"https://api.coinbase.com/v2/prices/NEAR-USD/spot\",\"json_path\":\"data.amount\",\"value_type\":\"number\",\"method\":\"GET\"}}}",
+        "max_instructions": 10000000000,
+        "max_memory_mb": 256,
+        "max_execution_seconds": 60
+      },
+      "route_revision": 1,
+      "policy_revision": 1,
+      "payee_revision": 1,
+      "active": true
+    },
+    "max_age_seconds": 300
+  }
+}
