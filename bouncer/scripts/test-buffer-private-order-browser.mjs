@@ -3,7 +3,8 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { pathToFileURL } from 'node:url';
-const path=process.env.BOUNCER_PLAYWRIGHT_PATH, executablePath=process.env.CHROMIUM_PATH;
+const path=process.env.BOUNCER_PLAYWRIGHT_PATH, executablePath=process.env.CHROMIUM_PATH ||
+  ['/usr/bin/google-chrome','/usr/bin/google-chrome-stable','/usr/bin/chromium','/usr/bin/chromium-browser'].find(fs.existsSync);
 if (!path || !executablePath) throw Error('Playwright module and Chromium are required');
 const {chromium}=await import(pathToFileURL(path).href);
 const browser=await chromium.launch({executablePath,args:['--no-sandbox','--disable-gpu'],headless:true});
