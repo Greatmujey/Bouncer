@@ -59,3 +59,9 @@ durable hosted production database; the witness and wallet invocation are not
 wired into the phone preview. Do not open a real setup prompt on this prototype until the hosted
 authenticated backend, independent restore procedures, wallet transport and
 original-hash recovery have been integrated and verified.
+
+A live GitHub transport check used the deliberately synthetic, unowned name
+`synthetic-witness-2bd2741a.testnet`: reservation and a claimed marker were
+fast-forwarded to this session branch and read back at commit
+`0b5b1df7f268da320f7ced6e3db064370a0d2b3b`. It is test-only public evidence,
+not an actual account, on-chain result, wallet prompt or payment.

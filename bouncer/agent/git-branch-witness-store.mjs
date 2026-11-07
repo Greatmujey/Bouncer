@@ -38,6 +38,9 @@ export function createGitBranchWitnessStore({ repo, branch, remote = 'origin', i
   if (git(['rev-parse', '--show-toplevel']) !== root || git(['branch', '--show-current']) !== branch ||
       git(['rev-parse', '--git-dir']) !== '.git') throw failed();
   const lockPath = path.join(root, '.git', 'bouncer-wallet-prompt-witness.lock');
+  // Detect a remote history rollback during this process lifetime. A restart
+  // still needs the separately retained most recent acknowledged head.
+  let lastSeenHead = initialHead;
   function exclusive() {
     let fd; try { fd = fs.openSync(lockPath, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600); }
     catch { throw failed(); }
@@ -49,8 +52,11 @@ export function createGitBranchWitnessStore({ repo, branch, remote = 'origin', i
     const local = git(['rev-parse', 'HEAD']), head = git(['rev-parse', `refs/remotes/${remote}/${branch}`]);
     if (!objectId(head) || local !== head) throw failed();
     // Never accept a remote revision before the operator's baseline.
-    try { execFileSync('git', ['merge-base', '--is-ancestor', initialHead, head], { cwd: root, stdio: 'ignore', timeout: 10_000 }); }
-    catch { throw failed(); }
+    try {
+      execFileSync('git', ['merge-base', '--is-ancestor', initialHead, head], { cwd: root, stdio: 'ignore', timeout: 10_000 });
+      execFileSync('git', ['merge-base', '--is-ancestor', lastSeenHead, head], { cwd: root, stdio: 'ignore', timeout: 10_000 });
+    } catch { throw failed(); }
+    lastSeenHead = head;
     return head;
   }
   function remoteText(head, file) {
@@ -110,6 +116,7 @@ export function createGitBranchWitnessStore({ repo, branch, remote = 'origin', i
         git(['fetch', '--no-tags', remote, branch]);
         const confirmed = git(['rev-parse', `refs/remotes/${remote}/${branch}`]);
         if (!objectId(committed) || !objectId(confirmed) || confirmed !== committed || remoteText(confirmed, file) !== text) throw failed();
+        lastSeenHead = confirmed;
         return { confirmed: true, head: confirmed };
       } finally { release(); }
     },
