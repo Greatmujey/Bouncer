@@ -7,6 +7,7 @@
  * back using an audience-bound OIDC token. It never returns either token to the
  * browser, signs a NEAR transaction, broadcasts a transaction, or takes keys.
  *
+ * The callback origin and browser site origin are fixed deployment settings.
  * This transport authenticates the relay, not the underlying RPC. It is not a
  * consensus proof and is not an independent wallet-prompt or payment journal.
  */
