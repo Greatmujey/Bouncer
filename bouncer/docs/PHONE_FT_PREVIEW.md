@@ -48,6 +48,26 @@ planned **6 test NEAR** keyless vault deposit. The actual state can change; a
 keyless vault can leave its storage stake locked. A live setup must recheck
 state and show these terms before the owner's wallet approval.
 
+## Private Buffer order capsule (offline only)
+
+A fixed-order response can now be checked against the exact reviewed token,
+price, seller, order and brief, then sealed with an owner-unlockable public-key
+capsule. The brief and single-use private bearer are not included in its public
+record or commitment. Key enrollment uses two identical off-chain Ed25519
+signatures to reject a wallet that cannot reproduce its unlock key; decryption
+requires the same wallet key and site origin. The signature is sensitive key
+material, never a login or spending approval, and must not be logged or sent.
+The encrypted key record, ciphertext **and independently witnessed capsule
+commitment** must all be retained; losing them, changing origin or losing the
+wallet key can make the order permanently inaccessible. Public-key encryption
+alone cannot authenticate who created a capsule, so a hash returned by the
+same untrusted database is not an independent commitment. A compromised browser,
+wallet or order-executing backend can still see private material. These modules
+are not audited, connected to a seller, database, witness, or UI, and do not
+provide durable retention, authenticated key enrollment, unknown-POST recovery,
+order creation, payment or delivery. Synthetic Node and 320/390px Chromium
+round trips passed; no real wallet or phone was used.
+
 ## Independent prompt witness
 
 `git-wallet-prompt-witness.mjs` models one ordered setup reservation, claims
