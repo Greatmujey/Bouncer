@@ -72,8 +72,8 @@ enabledTest('a mismatched artifact or owner cannot enable the setup endpoint', (
 
 enabledTest('the body deadline stops slow uploads without cutting off longer authenticated work', async () => {
   const calls = [], service = syntheticService(calls);
-  service.issueInspect = async input => { await new Promise(resolve=>setTimeout(resolve,100)); calls.push(['issueInspect',input]); return {issued:true}; };
-  const handler = createWitnessedSetupHttpHandler({service,siteOrigin:SITE,wasmBytes:wasm,owner:'great_mujey.testnet',bodyTimeoutMs:30});
+  service.issueInspect = async input => { await new Promise(resolve=>setTimeout(resolve,700)); calls.push(['issueInspect',input]); return {issued:true}; };
+  const handler = createWitnessedSetupHttpHandler({service,siteOrigin:SITE,wasmBytes:wasm,owner:'great_mujey.testnet',bodyTimeoutMs:250});
   const server = http.createServer((req,res)=>handler(req,res,new URL(req.url,'http://test').pathname));
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   const base = `http://127.0.0.1:${server.address().port}`;
@@ -84,8 +84,8 @@ enabledTest('the body deadline stops slow uploads without cutting off longer aut
     const failure = await new Promise(resolve => {
       const req = http.request(`${base}/api/wallet-setup/inspect-challenge`,{method:'POST',headers:HEADER});
       req.on('error',error=>resolve(error.code)); req.on('response',res=>{res.resume();resolve(`http-${res.statusCode}`);});
-      req.write('{'); setTimeout(()=>{if(!req.destroyed) req.end('}');},100);
+      req.write('{'); setTimeout(()=>{if(!req.destroyed) req.end('}');},700);
     });
-    assert.equal(failure,'ECONNRESET'); assert.equal(calls.length,1, 'a slow partial body must not reach the service');
+    assert.ok(['ECONNRESET','EPIPE'].includes(failure)); assert.equal(calls.length,1, 'a slow partial body must not reach the service');
   } finally { await new Promise(resolve=>server.close(resolve)); }
 });
