@@ -189,6 +189,14 @@
     <p class="account-view-status" id="wallet-owner-status" role="status" aria-live="polite" hidden></p>
     <button class="account-entry-secondary" id="wallet-buffer-readiness" type="button" hidden>Review Buffer testnet setup →</button>
     <p class="account-view-status" id="wallet-buffer-readiness-status" role="status" aria-live="polite" hidden></p>
+    <button class="account-entry-secondary" id="wallet-setup-recovery" type="button" hidden>Check setup recovery →</button>
+    <p class="account-view-status" id="wallet-setup-recovery-status" role="status" aria-live="polite" hidden></p>
+    <div class="setup-recovery" id="wallet-setup-recovery-form" hidden>
+      <label for="wallet-setup-original">Original transaction hash from wallet history</label>
+      <input id="wallet-setup-original" type="text" maxlength="50" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Paste the original hash" />
+      <button class="account-entry-secondary" id="wallet-setup-check-original" type="button">Check original on testnet →</button>
+      <button class="account-entry-primary" id="wallet-setup-record-original" type="button" hidden>Record this original →</button>
+    </div>
     <dl class="account-view-balances"><div><dt>Account NEAR*</dt><dd id="wallet-account-near">—</dd></div><div><dt>Circle test USDC</dt><dd id="wallet-account-usdc">—</dd></div></dl>
     <p id="wallet-account-balance-status" class="account-view-status" role="status" aria-live="polite"></p>
     <p class="account-view-footnote">*NEAR may include funds reserved for storage; staked NEAR is not included. These are public balances, not a spendable quote.</p>

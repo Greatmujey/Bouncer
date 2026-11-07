@@ -46,3 +46,35 @@ test('browser stops if the relay returns an envelope for another job', async () 
   };
   await assert.rejects(fetchBufferReadinessPreview({ fetch: fake }), /READ_ONLY_UNAVAILABLE/);
 });
+
+test('setup request pumps the same pinned read-only relay while the backend is waiting', async () => {
+  const { withReadOnlyRelay } = await import('../web-src/buffer-readiness-preview.mjs');
+  const pending = new Set(ids), completed = new Set(); let finish;
+  const operation = new Promise(resolve => { finish = resolve; });
+  const fake = async (url, options={}) => {
+    if (url === '/api/read-only/config') return json({relay_url:relay});
+    if (url === '/api/read-only/pending') return json({jobs:[...pending]});
+    if (url.startsWith('/api/read-only/jobs/')) { const id=url.split('/').pop(); pending.delete(id); return json({job_id:id}); }
+    if (url === relay) { assert.equal(options.credentials,'omit'); return json({version:1,job_id:JSON.parse(options.body).job_id}); }
+    if (url === '/api/read-only/results') {
+      completed.add(JSON.parse(options.body).job_id); if (completed.size === 2) finish({status:'synthetic completed'});
+      return json({accepted:true});
+    }
+    throw Error('unexpected request');
+  };
+  assert.deepEqual(await withReadOnlyRelay({fetch:fake,work:()=>operation}),{status:'synthetic completed'});
+  assert.equal(completed.size,2);
+});
+
+test('invalid relay or malformed pending work never causes a setup retry', async () => {
+  const { withReadOnlyRelay } = await import('../web-src/buffer-readiness-preview.mjs');
+  let started=0;
+  await assert.rejects(withReadOnlyRelay({fetch:async()=>json({relay_url:'https://attacker.test'}),work:()=>{started++;}}),/READ_ONLY_UNAVAILABLE/);
+  assert.equal(started,0);
+  const fake = async url => url === '/api/read-only/config' ? json({relay_url:relay}) : json({jobs:['not-a-job']});
+  await assert.rejects(withReadOnlyRelay({fetch:fake,work:()=>{started++; return new Promise(()=>{});}}),/SETUP_RESULT_UNKNOWN/);
+  assert.equal(started,1);
+  const disconnected = async url => { if (url === '/api/read-only/config') return json({relay_url:relay}); throw Error('network lost'); };
+  await assert.rejects(withReadOnlyRelay({fetch:disconnected,work:()=>{started++; return new Promise(()=>{});}}),/SETUP_RESULT_UNKNOWN/);
+  assert.equal(started,2);
+});

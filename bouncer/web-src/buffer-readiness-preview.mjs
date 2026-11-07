@@ -46,11 +46,60 @@ export async function fetchBufferReadinessPreview({ fetch: fetchImpl = globalThi
     if (now() - lastTask > 500) {
       const result = await readJson(await get(`/api/read-only/review/${start.task_id}`), 64_000);
       lastTask = now();
-      if (result.state === 'complete') return result;
+      if (result.state === 'complete') return { ...result, task_id: start.task_id };
       if (result.state !== 'checking') throw new Error('READ_ONLY_UNAVAILABLE');
       onProgress('Checking one final testnet block and preparing an unsigned review…');
     }
     await sleep(180);
   }
   throw new Error('READ_ONLY_TIMEOUT');
+}
+
+/** Run one authenticated setup API request while forwarding ONLY the backend's
+ * signed read-only RPC jobs. No POST to a wallet or NEAR broadcast endpoint is
+ * made here. If the request or transport is uncertain, a claim may already
+ * have been committed: callers must inspect/reconcile, never retry a prompt. */
+export async function withReadOnlyRelay({ fetch: fetchImpl = globalThis.fetch, work, onProgress = () => {}, now = Date.now } = {}) {
+  if (typeof fetchImpl !== 'function' || typeof work !== 'function' || typeof onProgress !== 'function' || typeof now !== 'function') {
+    throw new Error('READ_ONLY_UNAVAILABLE');
+  }
+  const get = (url, init = {}) => fetchImpl(url, { cache:'no-store', credentials:'same-origin', ...init,
+    headers:{ ...HEADERS, ...(init.headers || {}) } });
+  const config = await readJson(await get('/api/read-only/config'));
+  if (config.relay_url !== RELAY) throw new Error('READ_ONLY_UNAVAILABLE');
+  let settled = false, value, failure, relayFailure = false;
+  const operation = Promise.resolve().then(work).then(result => { value = result; settled = true; }, error => { failure = error; settled = true; });
+  const running = new Map(), deadline = now() + 120_000;
+  async function run(id) {
+    const signedJob = await readJson(await get(`/api/read-only/jobs/${id}`), 24_000);
+    if (signedJob.job_id !== id) throw new Error('READ_ONLY_UNAVAILABLE');
+    const remote = await fetchImpl(RELAY, { method:'POST', mode:'cors', credentials:'omit', cache:'no-store',
+      headers:{ 'content-type':'application/json' }, body:JSON.stringify(signedJob) });
+    const envelope = await readJson(remote);
+    if (envelope.job_id !== id || envelope.version !== 1) throw new Error('READ_ONLY_UNAVAILABLE');
+    await readJson(await get('/api/read-only/results', { method:'POST', headers:{ 'content-type':'application/json' },
+      body:JSON.stringify(envelope) }));
+  }
+  try {
+    while (!settled && !relayFailure && now() < deadline) {
+      const pending = await readJson(await get('/api/read-only/pending'), 8_000);
+      if (!Array.isArray(pending.jobs) || pending.jobs.length > 32 || !pending.jobs.every(jobId)) throw Error();
+      for (const id of pending.jobs) if (!running.has(id) && running.size < 32) {
+        const task = run(id).catch(() => { relayFailure = true; }).finally(() => running.delete(id));
+        running.set(id, task);
+      }
+      if (!settled) { onProgress('Checking the original and current testnet state…'); await sleep(140); }
+    }
+  } catch {
+    // The operation has already started and could commit after this failure.
+    void operation; throw new Error('SETUP_RESULT_UNKNOWN');
+  }
+  if (!settled || relayFailure) {
+    // Consume a later rejection without converting an uncertain operation into
+    // a second attempt. The backend may still have committed its claim.
+    void operation;
+    throw new Error('SETUP_RESULT_UNKNOWN');
+  }
+  if (failure) throw failure;
+  return value;
 }

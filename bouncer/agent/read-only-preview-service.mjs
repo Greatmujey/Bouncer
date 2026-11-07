@@ -30,25 +30,32 @@ async function bytes(req, limit) {
 }
 
 /** No client-selected owner, vault, RPC URL, account data or transaction. */
-export function createReadOnlyPreviewService({ bridge, siteOrigin, relayUrl, inspectReadiness, makeReview, now = Date.now } = {}) {
+export function createReadOnlyPreviewService({ bridge, siteOrigin, relayUrl, inspectReadiness, makeReview, setupFactory, now = Date.now } = {}) {
   const site = fixedOrigin(siteOrigin);
   if (relayUrl !== undefined && relayUrl !== 'https://bouncer-testnet-readonly-relay-tau.vercel.app/api/read') {
     throw new Error('fixed experimental relay URL required');
   }
   if (!bridge || ['pending', 'take', 'submit', 'takeForBrowser', 'submitEncrypted'].some(k => typeof bridge[k] !== 'function') ||
-      typeof inspectReadiness !== 'function' || typeof makeReview !== 'function' || typeof now !== 'function') {
+      typeof inspectReadiness !== 'function' || typeof makeReview !== 'function' || typeof now !== 'function' ||
+      (setupFactory !== undefined && typeof setupFactory !== 'function')) {
     throw new Error('read-only preview dependencies required');
   }
   const tasks = new Map(); let active = false;
   function prune() {
     const current = now();
-    for (const [id, task] of tasks) if (task.finished && current - task.finished > 120_000) tasks.delete(id);
+    const retentionMs = setupFactory ? 30 * 60_000 : 120_000;
+    for (const [id, task] of tasks) if (task.finished && current - task.finished > retentionMs) tasks.delete(id);
   }
+  const setup = setupFactory?.({ getRetainedReview(id) {
+    prune(); const task = tasks.get(id);
+    return task?.state === 'complete' ? structuredClone({ snapshot:task.snapshot, review:task.review }) : null;
+  } });
+  if (setup !== undefined && typeof setup !== 'function') throw new Error('invalid setup handler');
   return http.createServer(async (req, res) => {
     try {
       const url = new URL(req.url, 'http://preview.invalid'), pathname = url.pathname;
       if (url.search || url.hash) return reply(res, 404, { error: 'not found' });
-      if (pathname === '/health' && req.method === 'GET') return reply(res, 200, { status: 'ok', scope: 'read-only preview' });
+      if (pathname === '/health' && req.method === 'GET') return reply(res, 200, { status: 'ok', scope: setup ? 'witnessed testnet setup preview' : 'read-only preview' });
       let match = /^\/internal\/read-only-jobs\/([a-f0-9]{32})$/.exec(pathname);
       if (match && req.method === 'GET') {
         const job = bridge.take(match[1], bearer(req));
@@ -61,6 +68,7 @@ export function createReadOnlyPreviewService({ bridge, siteOrigin, relayUrl, ins
           ? reply(res, 200, { accepted: true }) : reply(res, 404, { error: 'unavailable' });
       }
       if (req.headers.origin && req.headers.origin !== site) return reply(res, 403, { error: 'origin rejected' });
+      if (setup && pathname.startsWith('/api/wallet-setup/')) return await setup(req, res, pathname);
       if (pathname.startsWith('/api/read-only/') && req.headers['x-bouncer-preview'] !== 'read-only') {
         return reply(res, 403, { error: 'origin rejected' });
       }

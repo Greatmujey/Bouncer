@@ -56,14 +56,27 @@ the witness; a newly initialized witness cannot prove there was no earlier
 prompt elsewhere. A simultaneous rollback of database and witness is not
 protected, and a dirty or stale checkout deliberately blocks writes. Operators
 must separately retain and monitor the latest acknowledged remote Git head.
-The authenticated setup service and browser challenge verifier have been
-exercised together with disposable owner keys, PostgreSQL, synthetic chain
-views and a separate local Git remote. They only sign off-chain messages and
-return no wallet transaction. The disposable preview PostgreSQL is **not** a
-durable hosted production database; the witness and wallet invocation are not
-wired into the phone preview. Do not open a real setup prompt on this prototype
-until the hosted authenticated backend, independent restore procedures, wallet
-transport and original-hash recovery have been integrated and verified.
+The opt-in setup service now connects the browser adapter, same-origin HTTP
+routes, PostgreSQL, read-only relay and independent Git witness. An end-to-end
+harness used throwaway keys, fabricated chain views and receipts, a disposable
+database, a local bare Git remote and a synthetic wallet for all three setup
+stages. It also checked a lost claim acknowledgement and recovery of an unknown
+wallet result by verifying the original hash before recording it. **Those were
+not real wallet transactions.** The phone recovery panel can inspect a witnessed
+claim and, after a read-only FINAL receipt match, record the original hash; it
+never resends a transaction. It requires explicit off-chain wallet messages.
+The recovery interface was also exercised at 320 px and 390 px widths in
+Chromium with a synthetic wallet and synthetic backend; this is not a real
+phone or wallet test.
+
+The setup endpoints are **disabled by default** and the visible app does not
+initiate setup transactions. The opt-in backend requires a separate PostgreSQL
+URL and independently retained Git head; the temporary PostgreSQL here is
+**not** durable hosted storage. This is not production-ready: independent
+restore/monitoring, rate limiting, a real wallet and phone, mobile deployment
+size, policy/agent execution, provider order/payment and verified delivery all
+remain unproven. Fresh preflight cannot prevent state changes while a wallet
+prompt is open. Do not ask a user to lock funds for this incomplete path.
 
 A live GitHub transport check used the deliberately synthetic, unowned name
 `synthetic-witness-2bd2741a.testnet`: reservation and a claimed marker were

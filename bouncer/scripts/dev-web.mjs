@@ -21,7 +21,7 @@ if (walletConnectProjectId && !/^[a-f0-9]{32}$/i.test(walletConnectProjectId)) t
 http.createServer((req, res) => {
   const pathname = new URL(req.url, 'http://preview.invalid').pathname;
   if (pathname === '/api/google-session') return void session(req, res);
-  if (readOnlyBackend && pathname.startsWith('/api/read-only/')) {
+  if (readOnlyBackend && (pathname.startsWith('/api/read-only/') || pathname.startsWith('/api/wallet-setup/'))) {
     if (!['GET', 'POST'].includes(req.method)) { res.writeHead(405); res.end(); return; }
     const upstream = http.request({ hostname: '127.0.0.1', port: 8787, path: req.url, method: req.method,
       headers: { origin: req.headers.origin || '', 'x-bouncer-preview': req.headers['x-bouncer-preview'] || '',

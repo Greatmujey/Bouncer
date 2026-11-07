@@ -14,7 +14,8 @@ const digestHex = bytes => [...new Uint8Array(bytes)].map(n => n.toString(16).pa
 const labels = { reserve: id => `Reserve setup prompt: ${id}`,
   claim_prompt: id => `Claim one setup prompt: ${id}`, claim_setup_stage: id => `Claim one setup prompt: ${id}`,
   record_original_hash: () => 'Record the original transaction hash', record_setup_stage_original: () => 'Record the original transaction hash',
-  inspect: () => 'Inspect the retained prompt' };
+  reconcile_setup_original: id => `Reconcile original: ${id}`, reconcile_setup_stage: id => `Reconcile original: ${id}`,
+  verify_setup_funded: () => 'Verify funded vault state', inspect: () => 'Inspect the retained prompt' };
 
 /** Constructs exactly the action fields expected by the backend; no arbitrary
  * message text, receiver, amount or other action can be supplied here. */
@@ -32,15 +33,16 @@ export function setupAuthAction({ purpose, owner, ownerPublicKey, identity, revi
   if (!identity || identity.owner !== owner || identity.owner_public_key !== ownerPublicKey || !HEX32.test(identity.operation_id ?? '') ||
       !HEX64.test(identity.review_sha256 ?? '') || !Array.isArray(identity.stages) || identity.stages.length !== 3 ||
       identity.stages.some((s, i) => s?.stage_id !== STAGES[i] || !HEX64.test(s.action_commitment_sha256 ?? ''))) throw fail();
+  if (purpose === 'verify_setup_funded') return { ...base, operation_id: identity.operation_id, review_sha256: identity.review_sha256 };
   const i = STAGES.indexOf(stageId);
-  if (i < 0 || (purpose === 'claim_prompt' || purpose === 'record_original_hash' ? i !== 0 : i === 0)) throw fail();
+  if (i < 0 || (['claim_prompt','record_original_hash','reconcile_setup_original'].includes(purpose) ? i !== 0 : i === 0)) throw fail();
   if (purpose === 'record_original_hash') {
     if (!TX.test(originalHash ?? '')) throw fail();
     return { ...base, operation_id: identity.operation_id, original_hash: originalHash };
   }
   const action = { ...base, operation_id: identity.operation_id, review_sha256: identity.review_sha256,
     stage_id: stageId, action_commitment_sha256: identity.stages[i].action_commitment_sha256 };
-  if (purpose === 'record_setup_stage_original') {
+  if (['record_setup_stage_original','reconcile_setup_original','reconcile_setup_stage'].includes(purpose)) {
     if (!TX.test(originalHash ?? '')) throw fail();
     action.original_hash = originalHash;
   }

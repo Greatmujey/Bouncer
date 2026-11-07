@@ -1,11 +1,11 @@
 /**
  * Experimental owner-authenticated orchestration for the independently
- * witnessed setup journal. No HTTP routes, wallet adapter, signer, transaction
- * payload, broadcast, seller order or execution authorization are exposed.
+ * witnessed setup journal. This service has no wallet signer, transaction
+ * broadcaster, seller order or execution authorization.
  * Trusted server dependencies provide retained reviews and an authenticating
  * PostgreSQL fence; browser input can only select a retained operation/stage.
  */
-import { verifyBufferWalletSetupReview } from './buffer-wallet-setup-evidence.mjs';
+import { verifyBufferWalletSetupReview, prepareBufferWalletSetupAttempt, inspectBufferWalletSetupAttempt } from './buffer-wallet-setup-evidence.mjs';
 import { isTransactionHash } from '../shared/direct-payment-settlement.mjs';
 import { WalletWitnessError } from './git-wallet-prompt-witness.mjs';
 
@@ -30,7 +30,7 @@ function idFromPrompt(prompt) {
     }) };
 }
 
-export function createAuthenticatedWitnessedSetupService({ auth, fence, witness, coordinator, getRetainedReview, setupWasmBytes, owner } = {}) {
+export function createAuthenticatedWitnessedSetupService({ auth, fence, witness, coordinator, getRetainedReview, setupWasmBytes, setupReceiptProvider, owner } = {}) {
   if (!auth || typeof auth.issue !== 'function' || !fence || typeof fence.inspect !== 'function' ||
       !witness || typeof witness.inspect !== 'function' || typeof witness.assertClaimable !== 'function' ||
       !coordinator || ['reserve', 'claim', 'recordOriginal'].some(k => typeof coordinator[k] !== 'function') ||
@@ -53,6 +53,10 @@ export function createAuthenticatedWitnessedSetupService({ auth, fence, witness,
     const snapshot = await witness.inspect(owner);
     if (!snapshot.state || JSON.stringify(snapshot.state.identity) !== JSON.stringify(identity)) throw fail();
     return { identity, state: snapshot.state };
+  }
+  function witnessedOriginal(state, stageId, originalHash) {
+    return isTransactionHash(originalHash) && STAGES.includes(stageId) && state.records.some(r =>
+      r.event === 'original' && r.stage_id === stageId && r.original_hash === originalHash);
   }
   return Object.freeze({
     async issueReservation({ taskId, ownerPublicKey } = {}) {
@@ -90,7 +94,58 @@ export function createAuthenticatedWitnessedSetupService({ auth, fence, witness,
       const { identity } = await witnessedIdentity(raw);
       return coordinator.recordOriginal({ identity, stageId, originalHash, evidence });
     },
+    async issueReconcile({ identity: raw, stageId, originalHash } = {}) {
+      const { identity, state } = await witnessedIdentity(raw);
+      if (!witnessedOriginal(state, stageId, originalHash)) throw fail();
+      return auth.issue({ ...prefix(stageId === STAGES[0] ? 'reconcile_setup_original' : 'reconcile_setup_stage',
+        owner, identity.owner_public_key), ...stageContext(identity, stageId), original_hash: originalHash });
+    },
+    async reconcile({ identity: raw, stageId, originalHash, evidence } = {}) {
+      const { identity, state } = await witnessedIdentity(raw);
+      if (!witnessedOriginal(state, stageId, originalHash)) throw fail();
+      const args = { owner, ownerPublicKey: identity.owner_public_key, operationId: identity.operation_id,
+        reviewSha256: identity.review_sha256, stageId,
+        actionCommitmentSha256: stageContext(identity, stageId).action_commitment_sha256, originalHash, evidence };
+      const method = stageId === STAGES[0] ? 'reconcileSetupOriginal' : 'reconcileSetupStage';
+      if (typeof fence[method] !== 'function') throw fail();
+      return fence[method](args);
+    },
+    async issueVerifyFunded({ identity: raw } = {}) {
+      const { identity, state } = await witnessedIdentity(raw);
+      if (state.phase !== 'complete') throw fail();
+      return auth.issue({ ...prefix('verify_setup_funded', owner, identity.owner_public_key),
+        operation_id: identity.operation_id, review_sha256: identity.review_sha256 });
+    },
+    async verifyFunded({ identity: raw, evidence } = {}) {
+      const { identity, state } = await witnessedIdentity(raw);
+      if (state.phase !== 'complete' || typeof fence.verifySetupFunded !== 'function') throw fail();
+      return fence.verifySetupFunded({ owner, ownerPublicKey: identity.owner_public_key,
+        operationId: identity.operation_id, reviewSha256: identity.review_sha256, evidence });
+    },
     async issueInspect({ ownerPublicKey } = {}) { return auth.issue(prefix('inspect', owner, ownerPublicKey)); },
+    /** Verify an owner-provided original BEFORE recording its immutable hash.
+     * This is read-only; an unavailable or mismatched receipt never permits a
+     * retry and is not evidence that the wallet transaction was absent. */
+    async previewOriginal({ ownerPublicKey, stageId, originalHash, evidence } = {}) {
+      if (!STAGES.includes(stageId) || !isTransactionHash(originalHash) || !setupReceiptProvider ||
+          typeof setupReceiptProvider.viewNodeStatus !== 'function' || typeof setupReceiptProvider.txStatusReceipts !== 'function') throw fail();
+      const prompt = await fence.inspect({ owner, ownerPublicKey, evidence });
+      const remote = await witness.inspect(owner), state = remote.state;
+      if (!prompt || !state || JSON.stringify(idFromPrompt(prompt)) !== JSON.stringify(state.identity) ||
+          state.phase !== 'claimed' || STAGES[state.stage_index] !== stageId) throw fail();
+      try {
+        if ((await setupReceiptProvider.viewNodeStatus())?.chain_id !== 'testnet') throw Error();
+        const args = { review:prompt.review, snapshot:prompt.setup_snapshot, wasmBytes:wasm,
+          trustedReviewHash:prompt.review_sha256, trustedOwnerPublicKey:ownerPublicKey,
+          stageId, trustedOriginalHash:originalHash };
+        const attempt = prepareBufferWalletSetupAttempt(args);
+        const result = structuredClone(await setupReceiptProvider.txStatusReceipts(originalHash, owner, 'FINAL'));
+        const proof = inspectBufferWalletSetupAttempt({ ...args, attempt, result });
+        return { ...proof, execution_authorized:false, original_recorded:false,
+          scope:'Read-only matching against a trusted testnet RPC; no wallet prompt, recording, purchase or delivery.' };
+      } catch { throw new WalletWitnessError('RECEIPT_UNKNOWN',
+        'original receipt is unavailable or mismatched; keep the hash and never resend the transaction'); }
+    },
     async inspect({ ownerPublicKey, evidence } = {}) {
       const prompt = await fence.inspect({ owner, ownerPublicKey, evidence });
       const remote = await witness.inspect(owner);
@@ -101,6 +156,7 @@ export function createAuthenticatedWitnessedSetupService({ auth, fence, witness,
         scope: 'Database missing but public witness remains; do not recreate or retry a prompt.' };
       if (!remote.state || JSON.stringify(idFromPrompt(prompt)) !== JSON.stringify(remote.state.identity)) throw fail();
       return { status: 'WITNESSED', identity: remote.state.identity, witnessed_records: remote.state.records,
+        review: structuredClone(prompt.review), snapshot: structuredClone(prompt.setup_snapshot),
         claim_status: prompt.claim_status, execution_authorized: false,
         scope: 'Owner-authenticated journal state; wallet invocation, consent, FINAL execution and delivery are not established.' };
     },
