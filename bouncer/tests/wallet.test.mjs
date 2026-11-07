@@ -54,7 +54,9 @@ function fakeBrowser(url, { top = true, storageFails = false, approved = '' } = 
   const ids = ['wallet-connect', 'wallet-disconnect', 'wallet-status', 'wallet-open-site', 'wallet-dialog', 'wallet-close', 'wallet-options', 'wallet-dialog-status', 'wallet-title-text', 'wallet-dialog-description', 'wallet-banner', 'wallet-safety',
     'wallet-account-entry', 'wallet-account-form', 'wallet-account-id', 'wallet-account-error', 'wallet-account-back', 'wallet-cli-verify',
     'wallet-account-view', 'wallet-account-name', 'wallet-account-badge', 'wallet-account-warning', 'wallet-account-near', 'wallet-account-usdc', 'wallet-account-balance-status', 'wallet-account-use-wallet', 'wallet-account-refresh', 'wallet-owner-verify', 'wallet-owner-status',
-    'wallet-buffer-readiness', 'wallet-buffer-readiness-status', 'wallet-setup-recovery', 'wallet-setup-recovery-status',
+    'wallet-buffer-readiness', 'wallet-buffer-readiness-status', 'wallet-buffer-setup-start', 'wallet-buffer-setup-panel',
+    'wallet-buffer-setup-terms', 'wallet-buffer-setup-reserve', 'wallet-buffer-setup-approve', 'wallet-buffer-setup-status',
+    'wallet-setup-recovery', 'wallet-setup-recovery-status',
     'wallet-setup-recovery-form', 'wallet-setup-original', 'wallet-setup-check-original', 'wallet-setup-record-original',
     'wallet-ethereum-info', 'wallet-ethereum-continue', 'wallet-ethereum-back'];
   const nodes = Object.fromEntries(ids.map(id => [id, new Element()]));
@@ -117,6 +119,14 @@ test('wallet origin policy blocks shared origins, unapproved sites, HTTP and ifr
   assert.equal(walletOriginAllowed(location('https://4173-example.e2b.app/'), true), true);
   assert.equal(walletOriginAllowed(location('https://4173-example.e2b.app/'), false), false);
   assert.equal(walletOriginAllowed(location('http://127.0.0.1:4173/'), true), true);
+});
+
+test('preview mode explicitly states the app is read-only until the backend is enabled', async () => {
+  const browser = fakeBrowser('http://127.0.0.1:4173/');
+  await initWallet({ window: browser.win, document: browser.doc, NearConnector: connectorClass({}) });
+  assert.match(browser.nodes['wallet-status'].textContent, /Preview mode: read-only/i);
+  assert.match(browser.nodes['wallet-dialog-status'].textContent, /Preview mode: read-only/i);
+  assert.match(browser.nodes['wallet-status'].textContent, /no wallet transaction or key request is sent/i);
 });
 
 test('wallet manifests are curated testnet choices with pinned, integrity-checked executors', () => {
@@ -237,17 +247,25 @@ test('phone recovery checks and records a matching original without submitting a
   const ownerKey = String(config.cliKey.getPublicKey()), calls = [], stage = 'create_keyless_vault', originalHash = '7'.repeat(44);
   const identity = {owner:config.account,owner_public_key:ownerKey,operation_id:'1'.repeat(32),review_sha256:'2'.repeat(64),
     stages:['create_keyless_vault','register_vault_circle','fund_vault_circle'].map((stage_id,i)=>({stage_id,action_commitment_sha256:String(i+3).repeat(64)}))};
+  const review = {owner:config.account,review_sha256:identity.review_sha256,
+    vault:'vault.great_mujey.testnet',vault_wasm_sha256:'3'.repeat(64),fixed_product_price_atoms:'20000000',
+    stages:identity.stages.map((stage,index)=>({id:stage.stage_id,action_commitment_sha256:stage.action_commitment_sha256,
+      actions:index===0?[{type:'transfer',deposit_yocto:'6000000000000000000000000'}]
+        :index===1?[{type:'function_call',deposit_yocto:'1250000000000000000000'}]
+          :[{type:'function_call',args:{amount:'20000000'}}]}))};
   const originalFetch = browser.win.fetch, reply = value => new Response(JSON.stringify(value),{headers:{'content-type':'application/json'}});
   browser.win.fetch = async (url, options={}) => {
     calls.push(url);
     if (url === '/api/wallet-setup/config') return reply({enabled:true,network:'testnet',owner:config.account});
     if (url === '/api/read-only/config') return reply({relay_url:'https://bouncer-testnet-readonly-relay-tau.vercel.app/api/read'});
     if (url === '/api/read-only/pending') return reply({jobs:[]});
-    if (url === '/api/wallet-setup/inspect-challenge' || url === '/api/wallet-setup/original-challenge') {
-      const recording = url.endsWith('/original-challenge');
+    if (url === '/api/wallet-setup/inspect-challenge' || url === '/api/wallet-setup/original-challenge' || url === '/api/wallet-setup/reconcile-challenge') {
+      const recording = url.endsWith('/original-challenge'), reconciling = url.endsWith('/reconcile-challenge');
       const context = recording ? {purpose:'record_original_hash',owner:config.account,ownerPublicKey:ownerKey,identity,stageId:stage,originalHash}
-        : {purpose:'inspect',owner:config.account,ownerPublicKey:ownerKey};
-      const action = setupAuthAction(context), what = recording ? 'Record the original transaction hash' : 'Inspect the retained prompt';
+        : reconciling ? {purpose:'reconcile_setup_original',owner:config.account,ownerPublicKey:ownerKey,identity,stageId:stage,originalHash}
+          : {purpose:'inspect',owner:config.account,ownerPublicKey:ownerKey};
+      const action = setupAuthAction(context), what = recording ? 'Record the original transaction hash'
+        : reconciling ? `Reconcile original: ${stage}` : 'Inspect the retained prompt';
       const digest = createHash('sha256').update(JSON.stringify(action)).digest('hex'), issued = Date.now(), expires = issued + 120_000;
       return reply({challenge_id:'a'.repeat(32),nonce_base64:Buffer.alloc(32,7).toString('base64'),
         recipient:browser.win.location.host,expires_at_ms:expires,
@@ -255,9 +273,10 @@ test('phone recovery checks and records a matching original without submitting a
           `Action SHA-256: ${digest}\nSite: ${browser.win.location.origin}\nIssued: ${new Date(issued).toISOString()}\nExpires: ${new Date(expires).toISOString()}\n` +
           'This message is not a transaction and does not itself approve spending.'});
     }
-    if (url === '/api/wallet-setup/inspect') return reply({status:'WITNESSED',identity,witnessed_records:[{event:'claim',stage_id:stage}]});
+    if (url === '/api/wallet-setup/inspect') return reply({status:'WITNESSED',identity,review,witnessed_records:[{event:'claim',stage_id:stage}]});
     if (url === '/api/wallet-setup/preview-original') return reply({status:'FINAL_SETUP_RECEIPT_MATCH',tx_hash:originalHash,stage_id:stage,original_recorded:false});
     if (url === '/api/wallet-setup/original') return reply({status:'ORIGINAL_RECORDED',original_hash:originalHash,stage_id:stage});
+    if (url === '/api/wallet-setup/reconcile') return reply({status:'FINAL_SETUP_RECEIPT_MATCH',original_hash:originalHash,stage_id:stage});
     return originalFetch(url,options);
   };
   await initWallet({window:browser.win,document:browser.doc,NearConnector:connectorClass(config)});
@@ -277,16 +296,51 @@ test('phone recovery checks and records a matching original without submitting a
   assert.match(browser.nodes['wallet-setup-recovery-status'].textContent,/matches the reviewed testnet receipt.*No payment or delivery/);
   assert.equal(browser.nodes['wallet-setup-record-original'].hidden,false);
   await browser.nodes['wallet-setup-record-original'].click();
-  assert.match(browser.nodes['wallet-setup-recovery-status'].textContent,/recorded for recovery.*not a purchase or delivery/i);
+  assert.match(browser.nodes['wallet-setup-recovery-status'].textContent,/reconciled at FINAL.*next setup stage/i);
+  assert.equal(browser.nodes['wallet-buffer-setup-approve'].hidden,false);
   assert.equal(browser.nodes['wallet-setup-recovery-form'].hidden,true);
   assert.equal(browser.nodes['wallet-dialog'].open,true);
-  assert.equal(config.messageRequests.length,4);
+  assert.equal(config.messageRequests.length,5);
   assert.match(config.messageRequests[0].message,/does not approve a transaction/);
   assert.ok(config.messageRequests.slice(1).every(p=>/not a transaction/.test(p.message)));
   assert.ok(!calls.some(url=>/wallet-setup\/(claim|reserve|broadcast)/.test(url)));
   await browser.nodes['wallet-disconnect'].click();
   assert.equal(browser.nodes['wallet-setup-recovery'].hidden,true);
   assert.equal(browser.nodes['wallet-setup-recovery-status'].textContent,'');
+});
+
+test('Buffer setup review is backend-gated and remains read-only until the owner continues', async () => {
+  const browser = fakeBrowser('https://4173-preview.e2b.app/');
+  const config = { account:'great_mujey.testnet', signConnectedMessage:true, cliKey:KeyPair.fromRandom('ed25519') }, calls = [];
+  const snapshot = { owner:config.account, signed:false, sent:false };
+  const review = { owner:config.account, signing_or_broadcast_authorized:false, wallet_approval_obtained:false,
+    fixed_product_price_atoms:'20000000', vault:'vault.great_mujey.testnet', vault_wasm_sha256:'3'.repeat(64),
+    stages:[{actions:[{type:'transfer',deposit_yocto:'6000000000000000000000000'}]},
+      {actions:[{type:'function_call',deposit_yocto:'1250000000000000000000'}]},
+      {actions:[{type:'function_call',args:{amount:'20000000'}}]}] };
+  const originalFetch = browser.win.fetch, reply = value => new Response(JSON.stringify(value),{headers:{'content-type':'application/json'}});
+  browser.win.fetch = async (url, options={}) => {
+    calls.push([url,options.method || 'GET']);
+    if (url === '/api/wallet-setup/config') return reply({enabled:true,network:'testnet',owner:config.account});
+    if (url === '/api/read-only/config') return reply({relay_url:'https://bouncer-testnet-readonly-relay-tau.vercel.app/api/read'});
+    if (url === '/api/read-only/owner-key') return reply({full_access:true});
+    if (url === '/api/read-only/review' && options.method === 'POST') return reply({task_id:'a'.repeat(32)});
+    if (url === '/api/read-only/pending') return reply({jobs:[]});
+    if (url === `/api/read-only/review/${'a'.repeat(32)}`) return reply({state:'complete',snapshot,review});
+    return originalFetch(url,options);
+  };
+  await initWallet({window:browser.win,document:browser.doc,NearConnector:connectorClass(config)});
+  assert.equal(browser.nodes['wallet-buffer-setup-start'].hidden,true);
+  await browser.options.find(option=>option.dataset.walletId==='meteor-wallet').click();
+  await browser.nodes['wallet-owner-verify'].click();
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(browser.nodes['wallet-buffer-setup-start'].hidden,false);
+  await browser.nodes['wallet-buffer-setup-start'].click();
+  assert.match(browser.nodes['wallet-buffer-setup-terms'].textContent,/6 NEAR.*20 test USDC into the vault, not to Buffer.*separate later payment/);
+  assert.equal(browser.nodes['wallet-buffer-setup-reserve'].hidden,false);
+  assert.equal(browser.nodes['wallet-buffer-setup-approve'].hidden,true);
+  assert.equal(config.messageRequests.length,1,'preparing a review asks for no additional wallet message');
+  assert.ok(!calls.some(([url])=>/wallet-setup\/(reserve|claim|broadcast)$/.test(url)));
 });
 
 test('NEAR Mobile owner verification targets the connected account and performs no transaction', async () => {

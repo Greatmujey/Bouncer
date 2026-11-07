@@ -5,6 +5,7 @@
   "type": "module",
   "private": true,
   "scripts": {
+    "postinstall": "npm install --prefix walletconnect --no-audit --no-fund",
     "test": "node --test packages/policy/policy.test.mjs tests/*.test.mjs",
     "test:all": "node --test packages/policy/policy.test.mjs tests/*.test.mjs",
     "test:postgres": "node --test --test-concurrency=1 tests/postgres-buffer-order-fence.test.mjs tests/postgres-wallet-prompt-auth.test.mjs tests/postgres-wallet-prompt-fence.test.mjs tests/postgres-witnessed-wallet-setup.test.mjs tests/shared-buyer-journal.test.mjs tests/shared-resource-provider.test.mjs tests/witnessed-setup-flow.test.mjs",
@@ -61,9 +62,14 @@
     "@hot-labs/near-connect": "0.12.0",
     "@modelcontextprotocol/sdk": "1.32.2",
     "@noble/curves": "1.8.1",
+    "@walletconnect/core": "2.26.0",
+    "@walletconnect/relay-auth": "1.1.0",
+    "@walletconnect/sign-client": "2.26.0",
     "express": "5.2.1",
     "near-api-js": "6.5.1",
     "pg": "8.23.1",
+    "qrcode": "1.5.4",
+    "ws": "8.18.0",
     "zod": "4.6.7"
   },
   "devDependencies": {

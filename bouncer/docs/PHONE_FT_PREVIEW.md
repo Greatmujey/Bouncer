@@ -2,10 +2,17 @@
 
 This is an experimental testnet path, **not a completed autonomous purchase**.
 The phone preview offers a supported NEAR wallet connection, requests an off-chain
-NEP-413 identity message and prepare an unsigned Buffer vault review. It does
-not yet request setup transactions, configure an agent, create a Buffer order,
-transfer test USDC to Buffer or prove delivery. Name-only viewing and an
-Ethereum `0x` wallet are not substitutes for a named NEAR signing wallet.
+NEP-413 identity message and prepares an unsigned Buffer vault review. An
+experimental, backend-gated UI now supports reserving that exact review and
+requesting three separately approved wallet transactions for vault creation,
+Circle registration and vault funding; it records and reconciles each original
+before exposing the next stage. This only runs when the same-origin witnessed
+setup service explicitly reports enabled. It does not configure spending
+policy, create a Buffer order, pay Buffer or prove delivery. The current
+Codespace has no setup database, Git witness anchor, V12 artifact path or relay
+session-key configuration, so the real setup prompt and transactions remain
+unavailable and unverified here. Name-only viewing and an Ethereum `0x` wallet
+are not substitutes for a named NEAR signing wallet.
 
 ## Read-only transport
 
