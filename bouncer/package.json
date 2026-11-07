@@ -68,6 +68,7 @@
   },
   "devDependencies": {
     "esbuild": "0.28.2",
+    "fake-indexeddb": "6.2.7",
     "wabt": "1.0.39"
   }
 }

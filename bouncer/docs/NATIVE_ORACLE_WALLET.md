@@ -45,6 +45,15 @@ examples were **self-hosted development services**.
   head retention/monitoring are not connected. Git administrators or a
   simultaneous rollback can still defeat it. A hash in this log alone does
   **not** establish a valid receipt or allow a later wallet prompt.
+- `web-src/native-oracle-device-key.mjs` can generate and retain one local,
+  non-extractable Ed25519 WebCrypto key per owner and test its possession
+  without exporting the private key. It has no transaction-signing, network or
+  wallet API and is not connected to the UI. Synthetic IndexedDB tests and a
+  390px Chromium test cover concurrent creation and reload, not real phones or
+  durable backups. Storage eviction or device/origin loss can lose this key;
+  same-origin scripts/XSS can still use it. Missing local data does not prove
+  an on-chain key was never installed. Owner-led on-chain revocation and a
+  complete recovery process are still required before funding.
 - The native OutLayer runners require a **bounded one-shot** sender. They
   record the original signed hash before the single submission and recover
   using that hash; they do not fall back to a retrying sender. Their existing
@@ -90,7 +99,7 @@ is not proof of global absence or a compatible wallet transport.
    responses, browser changes and database or witness rollback. A local browser
    cache alone is insufficient. An uncertain claim or prompt is a stop, not a
    reason to prompt again.
-2. Complete and test device-side agent-key generation, secure custody, recovery
+2. Complete and test device-side agent-key custody, recovery
    and revocation without asking for a wallet seed or private key. Verify the
    wallet can deploy the large artifact and install the restricted key on an
    actual phone; feature flags and converter tests are not enough.
