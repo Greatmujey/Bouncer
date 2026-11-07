@@ -9,15 +9,14 @@ import { fileURLToPath } from 'node:url';
 import crypto from 'node:crypto';
 import nearApi from 'near-api-js';
 import { validateRpcEndpoint } from './shared/rpc-endpoint.mjs';
-import { waitForNewTestnetKey } from './shared/testnet-ready.mjs';
 import { MonotonicAccount } from './agent/near-account.mjs';
+import { resolveDemoOwnerConfig } from './demo-owner-config.mjs';
 
 const { KeyPair, KeyPairSigner, providers, transactions } = nearApi;
 const { JsonRpcProvider } = providers;
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const NETWORK = 'testnet';
 const RPC = process.env.NEAR_TESTNET_RPC || 'https://test.rpc.fastnear.com';
-const HELPER = 'https://helper.testnet.near.org';
 const WNEAR = 'wrap.testnet';
 const WASM_PATH = path.join(REPO_ROOT, 'bouncer.wasm');
 const KEY_DIR = path.join(os.homedir(), '.near-credentials', NETWORK);
@@ -43,18 +42,6 @@ function saveKey(id, key, label = '') {
   }, null, 2), { mode: 0o600 });
   fs.chmodSync(file, 0o600);
   return file;
-}
-
-async function helperCreate(id, publicKey) {
-  const response = await fetch(`${HELPER}/account`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ newAccountId: id, newAccountPublicKey: publicKey }),
-    signal: AbortSignal.timeout(30_000),
-  });
-  if (!response.ok) throw new Error(`testnet helper ${response.status}: ${await response.text()}`);
-  const body = await response.json();
-  await waitForNewTestnetKey(provider, id, publicKey);
-  return body;
 }
 
 // A callback can succeed after a failed ft_transfer. A successful top-level
@@ -147,66 +134,72 @@ async function main() {
   console.log('BOUNCER — restricted-agent payments firewall (NEAR testnet)');
   console.log('Fresh deploy • real wNEAR • policy-scoped key • 1-yocto guard\n');
 
+  const ownerConfig = resolveDemoOwnerConfig();
   const suffix = crypto.randomBytes(3).toString('hex');
-  const bouncerId = `bouncer-${suffix}.testnet`;
-  const userId = `user-${suffix}.${bouncerId}`;
+  const bouncerId = ownerConfig.contractAccountId;
+  const userId = ownerConfig.accountId;
   const vendorId = `vendor-${suffix}.${bouncerId}`;
   // Deliberately not registered with wNEAR, to force a downstream FT failure.
   const unregisteredId = `unregistered-${suffix}.${bouncerId}`;
 
-  console.log(`=== 1) Create funded contract account: ${bouncerId} ===`);
+  console.log(`=== 1) Create contract account under funded owner ${ownerConfig.accountId} ===`);
+  const ownerAccess = await provider.viewAccessKey(ownerConfig.accountId, ownerConfig.keyPair.getPublicKey(), { finality: 'final' });
+  if (ownerAccess.permission !== 'FullAccess') throw new Error(`owner credential for ${ownerConfig.accountId} is not a full-access key`);
   const bouncerKey = KeyPair.fromRandom('ed25519');
   saveKey(bouncerId, bouncerKey);
-  await helperCreate(bouncerId, bouncerKey.getPublicKey().toString());
+  const owner = accountFor(ownerConfig.accountId, ownerConfig.keyPair);
+  const create = await setupAttempt('create contract account under funded owner',
+    () => owner.createAccount(bouncerId, bouncerKey.getPublicKey(), 5n * ONE_NEAR));
+  assertReceiptsSucceeded(create, 'create funded contract account');
+  console.log(`    ✅ ${bouncerId} created under ${ownerConfig.accountId}  tx: ${txUrl(create.transaction_outcome.id)}`);
   const bouncer = accountFor(bouncerId, bouncerKey);
   fs.writeFileSync(path.join(os.homedir(), '.bouncer_id'), bouncerId);
-  console.log(`    Owner key saved under ${KEY_DIR}`);
+  console.log(`    Contract key saved under ${KEY_DIR}`);
 
   console.log(`\n=== 2) Deploy contract (${wasm.length} bytes) and initialize ===`);
   const deploy = await bouncer.deployContract(wasm);
   assertReceiptsSucceeded(deploy, 'deploy');
   console.log(`    ✅ deploy  tx: ${txUrl(deploy.transaction_outcome.id)}`);
-  await callFrom(bouncer, bouncerId, 'new', { owner: bouncerId });
+  await callFrom(bouncer, bouncerId, 'new', { owner: ownerConfig.accountId });
   let version;
   try { version = await view(bouncerId, 'contract_version', {}); }
   catch (error) { throw new Error('The deployed wasm is stale; wait for the CI wasm build and git pull again.', { cause: error }); }
   if (version !== 'bouncer-agent-v9') throw new Error(`Unsupported contract version: ${version}`);
 
-  console.log('\n=== 3) Create user and vendor sub-accounts ===');
-  const userKey = KeyPair.fromRandom('ed25519');
+  console.log('\n=== 3) Create vendor sub-account; the funded owner is the user ===');
   const vendorKey = KeyPair.fromRandom('ed25519');
-  saveKey(userId, userKey);
   saveKey(vendorId, vendorKey);
-  const userTx = await setupAttempt('create user', () => bouncer.createAccount(userId, userKey.getPublicKey(), 5n * ONE_NEAR));
-  assertReceiptsSucceeded(userTx, 'create user');
-  console.log(`    ✅ ${userId}  tx: ${txUrl(userTx.transaction_outcome.id)}`);
   const vendorTx = await setupAttempt('create vendor', () => bouncer.createAccount(vendorId, vendorKey.getPublicKey(), ONE_NEAR / 2n));
   assertReceiptsSucceeded(vendorTx, 'create vendor');
   console.log(`    ✅ ${vendorId}  tx: ${txUrl(vendorTx.transaction_outcome.id)}`);
-  const user = accountFor(userId, userKey);
+  const user = owner;
+  const vendor = accountFor(vendorId, vendorKey);
 
   console.log(`\n=== 4) Register accounts on ${WNEAR} ===`);
   await callFrom(user, WNEAR, 'storage_deposit', { account_id: userId }, STORAGE, GAS_50);
   await callFrom(bouncer, WNEAR, 'storage_deposit', { account_id: vendorId }, STORAGE, GAS_50);
   await callFrom(bouncer, WNEAR, 'storage_deposit', { account_id: bouncerId }, STORAGE, GAS_50);
 
+  // The funded owner can already hold wNEAR. Preserve and account for the
+  // existing balance instead of assuming this is a newly created user.
+  const initialUserBalance = BigInt(await view(WNEAR, 'ft_balance_of', { account_id: userId }));
   console.log('\n=== 5) User wraps 2 NEAR ===');
   await callFrom(user, WNEAR, 'near_deposit', {}, 2n * ONE_NEAR, GAS_50);
 
   console.log('\n=== 6) Create two separate policies (both use wNEAR) ===');
   for (const policyId of [COMPUTE_POLICY, STORAGE_POLICY]) {
-    await callFrom(bouncer, bouncerId, 'set_policy', {
+    await callFrom(owner, bouncerId, 'set_policy', {
       policy_id: policyId, token: WNEAR,
       per_tx_cap: (2n * ONE_NEAR).toString(), daily_cap: ONE_NEAR.toString(),
     }, YOCTO);
-    await callFrom(bouncer, bouncerId, 'allow_payee', { policy_id: policyId, payee: vendorId }, YOCTO);
+    await callFrom(owner, bouncerId, 'allow_payee', { policy_id: policyId, payee: vendorId }, YOCTO);
   }
 
   console.log('\n=== 7) Create and authorize an execute-only agent key for the compute policy ===');
   const agentKey = KeyPair.fromRandom('ed25519');
-  const agentKeyFile = saveKey(bouncerId, agentKey, 'agent');
-  await addRestrictedKey(bouncer, bouncerId, agentKey, ['execute']);
-  await callFrom(bouncer, bouncerId, 'grant_agent_key', {
+  const agentKeyFile = saveKey(ownerConfig.accountId, agentKey, 'agent');
+  await addRestrictedKey(owner, bouncerId, agentKey, ['execute']);
+  await callFrom(owner, bouncerId, 'grant_agent_key', {
     policy_id: COMPUTE_POLICY, public_key: agentKey.getPublicKey().toString(),
   }, YOCTO);
   const authorized = await view(bouncerId, 'is_agent_key_allowed', {
@@ -216,7 +209,7 @@ async function main() {
     policy_id: STORAGE_POLICY, public_key: agentKey.getPublicKey().toString(),
   });
   if (authorized !== true || crossPolicy !== false) throw new Error('agent policy grants did not match expectation');
-  const agent = accountFor(bouncerId, agentKey);
+  const agent = accountFor(ownerConfig.accountId, agentKey);
   console.log(`    Agent key saved separately: ${agentKeyFile}`);
 
   console.log('\n=== 8) Deposit 1.5 wNEAR into the vault ===');
@@ -238,7 +231,7 @@ async function main() {
   if (await view(WNEAR, 'storage_balance_of', { account_id: unregisteredId }) !== null) {
     throw new Error('refund test account is unexpectedly registered');
   }
-  await callFrom(bouncer, bouncerId, 'allow_payee', { policy_id: COMPUTE_POLICY, payee: unregisteredId }, YOCTO);
+  await callFrom(owner, bouncerId, 'allow_payee', { policy_id: COMPUTE_POLICY, payee: unregisteredId }, YOCTO);
   const beforeRefund = BigInt(await view(bouncerId, 'vault_balance', { token: WNEAR }));
   const refundProbe = () => agent.callFunctionRaw({
     contractId: bouncerId, methodName: 'execute',
@@ -268,7 +261,7 @@ async function main() {
     policy_id: COMPUTE_POLICY, payee: vendorId, amount: (9n * ONE_NEAR / 10n).toString(),
   });
   if (!Array.isArray(refundBudget) || refundBudget[0] !== true) throw new Error('failed transfer did not restore daily budget');
-  await callFrom(bouncer, bouncerId, 'revoke_payee', { policy_id: COMPUTE_POLICY, payee: unregisteredId }, YOCTO);
+  await callFrom(owner, bouncerId, 'revoke_payee', { policy_id: COMPUTE_POLICY, payee: unregisteredId }, YOCTO);
   console.log(`    ✅ Failed transfer refunded vault and daily budget  tx: ${txUrl(failedTransfer.transaction_outcome.id)}`);
 
   console.log('\n=== 10) Reject policy breaches from the actual agent key ===');
@@ -281,7 +274,7 @@ async function main() {
 
   console.log('\n=== 11) Reject unauthorized caller and cross-policy spending ===');
   await expectRejection('unrelated account', 'BLOCKED: caller is not the owner account',
-    () => execute(user, COMPUTE_POLICY, vendorId, ONE_NEAR / 10n, 'unauthorized'));
+    () => execute(vendor, COMPUTE_POLICY, vendorId, ONE_NEAR / 10n, 'unauthorized'));
   await expectRejection('agent key not granted to storage policy', 'BLOCKED: signing key is not authorized for this policy',
     () => execute(agent, STORAGE_POLICY, vendorId, ONE_NEAR / 10n, 'wrong policy'));
   await expectRejection('signed token mismatch', 'BLOCKED: policy token does not match expected token',
@@ -291,8 +284,8 @@ async function main() {
   // This intentionally broader TEST key can invoke set_policy, isolating the
   // deposit guard from the production agent key's separate method restriction.
   const probeKey = KeyPair.fromRandom('ed25519');
-  await addRestrictedKey(bouncer, bouncerId, probeKey, ['set_policy']);
-  const probe = accountFor(bouncerId, probeKey);
+  await addRestrictedKey(owner, bouncerId, probeKey, ['set_policy']);
+  const probe = accountFor(ownerConfig.accountId, probeKey);
   const escalation = { policy_id: 'pwn', token: WNEAR, per_tx_cap: (999n * ONE_NEAR).toString(), daily_cap: null };
   await expectRejection('zero-deposit policy escalation (contract)',
     'ESCALATION BLOCKED: owner-only method requires exactly 1 yoctoNEAR',
@@ -300,24 +293,24 @@ async function main() {
   await expectRejection('one-yocto policy escalation (NEAR protocol)',
     /DepositWithFunctionCall|deposit with a function call action is not allowed with a function call access key/i,
     () => callFrom(probe, bouncerId, 'set_policy', escalation, YOCTO));
-  const deleted = await bouncer.deleteKey(probeKey.getPublicKey());
+  const deleted = await owner.deleteKey(probeKey.getPublicKey());
   assertReceiptsSucceeded(deleted, 'delete probe key');
   console.log(`    ✅ test probe key removed  tx: ${txUrl(deleted.transaction_outcome.id)}`);
 
   console.log('\n=== 13) Last-payee revocation fails closed ===');
-  await callFrom(bouncer, bouncerId, 'revoke_payee', { policy_id: COMPUTE_POLICY, payee: vendorId }, YOCTO);
+  await callFrom(owner, bouncerId, 'revoke_payee', { policy_id: COMPUTE_POLICY, payee: vendorId }, YOCTO);
   await expectRejection('empty allowlist', 'BLOCKED: payee not in allowlist',
     () => execute(agent, COMPUTE_POLICY, vendorId, ONE_NEAR / 10n, 'revoked'));
-  await callFrom(bouncer, bouncerId, 'allow_payee', { policy_id: COMPUTE_POLICY, payee: vendorId }, YOCTO);
+  await callFrom(owner, bouncerId, 'allow_payee', { policy_id: COMPUTE_POLICY, payee: vendorId }, YOCTO);
 
   console.log('\n=== 14) Agent grant can be revoked ===');
-  await callFrom(bouncer, bouncerId, 'revoke_agent_key', {
+  await callFrom(owner, bouncerId, 'revoke_agent_key', {
     policy_id: COMPUTE_POLICY, public_key: agentKey.getPublicKey().toString(),
   }, YOCTO);
   await expectRejection('revoked agent key', 'BLOCKED: signing key is not authorized for this policy',
     () => execute(agent, COMPUTE_POLICY, vendorId, ONE_NEAR / 10n, 'revoked key'));
   // Restore the demo key for follow-on work, after the revocation was proven.
-  await callFrom(bouncer, bouncerId, 'grant_agent_key', {
+  await callFrom(owner, bouncerId, 'grant_agent_key', {
     policy_id: COMPUTE_POLICY, public_key: agentKey.getPublicKey().toString(),
   }, YOCTO);
 
@@ -326,7 +319,7 @@ async function main() {
   const vendorBalance = await view(WNEAR, 'ft_balance_of', { account_id: vendorId });
   const vaultBalance = await view(bouncerId, 'vault_balance', { token: WNEAR });
   const tokenBalance = await view(WNEAR, 'ft_balance_of', { account_id: bouncerId });
-  assertAmount(userBalance, ONE_NEAR / 2n, 'user wNEAR');
+  assertAmount(userBalance, initialUserBalance + ONE_NEAR / 2n, 'user wNEAR');
   assertAmount(vendorBalance, ONE_NEAR / 10n, 'vendor wNEAR');
   assertAmount(vaultBalance, 14n * ONE_NEAR / 10n, 'recorded vault wNEAR');
   assertAmount(tokenBalance, 14n * ONE_NEAR / 10n, 'actual vault wNEAR');

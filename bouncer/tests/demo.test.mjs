@@ -5,17 +5,28 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import nearApi from 'near-api-js';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
-function runDemo(mode = '') {
+function runDemo(mode = '', { ownerCredential = true } = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'bouncer-demo-test-'));
   try {
+    if (ownerCredential) {
+      // A fresh throwaway key in a disposable HOME; the NEAR transport below
+      // is mocked and no real wallet credential is read or network call made.
+      const credentialDir = path.join(home, '.near-credentials', 'testnet');
+      fs.mkdirSync(credentialDir, { recursive: true, mode: 0o700 });
+      const key = nearApi.KeyPair.fromRandom('ed25519');
+      fs.writeFileSync(path.join(credentialDir, 'great_mujey.testnet.json'),
+        JSON.stringify({ account_id: 'great_mujey.testnet', private_key: key.toString() }), { mode: 0o600 });
+    }
     return spawnSync(process.execPath, [
       '--import=./bouncer/tests/mock-near.mjs', 'bouncer/demo-all.mjs',
     ], {
       cwd: repo,
-      env: { ...process.env, HOME: home, NODE_OPTIONS: '--require=./bouncer/quiet.cjs', BOUNCER_MOCK_MODE: mode },
+      env: { ...process.env, HOME: home, NODE_OPTIONS: '--require=./bouncer/quiet.cjs', BOUNCER_MOCK_MODE: mode,
+        BOUNCER_OWNER_ACCOUNT: 'great_mujey.testnet', NEAR_TESTNET_RPC: 'https://test.rpc.fastnear.com' },
       encoding: 'utf8', timeout: 30_000,
     });
   } finally {
@@ -35,6 +46,20 @@ test('full demo uses gas units, runs with quiet preload, and verifies settlement
   assert.match(result.stdout, /one-yocto policy escalation \(NEAR protocol\): rejected as expected/);
   assert.match(result.stdout, /payment signed by a restricted agent key/);
   assert.match(result.stdout, /Failed transfer refunded vault and daily budget/);
+});
+
+test('funded-owner demo fails closed without a local credential', () => {
+  const result = runDemo('', { ownerCredential: false });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /No local NEAR testnet credential for great_mujey\.testnet/);
+  assert.doesNotMatch(result.stdout, /contract account.*created under/);
+});
+
+test('funded-owner demo accounts for an existing wNEAR balance', () => {
+  const result = runDemo('existing_wnear');
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /user:\s+1\.5 wNEAR/);
+  assert.match(result.stdout, /All checks passed/);
 });
 
 test('security demo refuses a non-testnet RPC before creating accounts', () => {
@@ -97,7 +122,7 @@ test('refund proof rejects a missing failed receipt, missing callback, or unrefu
 test('fresh security-demo account setup retries only one explicit pre-admission expiry', () => {
   const recovered = runDemo('setup_expired_once');
   assert.equal(recovered.status, 0, recovered.stderr);
-  assert.match(recovered.stderr, /Testnet security setup create user: explicit expired transaction; retrying once/);
+  assert.match(recovered.stderr, /Testnet security setup create contract account under funded owner: explicit expired transaction; retrying once/);
   assert.match(recovered.stdout, /All checks passed/);
   for (const mode of ['setup_expired_twice', 'setup_timeout', 'setup_expired_with_outcome']) {
     const result = runDemo(mode);

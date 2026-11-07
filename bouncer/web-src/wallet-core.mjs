@@ -96,6 +96,12 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
   const ownerStatus = doc.querySelector('#wallet-owner-status');
   const bufferReadiness = doc.querySelector('#wallet-buffer-readiness');
   const bufferReadinessStatus = doc.querySelector('#wallet-buffer-readiness-status');
+  const bufferSetupStart = doc.querySelector('#wallet-buffer-setup-start');
+  const bufferSetupPanel = doc.querySelector('#wallet-buffer-setup-panel');
+  const bufferSetupTerms = doc.querySelector('#wallet-buffer-setup-terms');
+  const bufferSetupReserve = doc.querySelector('#wallet-buffer-setup-reserve');
+  const bufferSetupApprove = doc.querySelector('#wallet-buffer-setup-approve');
+  const bufferSetupStatus = doc.querySelector('#wallet-buffer-setup-status');
   const setupRecovery = doc.querySelector('#wallet-setup-recovery');
   const setupRecoveryStatus = doc.querySelector('#wallet-setup-recovery-status');
   const setupRecoveryForm = doc.querySelector('#wallet-setup-recovery-form');
@@ -111,6 +117,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
       !ethereumInfoPanel || !ethereumContinue || !ethereumBack) return;
 
   const approved = doc.querySelector('meta[name="bouncer-wallet-origin"]')?.content || '';
+  const previewModeMessage = 'Preview mode: Bouncer spending setup is read-only unless its backend is enabled. Some wallets may request their own setup; review every wallet prompt.';
   const allowedIds = new Set([...WALLET_MANIFEST.wallets.map(wallet => wallet.id), 'wallet-connect']);
   let connector, selectedWallet = null, connected = false, connectedAccount = '', ready = false, busyState = false, opener = null;
   let wcProjectId = '', wcHandle = null, wcAbort = null, wcPairing = false, wcUri = '', wcClockSkew = false;
@@ -120,6 +127,8 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
   // In-memory proof only, bound to the selected session. It never grants
   // spending access, authenticates a backend, or survives account changes.
   let ownerVerification = null, ownerSessionVersion = 0, setupRecoveryAvailable = false, setupRecoverySelection = null, matchedOriginal = null;
+  let bufferSetupDraft = null;
+  const bufferSetupStages = ['create_keyless_vault', 'register_vault_circle', 'fund_vault_circle'];
   let bannerTimer;
   const trusted = new Set(WALLET_MANIFEST.wallets);
   const walletReadFetch = createOwnerKeyFallbackFetch({ fetch:win.fetch.bind(win),
@@ -128,6 +137,20 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     doc.querySelectorAll('[data-wallet-label]').forEach(node => { node.textContent = label; });
   }
   function setStatus(message) { status.textContent = message; dialogStatus.textContent = message; }
+  setStatus(previewModeMessage);
+  function bufferSetupReviewText(review) {
+    const vaultAmount = review.stages?.[0]?.actions?.find(action => action.type === 'transfer')?.deposit_yocto;
+    const registrationAmount = review.stages?.[1]?.actions?.[0]?.deposit_yocto;
+    const fundingAmount = review.stages?.[2]?.actions?.[0]?.args?.amount;
+    if (![vaultAmount, registrationAmount, fundingAmount, review.fixed_product_price_atoms].every(value => typeof value === 'string')) {
+      throw new Error('SETUP_REVIEW_UNAVAILABLE');
+    }
+    return `Vault ${review.vault}. Stage 1 transfers ${formatPublicAmount(vaultAmount, 24)} NEAR and deploys the reviewed keyless contract (SHA-256 ${review.vault_wasm_sha256}); storage funds may remain locked. ` +
+      `Stage 2 registers the vault for Circle test USDC with ${formatPublicAmount(registrationAmount, 24)} NEAR. ` +
+      `Stage 3 deposits ${formatPublicAmount(fundingAmount, 6)} test USDC into the vault, not to Buffer. ` +
+      `The reviewed Buffer product costs ${formatPublicAmount(review.fixed_product_price_atoms, 6)} test USDC and is a separate later payment. ` +
+      'Each stage needs its own wallet approval; no order is created here.';
+  }
   function notify(message, persistent = false) {
     if (!banner) return;
     clearTimeout(bannerTimer);
@@ -140,6 +163,9 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
   function hideBanner() { clearTimeout(bannerTimer); if (banner) banner.hidden = true; }
   function renderControls() {
     const viewing = Boolean(viewedAccount);
+    // Rendering must not erase a wallet error or an uncertain onboarding result.
+    // The preview explanation is set at initialization, while each operation
+    // sets its own status explicitly.
     optionsBox.hidden = connected || wcPairing || accountEntry || ethereumInfo || viewing;
     if (wcPanel) wcPanel.hidden = !wcPairing;
     accountEntryPanel.hidden = !accountEntry;
@@ -159,6 +185,19 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
       const experimentalPreview = /^4173-[a-z0-9-]+\.e2b\.app$/i.test(win.location.hostname);
       bufferReadiness.hidden = !(experimentalPreview && ownerVerified && connectedAccount === 'great_mujey.testnet');
       bufferReadiness.disabled = busyState;
+    }
+    const setupEnabled = setupRecoveryAvailable && ownerVerified && connectedAccount === 'great_mujey.testnet';
+    if (bufferSetupStart) { bufferSetupStart.hidden = !setupEnabled; bufferSetupStart.disabled = busyState; }
+    if (bufferSetupPanel) bufferSetupPanel.hidden = !setupEnabled || !bufferSetupDraft;
+    if (bufferSetupReserve) {
+      bufferSetupReserve.hidden = !bufferSetupDraft || bufferSetupDraft.reserved || bufferSetupDraft.stopped;
+      bufferSetupReserve.disabled = busyState;
+    }
+    if (bufferSetupApprove) {
+      bufferSetupApprove.hidden = !bufferSetupDraft?.reserved || bufferSetupDraft.stopped || bufferSetupDraft.complete;
+      bufferSetupApprove.disabled = busyState;
+      const stage = bufferSetupStages[bufferSetupDraft?.stageIndex ?? -1];
+      bufferSetupApprove.textContent = stage ? `Approve ${stage.replaceAll('_', ' ')} →` : 'Approve next wallet transaction →';
     }
     if (setupRecovery) {
       setupRecovery.hidden = !(setupRecoveryAvailable && ownerVerified && connectedAccount === 'great_mujey.testnet');
@@ -202,9 +241,11 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
   function busy(value) { busyState = value; renderControls(); }
   function clearAccountView() {
     accountReadVersion++;
-    ownerSessionVersion++; ownerVerification = null; setupRecoveryAvailable = false; setupRecoverySelection = null; matchedOriginal = null;
+    ownerSessionVersion++; ownerVerification = null; setupRecoveryAvailable = false; setupRecoverySelection = null; matchedOriginal = null; bufferSetupDraft = null;
     if (ownerStatus) { ownerStatus.hidden = true; ownerStatus.textContent = ''; }
     if (bufferReadinessStatus) { bufferReadinessStatus.hidden = true; bufferReadinessStatus.textContent = ''; }
+    if (bufferSetupTerms) bufferSetupTerms.textContent = '';
+    if (bufferSetupStatus) bufferSetupStatus.textContent = '';
     if (setupRecoveryStatus) { setupRecoveryStatus.hidden = true; setupRecoveryStatus.textContent = ''; }
     if (setupOriginal) setupOriginal.value = '';
     accountRead?.abort(); accountRead = null;
@@ -417,7 +458,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
         const { wallet, accounts } = await connector.getConnectedWallet();
         acceptAccounts(wallet, accounts);
       } catch { showDisconnected('Previous wallet session could not be restored. You can connect again.'); }
-    } else showDisconnected();
+    } else showDisconnected(previewModeMessage);
     renderControls();
   } catch {
     setStatus('Wallet connector could not initialize. Check browser storage and try reloading.');
@@ -476,6 +517,96 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     } catch {
       if (stillCurrent() && bufferReadinessStatus) bufferReadinessStatus.textContent = 'The read-only setup check is unavailable. No transaction was requested; nothing was spent.';
     } finally { busy(false); if (stillCurrent()) renderControls(); }
+  });
+  bufferSetupStart?.addEventListener('click', async () => {
+    const wallet = selectedWallet, accountId = connectedAccount, version = ownerSessionVersion, proof = ownerVerification;
+    if (busyState || !setupRecoveryAvailable || !connected || accountId !== 'great_mujey.testnet' ||
+        proof?.wallet !== wallet || proof.accountId !== accountId) return;
+    const stillCurrent = () => connected && selectedWallet === wallet && connectedAccount === accountId &&
+      ownerSessionVersion === version && ownerVerification === proof;
+    busy(true); bufferSetupDraft = null;
+    if (bufferSetupStatus) bufferSetupStatus.textContent = 'Refreshing the testnet snapshot and preparing an unsigned review. No transaction is requested.';
+    try {
+      const result = await fetchBufferReadinessPreview({ fetch: win.fetch.bind(win), onProgress: message => {
+        if (stillCurrent() && bufferSetupStatus) bufferSetupStatus.textContent = message;
+      } });
+      if (!stillCurrent()) return;
+      const { snapshot, review, task_id: taskId } = result;
+      if (snapshot?.owner !== accountId || review?.owner !== accountId || review.signing_or_broadcast_authorized !== false ||
+          review.wallet_approval_obtained !== false || snapshot.signed !== false || snapshot.sent !== false ||
+          !/^[a-f0-9]{32}$/.test(taskId ?? '') || review.stages?.length !== 3) throw new Error('SETUP_REVIEW_UNAVAILABLE');
+      const terms = bufferSetupReviewText(review);
+      bufferSetupDraft = { review, taskId, identity: null, stageIndex: 0, reserved: false, stopped: false, complete: false };
+      if (bufferSetupTerms) bufferSetupTerms.textContent = terms;
+      if (bufferSetupStatus) bufferSetupStatus.textContent = 'Review the exact amounts above. The next step signs an off-chain reservation message only; it sends no transaction.';
+    } catch {
+      if (stillCurrent() && bufferSetupStatus) bufferSetupStatus.textContent = 'A fresh setup review is unavailable. No transaction was requested.';
+    } finally { busy(false); if (stillCurrent()) renderControls(); }
+  });
+  bufferSetupReserve?.addEventListener('click', async () => {
+    const wallet = selectedWallet, accountId = connectedAccount, version = ownerSessionVersion, proof = ownerVerification, draft = bufferSetupDraft;
+    if (busyState || !setupRecoveryAvailable || !draft || draft.reserved || draft.stopped || !connected ||
+        proof?.wallet !== wallet || proof.accountId !== accountId) return;
+    const stillCurrent = () => connected && selectedWallet === wallet && connectedAccount === accountId &&
+      ownerSessionVersion === version && ownerVerification === proof && bufferSetupDraft === draft;
+    let stopWalletPresentation = () => {};
+    busy(true); closePicker();
+    if (bufferSetupStatus) bufferSetupStatus.textContent = 'Approve the off-chain reservation message in your wallet. This is not a transaction.';
+    try {
+      if (['near-mobile', 'nightly-wallet', 'ledger'].includes(wallet.manifest.id)) stopWalletPresentation = decorateWalletPopup(wallet.manifest.id);
+      const client = createWitnessedSetupClient({ wallet, accountId, ownerPublicKey: proof.publicKey, location: win.location,
+        crypto: win.crypto, fetch: walletReadFetch, isCurrent: stillCurrent });
+      const reservation = await client.reserve({ taskId: draft.taskId, review: draft.review });
+      if (!stillCurrent()) return;
+      if (reservation?.status !== 'RESERVED_NOT_CLAIMED' || reservation.execution_authorized !== false || !reservation.identity) throw Error();
+      draft.identity = reservation.identity; draft.reserved = true;
+      if (bufferSetupStatus) bufferSetupStatus.textContent = 'The exact review is reserved in the database and independent witness. No transaction was sent. Approve only the next stage when ready.';
+    } catch {
+      if (stillCurrent()) {
+        draft.stopped = true;
+        if (bufferSetupStatus) bufferSetupStatus.textContent = 'Reservation may have committed without acknowledgement. Stop and use setup recovery; do not reserve or approve again.';
+      }
+    } finally { stopWalletPresentation(); busy(false); if (stillCurrent()) { renderControls(); hideBanner(); openPicker(opener); } }
+  });
+  bufferSetupApprove?.addEventListener('click', async () => {
+    const wallet = selectedWallet, accountId = connectedAccount, version = ownerSessionVersion, proof = ownerVerification, draft = bufferSetupDraft;
+    const stageId = bufferSetupStages[draft?.stageIndex ?? -1];
+    if (busyState || !setupRecoveryAvailable || !draft?.reserved || draft.stopped || draft.complete || !stageId ||
+        !connected || proof?.wallet !== wallet || proof.accountId !== accountId) return;
+    const stillCurrent = () => connected && selectedWallet === wallet && connectedAccount === accountId &&
+      ownerSessionVersion === version && ownerVerification === proof && bufferSetupDraft === draft;
+    let stopWalletPresentation = () => {};
+    busy(true); closePicker();
+    if (bufferSetupStatus) bufferSetupStatus.textContent = 'The next wallet prompt is for this one reviewed stage only. The client will record and reconcile its original before enabling another stage.';
+    try {
+      if (['near-mobile', 'nightly-wallet', 'ledger'].includes(wallet.manifest.id)) stopWalletPresentation = decorateWalletPopup(wallet.manifest.id);
+      const client = createWitnessedSetupClient({ wallet, accountId, ownerPublicKey: proof.publicKey, location: win.location,
+        crypto: win.crypto, fetch: walletReadFetch, isCurrent: stillCurrent });
+      const outcome = await client.approveStage({ identity: draft.identity, review: draft.review, stageId });
+      if (!stillCurrent()) return;
+      if (outcome?.status !== 'ORIGINAL_HASH_RETURNED' || typeof outcome.original_hash !== 'string' || outcome.do_not_retry !== true) {
+        draft.stopped = true;
+        if (bufferSetupStatus) bufferSetupStatus.textContent = 'The wallet result is unknown. Do not approve this stage again; use setup recovery to locate and reconcile the original.';
+        return;
+      }
+      const recorded = await client.recordOriginal({ identity: draft.identity, stageId, originalHash: outcome.original_hash });
+      if (!stillCurrent() || recorded?.status !== 'ORIGINAL_RECORDED') throw Error();
+      const reconciled = await client.reconcile({ identity: draft.identity, stageId, originalHash: outcome.original_hash });
+      const expected = stageId === bufferSetupStages[2] ? 'FINAL_FUNDING_RECEIPTS_MATCH' : 'FINAL_SETUP_RECEIPT_MATCH';
+      if (!stillCurrent() || reconciled?.status !== expected) throw Error();
+      draft.stageIndex++;
+      if (draft.stageIndex === bufferSetupStages.length) {
+        const funded = await client.verifyFunded({ identity: draft.identity });
+        if (!stillCurrent() || funded?.status !== 'READ_ONLY_SETUP_STAGE_PROFILE_MATCH' || funded.spending_unlocked !== false) throw Error();
+        draft.complete = true;
+        if (bufferSetupStatus) bufferSetupStatus.textContent = 'All three setup transactions were reconciled at FINAL. The vault is funded; spending remains locked. No Buffer order or seller payment was made.';
+      } else if (bufferSetupStatus) bufferSetupStatus.textContent = `${stageId.replaceAll('_', ' ')} was reconciled at FINAL. Review the next stage above before approving it.`;
+    } catch {
+      if (stillCurrent()) {
+        draft.stopped = true;
+        if (bufferSetupStatus) bufferSetupStatus.textContent = 'This stage may have executed or been recorded without a verified result. Stop and use setup recovery; never approve it again.';
+      }
+    } finally { stopWalletPresentation(); busy(false); if (stillCurrent()) { renderControls(); hideBanner(); openPicker(opener); } }
   });
   ownerVerify?.addEventListener('click', async () => {
     const wallet = selectedWallet, accountId = connectedAccount, version = ownerSessionVersion;
@@ -550,8 +681,26 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
       if (!stillCurrent()) return;
       const last = result?.witnessed_records?.at(-1);
       setupRecoverySelection = result.status === 'WITNESSED' && last?.event === 'claim' && result.identity
-        ? { identity:result.identity, stageId:last.stage_id } : null;
+        ? { identity:result.identity, review:result.review, stageId:last.stage_id } : null;
       matchedOriginal = null; if (setupOriginal) setupOriginal.value = '';
+      if (result.status === 'WITNESSED' && result.identity && result.review && last?.event === 'reserve') {
+        bufferSetupDraft = { identity:result.identity, review:result.review, taskId:null, stageIndex:0,
+          reserved:true, stopped:false, complete:false };
+      } else if (result.status === 'WITNESSED' && result.identity && result.review && last?.event === 'original') {
+        const stageIndex = bufferSetupStages.indexOf(last.stage_id);
+        const reconciled = await client.reconcile({ identity:result.identity, stageId:last.stage_id, originalHash:last.original_hash });
+        const expected = last.stage_id === bufferSetupStages[2] ? 'FINAL_FUNDING_RECEIPTS_MATCH' : 'FINAL_SETUP_RECEIPT_MATCH';
+        if (!stillCurrent()) return;
+        if (stageIndex < 0 || reconciled?.status !== expected) throw Error();
+        bufferSetupDraft = { identity:result.identity, review:result.review, taskId:null, stageIndex:stageIndex + 1,
+          reserved:true, stopped:false, complete:false };
+        if (bufferSetupDraft.stageIndex === bufferSetupStages.length) {
+          const funded = await client.verifyFunded({ identity:result.identity });
+          if (!stillCurrent() || funded?.status !== 'READ_ONLY_SETUP_STAGE_PROFILE_MATCH' || funded.spending_unlocked !== false) throw Error();
+          bufferSetupDraft.complete = true;
+        }
+      }
+      if (bufferSetupDraft?.review && bufferSetupTerms) bufferSetupTerms.textContent = bufferSetupReviewText(bufferSetupDraft.review);
       const message = result.status === 'NO_LOCAL_RECORD'
         ? 'No setup is recorded in this witness. That does not prove there was no prompt elsewhere. No transaction was requested.'
         : result.status === 'RECOVERY_REQUIRED'
@@ -559,7 +708,10 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
           : last?.event === 'claim'
             ? `The ${last.stage_id} prompt was claimed but no original hash is recorded. Do not repeat it. Check wallet history for the original.`
             : last?.event === 'original'
-              ? `Witnessed ${last.stage_id} original: ${last.original_hash}. This alone does not prove final execution. Do not resend it.`
+              ? bufferSetupDraft?.complete ? 'All setup originals are reconciled at FINAL. The vault is funded; spending remains locked.'
+                : `Witnessed ${last.stage_id} original: ${last.original_hash}. It was reconciled before any next stage. Do not resend it.`
+              : last?.event === 'reserve'
+                ? 'The witnessed setup reservation was restored. No wallet transaction was sent; you may review and approve stage 1.'
               : 'A setup reservation is recorded. No transaction or delivery is verified.';
       if (setupRecoveryStatus) setupRecoveryStatus.textContent = message;
       setStatus('Recovery check complete. No transaction was requested.');
@@ -634,9 +786,25 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
       })]);
       if (!stillCurrent()) return;
       if (result?.status !== 'ORIGINAL_RECORDED' || result.original_hash !== selected.originalHash || result.stage_id !== selected.stageId) throw Error();
-      if (setupRecoveryStatus) setupRecoveryStatus.textContent = `Original ${selected.originalHash} was recorded for recovery. Do not resend it; this is not a purchase or delivery.`;
+      const stageIndex = bufferSetupStages.indexOf(selected.stageId);
+      const reconciled = await client.reconcile({ identity:selected.identity, stageId:selected.stageId, originalHash:selected.originalHash });
+      const expected = selected.stageId === bufferSetupStages[2] ? 'FINAL_FUNDING_RECEIPTS_MATCH' : 'FINAL_SETUP_RECEIPT_MATCH';
+      if (!stillCurrent() || stageIndex < 0 || reconciled?.status !== expected) throw Error();
+      bufferSetupDraft = { identity:selected.identity, review:selected.review, taskId:null, stageIndex:stageIndex + 1,
+        reserved:true, stopped:false, complete:false };
+      if (bufferSetupTerms) bufferSetupTerms.textContent = bufferSetupReviewText(selected.review);
+      if (bufferSetupDraft.stageIndex === bufferSetupStages.length) {
+        const funded = await client.verifyFunded({ identity:selected.identity });
+        if (!stillCurrent() || funded?.status !== 'READ_ONLY_SETUP_STAGE_PROFILE_MATCH' || funded.spending_unlocked !== false) throw Error();
+        bufferSetupDraft.complete = true;
+      }
+      const message = bufferSetupDraft.complete
+        ? 'All setup originals are reconciled at FINAL. The vault is funded; spending remains locked.'
+        : `Original ${selected.originalHash} was reconciled at FINAL. Review the next setup stage before approving it.`;
+      if (setupRecoveryStatus) setupRecoveryStatus.textContent = message;
+      if (bufferSetupStatus) bufferSetupStatus.textContent = message;
       matchedOriginal = null; setupRecoverySelection = null;
-      setStatus('Original recorded. No transaction was requested.');
+      setStatus('Original reconciled. No transaction was requested.');
     } catch {
       if (stillCurrent()) {
         matchedOriginal = null;
