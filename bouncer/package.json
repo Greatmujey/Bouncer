@@ -50,6 +50,7 @@
     "demo": "node demo-multi-resource.mjs",
     "simulation": "echo \"Offline simulation only: open demo/index.html; no transactions are sent.\"",
     "build:web": "node scripts/build-web.mjs && node --check web/google-signin.mjs && node --check web/api/google-session.mjs",
+    "checkpoint:monitor": "node scripts/start-independent-setup-checkpoint.mjs",
     "mcp": "node mcp/server.mjs"
   },
   "license": "MIT",

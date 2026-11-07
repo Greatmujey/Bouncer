@@ -68,6 +68,21 @@ examples were **self-hosted development services**.
   checkpoint, so independent administration and a further independently
   retained latest revision remain essential. It cannot make the setup DB safe
   merely by placing both schemas in the same database.
+- `independent-setup-checkpoint.mjs` adds an authenticated machine-to-machine
+  checkpoint service/client. The separate monitor fetches the exact configured
+  Git branch and independently audits ancestry and every protected witness file
+  **before** database CAS, rather than trusting the setup server's assertion.
+  Its loopback-only bootstrap (`npm run checkpoint:monitor`) refuses missing
+  state; it does not provision a baseline, grant DB roles, configure TLS, or
+  deploy anything. The bearer belongs only in protected backend secrets, never
+  browser code, URLs, logs or the repository. Tests use disposable PostgreSQL,
+  local Git and an in-process fake HTTP transport. A real deployment still
+  needs a dedicated operator, least-privilege checkpoint DB role, HTTPS reverse
+  proxy, verified complete baseline, independent latest-revision monitoring,
+  incident procedures and performance testing. A privileged monitor or DB
+  operator can still forge or roll back the checkpoint. If the added network
+  round trips make a claim's five-second preflight expire, stop and reconcile;
+  do not reopen the wallet prompt.
 - `postgres-native-oracle-prompt-fence.mjs` atomically retains one review and
   four stage rows, checks earlier original receipts and fresh native preflights,
   and claims each prompt once. `witnessed-native-oracle-wallet-setup.mjs`

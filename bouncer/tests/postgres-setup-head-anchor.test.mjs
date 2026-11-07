@@ -9,6 +9,9 @@ import pg from 'pg';
 import nearApi from 'near-api-js';
 import { provisionPostgresSetupHeadAnchor,createPostgresSetupHeadAnchor } from '../agent/postgres-setup-head-anchor.mjs';
 import { createAnchoredSetupWitnessPair } from '../agent/anchored-setup-witness-pair.mjs';
+import { createGitNativeOraclePromptWitnessStore } from '../agent/git-branch-witness-store.mjs';
+import { createNativeOraclePromptWitness } from '../agent/git-native-oracle-prompt-witness.mjs';
+import { createGitAuditedSetupCheckpointServer,createIndependentSetupCheckpointClient,createIndependentGitHeadResolver } from '../agent/independent-setup-checkpoint.mjs';
 
 const url=process.env.BOUNCER_TEST_POSTGRES_URL;
 if(process.env.BOUNCER_REQUIRE_POSTGRES_TESTS==='1' && !url)throw Error('disposable PostgreSQL required');
@@ -92,4 +95,47 @@ dbtest('synthetic local Git witness commits advance a separately provisioned Pos
     git(work,['push','--force','origin',`${base}:refs/heads/${branch}`]);
     await assert.rejects(pair.native.inspect(owner),e=>code(e,'WITNESS_UNAVAILABLE'));
   }finally{fs.rmSync(root,{recursive:true,force:true})}
+}));
+
+dbtest('separate synthetic HTTP checkpoint independently audits Git before CAS and never retries a lost acknowledgement',async()=>database(async({db})=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'bouncer-independent-monitor-')),
+    git=(cwd,args)=>execFileSync('git',args,{cwd,encoding:'utf8',stdio:['ignore','pipe','pipe']}).trim();
+  let server;
+  try{
+    const bare=path.join(root,'remote.git'),work=path.join(root,'work'),monitor=path.join(root,'monitor');fs.mkdirSync(work);
+    git(root,['init','--bare','--initial-branch',branch,bare]);git(work,['init','--initial-branch',branch]);
+    git(work,['config','user.email','synthetic@example.test']);git(work,['config','user.name','Synthetic test']);
+    git(work,['remote','add','origin',bare]);fs.writeFileSync(path.join(work,'README.md'),'Synthetic only\n');
+    git(work,['add','README.md']);git(work,['commit','-m','Initial']);git(work,['push','origin',branch]);
+    const base=git(work,['rev-parse','HEAD']);git(root,['clone','--quiet','--branch',branch,bare,monitor]);
+    const cfg={pool:db,repository,branch,initialHead:base};await provisionPostgresSetupHeadAnchor({...cfg,operatorVerifiedCompleteBaseline:true});
+    const anchor=createPostgresSetupHeadAnchor(cfg),token=crypto.randomBytes(32).toString('base64url');
+    assert.throws(()=>createIndependentGitHeadResolver({repo:monitor,branch,remoteUrl:bare})); // local Git is tests only
+    server=createGitAuditedSetupCheckpointServer({anchor,repo:monitor,branch,remoteUrl:bare,token,allowLocalForTests:true});
+    await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));const local=`http://127.0.0.1:${server.address().port}`,origin='https://checkpoint.example.test';
+    const fetchImpl=(address,init)=>fetch(address.replace(origin,local),init);
+    const client=createIndependentSetupCheckpointClient({origin,token,fetch:fetchImpl});
+    assert.equal((await fetch(`${local}/v1/head`)).status,401);
+    assert.throws(()=>createIndependentSetupCheckpointClient({origin:'http://checkpoint.example.test',token}));
+    const before=await client.read(),owner='monitor-alice.testnet',identity={owner,
+      owner_public_key:String(nearApi.KeyPair.fromRandom('ed25519').getPublicKey()),operation_id:crypto.randomBytes(16).toString('hex'),
+      review_sha256:'b'.repeat(64),stages:['create_keyless_native_vault','configure_native_oracle_policy','fund_native_vault','install_native_oracle_agent']
+        .map((stage_id,i)=>({stage_id,action_commitment_sha256:String(i+1).repeat(64)}))};
+    const raw=createNativeOraclePromptWitness({store:createGitNativeOraclePromptWitnessStore({repo:work,branch,initialHead:base})});
+    const reserved=await raw.reserve(identity),after=await client.compareAndSet({expected:before,nextHead:reserved.head});
+    assert.equal(after.confirmed,true);assert.equal(after.head,reserved.head);assert.equal(after.revision,'1');
+    const file=`bouncer/evidence/native-oracle-prompt-witness-v1/${crypto.createHash('sha256').update(owner).digest('hex')}.jsonl`;
+    const old=fs.readFileSync(path.join(work,file));fs.unlinkSync(path.join(work,file));git(work,['add','-A']);git(work,['commit','-m','Malicious synthetic deletion']);
+    git(work,['push','origin',branch]);const unsafe=git(work,['rev-parse','HEAD']);
+    await assert.rejects(client.compareAndSet({expected:{head:after.head,revision:after.revision},nextHead:unsafe}));
+    assert.deepEqual(await client.read(),{head:after.head,revision:after.revision});
+    fs.writeFileSync(path.join(work,file),old);git(work,['add','-A']);git(work,['commit','-m','Restore synthetic witness']);git(work,['push','origin',branch]);
+    const repaired=git(work,['rev-parse','HEAD']);let lost=true;
+    const uncertain=createIndependentSetupCheckpointClient({origin,token,fetch:async(address,init)=>{
+      const response=await fetchImpl(address,init);if(address.endsWith('/compare-and-set')&&lost){lost=false;await response.body?.cancel();throw Error('synthetic lost response')}return response;
+    }});
+    await assert.rejects(uncertain.compareAndSet({expected:{head:after.head,revision:after.revision},nextHead:repaired}));
+    assert.deepEqual(await client.read(),{head:repaired,revision:'2'});
+    await assert.rejects(client.compareAndSet({expected:{head:after.head,revision:after.revision},nextHead:repaired}));
+  }finally{if(server)await new Promise(resolve=>server.close(resolve));fs.rmSync(root,{recursive:true,force:true})}
 }));
