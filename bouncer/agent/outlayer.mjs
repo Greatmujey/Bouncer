@@ -259,6 +259,7 @@ export async function runOutlayerGoal({ goal: rawGoal, provider, account, public
   if (!Array.isArray(verdict) || verdict.length !== 2 || typeof verdict[0] !== 'boolean') throw new Error('invalid policy verdict');
   if (!verdict[0]) { log(`[outlayer] BLOCKED ${goal.id}: ${String(verdict[1]).slice(0, 200)}`); return { status: 'BLOCKED' }; }
   if (!execute) { log(`[outlayer] READY ${goal.id}: at most ${goal.amount} yoctoNEAR to ${OUTLAYER} (dry run)`); return { status: 'READY' }; }
+  if (typeof provider.sendTransactionOnce !== 'function') throw new Error('live execution requires a bounded one-shot transaction transport');
   // Sign locally, persist the exact signed transaction hash and only then
   // broadcast. If the RPC times out or the process crashes, the journal can
   // be queried without signing or submitting another transaction. We do not
@@ -271,7 +272,7 @@ export async function runOutlayerGoal({ goal: rawGoal, provider, account, public
   journal.put(goal.id, pending);
   try {
     // Never retry this payment, including explicit expiry or a timeout.
-    const sent = await provider.sendTransactionUntil(signed, 'FINAL');
+    const sent = await provider.sendTransactionOnce(signed, 'FINAL');
     if (sent?.transaction_outcome?.id !== txHash) throw new Error('RPC returned a different or missing transaction hash');
     // Request raw receipts as well as outcomes; ordinary send_tx outcomes do
     // not establish the actual OutLayer refund transfer to the owner.

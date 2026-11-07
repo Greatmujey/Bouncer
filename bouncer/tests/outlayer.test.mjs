@@ -61,7 +61,7 @@ function fixture() {
       if (method === 'check') return [true, 'ok'];
       throw new Error(`unexpected view ${method}`);
     },
-    async sendTransactionUntil(signed, wait) {
+    async sendTransactionOnce(signed, wait) {
       sends++; assert.equal(wait, 'FINAL'); assert.equal(signed.transaction.receiverId, goal.contract_id);
       assert.equal(journal.get(goal.id).status, 'pending');
       assert.equal(journal.get(goal.id).tx_hash, hash); // persisted before broadcast
@@ -142,7 +142,7 @@ test('one send is journaled before broadcast; recovery reuses the exact transact
 
 test('dry-run recovery of an existing OutLayer hash is read-only', async () => {
   const f = fixture(); let sends = 0;
-  f.provider.sendTransactionUntil = async () => { sends++; throw new Error('response lost'); };
+  f.provider.sendTransactionOnce = async () => { sends++; throw new Error('response lost'); };
   await assert.rejects(run(f, { execute: true }), /do not resend automatically/);
   const pending = structuredClone(f.journal.get(goal.id));
   f.journal.put(goal.id, { ...pending, status: 'invalid' });
@@ -155,7 +155,7 @@ test('dry-run recovery of an existing OutLayer hash is read-only', async () => {
 
 test('ambiguous broadcast has a pre-signed hash and can recover without a signer or another payment', async () => {
   const f = fixture(); let broadcasts = 0;
-  f.provider.sendTransactionUntil = async () => {
+  f.provider.sendTransactionOnce = async () => {
     broadcasts++; assert.equal(f.journal.get(goal.id).tx_hash, hash);
     throw new Error('network timeout after possible broadcast');
   };
@@ -237,4 +237,13 @@ test('native OutLayer runner does not broadcast if the pending journal write fai
   const f = fixture(); f.journal.put = () => { throw new Error('simulated fsync failure'); };
   await assert.rejects(run(f, { execute: true }), /simulated fsync failure/);
   assert.equal(f.sends(), 0); assert.equal(f.state.size, 0);
+});
+
+test('live native execution requires one-shot transport and never falls back to a retrying sender', async () => {
+  const f = fixture(); let legacy = 0;
+  f.provider.sendTransactionOnce = undefined;
+  f.provider.sendTransactionUntil = async () => { legacy++; };
+  await assert.rejects(run(f, { execute: true }), /bounded one-shot transaction transport/);
+  assert.equal(f.state.size, 0); assert.equal(legacy, 0); assert.equal(f.sends(), 0);
+  assert.deepEqual(await run(f), { status: 'READY' });
 });

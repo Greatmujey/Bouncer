@@ -106,7 +106,7 @@ export function rootOf(result, batch, attempt, g) {
   // single AddKey stage without the body: the original trusted hash, exact
   // transaction actions, root link and root outcome were checked above. This
   // remains trusted-RPC evidence, not an independently verified receipt body.
-  if (!receipt && attempt.stage_id === 'install_restricted_agent_key' &&
+  if (!receipt && ['install_restricted_agent_key', 'install_native_oracle_agent'].includes(attempt.stage_id) &&
       attempt.signer_id === attempt.receiver_id && txOutcome.receipt_ids.length === 1 && txOutcome.receipt_ids[0] === id &&
       batch.actions.length === 1 && batch.actions[0].enum === 'addKey') {
     return { id, receipt: null, outcome, localReceiptOmitted: true };

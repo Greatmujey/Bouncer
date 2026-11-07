@@ -59,7 +59,7 @@ function fixture() {
       throw new Error(`unexpected view ${method}`);
     },
     async block(query) { assert.deepEqual(query, { blockId: blockHash }); return { header: { hash: blockHash, timestamp_nanosec: `${stamp + 8}000000000` } }; },
-    async sendTransactionUntil(signed, wait) {
+    async sendTransactionOnce(signed, wait) {
       sends++; assert.equal(wait, 'FINAL'); assert.equal(signed.transaction.receiverId, goal.contract_id);
       assert.equal(journal.get(goal.id).status, 'pending'); assert.equal(journal.get(goal.id).tx_hash, hash);
       return { transaction_outcome: { id: hash } };
@@ -157,7 +157,7 @@ test('dry run is read-only; a paid result is journaled before broadcast and reco
 
 test('dry-run recovery of a pending oracle hash leaves the journal untouched', async () => {
   const f = fixture(); let sends = 0;
-  f.provider.sendTransactionUntil = async () => { sends++; throw new Error('response lost'); };
+  f.provider.sendTransactionOnce = async () => { sends++; throw new Error('response lost'); };
   await assert.rejects(run(f, { execute: true }), /do not resend automatically/);
   const pending = structuredClone(f.journal.get(goal.id));
   f.journal.put(goal.id, { ...pending, status: 'invalid' });
@@ -170,7 +170,7 @@ test('dry-run recovery of a pending oracle hash leaves the journal untouched', a
 
 test('lost response recovers by hash without a key or second payment', async () => {
   const f = fixture(); let calls = 0;
-  f.provider.sendTransactionUntil = async () => { calls++; assert.equal(f.journal.get(goal.id).tx_hash, hash); throw new Error('timeout after possible broadcast'); };
+  f.provider.sendTransactionOnce = async () => { calls++; assert.equal(f.journal.get(goal.id).tx_hash, hash); throw new Error('timeout after possible broadcast'); };
   await assert.rejects(run(f, { execute: true }), /do not resend automatically/);
   assert.equal(f.journal.get(goal.id).status, 'pending');
   f.provider.viewAccessKey = async () => { throw new Error('key revoked'); };
@@ -238,4 +238,13 @@ test('oracle runner does not broadcast if the pending journal write fails', asyn
   const f = fixture(); f.journal.put = () => { throw new Error('simulated fsync failure'); };
   await assert.rejects(run(f, { execute: true }), /simulated fsync failure/);
   assert.equal(f.sends(), 0); assert.equal(f.entries.size, 0);
+});
+
+test('live oracle execution requires one-shot transport and never falls back to a retrying sender', async () => {
+  const f = fixture(); let legacy = 0;
+  f.provider.sendTransactionOnce = undefined;
+  f.provider.sendTransactionUntil = async () => { legacy++; };
+  await assert.rejects(run(f, { execute: true }), /bounded one-shot transaction transport/);
+  assert.equal(f.entries.size, 0); assert.equal(legacy, 0); assert.equal(f.sends(), 0);
+  assert.deepEqual(await run(f), { status: 'READY' }); // read-only preview needs no sender
 });

@@ -27,7 +27,7 @@ function fixture() {
       if (method === 'check') return [true, 'ok'];
       throw new Error('unexpected query');
     },
-    async sendTransactionUntil() { sends++; throw new Error('uncertain broadcast'); },
+    async sendTransactionOnce() { sends++; throw new Error('uncertain broadcast'); },
     async txStatusReceipts() { throw new Error('transaction unavailable'); },
   };
   const account = signing.newAccount();

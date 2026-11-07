@@ -229,6 +229,7 @@ export async function runOracleGoal({ goal: rawGoal, provider, account, publicKe
   if (!Array.isArray(verdict) || verdict.length !== 2 || typeof verdict[0] !== 'boolean') throw new Error('invalid policy verdict');
   if (!verdict[0]) { log(`[oracle] BLOCKED ${goal.id}: ${String(verdict[1]).slice(0, 200)}`); return { status: 'BLOCKED' }; }
   if (!execute) { log(`[oracle] READY ${goal.id}: at most ${goal.amount} yoctoNEAR to ${OUTLAYER} (dry run)`); return { status: 'READY' }; }
+  if (typeof provider.sendTransactionOnce !== 'function') throw new Error('live execution requires a bounded one-shot transaction transport');
   const { txHash, signed } = await signReviewedCall({ account, publicKey, ownerId: goal.owner_account_id, contractId: goal.contract_id,
     method: 'execute_outlayer_native_project', args: signedArgs(goal), gas: GAS });
   if (!validHash(txHash)) throw new Error('signer returned an invalid transaction hash');
@@ -237,7 +238,7 @@ export async function runOracleGoal({ goal: rawGoal, provider, account, publicKe
   journal.put(goal.id, pending);
   try {
     // Exactly one submission; even an explicit expiry or timeout is not retried.
-    const sent = await provider.sendTransactionUntil(signed, 'FINAL');
+    const sent = await provider.sendTransactionOnce(signed, 'FINAL');
     if (sent?.transaction_outcome?.id !== txHash) throw new Error('RPC returned a different or missing transaction hash');
     const chain = await provider.txStatusReceipts(txHash, goal.owner_account_id, 'FINAL');
     const delivery = await verifyOracleResult(goal, chain, publicKey, provider);

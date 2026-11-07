@@ -31,7 +31,7 @@ export function attachSyntheticOracle({ provider, goal, journal, events, ambiguo
     return call(receiver, method, args, ...rest);
   };
   provider.block = async () => ({ header: { hash: blockHash, timestamp_nanosec: `${stamp}000000000` } });
-  provider.sendTransactionUntil = async (signed, wait) => {
+  provider.sendTransactionOnce = async (signed, wait) => {
     if (signed.transaction.actions[0].functionCall.methodName !== 'execute_outlayer_native_project') return send(signed, wait);
     sourceSends++; events.push('real-source:pay');
     sourceHash = nearApi.utils.serialize.base_encode(crypto.createHash('sha256').update(nearApi.transactions.encodeTransaction(signed.transaction)).digest());
