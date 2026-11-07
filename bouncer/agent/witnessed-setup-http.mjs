@@ -42,10 +42,11 @@ async function readBody(req) {
   return JSON.parse(Buffer.concat(chunks, total).toString('utf8'));
 }
 
-export function createWitnessedSetupHttpHandler({ service, siteOrigin, wasmBytes, owner, now = Date.now } = {}) {
+export function createWitnessedSetupHttpHandler({ service, siteOrigin, wasmBytes, owner, now = Date.now, bodyTimeoutMs = 10_000 } = {}) {
   let site; try { site = new URL(siteOrigin); } catch { throw Error('fixed setup origin required'); }
   if (site.protocol !== 'https:' || site.origin !== siteOrigin || site.username || site.password ||
       site.pathname !== '/' || site.search || site.hash || !service || typeof now !== 'function' ||
+      !Number.isSafeInteger(bodyTimeoutMs) || bodyTimeoutMs < 10 || bodyTimeoutMs > 10_000 ||
       Object.values(specs).some(([method]) => typeof service[method] !== 'function') ||
       owner !== 'great_mujey.testnet' || !(wasmBytes instanceof Uint8Array) || wasmBytes.length !== 536651 ||
       crypto.createHash('sha256').update(wasmBytes).digest('hex') !== SHA) throw Error('fixed origin, reviewed artifact and authenticated setup service required');
@@ -74,8 +75,13 @@ export function createWitnessedSetupHttpHandler({ service, siteOrigin, wasmBytes
     if (pending >= 4 || requests >= 80) return reply(res, 429, { error:'unavailable' });
     pending++; requests++;
     try {
-      req.setTimeout(10_000, () => req.destroy());
-      const input = await readBody(req), [method, fields] = spec;
+      // Bound body upload time, not the authenticated operation. A legitimate
+      // setup preflight may wait for several relayed RPC reads; destroying its
+      // response socket mid-claim can leave a committed, unrecoverable prompt.
+      const timer = setTimeout(() => req.destroy(), bodyTimeoutMs); timer.unref?.();
+      let input;
+      try { input = await readBody(req); } finally { clearTimeout(timer); }
+      const [method, fields] = spec;
       if (!record(input) || Object.keys(input).length !== fields.length || fields.some(k => !Object.hasOwn(input, k))) {
         return reply(res, 400, { error:'invalid request' });
       }

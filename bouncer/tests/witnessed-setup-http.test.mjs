@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import http from 'node:http';
 import { createWitnessedSetupHttpHandler } from '../agent/witnessed-setup-http.mjs';
 import { createReadOnlyPreviewService } from '../agent/read-only-preview-service.mjs';
 import { wasm } from './buffer-wallet-setup-fixture.mjs';
@@ -66,4 +67,25 @@ enabledTest('a mismatched artifact or owner cannot enable the setup endpoint', (
   const changed = Buffer.from(wasm); changed[300] ^= 1;
   assert.throws(() => createWitnessedSetupHttpHandler({ ...common, wasmBytes:changed }));
   assert.throws(() => createWitnessedSetupHttpHandler({ ...common, siteOrigin:'https://phone.example.test/path' }));
+});
+
+
+enabledTest('the body deadline stops slow uploads without cutting off longer authenticated work', async () => {
+  const calls = [], service = syntheticService(calls);
+  service.issueInspect = async input => { await new Promise(resolve=>setTimeout(resolve,100)); calls.push(['issueInspect',input]); return {issued:true}; };
+  const handler = createWitnessedSetupHttpHandler({service,siteOrigin:SITE,wasmBytes:wasm,owner:'great_mujey.testnet',bodyTimeoutMs:30});
+  const server = http.createServer((req,res)=>handler(req,res,new URL(req.url,'http://test').pathname));
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const response = await post(base,'inspect-challenge',{ownerPublicKey:'synthetic'});
+    assert.equal(response.status,200); assert.equal((await response.json()).issued,true);
+    assert.equal(calls.length,1, 'the authenticated work may outlast the body deadline');
+    const failure = await new Promise(resolve => {
+      const req = http.request(`${base}/api/wallet-setup/inspect-challenge`,{method:'POST',headers:HEADER});
+      req.on('error',error=>resolve(error.code)); req.on('response',res=>{res.resume();resolve(`http-${res.statusCode}`);});
+      req.write('{'); setTimeout(()=>{if(!req.destroyed) req.end('}');},100);
+    });
+    assert.equal(failure,'ECONNRESET'); assert.equal(calls.length,1, 'a slow partial body must not reach the service');
+  } finally { await new Promise(resolve=>server.close(resolve)); }
 });
