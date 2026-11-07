@@ -46,8 +46,12 @@ establish seller service, audited code or delivery.
 hashes for those three setup batches against receipt-inclusive FINAL data from
 a trusted RPC. It rebuilds the canonical review from the retained historical
 snapshot and the exact pinned V12 artifact, checks the owner key, actions and
-root receipt, and for funding matches the token transfer event, vault callback
-and linked resolver. The historical snapshot is **not** a fresh preflight or
+root receipt, and for funding matches the token transfer event, vault callback,
+linked resolver and the entire linked action-receipt graph, allowing only
+protocol gas refunds to the original signer. The same closure check matched
+one [historical 6,898-atom V3 vault funding transaction](https://github.com/Greatmujey/Bouncer/actions/runs/42318044565)
+against an archival testnet RPC; that earlier transfer is not this new setup
+or an independent seller purchase. The historical snapshot is **not** a fresh preflight or
 proof of wallet control. The caller must retain the review digest, snapshot,
 owner key and original hash independently; a missing or ambiguous original is
 not permission to retry. Matches do not verify deployed code/current state,
