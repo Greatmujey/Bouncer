@@ -28,8 +28,21 @@ jobs:
           npm ci --ignore-scripts --no-audit --no-fund
           gh api repos/Greatmujey/Bouncer/git/blobs/16785505eaed13609d8e569e7b1665f89683d9eb --jq .content | base64 -d > "$RUNNER_TEMP/v12-reviewed.wasm"
           printf '%s  %s\n' '033f255c5822ff97495809f7d60fddf66f266f20c36285fe71296b66decc6d12' "$RUNNER_TEMP/v12-reviewed.wasm" | sha256sum -c -
-      - name: Publish the one-use read-only handoff public key
+      - name: Generate the one-use read-only handoff public key
+        id: handoff
         run: node scripts/generate-read-only-handoff-key.mjs
+      - name: Publish the first public-key fragment
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: bouncer-readonly-public-1-${{ steps.handoff.outputs.part1 }}
+          path: ${{ runner.temp }}/bouncer-read-only-handoff-public.txt
+          retention-days: 1
+      - name: Publish the second public-key fragment
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: bouncer-readonly-public-2-${{ steps.handoff.outputs.part2 }}
+          path: ${{ runner.temp }}/bouncer-read-only-handoff-public.txt
+          retention-days: 1
       - name: Run encrypted relay and browser pump without a wallet
         env:
           GH_TOKEN: ${{ github.token }}
