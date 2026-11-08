@@ -10,6 +10,11 @@ import { FileJournal } from '../agent/procurement.mjs';
 import { runNativeResource } from '../agent/mixed-mission.mjs';
 import { runNativeMission, validateNativeMission } from '../agent/native-mission.mjs';
 import { ORACLE_TESTNET_PROJECT, ORACLE_TESTNET_PROGRAM, ORACLE_PROJECT_ID, ORACLE_PROJECT_UUID } from '../agent/oracle-outlayer.mjs';
+import { createAuthenticatedNativeMissionService } from '../agent/authenticated-native-mission-service.mjs';
+import { createNativeMissionHttpServer } from '../agent/native-mission-http.mjs';
+import { nativeMissionApprovalMessage } from '../web-src/native-mission-auth.mjs';
+import { createNativeMissionClient } from '../web-src/native-mission-client.mjs';
+import { nep413Payload } from '../web-src/cli-login.mjs';
 
 const owner = 'owner.testnet', vault = 'bouncer.testnet';
 const storageCodeHash = nearApi.utils.serialize.base_encode(Buffer.alloc(32, 42));
@@ -391,3 +396,53 @@ test('a lost preceding original prevents dependent storage until original-hash r
   const result = await f.invoke({ execute: true });
   assert.equal(result.status, 'FULFILLED'); assert.equal(result.new_payments, 2); assert.equal(f.sends, 3);
 }, { storage: true, ambiguous: true }));
+
+test('browser approval reaches all three actual guarded runners and original-only recovery on a synthetic chain', () => withFixture(async f => {
+  const site = 'https://bouncer.example', ownerPair = nearApi.KeyPair.fromRandom('ed25519');
+  const ownerPublicKey = String(ownerPair.getPublicKey()); let saved, prompts = 0;
+  const auth = {
+    async issue(action) {
+      const issued = Date.now(), expires = issued + 120_000, nonce = crypto.randomBytes(32);
+      const challenge = { challenge_id:'1'.repeat(32), nonce_base64:nonce.toString('base64'), recipient:'bouncer.example', expires_at_ms:expires,
+        message:nativeMissionApprovalMessage(action,crypto.createHash('sha256').update(JSON.stringify(action)).digest('hex'),site,issued,expires) };
+      saved = {action:structuredClone(action),challenge,nonce,used:false}; return challenge;
+    },
+    async authenticate({action,evidence}) {
+      if (!saved || saved.used || JSON.stringify(action)!==JSON.stringify(saved.action) || evidence?.challenge_id!==saved.challenge.challenge_id ||
+          evidence.accountId!==owner || evidence.publicKey!==ownerPublicKey) return false;
+      const payload=nep413Payload({message:saved.challenge.message,nonce:new Uint8Array(saved.nonce),recipient:saved.challenge.recipient});
+      const digest=crypto.createHash('sha256').update(payload).digest();
+      if (!ownerPair.getPublicKey().verify(digest,Buffer.from(evidence.signature,'base64'))) return false;
+      saved.used=true; return true;
+    },
+  };
+  const service=createAuthenticatedNativeMissionService({mission:f.mission,provider:f.provider,signers:f.signers,journal:f.journal,auth});
+  const server=createNativeMissionHttpServer({service,siteOrigin:site});
+  await new Promise((resolve,reject)=>server.listen(0,'127.0.0.1',resolve).once('error',reject));
+  const local=`http://127.0.0.1:${server.address().port}`;
+  const fetchForBrowser=(url,options={}) => url==='https://test.rpc.fastnear.com'
+    ? Promise.resolve(new Response(JSON.stringify({jsonrpc:'2.0',id:'bouncer-cli-login',result:{permission:'FullAccess'}})))
+    : fetch(`${local}${url}`,{...options,headers:{...options.headers,origin:site}});
+  const wallet={manifest:{id:'meteor-wallet'},async signMessage({message,nonce,recipient,signerId}){
+    prompts++; assert.equal(signerId,owner); const payload=nep413Payload({message,nonce,recipient});
+    const digest=crypto.createHash('sha256').update(payload).digest();
+    return {accountId:owner,publicKey:ownerPublicKey,signature:Buffer.from(ownerPair.sign(digest).signature).toString('base64')};
+  }};
+  const client=createNativeMissionClient({wallet,accountId:owner,ownerPublicKey,location:{origin:site,host:'bouncer.example'},
+    crypto:crypto.webcrypto,fetch:fetchForBrowser});
+  try {
+    const {review,preview}=await client.preview(); assert.equal(preview.status,'READY'); assert.equal(f.sends,0); assert.equal(prompts,0);
+    const result=await client.approve(review); assert.equal(result.status,'FULFILLED'); assert.equal(result.new_payments,3);
+    assert.equal(f.sends,3); assert.equal(prompts,1);
+    assert.deepEqual(result.deliveries.map(item=>item.kind),['random','oracle','storage']);
+    const stored=JSON.parse(result.deliveries[2].delivery.result.value);
+    assert.deepEqual(stored.resources.map(item=>item.goal_id),['compute','price']);
+    assert.deepEqual(stored.resources.map(item=>item.tx_hash),result.deliveries.slice(0,2).map(item=>item.delivery.tx_hash));
+    const originals=await client.originals(review); assert.equal(originals.originals.length,3);
+    assert.deepEqual(originals.originals.map(item=>item.status),['completed','completed','completed']);
+    const recovered=await client.recover(review); assert.equal(recovered.status,'RECOVERED'); assert.equal(recovered.new_payments,0);
+    assert.deepEqual(recovered.deliveries.map(item=>item.delivery.tx_hash),result.deliveries.map(item=>item.delivery.tx_hash));
+    assert.equal(f.sends,3); assert.equal(prompts,1);
+    await assert.rejects(client.approve(review),/UNAVAILABLE/); assert.equal(f.sends,3);
+  } finally { await new Promise(resolve=>server.close(resolve)); }
+}, {storage:true}));

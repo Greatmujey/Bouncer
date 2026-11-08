@@ -38,6 +38,12 @@ jobs:
       - name: Install test dependencies
         working-directory: bouncer
         run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Build fabricated sandbox-only provider
+        working-directory: bouncer/integration/fake-outlayer
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/bouncer/contracts/bouncer/target
+          RUSTFLAGS: '-C link-arg=-s'
+        run: cargo build --locked --target wasm32-unknown-unknown --release
       - name: Download pinned isolated nearcore
         working-directory: bouncer
         run: |
@@ -57,6 +63,19 @@ jobs:
             exit 1
           fi
           cat "$RUNNER_TEMP/v14-sandbox-result.log"
+      - name: Exercise three guarded legs against a fabricated local provider
+        working-directory: bouncer
+        env:
+          BOUNCER_SANDBOX_BIN: ${{ runner.temp }}/near-sandbox
+          BOUNCER_V14_WASM_PATH: ${{ github.workspace }}/bouncer/contracts/bouncer/target/wasm32-unknown-unknown/release/bouncer.wasm
+          BOUNCER_FAKE_OUTLAYER_WASM_PATH: ${{ github.workspace }}/bouncer/contracts/bouncer/target/wasm32-unknown-unknown/release/bouncer_fake_outlayer.wasm
+        run: |
+          ulimit -Sn 65535
+          if ! node integration/native-mission-v14-sandbox.mjs > "$RUNNER_TEMP/v14-mission-result.log" 2>&1; then
+            python3 -c 'import os; s=open(os.environ["RUNNER_TEMP"]+"/v14-mission-result.log").read()[-4500:]; print("::error title=Isolated three-leg mission failed::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
+            exit 1
+          fi
+          cat "$RUNNER_TEMP/v14-mission-result.log"
       - uses: actions/upload-artifact@v4
         with:
           name: experimental-v14-testnet-wasm
