@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
+import nearApi from 'near-api-js';
 import { inspectV14MobileArtifact, METEOR_MOBILE_BRIDGE_LIMIT } from '../scripts/inspect-v14-mobile-artifact.mjs';
 
 const magic = Buffer.from([0,97,115,109,1,0,0,0]);
@@ -11,6 +12,7 @@ test('V14 artifact inspection reports a necessary Meteor size bound, not compati
   const bytes = stub(300_001), result = inspectV14MobileArtifact(bytes);
   assert.equal(result.wasm_bytes, bytes.length);
   assert.equal(result.sha256, crypto.createHash('sha256').update(bytes).digest('hex'));
+  assert.equal(result.near_code_hash, nearApi.utils.serialize.base_encode(Buffer.from(result.sha256, 'hex')));
   assert.equal(result.raw_base64_bytes, bytes.toString('base64').length);
   assert.equal(METEOR_MOBILE_BRIDGE_LIMIT, 400_000);
   assert.equal(result.raw_code_field_exceeds_meteor_limit, true);

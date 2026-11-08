@@ -99,6 +99,13 @@ persistent journal, owner-authorized fresh V14 vault, policies/allowlists and
 scoped agent keys. There is no complete browser provisioning flow for that
 setup yet. A static Netlify or Vercel deployment alone cannot run missions.
 
+Mobile V14 provisioning is also unresolved. CI measures the artifact size, but
+fitting a code field within a bridge limit would not verify the complete wallet
+request. A published NEAR global contract referenced by immutable code hash could
+reduce a wallet payload, but the [pinned Meteor mobile bridge](https://github.com/Meteor-Wallet/meteor_wallet_sdk/blob/53a8b39d1aaaf067502c11e49ebb050c75df019e/packages/meteor-sdk-v1/src/MeteorConnect/target_clients/mobile_bridge/sdkActionToMobileBridge.ts)
+does not map `UseGlobalContract`. Bouncer does not currently implement or
+claim a global-contract setup route; no global artifact was published here.
+
 A static Netlify build is provided by the root `netlify.toml`. Its staging
 script approves exactly the dedicated HTTPS site URL supplied by Netlify (or
 `BOUNCER_WALLET_ORIGIN`), rather than trusting every Netlify preview origin.
@@ -121,7 +128,7 @@ offline tests only.
 
 Unit tests use synthetic FINAL receipts and ephemeral keys for three-leg
 sequencing, budget checks, storage readback, authentication, challenge
-replay/tampering, unknown results and original-only recovery. A separate
+replay/tampering, unknown results and original-only recovery. Separate
 loopback-only nearcore scenarios exercise a disposable V14 contract and all
 three real guarded JS runners. The three-leg scenario uses a fabricated local
 provider: its outputs are not independent OutLayer execution, although the

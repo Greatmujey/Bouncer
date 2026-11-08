@@ -11,6 +11,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { deflateRawSync } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
+import nearApi from 'near-api-js';
 
 const MAGIC = Buffer.from([0, 97, 115, 109, 1, 0, 0, 0]);
 const MARKER = Buffer.from('bouncer-agent-v14-native-storage-testnet');
@@ -26,9 +27,11 @@ export function inspectV14MobileArtifact(input) {
   }
   const compressed = deflateRawSync(wasm, { level: 9 });
   const base64Bytes = 4 * Math.ceil(wasm.length / 3);
+  const digest = crypto.createHash('sha256').update(wasm).digest();
   return Object.freeze({
     wasm_bytes: wasm.length,
-    sha256: crypto.createHash('sha256').update(wasm).digest('hex'),
+    sha256: digest.toString('hex'),
+    near_code_hash: nearApi.utils.serialize.base_encode(digest),
     raw_base64_bytes: base64Bytes,
     meteor_bridge_limit_bytes: METEOR_MOBILE_BRIDGE_LIMIT,
     raw_code_field_exceeds_meteor_limit: base64Bytes > METEOR_MOBILE_BRIDGE_LIMIT,
@@ -44,7 +47,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     const result = inspectV14MobileArtifact(fs.readFileSync(process.argv[2]));
     console.log(JSON.stringify(result));
     if (process.env.GITHUB_ACTIONS === 'true') {
-      console.log(`::notice title=V14 mobile artifact size::WASM ${result.wasm_bytes} bytes; raw base64 code ${result.raw_base64_bytes} bytes; Meteor request limit ${result.meteor_bridge_limit_bytes} bytes; deflate-only research ${result.experimental_deflate_base64_bytes} bytes. Size alone does not establish wallet support or a safe loader.`);
+      console.log(`::notice title=V14 mobile artifact size::WASM ${result.wasm_bytes} bytes; NEAR code hash ${result.near_code_hash}; raw base64 code ${result.raw_base64_bytes} bytes; Meteor request limit ${result.meteor_bridge_limit_bytes} bytes; deflate-only research ${result.experimental_deflate_base64_bytes} bytes. Size alone does not establish wallet support or a safe loader.`);
     }
   } catch (error) {
     console.error(`V14 size inspection failed: ${error.message}`); process.exitCode = 1;
