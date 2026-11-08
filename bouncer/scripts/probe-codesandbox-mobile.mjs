@@ -13,13 +13,14 @@ const executablePath=['/usr/bin/google-chrome','/usr/bin/google-chrome-stable','
 if(!executablePath)throw Error('No Chromium executable found');
 const browser=await chromium.launch({executablePath,args:['--no-sandbox','--disable-gpu'],headless:true});
 const report={interstitial:false,proceeded:false,top_level:false,script_executed:false,origin_correct:false,
-  persistent_requested:false,persistent_granted:false,indexeddb_strict:false,reload_retained:false,
+  persistent_requested:false,persistent_granted:false,indexeddb_strict:false,reload_retained:false,fragment_retained:false,
   signed:false,transaction_sent:false};
 let error;
 try {
   const context=await browser.newContext({viewport:{width:390,height:844},isMobile:true,hasTouch:true});
   const page=await context.newPage();
-  await page.goto(`https://${id}.csb.app/`,{waitUntil:'domcontentloaded',timeout:60000});
+  const dummyFragment=`#bouncer-direct=${'p'.repeat(43)}`;
+  await page.goto(`https://${id}.csb.app/${dummyFragment}`,{waitUntil:'domcontentloaded',timeout:60000});
   const trust=page.getByText('Yes, proceed to preview',{exact:true});
   if(await trust.count() && await trust.first().isVisible()){
     report.interstitial=true;
@@ -29,6 +30,7 @@ try {
   }
   await page.waitForFunction(()=>document.documentElement.dataset.hostingProbe==='ok',null,{timeout:30000});
   report.script_executed=true;
+  report.fragment_retained=(await page.evaluate(()=>location.hash))===dummyFragment;
   const result=await page.evaluate(async(id)=>{
     const out={top_level:window===window.top,origin_correct:location.origin===`https://${id}.csb.app`,persistent_requested:false,
       persistent_granted:false,indexeddb_strict:false};
@@ -51,4 +53,4 @@ try {
 finally {await browser.close();}
 console.log(`::notice title=Public host mobile-browser probe::${JSON.stringify({...report,error}).replaceAll('%','%25').replaceAll('\n','%0A').replaceAll('\r','%0D')}`);
 if(process.env.GITHUB_STEP_SUMMARY)fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,`\n## Mobile browser hosting probe\n\nHarmless page, no wallet or transaction.\n\n\`\`\`json\n${JSON.stringify({...report,error},null,2)}\n\`\`\`\n`);
-if(error || !report.top_level || !report.script_executed || !report.origin_correct || !report.indexeddb_strict || !report.reload_retained)process.exitCode=1;
+if(error || !report.top_level || !report.script_executed || !report.origin_correct || !report.indexeddb_strict || !report.reload_retained || !report.fragment_retained)process.exitCode=1;
