@@ -138,7 +138,9 @@ jobs:
           npm run build:web
           git diff --exit-code -- web/wallet.bundle.js
           npm install --prefix "$RUNNER_TEMP/bouncer-browser" --no-save --no-audit --no-fund playwright@1.64.1
-          npx --prefix "$RUNNER_TEMP/bouncer-browser" playwright@1.64.1 install chromium
+          node "$RUNNER_TEMP/bouncer-browser/node_modules/playwright/cli.js" install chromium
+          CHROMIUM_PATH="$(node -e "console.log(require('$RUNNER_TEMP/bouncer-browser/node_modules/playwright-core').chromium.executablePath())")"
+          echo "CHROMIUM_PATH=$CHROMIUM_PATH" >> "$GITHUB_ENV"
       - name: Test synthetic desktop and mobile wallet consent and recovery
         working-directory: bouncer
         env:
