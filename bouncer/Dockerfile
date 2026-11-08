@@ -2,7 +2,7 @@
 # created during build or startup. Attach a persistent Railway volume and
 # explicitly configure recovery-only mode before exposing it through Vercel.
 FROM node:22-bookworm-slim
-ENV NODE_ENV=production BOUNCER_NATIVE_MISSION_INGRESS=railway-proxy BOUNCER_NATIVE_MISSION_BIND=0.0.0.0
+ENV NODE_ENV=production BOUNCER_NATIVE_MISSION_INGRESS=railway-proxy BOUNCER_NATIVE_MISSION_BIND=0.0.0.0 BOUNCER_STANDBY_READINESS=1
 WORKDIR /app
 # Kernel advisory locking lets an unclean restart enter recovery-only without
 # silently replacing the retained journal. It is still a single-host fence.

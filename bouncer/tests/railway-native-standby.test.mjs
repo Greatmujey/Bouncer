@@ -64,7 +64,7 @@ test('standby exposes only an honest non-spending status, no mission APIs or ref
       assert.equal(res.headers['cache-control'],'no-store');assert.ok(!res.body.includes('synthetic-never-reflect'));
     }
     assert.equal((await request(server,{path:'/healthz',method:'HEAD'})).body,'');
-    for(const [method,path] of [['POST','/healthz'],['GET','/healthz?x=1'],['GET','/api/native-mission/config'],
+    for(const [method,path] of [['POST','/healthz'],['GET','/healthz?x=1'],['GET','/readiness'],['GET','/api/native-mission/config'],
       ['POST','/api/native-mission/execute'],['GET','/journal']]) {
       const res=await request(server,{method,path,headers:{origin:'https://attacker.example'},body:method==='POST'?'{}':undefined});
       assert.equal(res.status,404);assert.deepEqual(JSON.parse(res.body),{error:'unavailable'});

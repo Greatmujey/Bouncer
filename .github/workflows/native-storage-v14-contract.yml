@@ -1,4 +1,4 @@
-# Offline testnet prototype only. No public-chain deployment or transaction.
+# Offline tests by default. Optional manual preflight uses public views only.
 name: V14 native storage contract
 on:
   push:
@@ -6,12 +6,27 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      run_v14_readiness:
+        description: 'Run only the public, read-only testnet preflight'
+        required: false
+        default: false
+        type: boolean
+      owner:
+        description: 'Named testnet owner (public account ID)'
+        required: false
+        type: string
+      candidate_vault:
+        description: 'Candidate direct-child testnet vault (public account ID)'
+        required: false
+        type: string
 
 permissions:
   contents: read
 
 jobs:
   contract:
+    if: github.event_name != 'workflow_dispatch' || inputs.run_v14_readiness != true
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -35,6 +50,12 @@ jobs:
         run: |
           cargo build --locked --target wasm32-unknown-unknown --release --no-default-features --features native-storage-v14
           sha256sum target/wasm32-unknown-unknown/release/bouncer.wasm
+          node --input-type=module -e '
+            import {readFileSync} from "node:fs";import {createHash} from "node:crypto";
+            import {V14_TESTNET_ARTIFACT as expected} from "../../shared/v14-testnet-artifact.mjs";
+            const bytes=readFileSync("target/wasm32-unknown-unknown/release/bouncer.wasm");
+            if(bytes.length!==expected.bytes||createHash("sha256").update(bytes).digest("hex")!==expected.sha256)throw Error("V14 research artifact changed; review and update its pin before using estimates");
+          '
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: '22'
@@ -121,6 +142,7 @@ jobs:
           retention-days: 7
 
   railway-image:
+    if: github.event_name != 'workflow_dispatch' || inputs.run_v14_readiness != true
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -141,6 +163,8 @@ jobs:
             while(!health && Date.now()<deadline){try{health=await fetch("http://127.0.0.1:8080/healthz")}catch{await delay(100)}}
             assert.equal(health?.status,200);const body=await health.json();
             assert.equal(body.status,"STANDBY");assert.equal(body.mission_enabled,false);assert.equal(body.transactions_enabled,false);
+            const diagnostic=await fetch("http://127.0.0.1:8080/readiness");assert.equal(diagnostic.status,200);
+            const checks=await diagnostic.json();assert.equal(checks.status,"STANDBY");assert.equal(checks.transactions_enabled,false);
             assert.equal((await fetch("http://127.0.0.1:8080/api/native-mission/config")).status,404);
           '
           set +e
@@ -154,6 +178,7 @@ jobs:
           echo 'Standby and enabled-but-unconfigured modes verified without network access.'
 
   browser:
+    if: github.event_name != 'workflow_dispatch' || inputs.run_v14_readiness != true
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -184,3 +209,26 @@ jobs:
             exit 1
           fi
           cat "$RUNNER_TEMP/v14-browser-result.log"
+
+  public-preflight:
+    if: github.event_name == 'workflow_dispatch' && inputs.run_v14_readiness == true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    defaults:
+      run:
+        working-directory: bouncer
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Validate read-only guard using synthetic responses
+        run: node --test tests/native-v14-readiness.test.mjs
+      - name: Inspect public testnet state without signing
+        env:
+          BOUNCER_OWNER: ${{ inputs.owner }}
+          BOUNCER_CANDIDATE_VAULT: ${{ inputs.candidate_vault }}
+        run: node scripts/inspect-v14-readiness.mjs "$BOUNCER_OWNER" "$BOUNCER_CANDIDATE_VAULT"

@@ -209,9 +209,9 @@ hash never proves that a transaction did not happen.
 
 ### Experimental Vercel website + Railway API
 
-This is an **unprovisioned testnet option**, not a claim that Railway is set up
-or that its volume has been verified. Charges may apply; review the actual plan
-and obtain approval before creating a paid service. The website stays on the
+This is a **recovery-first testnet design**, not a claim that a mission is
+provisioned or that a Railway volume is durable. Charges may apply; review the
+actual plan and obtain approval before creating a paid service. The website stays on the
 exact approved Vercel wallet origin. Six bundled `/api/native-mission/*`
 functions are **off by default** and forward only their fixed actions to one
 configured Railway HTTPS origin. They do not forward cookies, select a
@@ -222,12 +222,16 @@ The `bouncer/Dockerfile` builds a persistent Node service with Linux `flock`;
 the Railway project root must be `bouncer`. Without explicit mission enablement
 it runs a **non-spending standby**: `/` and `/healthz` report `STANDBY`, and
 mission endpoints return 404. No mission, vault, keys, consent database or
-journal is created, and the mission runtime is not loaded. This allows a basic
-HTTPS deployment check without implying readiness. When configured, `/healthz`
-returns `ONLINE` without authentication; it is only process liveness, not proof
-of RPC connectivity, original durability, wallet control or mission readiness.
-Every mission API remains gated by the proxy secret. Attach a persistent
-volume to **one instance**;
+journal is created, and the mission runtime is not loaded. The container also
+runs one fixed, public read-only check at startup; `/readiness` reports whether
+it observed the declared mounted directory, a testnet RPC, the pinned oracle
+registry and a backend-side hash of the market WASM. It never performs checks
+on incoming requests and can be disabled with `BOUNCER_STANDBY_READINESS=0`.
+These are point-in-time indications, **not** proof of volume persistence,
+backup, provider-side fetch/execution, wallet control or mission readiness.
+When configured, `/healthz` returns `ONLINE` without authentication; it is only
+process liveness. Every mission API remains gated by the proxy secret. Attach a
+persistent volume to **one instance**;
 under it, provision an owner-only 0700 directory containing the already
 reviewed mission, its dedicated **original** encrypted journal and its key.
 The journal must retain that mission's intent and no unrelated entries. The
@@ -287,7 +291,15 @@ must never be the sole copy of originals. Railway and Vercel remain unavailable
 for this mission until their actual service, cost, configuration and deployed
 behavior are verified.
 
-Mobile V14 provisioning is also unresolved. At commit `42255e1`, the CI-built
+A separate manually dispatched V14 public preflight reads a named owner and
+candidate direct-child vault at one fresh FINAL testnet block. It reports the
+pinned artifact identity, account/registry checks and an **unapproved estimate**
+for storage funding and the example mission cap, with gas additional. An
+unknown candidate-account view is not treated as absence. These public reads
+cannot prove wallet control, consent, delivery or an independently retained
+original. The example amounts are not instructions to fund or sign.
+
+Mobile V14 provisioning is also unresolved. The identified CI-built
 WASM was 499,063 bytes; its 665,420-byte base64 code field alone exceeds the
 Meteor mobile bridge's 400,000-byte request limit. CI also investigates a
 separately pinned compressed loader, **research only**: at commit `236aeca`,

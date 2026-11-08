@@ -1,7 +1,8 @@
 #!/usr/bin/env node
-/** Railway container entry. Without explicit enablement it serves only a
- * public, non-spending standby status; it creates no state and never imports
- * the mission runtime. A configured mission still starts recovery-first. */
+/** Railway container entry. Without explicit enablement it serves a public,
+ * non-spending standby; it creates no state and never imports the mission
+ * runtime. Optional, fixed public read-only checks run once on startup. A
+ * configured mission still starts recovery-first. */
 import http from 'node:http';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -23,14 +24,18 @@ export function railwayNativePort(env=process.env) {
   if(typeof raw!=='string'||!/^\d{1,5}$/.test(raw)||Number(raw)<1||Number(raw)>65535)throw new Error('invalid port');
   return Number(raw);
 }
-/** No input is trusted or reflected. No wallet, journal, RPC, keys or backend
- * connection is loaded in standby. This endpoint is not mission readiness. */
-export function createRailwayNativeStandby() {
+/** No input is trusted or reflected. No wallet, journal, agent keys or mission
+ * runtime is loaded in standby. Optional diagnostics are public reads only,
+ * never invoked by a request, and do not establish mission readiness. */
+export function createRailwayNativeStandby({readiness}={}) {
+  if(readiness!==undefined && typeof readiness?.snapshot!=='function')throw new Error('invalid standby diagnostics');
   const server=http.createServer((req,res)=>{
-    const status=(req.method==='GET'||req.method==='HEAD') && (req.url==='/'||req.url==='/healthz');
+    const get=req.method==='GET'||req.method==='HEAD';
+    const status=get && (req.url==='/'||req.url==='/healthz');
+    const diagnostic=get && req.url==='/readiness' && readiness!==undefined;
     req.resume();
-    res.writeHead(status?200:404,headers);
-    res.end(req.method==='HEAD' ? undefined : JSON.stringify(status?STANDBY_STATUS:{error:'unavailable'}));
+    res.writeHead(status||diagnostic?200:404,headers);
+    res.end(req.method==='HEAD' ? undefined : JSON.stringify(status?STANDBY_STATUS:diagnostic?readiness.snapshot():{error:'unavailable'}));
   });
   server.requestTimeout=10_000;server.headersTimeout=12_000;server.keepAliveTimeout=5_000;
   server.on('clientError',(_error,socket)=>socket.destroy());
@@ -45,9 +50,17 @@ async function main() {
     classifyStartupError=classifyNativeMissionStartupError;
     await startNativeMissionSite();return;
   }
-  const port=railwayNativePort(),server=createRailwayNativeStandby();
+  const check=process.env.BOUNCER_STANDBY_READINESS;
+  if(check!==undefined && check!=='' && check!=='0' && check!=='1')throw new Error('invalid standby diagnostics configuration');
+  let readiness;
+  if(check==='1') {
+    const {createStandbyReadiness}=await import('../agent/railway-standby-readiness.mjs');
+    readiness=createStandbyReadiness();
+  }
+  const port=railwayNativePort(),server=createRailwayNativeStandby({readiness});
   await new Promise((resolve,reject)=>server.listen(port,'0.0.0.0',resolve).once('error',reject));
   console.log(`Bouncer testnet backend in STANDBY on port ${port}; no mission, wallet or transactions are enabled.`);
+  if(readiness)void readiness.start().catch(()=>{});
   let stopping=false;
   const shutdown=()=>{if(stopping)return;stopping=true;server.close(error=>{if(error)process.exitCode=1});server.closeIdleConnections?.()};
   process.once('SIGINT',shutdown);process.once('SIGTERM',shutdown);
