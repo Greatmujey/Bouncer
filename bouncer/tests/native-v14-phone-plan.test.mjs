@@ -168,7 +168,7 @@ function completionFixture() {
       ...review.mission.goals.map(({kind,goal})=>({public_key:inputs.agentPublicKeys[goal.id],access_key:{nonce:0,permission:{FunctionCall:{
         receiver_id:vault,allowance:inputs.gasAllowances[goal.id],method_names:[kind==='random'?'execute_outlayer':
           kind==='oracle'?'execute_outlayer_native_project':'execute_native_storage']}}}}))]},
-    vaultKeys:{block_hash:blockHash,keys:[]},ledger:inputs.nativeDepositYocto};
+    vaultKeys:{block_hash:blockHash,keys:[]},ledger:inputs.nativeDepositYocto,overrides:{}};
   const provider={async viewNodeStatus(){return {chain_id:'testnet'}},async viewBlock(){return {header:{hash:blockHash,height:42,timestamp_nanosec:`${time}000000`}}},
     async experimental_protocolConfig({blockId}){assert.equal(blockId,blockHash);return {chain_id:'testnet',runtime_config:{storage_amount_per_byte:'1'}}},
     async query({request_type,account_id,block_id}){assert.equal(block_id,blockHash);
@@ -179,7 +179,8 @@ function completionFixture() {
         get_policy:g?{token:'native',per_tx_cap:g.amount,daily_cap:review.rolling_caps_yocto[g.id]}:null,
         get_outlayer_program:g?.program,get_outlayer_native_project:g?.route,get_native_storage_route:g?.route,
         is_agent_key_allowed:true,check:[true,'ok']};
-      return {block_hash:blockHash,result:[...Buffer.from(JSON.stringify(values[method]))]};}};
+      const k=`${method}:${args.policy_id??''}`,selected=Object.hasOwn(state.overrides,k)?state.overrides[k]:values[method];
+      return {block_hash:blockHash,result:[...Buffer.from(JSON.stringify(selected))]};}};
   return {inputs,review,prior,provider,state,now:()=>time,trustedReviewSha256:review.review_sha256};
 }
 
@@ -199,6 +200,12 @@ test('read-only V14 completion requires all distinct originals and one fresh pin
   f.state.vaultKeys.keys=[];f.state.ledger='0';assert.ok((await inspectV14PhoneSetupCompletion(options)).blockers.includes('deposited_and_storage_backed'));
   f.state.ledger=f.inputs.nativeDepositYocto;f.state.ownerKeys.keys[1].access_key.permission='FullAccess';
   assert.ok((await inspectV14PhoneSetupCompletion(options)).blockers.includes('compute_agent_key'));
+  f.state.overrides['get_policy:price']={token:'native',per_tx_cap:'999',daily_cap:'500'};
+  f.state.overrides['get_native_storage_route:store']={...f.review.mission.goals[2].goal.route,active:false};
+  f.state.overrides['is_agent_key_allowed:price']=false;
+  f.state.overrides['check:store']=[false,'blocked'];
+  const bad=(await inspectV14PhoneSetupCompletion(options)).blockers;
+  for(const name of ['price_policy','store_route','price_grant','store_allowed'])assert.ok(bad.includes(name),name);
   f.state.owner.block_hash=hash(8);await assert.rejects(inspectV14PhoneSetupCompletion(options),/mixed-block/);
   await assert.rejects(inspectV14PhoneSetupCompletion({...options,now:()=>f.now()+300_000}),/stale/);
 });

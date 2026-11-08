@@ -114,9 +114,10 @@ the UI or a durable setup fence. A separate research receipt inspector matches
 only independently retained originals against the reviewed actions and loader
 upgrade; failure or a missing result never permits a retry. Its trusted-RPC
 receipt checks do not establish a prompt fence or current state. A read-only
-completion inspector can also compare all six original receipts and the
-installed policies, keyless vault and restricted keys at one fresh FINAL block;
-it still does not authorize the setup prompts or establish key custody. Fitting
+completion inspector can also compare all six originals' bounded outcome graphs
+and the installed policies, keyless vault and restricted keys at one fresh
+FINAL block. NEAR may omit the local AddKey receipt body; neither the graph nor
+the snapshot authorizes setup prompts or establishes key custody. Fitting
 a code field within a bridge limit would not verify the complete wallet request. A published NEAR
 global contract referenced by immutable code hash could
 reduce a wallet payload, but the [pinned Meteor mobile bridge](https://github.com/Meteor-Wallet/meteor_wallet_sdk/blob/53a8b39d1aaaf067502c11e49ebb050c75df019e/packages/meteor-sdk-v1/src/MeteorConnect/target_clients/mobile_bridge/sdkActionToMobileBridge.ts)
