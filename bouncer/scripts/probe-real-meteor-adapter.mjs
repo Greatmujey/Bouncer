@@ -13,7 +13,7 @@ if(!executablePath)throw Error('Chromium unavailable');
 const browser=await chromium.launch({executablePath,args:['--no-sandbox','--disable-gpu'],headless:true}),origin=`https://${id}.csb.app`;
 let adapterStatus=0,adapterRequests=0,adapterFailure='',error,stage='open',page;const errors=[],consoleErrors=[];
 const report={top_level:false,real_adapter_fetched:false,real_adapter_integrity_checked_by_app:false,
-  wallet_handoff_observed:false,handoff_kind:null,no_wallet:true,no_transaction:true};
+  wallet_ui_visible:false,mobile_option_ready:false,wallet_handoff_observed:false,handoff_kind:null,no_wallet:true,no_transaction:true};
 try{
   const context=await browser.newContext({viewport:{width:390,height:844},isMobile:true,hasTouch:true,
     userAgent:'Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Mobile Safari/537.36'});
@@ -35,7 +35,8 @@ try{
       return route.fulfill({status:200,contentType:'application/json',headers:cors,
         body:JSON.stringify({scope:'direct',state:'ready',original_hash:null,claim_acquired:false,expired:false})});
     }
-    if(url.origin===origin||url.hostname==='codesandbox.io'||url.hostname.endsWith('.codesandbox.io')||url.hostname==='raw.githubusercontent.com')return route.continue();
+    if(url.origin===origin||url.hostname==='codesandbox.io'||url.hostname.endsWith('.codesandbox.io')||
+       url.hostname==='raw.githubusercontent.com'||url.hostname==='mc.meteorwallet.app')return route.continue();
     return route.abort();
   });
   const link=`${origin}/#bouncer-direct=${'u'.repeat(43)}`;
@@ -47,13 +48,24 @@ try{
   }
   stage='initialization';await page.waitForFunction(()=>!document.querySelector('[data-wallet-id="meteor-wallet"]').disabled,null,{timeout:30000});
   report.top_level=await page.evaluate(()=>window===window.top);
-  stage='Meteor handoff';await page.locator('.top-connect').click();await page.locator('[data-wallet-id="meteor-wallet"]').click();
-  await page.waitForFunction(()=>window.__bouncerOpenCalls?.length>0,null,{timeout:30000});
-  const calls=await page.evaluate(()=>window.__bouncerOpenCalls.map(s=>{try{const u=new URL(s);return `${u.protocol}//${u.host}`}catch{return 'invalid'}}));
+  stage='Meteor UI';await page.locator('.top-connect').click();await page.locator('[data-wallet-id="meteor-wallet"]').click();
+  const frame=page.frameLocator('iframe').first(),web=frame.getByRole('button',{name:'Meteor Web',exact:true});
+  await web.waitFor({state:'visible',timeout:30000});report.wallet_ui_visible=true;
   report.real_adapter_fetched=adapterStatus===200;
   // The app executes this adapter only after loadVerifiedExecutor hashes the
   // fetched bytes and compares them to the reviewed SHA-256 pin.
-  report.real_adapter_integrity_checked_by_app=report.real_adapter_fetched&&calls.length>0;
+  report.real_adapter_integrity_checked_by_app=report.real_adapter_fetched&&report.wallet_ui_visible;
+  const mobile=frame.getByRole('button',{name:/^Meteor Mobile/});
+  try{
+    await mobile.waitFor({state:'visible',timeout:10000});
+    report.mobile_option_ready=await mobile.evaluate(el=>new Promise(resolve=>{
+      if(!el.disabled){resolve(true);return}const o=new MutationObserver(()=>{if(!el.disabled){o.disconnect();resolve(true)}});
+      o.observe(el,{attributes:true,attributeFilter:['disabled','aria-busy']});setTimeout(()=>{o.disconnect();resolve(!el.disabled)},15000);
+    }));
+  }catch{}
+  stage='Meteor handoff';if(report.mobile_option_ready)await mobile.click();else await web.click();
+  await page.waitForFunction(()=>window.__bouncerOpenCalls?.length>0,null,{timeout:20000});
+  const calls=await page.evaluate(()=>window.__bouncerOpenCalls.map(s=>{try{const u=new URL(s);return `${u.protocol}//${u.host}`}catch{return 'invalid'}}));
   report.wallet_handoff_observed=calls.some(s=>s==='https://wallet.meteorwallet.app'||s.startsWith('meteorwallet:')||s.startsWith('meteorwalletdev:'));
   report.handoff_kind=calls.find(s=>s==='https://wallet.meteorwallet.app'||s.startsWith('meteorwallet:')||s.startsWith('meteorwalletdev:'))||null;
   assert.ok(report.top_level&&report.real_adapter_integrity_checked_by_app&&report.wallet_handoff_observed);
