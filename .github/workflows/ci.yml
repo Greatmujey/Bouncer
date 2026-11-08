@@ -1736,6 +1736,39 @@ jobs:
       - name: Read public catalog (no credentials or payments)
         run: node bouncer/scripts/probe-market-discovery.mjs
 
+  native-qa-original-diagnosis:
+    name: Inspect the previous QA failure (read only)
+    # Read only: no faucet, wallet, signer or transaction. Fetch the old log
+    # privately and expose only its bounded, redacted QA error line.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/arena/0e4386ea-near-hub' && github.event.before == 'b6e4970944ecd5a314ba982a7dcb9a569ccf4e73' && github.run_attempt == '1' && contains(github.event.head_commit.message, '[native-qa-read-only-diagnosis]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Read the stopped QA job without exposing log URLs or secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api repos/Greatmujey/Bouncer/actions/jobs/128664415262/logs > "$RUNNER_TEMP/old-qa.log" 2> "$RUNNER_TEMP/log-download.err" || { echo '::error::Previous QA log unavailable.'; exit 1; }
+          node - "$RUNNER_TEMP/old-qa.log" <<'NODE'
+          const fs = require('fs');
+          const lines = fs.readFileSync(process.argv[2], 'utf8').split('\n').filter(x => x.includes('QA stopped:'));
+          if (lines.length !== 1) { console.log('::error::Expected one bounded QA stop line.'); process.exit(1); }
+          const text = lines[0].slice(lines[0].indexOf('QA stopped:')).replace(/https?:\/\/\S+/g, '[url]').replace(/ed25519:[1-9A-HJ-NP-Za-km-z]+/g, 'ed25519:[redacted]').slice(0, 700).replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A');
+          console.log('::notice title=Previous QA stop::' + text);
+          NODE
+          mkdir -p "$RUNNER_TEMP/public-qa"
+          gh run download 42458530561 --repo Greatmujey/Bouncer --name native-qa-42458530561-public-results --dir "$RUNNER_TEMP/public-qa" > "$RUNNER_TEMP/artifact-download.log" 2>&1 || { echo '::error::Previous public QA result unavailable.'; exit 1; }
+          node - "$RUNNER_TEMP/public-qa/faucet-result.json" <<'NODE'
+          const fs = require('fs'); const x = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (x.status !== 'OWNER_OBSERVED_AT_FINAL' || !/^bouncer-owner-[a-f0-9]{24}\.testnet$/.test(x.account_id) || !/^[1-9A-HJ-NP-Za-km-z]{32,60}$/.test(x.block_hash)) process.exit(1);
+          console.log('::notice title=Previous QA account::' + JSON.stringify({status:x.status, account_id:x.account_id, block_hash:x.block_hash, helper_acknowledgement:x.helper_acknowledgement, do_not_repeat_helper_request:x.do_not_repeat_helper_request}));
+          NODE
+
   native-wallet-qa:
     name: One-shot native wallet plan (disposable testnet QA)
     # This one run uses a new, locally generated QA account, NEVER the user's
