@@ -102,9 +102,11 @@ setup yet. A static Netlify or Vercel deployment alone cannot run missions.
 Mobile V14 provisioning is also unresolved. At commit `42255e1`, the CI-built
 WASM was 499,063 bytes; its 665,420-byte base64 code field alone exceeds the
 Meteor mobile bridge's 400,000-byte request limit. CI also investigates a
-separately pinned compressed loader, **research only**: an asynchronous upgrade
-can fail, and the UI, retained original, owner-controlled recovery and real
-wallet behavior still need end-to-end verification. Fitting a code field within
+separately pinned compressed loader, **research only**: at commit `236aeca`,
+the synthetic Meteor request was 242,375 bytes and isolated tests covered a
+failed upgrade and explicit owner refund. An asynchronous upgrade can still
+fail, and the UI, retained original, owner-controlled recovery and real wallet
+behavior need end-to-end verification. Fitting a code field within
 a bridge limit would not verify the complete wallet request. A published NEAR
 global contract referenced by immutable code hash could
 reduce a wallet payload, but the [pinned Meteor mobile bridge](https://github.com/Meteor-Wallet/meteor_wallet_sdk/blob/53a8b39d1aaaf067502c11e49ebb050c75df019e/packages/meteor-sdk-v1/src/MeteorConnect/target_clients/mobile_bridge/sdkActionToMobileBridge.ts)
@@ -144,4 +146,6 @@ checks the dedicated Netlify origin and review/recovery UI. See the correspondin
 CI run for its actual result; a script's existence is not a passing test.
 [Run 42503338044](https://github.com/Greatmujey/Bouncer/actions/runs/42503338044)
 passed the isolated three-leg/fabricated-provider scenario and the mocked browser
-checks at commit `5d2f894`; it was not a public-chain or real-wallet test.
+checks at commit `5d2f894`. [Run 42504217242](https://github.com/Greatmujey/Bouncer/actions/runs/42504217242)
+also passed the separate compressed-loader research scenario at `236aeca`.
+Neither was a public-chain or real-wallet test.

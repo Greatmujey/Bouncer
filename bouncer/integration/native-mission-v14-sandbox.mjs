@@ -88,11 +88,16 @@ async function main() {
         failed(await send(owner,HOLD,[deployCompressed(compressed,0n)]),'zero-yocto deployment');
         failed(await send(owner,HOLD,[call('loader_refund',{},0n,60n*T)]),'zero-yocto refund');
         await must(owner,HOLD,[call('loader_refund',{},1n,60n*T)],'owner explicitly refunds research loader'); await absent(provider,HOLD);
-        failed(await send(owner,LOW,[...createLoader(loader,N),deployCompressed(compressed)]),'insufficient-storage upgrade');
+        const lowResult=await send(owner,LOW,[...createLoader(loader,N),deployCompressed(compressed)]);
+        failed(lowResult,'insufficient-storage upgrade');
+        assert.match(JSON.stringify(lowResult.status.Failure),/LackBalance|Storage|storage|ActionError/i);
         assert.equal((await provider.viewAccount(LOW,{finality:'final'})).code_hash,nearApi.utils.serialize.base_encode(sha(loader)));
         assert.deepEqual((await provider.viewAccessKeyList(LOW,{finality:'final'})).keys,[]);
         failed(await send(owner,LOW,[deployCompressed(compressed)]),'pending loader cannot redeploy');
+        const beforeRefund=BigInt((await provider.viewAccount(OWNER,{finality:'final'})).amount);
         await must(owner,LOW,[call('loader_refund',{},1n,60n*T)],'owner explicitly refunds failed upgrade'); await absent(provider,LOW);
+        const afterRefund=BigInt((await provider.viewAccount(OWNER,{finality:'final'})).amount);
+        assert.ok(afterRefund>beforeRefund+N/2n,'failed-upgrade loader funding did not return to sandbox owner');
         const sent=await must(owner,VAULT,[...createLoader(loader),deployCompressed(compressed)],'compressed V14 research self-deploy');
         const receipt=await provider.txStatusReceipts(sent.transaction_outcome.id,OWNER,'FINAL');
         const selfDeploy=receipt.receipts.filter(r=>r.predecessor_id===VAULT && r.receiver_id===VAULT &&
