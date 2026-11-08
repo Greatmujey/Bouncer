@@ -1,0 +1,61 @@
+# A separately gated, testnet-only infrastructure bootstrap. It prepares two
+# independent runner-local passwords and public session keys, encrypted to the
+# operator. It does not connect a wallet or submit a NEAR transaction.
+name: Prepare isolated native phone testnet infrastructure
+on:
+  push:
+    branches: ['arena/0e4386ea-near-hub']
+permissions:
+  contents: read
+concurrency:
+  group: native-phone-infra-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  coordinator:
+    if: contains(github.event.head_commit.message, '[phone-infra-session]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 70
+    permissions:
+      contents: write # needed only for the existing append-only Git witness
+    env:
+      BOUNCER_INFRA_ROLE: coordinator
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+          persist-credentials: true
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+      - name: Prepare encrypted, temporary provisioning material
+        run: node bouncer/scripts/prepare-testnet-infra-session.mjs
+      - name: Install pinned application dependencies
+        working-directory: bouncer
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Wait for this run's explicit provisioning instruction
+        run: node bouncer/scripts/wait-testnet-infra-session.mjs
+  checkpoint:
+    if: contains(github.event.head_commit.message, '[phone-infra-session]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 70
+    permissions:
+      contents: read
+    env:
+      BOUNCER_INFRA_ROLE: checkpoint
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+      - name: Prepare encrypted, temporary provisioning material
+        run: node bouncer/scripts/prepare-testnet-infra-session.mjs
+      - name: Install pinned application dependencies
+        working-directory: bouncer
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Wait for this run's explicit provisioning instruction
+        run: node bouncer/scripts/wait-testnet-infra-session.mjs
