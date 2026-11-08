@@ -1,6 +1,6 @@
-# Read-only route probes. These jobs never connect an account, request a wallet
-# signature, or submit a transaction. The IPFS probe publishes only a new,
-# harmless test page, not repository contents.
+# Route probes never connect an account, request a wallet signature, or submit
+# a transaction. Hosting probes publish only harmless test pages, never
+# repository contents or credentials.
 name: Public testnet browser route probes
 on:
   push:
@@ -27,6 +27,19 @@ jobs:
           set -euo pipefail
           npm install --prefix "$RUNNER_TEMP/bouncer-browser" --no-save --no-audit --no-fund playwright-core@1.64.1
           node bouncer/scripts/probe-public-testnet-browser.mjs
+  codesandbox-public-availability:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[codesandbox-probe]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+      - name: Publish and fetch a harmless public test page
+        run: node bouncer/scripts/probe-codesandbox-public.mjs
   ipfs-public-availability:
     if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[public-route-probe]')
     runs-on: ubuntu-24.04
