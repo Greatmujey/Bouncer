@@ -24,6 +24,7 @@ import { provisionPostgresSetupHeadAnchor } from '../agent/postgres-setup-head-a
 
 const ROLE=process.env.BOUNCER_INFRA_ROLE, RUN=process.env.GITHUB_RUN_ID, BRANCH=process.env.GITHUB_REF_NAME;
 const REPO=process.env.GITHUB_WORKSPACE, TEMP=process.env.RUNNER_TEMP;
+let phase = 'configuration';
 const failed=()=>new Error('testnet infrastructure provisioning is unavailable or uncertain; stop and reconcile; no wallet action is authorized');
 function git(args) {
   try{return execFileSync('git',args,{cwd:REPO,encoding:'utf8',stdio:['ignore','pipe','pipe'],timeout:30_000,
@@ -45,7 +46,17 @@ async function connect(config,password){
       if(result.rows.length!==1 || result.rows[0].role!==`bouncer_${ROLE}` || result.rows[0].database!=='postgres')throw failed();
       console.log(`Verified TLS and the dedicated ${ROLE} database role.`);
       return pool;
-    }catch{await pool.end().catch(()=>{})}
+    }catch(error){
+      // Report only a fixed category, never an exception message, connection
+      // string, password, token or arbitrary database response.
+      const code=typeof error?.code==='string' ? error.code : '';
+      const category=code==='28P01' ? 'authentication' :
+        (code==='XX000' && /tenant or user not found/i.test(error?.message??'')) ? 'pooler-tenant' :
+        ['ECONNREFUSED','ETIMEDOUT','ENOTFOUND','EHOSTUNREACH','ECONNRESET'].includes(code) ? 'network' :
+        /CERT|TLS|SSL/i.test(code) ? 'tls' : 'other';
+      console.log(`::warning title=Testnet ${ROLE} database connection::${host.split('.')[0]} ${category}`);
+      await pool.end().catch(()=>{});
+    }
   }
   throw failed();
 }
@@ -54,28 +65,35 @@ async function main(){
       BRANCH!=='arena/0e4386ea-near-hub' || !path.isAbsolute(REPO??'') || !path.isAbsolute(TEMP??'') ||
       process.argv.length!==3 || process.argv[2]!==`bouncer/infrastructure/session-${RUN}.json`)throw failed();
   const config=validateTestnetInfraConfig(JSON.parse(fs.readFileSync(path.join(REPO,process.argv[2]),'utf8')),RUN);
+  phase='session-keys';
   const directory=path.join(TEMP,`bouncer-testnet-infra-${ROLE}`), password=readProtected(path.join(directory,'postgres-password'));
   if(!/^[A-Za-z0-9_-]{43}$/.test(password))throw failed();
   const token=deriveTestnetCheckpointToken({role:ROLE,config,privateKey:readProtected(path.join(directory,'session-key.pem'))});
   const tokenFile=path.join(directory,'checkpoint-token');
   fs.writeFileSync(tokenFile,token,{mode:0o600,flag:'wx'});
+  phase='checkout';
   if(git(['branch','--show-current'])!==BRANCH || git(['rev-parse','--is-shallow-repository'])!=='false' ||
      git(['status','--porcelain','--untracked-files=normal']))throw failed();
   const baseline=git(['rev-parse','HEAD']);
   if(!/^[a-f0-9]{40}$/.test(baseline) || git(['ls-remote','--heads','origin',`refs/heads/${BRANCH}`])!==`${baseline}\trefs/heads/${BRANCH}`)throw failed();
+  phase='witness-history';
   await auditFullGitWitnessHistory({repo:REPO,head:baseline});
+  phase='owner-witness-check';
   const ownerHash=crypto.createHash('sha256').update('great_mujey.testnet').digest('hex');
   for(const folder of ['wallet-prompt-witness-v1','native-oracle-prompt-witness-v1','buffer-order-witness-v1']){
     if(git(['ls-tree','--name-only',baseline,'--',`bouncer/evidence/${folder}/${ownerHash}.jsonl`]))throw failed();
   }
   if(git(['ls-remote','--heads','origin',`refs/heads/${BRANCH}`])!==`${baseline}\trefs/heads/${BRANCH}`)throw failed();
+  phase='database-connect';
   const pool=await connect(config,password);
   try{
+    phase='database-empty-check';
     // Each database is new and dedicated. Refuse implicit repair or reuse.
     const existing=await pool.query(`SELECT nspname FROM pg_catalog.pg_namespace WHERE nspname = ANY($1::text[])`,
       [['bouncer_testnet_infra_v1','bouncer_wallet_auth_v1','bouncer_wallet_owner_fence_v1','bouncer_wallet_prompt_v1',
         'bouncer_native_wallet_prompt_v1','bouncer_setup_head_anchor_v1']]);
     if(existing.rows.length)throw failed();
+    phase='database-provision';
     if(ROLE==='coordinator'){
       await initializePostgresWalletPromptAuth({pool});
       await initializePostgresWalletPromptFence({pool});
@@ -84,6 +102,7 @@ async function main(){
       await provisionPostgresSetupHeadAnchor({pool,repository:'Greatmujey/Bouncer',branch:BRANCH,initialHead:baseline,
         operatorVerifiedCompleteBaseline:true});
     }
+    phase='status-record';
     const client=await pool.connect();
     try{
       await client.query('BEGIN');
@@ -121,4 +140,4 @@ async function main(){
     console.log('No separate activation instruction was received; no wallet prompt was enabled.');
   }finally{await pool.end().catch(()=>{})}
 }
-main().catch(()=>{console.error('Testnet infrastructure provisioning unavailable or uncertain. Stop; no wallet or transaction was authorized.');process.exitCode=1});
+main().catch(()=>{console.error(`::error title=Testnet infrastructure stopped::${ROLE ?? 'unknown'} phase=${phase}; no wallet or transaction was authorized.`);process.exitCode=1});
