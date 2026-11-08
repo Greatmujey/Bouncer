@@ -3,7 +3,7 @@
 [build]
   base = "bouncer"
   publish = "dist"
-  command = "npm ci --ignore-scripts --no-audit --no-fund && npm ci --prefix walletconnect --ignore-scripts --no-audit --no-fund && npm run build:web && node scripts/stage-public-web.mjs dist"
+  command = "npm ci --ignore-scripts --no-audit --no-fund && npm ci --prefix walletconnect --ignore-scripts --no-audit --no-fund && npm run build:web && node scripts/stage-netlify-public-web.mjs"
 
 [build.environment]
   NODE_VERSION = "22"
