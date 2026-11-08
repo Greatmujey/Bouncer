@@ -33,14 +33,17 @@ receipt and owner, configured a keyless vault, enforced a native cap, rejected
 unauthorized and corrupt calls, and exercised rollback and a separate manual
 owner-only refund. The built loader was 28,950 bytes (SHA-256
 `28b358e4ee4e6c7327dc17c63934a63e4cdad5d424dbfe67a80381cf1027bb7b`);
-compressed V9 was 135,476 bytes and the estimated request was 219,827 bytes.
-An offline test of the pinned Meteor SDK validator also rejected a direct V9
-request and accepted a same-sized loader request. These are not real-phone,
-independently anchored original-hash recovery, wallet-approval, public testnet,
-provider fulfillment or security-audit evidence. The loader is not integrated
-or deployed. In particular, an uncertain original must never be retried; an
-asynchronous failure can leave a loader and funds on the child and requires
-verified, explicitly owner-authorized recovery.
+compressed V9 was 135,476 bytes. A [second sandbox run](https://github.com/Greatmujey/Bouncer/actions/runs/42471487726)
+reproduced that loader and passed the pinned Meteor SDK validator with the
+actual built binary and compressed V9 (220,060-byte synthetic request); a
+direct V9 request was rejected by the same validator. A three-stage unsigned
+research review and offline receipt-graph inspector are under test, not wired
+to the production setup. These are not real-phone, independently anchored
+original-hash recovery, wallet-approval, public testnet, provider fulfillment
+or security-audit evidence. The loader is not integrated or deployed. In
+particular, an uncertain original must never be retried; an asynchronous failure
+can leave a loader and funds on the child and requires verified, explicitly
+owner-authorized recovery.
 
 ## What is implemented
 

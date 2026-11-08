@@ -14,8 +14,9 @@ import zlib from 'node:zlib';
 import { pathToFileURL } from 'node:url';
 import nearApi from 'near-api-js';
 import { act_impl_near, validateKnownFirstPartyActionRequest, MAX_ACTION_REQUEST_CANONICAL_JSON_LENGTH } from '@meteorwallet/connect-shared/internal';
-import { buildNativeOracleWalletPlan, NATIVE_ORACLE_DEFAULT_GAS_ALLOWANCE,
+import { NATIVE_ORACLE_DEFAULT_GAS_ALLOWANCE,
   NATIVE_ORACLE_V9_CODE_HASH, NATIVE_ORACLE_V9_SHA256 } from '../agent/native-oracle-wallet-plan.mjs';
+import { buildResearchPhonePlan, prepareResearchPhoneAttempt, inspectResearchPhoneAttempt } from '../agent/native-phone-loader-research.mjs';
 import { SANDBOX_CHAIN_ID, SANDBOX_SHA256, readVerifiedFile, assertSandboxStatus,
   requireFinalSuccess } from './v11-sandbox-support.mjs';
 import { withSandboxOnlyFetch } from './v11-sandbox-setup-rpc.mjs';
@@ -112,15 +113,24 @@ async function main() {
       const afterRefund = BigInt((await provider.viewAccount(OWNER, ref)).amount);
       assert.ok(afterRefund > beforeRefund + 5n*ONE, 'unused loader funding did not return to sandbox owner');
 
-      const setup = await must(owner,VAULT,[...createLoader(loader),deploy(compressed)],'compressed pinned V9 self-deploy');
-      const originalHash = setup.transaction_outcome.id;
+      const terms={owner:OWNER,vault:VAULT,policy_id:'loader-native',agent_public_key:pub(agentKey),
+        per_tx_cap_yocto:(ONE/10n).toString(),daily_cap_yocto:(ONE/10n).toString(),vault_deposit_yocto:(ONE/10n).toString(),
+        agent_gas_allowance_yocto:NATIVE_ORACLE_DEFAULT_GAS_ALLOWANCE};
+      const publicInputs={terms,wasmBytes:code,loaderBytes:loader,compressedBytes:compressed,trustedOwnerPublicKey:pub(ownerKey)};
+      const plan=buildResearchPhonePlan(publicInputs);
+      const reconcile = async (sent,stageId,expectedStatus) => {
+        const originalHash=sent.transaction_outcome.id, review=plan.review;
+        const anchors={...publicInputs,review,trustedReviewHash:review.review_sha256,trustedOriginalHash:originalHash};
+        const attempt=prepareResearchPhoneAttempt({...anchors,stageId});
+        const receipt=await provider.txStatusReceipts(originalHash,OWNER,'FINAL');
+        requireFinalSuccess(receipt,`original ${stageId} receipt`);
+        assert.equal(inspectResearchPhoneAttempt({...anchors,attempt,result:receipt}).status,expectedStatus);
+        return {receipt,anchors,attempt};
+      };
+      const setup = await must(owner,VAULT,plan.batches[0].actions,'compressed pinned V9 self-deploy');
       const walletResultBytes = Buffer.byteLength(JSON.stringify(setup));
       assert.ok(walletResultBytes < 380_000, `sandbox wallet result is too close to Meteor's 400,000-byte cap: ${walletResultBytes}`);
-      const receipt = await provider.txStatusReceipts(originalHash,OWNER,'FINAL');
-      requireFinalSuccess(receipt,'original compressed loader receipt');
-      assert.equal(receipt.transaction.hash,originalHash);
-      assert.equal(receipt.transaction.signer_id,OWNER);
-      assert.equal(receipt.transaction.receiver_id,VAULT);
+      const {receipt,anchors,attempt} = await reconcile(setup,plan.batches[0].id,'FINAL_RESEARCH_LOADER_AND_UPGRADE_MATCH');
       const deployReceipts = receipt.receipts.filter(r => r.predecessor_id===VAULT && r.receiver_id===VAULT &&
         r.receipt?.Action?.actions?.some(a => a.DeployContract?.code===digest(code).toString('base64')));
       assert.equal(deployReceipts.length,1,'matching V9 self-deployment receipt missing or duplicated');
@@ -133,12 +143,16 @@ async function main() {
       assert.deepEqual((await provider.viewAccessKeyList(VAULT,ref)).keys,[]);
       const view = (method,args={}) => provider.callFunction(VAULT,method,args,ref);
       assert.equal(await view('get_owner'),OWNER);
-      const terms={owner:OWNER,vault:VAULT,policy_id:'loader-native',agent_public_key:pub(agentKey),
-        per_tx_cap_yocto:(ONE/10n).toString(),daily_cap_yocto:(ONE/10n).toString(),vault_deposit_yocto:(ONE/10n).toString(),
-        agent_gas_allowance_yocto:NATIVE_ORACLE_DEFAULT_GAS_ALLOWANCE};
-      const plan=buildNativeOracleWalletPlan({wasmBytes:code,terms});
-      await must(owner,VAULT,[...plan.batches[1].actions,...plan.batches[2].actions],'configure and fund upgraded V9');
-      await must(owner,OWNER,plan.batches[3].actions,'install restricted sandbox agent');
+      const tampered=structuredClone(receipt), changed=tampered.receipts.find(r=>r.receipt_id===deployReceipts[0].receipt_id);
+      changed.receipt.Action.actions[1].FunctionCall.args=Buffer.from('{"owner":"intruder.testnet"}').toString('base64');
+      assert.throws(()=>inspectResearchPhoneAttempt({...anchors,attempt,result:tampered}),/self-upgrade/);
+      const configured=await must(owner,VAULT,plan.batches[1].actions,'configure and fund upgraded V9');
+      await reconcile(configured,plan.batches[1].id,'FINAL_RESEARCH_NATIVE_SETUP_RECEIPT_MATCH');
+      const installed=await must(owner,OWNER,plan.batches[2].actions,'install restricted sandbox agent');
+      const installationReceipt=await provider.txStatusReceipts(installed.transaction_outcome.id,OWNER,'FINAL');
+      const installExpected=installationReceipt.receipts.some(r=>r.receipt_id===installationReceipt.transaction_outcome.outcome.status.SuccessReceiptId)
+        ? 'FINAL_RESEARCH_NATIVE_SETUP_RECEIPT_MATCH' : 'FINAL_LOCAL_ADD_KEY_OUTCOME_MATCH';
+      await reconcile(installed,plan.batches[2].id,installExpected);
       assert.equal(await view('vault_balance',{token:'native'}),terms.vault_deposit_yocto);
       assert.equal(await view('is_agent_key_allowed',{policy_id:terms.policy_id,public_key:pub(agentKey)}),true);
       const route=await view('get_outlayer_native_project',{policy_id:terms.policy_id});
@@ -152,6 +166,7 @@ async function main() {
         sandbox_wallet_result_json_bytes:walletResultBytes,meteor_mobile_action_limit_bytes:400000,
         pinned_meteor_sdk_validator_accepted:true,
         loader_sha256:digest(loader).toString('hex'),exact_v9_digest_checked_by_loader:true,
+        all_three_original_receipt_graphs_matched_offline:true,tampered_upgrade_rejected:true,
         self_deployment_receipt_and_owner_matched:true,keyless_vault_and_policy_configured:true,agent_cap_enforced:true,
         non_owner_zero_yocto_reinitialization_and_corruption_rejected:true,
         failed_creation_rolled_back_except_gas:true,unused_loader_owner_refund_verified:true,

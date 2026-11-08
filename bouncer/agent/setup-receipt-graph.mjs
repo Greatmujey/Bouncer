@@ -126,7 +126,7 @@ export function rootOf(result, batch, attempt, g) {
 // contract created no promise. Do not mistake that for a storage-deposit refund
 // from the token. Match only the protocol's system transfer to this original
 // signer and key; any unknown/missing child or contract-origin transfer blocks.
-function protocolGasRefund(receipt, outcome, attempt) {
+export function protocolGasRefund(receipt, outcome, attempt) {
   const action = receipt?.receipt?.Action, actions = action?.actions, transfer = actions?.[0]?.Transfer;
   const deposit = numericString(transfer?.deposit);
   const knownActionFields = ['signer_id', 'signer_public_key', 'gas_price', 'input_data_ids', 'output_data_receivers',
