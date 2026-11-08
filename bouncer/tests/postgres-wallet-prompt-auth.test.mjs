@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import pg from 'pg';
 import nearApi from 'near-api-js';
 import { nep413Payload } from '../web-src/cli-login.mjs';
+import { nativeMissionAction } from '../web-src/native-mission-auth.mjs';
 import { buildBufferWalletSpendingPlan } from '../agent/buffer-wallet-spending-plan.mjs';
 import { buildBufferWalletSetup } from '../agent/buffer-wallet-setup-plan.mjs';
 import { wasm as V12, NOW as SETUP_NOW, snapshot as setupSnapshot, fixture as setupFixture } from './buffer-wallet-setup-fixture.mjs';
@@ -82,6 +83,21 @@ dbtest('a signed, owner-bound fresh testnet challenge works once and stores no s
   assert.ok(!JSON.stringify(stored.rows[0]).includes(evidence.signature));
   await assert.rejects(db.query('UPDATE bouncer_wallet_auth_v1.challenges SET consumed=false WHERE challenge_id=$1', [challenge.challenge_id]), /single use/);
   await assert.rejects(db.query('DELETE FROM bouncer_wallet_auth_v1.challenges WHERE challenge_id=$1', [challenge.challenge_id]), /cannot be deleted/);
+}));
+
+dbtest('mission approval binds exact hash, vault and maximum; owner consent is one-use', async () => resources(async (db, rpc, auth) => {
+  const f = fixture();
+  const action = nativeMissionAction({ owner:f.owner, ownerPublicKey:pk(f.ownerKey), vault:`vault.${f.owner}`,
+    missionId:'guarded-mission', missionSha256:'a'.repeat(64), maxNativeYocto:'300' });
+  const challenge = await auth.issue(action), evidence = signed(challenge, f);
+  assert.match(challenge.message, /I approve this one Bouncer testnet mission/);
+  assert.match(challenge.message, /Maximum: 300 yoctoNEAR plus gas/);
+  assert.match(challenge.message, /storage is public/);
+  assert.equal(await auth.authenticate({ action:{...action,max_native_yocto:'301'}, evidence }), false);
+  assert.equal(await auth.authenticate({ action:{...action,mission_sha256:'b'.repeat(64)}, evidence }), false);
+  assert.equal(await auth.authenticate({ action:{...action,vault:'other.testnet'}, evidence }), false);
+  const attempts = await Promise.all(Array.from({length:5}, () => auth.authenticate({action,evidence})));
+  assert.equal(attempts.filter(Boolean).length, 1);
 }));
 
 dbtest('a challenge cannot be reused concurrently or redirected to another origin or action', async () => resources(async (db, rpc, auth) => {

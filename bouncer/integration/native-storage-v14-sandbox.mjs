@@ -54,7 +54,8 @@ async function main() {
       assert.equal(route.active, true);
       failed(await send(owner, VAULT, [call('clear_native_storage_route', { policy_id: 'store' })]), /exactly 1 yoctoNEAR/);
       const rpc = new SandboxSetupRpc(rpcUrl), localAgent = account(OWNER, rpc, agentKey);
-      const goal = { id: 'storage', contract_id: VAULT, owner_account_id: OWNER, policy_id: 'store', amount: String(N / 10n),
+      const codeHash = (await provider.viewAccount(VAULT, { finality: 'final' })).code_hash;
+      const goal = { id: 'storage', contract_id: VAULT, contract_code_hash: codeHash, owner_account_id: OWNER, policy_id: 'store', amount: String(N / 10n),
         object_id: 'mission-sandbox', value: 'public sandbox result', route };
       journal = new FileJournal(path.join(dir, 'original.json'), VAULT, OWNER);
       assert.equal((await runNativeStorageGoal({ goal, account: localAgent, publicKey: agentKey.getPublicKey(), provider: rpc, journal, log: () => {} })).status, 'READY');

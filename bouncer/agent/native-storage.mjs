@@ -17,7 +17,7 @@ import { validateNativeBroadcastGuard, checkNativeBroadcastGuard } from './nativ
 const VERSION = 'bouncer-agent-v14-native-storage-testnet';
 const GAS = 100n * 10n ** 12n;
 const U128_MAX = (1n << 128n) - 1n;
-const fields = ['id', 'contract_id', 'owner_account_id', 'policy_id', 'amount', 'object_id', 'value', 'route'];
+const fields = ['id', 'contract_id', 'contract_code_hash', 'owner_account_id', 'policy_id', 'amount', 'object_id', 'value', 'route'];
 const routeFields = ['prefix', 'max_value_bytes', 'route_revision', 'policy_revision', 'payee_revision', 'active'];
 const objectFields = ['policy_id', 'object_id', 'value', 'value_sha256', 'value_bytes', 'stake_yocto'];
 const plain = value => value !== null && typeof value === 'object' && !Array.isArray(value) &&
@@ -46,7 +46,9 @@ function name(value, label, max) {
 export function validateNativeStorageGoal(value) {
   if (!exact(value, fields) || !exact(value.route, routeFields)) throw new Error('storage goal must contain exactly the reviewed fields');
   const id = name(value.id, 'storage goal id', 64);
-  if (!isTestnetAccount(value.contract_id) || !isTestnetAccount(value.owner_account_id)) throw new Error('named testnet owner and vault required');
+  if (!isTestnetAccount(value.contract_id) || !isTestnetAccount(value.owner_account_id) || !isTransactionHash(value.contract_code_hash)) {
+    throw new Error('named testnet owner, vault and reviewed contract code hash required');
+  }
   const policy = text(value.policy_id, 'storage policy', 128), object = name(value.object_id, 'storage object id', 64);
   const route = { prefix: name(value.route.prefix, 'storage prefix', 48),
     max_value_bytes: integer(value.route.max_value_bytes, 'storage size limit', 1, 4096),
@@ -56,7 +58,7 @@ export function validateNativeStorageGoal(value) {
   if (route.active !== true || !object.startsWith(route.prefix)) throw new Error('storage object is outside the active reviewed route');
   const content = text(value.value, 'PUBLIC storage value', route.max_value_bytes);
   const amount = u128(value.amount, 'storage maximum', true);
-  return { id, contract_id: value.contract_id, owner_account_id: value.owner_account_id, policy_id: policy,
+  return { id, contract_id: value.contract_id, contract_code_hash: value.contract_code_hash, owner_account_id: value.owner_account_id, policy_id: policy,
     amount: amount.toString(), object_id: object, value: content, route };
 }
 const fingerprint = goal => crypto.createHash('sha256').update(JSON.stringify(goal)).digest('hex');
@@ -71,6 +73,17 @@ function successful(status) {
   return plain(status) && status.Failure === undefined &&
     ((typeof status.SuccessValue === 'string' && status.SuccessReceiptId === undefined) ||
      (typeof status.SuccessReceiptId === 'string' && status.SuccessValue === undefined));
+}
+async function assertPinnedVault(provider, goal, reference) {
+  if (typeof provider?.viewAccount !== 'function' || typeof provider?.viewAccessKeyList !== 'function') {
+    throw new Error('trusted RPC must verify the pinned, keyless V14 vault');
+  }
+  const [account, keys] = await Promise.all([
+    provider.viewAccount(goal.contract_id, reference), provider.viewAccessKeyList(goal.contract_id, reference),
+  ]);
+  if (account?.code_hash !== goal.contract_code_hash || !Array.isArray(keys?.keys) || keys.keys.length !== 0) {
+    throw new Error('V14 contract code hash or keyless vault does not match the owner review');
+  }
 }
 function validateObject(goal, object) {
   if (!exact(object, objectFields) || object.policy_id !== goal.policy_id || object.object_id !== goal.object_id || object.value !== goal.value ||
@@ -105,6 +118,8 @@ export async function verifyNativeStorageResult(rawGoal, result, publicKey, prov
   if (executed.length !== 1 || receipts.length !== 1 || !Array.isArray(actions) || actions.length !== 1 ||
       receiptCall?.method_name !== 'execute_native_storage' || String(receiptCall.deposit) !== '0' ||
       !equal(decodeJson(receiptCall.args, 'storage receipt arguments'), argsFor(goal))) throw new Error('missing exact Bouncer storage receipt');
+  if (!isTransactionHash(executed[0].block_hash)) throw new Error('storage receipt block is unavailable');
+  await assertPinnedVault(provider, goal, { blockId: executed[0].block_hash });
   const receiptObject = validateObject(goal, decodeJson(executed[0].outcome.status.SuccessValue, 'storage receipt result'));
   const returnedObject = validateObject(goal, decodeJson(result.status.SuccessValue, 'storage final result'));
   if (!equal(receiptObject, returnedObject) || !provider || typeof provider.callFunction !== 'function') throw new Error('storage results do not match');
@@ -147,6 +162,7 @@ async function runUnlocked({ goal: raw, provider, account, publicKey, journal, e
   if (execute && (!journal || typeof journal.get !== 'function' || typeof journal.put !== 'function')) throw new Error('storage execution requires the original journal');
   if ((await provider.viewNodeStatus())?.chain_id !== 'testnet') throw new Error('RPC must report testnet');
   const final = { finality: 'final' };
+  await assertPinnedVault(provider, goal, final);
   const [version, owner, access] = await Promise.all([
     provider.callFunction(goal.contract_id, 'contract_version', {}, final),
     provider.callFunction(goal.contract_id, 'get_owner', {}, final),

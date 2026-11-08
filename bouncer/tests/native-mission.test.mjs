@@ -12,12 +12,13 @@ import { runNativeMission, validateNativeMission } from '../agent/native-mission
 import { ORACLE_TESTNET_PROJECT, ORACLE_TESTNET_PROGRAM, ORACLE_PROJECT_ID, ORACLE_PROJECT_UUID } from '../agent/oracle-outlayer.mjs';
 
 const owner = 'owner.testnet', vault = 'bouncer.testnet';
+const storageCodeHash = nearApi.utils.serialize.base_encode(Buffer.alloc(32, 42));
 const randomGoal = { id: 'compute', contract_id: vault, owner_account_id: owner, policy_id: 'compute-policy', amount: '100',
   input: { min: 1, max: 100 }, program: { url: 'https://example.test/random.wasm', sha256: 'a'.repeat(64),
     build_target: 'wasm32-wasip1', max_instructions: 10_000_000, max_memory_mb: 128, max_execution_seconds: 60 } };
 const oracleGoal = { id: 'price', contract_id: vault, owner_account_id: owner, policy_id: 'api-policy', amount: '100',
   route: { project: { ...ORACLE_TESTNET_PROJECT }, route_revision: 1, policy_revision: 1, payee_revision: 1, active: true }, max_age_seconds: 300 };
-const storageGoal = { id: 'store', contract_id: vault, owner_account_id: owner, policy_id: 'storage-policy', amount: '100',
+const storageGoal = { id: 'store', contract_id: vault, contract_code_hash: storageCodeHash, owner_account_id: owner, policy_id: 'storage-policy', amount: '100',
   object_id: 'mission-results', value: { from_goal_ids: ['compute', 'price'] },
   route: { prefix: 'mission-', max_value_bytes: 4096, route_revision: 1, policy_revision: 1, payee_revision: 1, active: true } };
 const makeMission = () => ({ version: 1, id: 'partial-native', contract_id: vault, owner_account_id: owner, max_native_amount: '200',
@@ -48,6 +49,8 @@ function fixture({ stale = false, ambiguous = false, samePolicy = false, storage
   const timestamp = Math.floor(Date.now() / 1000) - (stale ? 1000 : 0);
   const provider = {
     async viewNodeStatus() { return { chain_id: 'testnet' }; },
+    async viewAccount() { return { code_hash: storageCodeHash }; },
+    async viewAccessKeyList() { return { keys: [] }; },
     async viewAccessKey(account, key) {
       assert.equal(account, owner);
       const id = Object.keys(signers).find(id => String(signers[id].publicKey) === String(key));

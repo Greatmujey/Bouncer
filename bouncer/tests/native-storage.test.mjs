@@ -6,8 +6,9 @@ import nearApi from 'near-api-js';
 import { validateNativeStorageGoal, verifyNativeStorageResult, runNativeStorageGoal, recoverNativeStorageGoal } from '../agent/native-storage.mjs';
 
 const owner = 'owner.testnet', vault = 'vault.testnet';
+const codeHash = nearApi.utils.serialize.base_encode(Buffer.alloc(32, 42));
 const route = { prefix: 'mission-', max_value_bytes: 128, route_revision: 1, policy_revision: 1, payee_revision: 1, active: true };
-const makeGoal = () => ({ id: 'storage', contract_id: vault, owner_account_id: owner, policy_id: 'store', amount: '100',
+const makeGoal = () => ({ id: 'storage', contract_id: vault, contract_code_hash: codeHash, owner_account_id: owner, policy_id: 'store', amount: '100',
   object_id: 'mission-001', value: 'public value', route: structuredClone(route) });
 const enc = value => Buffer.from(JSON.stringify(value)).toString('base64');
 const actionId = '7'.repeat(44), block = 'B'.repeat(44);
@@ -25,6 +26,8 @@ function fixture({ timeout = false } = {}) {
     routeView = structuredClone(route), verdict = [true, 'ok'], beforeSend;
   const provider = {
     async viewNodeStatus() { return { chain_id: chainId }; },
+    async viewAccount() { return { code_hash: codeHash }; },
+    async viewAccessKeyList() { return { keys: [] }; },
     async viewAccessKey() { return { permission: { FunctionCall: { receiver_id: vault, method_names: [method] } } }; },
     async callFunction(receiver, view) {
       assert.equal(receiver, vault);
