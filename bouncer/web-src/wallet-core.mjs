@@ -310,9 +310,9 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     if (missionOpen) { missionOpen.hidden = !ownerVerified || Boolean(missionFlow); missionOpen.disabled = busyState; }
     if (missionPanel) missionPanel.hidden = !ownerVerified || !missionFlow;
     if (missionConsentLabel) missionConsentLabel.hidden = !missionReview || !missionReady || missionStarted;
-    if (missionConsent) missionConsent.disabled = busyState || !missionReady || missionStarted;
+    if (missionConsent) missionConsent.disabled = busyState || !missionReady || missionStarted || !missionDetails?.open;
     if (missionApprove) { missionApprove.hidden = !missionReview || !missionReady || missionStarted;
-      missionApprove.disabled = busyState || !missionConsent?.checked; }
+      missionApprove.disabled = busyState || !missionDetails?.open || !missionConsent?.checked; }
     if (missionRecover) { missionRecover.hidden = !missionReview; missionRecover.disabled = busyState; }
     if (bufferReadiness) {
       const experimentalPreview = /^4173-[a-z0-9-]+\.e2b\.app$/i.test(win.location.hostname);
@@ -392,7 +392,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     missionFlow = null; missionReview = null; missionReady = false; missionStarted = false;
     if (missionConsent) missionConsent.checked = false;
     if (missionSummary) missionSummary.textContent = ''; if (missionStatus) missionStatus.textContent = '';
-    if (missionManifest) missionManifest.textContent = ''; if (missionDetails) missionDetails.hidden = true;
+    if (missionManifest) missionManifest.textContent = ''; if (missionDetails) { missionDetails.hidden = true; missionDetails.open = false; }
     if (directStatus) directStatus.textContent = ''; if (directHash) { directHash.hidden = true; directHash.textContent = ''; }
     if (directResult) { directResult.hidden = true; directResult.textContent = ''; } if (directOriginal) directOriginal.value = '';
     if (nativeTerms) nativeTerms.textContent = ''; if (nativeStage) nativeStage.textContent = '';
@@ -831,6 +831,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     }
   });
   missionConsent?.addEventListener('change', () => renderControls());
+  missionDetails?.addEventListener('toggle', () => renderControls());
   missionOpen?.addEventListener('click', async () => {
     const wallet = selectedWallet, accountId = connectedAccount, version = ownerSessionVersion, proof = ownerVerification;
     if (busyState || !connected || !isTop || proof?.wallet !== wallet || proof.accountId !== accountId ||
@@ -868,7 +869,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
   });
   missionApprove?.addEventListener('click', async () => {
     const flow = missionFlow, review = missionReview, wallet = selectedWallet, proof = ownerVerification, version = ownerSessionVersion;
-    if (busyState || !flow || !review || !missionReady || missionStarted || !missionConsent?.checked || proof?.wallet !== wallet) return;
+    if (busyState || !flow || !review || !missionReady || missionStarted || !missionDetails?.open || !missionConsent?.checked || proof?.wallet !== wallet) return;
     const current = () => connected && missionFlow === flow && ownerVerification === proof && ownerSessionVersion === version;
     missionStarted = true; busy(true); closePicker();
     setStatus('Review the one testnet mission approval in your wallet. If uncertain, check the originals; do not approve again.');

@@ -60,7 +60,7 @@ jobs:
           for script in test-web-browser.mjs test-witnessed-setup-browser.mjs test-buffer-private-order-browser.mjs \
             test-walletconnect-browser.mjs test-wallet-prompt-fence-browser.mjs test-native-oracle-device-key-browser.mjs \
             test-native-oracle-setup-browser.mjs test-witnessed-native-oracle-phone-browser.mjs \
-            test-native-oracle-owner-ui-browser.mjs; do
+            test-native-oracle-owner-ui-browser.mjs test-native-mission-ui-browser.mjs; do
             set +e
             node "scripts/$script" 2>&1 | tee "$RUNNER_TEMP/browser-test.log"
             result=${PIPESTATUS[0]}

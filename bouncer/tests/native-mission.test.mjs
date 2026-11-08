@@ -164,12 +164,14 @@ test('strict native manifest binds one owner, unique goals, required types and t
   ]) { const changed = structuredClone(m); mutate(changed); assert.throws(() => validateNativeMission(changed)); }
 });
 
-test('checked-in example is unsigned and explicitly requires unsupported storage', () => {
+test('checked-in example is unsigned, illustrative and includes a public storage goal', () => {
   const example = JSON.parse(fs.readFileSync(new URL('../examples/native-mission.example.json', import.meta.url), 'utf8'));
   const mission = validateNativeMission(example);
   assert.deepEqual(mission.required_resources, ['compute', 'storage', 'api']);
   assert.equal(JSON.stringify(mission).includes('private_key'), false);
   assert.equal(mission.owner_account_id, 'great_mujey.testnet');
+  assert.deepEqual(mission.goals.map(item => item.kind), ['random','oracle','storage']);
+  assert.deepEqual(mission.goals[2].goal.value.from_goal_ids, ['compute','price']);
 });
 
 test('a full mission requiring storage blocks before reads, signing or payments', () => withFixture(async f => {

@@ -1,4 +1,4 @@
-# Offline testnet prototype only. This never deploys or signs a transaction.
+# Offline testnet prototype only. No public-chain deployment or transaction.
 name: V14 native storage contract
 on:
   push:
@@ -62,3 +62,32 @@ jobs:
           name: experimental-v14-testnet-wasm
           path: bouncer/contracts/bouncer/target/wasm32-unknown-unknown/release/bouncer.wasm
           retention-days: 7
+  browser:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[native-storage-v14]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+      - name: Install dependencies and rebuild browser assets
+        working-directory: bouncer
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm ci --prefix walletconnect --ignore-scripts --no-audit --no-fund
+          npm run build:web
+          git diff --exit-code -- web/wallet.bundle.js
+          npm install --prefix "$RUNNER_TEMP/bouncer-browser" --no-save --no-audit --no-fund playwright-core@1.64.1
+      - name: Test synthetic mobile wallet consent and recovery
+        working-directory: bouncer
+        env:
+          BOUNCER_PLAYWRIGHT_PATH: ${{ runner.temp }}/bouncer-browser/node_modules/playwright-core/index.mjs
+        run: |
+          if ! node scripts/test-native-mission-ui-browser.mjs > "$RUNNER_TEMP/v14-browser-result.log" 2>&1; then
+            python3 -c 'import os; s=open(os.environ["RUNNER_TEMP"]+"/v14-browser-result.log").read()[-4500:]; print("::error title=Synthetic mission browser failed::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
+            exit 1
+          fi
+          cat "$RUNNER_TEMP/v14-browser-result.log"
