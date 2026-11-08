@@ -201,6 +201,9 @@
       <button class="account-entry-primary" id="wallet-native-setup-approve" type="button" hidden>Approve this stage in wallet →</button>
       <button class="account-entry-secondary" id="wallet-native-setup-receipt" type="button" hidden>Check original receipt →</button>
       <button class="account-entry-secondary" id="wallet-native-setup-verify" type="button" hidden>Verify current setup →</button>
+      <button class="account-entry-secondary" id="wallet-native-trial-review" type="button" hidden>Review the resource request →</button>
+      <button class="account-entry-primary" id="wallet-native-trial-send" type="button" hidden>Authorize one testnet resource request →</button>
+      <button class="account-entry-secondary" id="wallet-native-trial-check" type="button" hidden>Check resource receipt and refund →</button>
       <div id="wallet-native-setup-recover" hidden>
         <label for="wallet-native-setup-original">Original transaction hash from wallet history</label>
         <input id="wallet-native-setup-original" type="text" maxlength="50" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Paste the original hash" />
@@ -274,7 +277,7 @@
   </dialog>
   <dialog class="tour-dialog" id="welcome-tour" aria-labelledby="tour-title" aria-describedby="tour-description"><div class="tour-topline"><span class="brand-mark" aria-hidden="true"><svg viewBox="16 17 300 300"><use href="#i-bouncer"/></svg></span><span class="tour-count" id="tour-count">STEP 1 OF 4</span><button type="button" class="tour-close" id="tour-skip" aria-label="Close the tour">×</button></div><div class="tour-progress" aria-hidden="true"><span></span><span></span><span></span><span></span></div><div class="tour-copy" aria-live="polite"><div class="section-kicker" id="tour-kicker">WELCOME TO BOUNCER</div><h2 id="tour-title">Meet your resource agent.</h2><p id="tour-description">Bouncer helps an agent get compute, storage and API services while your on-chain rules guard its spending.</p><div class="tour-callout" id="tour-callout">Bouncer is a testnet prototype, not an open marketplace.</div></div><div class="tour-actions"><button class="button tour-back" type="button" id="tour-back" disabled>Back</button><button class="button tour-next" type="button" id="tour-next">Next →</button></div></dialog>
   <script type="module" src="./app.mjs?v=7"></script>
-  <script type="module" src="./wallet.bundle.js?v=19"></script>
+  <script type="module" src="./wallet.bundle.js?v=20"></script>
   <script type="module" src="./google-signin.mjs?v=2"></script>
 </body>
 </html>

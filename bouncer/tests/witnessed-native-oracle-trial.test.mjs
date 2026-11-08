@@ -9,6 +9,8 @@ import { createNativeOraclePromptWitness } from '../agent/git-native-oracle-prom
 import { createWitnessedNativeOraclePhoneAccount } from '../agent/native-oracle-phone-signer.mjs';
 import { createPresignedWitnessedNativeOracleAccount } from '../agent/presigned-witnessed-native-oracle-account.mjs';
 import { prepareWitnessedNativeOracleTrial } from '../web-src/witnessed-native-oracle-trial.mjs';
+import { submitWitnessedNativeOracleTrialOnce } from '../web-src/native-oracle-trial-submit.mjs';
+import { inspectLocalNativeSubmission } from '../web-src/native-oracle-local-submission.mjs';
 import { recoverWitnessedNativeOracle } from '../agent/recover-witnessed-native-oracle.mjs';
 import { createAuthenticatedNativeOracleTrialClaim, createOwnerAuthorizedNativeTrialWitness } from '../agent/authenticated-native-oracle-trial-claim.mjs';
 import { openNativeOracleDeviceKey } from '../web-src/native-oracle-device-key.mjs';
@@ -32,7 +34,8 @@ function store() {
 const journal=()=>{const rows=new Map();return {get:id=>rows.get(id),put:(id,v)=>rows.set(id,structuredClone(v)),rows}};
 async function fixture() {
   let clock=base;
-  const device=await openNativeOracleDeviceKey({indexedDB:new IDBFactory(),storage:{persisted:async()=>true},crypto:webcrypto,
+  const indexedDB=new IDBFactory();
+  const device=await openNativeOracleDeviceKey({indexedDB,storage:{persisted:async()=>true},crypto:webcrypto,
     origin:'https://bouncer.example',isTopLevel:true,now:()=>clock});
   const key=await device.create({owner:OWNER,vault:VAULT});
   const review=buildNativeOracleWalletPlan({wasmBytes:wasm,terms:{owner:OWNER,vault:VAULT,policy_id:'price',agent_public_key:key.public_key,
@@ -75,7 +78,7 @@ async function fixture() {
     async txStatusReceipts(){statusReads++;throw Error('synthetic original not yet found')},
   };
   const publicKey=nearApi.utils.PublicKey.from(review.agent_public_key);
-  return {device,review,identity,goal,witness,remote,provider,publicKey,makeAccount,getFreshCompletion,requestPhoneSignature,
+  return {device,indexedDB,review,identity,goal,witness,remote,provider,publicKey,makeAccount,getFreshCompletion,requestPhoneSignature,
     counts:()=>({completionReads,signatures,sends,statusReads}),setNonce:value=>{nonce=value},setClock:value=>{clock=value}};
 }
 const run=(f,account,local)=>runOracleGoal({goal:f.goal,provider:f.provider,account,publicKey:f.publicKey,journal:local,execute:true,log:()=>{}});
@@ -367,6 +370,77 @@ test('stale or inconsistent completion evidence cannot release the presigned tra
       const account=presignedAccount(f,signed,{getFreshCompletion,...(mode==='stale'?{now:()=>base+6000}:{})});
       await assert.rejects(run(f,account,local));
       assert.equal(local.get(f.goal.id),undefined);assert.equal(f.counts().sends,0);
+    }finally{f.device.close()}
+  }
+});
+
+// Browser submission tests below use a fabricated witness, phone key and RPC.
+// No signed testnet transaction leaves this process.
+async function submitArgs(f,signed,extra={}) {
+  return {signedResult:signed,review:f.review,identity:f.identity,completion:await f.getFreshCompletion(),
+    deviceStore:f.device,indexedDB:f.indexedDB,origin:'https://bouncer.example',isTopLevel:true,crypto:webcrypto,
+    isCurrent:()=>true,now:()=>base,...extra};
+}
+test('phone submission records the witnessed original before exactly one testnet RPC call',async()=>{
+  const f=await fixture();try {
+    const signed=await signedPhoneTrial(f),original=signed.tx_hash;let calls=0,fetchError;
+    const fetch=async (url,options)=>{ try {
+      calls++;assert.equal(url,'https://rpc.testnet.near.org');assert.equal(options.redirect,'error');
+      assert.equal(options.credentials,'omit');assert.equal(options.method,'POST');
+      const request=JSON.parse(options.body);assert.equal(request.method,'send_tx');assert.equal(request.params.wait_until,'FINAL');
+      const tx=nearApi.transactions.SignedTransaction.decode(Buffer.from(request.params.signed_tx_base64,'base64'));
+      assert.deepEqual(Buffer.from(tx.transaction.publicKey.ed25519Key.data),Buffer.from(nearApi.utils.PublicKey.from(f.review.agent_public_key).ed25519Key.data));
+      const local=await inspectLocalNativeSubmission(f.indexedDB,f.review.review_sha256);
+      assert.equal(local.original_hash,original);
+      return new Response(JSON.stringify({jsonrpc:'2.0',id:request.id,result:{transaction:{hash:original},transaction_outcome:{id:original}}}),
+        {status:200,headers:{'content-type':'application/json'}});
+      } catch (error) { fetchError=error; throw error; }
+    };
+    const args=await submitArgs(f,signed,{fetch});
+    const result=await submitWitnessedNativeOracleTrialOnce(args);
+    if(fetchError)throw fetchError;
+    assert.deepEqual(result,{status:'ORIGINAL_RPC_ACKNOWLEDGED',original_hash:original,do_not_retry:true,provider_delivery_verified:false});
+    assert.equal(calls,1);assert.equal(signed.signed_transaction.every(byte=>byte===0),true);
+    await assert.rejects(submitWitnessedNativeOracleTrialOnce(args));assert.equal(calls,1);
+  }finally{f.device.close()}
+});
+
+test('lost RPC acknowledgement remains unknown and never resends',async()=>{
+  const f=await fixture();try {
+    const signed=await signedPhoneTrial(f),original=signed.tx_hash;let calls=0;
+    const args=await submitArgs(f,signed,{fetch:async()=>{calls++;throw Error('synthetic network timeout')}});
+    const result=await submitWitnessedNativeOracleTrialOnce(args);
+    assert.equal(result.status,'ORIGINAL_SUBMISSION_UNKNOWN');assert.equal(result.original_hash,original);assert.equal(result.do_not_retry,true);
+    assert.equal((await inspectLocalNativeSubmission(f.indexedDB,f.review.review_sha256)).original_hash,original);
+    await assert.rejects(submitWitnessedNativeOracleTrialOnce(args));assert.equal(calls,1);
+  }finally{f.device.close()}
+});
+
+test('concurrent cooperating tabs cannot submit the same witnessed original twice',async()=>{
+  const f=await fixture();try {
+    const signed=await signedPhoneTrial(f);let calls=0;
+    const fetch=async()=>{calls++;throw Error('synthetic unknown response')};
+    const args=await submitArgs(f,signed,{fetch});
+    const result=await Promise.allSettled([submitWitnessedNativeOracleTrialOnce(args),submitWitnessedNativeOracleTrialOnce(args)]);
+    assert.equal(result.filter(x=>x.status==='fulfilled').length,1);assert.equal(result.filter(x=>x.status==='rejected').length,1);
+    assert.equal(result.find(x=>x.status==='fulfilled').value.status,'ORIGINAL_SUBMISSION_UNKNOWN');assert.equal(calls,1);
+  }finally{f.device.close()}
+});
+
+test('tampered bytes, stale or changed state and changed owner session stop before local submission or network',async()=>{
+  for(const mode of ['signature','transaction','head','nonce','originals','stale','session']){
+    const f=await fixture();try {
+      const signed=await signedPhoneTrial(f);let calls=0;
+      const args=await submitArgs(f,signed,{fetch:async()=>{calls++;throw Error('must not be reached')}});
+      if(mode==='signature')signed.signed_transaction[signed.signed_transaction.length-1]^=1;
+      if(mode==='transaction')signed.signed_transaction[5]^=1;
+      if(mode==='head')args.completion.witness_head='f'.repeat(40);
+      if(mode==='nonce')args.completion.agent_key_nonce='78';
+      if(mode==='originals')args.completion.prior_original_hashes[2]=hash(80);
+      if(mode==='stale')args.now=()=>base+6_000;
+      if(mode==='session')args.isCurrent=()=>false;
+      await assert.rejects(submitWitnessedNativeOracleTrialOnce(args));
+      assert.equal(calls,0,mode);assert.equal(await inspectLocalNativeSubmission(f.indexedDB,f.review.review_sha256),null,mode);
     }finally{f.device.close()}
   }
 });

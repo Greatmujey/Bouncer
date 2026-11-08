@@ -27,7 +27,7 @@ const checks=Object.fromEntries(['plain_owner','exact_owner_key','owner_native_e
   'native_policy_state','vault_native_balance','onchain_policy_check'].map(k=>[k,true]));
 const labels={reserve_native_setup:id=>`Reserve native setup prompt: ${id}`,claim_native_setup_stage:id=>`Claim one native setup prompt: ${id}`,
   record_native_setup_original:id=>`Record native setup original: ${id}`,inspect_native_setup:()=> 'Inspect retained native setup',
-  verify_native_setup_completion:()=> 'Verify native setup originals and state'};
+  verify_native_setup_completion:()=> 'Verify native setup originals and state',claim_native_oracle_trial:()=> 'Retain original native trial hash'};
 try {
   for(const {width,unknown} of [{width:390,unknown:false},{width:320,unknown:true}]) {
     const context=await browser.newContext({viewport:{width,height:844},isMobile:true,hasTouch:true,reducedMotion:'reduce'}),page=await context.newPage();
@@ -55,7 +55,7 @@ try {
     });`;
     const bundle=fs.readFileSync(path.join(web,'wallet.bundle.js'),'utf8'),digest=createHash('sha256').update(mock).digest('hex'),
       pinned=WALLET_EXECUTOR_SHA256['meteor-wallet'];assert.ok(bundle.includes(pinned));
-    let review=null,identity=null,rows=[],records=[],sequence=0,reserved=false,dropAck=unknown,claims=0;
+    let review=null,identity=null,rows=[],records=[],sequence=0,reserved=false,dropAck=unknown,claims=0,trial=null,sends=0,blockTime=null;
     const json=(route,data,status=200)=>route.fulfill({status,contentType:'application/json',body:JSON.stringify(data),headers:{'cache-control':'no-store'}});
     const common=purpose=>({purpose,owner,ownerPublicKey:publicKey,identity});
     function challenge(ctx){const action=nativeSetupAuthAction(ctx),actionDigest=createHash('sha256').update(JSON.stringify(action)).digest('hex');
@@ -69,19 +69,33 @@ try {
       assert.deepEqual(saved.action,nativeSetupAuthAction(ctx));assert.equal(evidence.accountId,owner);assert.equal(evidence.publicKey,publicKey);
       const payload=nep413Payload({message:saved.result.message,nonce:new Uint8Array(Buffer.from(saved.result.nonce_base64,'base64')),recipient:saved.result.recipient});
       assert.equal(verifySignature(null,createHash('sha256').update(payload).digest(),pair.publicKey,Buffer.from(evidence.signature,'base64')),true);saved.used=true;}
-    function completion(){const now=Date.now();return {version:1,network:'testnet',status:'FOUR_ORIGINALS_AND_STATE_MATCH_NOT_AUTHORIZED',
-      stage_id:'verify_native_setup_completion',owner,vault,review_sha256:review.review_sha256,independently_witnessed:true,witness_head:'c'.repeat(40),
+    function completion(){const now=Date.now();blockTime??=now;return {version:1,network:'testnet',status:'FOUR_ORIGINALS_AND_STATE_MATCH_NOT_AUTHORIZED',
+      stage_id:'verify_native_setup_completion',owner,vault,review_sha256:review.review_sha256,independently_witnessed:true,
+      witness_head:(trial?'d':'c').repeat(40),
       execution_authorized:false,signing_authorized:false,transaction_sent:false,owner_approval_obtained:false,wallet_prompt_authorized:false,
       prior_original_hashes:rows.map(row=>row.original_hash),checks:{...checks},blockers:[],observed_at:new Date(now).toISOString(),
-      block_hash:hash(9),block_height:100,block_timestamp_nanosec:String(BigInt(now)*1_000_000n),agent_key_nonce:'77'};}
+      block_hash:hash(9),block_height:100,block_timestamp_nanosec:String(BigInt(blockTime)*1_000_000n),agent_key_nonce:'77'};}
     await page.route('**/*',async route=>{
       const req=route.request(),url=new URL(req.url());requests.push(`${req.method()} ${url.pathname}`);
       if(url.pathname.endsWith('meteor-near-connect-latest.js'))return route.fulfill({status:200,contentType:'text/javascript',body:mock});
       if(url.origin==='https://test.rpc.fastnear.com')return route.abort('failed');
+      if(url.origin==='https://rpc.testnet.near.org'){
+        const cors={'access-control-allow-origin':origin,'access-control-allow-methods':'POST, OPTIONS',
+          'access-control-allow-headers':'content-type'};
+        if(req.method()==='OPTIONS')return route.fulfill({status:204,headers:cors});
+        const request=req.postDataJSON();
+        if(request.method==='status')return route.fulfill({status:200,contentType:'application/json',headers:cors,
+          body:JSON.stringify({jsonrpc:'2.0',id:request.id,result:{chain_id:'testnet'}})});
+        sends++;assert.equal(request.method,'send_tx');assert.equal(request.params.wait_until,'FINAL');
+        assert(trial);const decoded=nearApi.transactions.SignedTransaction.decode(Buffer.from(request.params.signed_tx_base64,'base64'));
+        assert.equal(decoded.transaction.signerId,owner);assert.equal(decoded.transaction.receiverId,vault);
+        return route.fulfill({status:200,contentType:'application/json',headers:cors,
+          body:JSON.stringify({jsonrpc:'2.0',id:request.id,result:{transaction:{hash:trial.original_hash},transaction_outcome:{id:trial.original_hash}}})});
+      }
       if(url.origin!==origin)return route.abort();
       if(url.pathname==='/api/google-session')return json(route,{authenticated:false});
       if(url.pathname==='/api/wallet-setup/config')return json(route,{enabled:false,network:'testnet',owner});
-      if(url.pathname==='/api/native-oracle-setup/config')return json(route,{enabled:true,network:'testnet',owner,ready_for_real_spending:false});
+      if(url.pathname==='/api/native-oracle-setup/config')return json(route,{enabled:true,network:'testnet',owner,ready_for_real_spending:false,trial_submission_enabled:true});
       if(url.pathname==='/api/read-only/config')return json(route,{relay_url:'https://bouncer-testnet-readonly-relay-tau.vercel.app/api/read'});
       if(url.pathname==='/api/read-only/pending')return json(route,{jobs:[]});
       if(url.pathname==='/api/read-only/owner-key')return json(route,{full_access:true});
@@ -121,6 +135,22 @@ try {
           stage_id:row.stage_id,tx_hash:input.originalHash,original_recorded:row.original_hash===input.originalHash,execution_authorized:false});}
       if(name==='completion-challenge')return json(route,challenge(common('verify_native_setup_completion')));
       if(name==='completion') {authenticate(input.evidence,common('verify_native_setup_completion'));return json(route,completion());}
+      if(name==='trial-challenge')return json(route,challenge({...common('claim_native_oracle_trial'),trial:input.trial,expectedWitnessHead:input.expectedWitnessHead}));
+      if(name==='trial') {
+        authenticate(input.evidence,{...common('claim_native_oracle_trial'),trial:input.trial,expectedWitnessHead:input.expectedWitnessHead});
+        authenticate(input.completionEvidence,common('verify_native_setup_completion'));
+        assert.equal(input.expectedWitnessHead,'c'.repeat(40));assert.equal(trial,null);trial=structuredClone(input.trial);
+        records.push({event:'trial_claim',...trial});
+        return json(route,{status:'TRIAL_ORIGINAL_WITNESSED',owner,operation_id:identity.operation_id,review_sha256:review.review_sha256,
+          ...trial,witness_head:'d'.repeat(40),independently_witnessed:true,do_not_retry:true,execution_authorized:false,transaction_sent:false});
+      }
+      if(name==='preview-trial') {
+        authenticate(input.evidence,common('inspect_native_setup'));assert(trial);assert.equal(sends,1);
+        return json(route,{status:'FINAL_NATIVE_ORACLE_DELIVERY_MATCH',owner,original_hash:trial.original_hash,do_not_retry:true,
+          execution_authorized:false,provider_delivery_verified:true,delivery:{tx_hash:trial.original_hash,provider:review.payee,asset:'NEAR',
+            maximum_yocto:review.per_tx_cap_yocto,charged_yocto:'10000000000000000000000',refunded_to_owner_yocto:'90000000000000000000000',
+            result:{price_usd:2.75}}});
+      }
       const file=url.pathname.slice(1)||'index.html';
       if(!allowed.has(file))return route.fulfill({status:404,body:'blocked synthetic route'});
       const content=file==='wallet.bundle.js'?bundle.replace(pinned,digest):fs.readFileSync(path.join(web,file));
@@ -158,10 +188,22 @@ try {
     }
     await page.locator('#wallet-native-setup-verify').click();
     await page.waitForFunction(()=>document.querySelector('#wallet-native-setup-status').textContent.includes('did not buy a resource'));
-    assert.equal(claims,4);assert.ok(!requests.some(r=>/native-oracle-setup\/(trial|broadcast)/.test(r)));
+    assert.equal(claims,4);assert.equal(sends,0);assert.equal(trial,null);
+    await page.locator('#wallet-native-trial-review').waitFor({state:'visible'});await page.locator('#wallet-native-trial-review').click();
+    await page.locator('#wallet-native-trial-send').waitFor({state:'visible'});
+    assert.match(await page.locator('#wallet-native-setup-stage').innerText(),/maximum 0\.1 test NEAR/);
+    assert.equal(sends,0);assert.equal(trial,null);await page.locator('#wallet-native-trial-send').click();
+    try { await page.locator('#wallet-native-trial-check').waitFor({state:'visible',timeout:15_000}); }
+    catch(error) { console.error('Synthetic trial:',await page.locator('#wallet-native-setup-status').textContent(),
+      {trialRetained:Boolean(trial),sends},errors,requests.slice(-18)); throw error; }
+    assert.equal(sends,1);assert(trial?.original_hash);assert.match(await page.locator('#wallet-native-setup-hash').innerText(),new RegExp(trial.original_hash));
+    await page.locator('#wallet-native-trial-check').click();
+    await page.waitForFunction(()=>document.querySelector('#wallet-native-setup-status').textContent.includes('OutLayer receipt verified'));
+    assert.match(await page.locator('#wallet-native-setup-status').innerText(),/charged 0\.01 test NEAR, refunded 0\.09/);
+    assert.equal(sends,1);assert.equal(await page.locator('#wallet-native-trial-send').isVisible(),false);
     assert.equal(await page.locator('#wallet-dialog').evaluate(el=>el.scrollWidth<=el.clientWidth),true);
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);assert.deepEqual(errors,[]);
     await context.close();
   }
-  console.log('Native owner UI: four separate simulated wallet approvals, receipt checks and lost-result recovery passed. No live transaction.');
+  console.log('Native owner UI: four simulated wallet approvals, one reviewed trial, receipt/refund checks and lost-result recovery passed. No live transaction.');
 } finally {await browser.close();}

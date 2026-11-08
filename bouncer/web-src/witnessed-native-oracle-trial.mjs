@@ -63,7 +63,10 @@ export async function prepareWitnessedNativeOracleTrial({client,deviceStore,iden
           !(result.signed_transaction instanceof Uint8Array) || result.signed_transaction.length>16_384 ||
           result.witnessed_original_matched!==true || result.local_original_retained!==true || result.do_not_retry!==true ||
           result.broadcast_authorized!==false || result.transaction_sent!==false)throw fail();
-      return result;
+      // Public metadata for a later same-device, one-shot submission. The
+      // signed bytes stay in memory only; neither this metadata nor signing is
+      // evidence that the request was sent or fulfilled.
+      return { ...result, witness_head:witness.witness_head, setup_original_hashes:[...completion.prior_original_hashes] };
     },
   });
 }

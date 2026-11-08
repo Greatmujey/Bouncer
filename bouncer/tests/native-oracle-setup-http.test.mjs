@@ -8,7 +8,7 @@ import { createReadOnlyPreviewService } from '../agent/read-only-preview-service
 const wasm=fs.readFileSync(new URL('../../bouncer.wasm',import.meta.url)),SITE='https://phone.example.test';
 const HEADERS={origin:SITE,'x-bouncer-preview':'native-oracle-setup-v1','content-type':'application/json'};
 const methods=['issueReservation','reserve','issueClaim','claim','issueOriginal','recordOriginal','issueCompletion','verifyCompletion',
-  'issueTrial','claimTrial','issueInspect','inspect','previewOriginal'];
+  'issueTrial','claimTrial','issueInspect','inspect','previewOriginal','previewTrial'];
 const bridge={pending:()=>[],take:()=>null,submit:()=>false,takeForBrowser:()=>null,submitEncrypted:()=>false};
 function synthetic(calls){return Object.fromEntries(methods.map(method=>[method,async input=>{calls.push([method,input]);
   if(input.evidence==='bad'){const error=new Error('private detail');error.code='UNAUTHENTICATED';throw error}return {method,execution_authorized:false}}]));}
@@ -24,6 +24,7 @@ test('native setup is off by default and opt-in routes enforce exact same-origin
   await withServer(async({base,calls})=>{
     const config=await fetch(`${base}/api/native-oracle-setup/config`,{headers:{'x-bouncer-preview':'native-oracle-setup-v1'}});
     const body=await config.json();assert.equal(body.enabled,true);assert.equal(body.ready_for_real_spending,false);
+    assert.equal(body.trial_submission_enabled,false);
     assert.equal(config.headers.get('cache-control'),'no-store');
     assert.equal((await post(base,'claim',{identity:{},stageId:'x',evidence:{}},{...HEADERS,origin:'https://evil.test'})).status,403);
     assert.equal((await post(base,'claim',{identity:{},stageId:'x',evidence:{}},{...HEADERS,'x-bouncer-preview':'read-only'})).status,403);
@@ -37,6 +38,9 @@ test('native setup is off by default and opt-in routes enforce exact same-origin
     assert.equal((await post(base,'trial',{...trial,unexpected:true})).status,400);
     assert.equal((await post(base,'trial',{...trial,completionEvidence:undefined})).status,400);
     assert.equal((await post(base,'trial',trial)).status,200);assert.equal(calls.at(-1)[0],'claimTrial');
+    assert.equal((await post(base,'preview-trial',{ownerPublicKey:'synthetic',evidence:'synthetic',extra:true})).status,400);
+    assert.equal((await post(base,'preview-trial',{ownerPublicKey:'synthetic',evidence:'synthetic'})).status,200);
+    assert.equal(calls.at(-1)[0],'previewTrial');
     const bad=await post(base,'claim',{identity:{},stageId:'x',evidence:'bad'}),text=await bad.text();
     assert.equal(bad.status,409);assert.match(text,/UNAUTHENTICATED/);assert.doesNotMatch(text,/private detail|evidence/);
   });
@@ -46,6 +50,7 @@ test('only pinned V9 bytes, the intended owner and a dedicated HTTPS origin can 
   const service=synthetic([]),base={service,siteOrigin:SITE,wasmBytes:wasm,owner:'great_mujey.testnet'};
   assert.throws(()=>createNativeOracleSetupHttpHandler({...base,owner:'other.testnet'}));
   assert.throws(()=>createNativeOracleSetupHttpHandler({...base,siteOrigin:'https://owner.github.io'}));
+  assert.throws(()=>createNativeOracleSetupHttpHandler({...base,enableTrialSubmission:'true'}));
   assert.throws(()=>createNativeOracleSetupHttpHandler({...base,siteOrigin:'https://phone.example.test/path'}));
   const changed=Buffer.from(wasm);changed[100]^=1;assert.throws(()=>createNativeOracleSetupHttpHandler({...base,wasmBytes:changed}));
   await withServer(async({base})=>{const response=await fetch(`${base}/api/native-oracle-setup/artifact`,

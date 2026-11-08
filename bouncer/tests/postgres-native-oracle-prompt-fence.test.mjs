@@ -490,7 +490,7 @@ dbtest('synthetic browser prompts, owner challenges, PostgreSQL, local Git and p
   const changingWitness = { ...witness, async inspect(owner) {
     const snapshot = await witness.inspect(owner); if (++reads === 2) return { ...snapshot, head: 'e'.repeat(40) }; return snapshot;
   } };
-  const changing = createWitnessedNativeOracleSetup({ fence, witness: changingWitness, otherWitness: emptyCrossWitness(changingWitness) });
+  const changing = createWitnessedNativeOracleSetup({ fence, witness: changingWitness, otherWitness: emptyCrossWitness(witness) });
   await assert.rejects(changing.verifyCompletion({ identity, evidence: await sign(verifyContext) }), e => e.code === 'WITNESS_MISMATCH');
   f.state.blocked = true;
   const changed = await coordinator.verifyCompletion({ identity, evidence: await sign(verifyContext) });

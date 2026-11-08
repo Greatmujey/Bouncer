@@ -7,6 +7,8 @@ import { buildNativeOracleWalletPlan, NATIVE_ORACLE_DEFAULT_GAS_ALLOWANCE } from
 import { createNativeOraclePromptWitness } from '../agent/git-native-oracle-prompt-witness.mjs';
 import { createAuthenticatedNativeOracleSetupService } from '../agent/authenticated-native-oracle-setup-service.mjs';
 import { createNativeOracleSetupClient } from '../web-src/native-oracle-setup-client.mjs';
+import { validateWitnessedNativeOracleTrial } from '../agent/native-oracle-phone-signer.mjs';
+import { ORACLE_PROJECT_ID, ORACLE_PROJECT_UUID, ORACLE_TESTNET_PROGRAM } from '../agent/oracle-outlayer.mjs';
 
 const wasm=fs.readFileSync(new URL('../../bouncer.wasm',import.meta.url)),OWNER='great_mujey.testnet',VAULT=`native.${OWNER}`;
 const key=()=>String(nearApi.KeyPair.fromRandom('ed25519').getPublicKey()),hash=n=>nearApi.utils.serialize.base_encode(Buffer.alloc(32,n));
@@ -24,14 +26,16 @@ function fixture({reorderedReview=false}={}){
   const witness=createNativeOraclePromptWitness({store});let peerState=null;
   const otherWitness={async inspect(){return {head,state:peerState}}};
   let state='absent',issued=[];
-  const fence={async inspect(){if(state==='absent'){const e=new Error();e.code='OWNER_FENCED';throw e}
+  const fence={async inspect({ownerPublicKey,evidence}={}){if(ownerPublicKey!==ownerKey || evidence==='bad')throw Error('synthetic authentication failed');
+    if(state==='absent'){const e=new Error();e.code='OWNER_FENCED';throw e}
     const output=structuredClone(plan);if(state==='mismatched')output.stages[0].claimed=true;return output}};
   const coordinator=Object.fromEntries(['reserve','claim','recordOriginal','verifyCompletion'].map(x=>[x,async()=>({})]));
   const auth={async issue(action){issued.push(action);return {action}}};
+  const receiptProvider={async viewNodeStatus(){return {chain_id:'testnet'}},async txStatusReceipts(){throw Error('not available')}};
   const service=createAuthenticatedNativeOracleSetupService({auth,fence,witness,otherWitness,coordinator,
-    getRetainedReview:async (id,k)=>id===review.review_sha256 && k===agentKey?{review:reorderedReview?reorder(review):review}:null,wasmBytes:wasm,receiptProvider:{async viewNodeStatus(){return {chain_id:'testnet'}},
-      async txStatusReceipts(){throw Error('not available')}},owner:OWNER});
-  return {review,identity,plan,witness,otherWitness,service,ownerKey,issued,setState:v=>{state=v},setPeer:v=>{peerState=v}};
+    getRetainedReview:async (id,k)=>id===review.review_sha256 && k===agentKey?{review:reorderedReview?reorder(review):review}:null,
+    wasmBytes:wasm,receiptProvider,owner:OWNER});
+  return {review,identity,plan,witness,otherWitness,service,receiptProvider,ownerKey,issued,setState:v=>{state=v},setPeer:v=>{peerState=v}};
 }
 
 test('native service binds challenge to retained plan and never treats absent or disagreeing journals as permission',async()=>{
@@ -101,4 +105,70 @@ test('completion can be freshly authenticated after the original trial hash is w
   const recovered=await f.service.inspect({ownerPublicKey:f.ownerKey,evidence:'synthetic'});
   assert.equal(recovered.status,'WITNESSED');assert.equal(recovered.witnessed_records.at(-1).original_hash,trial.original_hash);
   await assert.rejects(f.service.issueCompletion({identity:{...f.identity,operation_id:'f'.repeat(32)}}));
+});
+
+async function syntheticTrialReceiptFixture(){
+  const f=fixture();await f.witness.reserve(f.identity);
+  for(let i=0;i<f.identity.stages.length;i++){
+    const stage=f.identity.stages[i].stage_id,prior=await f.witness.assertClaimable(f.identity,stage);
+    await f.witness.claim(f.identity,stage,prior);await f.witness.recordOriginal(f.identity,stage,hash(i+1));
+    f.plan.stages[i].claimed=true;f.plan.stages[i].original_hash=hash(i+1);
+  }
+  f.setState('present');
+  const goal={id:'native-oracle-trial-1',contract_id:f.review.vault,owner_account_id:f.review.owner,policy_id:f.review.policy_id,
+    amount:f.review.per_tx_cap_yocto,route:{project:f.review.project,route_revision:1,policy_revision:1,payee_revision:1,active:true},max_age_seconds:300};
+  const checked=validateWitnessedNativeOracleTrial({goal,review:f.review,identity:f.identity,wasmBytes:wasm,
+    trustedReviewHash:f.review.review_sha256,trustedOwnerPublicKey:f.ownerKey});
+  const original=hash(40),prior=await f.witness.inspect(OWNER);
+  await f.witness.claimTrial(f.identity,{goal_id:goal.id,goal_sha256:checked.goalSha256,
+    agent_public_key:f.review.agent_public_key,original_hash:original},prior.head);
+  const blockHash=hash(90),bouncerReceipt=hash(91),requestReceipt=hash(92),completedReceipt=hash(93),refundReceipt=hash(94);
+  const charged='10000000000000000000000',refunded='90000000000000000000000',stamp=1_800_000_000;
+  const source={WasmUrl:{url:ORACLE_TESTNET_PROGRAM.url,hash:ORACLE_TESTNET_PROGRAM.sha256,build_target:ORACLE_TESTNET_PROGRAM.build_target}};
+  const encode=x=>Buffer.from(JSON.stringify(x)).toString('base64');
+  const event=(name,data)=>`EVENT_JSON:${JSON.stringify({standard:'near-outlayer',version:'1.0.0',event:name,data:[data]})}`;
+  const project=goal.route.project,data={success:true,token_id:'near',source:'custom',price_usd:2.75,timestamp:stamp};
+  const request={sender_id:OWNER,predecessor_id:VAULT,payment:goal.amount,input_data:project.input_data,code_source:source,
+    project_id:ORACLE_PROJECT_ID,project_uuid:ORACLE_PROJECT_UUID,attached_usd:'0'};
+  const completion={success:true,sender_id:OWNER,code_source:source,payment_charged:charged,payment_refunded:refunded};
+  const limits={max_instructions:project.max_instructions,max_memory_mb:project.max_memory_mb,max_execution_seconds:project.max_execution_seconds};
+  const outlayerArgs={source:{Project:{project_id:ORACLE_PROJECT_ID,version_key:project.version_key}},resource_limits:limits,
+    input_data:project.input_data,secrets_ref:null,response_format:'Json',payer_account_id:OWNER,params:null};
+  const outcome=(id,executor_id,status,logs=[])=>({id,block_hash:blockHash,outcome:{executor_id,status,logs}});
+  const receipt=(id,predecessor_id,receiver_id,actions)=>({receipt_id:id,predecessor_id,receiver_id,receipt:{Action:{actions}}});
+  const chain={final_execution_status:'FINAL',status:{SuccessValue:encode(data)},transaction_outcome:{id:original},
+    transaction:{hash:original,signer_id:OWNER,receiver_id:VAULT,public_key:f.review.agent_public_key,
+      actions:[{FunctionCall:{method_name:'execute_outlayer_native_project',deposit:'0',args:encode({policy_id:goal.policy_id,amount:goal.amount,expected_route:goal.route})}}]},
+    receipts_outcome:[outcome(bouncerReceipt,VAULT,{SuccessReceiptId:requestReceipt},['BOUNCER independent native project initiated; full maximum reserved']),
+      outcome(requestReceipt,'outlayer.testnet',{SuccessReceiptId:completedReceipt},[event('execution_requested',{request_data:JSON.stringify(request)})]),
+      outcome(completedReceipt,'outlayer.testnet',{SuccessValue:encode(data)},[event('execution_completed',completion)]),
+      outcome(refundReceipt,OWNER,{SuccessValue:''})],
+    receipts:[receipt(requestReceipt,VAULT,'outlayer.testnet',[{FunctionCall:{method_name:'request_execution',deposit:goal.amount,args:encode(outlayerArgs)}}]),
+      receipt(refundReceipt,'outlayer.testnet',OWNER,[{Transfer:{deposit:refunded}}])]};
+  let reads=0;
+  f.receiptProvider.txStatusReceipts=async(tx,account,wait)=>{reads++;assert.equal(tx,original);assert.equal(account,OWNER);assert.equal(wait,'FINAL');return structuredClone(chain)};
+  f.receiptProvider.block=async({blockId})=>{assert.equal(blockId,blockHash);return {header:{hash:blockHash,timestamp_nanosec:`${stamp}000000000`}}};
+  return {...f,goal,chain,original,charged,refunded,reads:()=>reads};
+}
+
+test('authenticated trial preview verifies the witnessed original, delivery and owner refund without a send',async()=>{
+  const f=await syntheticTrialReceiptFixture();
+  const result=await f.service.previewTrial({ownerPublicKey:f.ownerKey,evidence:'synthetic'});
+  assert.equal(result.status,'FINAL_NATIVE_ORACLE_DELIVERY_MATCH');assert.equal(result.original_hash,f.original);
+  assert.equal(result.delivery.charged_yocto,f.charged);assert.equal(result.delivery.refunded_to_owner_yocto,f.refunded);
+  assert.equal(result.delivery.result.price_usd,2.75);assert.equal(result.provider_delivery_verified,true);
+  assert.equal(result.execution_authorized,false);assert.equal(result.do_not_retry,true);assert.equal(f.reads(),1);
+  assert.equal((await f.witness.inspect(OWNER)).state.phase,'trial_claimed');
+});
+
+test('trial preview refuses wrong identity, unavailable receipts, failed output or a mismatched refund',async()=>{
+  const f=await syntheticTrialReceiptFixture();
+  await assert.rejects(f.service.previewTrial({ownerPublicKey:f.ownerKey,evidence:'bad'}));assert.equal(f.reads(),0);
+  f.setPeer({phase:'other'});await assert.rejects(f.service.previewTrial({ownerPublicKey:f.ownerKey,evidence:'synthetic'}));
+  f.setPeer(null);f.chain.final_execution_status='EXECUTED';
+  await assert.rejects(f.service.previewTrial({ownerPublicKey:f.ownerKey,evidence:'synthetic'}),e=>e.code==='RECEIPT_UNKNOWN');
+  f.chain.final_execution_status='FINAL';f.chain.receipts[1].receiver_id='attacker.testnet';
+  await assert.rejects(f.service.previewTrial({ownerPublicKey:f.ownerKey,evidence:'synthetic'}),e=>e.code==='RECEIPT_UNKNOWN');
+  f.receiptProvider.txStatusReceipts=async()=>{throw Error('not found is not proof of absence')};
+  await assert.rejects(f.service.previewTrial({ownerPublicKey:f.ownerKey,evidence:'synthetic'}),e=>e.code==='RECEIPT_UNKNOWN');
 });

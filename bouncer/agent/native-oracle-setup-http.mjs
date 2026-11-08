@@ -19,6 +19,7 @@ const specs=Object.freeze({
   trial:['claimTrial',['identity','goal','trial','expectedWitnessHead','evidence','completionEvidence']],
   'inspect-challenge':['issueInspect',['ownerPublicKey']], inspect:['inspect',['ownerPublicKey','evidence']],
   'preview-original':['previewOriginal',['ownerPublicKey','stageId','originalHash','evidence']],
+  'preview-trial':['previewTrial',['ownerPublicKey','evidence']],
 });
 const codes=new Set(['UNAUTHENTICATED','OWNER_FENCED','OWNER_ALREADY_WITNESSED','ALREADY_CLAIMED','WITNESS_NOT_CLAIMABLE',
   'WITNESS_COMMIT_UNKNOWN','WITNESS_MISMATCH','WITNESS_HEAD_CHANGED','CROSS_FLOW_WITNESSED','GLOBAL_FENCE_UNSAFE',
@@ -35,12 +36,12 @@ async function read(req) {
   let total=0;const chunks=[];for await (const chunk of req) { total+=chunk.length;if(total>MAX)throw Error();chunks.push(chunk); }
   return JSON.parse(Buffer.concat(chunks,total).toString('utf8'));
 }
-export function createNativeOracleSetupHttpHandler({service,siteOrigin,wasmBytes,owner,createReview,now=Date.now,bodyTimeoutMs=10_000}={}) {
+export function createNativeOracleSetupHttpHandler({service,siteOrigin,wasmBytes,owner,createReview,enableTrialSubmission=false,now=Date.now,bodyTimeoutMs=10_000}={}) {
   let site;try{site=new URL(siteOrigin)}catch{throw Error('fixed native setup origin required')}
   if(site.protocol!=='https:' || site.origin!==siteOrigin || site.username || site.password || site.pathname!=='/' || site.search || site.hash ||
       site.hostname==='github.io' || site.hostname.endsWith('.github.io') || site.hostname==='madethis.website' || site.hostname.endsWith('.madethis.website') ||
       !service || Object.values(specs).some(([method])=>method!=='createReview' && typeof service[method]!=='function') ||
-      (createReview!==undefined && typeof createReview!=='function') || typeof now!=='function' ||
+      (createReview!==undefined && typeof createReview!=='function') || typeof enableTrialSubmission!=='boolean' || typeof now!=='function' ||
       !Number.isSafeInteger(bodyTimeoutMs) || bodyTimeoutMs<10 || bodyTimeoutMs>10_000 || owner!=='great_mujey.testnet' ||
       !(wasmBytes instanceof Uint8Array) || wasmBytes.length!==NATIVE_ORACLE_V9_BYTES ||
       crypto.createHash('sha256').update(wasmBytes).digest('hex')!==NATIVE_ORACLE_V9_SHA256) {
@@ -52,7 +53,8 @@ export function createNativeOracleSetupHttpHandler({service,siteOrigin,wasmBytes
       return reply(res,403,{error:'unavailable'});
     }
     if(pathname===`${PREFIX}config` && req.method==='GET') return reply(res,200,{enabled:true,network:'testnet',owner,
-      ready_for_real_spending:false,review_available:typeof createReview==='function',scope:'Experimental setup transport only; no purchase or delivery.'});
+      ready_for_real_spending:false,review_available:typeof createReview==='function',trial_submission_enabled:enableTrialSubmission,
+      scope:'Experimental testnet transport; receipt verification is separate. No production-spending readiness is claimed.'});
     if(pathname===`${PREFIX}artifact` && req.method==='GET') {
       res.writeHead(200,{'content-type':'application/wasm','content-length':String(wasm.length),'cache-control':'no-store',
         'x-content-type-options':'nosniff','referrer-policy':'no-referrer'});return res.end(wasm);

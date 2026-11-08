@@ -4,8 +4,8 @@
  * reconstructed, pinned V9 plan; the coordinator remains responsible for the
  * database hold, both same-branch witnesses and fresh stage preflights.
  *
- * No private key, wallet call, transaction broadcast, provider purchase or
- * spend authorization is handled here. Host only after deploying an independent
+ * No private key, wallet call, transaction broadcast or spend authorization is
+ * handled here. The trial preview verifies receipts only. Host only after deploying an independent
  * latest-head anchor, safe recovery/release and real-device testing. Lost or
  * ambiguous claims and wallet results are reconciliation-only, never retry.
  */
@@ -13,6 +13,8 @@ import { isDeepStrictEqual } from 'node:util';
 import { nativeSetupAuthAction } from '../web-src/native-oracle-setup-auth.mjs';
 import { verifyNativeOracleWalletReview, prepareNativeOracleWalletAttempt, inspectNativeOracleWalletAttempt } from './native-oracle-wallet-evidence.mjs';
 import { createAuthenticatedNativeOracleTrialClaim } from './authenticated-native-oracle-trial-claim.mjs';
+import { validateWitnessedNativeOracleTrial, assertWitnessedNativeOracleTrial } from './native-oracle-phone-signer.mjs';
+import { verifyOracleResult } from './oracle-outlayer.mjs';
 import { isTransactionHash } from '../shared/direct-payment-settlement.mjs';
 import { isTestnetAccount } from '../shared/account-id.mjs';
 import { V3_OWNER } from './v3-faucet-github-fence.mjs';
@@ -161,6 +163,36 @@ export function createAuthenticatedNativeOracleSetupService({ auth, fence, witne
         return { ...inspectNativeOracleWalletAttempt({...args,attempt,result}), execution_authorized:false, original_recorded:recorded,
           scope:'Trusted-RPC original receipt preview only; this read does not record a hash, prompt a wallet, prove current state, delivery or authorization.' };
       } catch { throw new WalletWitnessError('RECEIPT_UNKNOWN','original receipt unavailable or mismatched; retain the hash and never resend'); }
+    },
+    /** Read the one witnessed trial's FINAL receipts. This never broadcasts,
+     * changes the witness or treats a missing receipt as non-execution. */
+    async previewTrial({ ownerPublicKey, evidence } = {}) {
+      const plan = await fence.inspect({owner,ownerPublicKey,evidence});
+      const snapshot = await witness.inspect(owner), state = snapshot.state, trial = state?.trial;
+      if (!plan || !state || state.phase !== 'trial_claimed' || !trial || !journalsMatch(plan,state) ||
+          state.identity.owner_public_key !== ownerPublicKey || typeof receiptProvider.block !== 'function') throw fail();
+      await checkPeer(otherWitness,owner,snapshot.head);
+      try {
+        const review = structuredClone(plan.review), identity = structuredClone(state.identity);
+        const goal = {id:trial.goal_id,contract_id:review.vault,owner_account_id:review.owner,policy_id:review.policy_id,
+          amount:review.per_tx_cap_yocto,route:{project:review.project,route_revision:1,policy_revision:1,payee_revision:1,active:true},
+          max_age_seconds:300};
+        const checked = validateWitnessedNativeOracleTrial({goal,review,identity,wasmBytes:wasm,
+          trustedReviewHash:identity.review_sha256,trustedOwnerPublicKey:ownerPublicKey});
+        if (checked.goalSha256 !== trial.goal_sha256 || checked.agentPublicKey !== trial.agent_public_key) throw Error();
+        assertWitnessedNativeOracleTrial(snapshot,identity,trial);
+        if ((await receiptProvider.viewNodeStatus())?.chain_id !== 'testnet') throw Error();
+        const chain = await receiptProvider.txStatusReceipts(trial.original_hash,owner,'FINAL');
+        const delivery = await verifyOracleResult(checked.goal,chain,trial.agent_public_key,receiptProvider);
+        if (delivery.tx_hash !== trial.original_hash) throw Error();
+        const after = await witness.inspect(owner);
+        assertWitnessedNativeOracleTrial(after,identity,trial);
+        if (after.head !== snapshot.head || !same(after.state,snapshot.state)) throw Error();
+        await checkPeer(otherWitness,owner,snapshot.head);
+        return {status:'FINAL_NATIVE_ORACLE_DELIVERY_MATCH',owner,original_hash:trial.original_hash,delivery,
+          do_not_retry:true,execution_authorized:false,provider_delivery_verified:true,
+          scope:'Trusted testnet RPC and OutLayer receipts; single-source output, no TEE or market-data accuracy proof.'};
+      } catch { throw new WalletWitnessError('RECEIPT_UNKNOWN','trial receipt unavailable or mismatched; retain the original and never resend'); }
     },
     async inspect({ ownerPublicKey, evidence } = {}) {
       let plan;

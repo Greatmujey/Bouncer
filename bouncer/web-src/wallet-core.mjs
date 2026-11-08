@@ -109,6 +109,9 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
   const nativeApprove = doc.querySelector('#wallet-native-setup-approve');
   const nativeReceipt = doc.querySelector('#wallet-native-setup-receipt');
   const nativeVerify = doc.querySelector('#wallet-native-setup-verify');
+  const nativeTrialReview = doc.querySelector('#wallet-native-trial-review');
+  const nativeTrialSend = doc.querySelector('#wallet-native-trial-send');
+  const nativeTrialCheck = doc.querySelector('#wallet-native-trial-check');
   const nativeRecover = doc.querySelector('#wallet-native-setup-recover');
   const nativeOriginal = doc.querySelector('#wallet-native-setup-original');
   const nativeRecoverOriginal = doc.querySelector('#wallet-native-setup-recover-original');
@@ -181,14 +184,18 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
       fund_native_vault: `3 of 4 · Deposit ${terms?.depositNear ?? '—'} test NEAR into the vault. This is not a provider payment.`,
       install_native_oracle_agent: `4 of 4 · Add the restricted agent key with a gas allowance of ${terms?.gasAllowanceNear ?? '—'} test NEAR. It cannot attach the 1 yoctoNEAR required for owner-only changes.`,
     };
-    if (nativeStage) nativeStage.textContent = descriptions[state.stageId] || '';
+    if (nativeStage) nativeStage.textContent = state.phase === 'trial_review'
+      ? `One OutLayer NEAR/USD price request · maximum ${terms?.capNear ?? '—'} test NEAR from the vault. The full maximum counts toward the rolling daily limit; unused funds return to the owner only if the refund receipt succeeds. Gas is separate. This is a single-source result, not storage delivery or a guarantee of accuracy.`
+      : descriptions[state.stageId] || '';
     if (nativeStatus) nativeStatus.textContent = state.message || '';
     if (nativeHash) { nativeHash.hidden = !state.originalHash; nativeHash.textContent = state.originalHash ? `Original transaction: ${state.originalHash}` : ''; }
     const disabled = busyState || state.busy;
     const buttons = [[nativeCheck, ['initial','stopped','blocked','recover','await_receipt','verify_setup','trial_retained']],
       [nativeDevice, ['create_device']], [nativeReserve, ['review']], [nativeApprove, ['stage']],
-      [nativeReceipt, ['await_receipt']], [nativeVerify, ['verify_setup']]];
+      [nativeReceipt, ['await_receipt']], [nativeVerify, ['verify_setup']],
+      [nativeTrialReview, ['setup_verified']], [nativeTrialSend, ['trial_review']], [nativeTrialCheck, ['trial_retained']]];
     for (const [button, phases] of buttons) if (button) { button.hidden = !phases.includes(state.phase); button.disabled = disabled; }
+    if (nativeTrialReview && !state.trialAvailable) nativeTrialReview.hidden = true;
     if (nativeRecover) nativeRecover.hidden = state.phase !== 'recover';
     if (nativeOriginal) nativeOriginal.disabled = disabled;
     if (nativeRecoverOriginal) nativeRecoverOriginal.disabled = disabled;
@@ -757,7 +764,8 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
         }
       };
       flow = createNativeOracleOwnerFlow({ client, deviceStore:store, ownerPublicKey:proof.publicKey, origin:win.location.origin,
-        crypto:win.crypto, isCurrent:currentFlow, interact, onChange:state => { if (currentFlow()) renderNativeState(state); } });
+        crypto:win.crypto, isCurrent:currentFlow, indexedDB:win.indexedDB, isTopLevel:isTop, fetch:win.fetch.bind(win),
+        interact, onChange:state => { if (currentFlow()) renderNativeState(state); } });
       nativeFlow = flow; installed = true; nativeSetupOpening = false; renderControls();
       if (!(await client.enabled()) || !currentFlow()) throw Error('NATIVE_SETUP_UNAVAILABLE');
       await flow.check();
@@ -787,6 +795,9 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
   nativeApprove?.addEventListener('click', () => { void runNative(flow => flow.approveStage({ownerConfirmed:true})); });
   nativeReceipt?.addEventListener('click', () => { void runNative(flow => flow.checkReceipt()); });
   nativeVerify?.addEventListener('click', () => { void runNative(flow => flow.verifySetup()); });
+  nativeTrialReview?.addEventListener('click', () => { void runNative(flow => flow.reviewTrial()); });
+  nativeTrialSend?.addEventListener('click', () => { void runNative(flow => flow.runTrial({ownerConfirmed:true})); });
+  nativeTrialCheck?.addEventListener('click', () => { void runNative(flow => flow.checkTrial()); });
   nativeRecoverOriginal?.addEventListener('click', () => {
     const hash = nativeOriginal?.value?.trim() || '';
     void runNative(flow => flow.recoverOriginal({hash,ownerConfirmed:true}));

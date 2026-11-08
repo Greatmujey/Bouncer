@@ -22,7 +22,7 @@ const branch = 'arena/0e4386ea-near-hub', origin = 'https://phone.example.test';
 const nativeWasmBytes = fs.readFileSync(new URL('../../bouncer.wasm', import.meta.url));
 const noRpc = async () => { throw Error('synthetic test must not call RPC'); };
 const provider = Object.fromEntries(['viewNodeStatus','viewBlock','viewAccessKey','viewAccount','viewAccessKeyList','txStatusReceipts','query',
-  'viewTestnetAccountPresenceAt','callFunctionRaw','experimental_protocolConfig','gasPrice'].map(name => [name,noRpc]));
+  'viewTestnetAccountPresenceAt','callFunctionRaw','experimental_protocolConfig','gasPrice','block'].map(name => [name,noRpc]));
 const bridge = { pending:()=>[], take:()=>null, submit:()=>false, takeForBrowser:()=>null, submitEncrypted:()=>false };
 const git = (cwd,args) => execFileSync('git',args,{cwd,encoding:'utf8',stdio:['ignore','pipe','pipe']}).trim();
 
@@ -95,7 +95,7 @@ dbtest('phone runtime never creates missing schemas and requires both durable fe
   let prepared;
   try {
     const response=await fetch(`${base}/api/native-oracle-setup/config`,{headers});const status=await response.json();
-    assert.equal(status.enabled,true);assert.equal(status.ready_for_real_spending,false);
+    assert.equal(status.enabled,true);assert.equal(status.ready_for_real_spending,false);assert.equal(status.trial_submission_enabled,false);
     assert.equal((await fetch(`${base}/api/wallet-setup/config`,{headers})).status,404);
     const agentPublicKey=String(nearApi.KeyPair.fromRandom('ed25519').getPublicKey());
     const review=await fetch(`${base}/api/native-oracle-setup/review`,{method:'POST',
@@ -107,6 +107,20 @@ dbtest('phone runtime never creates missing schemas and requires both durable fe
     assert.deepEqual(await counts(db),initialCounts,'read-only setup and synthetic review did not reserve or prompt');
     assert.equal(anchor.writes(),0);
   } finally { await new Promise(resolve=>server.close(resolve)); }
+
+  // The trial is a separate opt-in, and still does not make this synthetic
+  // backend a real independent checkpoint or establish production readiness.
+  await assert.rejects(createExperimentalPhoneSetupRuntime({...config,enableNative:false,enableNativeTrial:true}));
+  await assert.rejects(createExperimentalPhoneSetupRuntime({...config,enableNativeTrial:true,provider:{...provider,block:undefined}}));
+  const trialRuntime=await createExperimentalPhoneSetupRuntime({...config,enableNativeTrial:true});
+  const trialServer=createReadOnlyPreviewService({bridge,siteOrigin:origin,inspectReadiness:async()=>({}),makeReview:async()=>({}),
+    nativeSetupFactory:trialRuntime.nativeSetupFactory});
+  await new Promise(resolve=>trialServer.listen(0,'127.0.0.1',resolve));
+  try {
+    const response=await fetch(`http://127.0.0.1:${trialServer.address().port}/api/native-oracle-setup/config`,{headers});
+    const status=await response.json();assert.equal(status.trial_submission_enabled,true);assert.equal(status.ready_for_real_spending,false);
+    assert.deepEqual(await counts(db),initialCounts);assert.equal(anchor.writes(),0);
+  } finally { await new Promise(resolve=>trialServer.close(resolve)); }
 
   // Exercise the actual paired FT+native composition when the pinned public
   // V12 fixture is supplied; this does not make FT a native prerequisite.

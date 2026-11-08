@@ -2,13 +2,16 @@
  * Phone-facing state machine for the experimental native-NEAR setup.
  * Every reservation and wallet transaction is a separate user action. A
  * claimed stage is never retried after an unknown result; only its original
- * hash may be inspected/recovered. Receipt checks are reads, not delivery.
- * The authenticated backend, paired witness, wallet and trusted RPC remain
- * independent trust boundaries. This module does not authorize a trial.
+ * hash may be inspected/recovered. The optional trial requires its own review
+ * and explicit owner action, a witnessed original, a one-shot submission and
+ * read-only receipt verification. The authenticated backend, paired witness,
+ * wallet, phone storage and trusted RPC remain independent trust boundaries.
  */
 import { verifyNativeOracleSetupReview } from './native-oracle-setup-wallet-prompt.mjs';
 import { decodeNativeHash32 } from './native-oracle-transaction.mjs';
 import { assertNativeOracleCompletion } from './native-oracle-completion.mjs';
+import { prepareWitnessedNativeOracleTrial } from './witnessed-native-oracle-trial.mjs';
+import { probeNativeTestnetRpc, submitWitnessedNativeOracleTrialOnce } from './native-oracle-trial-submit.mjs';
 
 const OWNER = 'great_mujey.testnet';
 const STAGES = ['create_keyless_native_vault', 'configure_native_oracle_policy', 'fund_native_vault', 'install_native_oracle_agent'];
@@ -36,12 +39,15 @@ function matchesReceipt(receipt, stageId, originalHash, recorded) {
 }
 
 /** The `interact` hook presents the connected wallet; it must not retry work. */
-export function createNativeOracleOwnerFlow({ client, deviceStore, ownerPublicKey, origin, crypto, isCurrent, interact = work => work(), onChange = () => {} } = {}) {
+export function createNativeOracleOwnerFlow({ client, deviceStore, ownerPublicKey, origin, crypto, isCurrent,
+  indexedDB, isTopLevel = false, fetch: submitFetch = globalThis.fetch, now = Date.now,
+  interact = work => work(), onChange = () => {} } = {}) {
   if (!client || !deviceStore || typeof ownerPublicKey !== 'string' || typeof origin !== 'string' || !crypto?.subtle ||
       typeof isCurrent !== 'function' || typeof interact !== 'function' || typeof onChange !== 'function') throw fail('NATIVE_FLOW_UNAVAILABLE');
   const vault = `native.${OWNER}`;
   let state = { phase: 'initial', busy: false, message: 'Check the retained testnet setup before requesting any transaction.' };
   let disposed = false, review = null, identity = null, stageId = null, originalHash = null, taskId = null, originals = [], reservationStarted = false;
+  let trial = null, trialStarted = false;
   const current = () => { if (disposed || !isCurrent()) throw fail('NATIVE_FLOW_SESSION_CHANGED'); };
   const emit = () => { if (!disposed) { try { onChange(Object.freeze({ ...state })); } catch { /* rendering must not change the fence */ } } };
   const set = patch => { state = { ...state, ...patch }; emit(); };
@@ -116,9 +122,10 @@ export function createNativeOracleOwnerFlow({ client, deviceStore, ownerPublicKe
     review = remote.review; identity = remote.identity; taskId = review.review_sha256; originals = hashes;
     const last = remote.witnessed_records.at(-1);
     if (last?.event === 'trial_claim') {
-      if (!validHash(last.original_hash)) throw fail('NATIVE_RETAINED_STATE_INVALID');
-      set({ phase: 'trial_retained', terms, stageId: null, originalHash: last.original_hash,
-        message: 'A trial original is already retained. Recover that original; do not request another payment.' }); return;
+      if (next || hashes.length !== STAGES.length || !validHash(last.original_hash) || hashes.includes(last.original_hash)) throw fail('NATIVE_RETAINED_STATE_INVALID');
+      originalHash = last.original_hash; trialStarted = true; trial = null;
+      set({ phase: 'trial_retained', terms, stageId: null, originalHash,
+        message: 'This original is retained. Check its receipt; do not request another payment.' }); return;
     }
     if (next?.claimed) {
       stageId = next.stage_id; originalHash = null;
@@ -222,12 +229,85 @@ export function createNativeOracleOwnerFlow({ client, deviceStore, ownerPublicKe
     async verifySetup() { return guarded(['verify_setup'], async () => {
       const result = await wallet(() => client.verifyCompletion({ identity }), 'Check the retained originals and current setup state. No transaction is requested.');
       try {
-        assertNativeOracleCompletion(result, review, Date.now(), { maxAgeMs: 120_000 });
+        assertNativeOracleCompletion(result, review, now(), { maxAgeMs: 120_000 });
         if (originals.length !== STAGES.length || JSON.stringify(result.prior_original_hashes) !== JSON.stringify(originals)) throw fail('NATIVE_ORIGINALS_CHANGED');
       } catch {
         set({ phase: 'blocked', message: 'Current setup state did not match. Do not request another transaction; recover the original state.' }); return snapshot();
       }
-      set({ phase: 'setup_verified', stageId: null, message: 'Setup receipts and current state matched. This check did not buy a resource or authorize a trial.' }); return snapshot();
+      const trialAvailable = typeof client.trialSubmissionEnabled === 'function' && await client.trialSubmissionEnabled() === true; current();
+      set({ phase: 'setup_verified', stageId: null, trialAvailable,
+        message: 'Setup receipts and current state matched. This check did not buy a resource or authorize a trial.' }); return snapshot();
+    }); },
+    /** Show the fixed OutLayer request without signing or sending it. */
+    async reviewTrial() { return guarded(['setup_verified'], async () => {
+      if (trialStarted || !indexedDB || isTopLevel !== true || typeof submitFetch !== 'function' ||
+          typeof client.trialSubmissionEnabled !== 'function' || await client.trialSubmissionEnabled() !== true) throw fail('NATIVE_TRIAL_UNAVAILABLE');
+      current();
+      trial = await prepareWitnessedNativeOracleTrial({client,deviceStore,identity,review,
+        goalId:`native-oracle-${identity.operation_id}`,origin,isTopLevel,crypto,isCurrent:()=>!disposed && isCurrent(),now}); current();
+      set({phase:'trial_review',trialTerms:trial.terms,originalHash:null,
+        message:'Review the maximum, provider, refund and gas terms. The next button authorizes one testnet resource request.'});
+      return snapshot();
+    }); },
+    /** Consent is a separate UI action. A witnessed/signature/send uncertainty
+     * can only be checked by original hash; no replacement is requested. */
+    async runTrial({ownerConfirmed} = {}) {
+      if (ownerConfirmed !== true) throw fail('NATIVE_OWNER_CONFIRMATION_REQUIRED');
+      return guarded(['trial_review'], async () => {
+        if (!trial || trialStarted || typeof client.trialSubmissionEnabled !== 'function' ||
+            await client.trialSubmissionEnabled() !== true) throw fail('NATIVE_TRIAL_UNAVAILABLE');
+        try { await probeNativeTestnetRpc({fetch:submitFetch,isCurrent:()=>!disposed && isCurrent()}); }
+        catch {
+          current();set({phase:'trial_review',message:'Cannot reach testnet from this phone. No trial was claimed or signed; check your connection before authorizing.'});
+          return snapshot();
+        }
+        current(); trialStarted = true; let signed;
+        try {
+          signed = await wallet(() => trial.sign({ownerConfirmed:true}),
+            'Approve identity messages for this reviewed request. The phone then signs its one restricted testnet transaction.');
+          if (!validHash(signed?.tx_hash)) throw fail('NATIVE_ORIGINAL_UNKNOWN');
+          originalHash = signed.tx_hash;
+          set({phase:'trial_retained',originalHash,
+            message:'The trial original is retained. Checking the same policy and key before one submission; do not request it again.'});
+          const completion = await wallet(() => client.verifyCompletion({identity}),
+            'Check the same setup and agent key. No new wallet transaction is requested.');
+          if (await client.trialSubmissionEnabled() !== true) throw fail('NATIVE_TRIAL_UNAVAILABLE');
+          current();
+          const result = await submitWitnessedNativeOracleTrialOnce({signedResult:signed,review,identity,completion,deviceStore,
+            indexedDB,origin,isTopLevel,crypto,isCurrent:()=>!disposed && isCurrent(),fetch:submitFetch,now}); current();
+          if (result?.original_hash !== originalHash || result.do_not_retry !== true || result.provider_delivery_verified !== false ||
+              !['ORIGINAL_RPC_ACKNOWLEDGED','ORIGINAL_SUBMISSION_UNKNOWN'].includes(result.status)) throw fail('NATIVE_TRIAL_RESULT_UNKNOWN');
+          set({phase:'trial_retained',message:result.status === 'ORIGINAL_RPC_ACKNOWLEDGED'
+            ? 'The original reached the testnet RPC. Check its receipts for delivery and refund; do not resend.'
+            : 'The submission result is unknown. Check this original’s receipts; do not resend.'});
+          return snapshot();
+        } finally {
+          signed?.signed_transaction?.fill?.(0); trial = null;
+        }
+      });
+    },
+    /** Receipt checks are safe to repeat: they never sign or send. */
+    async checkTrial() { return guarded(['trial_retained'], async () => {
+      let result;
+      try { result = await wallet(() => client.previewTrial(), 'Check the original resource receipt. No transaction is requested.'); }
+      catch {
+        current();set({phase:'trial_retained',message:'The original receipt is not verified yet. Check again later; do not resend.'});
+        return snapshot();
+      }
+      const delivery = result?.delivery, max = review?.per_tx_cap_yocto;
+      if (result?.status !== 'FINAL_NATIVE_ORACLE_DELIVERY_MATCH' || result.owner !== OWNER || result.original_hash !== originalHash ||
+          result.do_not_retry !== true || result.execution_authorized !== false || result.provider_delivery_verified !== true ||
+          delivery?.tx_hash !== originalHash || delivery.provider !== review.payee || delivery.asset !== 'NEAR' || delivery.maximum_yocto !== max ||
+          typeof delivery.charged_yocto !== 'string' || !/^(0|[1-9][0-9]*)$/.test(delivery.charged_yocto) ||
+          typeof delivery.refunded_to_owner_yocto !== 'string' || !/^(0|[1-9][0-9]*)$/.test(delivery.refunded_to_owner_yocto) ||
+          BigInt(delivery.charged_yocto) <= 0n || BigInt(delivery.charged_yocto) + BigInt(delivery.refunded_to_owner_yocto) !== BigInt(max) ||
+          typeof delivery.result?.price_usd !== 'number' || !Number.isFinite(delivery.result.price_usd) || delivery.result.price_usd <= 0) {
+        set({phase:'trial_retained',message:'The receipt did not match this request. Keep the original and do not resend.'}); return snapshot();
+      }
+      set({phase:'trial_verified',delivery:{priceUsd:delivery.result.price_usd,chargedNear:formatNativeNear(delivery.charged_yocto),
+        refundNear:formatNativeNear(delivery.refunded_to_owner_yocto)},
+        message:`OutLayer receipt verified: $${delivery.result.price_usd} per NEAR; charged ${formatNativeNear(delivery.charged_yocto)} test NEAR, refunded ${formatNativeNear(delivery.refunded_to_owner_yocto)} to the owner. Single source; price accuracy is not guaranteed.`});
+      return snapshot();
     }); },
   });
 }

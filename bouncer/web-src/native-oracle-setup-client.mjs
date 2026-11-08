@@ -64,13 +64,17 @@ export function createNativeOracleSetupClient({wallet,accountId,ownerPublicKey,d
     if(!response.ok)throw fail('NATIVE_SETUP_UNAVAILABLE');const data=await bounded(response,BYTES);
     if(data.length!==BYTES)throw fail('NATIVE_SETUP_UNAVAILABLE');return data;
   }
+  async function config() {
+    session();try{const response=await fetchImpl(`${PREFIX}config`,{headers:HEADERS,credentials:'same-origin',cache:'no-store'});
+      const body=JSON.parse(new TextDecoder().decode(await bounded(response,4096)));
+      if(!response.ok || body?.enabled!==true || body.network!=='testnet' || body.owner!==OWNER || body.ready_for_real_spending!==false)return null;
+      session();return body;
+    }catch{return null}
+  }
   return Object.freeze({
-    async enabled() {
-      session();try{const response=await fetchImpl(`${PREFIX}config`,{headers:HEADERS,credentials:'same-origin',cache:'no-store'});
-        const body=JSON.parse(new TextDecoder().decode(await bounded(response,4096)));
-        return response.ok && body?.enabled===true && body.network==='testnet' && body.owner===OWNER && body.ready_for_real_spending===false;
-      }catch{return false}
-    },
+    async enabled() { return Boolean(await config()); },
+    /** Separately opt-in: enabling setup alone never enables submission. */
+    async trialSubmissionEnabled() { return (await config())?.trial_submission_enabled===true; },
     /** Generate only an unsigned fixed testnet review for an already retained
      * local device key. Creating a key or trusting its backup is a separate step. */
     async createReview({agentPublicKey}={}) {
@@ -114,6 +118,13 @@ export function createNativeOracleSetupClient({wallet,accountId,ownerPublicKey,d
       session();const challenge=await request('inspect-challenge',{ownerPublicKey});
       const evidence=await sign(context('inspect_native_setup'),challenge);
       return pump(()=>request('preview-original',{ownerPublicKey,stageId,originalHash,evidence}));
+    },
+    /** Receipt-only recovery of the independently witnessed trial. A missing
+     * or mismatched receipt never authorizes another submission. */
+    async previewTrial() {
+      session();const challenge=await request('inspect-challenge',{ownerPublicKey});
+      const evidence=await sign(context('inspect_native_setup'),challenge);
+      return pump(()=>request('preview-trial',{ownerPublicKey,evidence}));
     },
     async verifyCompletion({identity}={}) {
       session();const challenge=await request('completion-challenge',{identity});

@@ -7,9 +7,9 @@
  * an unrolled-back database, owner consent, device-key custody, provider
  * delivery or a safe lock release. Native pre-reservation reviews are
  * reconstructed from pinned code and a public key, not independently retained.
- * A preview-only native setup panel is available when this backend is enabled;
- * the trial is not mounted. Do not use this for real spending or deploy it as
- * a production service without independent review and recovery work.
+ * A native setup panel is available when enabled; the testnet trial requires
+ * a separate explicit enable flag and remains off by default. Do not use this
+ * for production spending or deploy without independent review and recovery work.
  */
 import { createAnchoredSetupWitnessPair } from './anchored-setup-witness-pair.mjs';
 import { createPostgresWalletPromptAuth, inspectPostgresWalletPromptAuthSchema } from './postgres-wallet-prompt-auth.mjs';
@@ -32,8 +32,9 @@ const sameCheckpoint = (a, b) => validCheckpoint(a) && validCheckpoint(b) && a.h
 const fail = () => new Error('experimental setup unavailable: preprovisioned schemas and the separately retained current witness head are required');
 
 export async function createExperimentalPhoneSetupRuntime({ pool, siteOrigin, provider, anchor, repo, branch, initialHead,
-  nativeWasmBytes, bufferWasmBytes, enableNative = false, enableBuffer = false } = {}) {
-  if (typeof enableNative !== 'boolean' || typeof enableBuffer !== 'boolean' || (!enableNative && !enableBuffer) ||
+  nativeWasmBytes, bufferWasmBytes, enableNative = false, enableBuffer = false, enableNativeTrial = false } = {}) {
+  if (typeof enableNative !== 'boolean' || typeof enableBuffer !== 'boolean' || typeof enableNativeTrial !== 'boolean' ||
+      (enableNativeTrial && (!enableNative || typeof provider?.block !== 'function')) || (!enableNative && !enableBuffer) ||
       !pool || typeof pool.connect !== 'function' || !anchor || typeof anchor.read !== 'function' ||
       typeof anchor.compareAndSet !== 'function') throw fail();
 
@@ -72,9 +73,9 @@ export async function createExperimentalPhoneSetupRuntime({ pool, siteOrigin, pr
     const service = createAuthenticatedNativeOracleSetupService({ auth, fence, witness: pair.native, otherWitness: pair.wallet,
       coordinator, getRetainedReview: catalog.getRetainedReview, wasmBytes: nativeWasmBytes, receiptProvider: provider, owner: OWNER });
     const handler = createNativeOracleSetupHttpHandler({ service, siteOrigin, wasmBytes: nativeWasmBytes,
-      owner: OWNER, createReview: catalog.create });
+      owner: OWNER, createReview: catalog.create, enableTrialSubmission: enableNativeTrial });
     nativeSetupFactory = () => handler;
   }
   return Object.freeze({ setupFactory, nativeSetupFactory, ready_for_real_spending: false,
-    scope: 'experimental testnet transport only; no provisioning, wallet consent, broadcast, purchase or delivery' });
+    scope: 'experimental testnet transport; no provisioning, wallet consent or production readiness; trial submission is independently opt-in' });
 }

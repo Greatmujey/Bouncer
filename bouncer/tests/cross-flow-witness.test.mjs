@@ -122,3 +122,23 @@ test('head mismatch, a missing peer, or a changed owner cannot yield a reservati
   await assert.rejects(mismatch.reserve({review:review(n)}),e=>e.code==='WITNESS_MISMATCH');
   assert.equal((await native.inspect(other.owner)).state,null);
 }));
+
+test('completion rechecks the peer witness both before and after its read-only state inspection',async()=>fixture(async({native,ft,n,f})=>{
+  const db=fences(n,f),h=i=>nearApi.utils.serialize.base_encode(Buffer.alloc(32,i+1));
+  await native.reserve(n);
+  for(let i=0;i<nativeStages.length;i++){
+    const claim=await native.assertClaimable(n,nativeStages[i]);await native.claim(n,nativeStages[i],claim);
+    await native.recordOriginal(n,nativeStages[i],h(i));
+  }
+  let reads=0,peerReads=0,mode='normal';
+  db.native.verifyCompletion=async()=>{reads++;return {prior_original_hashes:nativeStages.map((_,i)=>h(i))}};
+  const peer={async inspect(owner){peerReads++;const snapshot=await ft.inspect(owner);
+    if(mode==='before' || (mode==='after' && peerReads===2))return {...snapshot,state:{phase:'claimed'}};return snapshot}};
+  const coordinator=createWitnessedNativeOracleSetup({fence:db.native,witness:native,otherWitness:peer});
+  const success=await coordinator.verifyCompletion({identity:n,evidence:'synthetic'});
+  assert.equal(success.independently_witnessed,true);assert.equal(peerReads,2);assert.equal(reads,1);
+  mode='before';peerReads=0;await assert.rejects(coordinator.verifyCompletion({identity:n,evidence:'synthetic'}),e=>e.code==='CROSS_FLOW_WITNESSED');
+  assert.equal(reads,1);
+  mode='after';peerReads=0;await assert.rejects(coordinator.verifyCompletion({identity:n,evidence:'synthetic'}),e=>e.code==='CROSS_FLOW_WITNESSED');
+  assert.equal(reads,2);assert.equal(peerReads,2);
+}));

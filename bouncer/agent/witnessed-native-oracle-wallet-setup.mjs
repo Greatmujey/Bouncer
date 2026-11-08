@@ -108,6 +108,7 @@ export function createWitnessedNativeOracleSetup({ fence, witness, otherWitness,
     async verifyCompletion({ identity: raw, evidence } = {}) {
       const identity = structuredClone(raw), checkpoint = await witness.inspect(identity?.owner), state = checkpoint.state;
       if (!state || !['complete','trial_claimed'].includes(state.phase) || JSON.stringify(state.identity) !== JSON.stringify(identity)) throw fail('WITNESS_MISMATCH');
+      await assertOtherFlowEmpty(otherWitness, identity.owner, checkpoint.head);
       const originals = state.records.filter(r => r.event === 'original').map(r => r.original_hash);
       if (originals.length !== STAGES.length) throw fail('WITNESS_MISMATCH');
       const result = await fence.verifyCompletion({ owner: identity.owner, ownerPublicKey: identity.owner_public_key,
@@ -115,6 +116,7 @@ export function createWitnessedNativeOracleSetup({ fence, witness, otherWitness,
       if (!Array.isArray(result?.prior_original_hashes) || JSON.stringify(result.prior_original_hashes) !== JSON.stringify(originals)) throw fail('WITNESS_MISMATCH');
       const after = await witness.inspect(identity.owner);
       if (after.head !== checkpoint.head || JSON.stringify(after.state) !== JSON.stringify(state)) throw fail('WITNESS_MISMATCH');
+      await assertOtherFlowEmpty(otherWitness, identity.owner, checkpoint.head);
       return { ...result, independently_witnessed: true, witness_head: checkpoint.head, execution_authorized: false,
         scope: 'four original receipt graphs and current setup at one trusted-RPC FINAL block; not local custody, provider execution, spending approval or a state reservation' };
     },

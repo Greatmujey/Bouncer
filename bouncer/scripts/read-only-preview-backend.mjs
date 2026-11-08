@@ -40,12 +40,13 @@ const bridge = createOidcReadOnlyRpcBridge({ callbackOrigin, defaultAudience: `h
 const provider = new ReadOnlyNearReceiptProvider('https://test.rpc.fastnear.com', { fetchImpl: bridge.fetch, timeoutMs: 25_000 });
 // Both transports are OFF by default. Even when explicitly enabled, this is
 // experimental testnet plumbing, not a spending-ready or deployed service.
-// In particular reconstructed reviews are not independent backups, the UI is
-// unmounted, and the phone signer has no independent original-hash backup or
-// authenticated transport. Never infer from a missing record that a wallet
-// prompt or signed trial did not happen.
+// Reconstructed reviews are not independent backups, and browser storage
+// can be lost or rolled back. The independently anchored witness is required;
+// never infer from a missing record that a wallet prompt or trial did not happen.
 const enableBuffer = process.env.BOUNCER_ENABLE_WITNESSED_TESTNET_SETUP === '1';
 const enableNative = process.env.BOUNCER_ENABLE_NATIVE_ORACLE_TESTNET_SETUP === '1';
+const enableNativeTrial = process.env.BOUNCER_ENABLE_NATIVE_ORACLE_TESTNET_TRIAL === '1';
+if (enableNativeTrial && !enableNative) throw Error('native testnet trial requires the native setup runtime');
 let setupFactory, nativeSetupFactory, setupPool;
 if (enableBuffer || enableNative) {
   const env = process.env, url = env.BOUNCER_TESTNET_SETUP_DATABASE_URL;
@@ -62,7 +63,7 @@ if (enableBuffer || enableNative) {
     setupPool = new pg.Pool({ connectionString:url, max:8, connectionTimeoutMillis:5000 });
     const nativeWasmBytes = enableNative ? fs.readFileSync(new URL('../../bouncer.wasm', import.meta.url)) : undefined;
     const runtime = await createExperimentalPhoneSetupRuntime({ pool:setupPool, siteOrigin, provider, anchor, repo, branch, initialHead,
-      nativeWasmBytes, bufferWasmBytes:wasm ?? undefined, enableNative, enableBuffer });
+      nativeWasmBytes, bufferWasmBytes:wasm ?? undefined, enableNative, enableBuffer, enableNativeTrial });
     ({ setupFactory, nativeSetupFactory } = runtime);
   } catch {
     if (setupPool) await setupPool.end().catch(() => {});

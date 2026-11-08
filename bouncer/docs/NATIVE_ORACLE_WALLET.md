@@ -176,7 +176,9 @@ examples were **self-hosted development services**.
   allowance and four separate stage approvals. Each original is retained and
   checked at FINAL before another stage; unknown outcomes go to recovery. The
   screen requests persistent device storage, but does not provide key backup or
-  revocation. It does not authorize or submit a trial. A synthetic test
+  revocation. A separately disabled-by-default testnet trial option now adds
+  explicit review, one phone-key submission and read-only receipt/refund checks.
+  A synthetic test
   exercises that path with real WebCrypto in simulated IndexedDB, throwaway
   signatures, disposable PostgreSQL, a local Git remote, an **in-memory** head
   checkpoint, fabricated RPC receipts and a fake wallet; lost claim responses
@@ -194,7 +196,9 @@ examples were **self-hosted development services**.
   the separately retained head to match the configured branch. A missing,
   stale or uncertain checkpoint stops startup; it is not automatically reset.
   Native-only preview does not require the V12 FT artifact. Both transport
-  switches are off by default. This wiring and its disposable DB/local Git
+  switches are off by default; trial submission also requires the separate
+  `BOUNCER_ENABLE_NATIVE_ORACLE_TESTNET_TRIAL=1` opt-in with native setup.
+  This wiring and its disposable DB/local Git
   tests are **not** an independently operated deployment, live phone flow or
   approval to fund a vault. The review catalog is reconstructable across
   instances but is not an independent historical backup. The post-witness
@@ -207,8 +211,9 @@ examples were **self-hosted development services**.
   block, and commits the original transaction hash to a strict IndexedDB record
   before releasing a verified signature. The `ownerConfirmed` input is only an
   integration flag, not proof that a person saw or approved anything. A caller
-  must authenticate the completion source and display the terms. The module
-  has no network, wallet or broadcast API and is not mounted in the UI.
+  must authenticate the completion source and display the terms. The key module
+  itself has no network, wallet or broadcast API; the separately gated phone
+  flow composes it with a one-shot submission.
 - `agent/native-oracle-phone-signer.mjs` adapts the existing native OutLayer
   runner to a callback which can return that phone signature. Its witnessed
   variant retains the original hash at the separately anchored witness before
@@ -218,8 +223,8 @@ examples were **self-hosted development services**.
   composition now obtains an authenticated witness over the opt-in setup API
   and signs locally. `presigned-witnessed-native-oracle-account.mjs` can pass
   those exact signed bytes to the runner after checking the original witness,
-  peer and fresh state; an authenticated transport and owner interface remain
-  separate steps.
+  peer and fresh state; the phone UI instead uses the direct one-shot testnet
+  RPC path described below, without uploading signed bytes to the setup service.
   Synthetic tests compare Borsh bytes against the NEAR SDK, verify signatures,
   race two tabs and independent journals, simulate unknown sends, and check a
   fabricated result/refund recovered through the runner. Mobile-sized Chromium
@@ -302,6 +307,26 @@ it. Treat the returned signed bytes as sensitive bearer material: do not log,
 commit, or expose them, and do not send them outside a guarded,
 original-hash-recoverable execution path.
 
+When explicitly enabled, the phone UI shows the reviewed price request and
+requires a separate authorize action. Before claiming or signing, it checks the
+fixed public RPC's CORS reachability and testnet chain identity. It then
+witnesses the original, signs locally, rechecks the authenticated completion,
+validates the exact signed bytes and signature, and commits a local submission
+claim before one direct `send_tx` call. It never automatically resends. A lost
+response remains unknown; the owner can recheck the same witnessed original.
+The read-only `preview-trial` route verifies the FINAL transaction, OutLayer
+request/completion, historical block and refund to the owner; an RPC
+acknowledgment alone is not delivery. The read-only relay must run the updated
+code that permits an exact historical block hash and routes that lookup to the
+archival testnet RPC; the existing hosted relay has not been updated here.
+Local submission claims coordinate
+cooperating tabs only, not rollback, other devices or bypassing clients. Signed
+bytes are sent to the public testnet RPC, not uploaded to the setup service.
+Browser-sized tests use synthetic wallets, witnesses and responses; no real
+phone, independently operated checkpoint or actual provider delivery has been
+verified by this flow. The trial flag must remain off until those deployment
+and recovery prerequisites are independently addressed.
+
 For a phone that has already returned `SIGNED_NOT_BROADCAST`, create
 `createPresignedWitnessedNativeOracleAccount` with that result, the same
 `goal`, `review`, `identity`, pinned WASM bytes and owner key, both anchored
@@ -312,8 +337,8 @@ completion. Pass it to `runOracleGoal` with the reviewed public key and a
 **shared durable journal**. The runner rechecks the witness and fresh state
 after writing and reading the pending original, then invokes its bounded
 one-shot sender. A lost send response remains pending and is never automatically
-resent. Neither the adapter nor the phone API itself broadcasts or provides a
-transport for signed bytes; any transport must preserve their secrecy, retain
+resent. Neither that adapter nor the phone `sign()` method broadcasts; the
+separate opt-in browser path is described above. Any other transport must preserve their secrecy, retain
 the exact original, obtain explicit consent, and avoid automatic retries.
 Participating calls sharing the same journal are excluded; independent journals,
 restored backups, bypassing clients and privileged rollback can still defeat
