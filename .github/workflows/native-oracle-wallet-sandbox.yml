@@ -46,3 +46,17 @@ jobs:
           { echo '## Native wallet setup on isolated nearcore';
             echo 'Fabricated OutLayer registry; no real provider execution, phone, wallet, public-chain payment or independent delivery.';
             echo '```json'; cat "$RUNNER_TEMP/native-wallet-result.json"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: Check combined setup atomicity and original-hash markers on loopback
+        env:
+          BOUNCER_SANDBOX_BIN: ${{ runner.temp }}/near-sandbox
+        run: |
+          set -euo pipefail
+          ulimit -Sn 65535
+          if ! node integration/native-oracle-atomic-sandbox.mjs > "$RUNNER_TEMP/native-atomic-result.json" 2> "$RUNNER_TEMP/native-atomic-error.log"; then
+            python3 -c 'import os; s=open(os.environ["RUNNER_TEMP"]+"/native-atomic-error.log").read()[-5000:]; print("::error title=Isolated atomic native setup failed::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
+            exit 1
+          fi
+          python3 -c 'import os; s=open(os.environ["RUNNER_TEMP"]+"/native-atomic-result.json").read(); print("::notice title=Isolated atomic setup results::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
+          { echo '## Combined native setup research on isolated nearcore';
+            echo 'Disposable sandbox only; marker ideas do not establish complete cross-device recovery and are not enabled on the phone.';
+            echo '```json'; cat "$RUNNER_TEMP/native-atomic-result.json"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
