@@ -2,13 +2,16 @@
 name: V14 native storage contract
 on:
   push:
-    branches: ['arena/ebd0bbac-near-hub']
+    branches: [main, 'arena/**']
+  pull_request:
+    branches: [main]
   workflow_dispatch:
+
 permissions:
   contents: read
+
 jobs:
   contract:
-    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[native-storage-v14]')
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -116,8 +119,8 @@ jobs:
           name: experimental-v14-testnet-wasm
           path: bouncer/contracts/bouncer/target/wasm32-unknown-unknown/release/bouncer.wasm
           retention-days: 7
+
   browser:
-    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[native-storage-v14]')
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
