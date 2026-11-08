@@ -89,6 +89,16 @@ persistent journal, owner-authorized fresh V14 vault, policies/allowlists and
 scoped agent keys. There is no complete browser provisioning flow for that
 setup yet. A static Netlify or Vercel deployment alone cannot run missions.
 
+A static Netlify build is provided by the root `netlify.toml`. Its staging
+script approves exactly the dedicated HTTPS site URL supplied by Netlify (or
+`BOUNCER_WALLET_ORIGIN`), rather than trusting every Netlify preview origin.
+Deploy previews on a different hostname stay wallet-disabled unless separately
+reviewed and staged for that exact origin. The static build does not provision
+Google's session backend, the optional WalletConnect relay, or the mission
+backend. A public WalletConnect project ID can be supplied separately through
+`BOUNCER_WALLETCONNECT_PROJECT_ID`; an empty ID leaves that option disabled.
+Actual wallet, RPC CORS and phone behavior on a new host still require testing.
+
 The server operator, signer custody, RPC, database and local filesystem are
 trust boundaries. `FileJournal` locks only cooperating processes using that
 file; it is **not** an independent checkpoint and cannot prevent rollback,

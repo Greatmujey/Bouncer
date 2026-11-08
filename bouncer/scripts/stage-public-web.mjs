@@ -52,8 +52,21 @@ export function validatePublicWeb(source = DEFAULT_SOURCE) {
   }
 }
 
-export function stagePublicWeb(destination, source = DEFAULT_SOURCE, { walletConnectProjectId = process.env.BOUNCER_WALLETCONNECT_PROJECT_ID || '' } = {}) {
+const SOURCE_WALLET_ORIGIN = 'https://bouncer-near.vercel.app';
+function dedicatedOrigin(value) {
+  let url; try { url = new URL(value); } catch { throw new Error('A dedicated HTTPS wallet origin is required'); }
+  const host = url.hostname;
+  if (url.origin !== value || url.protocol !== 'https:' || url.pathname !== '/' || url.search || url.hash || url.username || url.password ||
+      !/^[a-z0-9.-]+$/.test(host) || !host.includes('.') || /^\d+(?:\.\d+){3}$/.test(host) ||
+      ['localhost','github.io','madethis.website'].some(shared => host === shared || host.endsWith(`.${shared}`))) {
+    throw new Error('A dedicated HTTPS wallet origin is required');
+  }
+  return url.origin;
+}
+export function stagePublicWeb(destination, source = DEFAULT_SOURCE, { walletConnectProjectId = process.env.BOUNCER_WALLETCONNECT_PROJECT_ID || '',
+  walletOrigin = process.env.BOUNCER_WALLET_ORIGIN || (process.env.NETLIFY === 'true' ? (process.env.URL || '') : SOURCE_WALLET_ORIGIN) } = {}) {
   if (typeof destination !== 'string' || !destination.trim()) throw new Error('A new staging directory is required');
+  const origin = dedicatedOrigin(walletOrigin);
   if (typeof walletConnectProjectId !== 'string' || (walletConnectProjectId !== '' && !/^[a-f0-9]{32}$/i.test(walletConnectProjectId))) {
     throw new Error('Invalid WalletConnect project ID');
   }
@@ -65,6 +78,10 @@ export function stagePublicWeb(destination, source = DEFAULT_SOURCE, { walletCon
   }
   if (walletConnectProjectId) {
     fs.writeFileSync(path.join(destination, 'walletconnect-config.json'), `${JSON.stringify({ projectId: walletConnectProjectId })}\n`);
+  }
+  if (origin !== SOURCE_WALLET_ORIGIN) {
+    const index = path.join(destination, 'index.html'), html = fs.readFileSync(index, 'utf8');
+    fs.writeFileSync(index, html.replace(`content="${SOURCE_WALLET_ORIGIN}"`, `content="${origin}"`));
   }
   return [...PUBLIC_WEB_FILES];
 }

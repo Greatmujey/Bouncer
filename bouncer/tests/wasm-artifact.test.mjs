@@ -67,6 +67,24 @@ test('V13 feature relationship checks only the default V9 marker and rejects cha
   assert.throws(() => checkWasmArtifact(wasm('bouncer-agent-v9'), conditional.replace('not(feature = "exact-ft-v12")', 'feature = "exact-ft-v12"')), /unique/);
 });
 
+test('separate V14 feature still checks only the default V9 marker and rejects altered guards', () => {
+  const conditional = `pub fn contract_version(&self) -> &'static str {
+    #[cfg(feature = "tollgate-native-v13")] { "bouncer-agent-v13-tollgate-native-testnet" }
+    #[cfg(all(feature = "exact-ft-v12", not(feature = "tollgate-native-v13")))] { "bouncer-agent-v12-exact-ft-testnet" }
+    #[cfg(all(feature = "exact-ft-v11", not(feature = "exact-ft-v12")))] { "bouncer-agent-v11-exact-ft-testnet" }
+    #[cfg(feature = "youtick-playback-v10")] { "bouncer-agent-v10-youtick-testnet" }
+    #[cfg(feature = "native-storage-v14")] { "bouncer-agent-v14-native-storage-testnet" }
+    #[cfg(not(any(feature = "youtick-playback-v10", feature = "exact-ft-v11", feature = "native-storage-v14")))] { "bouncer-agent-v9" }
+  }`;
+  assert.equal(checkWasmArtifact(wasm('bouncer-agent-v9'), conditional).version, 'bouncer-agent-v9');
+  for (const marker of ['bouncer-agent-v14-native-storage-testnet', 'bouncer-agent-v13-tollgate-native-testnet', 'bouncer-agent-v10-youtick-testnet']) {
+    assert.throws(() => checkWasmArtifact(wasm(marker), conditional), /rebuild/);
+  }
+  assert.throws(() => checkWasmArtifact(wasm('bouncer-agent-v9'), conditional + conditional), /unique/);
+  assert.throws(() => checkWasmArtifact(wasm('bouncer-agent-v9'), conditional.replace(', feature = "native-storage-v14"', '')), /unique/);
+  assert.throws(() => checkWasmArtifact(wasm('bouncer-agent-v9'), conditional.replace('#[cfg(feature = "native-storage-v14")]', '#[cfg(feature = "youtick-playback-v10")]')), /unique/);
+});
+
 test('checked-in deployment artifact carries the current source marker', () => {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
   const checked = checkWasmArtifact(fs.readFileSync(path.join(root, 'bouncer.wasm')),
