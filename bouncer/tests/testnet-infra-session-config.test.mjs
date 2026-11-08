@@ -27,6 +27,15 @@ test('the Supabase pooler uses a pinned public CA with certificate and hostname 
   assert.equal(root.fingerprint256.replaceAll(':',''),'807025AD50D4ED219D2C9C7D299C004F824EB00CF7F65AFEF607D07B72E6CAFA');
 });
 
+test('explicit resume requires a previous run and a pinned baseline',()=>{
+  const {config}=setup();
+  const resumed={...config,mode:'resume-only',resume_from:{run_id:'1233',initial_head:'a'.repeat(40)}};
+  assert.deepEqual(validateTestnetInfraConfig(resumed,'1234'),resumed);
+  assert.throws(()=>validateTestnetInfraConfig({...resumed,resume_from:{...resumed.resume_from,run_id:'1234'}},'1234'));
+  assert.throws(()=>validateTestnetInfraConfig({...resumed,resume_from:{...resumed.resume_from,initial_head:'invalid'}},'1234'));
+  assert.throws(()=>validateTestnetInfraConfig({...config,mode:'resume-only'},'1234'));
+});
+
 test('configuration fails closed for wrong run, shared databases, extra fields and mismatched keys',()=>{
   const {a,b,config}=setup();
   assert.throws(()=>validateTestnetInfraConfig(config,'2'));

@@ -22,13 +22,13 @@ while (Date.now() < deadline) {
     git(['fetch','--quiet','--no-tags','origin',branch]);
     const raw = git(['show', `refs/remotes/origin/${branch}:${file}`]);
     const config = JSON.parse(raw);
-    if (config?.version === 1 && config.run_id === runId && config.mode === 'provision-only') {
+    if (config?.version === 1 && config.run_id === runId && ['provision-only','resume-only'].includes(config.mode)) {
       if (git(['branch','--show-current']) !== branch || git(['status','--porcelain','--untracked-files=normal'])) throw Error();
       git(['pull','--ff-only','--quiet','origin',branch]);
       console.log('Found the run-specific provisioning instruction. No wallet action is authorized.');
       provisioningStarted = true;
       const result = spawnSync(process.execPath, ['bouncer/scripts/run-testnet-infra-session.mjs', file],
-        { env:process.env, stdio:'inherit', timeout:30 * 60_000 });
+        { env:process.env, stdio:'inherit', timeout:60 * 60_000 });
       if (result.error || result.signal || result.status !== 0) throw new Error('testnet provisioning did not complete');
       process.exit(0);
     }

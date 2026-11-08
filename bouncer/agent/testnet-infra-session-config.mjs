@@ -16,9 +16,15 @@ function publicKey(value) {
   return key;
 }
 export function validateTestnetInfraConfig(value,runId) {
-  if (!exact(value,['version','run_id','mode','projects','session_public_keys']) || value.version !== 1 ||
-      value.run_id !== runId || !/^[1-9][0-9]{0,19}$/.test(runId ?? '') || value.mode !== 'provision-only' ||
+  const base=['version','run_id','mode','projects','session_public_keys'];
+  const resume=value?.mode === 'resume-only';
+  if (!exact(value,resume?[...base,'resume_from']:base) || value.version !== 1 ||
+      value.run_id !== runId || !/^[1-9][0-9]{0,19}$/.test(runId ?? '') ||
+      !['provision-only','resume-only'].includes(value.mode) ||
       !exact(value.projects,names) || !exact(value.session_public_keys,names)) throw Error('invalid testnet infrastructure configuration');
+  if(resume && (!exact(value.resume_from,['run_id','initial_head']) ||
+      !/^[1-9][0-9]{0,19}$/.test(value.resume_from.run_id ?? '') || value.resume_from.run_id===runId ||
+      !/^[a-f0-9]{40}$/.test(value.resume_from.initial_head ?? ''))) throw Error('invalid resume baseline');
   for (const role of names) {
     const p=value.projects[role];
     if (!exact(p,['ref','region']) || !/^[a-z]{20}$/.test(p.ref ?? '') ||

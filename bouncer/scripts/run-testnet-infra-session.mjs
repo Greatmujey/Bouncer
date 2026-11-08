@@ -17,10 +17,12 @@ import { setTimeout as delay } from 'node:timers/promises';
 import pg from 'pg';
 import { validateTestnetInfraConfig,testnetPoolerHosts,testnetPoolerSsl,deriveTestnetCheckpointToken } from '../agent/testnet-infra-session-config.mjs';
 import { auditFullGitWitnessHistory } from '../agent/full-git-witness-history-audit.mjs';
-import { initializePostgresWalletPromptAuth } from '../agent/postgres-wallet-prompt-auth.mjs';
-import { initializePostgresWalletPromptFence } from '../agent/postgres-wallet-prompt-fence.mjs';
-import { initializePostgresNativeOraclePromptFence } from '../agent/postgres-native-oracle-prompt-fence.mjs';
-import { provisionPostgresSetupHeadAnchor } from '../agent/postgres-setup-head-anchor.mjs';
+import { initializePostgresWalletPromptAuth,inspectPostgresWalletPromptAuthSchema } from '../agent/postgres-wallet-prompt-auth.mjs';
+import { initializePostgresWalletPromptFence,inspectPostgresWalletPromptFenceSchema } from '../agent/postgres-wallet-prompt-fence.mjs';
+import { initializePostgresNativeOraclePromptFence,inspectPostgresNativeOraclePromptFenceSchema } from '../agent/postgres-native-oracle-prompt-fence.mjs';
+import { provisionPostgresSetupHeadAnchor,createPostgresSetupHeadAnchor } from '../agent/postgres-setup-head-anchor.mjs';
+import { createGitWitnessRangeAudit } from '../agent/git-witness-range-audit.mjs';
+import { waitForTestnetInfraActivation } from '../agent/testnet-infra-activation.mjs';
 
 const ROLE=process.env.BOUNCER_INFRA_ROLE, RUN=process.env.GITHUB_RUN_ID, BRANCH=process.env.GITHUB_REF_NAME;
 const REPO=process.env.GITHUB_WORKSPACE, TEMP=process.env.RUNNER_TEMP;
@@ -87,57 +89,93 @@ async function main(){
   phase='database-connect';
   const pool=await connect(config,password);
   try{
-    phase='database-empty-check';
-    // Each database is new and dedicated. Refuse implicit repair or reuse.
-    const existing=await pool.query(`SELECT nspname FROM pg_catalog.pg_namespace WHERE nspname = ANY($1::text[])`,
-      [['bouncer_testnet_infra_v1','bouncer_wallet_auth_v1','bouncer_wallet_owner_fence_v1','bouncer_wallet_prompt_v1',
-        'bouncer_native_wallet_prompt_v1','bouncer_setup_head_anchor_v1']]);
-    if(existing.rows.length)throw failed();
-    phase='database-provision';
-    if(ROLE==='coordinator'){
-      await initializePostgresWalletPromptAuth({pool});
-      await initializePostgresWalletPromptFence({pool});
-      await initializePostgresNativeOraclePromptFence({pool});
-    } else {
-      await provisionPostgresSetupHeadAnchor({pool,repository:'Greatmujey/Bouncer',branch:BRANCH,initialHead:baseline,
-        operatorVerifiedCompleteBaseline:true});
+    let initialHead=baseline;
+    if(config.mode==='provision-only'){
+      phase='database-empty-check';
+      // Fresh provisioning is permitted only once, never as implicit repair.
+      const existing=await pool.query(`SELECT nspname FROM pg_catalog.pg_namespace WHERE nspname = ANY($1::text[])`,
+        [['bouncer_testnet_infra_v1','bouncer_wallet_auth_v1','bouncer_wallet_owner_fence_v1','bouncer_wallet_prompt_v1',
+          'bouncer_native_wallet_prompt_v1','bouncer_setup_head_anchor_v1']]);
+      if(existing.rows.length)throw failed();
+      phase='database-provision';
+      if(ROLE==='coordinator'){
+        await initializePostgresWalletPromptAuth({pool});
+        await initializePostgresWalletPromptFence({pool});
+        await initializePostgresNativeOraclePromptFence({pool});
+      } else {
+        await provisionPostgresSetupHeadAnchor({pool,repository:'Greatmujey/Bouncer',branch:BRANCH,initialHead:baseline,
+          operatorVerifiedCompleteBaseline:true});
+      }
+      phase='status-record';
+      const client=await pool.connect();
+      try{
+        await client.query('BEGIN');
+        await client.query(`CREATE SCHEMA bouncer_testnet_infra_v1;
+          CREATE TABLE bouncer_testnet_infra_v1.status(role text PRIMARY KEY,run_id text NOT NULL,baseline text NOT NULL,phase text NOT NULL);
+          GRANT USAGE ON SCHEMA bouncer_testnet_infra_v1 TO postgres;
+          GRANT SELECT ON bouncer_testnet_infra_v1.status TO postgres`);
+        await client.query(`INSERT INTO bouncer_testnet_infra_v1.status(role,run_id,baseline,phase) VALUES($1,$2,$3,'PROVISIONED_NO_WALLET')`,
+          [ROLE,RUN,baseline]);
+        await client.query('COMMIT');
+      }catch(e){try{await client.query('ROLLBACK')}catch{}throw e}finally{client.release()}
+    }else{
+      // A resume is strictly limited to a verified, prompt-free provisioning
+      // session. Existing schemas are inspected, never recreated or repaired.
+      phase='resume-status';
+      initialHead=config.resume_from.initial_head;
+      const status=await pool.query('SELECT role,run_id,baseline,phase FROM bouncer_testnet_infra_v1.status');
+      const row=status.rows[0];
+      if(status.rows.length!==1 || row.role!==ROLE || row.run_id!==config.resume_from.run_id ||
+          row.baseline!==initialHead || row.phase!=='PROVISIONED_NO_WALLET')throw failed();
+      if(ROLE==='coordinator'){
+        phase='resume-schema-check';
+        await inspectPostgresWalletPromptAuthSchema({pool});
+        await inspectPostgresWalletPromptFenceSchema({pool});
+        await inspectPostgresNativeOraclePromptFenceSchema({pool});
+        const count=await pool.query(`SELECT
+          (SELECT count(*) FROM bouncer_wallet_auth_v1.challenges) AS challenges,
+          (SELECT count(*) FROM bouncer_wallet_owner_fence_v1.holders) AS holders,
+          (SELECT count(*) FROM bouncer_wallet_prompt_v1.prompts) AS prompts,
+          (SELECT count(*) FROM bouncer_wallet_prompt_v1.claims) AS claims,
+          (SELECT count(*) FROM bouncer_wallet_prompt_v1.setup_stages) AS wallet_stages,
+          (SELECT count(*) FROM bouncer_native_wallet_prompt_v1.plans) AS plans,
+          (SELECT count(*) FROM bouncer_native_wallet_prompt_v1.stages) AS native_stages`);
+        if(count.rows.length!==1 || Object.values(count.rows[0]).some(value=>value!=='0'))throw failed();
+      }else{
+        phase='resume-checkpoint';
+        const anchor=createPostgresSetupHeadAnchor({pool,repository:'Greatmujey/Bouncer',branch:BRANCH,initialHead});
+        const before=await anchor.read();
+        if(before.head!==initialHead || before.revision!=='0' || baseline===initialHead ||
+           await createGitWitnessRangeAudit({repo:REPO})(initialHead,baseline)!==true)throw failed();
+        // One attempt only. A lost acknowledgement is a stop, not a retry.
+        const advanced=await anchor.compareAndSet({expected:before,nextHead:baseline});
+        const after=await anchor.read();
+        if(advanced.confirmed!==true || advanced.head!==baseline || after.head!==baseline || after.revision!==advanced.revision)throw failed();
+      }
+      phase='resume-status-advance';
+      const changed=await pool.query(`UPDATE bouncer_testnet_infra_v1.status SET run_id=$1,baseline=$2
+        WHERE role=$3 AND run_id=$4 AND baseline=$5 AND phase='PROVISIONED_NO_WALLET'`,
+        [RUN,baseline,ROLE,config.resume_from.run_id,initialHead]);
+      if(changed.rowCount!==1)throw failed();
     }
-    phase='status-record';
-    const client=await pool.connect();
-    try{
-      await client.query('BEGIN');
-      await client.query(`CREATE SCHEMA bouncer_testnet_infra_v1;
-        CREATE TABLE bouncer_testnet_infra_v1.status(role text PRIMARY KEY,run_id text NOT NULL,baseline text NOT NULL,phase text NOT NULL);
-        GRANT USAGE ON SCHEMA bouncer_testnet_infra_v1 TO postgres;
-        GRANT SELECT ON bouncer_testnet_infra_v1.status TO postgres`);
-      await client.query(`INSERT INTO bouncer_testnet_infra_v1.status(role,run_id,baseline,phase) VALUES($1,$2,$3,'PROVISIONED_NO_WALLET')`,
-        [ROLE,RUN,baseline]);
-      await client.query('COMMIT');
-    }catch(e){try{await client.query('ROLLBACK')}catch{}throw e}finally{client.release()}
     fs.writeFileSync(path.join(directory,'baseline'),baseline,{mode:0o600,flag:'wx'});
-    console.log(`The ${ROLE} testnet database was provisioned; no wallet prompt is enabled.`);
+    fs.writeFileSync(path.join(directory,'initial-head'),initialHead,{mode:0o600,flag:'wx'});
+    console.log(`The ${ROLE} testnet database was provisioned or inspected; no wallet prompt is enabled.`);
     // Keep the runner-local password and key available for a separate, explicit
     // activation instruction. This loop never creates an instruction itself.
-    const serveFile=`bouncer/infrastructure/session-${RUN}-serve.json`, deadline=Date.now()+25*60_000;
-    while(Date.now()<deadline){
-      try{
-        git(['fetch','--quiet','--no-tags','origin',BRANCH]);
-        const control=JSON.parse(git(['show',`refs/remotes/origin/${BRANCH}:${serveFile}`]));
-        if(control?.version===1 && control.run_id===RUN && control.mode==='serve-testnet'){
-          // Do not retry after this point, including a lost acknowledgement.
-          git(['pull','--ff-only','--quiet','origin',BRANCH]);
-          const launched=spawnSync(process.execPath,['bouncer/scripts/serve-testnet-infra-session.mjs',serveFile],
-            {cwd:REPO,env:{...process.env,BOUNCER_INFRA_BASELINE:baseline},stdio:'inherit',timeout:20*60_000});
-          if(launched.error || launched.signal || launched.status!==0)throw failed();
-          return;
-        }
-      }catch(e){
-        if(e?.message==='testnet infrastructure provisioning is unavailable or uncertain; stop and reconcile; no wallet action is authorized')throw e;
-        // Missing future instruction is not an approval.
-      }
-      await delay(5_000);
-    }
-    console.log('No separate activation instruction was received; no wallet prompt was enabled.');
+    const serveFile=`bouncer/infrastructure/session-${RUN}-serve.json`;
+    const activated=await waitForTestnetInfraActivation({runId:RUN,deadline:Date.now()+25*60_000,
+      readControl:()=>{git(['fetch','--quiet','--no-tags','origin',BRANCH]);
+        return JSON.parse(git(['show',`refs/remotes/origin/${BRANCH}:${serveFile}`]))},
+      wait:()=>delay(5_000),activate:()=>{
+        phase='activation';
+        git(['pull','--ff-only','--quiet','origin',BRANCH]);
+        const launched=spawnSync(process.execPath,['bouncer/scripts/serve-testnet-infra-session.mjs',serveFile],
+          {cwd:REPO,env:{...process.env,BOUNCER_INFRA_BASELINE:baseline,BOUNCER_INFRA_INITIAL_HEAD:initialHead},
+            stdio:'inherit',timeout:20*60_000});
+        if(launched.error || launched.signal || launched.status!==0)throw failed();
+      }});
+    if(!activated)console.log('No separate activation instruction was received; no wallet prompt was enabled.');
   }finally{await pool.end().catch(()=>{})}
 }
 main().catch(()=>{console.error(`::error title=Testnet infrastructure stopped::${ROLE ?? 'unknown'} phase=${phase}; no wallet or transaction was authorized.`);process.exitCode=1});
