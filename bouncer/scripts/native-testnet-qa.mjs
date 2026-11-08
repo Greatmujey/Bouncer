@@ -327,5 +327,14 @@ async function main() {
   fail('unsupported QA phase');
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
-  main().catch(error => { console.error(`QA stopped: ${error.message}; do not retry an unresolved original.`); process.exitCode = 1; });
+  main().catch(error => {
+    const message = String(error?.message ?? 'unknown failure').replace(/https?:\/\/\S+/g, '[url]')
+      .replace(/ed25519:[1-9A-HJ-NP-Za-km-z]+/g, 'ed25519:[redacted]').slice(0, 600);
+    console.error(`QA stopped: ${message}; do not retry an unresolved original.`);
+    if (process.env.GITHUB_ACTIONS === 'true') {
+      const safe = message.replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A');
+      console.log(`::error title=Testnet QA stopped::${safe}; do not retry an unresolved original.`);
+    }
+    process.exitCode = 1;
+  });
 }
