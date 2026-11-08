@@ -85,19 +85,80 @@ is not proof that a transaction never happened.
 
 `agent/authenticated-native-mission-service.mjs` composes a fixed manifest,
 server-side scoped agent signers, trusted RPC, `FileJournal` and the existing
-PostgreSQL one-use owner authenticator. If agent keys are unavailable, the
-service can instead be constructed without signers or an authenticator in
-**recovery-only mode**: it can list retained hashes and reconcile receipts,
-but cannot issue approval challenges or execute. `agent/native-mission-http.mjs` provides
-a strict same-origin handler/server factory, **not an automatically enabled
-service**. POST requests are exact-shape and origin-checked. The separate
-`BOUNCER_NATIVE_MISSION_PREVIEW=1` switch on the development web server only
-proxies `/api/native-mission/` to a separately started loopback service; it
-never starts or provisions that service. A real operator must separately
-provision a dedicated HTTPS same-origin backend, PostgreSQL challenge store,
-persistent journal, owner-authorized fresh V14 vault, policies/allowlists and
-scoped agent keys. There is no complete browser provisioning flow for that
-setup yet. A static Netlify or Vercel deployment alone cannot run missions.
+PostgreSQL one-use owner authenticator. `npm run native-mission:serve` now
+wires these pieces to the reviewed website in **one fixed-origin, single-host
+Node service**; it is disabled unless explicitly configured. It serves the
+same site and mission API for computer and phone, as well as the optional
+WalletConnect relay and Google identity endpoint when configured. Its startup
+performs no wallet prompt or transaction. It is not a deployment, and has not
+been tested with a real wallet or live mission.
+
+The operator still needs a dedicated HTTPS host, PostgreSQL challenge store,
+persistent original journal, and an owner-authorized fresh V14 vault with
+policies/allowlists and scoped keys. There is no complete browser provisioning
+flow for that setup yet. A static Netlify or Vercel deployment alone cannot run
+missions. The development server's separate `BOUNCER_NATIVE_MISSION_PREVIEW=1`
+switch only proxies to an already running loopback service and provisions
+nothing.
+
+### Operator setup for the single-host service
+
+This is a **testnet-only operator interface**, not an instruction for a wallet
+owner to hand over keys. The owner approves setup and the mission in their own
+wallet; the server must never receive the owner's private key or recovery
+phrase. Use a single trusted machine with persistent, backed-up storage. Bind
+an HTTPS reverse proxy on the reviewed dedicated domain to loopback port 8789;
+the proxy must preserve `Host`, set `X-Forwarded-Proto: https`, sanitize
+forwarded headers, and never serve the private state directory. Do not put the
+journal on an ephemeral serverless filesystem or run multiple replicas.
+
+All paths below are **absolute**, outside the checkout, and in existing
+owner-only mode-0700 directories. Create a validated mission manifest using the
+actual V14 code hash, accounts, caps and routes; the example is not live
+configuration. Set `BOUNCER_NATIVE_MISSION_FILE`,
+`BOUNCER_NATIVE_MISSION_JOURNAL_FILE` and `BOUNCER_FILE_JOURNAL_KEY_FILE`.
+For a genuinely **new** vault/mission with no earlier attempts, the existing
+`npm run init-file-journal-key -- --key-file <new-key>` creates the private
+32-byte encryption key; `npm run native-mission:init-journal --
+--confirm-brand-new-vault` then exclusively creates the encrypted journal and
+retains the reviewed mission intent. Neither tool overwrites an existing file.
+**Never initialize a replacement** for a missing/uncertain journal. The tool
+cannot prove that the vault is new, and encryption cannot detect rollback.
+Back up the original journal and key securely.
+
+Set `BOUNCER_NATIVE_MISSION_AGENT_KEYS_FILE` and run `npm run
+native-mission:agent-keys -- --confirm-new-agent-keys` once. It writes distinct
+new private *agent* keys mode 0600 and outputs only their public keys, required
+single vault methods and maximum gas allowance; it does not install or
+authorize them. The wallet owner must separately review and approve vault
+creation, funding, the exact policy grants and those restricted access keys.
+The offline V14 research plan may assist review but is not a wallet onboarding
+flow or permission to send. The server checks each key's on-chain single-method
+scope, receiver, ≤1 test NEAR gas allowance, owner and pinned keyless vault at
+startup; the runners repeat policy/key checks before each new payment.
+
+In a dedicated testnet PostgreSQL primary, set
+`BOUNCER_NATIVE_MISSION_AUTH_DATABASE_URL` and run `npm run
+native-mission:init-auth -- --confirm-dedicated-testnet-db` explicitly. This
+creates/checks the consent schema without a wallet prompt. Remote database
+connections require `sslmode=verify-full` and a trusted CA. The database URL is
+secret and must not appear in the repository, logs or command arguments. Set
+`BOUNCER_WALLET_ORIGIN` to the exact dedicated HTTPS origin,
+`BOUNCER_TESTNET_RPC_URL` to the trusted testnet RPC,
+`BOUNCER_NATIVE_MISSION_MODE=execute` and `BOUNCER_NATIVE_MISSION_ENABLED=1`,
+then run `npm run native-mission:serve`. Optional public configuration is
+`BOUNCER_WALLETCONNECT_PROJECT_ID` and `BOUNCER_GOOGLE_CLIENT_ID`; port defaults
+to 8789 (`BOUNCER_NATIVE_MISSION_PORT`). The server refuses to recreate a
+missing journal or initialize its database on startup. It listens on loopback
+only and must be behind the dedicated TLS proxy; this has not been deployed.
+
+To investigate retained originals without loading agent keys or the consent
+database, start with `BOUNCER_NATIVE_MISSION_MODE=recover` and the same mission,
+RPC, original encrypted journal and key. Recovery cannot issue challenges or
+sign/send. Graceful shutdown waits for in-flight work, even after a browser
+disconnect; a forced kill or lost disk still requires reconciliation. The
+filesystem, database and operator may be compromised or rolled back. A missing
+hash never proves that a transaction did not happen.
 
 Mobile V14 provisioning is also unresolved. At commit `42255e1`, the CI-built
 WASM was 499,063 bytes; its 665,420-byte base64 code field alone exceeds the
@@ -146,14 +207,17 @@ offline tests only.
 
 Unit tests use synthetic FINAL receipts and ephemeral keys for three-leg
 sequencing, budget checks, storage readback, authentication, challenge
-replay/tampering, unknown results and original-only recovery. Separate
-loopback-only nearcore scenarios exercise a disposable V14 contract and all
-three real guarded JS runners. The three-leg scenario uses a fabricated local
-provider: its outputs are not independent OutLayer execution, although the
-sandbox executes the vault calls, storage writes and refund transfers. These
-tests cannot prove live OutLayer delivery, independent storage, a real
-phone/wallet approval or safe deployment. A mocked mobile-browser test also
-checks the dedicated Netlify origin and review/recovery UI. See the corresponding
+replay/tampering, unknown results and original-only recovery. The configured
+single-host service is also tested with a disposable PostgreSQL instance and
+fabricated RPC, including a real one-use signed challenge and a policy change
+that blocks before sending. Separate loopback-only nearcore scenarios exercise
+a disposable V14 contract and all three real guarded JS runners. The
+three-leg scenario uses a fabricated local provider: its outputs are not
+independent OutLayer execution, although the sandbox executes the vault calls,
+storage writes and refund transfers. These tests cannot prove live OutLayer
+delivery, independent storage, a real wallet approval or safe deployment.
+Mocked desktop and mobile browser tests also check review/recovery UI and the
+dedicated Netlify origin. See the corresponding
 CI run for its actual result; a script's existence is not a passing test.
 [Run 42503338044](https://github.com/Greatmujey/Bouncer/actions/runs/42503338044)
 passed the isolated three-leg/fabricated-provider scenario and the mocked browser

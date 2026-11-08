@@ -1,4 +1,4 @@
-// Mobile-sized browser test, synthetic wallet/backend/RPC only. No live send.
+// Desktop and mobile browser tests, synthetic wallet/backend/RPC only. No live send.
 import assert from 'node:assert/strict';
 import { createHash, generateKeyPairSync, verify } from 'node:crypto';
 import fs from 'node:fs';
@@ -37,12 +37,13 @@ const allowed=new Set(PUBLIC_WEB_FILES),types={'.html':'text/html','.css':'text/
   '.json':'application/json','.zip':'application/zip','.svg':'image/svg+xml','.jpg':'image/jpeg','.woff2':'font/woff2','.txt':'text/plain'};
 const staging=fs.mkdtempSync(path.join(os.tmpdir(),'bouncer-mission-ui-'));
 try {
-  for(const {width,mode,origin} of [{width:390,mode:'success',origin:defaultOrigin},
-    {width:320,mode:'unknown',origin:defaultOrigin},{width:390,mode:'blocked',origin:defaultOrigin},
-    {width:390,mode:'success',origin:'https://synthetic-bouncer.netlify.app'}]) {
+  for(const {width,mode,origin} of [{width:1280,mode:'success',origin:defaultOrigin},
+    {width:390,mode:'success',origin:defaultOrigin},{width:320,mode:'unknown',origin:defaultOrigin},
+    {width:390,mode:'blocked',origin:defaultOrigin},{width:390,mode:'success',origin:'https://synthetic-bouncer.netlify.app'}]) {
     const siteDir=path.join(staging,`site-${fs.readdirSync(staging).length}`);
     stagePublicWeb(siteDir,web,{walletOrigin:origin,walletConnectProjectId:''});
-    const context=await browser.newContext({viewport:{width,height:844},isMobile:true,hasTouch:true,reducedMotion:'reduce'}),page=await context.newPage();
+    const mobile=width<600;
+    const context=await browser.newContext({viewport:{width,height:844},isMobile:mobile,hasTouch:mobile,reducedMotion:'reduce'}),page=await context.newPage();
     const errors=[],requests=[];page.on('pageerror',e=>errors.push(e.message));
     const keys=generateKeyPairSync('ed25519'),privatePkcs8=keys.privateKey.export({type:'pkcs8',format:'der'}).toString('base64'),
       publicKey=`ed25519:${nearApi.utils.serialize.base_encode(Buffer.from(keys.publicKey.export({format:'jwk'}).x,'base64url'))}`;
@@ -139,5 +140,5 @@ try {
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
     assert.deepEqual(errors,[]);await context.close();
   }
-  console.log('Synthetic mobile mission UI: review, explicit consent, blocked preflight, unknown response and no-key recovery passed.');
+  console.log('Synthetic desktop and mobile mission UI: review, explicit consent, blocked preflight, unknown response and no-key recovery passed.');
 } finally { await browser.close(); fs.rmSync(staging,{recursive:true,force:true}); }

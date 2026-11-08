@@ -6,6 +6,7 @@
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import zlib from 'node:zlib';
@@ -14,6 +15,10 @@ import { validateKnownFirstPartyActionRequest, MAX_ACTION_REQUEST_CANONICAL_JSON
 import { syntheticV14MeteorRequest } from './v14-synthetic-meteor.mjs';
 import { FileJournal } from '../agent/procurement.mjs';
 import { runNativeMission } from '../agent/native-mission.mjs';
+import { createAuthenticatedNativeMissionService } from '../agent/authenticated-native-mission-service.mjs';
+import { createNativeMissionSite } from '../agent/native-mission-site.mjs';
+import { nativeMissionApprovalMessage } from '../web-src/native-mission-auth.mjs';
+import { nep413Payload } from '../web-src/cli-login.mjs';
 import { buildV14PhoneResearchPlan, verifyV14PhoneResearchPlan, v14PhoneBatchCommitment } from '../agent/native-v14-phone-plan.mjs';
 import { prepareV14PhoneAttempt, inspectV14PhoneAttempt } from '../agent/native-v14-phone-receipts.mjs';
 import { inspectV14PhoneSetupCompletion } from '../agent/native-v14-phone-completion.mjs';
@@ -38,6 +43,35 @@ async function absent(provider,id) {
   let error; try { await provider.viewAccount(id,{finality:'final'}); } catch (caught) { error=caught; }
   assert.ok(error,`${id} should be absent`);
   assert.match(`${error.message ?? ''} ${JSON.stringify(error)}`,/UNKNOWN_ACCOUNT|does not exist|doesn't exist|unknown account/i);
+}
+// Test-only in-memory consent fence. Production uses PostgreSQL; this verifies
+// the synthetic owner's actual NEP-413 signature and rejects a replay.
+function syntheticConsent(ownerKey,origin) {
+  let saved;
+  return {
+    async issue(action) {
+      const issued=Date.now(),expires=issued+120_000,nonce=crypto.randomBytes(32);
+      const challenge={challenge_id:crypto.randomBytes(16).toString('hex'),nonce_base64:nonce.toString('base64'),recipient:new URL(origin).host,
+        message:nativeMissionApprovalMessage(action,sha(JSON.stringify(action)).toString('hex'),origin,issued,expires),expires_at_ms:expires};
+      saved={action,challenge,nonce,used:false};return challenge;
+    },
+    async authenticate({action,evidence}) {
+      if(!saved||saved.used||JSON.stringify(action)!==JSON.stringify(saved.action)||evidence?.challenge_id!==saved.challenge.challenge_id||
+          evidence?.accountId!==OWNER||evidence?.publicKey!==pub(ownerKey))return false;
+      const payload=nep413Payload({message:saved.challenge.message,nonce:new Uint8Array(saved.nonce),recipient:saved.challenge.recipient});
+      if(!ownerKey.getPublicKey().verify(sha(payload),Buffer.from(evidence.signature??'','base64')))return false;
+      saved.used=true;return true;
+    },
+  };
+}
+function siteRequest(server,{route='/',input}={}) {
+  const data=input===undefined?null:JSON.stringify(input),origin='https://bouncer.example';
+  return new Promise((resolve,reject)=>{
+    const req=http.request({host:'127.0.0.1',port:server.address().port,path:route,method:data?'POST':'GET',
+      headers:{host:'bouncer.example',origin,'x-bouncer-native-mission':'v1',...(data?{'content-type':'application/json'}:{})}},res=>{
+      const chunks=[];res.on('data',part=>chunks.push(part));res.on('end',()=>resolve({status:res.statusCode,body:Buffer.concat(chunks).toString()}));
+    });req.on('error',reject);req.end(data);
+  });
 }
 function makeMission(codeHash,priceRoute,storageRoute,suffix='') {
   return {version:1,id:`sandbox-mission${suffix}`,contract_id:VAULT,owner_account_id:OWNER,
@@ -211,6 +245,33 @@ async function main() {
       const resumed=await run(second,{signers:signers('-second'),execute:true});
       assert.equal(resumed.status,'FULFILLED');assert.equal(resumed.new_payments,2);assert.equal(rpc.transportCalls,6);
       assert.equal(journal.get('compute-second').tx_hash,original);
+
+      // Wire the real same-origin HTTP service to the real three guarded
+      // runners. Consent and provider are still synthetic, and everything is
+      // isolated to this nearcore; no browser wallet or public chain is used.
+      const third=make('-http');activeIds={compute:'compute-http',price:'price-http',store:'store-http'};
+      const siteOrigin='https://bouncer.example',service=createAuthenticatedNativeMissionService({mission:third,provider:rpc,
+        signers:signers('-http'),journal,auth:syntheticConsent(ownerKey,siteOrigin)});
+      const site=createNativeMissionSite({siteOrigin,service});
+      await new Promise((resolve,reject)=>site.listen(0,'127.0.0.1',resolve).once('error',reject));
+      try {
+        assert.equal((await siteRequest(site)).status,200);
+        const config=JSON.parse((await siteRequest(site,{route:'/api/native-mission/config'})).body),reviewHash=config.review.mission_sha256;
+        const preview=JSON.parse((await siteRequest(site,{route:'/api/native-mission/preview',input:{missionSha256:reviewHash}})).body);
+        assert.equal(preview.preview.status,'READY');assert.equal(rpc.transportCalls,6);
+        const challenge=JSON.parse((await siteRequest(site,{route:'/api/native-mission/challenge',input:{missionSha256:reviewHash,ownerPublicKey:pub(ownerKey)}})).body);
+        const payload=nep413Payload({message:challenge.message,nonce:new Uint8Array(Buffer.from(challenge.nonce_base64,'base64')),recipient:challenge.recipient});
+        const evidence={challenge_id:challenge.challenge_id,accountId:OWNER,publicKey:pub(ownerKey),
+          signature:Buffer.from(ownerKey.sign(sha(payload)).signature).toString('base64')};
+        const input={missionSha256:reviewHash,ownerPublicKey:pub(ownerKey),evidence};
+        const response=await siteRequest(site,{route:'/api/native-mission/execute',input}),executed=JSON.parse(response.body);
+        assert.equal(response.status,200);assert.equal(executed.status,'FULFILLED');assert.equal(executed.new_payments,3);assert.equal(rpc.transportCalls,9);
+        const list=JSON.parse((await siteRequest(site,{route:'/api/native-mission/originals',input:{missionSha256:reviewHash}})).body);
+        assert.deepEqual(list.originals.map(row=>row.original_hash),executed.deliveries.map(row=>row.delivery.tx_hash));
+        const receiptOnly=JSON.parse((await siteRequest(site,{route:'/api/native-mission/recover',input:{missionSha256:reviewHash}})).body);
+        assert.equal(receiptOnly.status,'RECOVERED');assert.equal(receiptOnly.new_payments,0);assert.equal(rpc.transportCalls,9);
+        assert.equal((await siteRequest(site,{route:'/api/native-mission/execute',input})).status,409);assert.equal(rpc.transportCalls,9);
+      } finally {await new Promise(resolve=>site.close(resolve))}
       return {scope:'isolated nearcore and fabricated provider; no public chain or real service',
         research_loader:loader?{synthetic_meteor_request_bytes:meteorBytes,loader_wasm_bytes:loader.length,
           compressed_v14_bytes:compressed.length,all_unsigned_plan_stages_executed_only_in_sandbox:true,
@@ -218,6 +279,7 @@ async function main() {
           failed_upgrade_owner_refund_tested:true,real_phone_tested:false}:null,
         three_guarded_legs_and_public_result_storage:true, sandbox_refunds_verified:true,
         original_hash_recovery_without_new_send:true, lost_response_recovered_and_remaining_legs_continued:true,
+        fixed_site_http_synthetic_consent_three_real_runners:true,
         independent_delivery_verified:false, public_chain_transactions:false};
     });
     console.log(JSON.stringify(report,null,2));

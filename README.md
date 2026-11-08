@@ -50,10 +50,11 @@ for real funds.
 The experimental [native-mission flow](bouncer/docs/NATIVE_MISSIONS.md)
 sequences owner-pinned compute, API data and **public, self-hosted NEAR state**
 through a fresh V14 vault, with aggregate budgets and original-hash recovery.
-The wallet UI can review and explicitly approve a fixed mission when a separate,
-opt-in same-origin backend is provisioned. V14 is not deployed or configured
-here, and the existing phone setup does not yet provision its three-resource
-vault. A static Netlify/Vercel site alone cannot run the mission. Public state
+The wallet UI can review and explicitly approve a fixed mission when the
+opt-in same-origin backend is provisioned. A single-host testnet server is now
+available, but V14 is not deployed or configured here and browser onboarding
+does not yet provision its three-resource vault. A static Netlify/Vercel site
+alone cannot run the mission. Public state
 is not private or independent storage, and synthetic/isolated tests do not
 prove live multi-resource fulfillment.
 
