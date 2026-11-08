@@ -1736,6 +1736,118 @@ jobs:
       - name: Read public catalog (no credentials or payments)
         run: node bouncer/scripts/probe-market-discovery.mjs
 
+  native-wallet-qa:
+    name: One-shot native wallet plan (disposable testnet QA)
+    # This one run uses a new, locally generated QA account, NEVER the user's
+    # wallet. Each original is uploaded separately before its one send. Public
+    # artifacts contain only public hashes/terms; private keys and signed bytes
+    # remain in RUNNER_TEMP and are destroyed with the runner. No reruns.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/arena/0e4386ea-near-hub' && github.event.before == '5e0cf437c78b0b25087bcb285c4f2d6df5fb6591' && github.run_attempt == '1' && contains(github.event.head_commit.message, '[native-wallet-qa-once]')
+    needs: [js-tests, contract-tests, build-contract]
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      actions: read
+    env:
+      BOUNCER_NATIVE_QA: one-shot-testnet-only
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      - name: Check QA transaction and one-shot protections
+        working-directory: bouncer
+        run: node --test tests/native-testnet-qa.test.mjs
+      - name: Generate disposable QA identity and public review (no network mutation)
+        id: boot
+        run: node bouncer/scripts/native-testnet-qa.mjs init
+      - name: Retain the public bootstrap before the one helper request
+        id: boot_artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.boot.outputs.artifact_name }}
+          path: ${{ steps.boot.outputs.artifact_file }}
+          if-no-files-found: error
+          retention-days: 90
+      - name: Request the new disposable testnet owner once
+        run: node bouncer/scripts/native-testnet-qa.mjs faucet '${{ steps.boot_artifact.outputs.artifact-id }}'
+      - name: Prepare creation original without broadcasting
+        id: stage0
+        run: node bouncer/scripts/native-testnet-qa.mjs prepare-stage 0
+      - name: Retain creation original before sending
+        id: stage0_artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.stage0.outputs.artifact_name }}
+          path: ${{ steps.stage0.outputs.artifact_file }}
+          if-no-files-found: error
+          retention-days: 90
+      - name: Send creation original once and verify FINAL
+        run: node bouncer/scripts/native-testnet-qa.mjs send-stage 0 '${{ steps.stage0_artifact.outputs.artifact-id }}'
+      - name: Prepare policy original without broadcasting
+        id: stage1
+        run: node bouncer/scripts/native-testnet-qa.mjs prepare-stage 1
+      - name: Retain policy original before sending
+        id: stage1_artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.stage1.outputs.artifact_name }}
+          path: ${{ steps.stage1.outputs.artifact_file }}
+          if-no-files-found: error
+          retention-days: 90
+      - name: Send policy original once and verify FINAL
+        run: node bouncer/scripts/native-testnet-qa.mjs send-stage 1 '${{ steps.stage1_artifact.outputs.artifact-id }}'
+      - name: Prepare funding original without broadcasting
+        id: stage2
+        run: node bouncer/scripts/native-testnet-qa.mjs prepare-stage 2
+      - name: Retain funding original before sending
+        id: stage2_artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.stage2.outputs.artifact_name }}
+          path: ${{ steps.stage2.outputs.artifact_file }}
+          if-no-files-found: error
+          retention-days: 90
+      - name: Send funding original once and verify FINAL
+        run: node bouncer/scripts/native-testnet-qa.mjs send-stage 2 '${{ steps.stage2_artifact.outputs.artifact-id }}'
+      - name: Prepare agent-key original without broadcasting
+        id: stage3
+        run: node bouncer/scripts/native-testnet-qa.mjs prepare-stage 3
+      - name: Retain agent-key original before sending
+        id: stage3_artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.stage3.outputs.artifact_name }}
+          path: ${{ steps.stage3.outputs.artifact_file }}
+          if-no-files-found: error
+          retention-days: 90
+      - name: Send agent-key original once and verify FINAL
+        run: node bouncer/scripts/native-testnet-qa.mjs send-stage 3 '${{ steps.stage3_artifact.outputs.artifact-id }}'
+      - name: Prepare a single guarded OutLayer original without broadcasting
+        id: trial
+        run: node bouncer/scripts/native-testnet-qa.mjs prepare-trial
+      - name: Retain the guarded trial original before sending
+        id: trial_artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.trial.outputs.artifact_name }}
+          path: ${{ steps.trial.outputs.artifact_file }}
+          if-no-files-found: error
+          retention-days: 90
+      - name: Send the guarded trial once and verify provider receipts
+        run: node bouncer/scripts/native-testnet-qa.mjs send-trial '${{ steps.trial_artifact.outputs.artifact-id }}'
+      - name: Preserve only public verified result summaries
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-qa-${{ github.run_id }}-public-results
+          path: ${{ runner.temp }}/bouncer-native-qa/public/*-result.json
+          if-no-files-found: ignore
+          retention-days: 90
+
   testnet-smoke:
     name: Live testnet restricted-key smoke test
     if: github.event.repository.private == true && github.run_attempt == '1' && ((github.event_name == 'workflow_dispatch' && inputs.run_testnet_smoke == true) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[testnet-smoke]')))
