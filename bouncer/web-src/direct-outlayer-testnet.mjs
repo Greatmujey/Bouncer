@@ -2,12 +2,15 @@
  * One opt-in DIRECT OutLayer testnet purchase from great_mujey.testnet.
  * This bypasses Bouncer's firewall, policies and agent. It is NOT evidence of
  * the autonomous Bouncer flow. No owner private key is handled here. The
- * wallet is invoked at most once after a strict local write-ahead claim.
- * Browser deletion, storage rollback, other devices and other origins are not
- * fenced; an unknown result must never be retried. RPC/provider data is trusted
- * only for the receipt check, not proof of market accuracy or a TEE attestation.
+ * wallet is invoked at most once after a strict local write-ahead claim. A
+ * separately authenticated preview additionally uses a shared one-shot journal.
+ * Browser deletion, rollback, non-cooperating origins and compromised services
+ * are not absolutely fenced; an unknown result must never be retried. RPC/
+ * provider data is trusted only for the receipt check, not market accuracy or
+ * a TEE attestation.
  */
 import {decodeNativeHash32} from './native-oracle-transaction.mjs';
+import {isVerifiedRemoteDirectFence} from './direct-test-remote-fence.mjs';
 
 // Representative Arena preview origin used by read-only CORS probes and tests.
 // The real preview has the same host shape but a session-specific sandbox ID.
@@ -30,9 +33,9 @@ const stable=x=>Array.isArray(x)?x.map(stable):plain(x)?Object.fromEntries(Objec
 const equal=(a,b)=>JSON.stringify(stable(a))===JSON.stringify(stable(b));
 const hash=x=>{try{decodeNativeHash32(x);return true}catch{return false}};
 const amount=x=>typeof x==='string' && /^(?:0|[1-9][0-9]{0,38})$/.test(x)?BigInt(x):null;
-export const directOutlayerOriginAllowed=(origin,isTopLevel)=>{
-  try{const u=new URL(origin);return isTopLevel===true && u.protocol==='https:' && u.origin===origin &&
-    /^4173-[a-z0-9-]+\.e2b\.app$/i.test(u.hostname) && !u.username && !u.password}
+export const directOutlayerOriginAllowed=(origin,isTopLevel,remoteFence=null)=>{
+  try{const u=new URL(origin);return isTopLevel===true && u.protocol==='https:' && u.origin===origin && !u.username && !u.password &&
+    (/^4173-[a-z0-9-]+\.e2b\.app$/i.test(u.hostname) || isVerifiedRemoteDirectFence(remoteFence,origin))}
   catch{return false}
 };
 export function directOutlayerArgs(){return {source:{Project:{project_id:DIRECT_PROJECT,version_key:DIRECT_VERSION}},resource_limits:{...LIMITS},
@@ -184,9 +187,10 @@ export function verifyDirectOutlayerReceipt(original,result){
 }
 
 /** Review, one wallet attempt, then read-only reconciliation. */
-export function createDirectOutlayerTest({wallet,origin,isTopLevel,indexedDB,storage,fetch:fetchImpl=globalThis.fetch,isCurrent,now=Date.now,onChange=()=>{}}={}){
-  if(!directOutlayerOriginAllowed(origin,isTopLevel)||!wallet||wallet.manifest?.id!=='meteor-wallet'||wallet.manifest?.features?.signAndSendTransaction!==true||
-     typeof wallet.signAndSendTransaction!=='function'||!indexedDB||typeof storage?.persist!=='function'||typeof storage?.persisted!=='function'||
+export function createDirectOutlayerTest({wallet,origin,isTopLevel,indexedDB,storage,remoteFence=null,fetch:fetchImpl=globalThis.fetch,isCurrent,now=Date.now,onChange=()=>{}}={}){
+  const shared=isVerifiedRemoteDirectFence(remoteFence,origin);
+  if(!directOutlayerOriginAllowed(origin,isTopLevel,remoteFence)||!wallet||wallet.manifest?.id!=='meteor-wallet'||wallet.manifest?.features?.signAndSendTransaction!==true||
+     typeof wallet.signAndSendTransaction!=='function'||!indexedDB||(!shared && (typeof storage?.persist!=='function'||typeof storage?.persisted!=='function'))||
      typeof fetchImpl!=='function'||typeof isCurrent!=='function'||typeof now!=='function'||typeof onChange!=='function')throw fail();
   let state={phase:'initial',busy:false,message:'No wallet transaction has been requested by this screen.'},review=null,disposed=false;
   const current=()=>{if(disposed||isCurrent()!==true)throw fail()};
@@ -195,7 +199,7 @@ export function createDirectOutlayerTest({wallet,origin,isTopLevel,indexedDB,sto
     try{return await work()}catch(e){if(!disposed&&isCurrent()===true){
       if(state.phase==='claimed')set({phase:'unknown',message:'The wallet result is unknown. Find the original in Meteor history; do not approve another transaction.'});
       else if(before==='retained'||before==='unknown')set({phase:before,message:'Receipt not verified yet. You can check the original again, but do not send another transaction.'});
-      else if(state.phase==='claiming')set({phase:'stopped',message:'The local one-shot record is unavailable. No wallet prompt was requested by this action; reopen the review before proceeding.'});
+      else if(state.phase==='claiming')set({phase:'stopped',message:'The one-shot record could not be confirmed. No wallet prompt was requested by this action; reopen the review before proceeding.'});
       else set({phase:'stopped',message:'The testnet check or phone storage is unavailable. No wallet transaction was requested by this action.'});
     }throw e}
     finally{if(!disposed&&isCurrent()===true)set({busy:false})}};
@@ -212,6 +216,10 @@ export function createDirectOutlayerTest({wallet,origin,isTopLevel,indexedDB,sto
   return Object.freeze({
     getState:()=>Object.freeze({...state}),destroy(){disposed=true},
     review:()=>guard(['initial','stopped'],async()=>{
+      if(shared){const prior=await remoteFence.read();current();
+        if(prior.state!=='ready'){set({phase:prior.original_hash?'retained':'unknown',originalHash:prior.original_hash,
+          message:prior.original_hash?'The original is retained. Check its receipt; do not send again.':'An attempt was already claimed. Find its original in Meteor; do not send again.'});return}
+        if(prior.expired){set({phase:'stopped',message:'This test link has expired. No wallet transaction was requested by this action.'});return}}
       const prior=await readClaim(indexedDB,origin);current();
       if(prior){set({phase:prior.hash?'retained':'unknown',originalHash:prior.hash,
         message:prior.hash?'An original is already retained. Check its receipt; do not send again.':'A wallet attempt was already claimed. Find its original hash in Meteor; do not send again.'});return}
@@ -219,23 +227,32 @@ export function createDirectOutlayerTest({wallet,origin,isTopLevel,indexedDB,sto
       set({phase:'reviewed',message:'Direct OutLayer test is ready to review. No transaction has been requested.'});
     }),
     send:()=>guard(['reviewed'],async()=>{
-      // Persistence is requested directly from the user's click. A declined or
-      // unknown wallet result still consumes the claim: never retry the prompt.
-      if(!(await storage.persist()) && !(await storage.persisted()))throw fail();current();
+      // The isolated shared journal is required for the new browser host; the
+      // Arena preview continues to require persistent origin-local storage.
+      // A declined, lost or unknown result always consumes the claim.
+      if(!shared && !(await storage.persist()) && !(await storage.persisted()))throw fail();current();
       const clock=now();if(!Number.isSafeInteger(clock)||!review||clock<review.checked_at_ms||clock-review.checked_at_ms>120_000)throw fail();
       set({phase:'claiming',message:'Saving the one-shot record. No wallet request yet.'});
+      if(shared){const claim=await remoteFence.claim();current();
+        if(!claim.claim_acquired){
+          if(claim.state==='ready')set({phase:'stopped',message:'This test link has expired. No wallet transaction was requested.'});
+          else set({phase:claim.original_hash?'retained':'unknown',originalHash:claim.original_hash,
+            message:claim.original_hash?'An original is already retained. Check its receipt; do not send again.':'An attempt was already claimed. Find its original in Meteor; do not send again.'});
+          return;
+        }}
       await makeClaim(indexedDB,origin,clock);current();set({phase:'claimed',message:'Opening Meteor for the one direct testnet transaction.'});
       let outcome;try{outcome=await wallet.signAndSendTransaction(directOutlayerTransaction())}catch{outcome=null}
       const candidates=[outcome?.transaction?.hash,outcome?.transaction_outcome?.id].filter(x=>x!==undefined);
       if(!candidates.length||candidates.some(x=>!hash(x))||new Set(candidates).size!==1){
         if(!disposed && isCurrent()===true)set({phase:'unknown',message:'The wallet result is unknown. Find the original in Meteor history; do not approve another transaction.'});return}
-      const original=candidates[0];let retained=true;
-      // Retain a returned hash even if the user closed or changed the wallet
-      // session while Meteor was open. This operation cannot send anything.
-      try{await recordHash(indexedDB,origin,original)}catch{retained=false}
-      if(!disposed && isCurrent()===true)set({phase:'retained',originalHash:original,message:retained?
+      const original=candidates[0];let localRetained=false,sharedRetained=false;
+      // Record even if the user closed or changed the wallet session while
+      // Meteor was open. These operations cannot sign or send a transaction.
+      try{await recordHash(indexedDB,origin,original);localRetained=true}catch{}
+      if(shared)try{const saved=await remoteFence.retain(original);sharedRetained=saved.state==='retained'&&saved.original_hash===original}catch{}
+      if(!disposed && isCurrent()===true)set({phase:'retained',originalHash:original,message:(localRetained && (!shared||sharedRetained))?
         'Original hash returned. Save it and check the receipt; do not send again.':
-        'Save this original hash now. Local retention failed; do not send again.'});
+        'Save this original hash now. A retention copy failed; do not send again.'});
     }),
     check:()=>guard(['retained','unknown'],async()=>{
       if(!hash(state.originalHash))throw fail();const receipt=await readReceipt(state.originalHash);current();
@@ -243,7 +260,12 @@ export function createDirectOutlayerTest({wallet,origin,isTopLevel,indexedDB,sto
     }),
     recover:original=>guard(['unknown','retained','stopped'],async()=>{
       if(!hash(original))throw fail();const receipt=await readReceipt(original);current();
-      await recordHash(indexedDB,origin,original);current();set({phase:'verified',originalHash:original,receipt,
+      if(shared){const prior=await remoteFence.read();current();
+        if(prior.state==='ready'||(prior.original_hash && prior.original_hash!==original))throw fail();
+        const saved=await remoteFence.retain(original);current();if(saved.state!=='retained'||saved.original_hash!==original)throw fail()}
+      const local=await readClaim(indexedDB,origin);current();
+      if(local)await recordHash(indexedDB,origin,original);else if(!shared)throw fail();
+      current();set({phase:'verified',originalHash:original,receipt,
         message:'The original direct OutLayer receipt and refund were verified. No new transaction was requested.'});
     }),
   });

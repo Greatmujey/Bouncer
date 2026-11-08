@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {IDBFactory} from 'fake-indexeddb';
 import {encodeBase58} from '../web-src/native-oracle-transaction.mjs';
+import {createRemoteDirectFence} from '../web-src/direct-test-remote-fence.mjs';
 import {DIRECT_PREVIEW_ORIGIN,DIRECT_OWNER,DIRECT_PAYEE,DIRECT_DEPOSIT,DIRECT_GAS,DIRECT_PROJECT,DIRECT_UUID,DIRECT_VERSION,DIRECT_INPUT,
   directOutlayerArgs,directOutlayerTransaction,inspectDirectOutlayerReadiness,verifyDirectOutlayerReceipt,createDirectOutlayerTest} from '../web-src/direct-outlayer-testnet.mjs';
 
@@ -126,4 +127,65 @@ test('wrong wallets, accounts, or origins never produce a wallet request',async(
   assert.throws(()=>createDirectOutlayerTest({...env.args,wallet:{...env.args.wallet,manifest:{id:'other',features:{signAndSendTransaction:true}}}}));
   const noPersistence=environment();noPersistence.args.storage={persist:async()=>false,persisted:async()=>false};
   const flow=noPersistence.create();await flow.review();await assert.rejects(flow.send());assert.equal(noPersistence.sends(),0);
+});
+
+function sharedJournal({dropClaimResponse=false}={}){
+  let state='ready',saved=null,expired=false,drop=dropClaimResponse;
+  const fetch=async(_url,options)=>{
+    const {operation,original_hash}=JSON.parse(options.body);let won=false;
+    if(operation==='claim' && state==='ready' && !expired){state='claimed';won=true;}
+    if(operation==='retain'){
+      if(state==='ready'||(saved && saved!==original_hash))return new Response('{}',{status:503});
+      state='retained';saved=original_hash;
+    }
+    if(operation==='claim'&&won&&drop){drop=false;throw Error('lost response')}
+    return new Response(JSON.stringify({scope:'direct',state,original_hash:saved,claim_acquired:won,expired}));
+  };
+  return {fetch,get:()=>({state,saved})};
+}
+async function remoteEnvironment(journal,wallet,indexedDB=new IDBFactory()){
+  const origin='https://abcd1234.csb.app';
+  const fence=createRemoteDirectFence({origin,capability:'a'.repeat(43),fetch:journal.fetch});
+  await fence.read();
+  return {args:{wallet,origin,isTopLevel:true,indexedDB,storage:{persist:async()=>false,persisted:async()=>false},remoteFence:fence,
+    fetch:rpc(),isCurrent:()=>true,now:()=>now},fence};
+}
+test('separate browser stores use the shared claim exactly once when persistence is denied',async()=>{
+  const journal=sharedJournal();let calls=0;
+  const wallet={manifest:{id:'meteor-wallet',features:{signAndSendTransaction:true}},async signAndSendTransaction(tx){
+    calls++;assert.deepEqual(tx,directOutlayerTransaction());return {transaction:{hash:original},transaction_outcome:{id:original}};}};
+  const a=await remoteEnvironment(journal,wallet),b=await remoteEnvironment(journal,wallet);
+  const first=createDirectOutlayerTest(a.args),second=createDirectOutlayerTest(b.args);
+  await Promise.all([first.review(),second.review()]);assert.equal(calls,0);
+  await Promise.all([first.send(),second.send()]);assert.equal(calls,1);
+  assert.equal(journal.get().saved,original);
+  const reloaded=createDirectOutlayerTest((await remoteEnvironment(journal,wallet)).args);
+  await reloaded.review();assert.equal(reloaded.getState().phase,'retained');assert.equal(reloaded.getState().originalHash,original);
+  await reloaded.check();assert.equal(reloaded.getState().phase,'verified');assert.equal(calls,1);
+});
+test('a lost shared-claim response prevents a wallet request and another browser cannot retry',async()=>{
+  const journal=sharedJournal({dropClaimResponse:true});let calls=0;
+  const wallet={manifest:{id:'meteor-wallet',features:{signAndSendTransaction:true}},async signAndSendTransaction(){calls++;}};
+  const first=createDirectOutlayerTest((await remoteEnvironment(journal,wallet)).args);await first.review();
+  await assert.rejects(first.send());assert.equal(calls,0);assert.equal(journal.get().state,'claimed');
+  const other=createDirectOutlayerTest((await remoteEnvironment(journal,wallet)).args);await other.review();
+  assert.equal(other.getState().phase,'unknown');await assert.rejects(other.send());assert.equal(calls,0);
+});
+test('a verified original can be recovered on another browser without a new wallet request',async()=>{
+  const journal=sharedJournal();let calls=0;
+  const wallet={manifest:{id:'meteor-wallet',features:{signAndSendTransaction:true}},async signAndSendTransaction(){calls++;throw Error('unknown')}};
+  const first=createDirectOutlayerTest((await remoteEnvironment(journal,wallet)).args);await first.review();await first.send();
+  assert.equal(first.getState().phase,'unknown');
+  const other=createDirectOutlayerTest((await remoteEnvironment(journal,wallet)).args);await other.review();
+  assert.equal(other.getState().phase,'unknown');await other.recover(original);
+  assert.equal(other.getState().phase,'verified');assert.equal(journal.get().saved,original);assert.equal(calls,1);
+});
+test('an unverified or wrong-origin object cannot enable a temporary wallet host',async()=>{
+  const journal=sharedJournal();let calls=0;
+  const wallet={manifest:{id:'meteor-wallet',features:{signAndSendTransaction:true}},async signAndSendTransaction(){calls++}};
+  const {args}=await remoteEnvironment(journal,wallet);
+  assert.throws(()=>createDirectOutlayerTest({...args,remoteFence:{read:async()=>({state:'ready'})}}));
+  assert.throws(()=>createDirectOutlayerTest({...args,origin:'https://other123.csb.app'}));
+  assert.throws(()=>createDirectOutlayerTest({...args,isTopLevel:false}));
+  assert.equal(calls,0);
 });
