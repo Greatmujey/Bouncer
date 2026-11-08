@@ -1,0 +1,72 @@
+# Read-only route probes. These jobs never connect an account, request a wallet
+# signature, or submit a transaction. The IPFS probe publishes only a new,
+# harmless test page, not repository contents.
+name: Public testnet browser route probes
+on:
+  push:
+    branches: ['arena/**']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  nearblocks-form:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[public-route-probe]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+      - name: Inspect the live testnet contract form on a mobile-sized browser
+        env:
+          BOUNCER_PLAYWRIGHT_PATH: ${{ runner.temp }}/bouncer-browser/node_modules/playwright-core/index.mjs
+        run: |
+          set -euo pipefail
+          npm install --prefix "$RUNNER_TEMP/bouncer-browser" --no-save --no-audit --no-fund playwright-core@1.64.1
+          node bouncer/scripts/probe-public-testnet-browser.mjs
+  ipfs-public-availability:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[public-route-probe]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - name: Check a harmless temporary page through an origin-isolating gateway
+        run: |
+          set -euo pipefail
+          export IPFS_PATH="$RUNNER_TEMP/bouncer-ipfs-probe"
+          cd "$RUNNER_TEMP"
+          curl -fsSL --retry 2 -o kubo.tar.gz https://github.com/ipfs/kubo/releases/download/v0.43.1/kubo_v0.43.1_linux-amd64.tar.gz
+          echo '3f2bf974ab2a3ec6d997fac7d8cb46f59983a7cddd0b55ef998e6ce379155fb2  kubo.tar.gz' | sha256sum -c -
+          tar xzf kubo.tar.gz
+          export PATH="$RUNNER_TEMP/kubo:$PATH"
+          ipfs init --profile=server >/dev/null
+          ipfs daemon >"$RUNNER_TEMP/kubo.log" 2>&1 &
+          daemon_pid=$!
+          trap 'kill "$daemon_pid" 2>/dev/null || true' EXIT
+          for i in {1..30}; do if ipfs id >/dev/null 2>&1; then break; fi; sleep 2; done
+          ipfs id >/dev/null
+          mkdir -p "$RUNNER_TEMP/ipfs-probe-site"
+          printf '%s\n' '<!doctype html><meta charset="utf-8"><title>Read-only probe</title><p>Bouncer public gateway availability test. No wallet.</p>' > "$RUNNER_TEMP/ipfs-probe-site/index.html"
+          cid=$(ipfs add -Qr --cid-version=1 "$RUNNER_TEMP/ipfs-probe-site")
+          [[ "$cid" =~ ^b[a-z2-7]{50,90}$ ]]
+          echo "Probe CID: $cid"
+          ipfs routing provide --recursive "/ipfs/$cid" || true
+          echo "Connected peers: $(ipfs swarm peers | wc -l)"
+          success=false
+          for attempt in 1 2 3; do
+            if curl -fsSL --max-time 60 "https://${cid}.ipfs.dweb.link/" -o "$RUNNER_TEMP/ipfs-response.html" && cmp -s "$RUNNER_TEMP/ipfs-probe-site/index.html" "$RUNNER_TEMP/ipfs-response.html"; then
+              success=true
+              break
+            fi
+            echo "Gateway retrieval attempt $attempt did not return the probe page."
+            sleep 15
+          done
+          printf '\n## Public IPFS gateway probe\n\nHarmless page only; no wallet, signing or transaction.\n\nRetrieved exact page: **%s**\n' "$success" >> "$GITHUB_STEP_SUMMARY"
+          if [[ "$success" == true ]]; then
+            echo '::notice title=Public IPFS gateway probe::Exact temporary page retrieved; actual Bouncer page and wallet are not tested.'
+          else
+            echo '::error title=Public IPFS gateway probe::The temporary runner could not provide the exact page through the gateway.'
+            exit 1
+          fi
