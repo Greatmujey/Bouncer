@@ -39,6 +39,37 @@ const json = value => Buffer.from(JSON.stringify(value, null, 2) + '\n');
 const hash = bytes => utils.serialize.base_encode(crypto.createHash('sha256').update(bytes).digest());
 const fail = message => { throw new Error(message); };
 
+/** Serialize and retry ONLY bounded JSON-RPC views on transient HTTP/network
+ * failures. A send method is rejected before fetch, so this cannot resend a
+ * transaction. The block freshness and exact-original checks still apply. */
+export function qaReadOnlyFetch({ fetchImpl = globalThis.fetch, pause = ms => new Promise(resolve => setTimeout(resolve, ms)), attempts = 4 } = {}) {
+  if (typeof fetchImpl !== 'function' || typeof pause !== 'function' || !Number.isInteger(attempts) || attempts < 1 || attempts > 5) {
+    fail('invalid QA read-only transport');
+  }
+  let queue = Promise.resolve();
+  return (url, init = {}) => {
+    let body;
+    try { body = JSON.parse(init.body); } catch { throw new Error('QA transport only permits JSON-RPC views'); }
+    const allowedMethods = ['status', 'block', 'gas_price', 'EXPERIMENTAL_protocol_config'];
+    const allowedQuery = body?.method === 'query' && ['view_account', 'view_access_key_list', 'view_access_key', 'call_function'].includes(body?.params?.request_type);
+    if (init.method !== 'POST' || (!allowedMethods.includes(body?.method) && !allowedQuery)) throw new Error('QA transport only permits JSON-RPC views');
+    const work = queue.then(async () => {
+      let lastError;
+      for (let i = 0; i < attempts; i++) {
+        try {
+          const response = await fetchImpl(url, init);
+          if (![429, 500, 502, 503, 504].includes(response.status) || i === attempts - 1) return response;
+          await response.body?.cancel().catch(() => {});
+        } catch (error) { lastError = error; if (i === attempts - 1) throw error; }
+        await pause(300 * 2 ** i);
+      }
+      throw lastError ?? new Error('QA read-only transport unavailable');
+    });
+    queue = work.then(() => {}, () => {});
+    return work;
+  };
+}
+
 /** Construct the exact next nonce from the already verified FINAL snapshot.
  * near-api-js's Account.createTransaction currently increments twice; do not
  * mix that optimistic nonce with this independently checked FINAL state. */
@@ -188,15 +219,24 @@ function planFor(p, bootstrap) {
   return { ...plan, wasm };
 }
 function providers() {
-  return { views: new ReadOnlyNearRpcProvider(RPC, { timeoutMs: 30_000 }),
+  return { views: new ReadOnlyNearRpcProvider(RPC, { timeoutMs: 30_000, fetchImpl: qaReadOnlyFetch() }),
     rpc: new PaymentRpcProvider(RPC, { receiptTimeoutMs: 120_000, sendTimeoutMs: 120_000 }) };
+}
+/** Repeat only a read of the SAME original hash, never a transaction send. */
+export async function readFinalOriginal(rpc, original, owner) {
+  let last;
+  for (let i = 0; i < 3; i++) {
+    try { return await rpc.txStatusReceipts(original, owner, 'FINAL'); }
+    catch (error) { last = error; if (i < 2) await new Promise(resolve => setTimeout(resolve, 500 * 2 ** i)); }
+  }
+  throw last;
 }
 async function prior(p, review, count, rpc) {
   const entries = [];
   for (let i = 0; i < count; i++) {
     const data = readJson(path.join(p.pub, `stage${i}.json`));
     if (data.review_sha256 !== review.review_sha256 || data.attempt?.stage_id !== review.stages[i].id) fail('earlier public original changed');
-    const result = await rpc.txStatusReceipts(data.attempt.tx_hash, review.owner, 'FINAL');
+    const result = await readFinalOriginal(rpc, data.attempt.tx_hash, review.owner);
     entries.push({ attempt: data.attempt, trustedOriginalHash: data.attempt.tx_hash, result });
   }
   return entries;
@@ -295,7 +335,7 @@ async function sendStage(p, index, artifactId) {
   console.log(`Sending retained original ${checked.txHash} once; no automatic retry.`);
   const sent = await rpc.sendTransactionOnce(checked.signed, 'FINAL');
   if (sent?.transaction_outcome?.id !== checked.txHash) fail('send acknowledgment differs; reconcile original, never resend');
-  const chain = await rpc.txStatusReceipts(checked.txHash, plan.review.owner, 'FINAL');
+  const chain = await readFinalOriginal(rpc, checked.txHash, plan.review.owner);
   const proof = inspectNativeOracleWalletAttempt({ review: plan.review, wasmBytes: plan.wasm,
     trustedReviewHash: plan.review.review_sha256, trustedOwnerPublicKey: bootstrap.owner_public_key,
     attempt: original.attempt, trustedOriginalHash: checked.txHash, result: chain });
@@ -334,7 +374,13 @@ async function sendTrial(p, artifactId) {
   const journal = new FileJournal(path.join(p.secret, 'trial-journal.json'), goal.contract_id, goal.owner_account_id);
   try {
     console.log(`Running guarded QA trial ${checked.txHash} at most once; maximum ${goal.amount} yoctoNEAR.`);
-    const result = await runOracleGoal({ goal, provider: rpc, account, publicKey: utils.PublicKey.from(original.agent_public_key), journal, execute: true });
+    const provider = {
+      viewNodeStatus: views.viewNodeStatus.bind(views), callFunction: views.callFunction.bind(views),
+      viewAccessKey: views.viewAccessKey.bind(views), block: views.block.bind(views),
+      txStatusReceipts: (hash, owner) => readFinalOriginal(rpc, hash, owner),
+      sendTransactionOnce: rpc.sendTransactionOnce.bind(rpc),
+    };
+    const result = await runOracleGoal({ goal, provider, account, publicKey: utils.PublicKey.from(original.agent_public_key), journal, execute: true });
     if (result.status !== 'FULFILLED' || result.delivery?.tx_hash !== checked.txHash) fail('QA trial did not establish matching provider delivery');
     writeExclusive(path.join(p.pub, 'trial-result.json'), json({ kind: 'disposable-qa-trial-result', user_wallet_used: false,
       setup_originals: plan.review.stages.map((_, i) => readJson(path.join(p.pub, `stage${i}.json`)).attempt.tx_hash),

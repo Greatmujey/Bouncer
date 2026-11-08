@@ -1736,6 +1736,34 @@ jobs:
       - name: Read public catalog (no credentials or payments)
         run: node bouncer/scripts/probe-market-discovery.mjs
 
+  native-qa-creation-read:
+    name: Verify the retained native QA original (read only)
+    # Re-reads the ONE already-sent creation hash and current state. No signer,
+    # account creation, funding, payment or transaction broadcast is possible.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/arena/0e4386ea-near-hub' && github.event.before == '725b22d936fcfda6359bcd310fb8b6e794d734a3' && github.run_attempt == '1' && contains(github.event.head_commit.message, '[native-qa-read-original]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    permissions:
+      contents: read
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      - name: Retrieve only public bootstrap and original artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/bootstrap" "$RUNNER_TEMP/original"
+          gh run download 42459498770 --repo Greatmujey/Bouncer --name native-qa-42459498770-bootstrap-e793fab4399a79308e1998863d12bbffe6f6a739455ad77e44374cf0ca816fc5 --dir "$RUNNER_TEMP/bootstrap" > "$RUNNER_TEMP/qa-download.log" 2>&1 || { echo '::error::Could not read public QA bootstrap.'; exit 1; }
+          gh run download 42459498770 --repo Greatmujey/Bouncer --name native-qa-42459498770-stage0-8a940ca8f364ed8523b573ac9705e0dbbf9799e81af6cca83fa5b9d4a71b3df6 --dir "$RUNNER_TEMP/original" >> "$RUNNER_TEMP/qa-download.log" 2>&1 || { echo '::error::Could not read public QA original.'; exit 1; }
+      - name: Verify original FINAL receipt and next-stage read-only state
+        run: node bouncer/scripts/inspect-native-qa-original.mjs "$RUNNER_TEMP/bootstrap/bootstrap.json" "$RUNNER_TEMP/original/stage0.json"
+
   native-qa-original-diagnosis:
     name: Inspect the previous QA failure (read only)
     # Read only: no faucet, wallet, signer or transaction. Fetch the old log

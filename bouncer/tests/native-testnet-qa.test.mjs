@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import nearApi from 'near-api-js';
-import { inspectQaSigned, qaPresignedAccount, qaSnapshotAccount, markQaAttempt } from '../scripts/native-testnet-qa.mjs';
+import { inspectQaSigned, qaPresignedAccount, qaReadOnlyFetch, qaSnapshotAccount, markQaAttempt } from '../scripts/native-testnet-qa.mjs';
 
 const { transactions: tx, utils } = nearApi;
 const digest = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
@@ -19,6 +19,24 @@ async function fixture() {
   const bytes = Buffer.from(tx.encodeTransaction(signed));
   return { bytes, signerId, receiverId, publicKey, actions, txHash: utils.serialize.base_encode(hash), signedSha256: digest(bytes) };
 }
+
+test('QA retries and serializes only RPC reads, never transaction sends', async () => {
+  let calls = 0, active = 0, maxActive = 0, pauses = 0;
+  const fetchImpl = async () => {
+    calls++; active++; maxActive = Math.max(maxActive, active);
+    await new Promise(resolve => setTimeout(resolve, 1)); active--;
+    return new Response('{}', { status: calls === 1 ? 429 : 200 });
+  };
+  const fetchView = qaReadOnlyFetch({ fetchImpl, pause: async () => { pauses++; } });
+  const request = method => ({ method: 'POST', body: JSON.stringify({ method, params: {} }) });
+  const responses = await Promise.all([fetchView('https://rpc.testnet.near.org', request('status')),
+    fetchView('https://rpc.testnet.near.org', request('block'))]);
+  assert.deepEqual(responses.map(r => r.status), [200, 200]);
+  assert.equal(calls, 3); assert.equal(pauses, 1); assert.equal(maxActive, 1);
+  assert.throws(() => fetchView('https://rpc.testnet.near.org', request('send_tx')), /only permits JSON-RPC views/);
+  assert.throws(() => fetchView('https://rpc.testnet.near.org', { method: 'POST', body: '{"method":"query","params":{"request_type":"send_transaction"}}' }), /only permits JSON-RPC views/);
+  assert.equal(calls, 3);
+});
 
 test('QA signs exactly FINAL snapshot nonce plus one, without the SDK double increment', async () => {
   const pair = nearApi.KeyPair.fromRandom('ed25519'), block = Uint8Array.from({ length: 32 }, (_, i) => i + 1);
