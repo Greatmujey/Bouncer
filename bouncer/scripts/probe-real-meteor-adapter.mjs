@@ -11,7 +11,7 @@ const {chromium}=await import(pathToFileURL(path.resolve(playwright)));
 const executablePath=['/usr/bin/google-chrome','/usr/bin/google-chrome-stable','/usr/bin/chromium','/usr/bin/chromium-browser'].find(fs.existsSync);
 if(!executablePath)throw Error('Chromium unavailable');
 const browser=await chromium.launch({executablePath,args:['--no-sandbox','--disable-gpu'],headless:true}),origin=`https://${id}.csb.app`;
-let adapterStatus=0,error,stage='open',page;const errors=[];
+let adapterStatus=0,adapterRequests=0,adapterFailure='',error,stage='open',page;const errors=[],consoleErrors=[];
 const report={top_level:false,real_adapter_fetched:false,real_adapter_integrity_checked_by_app:false,
   wallet_handoff_observed:false,handoff_kind:null,no_wallet:true,no_transaction:true};
 try{
@@ -22,6 +22,9 @@ try{
     window.open=(url)=>{window.__bouncerOpenCalls.push(String(url));return {closed:false,focus(){},close(){this.closed=true},postMessage(){},addEventListener(){},removeEventListener(){}};};
   });
   page=await context.newPage();page.on('pageerror',e=>errors.push(String(e.message).slice(0,120)));
+  page.on('console',m=>{if(m.type()==='error')consoleErrors.push(m.text().slice(0,180))});
+  page.on('request',r=>{if(r.url().includes('/storage/meteor-near-connect-latest.js'))adapterRequests++});
+  page.on('requestfailed',r=>{if(r.url().includes('/storage/meteor-near-connect-latest.js'))adapterFailure=r.failure()?.errorText||'failed'});
   page.on('response',r=>{if(r.url().includes('/storage/meteor-near-connect-latest.js'))adapterStatus=r.status()});
   await page.route('**/*',async route=>{
     const req=route.request(),url=new URL(req.url());
@@ -57,7 +60,9 @@ try{
   await context.close();
 }catch(e){error=`${stage}: ${String(e?.message||'probe failed').slice(0,200)}`;
   try{report.wallet_status=(await page?.locator('#wallet-status').textContent({timeout:1000})||'').slice(0,120)}catch{}
-  report.page_errors=errors.slice(0,3);
+  report.adapter_status=adapterStatus;report.adapter_requests=adapterRequests;report.adapter_failure=adapterFailure;
+  report.page_errors=errors.slice(0,3);report.console_errors=consoleErrors.slice(-3);
+  try{report.frames=await Promise.all(page.frames().slice(1,4).map(async frame=>(await frame.locator('body').innerText({timeout:1000})).slice(0,300)))}catch{}
 }finally{await browser.close()}
 console.log(`::${error?'error':'notice'} title=Real Meteor adapter handoff probe::${JSON.stringify({...report,error}).replaceAll('%','%25').replaceAll('\n','%0A').replaceAll('\r','%0D')}`);
 if(error)process.exitCode=1;
