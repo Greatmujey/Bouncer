@@ -25,10 +25,9 @@ import { buildNativeOracleWalletPlan, assertNativeOracleBatchMatchesReview, NATI
 import { prepareNativeOracleWalletAttempt, inspectNativeOracleWalletAttempt } from '../agent/native-oracle-wallet-evidence.mjs';
 import { inspectNativeOracleWalletStage, inspectNativeOracleWalletCompletion } from '../agent/native-oracle-wallet-preflight.mjs';
 import { ReadOnlyNearRpcProvider } from '../agent/read-only-near-rpc.mjs';
-import { MonotonicAccount, PaymentRpcProvider } from '../agent/near-account.mjs';
+import { PaymentRpcProvider } from '../agent/near-account.mjs';
 import { signReviewedProbeSetup, signReviewedCall } from '../agent/reviewed-transaction.mjs';
 import { requestTestnetOwnerOnce } from '../agent/testnet-owner-bootstrap.mjs';
-import { waitForNewTestnetKey } from '../shared/testnet-ready.mjs';
 import { FileJournal } from '../agent/procurement.mjs';
 import { runOracleGoal, validateOracleGoal } from '../agent/oracle-outlayer.mjs';
 
@@ -39,6 +38,32 @@ const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const json = value => Buffer.from(JSON.stringify(value, null, 2) + '\n');
 const hash = bytes => utils.serialize.base_encode(crypto.createHash('sha256').update(bytes).digest());
 const fail = message => { throw new Error(message); };
+
+/** Construct the exact next nonce from the already verified FINAL snapshot.
+ * near-api-js's Account.createTransaction currently increments twice; do not
+ * mix that optimistic nonce with this independently checked FINAL state. */
+export function qaSnapshotAccount({ accountId, pair, nonce, blockHash }) {
+  let block, n, key;
+  try {
+    if (typeof accountId !== 'string' || !accountId.endsWith('.testnet') || !pair ||
+        typeof nonce !== 'string' || !/^(?:0|[1-9][0-9]{0,15})$/.test(nonce)) throw Error();
+    n = BigInt(nonce);
+    if (n >= BigInt(Number.MAX_SAFE_INTEGER)) throw Error();
+    block = Uint8Array.from(utils.serialize.base_decode(blockHash)); key = pair.getPublicKey();
+    if (block.length !== 32 || key.keyType !== 0) throw Error();
+  } catch { throw new Error('QA needs a verified FINAL snapshot, nonce and Ed25519 key'); }
+  const signer = new KeyPairSigner(pair);
+  let prepared = false;
+  return Object.freeze({ accountId, signer,
+    async createTransaction(receiver, actions, suppliedKey) {
+      if (prepared || typeof receiver !== 'string' || !Array.isArray(actions) || !actions.length || String(suppliedKey) !== String(key)) {
+        fail('QA snapshot transaction cannot be replaced or reused');
+      }
+      prepared = true;
+      return tx.createTransaction(accountId, key, receiver, n + 1n, actions, Uint8Array.from(block));
+    },
+  });
+}
 
 /** Verify canonical actions, exact signed bytes, key and original hash. This
  * function never sends. Kept separate so mismatches are tested offline. */
@@ -244,8 +269,8 @@ async function prepareStage(p, index) {
   const { owner, bootstrap } = privateKeys(p), { views, rpc } = providers();
   const { plan, result: snapshot } = await preflight(p, bootstrap, index, views, rpc);
   const batch = plan.batches[index]; assertNativeOracleBatchMatchesReview(batch, plan.review.stages[index]);
-  await waitForNewTestnetKey(rpc, plan.review.owner, owner.getPublicKey());
-  const account = new MonotonicAccount(plan.review.owner, rpc, new KeyPairSigner(owner));
+  const account = qaSnapshotAccount({ accountId: plan.review.owner, pair: owner,
+    nonce: snapshot.owner_key_nonce, blockHash: snapshot.block_hash });
   const prepared = await signReviewedProbeSetup({ account, signerId: batch.signerId, publicKey: owner.getPublicKey(),
     receiverId: batch.receiverId, actions: batch.actions });
   nonceMatches(snapshot, prepared.signed.transaction);
@@ -281,7 +306,8 @@ async function sendStage(p, index, artifactId) {
 async function prepareTrial(p) {
   const { agent, bootstrap } = privateKeys(p), { views, rpc } = providers();
   const { plan, result: snapshot } = await preflight(p, bootstrap, 4, views, rpc), goal = getGoal(plan.review);
-  const account = new MonotonicAccount(goal.owner_account_id, rpc, new KeyPairSigner(agent));
+  const account = qaSnapshotAccount({ accountId: goal.owner_account_id, pair: agent,
+    nonce: snapshot.agent_key_nonce, blockHash: snapshot.block_hash });
   const args = { policy_id: goal.policy_id, amount: goal.amount, expected_route: goal.route };
   const prepared = await signReviewedCall({ account, publicKey: agent.getPublicKey(), ownerId: goal.owner_account_id,
     contractId: goal.contract_id, method: 'execute_outlayer_native_project', args, gas: GAS });

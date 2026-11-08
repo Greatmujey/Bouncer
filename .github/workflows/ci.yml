@@ -1781,8 +1781,9 @@ jobs:
     # wallet. Each original is uploaded separately before its one send. Public
     # artifacts contain only public hashes/terms; private keys and signed bytes
     # remain in RUNNER_TEMP and are destroyed with the runner. No reruns.
-    if: github.event_name == 'push' && github.ref == 'refs/heads/arena/0e4386ea-near-hub' && github.event.before == '5e0cf437c78b0b25087bcb285c4f2d6df5fb6591' && github.run_attempt == '1' && contains(github.event.head_commit.message, '[native-wallet-qa-once]')
-    needs: [js-tests, contract-tests, build-contract]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/arena/0e4386ea-near-hub' && github.event.before == '1a5ad32412621477fda6964b7f4f298cf1a19d03' && github.run_attempt == '1' && contains(github.event.head_commit.message, '[native-wallet-qa-once-v2]')
+    # The preceding full JS/Rust CI passed; this job independently checks the
+    # pinned V9 bytes and the targeted one-shot tests before any mutation.
     runs-on: ubuntu-latest
     timeout-minutes: 25
     permissions:

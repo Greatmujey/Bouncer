@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import nearApi from 'near-api-js';
-import { inspectQaSigned, qaPresignedAccount, markQaAttempt } from '../scripts/native-testnet-qa.mjs';
+import { inspectQaSigned, qaPresignedAccount, qaSnapshotAccount, markQaAttempt } from '../scripts/native-testnet-qa.mjs';
 
 const { transactions: tx, utils } = nearApi;
 const digest = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
@@ -19,6 +19,19 @@ async function fixture() {
   const bytes = Buffer.from(tx.encodeTransaction(signed));
   return { bytes, signerId, receiverId, publicKey, actions, txHash: utils.serialize.base_encode(hash), signedSha256: digest(bytes) };
 }
+
+test('QA signs exactly FINAL snapshot nonce plus one, without the SDK double increment', async () => {
+  const pair = nearApi.KeyPair.fromRandom('ed25519'), block = Uint8Array.from({ length: 32 }, (_, i) => i + 1);
+  const account = qaSnapshotAccount({ accountId: 'qa.testnet', pair, nonce: '100', blockHash: utils.serialize.base_encode(block) });
+  const actions = [tx.functionCall('method', {}, 1n, 0n)];
+  const transaction = await account.createTransaction('vault.qa.testnet', actions, pair.getPublicKey());
+  assert.equal(transaction.nonce, 101n);
+  assert.deepEqual(Uint8Array.from(transaction.blockHash), block);
+  await assert.rejects(account.createTransaction('vault.qa.testnet', actions, pair.getPublicKey()), /cannot be replaced/);
+  assert.throws(() => qaSnapshotAccount({ accountId: 'qa.testnet', pair, nonce: '-1', blockHash: utils.serialize.base_encode(block) }), /verified FINAL/);
+  assert.throws(() => qaSnapshotAccount({ accountId: 'qa.testnet', pair, nonce: '9007199254740991', blockHash: utils.serialize.base_encode(block) }), /verified FINAL/);
+  assert.throws(() => qaSnapshotAccount({ accountId: 'qa.testnet', pair, nonce: '100', blockHash: 'bad' }), /verified FINAL/);
+});
 
 test('QA original validates exact signed payload, hash and public key', async () => {
   const f = await fixture(), checked = inspectQaSigned(f);
