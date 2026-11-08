@@ -105,13 +105,18 @@ export function rootOf(result, batch, attempt, g) {
   }
   // nearcore does not include the local root receipt body in tx_status when
   // signer and receiver are the same. Accept ONLY this planner's self-directed
-  // single reviewed AddKey or DeleteKey stage without the body: the original trusted hash, exact
-  // transaction actions, root link and root outcome were checked above. This
-  // remains trusted-RPC evidence, not an independently verified receipt body.
-  const permittedLocalAction = (['install_restricted_agent_key', 'install_native_oracle_agent'].includes(attempt.stage_id) && batch.actions[0]?.enum === 'addKey') ||
-    (attempt.stage_id === 'remove_native_oracle_access_key' && batch.actions[0]?.enum === 'deleteKey');
-  if (!receipt && permittedLocalAction && attempt.signer_id === attempt.receiver_id &&
-      txOutcome.receipt_ids.length === 1 && txOutcome.receipt_ids[0] === id && batch.actions.length === 1) {
+  // reviewed AddKey or DeleteKey stage without the body: the original trusted
+  // hash, exact transaction actions, root link and outcome were checked above.
+  // The separately constrained V14 research plan uses three distinct AddKeys
+  // in one self-directed stage. Its caller must reconstruct that exact plan.
+  // This is trusted-RPC evidence, not an independently verified receipt body.
+  const permittedSingle = batch.actions.length === 1 &&
+    ((['install_restricted_agent_key', 'install_native_oracle_agent'].includes(attempt.stage_id) && batch.actions[0]?.enum === 'addKey') ||
+      (attempt.stage_id === 'remove_native_oracle_access_key' && batch.actions[0]?.enum === 'deleteKey'));
+  const permittedV14 = attempt.stage_id === 'install_restricted_agents' && batch.actions.length === 3 &&
+    batch.actions.every(action => action?.enum === 'addKey');
+  if (!receipt && (permittedSingle || permittedV14) && attempt.signer_id === attempt.receiver_id &&
+      txOutcome.receipt_ids.length === 1 && txOutcome.receipt_ids[0] === id) {
     return { id, receipt: null, outcome, localReceiptOmitted: true };
   }
   const action = receipt?.receipt?.Action;

@@ -47,12 +47,25 @@ There is **no verified independent FT-paid fulfillment by Bouncer**. The marketp
 service is bundled. This is unaudited testnet software, not suitable
 for real funds.
 
+The experimental [native-mission flow](bouncer/docs/NATIVE_MISSIONS.md)
+sequences owner-pinned compute, API data and **public, self-hosted NEAR state**
+through a fresh V14 vault, with aggregate budgets and original-hash recovery.
+The wallet UI can review and explicitly approve a fixed mission when the
+opt-in same-origin backend is provisioned. A single-host testnet server is now
+available, but V14 is not deployed or configured here and browser onboarding
+does not yet provision its three-resource vault. A static Netlify/Vercel site
+alone cannot run the mission. Public state
+is not private or independent storage, and synthetic/isolated tests do not
+prove live multi-resource fulfillment.
+
 ## Reproduce the safety checks without a wallet
 
 From the repository root, with Node.js 22 and npm:
 
 ```sh
 npm ci --prefix bouncer --ignore-scripts --no-audit --no-fund
+# Synthetic mission and browser-authentication tests; no wallet or public transaction
+node --test bouncer/tests/native-mission.test.mjs bouncer/tests/native-storage.test.mjs bouncer/tests/native-mission-browser-service.test.mjs
 node --test bouncer/tests/journal-operation-scope.test.mjs bouncer/tests/fresh-final-block.test.mjs bouncer/tests/multiagency-exact-ft.test.mjs bouncer/tests/multiagency-exact-runner.test.mjs bouncer/tests/svalin-pro-readiness.test.mjs bouncer/tests/svalin-pro-preflight.test.mjs bouncer/tests/svalin-setup-plan.test.mjs bouncer/tests/svalin-setup-evidence.test.mjs bouncer/tests/svalin-setup-journal.test.mjs bouncer/tests/svalin-setup-preflight.test.mjs bouncer/tests/svalin-setup-stage-preflight.test.mjs bouncer/tests/pinned-access-key-nonce.test.mjs bouncer/tests/svalin-setup-runner.test.mjs bouncer/tests/svalin-setup-rpc.test.mjs bouncer/tests/svalin-setup-cli.test.mjs bouncer/tests/v11-wasm-annotations.test.mjs bouncer/tests/svalin-liquidity-readiness.test.mjs bouncer/tests/svalin-pro-session.test.mjs bouncer/tests/svalin-pro-session-concurrency.test.mjs bouncer/tests/svalin-pro-runner.test.mjs bouncer/tests/svalin-pro-cli.test.mjs bouncer/tests/youtick-grant-probe-evidence.test.mjs bouncer/tests/live-action-safety-gates.test.mjs
 # Optional: Python 3 tests for the existing-artifact bridge and static ABI parser
 python3 -m unittest discover -s bouncer/tests -p 'v11_artifact_bridge_test.py'
@@ -819,6 +832,9 @@ real testnet transactions. To build locally with Rust and the wasm target, run
 - `bouncer/demo-onchain-proof.mjs` — explicitly gated one-shot testnet check against a local third-party SDK gate.
 - `bouncer/agent/resource-agent.mjs` — quote, guarded payment, fulfillment orchestration.
 - `bouncer/agent/workflow.mjs` — owner-reviewed dependent source → resource workflows and key-free recovery.
+- `bouncer/agent/native-mission.mjs` and `native-storage.mjs` — experimental compute/API/public-state sequence, aggregate budgets and original-hash recovery.
+- `bouncer/agent/authenticated-native-mission-service.mjs` and `native-mission-http.mjs` — optional, default-off fixed-mission wallet-consent service.
+- `bouncer/contracts/bouncer/src/native_storage_v14.rs` — fresh-state, unaudited public storage route (not a V9 upgrade).
 - `bouncer/agent/verify-delivery.mjs` — bounded result checks and local receipt validation.
 - `bouncer/agent/market-discovery.mjs` — isolated, read-only public catalog search.
 - `bouncer/agent/goal-planner.mjs`, `autonomous.mjs` — model proposals constrained by the owner catalog.

@@ -62,6 +62,19 @@ test('staging approves only the dedicated Bouncer wallet origin', t => {
   }
 });
 
+test('staging can explicitly approve one dedicated HTTPS Netlify origin without changing the source', t => {
+  const {source,dest} = fixture(t);
+  for (const walletOrigin of ['http://example.netlify.app','https://owner.github.io','https://madethis.website',
+    'https://a.madethis.website','https://user@site.netlify.app','https://site.netlify.app/path',
+    'https://site.netlify.app/', 'https://127.0.0.1', 'https://site.netlify.app?q=x', 'javascript:alert(1)']) {
+    assert.throws(() => stagePublicWeb(dest, source, {walletOrigin}), /dedicated HTTPS/);
+    assert.equal(fs.existsSync(dest), false);
+  }
+  stagePublicWeb(dest, source, {walletOrigin:'https://my-bouncer.netlify.app'});
+  assert.match(fs.readFileSync(path.join(dest,'index.html'),'utf8'), /bouncer-wallet-origin" content="https:\/\/my-bouncer\.netlify\.app"/);
+  assert.match(fs.readFileSync(path.join(source,'index.html'),'utf8'), /bouncer-wallet-origin" content="https:\/\/bouncer-near\.vercel\.app"/);
+});
+
 test('public staging refuses reused destinations and leaves their contents untouched', t => {
   const { source, dest } = fixture(t);
   fs.mkdirSync(dest); fs.writeFileSync(path.join(dest, 'do-not-publish'), 'untouched');

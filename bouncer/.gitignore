@@ -1,4 +1,6 @@
 node_modules/
+dist/
+/.netlify-stage-*/
 target/
 contracts/bouncer/res/
 contracts/bouncer/.near/

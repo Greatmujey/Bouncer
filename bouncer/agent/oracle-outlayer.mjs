@@ -25,7 +25,8 @@ import { isTestnetAccount } from '../shared/account-id.mjs';
 import { signReviewedCall } from './reviewed-transaction.mjs';
 import { withExclusiveJournalOperation } from './journal-operation.mjs';
 import { assertJournalScope } from './journal-write.mjs';
-import { readNativeJournal, writeConfirmedNativeJournal } from './synchronous-native-journal.mjs';
+import { readNativeJournal, writeConfirmedNativeJournal, assertNativeJournalUnchanged } from './synchronous-native-journal.mjs';
+import { validateNativeBroadcastGuard, checkNativeBroadcastGuard } from './native-broadcast-guard.mjs';
 
 const { KeyPair, KeyPairSigner } = nearApi;
 const HASH = '3585b3890f49748713b43ccb9b0ef4148f317d62f4d598db80fdaffc3f3185a0';
@@ -204,7 +205,8 @@ export async function assertOracleProjectRegistry(provider) {
 }
 
 /** Dry-run or sign one exact-input request after on-chain policy preflight. */
-async function runOracleGoalUnlocked({ goal: rawGoal, provider, account, publicKey, journal, execute = false, log = console.log }) {
+async function runOracleGoalUnlocked({ goal: rawGoal, provider, account, publicKey, journal, execute = false, log = console.log, beforeBroadcast }) {
+  validateNativeBroadcastGuard(beforeBroadcast);
   if (journal?.sharedDirectV3 === true) throw new Error('shared buyer journal does not coordinate oracle payments');
   const goal = validateOracleGoal(rawGoal);
   assertJournalScope(journal, goal.contract_id, goal.owner_account_id);
@@ -219,7 +221,9 @@ async function runOracleGoalUnlocked({ goal: rawGoal, provider, account, publicK
     provider.callFunction(goal.contract_id, 'contract_version', {}, final), provider.callFunction(goal.contract_id, 'get_owner', {}, final),
     provider.viewAccessKey(goal.owner_account_id, publicKey, final),
   ]);
-  if (version !== 'bouncer-agent-v9' || owner !== goal.owner_account_id) throw new Error('pinned oracle requires Bouncer v9 and the reviewed owner');
+  if (!['bouncer-agent-v9', 'bouncer-agent-v14-native-storage-testnet'].includes(version) || owner !== goal.owner_account_id) {
+    throw new Error('pinned oracle requires supported Bouncer v9/V14 and the reviewed owner');
+  }
   const permission = access?.permission?.FunctionCall;
   if (!permission || permission.receiver_id !== goal.contract_id || !equal(permission.method_names, ['execute_outlayer_native_project'])) {
     throw new Error('agent key must be scoped ONLY to execute_outlayer_native_project on this contract');
@@ -239,6 +243,7 @@ async function runOracleGoalUnlocked({ goal: rawGoal, provider, account, publicK
   if (!verdict[0]) { log(`[oracle] BLOCKED ${goal.id}: ${String(verdict[1]).slice(0, 200)}`); return { status: 'BLOCKED' }; }
   if (!execute) { log(`[oracle] READY ${goal.id}: at most ${goal.amount} yoctoNEAR to ${OUTLAYER} (dry run)`); return { status: 'READY' }; }
   if (typeof provider.sendTransactionOnce !== 'function') throw new Error('live execution requires a bounded one-shot transaction transport');
+  checkNativeBroadcastGuard(beforeBroadcast);
   const { txHash, signed } = await signReviewedCall({ account, publicKey, ownerId: goal.owner_account_id, contractId: goal.contract_id,
     method: 'execute_outlayer_native_project', args: signedArgs(goal), gas: GAS });
   if (!validHash(txHash)) throw new Error('signer returned an invalid transaction hash');
@@ -258,6 +263,10 @@ async function runOracleGoalUnlocked({ goal: rawGoal, provider, account, publicK
     }
   }
   try {
+    // Freshness and the original journal are rechecked after signing, fsync
+    // and any witnessed-original verification, immediately before submission.
+    checkNativeBroadcastGuard(beforeBroadcast);
+    assertNativeJournalUnchanged(journal, goal.id, pending);
     // Exactly one submission; even an explicit expiry or timeout is not retried.
     const sent = await provider.sendTransactionOnce(signed, 'FINAL');
     if (sent?.transaction_outcome?.id !== txHash) throw new Error('RPC returned a different or missing transaction hash');

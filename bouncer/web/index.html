@@ -14,7 +14,7 @@
   <title>Bouncer — The resource layer for agents</title>
   <link rel="icon" type="image/svg+xml" href="./favicon.svg?v=3">
   <link rel="preload" href="./manrope-latin.woff2" as="font" type="font/woff2" crossorigin>
-  <link rel="stylesheet" href="./styles.css?v=16">
+  <link rel="stylesheet" href="./styles.css?v=17">
 </head>
 <body>
   <svg class="svg-defs" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
@@ -189,6 +189,18 @@
     <p class="account-view-warning" id="wallet-account-warning">Unverified account name. No wallet is connected and no spending access was granted.</p>
     <button class="account-entry-primary" id="wallet-owner-verify" type="button" hidden>Verify account in wallet</button>
     <p class="account-view-status" id="wallet-owner-status" role="status" aria-live="polite" hidden></p>
+    <button class="account-entry-primary" id="wallet-native-mission-open" type="button" hidden>Review a guarded testnet mission →</button>
+    <section class="setup-recovery native-setup" id="wallet-native-mission-panel" aria-label="Guarded native testnet mission" hidden>
+      <strong>Compute + data + public storage</strong>
+      <p class="account-view-status">The Bouncer vault enforces the reviewed caps and allowlist. Storage is public NEAR contract state, not an independent storage provider; results and original hashes may be public. Never put secrets in storage.</p>
+      <p class="account-view-status">Your wallet signs an approval message authorizing the configured server's restricted agent keys to run this mission. Gas is extra; steps cannot be rolled back together. If any result is unknown, do not approve again—check the original receipts. The server and RPC must be trusted.</p>
+      <p class="account-view-status" id="wallet-native-mission-summary"></p>
+      <details id="wallet-native-mission-details" hidden><summary>Review the complete mission and limits</summary><pre id="wallet-native-mission-manifest" class="native-mission-manifest"></pre></details>
+      <p class="account-view-status" id="wallet-native-mission-status" role="status" aria-live="polite"></p>
+      <label id="wallet-native-mission-consent-label" class="native-mission-consent" hidden><input id="wallet-native-mission-consent" type="checkbox"> I reviewed the full mission, maximum and public storage. I approve this one testnet run.</label>
+      <button class="account-entry-primary" id="wallet-native-mission-approve" type="button" hidden>Approve this mission in my wallet →</button>
+      <button class="account-entry-secondary" id="wallet-native-mission-recover" type="button" hidden>Check original receipts only →</button>
+    </section>
     <button class="account-entry-primary" id="wallet-direct-outlayer-open" type="button" hidden>Review one direct OutLayer test →</button>
     <section class="setup-recovery native-setup" id="wallet-direct-outlayer-panel" aria-label="One direct OutLayer testnet purchase" hidden>
       <strong>One direct OutLayer test · testnet only</strong>
@@ -295,7 +307,7 @@
   </dialog>
   <dialog class="tour-dialog" id="welcome-tour" aria-labelledby="tour-title" aria-describedby="tour-description"><div class="tour-topline"><span class="brand-mark" aria-hidden="true"><svg viewBox="16 17 300 300"><use href="#i-bouncer"/></svg></span><span class="tour-count" id="tour-count">STEP 1 OF 4</span><button type="button" class="tour-close" id="tour-skip" aria-label="Close the tour">×</button></div><div class="tour-progress" aria-hidden="true"><span></span><span></span><span></span><span></span></div><div class="tour-copy" aria-live="polite"><div class="section-kicker" id="tour-kicker">WELCOME TO BOUNCER</div><h2 id="tour-title">Meet your resource agent.</h2><p id="tour-description">Bouncer helps an agent get compute, storage and API services while your on-chain rules guard its spending.</p><div class="tour-callout" id="tour-callout">Bouncer is a testnet prototype, not an open marketplace.</div></div><div class="tour-actions"><button class="button tour-back" type="button" id="tour-back" disabled>Back</button><button class="button tour-next" type="button" id="tour-next">Next →</button></div></dialog>
   <script type="module" src="./app.mjs?v=7"></script>
-  <script type="module" src="./wallet.bundle.js?v=32"></script>
+  <script type="module" src="./wallet.bundle.js?v=33"></script>
   <script type="module" src="./google-signin.mjs?v=3"></script>
 </body>
 </html>

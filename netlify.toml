@@ -1,0 +1,28 @@
+# Static testnet UI only. This does NOT deploy a mission spending backend,
+# wallet setup, Google session, or WalletConnect relay.
+[build]
+  base = "bouncer"
+  publish = "dist"
+  command = "npm ci --ignore-scripts --no-audit --no-fund && npm ci --prefix walletconnect --ignore-scripts --no-audit --no-fund && npm run build:web && node scripts/stage-netlify-public-web.mjs"
+
+[build.environment]
+  NODE_VERSION = "22"
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Content-Type-Options = "nosniff"
+    Content-Security-Policy = "script-src 'self' 'nonce-Qm91bmNlclRlc3RuZXQyMDI2' https://accounts.google.com; object-src 'none'; base-uri 'none'"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    Cross-Origin-Opener-Policy = "same-origin-allow-popups"
+    Permissions-Policy = "camera=(), microphone=(), geolocation=()"
+
+[[headers]]
+  for = "/"
+  [headers.values]
+    Cache-Control = "no-cache, max-age=0, must-revalidate"
+
+[[headers]]
+  for = "/index.html"
+  [headers.values]
+    Cache-Control = "no-cache, max-age=0, must-revalidate"

@@ -14,6 +14,9 @@ exact-ft-v11 = []
 exact-ft-v12 = ["exact-ft-v11"]
 # Experimental native-channel support; fresh state only, never a V12 upgrade.
 tollgate-native-v13 = ["exact-ft-v12"]
+# Separate fresh-state testnet artifact. Public NEAR on-chain storage; not an
+# upgrade to an existing vault and not an independent storage provider.
+native-storage-v14 = []
 
 [dependencies]
 # Keep experimental testnet artifacts on the captured lockfile resolution.

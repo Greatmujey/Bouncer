@@ -1,0 +1,147 @@
+# Offline testnet prototype only. No public-chain deployment or transaction.
+name: V14 native storage contract
+on:
+  push:
+    branches: ['arena/ebd0bbac-near-hub']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  contract:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[native-storage-v14]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: 1.99.1
+          targets: wasm32-unknown-unknown
+      - name: Test V14 storage, policy and existing contract behavior
+        working-directory: bouncer/contracts/bouncer
+        env:
+          CARGO_TERM_COLOR: never
+          CARGO_PROFILE_DEV_DEBUG: 0
+        run: cargo test --locked --lib --no-default-features --features native-storage-v14
+      - name: Build fresh-state V14 testnet WASM
+        working-directory: bouncer/contracts/bouncer
+        env:
+          RUSTFLAGS: '-C link-arg=-s'
+        run: |
+          cargo build --locked --target wasm32-unknown-unknown --release --no-default-features --features native-storage-v14
+          sha256sum target/wasm32-unknown-unknown/release/bouncer.wasm
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+      - name: Install test dependencies
+        working-directory: bouncer
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Measure V14 mobile wallet payload lower bound
+        working-directory: bouncer
+        run: node scripts/inspect-v14-mobile-artifact.mjs contracts/bouncer/target/wasm32-unknown-unknown/release/bouncer.wasm
+      - name: Build fabricated sandbox-only provider
+        working-directory: bouncer/integration/fake-outlayer
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/bouncer/contracts/bouncer/target
+          RUSTFLAGS: '-C link-arg=-s'
+        run: |
+          if ! cargo build --locked --target wasm32-unknown-unknown --release > "$RUNNER_TEMP/fake-provider-build.log" 2>&1; then
+            python3 -c 'import os; s=open(os.environ["RUNNER_TEMP"]+"/fake-provider-build.log").read()[-4500:]; print("::error title=Fake sandbox provider build failed::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
+            exit 1
+          fi
+          cat "$RUNNER_TEMP/fake-provider-build.log"
+      - name: Build pinned V14 phone-loader research artifact
+        working-directory: bouncer
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/v14-loader-target
+          BOUNCER_V14_LOADER_PIN_RS: ${{ runner.temp }}/v14-research-pin.rs
+          RUSTFLAGS: '-C link-arg=-s'
+        run: |
+          node scripts/write-v14-loader-research-pin.mjs contracts/bouncer/target/wasm32-unknown-unknown/release/bouncer.wasm "$BOUNCER_V14_LOADER_PIN_RS"
+          if ! cargo build --locked --manifest-path integration/v14-phone-loader/Cargo.toml --target wasm32-unknown-unknown --release > "$RUNNER_TEMP/v14-loader-build.log" 2>&1; then
+            python3 -c 'import os; s=open(os.environ["RUNNER_TEMP"]+"/v14-loader-build.log").read()[-4500:]; print("::error title=V14 research loader build failed::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
+            exit 1
+          fi
+          cat "$RUNNER_TEMP/v14-loader-build.log"
+      - name: Download pinned isolated nearcore
+        working-directory: bouncer
+        run: |
+          curl --fail --show-error --silent --location --proto '=https' --tlsv1.2 --max-time 180 --retry 2 --max-filesize 419430400 \
+            'https://s3-us-west-1.amazonaws.com/build.nearprotocol.com/nearcore/Linux-x86_64/2.14.0/near-sandbox.tar.gz' \
+            --output "$RUNNER_TEMP/near-sandbox.tar.gz"
+          python3 scripts/extract-pinned-near-sandbox.py "$RUNNER_TEMP/near-sandbox.tar.gz" "$RUNNER_TEMP/near-sandbox"
+      - name: Exercise contract and original-hash verifier on loopback only
+        working-directory: bouncer
+        env:
+          BOUNCER_SANDBOX_BIN: ${{ runner.temp }}/near-sandbox
+          BOUNCER_V14_WASM_PATH: ${{ github.workspace }}/bouncer/contracts/bouncer/target/wasm32-unknown-unknown/release/bouncer.wasm
+        run: |
+          ulimit -Sn 65535
+          if ! node integration/native-storage-v14-sandbox.mjs > "$RUNNER_TEMP/v14-sandbox-result.log" 2>&1; then
+            python3 -c 'import os; s=open(os.environ["RUNNER_TEMP"]+"/v14-sandbox-result.log").read()[-4500:]; print("::error title=Isolated storage sandbox failed::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
+            exit 1
+          fi
+          cat "$RUNNER_TEMP/v14-sandbox-result.log"
+      - name: Exercise three guarded legs against a fabricated local provider
+        working-directory: bouncer
+        env:
+          BOUNCER_SANDBOX_BIN: ${{ runner.temp }}/near-sandbox
+          BOUNCER_V14_WASM_PATH: ${{ github.workspace }}/bouncer/contracts/bouncer/target/wasm32-unknown-unknown/release/bouncer.wasm
+          BOUNCER_FAKE_OUTLAYER_WASM_PATH: ${{ github.workspace }}/bouncer/contracts/bouncer/target/wasm32-unknown-unknown/release/bouncer_fake_outlayer.wasm
+        run: |
+          ulimit -Sn 65535
+          if ! node integration/native-mission-v14-sandbox.mjs > "$RUNNER_TEMP/v14-mission-result.log" 2>&1; then
+            python3 -c 'import os; s=open(os.environ["RUNNER_TEMP"]+"/v14-mission-result.log").read()[-4500:]; print("::error title=Isolated three-leg mission failed::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
+            exit 1
+          fi
+          cat "$RUNNER_TEMP/v14-mission-result.log"
+      - name: Exercise research phone loader and full mission on isolated nearcore
+        working-directory: bouncer
+        env:
+          BOUNCER_SANDBOX_BIN: ${{ runner.temp }}/near-sandbox
+          BOUNCER_V14_WASM_PATH: ${{ github.workspace }}/bouncer/contracts/bouncer/target/wasm32-unknown-unknown/release/bouncer.wasm
+          BOUNCER_FAKE_OUTLAYER_WASM_PATH: ${{ github.workspace }}/bouncer/contracts/bouncer/target/wasm32-unknown-unknown/release/bouncer_fake_outlayer.wasm
+          BOUNCER_V14_RESEARCH_LOADER: ${{ runner.temp }}/v14-loader-target/wasm32-unknown-unknown/release/bouncer_v14_phone_loader_research.wasm
+        run: |
+          ulimit -Sn 65535
+          if ! node integration/native-mission-v14-sandbox.mjs > "$RUNNER_TEMP/v14-loader-mission-result.log" 2>&1; then
+            python3 -c 'import os; s=open(os.environ["RUNNER_TEMP"]+"/v14-loader-mission-result.log").read()[-4500:]; print("::error title=Isolated V14 loader mission failed::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
+            exit 1
+          fi
+          cat "$RUNNER_TEMP/v14-loader-mission-result.log"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: experimental-v14-testnet-wasm
+          path: bouncer/contracts/bouncer/target/wasm32-unknown-unknown/release/bouncer.wasm
+          retention-days: 7
+  browser:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[native-storage-v14]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+      - name: Install dependencies and rebuild browser assets
+        working-directory: bouncer
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm ci --prefix walletconnect --ignore-scripts --no-audit --no-fund
+          npm run build:web
+          git diff --exit-code -- web/wallet.bundle.js
+          npm install --prefix "$RUNNER_TEMP/bouncer-browser" --no-save --no-audit --no-fund playwright-core@1.64.1
+      - name: Test synthetic desktop and mobile wallet consent and recovery
+        working-directory: bouncer
+        env:
+          BOUNCER_PLAYWRIGHT_PATH: ${{ runner.temp }}/bouncer-browser/node_modules/playwright-core/index.mjs
+        run: |
+          if ! node scripts/test-native-mission-ui-browser.mjs > "$RUNNER_TEMP/v14-browser-result.log" 2>&1; then
+            python3 -c 'import os; s=open(os.environ["RUNNER_TEMP"]+"/v14-browser-result.log").read()[-4500:]; print("::error title=Synthetic mission browser failed::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
+            exit 1
+          fi
+          cat "$RUNNER_TEMP/v14-browser-result.log"

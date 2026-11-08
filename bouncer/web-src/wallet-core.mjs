@@ -10,6 +10,7 @@ import { createOwnerKeyFallbackFetch } from './read-only-owner-key-fallback.mjs'
 import { openNativeOracleDeviceKey } from './native-oracle-device-key.mjs';
 import { createNativeOracleSetupClient } from './native-oracle-setup-client.mjs';
 import { createNativeOracleOwnerFlow } from './native-oracle-owner-flow.mjs';
+import { createNativeMissionClient } from './native-mission-client.mjs';
 import { createDirectOutlayerTest, directOutlayerOriginAllowed } from './direct-outlayer-testnet.mjs';
 import { createRemoteDirectFence, directTestCapability } from './direct-test-remote-fence.mjs';
 
@@ -118,6 +119,16 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
   const directRecover = doc.querySelector('#wallet-direct-outlayer-recover');
   const directOriginal = doc.querySelector('#wallet-direct-outlayer-original');
   const directRecoverOriginal = doc.querySelector('#wallet-direct-outlayer-recover-original');
+  const missionOpen = doc.querySelector('#wallet-native-mission-open');
+  const missionPanel = doc.querySelector('#wallet-native-mission-panel');
+  const missionSummary = doc.querySelector('#wallet-native-mission-summary');
+  const missionDetails = doc.querySelector('#wallet-native-mission-details');
+  const missionManifest = doc.querySelector('#wallet-native-mission-manifest');
+  const missionStatus = doc.querySelector('#wallet-native-mission-status');
+  const missionConsentLabel = doc.querySelector('#wallet-native-mission-consent-label');
+  const missionConsent = doc.querySelector('#wallet-native-mission-consent');
+  const missionApprove = doc.querySelector('#wallet-native-mission-approve');
+  const missionRecover = doc.querySelector('#wallet-native-mission-recover');
   const nativeOpen = doc.querySelector('#wallet-native-setup-open');
   const nativePanel = doc.querySelector('#wallet-native-setup-panel');
   const nativeTerms = doc.querySelector('#wallet-native-setup-terms');
@@ -195,6 +206,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
   // spending access, authenticates a backend, or survives account changes.
   let ownerVerification = null, ownerSessionVersion = 0, setupRecoveryAvailable = false, setupRecoverySelection = null, matchedOriginal = null;
   let bufferSetupDraft = null, nativeSetupAvailable = false, nativeFlow = null, nativeSetupOpening = false, directFlow = null;
+  let missionFlow = null, missionReview = null, missionReady = false, missionStarted = false;
   const bufferSetupStages = ['create_keyless_vault', 'register_vault_circle', 'fund_vault_circle'];
   let bannerTimer;
   const trusted = new Set(WALLET_MANIFEST.wallets);
@@ -295,6 +307,13 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
       ownerVerify.disabled = busyState;
       ownerVerify.textContent = ownerVerified ? 'Verify account again' : 'Verify account in wallet';
     }
+    if (missionOpen) { missionOpen.hidden = !ownerVerified || Boolean(missionFlow); missionOpen.disabled = busyState; }
+    if (missionPanel) missionPanel.hidden = !ownerVerified || !missionFlow;
+    if (missionConsentLabel) missionConsentLabel.hidden = !missionReview || !missionReady || missionStarted;
+    if (missionConsent) missionConsent.disabled = busyState || !missionReady || missionStarted || !missionDetails?.open;
+    if (missionApprove) { missionApprove.hidden = !missionReview || !missionReady || missionStarted;
+      missionApprove.disabled = busyState || !missionDetails?.open || !missionConsent?.checked; }
+    if (missionRecover) { missionRecover.hidden = !missionReview; missionRecover.disabled = busyState; }
     if (bufferReadiness) {
       const experimentalPreview = /^4173-[a-z0-9-]+\.e2b\.app$/i.test(win.location.hostname);
       bufferReadiness.hidden = !(experimentalPreview && ownerVerified && connectedAccount === 'great_mujey.testnet');
@@ -370,6 +389,10 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     ownerSessionVersion++; ownerVerification = null; setupRecoveryAvailable = false; setupRecoverySelection = null; matchedOriginal = null; bufferSetupDraft = null;
     nativeSetupAvailable = false; nativeSetupOpening = false; nativeFlow?.destroy(); nativeFlow = null;
     directFlow?.destroy(); directFlow = null;
+    missionFlow = null; missionReview = null; missionReady = false; missionStarted = false;
+    if (missionConsent) missionConsent.checked = false;
+    if (missionSummary) missionSummary.textContent = ''; if (missionStatus) missionStatus.textContent = '';
+    if (missionManifest) missionManifest.textContent = ''; if (missionDetails) { missionDetails.hidden = true; missionDetails.open = false; }
     if (directStatus) directStatus.textContent = ''; if (directHash) { directHash.hidden = true; directHash.textContent = ''; }
     if (directResult) { directResult.hidden = true; directResult.textContent = ''; } if (directOriginal) directOriginal.value = '';
     if (nativeTerms) nativeTerms.textContent = ''; if (nativeStage) nativeStage.textContent = '';
@@ -760,6 +783,10 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
       } finally { clearTimeout(timeout); }
       if (!stillCurrent()) return;
       nativeFlow?.destroy(); nativeFlow = null; nativeSetupOpening = false; nativeSetupAvailable = false;
+      missionFlow = null; missionReview = null; missionReady = false; missionStarted = false;
+      if (missionConsent) missionConsent.checked = false;
+      if (missionDetails) { missionDetails.hidden = true; missionDetails.open = false; }
+      if (missionManifest) missionManifest.textContent = '';
       ownerVerification = { wallet, accountId: proof.accountId, publicKey: proof.publicKey };
       if (ownerStatus) {
         ownerStatus.hidden = false;
@@ -804,6 +831,85 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
       stopWalletPresentation(); busy(false);
       if (stillCurrent()) { renderControls(); hideBanner(); openPicker(opener); }
     }
+  });
+  missionConsent?.addEventListener('change', () => renderControls());
+  missionDetails?.addEventListener('toggle', () => renderControls());
+  missionOpen?.addEventListener('click', async () => {
+    const wallet = selectedWallet, accountId = connectedAccount, version = ownerSessionVersion, proof = ownerVerification;
+    if (busyState || !connected || !isTop || proof?.wallet !== wallet || proof.accountId !== accountId ||
+        !wallet?.manifest?.features?.signMessage || !missionPanel || !missionStatus) return;
+    const current = () => connected && selectedWallet === wallet && connectedAccount === accountId &&
+      ownerSessionVersion === version && ownerVerification === proof;
+    busy(true); missionReady = false; missionStarted = false;
+    try {
+      const client = createNativeMissionClient({ wallet, accountId, ownerPublicKey: proof.publicKey, location: win.location,
+        crypto: win.crypto, fetch: walletReadFetch, isCurrent: current });
+      missionFlow = client; missionStatus.textContent = 'Checking the configured testnet mission…'; renderControls();
+      missionReview = await client.review();
+      if (!current()) return;
+      const mission = missionReview.mission;
+      if (missionSummary) missionSummary.textContent = `Owner ${mission.owner_account_id} · vault ${mission.contract_id} · maximum ${formatPublicAmount(mission.max_native_amount, 24)} test NEAR plus gas. Review hash ${missionReview.mission_sha256}.`;
+      if (missionManifest) missionManifest.textContent = JSON.stringify(mission, null, 2);
+      if (missionDetails) missionDetails.hidden = false;
+      try {
+        const { review, preview } = await client.preview();
+        if (!current()) return;
+        if (review.mission_sha256 !== missionReview.mission_sha256) throw Error();
+        missionReady = preview.status === 'READY';
+        missionStatus.textContent = missionReady
+          ? 'Checks passed for the reviewed mission. Read the full terms before choosing whether to approve.'
+          : `Mission blocked: ${preview.stage || preview.budget?.reason || 'a required check failed'}. No new transaction was sent.`;
+      } catch {
+        if (current()) missionStatus.textContent = 'Preflight unavailable or an original is unresolved. Check original receipts; do not approve another run.';
+      }
+    } catch {
+      if (current()) {
+        missionFlow = null; missionReview = null;
+        if (ownerStatus) { ownerStatus.hidden = false; ownerStatus.textContent = 'The guarded mission backend is unavailable or not configured on this site. No approval or transaction was requested.'; }
+      }
+    } finally { busy(false); if (current()) renderControls(); }
+  });
+  missionApprove?.addEventListener('click', async () => {
+    const flow = missionFlow, review = missionReview, wallet = selectedWallet, proof = ownerVerification, version = ownerSessionVersion;
+    if (busyState || !flow || !review || !missionReady || missionStarted || !missionDetails?.open || !missionConsent?.checked || proof?.wallet !== wallet) return;
+    const current = () => connected && missionFlow === flow && ownerVerification === proof && ownerSessionVersion === version;
+    missionStarted = true; busy(true); closePicker();
+    setStatus('Review the one testnet mission approval in your wallet. If uncertain, check the originals; do not approve again.');
+    notify('Review the testnet mission approval. This authorizes the bounded agent run.', true);
+    let stopWalletPresentation = () => {};
+    try {
+      if (['near-mobile', 'nightly-wallet', 'ledger'].includes(wallet.manifest.id)) stopWalletPresentation = decorateWalletPopup(wallet.manifest.id);
+      const result = await flow.approve(review);
+      if (!current()) return;
+      missionStatus.textContent = `${result.status || 'UNKNOWN'} · New guarded steps: ${result.new_payments ?? 'unknown'}. ` +
+        `${result.note || 'Check original receipts before taking any further action.'}\n` +
+        JSON.stringify((result.deliveries || []).map(item => ({ goal: item.goal_id, kind: item.kind,
+          original_hash: item.delivery?.tx_hash, result: item.delivery?.result })), null, 2);
+    } catch {
+      if (current()) missionStatus.textContent = 'Approval or result is uncertain. Do not approve again; check the original receipts below.';
+    } finally {
+      stopWalletPresentation(); busy(false);
+      if (current()) { renderControls(); hideBanner(); openPicker(opener); }
+    }
+  });
+  missionRecover?.addEventListener('click', async () => {
+    const flow = missionFlow, review = missionReview, proof = ownerVerification, version = ownerSessionVersion;
+    if (busyState || !flow || !review || !proof) return;
+    const current = () => connected && missionFlow === flow && ownerVerification === proof && ownerSessionVersion === version;
+    busy(true); let retained = '';
+    try {
+      const local = await flow.originals(review);
+      retained = JSON.stringify(local.originals || [], null, 2);
+      if (current()) missionStatus.textContent = `Retained local original hashes (not proof of non-execution):\n${retained}\nChecking receipts…`;
+      const result = await flow.recover(review);
+      const updated = await flow.originals(review);
+      retained = JSON.stringify(updated.originals || [], null, 2);
+      if (current()) missionStatus.textContent = `${result.status || 'UNKNOWN'} · No new transaction.\nRetained original hashes:\n${retained}\n` +
+        JSON.stringify((result.deliveries || []).map(item => ({ goal: item.goal_id, kind: item.kind,
+          original_hash: item.delivery?.tx_hash, result: item.delivery?.result })), null, 2);
+    } catch { if (current()) missionStatus.textContent = 'Original receipts are unavailable or inconsistent. Do not approve another run.' +
+      (retained ? `\nRetained local original hashes:\n${retained}` : ''); }
+    finally { busy(false); if (current()) renderControls(); }
   });
   directOpen?.addEventListener('click', async () => {
     const wallet = selectedWallet, accountId = connectedAccount, version = ownerSessionVersion;
