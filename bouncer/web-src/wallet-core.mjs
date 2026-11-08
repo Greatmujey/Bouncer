@@ -175,6 +175,15 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
       await candidate.read(); remoteFence = candidate;
     }
   } catch { /* fail closed; no wallet prompt */ }
+  // CodeSandbox's first-visit trust page drops URL fragments. If the user
+  // opens the same private link again in this already-open tab, browsers can
+  // treat it as a hash-only navigation rather than reloading the page. Reload
+  // once so the capability is checked before any wallet connector is created.
+  if (isTop && !remoteFence && /^https:\/\/[a-z0-9]{4,20}\.csb\.app$/.test(win.location.origin)) {
+    win.addEventListener?.('hashchange', () => {
+      if (/^#bouncer-direct=[A-Za-z0-9_-]{43}$/.test(win.location.hash || '')) win.location.reload();
+    });
+  }
   const previewModeMessage = 'Preview mode: Bouncer spending setup is read-only unless its backend is enabled. Some wallets may request their own setup; review every wallet prompt.';
   const allowedIds = new Set([...WALLET_MANIFEST.wallets.map(wallet => wallet.id), 'wallet-connect']);
   let connector, selectedWallet = null, connected = false, connectedAccount = '', ready = false, busyState = false, opener = null;

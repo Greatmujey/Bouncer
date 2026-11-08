@@ -903,3 +903,14 @@ test('temporary wallet host remains blocked when its capability cannot be checke
   assert.equal(browser.nodes['wallet-direct-outlayer-open'].hidden,true);
   assert.equal(config.transactionRequests,undefined);
 });
+
+test('opening the private link again reloads after the hosting trust page drops its fragment',async()=>{
+  const browser=fakeBrowser('https://abcd1234.csb.app/'),config={};let handler,reloads=0;
+  browser.win.location.hash='';browser.win.location.reload=()=>{reloads++};
+  browser.win.addEventListener=(type,fn)=>{if(type==='hashchange')handler=fn};
+  browser.win.sessionStorage={setItem(){},getItem(){return null}};
+  await initWallet({window:browser.win,document:browser.doc,NearConnector:connectorClass(config)});
+  assert.equal(config.instance,undefined);assert.equal(typeof handler,'function');
+  browser.win.location.hash='#connect';handler();assert.equal(reloads,0);
+  browser.win.location.hash=`#bouncer-direct=${'a'.repeat(43)}`;handler();assert.equal(reloads,1);
+});
