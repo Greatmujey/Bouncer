@@ -30,6 +30,8 @@ jobs:
           node-version: '22'
       - name: Prepare encrypted, temporary provisioning material
         run: node bouncer/scripts/prepare-testnet-infra-session.mjs
+      - name: Publish the encrypted envelope on the session branch
+        run: node bouncer/scripts/publish-testnet-infra-envelope.mjs
       - name: Install pinned application dependencies
         working-directory: bouncer
         run: npm ci --ignore-scripts --no-audit --no-fund
@@ -40,7 +42,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 70
     permissions:
-      contents: read
+      contents: write # used only to publish its encrypted bootstrap envelope
     env:
       BOUNCER_INFRA_ROLE: checkpoint
     steps:
@@ -48,12 +50,16 @@ jobs:
         with:
           ref: ${{ github.ref_name }}
           fetch-depth: 0
-          persist-credentials: false
+          persist-credentials: true
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22'
       - name: Prepare encrypted, temporary provisioning material
         run: node bouncer/scripts/prepare-testnet-infra-session.mjs
+      - name: Publish the encrypted envelope on the session branch
+        run: node bouncer/scripts/publish-testnet-infra-envelope.mjs
+      - name: Remove the monitor checkout's write credential
+        run: git config --local --unset-all http.https://github.com/.extraheader
       - name: Install pinned application dependencies
         working-directory: bouncer
         run: npm ci --ignore-scripts --no-audit --no-fund

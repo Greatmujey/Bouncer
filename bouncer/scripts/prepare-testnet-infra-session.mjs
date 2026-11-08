@@ -58,5 +58,5 @@ const payload = JSON.stringify({ version: 1, run_id: runId, role, bootstrap_pass
   postgres_scram_verifier: makeScramVerifier(password),
   session_public_key_der_base64: publicKey.export({ type: 'spki', format: 'der' }).toString('base64') });
 const sealed = crypto.publicEncrypt({ key: rsa, oaepHash: 'sha256', padding: crypto.constants.RSA_PKCS1_OAEP_PADDING }, Buffer.from(payload));
-console.log(`::notice title=TESTNET_INFRA_${role.toUpperCase()}::${sealed.toString('base64')}`);
-console.log('No wallet, transaction, database connection, or public prompt was started.');
+writeSecret(path.join(directory, 'bootstrap.enc'), sealed.toString('base64'));
+console.log('Prepared the encrypted provisioning envelope. No wallet, transaction, database connection, or public prompt was started.');

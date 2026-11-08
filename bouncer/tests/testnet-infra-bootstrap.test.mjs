@@ -36,11 +36,10 @@ test('testnet session emits only an encrypted bootstrap; the actual database key
   try {
     const result=run(f.root);
     assert.equal(result.status,0,result.stderr);
-    const notice=result.stdout.match(/::notice title=TESTNET_INFRA_COORDINATOR::([^\n]+)/);
-    assert.ok(notice);
-    const payload=JSON.parse(crypto.privateDecrypt({key:f.keys.privateKey,oaepHash:'sha256',padding:crypto.constants.RSA_PKCS1_OAEP_PADDING},
-      Buffer.from(notice[1],'base64')).toString());
     const dir=path.join(f.root,'runner','bouncer-testnet-infra-coordinator');
+    const sealed=fs.readFileSync(path.join(dir,'bootstrap.enc'),'utf8');
+    const payload=JSON.parse(crypto.privateDecrypt({key:f.keys.privateKey,oaepHash:'sha256',padding:crypto.constants.RSA_PKCS1_OAEP_PADDING},
+      Buffer.from(sealed,'base64')).toString());
     const actual=fs.readFileSync(path.join(dir,'postgres-password'),'utf8');
     assert.equal(payload.version,1); assert.equal(payload.run_id,'1234'); assert.equal(payload.role,'coordinator');
     assert.notEqual(actual,payload.bootstrap_password); assert.equal(verifierFor(actual,payload.postgres_scram_verifier),true);
