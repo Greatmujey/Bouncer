@@ -1,0 +1,39 @@
+# Offline testnet prototype only. This never deploys or signs a transaction.
+name: V14 native storage contract
+on:
+  push:
+    branches: ['arena/ebd0bbac-near-hub']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  contract:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[native-storage-v14]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: 1.99.1
+          targets: wasm32-unknown-unknown
+      - name: Test V14 storage, policy and existing contract behavior
+        working-directory: bouncer/contracts/bouncer
+        env:
+          CARGO_TERM_COLOR: never
+          CARGO_PROFILE_DEV_DEBUG: 0
+        run: cargo test --locked --lib --no-default-features --features native-storage-v14
+      - name: Build fresh-state V14 testnet WASM
+        working-directory: bouncer/contracts/bouncer
+        env:
+          RUSTFLAGS: '-C link-arg=-s'
+        run: |
+          cargo build --locked --target wasm32-unknown-unknown --release --no-default-features --features native-storage-v14
+          sha256sum target/wasm32-unknown-unknown/release/bouncer.wasm
+      - uses: actions/upload-artifact@v4
+        with:
+          name: experimental-v14-testnet-wasm
+          path: bouncer/contracts/bouncer/target/wasm32-unknown-unknown/release/bouncer.wasm
+          retention-days: 7

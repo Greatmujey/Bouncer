@@ -25,6 +25,8 @@ const MAX_FT_CALL_MESSAGE_BYTES: usize = 2048;
 // Combining the two experimental variants would create an unreviewed ABI.
 #[cfg(all(feature = "exact-ft-v11", feature = "youtick-playback-v10"))]
 compile_error!("exact-ft-v11 and youtick-playback-v10 are separate artifacts");
+#[cfg(all(feature = "native-storage-v14", any(feature = "exact-ft-v11", feature = "youtick-playback-v10")))]
+compile_error!("native-storage-v14 is a separate fresh-state artifact");
 #[cfg(feature = "exact-ft-v11")]
 const MAX_EXACT_FT_MEMO_BYTES: usize = 128;
 #[cfg(feature = "exact-ft-v11")]
@@ -47,6 +49,13 @@ const NS_PER_DAY: u64 = WINDOW_HOURS * NS_PER_HOUR;
 // This fresh-state-only experiment is not an upgrade to any deployed vault.
 #[cfg(feature = "tollgate-native-v13")]
 mod tollgate_v13;
+
+// Fresh-state-only testnet prototype. Its raw storage keys are deliberately
+// domain-separated from the normal contract state and cannot upgrade a vault.
+#[cfg(feature = "native-storage-v14")]
+mod native_storage_v14;
+#[cfg(all(test, feature = "native-storage-v14"))]
+mod native_storage_v14_tests;
 
 // Preserve readable errors in optimized WASM; use a normal panic in native tests.
 #[cfg(target_arch = "wasm32")]
@@ -688,7 +697,9 @@ impl Bouncer {
         { "bouncer-agent-v11-exact-ft-testnet" }
         #[cfg(feature = "youtick-playback-v10")]
         { "bouncer-agent-v10-youtick-testnet" }
-        #[cfg(not(any(feature = "youtick-playback-v10", feature = "exact-ft-v11")))]
+        #[cfg(feature = "native-storage-v14")]
+        { "bouncer-agent-v14-native-storage-testnet" }
+        #[cfg(not(any(feature = "youtick-playback-v10", feature = "exact-ft-v11", feature = "native-storage-v14")))]
         { "bouncer-agent-v9" }
     }
 
