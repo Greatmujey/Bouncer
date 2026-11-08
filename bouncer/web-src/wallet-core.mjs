@@ -159,6 +159,10 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
       !ethereumInfoPanel || !ethereumContinue || !ethereumBack) return;
 
   const approved = doc.querySelector('meta[name="bouncer-wallet-origin"]')?.content || '';
+  // Optional hosted-preview CSP nonce is passed to NEAR Connect's isolated
+  // wallet iframe; it is not a credential or a wallet authorization.
+  const suppliedNonce = doc.querySelector('meta[name="bouncer-csp-nonce"]')?.content || '';
+  const cspNonce = /^[A-Za-z0-9+/=]{16,128}$/.test(suppliedNonce) ? suppliedNonce : undefined;
   let isTop = false;
   try { isTop = win.top === win.self; } catch { /* fail closed */ }
   // The temporary hosted route is enabled only after its exact-origin,
@@ -553,7 +557,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
   }
   try {
     connector = new NearConnector({ network: 'testnet', features: { testnet: true },
-      autoConnect: false, manifest: WALLET_MANIFEST, storage, providers: { testnet: ['https://test.rpc.fastnear.com'] } });
+      autoConnect: false, manifest: WALLET_MANIFEST, storage, cspNonce, providers: { testnet: ['https://test.rpc.fastnear.com'] } });
     // Defense in depth if the connector ever tries its default loader.
     connector.db.getItem = async () => null;
     connector.db.setItem = async () => {};

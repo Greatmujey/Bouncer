@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {PUBLIC_WEB_FILES,validatePublicWeb} from './stage-public-web.mjs';
+import {CSB_NONCE,htmlOnlyKnownAdditions} from './csb-hosted-html.mjs';
 process.on('uncaughtException',error=>{
   const message=String(error?.message||'candidate check failed').slice(0,500).replaceAll('%','%25').replaceAll('\n','%0A').replaceAll('\r','%0D');
   console.log(`::error title=Candidate check failed::${message}`);process.exitCode=1;
@@ -18,6 +19,12 @@ const files={};
 for(const name of PUBLIC_WEB_FILES){if(!binary.has(name))files[name]={content:fs.readFileSync(path.join(root,name),'utf8'),isBinary:false};}
 const data=(name,mime)=>`data:${mime};base64,${fs.readFileSync(path.join(root,name)).toString('base64')}`;
 function replaceOnce(text,from,to){assert.equal(text.split(from).length,2);return text.replace(from,to);}
+// CodeSandbox injects scripts immediately after the explicit <head>. Parsing
+// this CSP meta in the implicit head first prevents those third-party scripts
+// from executing. The fixed nonce lets the pinned NEAR Connect wallet run in
+// its sandboxed srcdoc iframe. This is a public execution marker, not a secret.
+files['index.html'].content=replaceOnce(files['index.html'].content,'<!doctype html>\n',
+  `<!doctype html>\n<meta http-equiv="Content-Security-Policy" content="script-src 'self' 'nonce-${CSB_NONCE}'; object-src 'none'; base-uri 'none'">\n<meta name="bouncer-csp-nonce" content="${CSB_NONCE}">\n`);
 files['styles.css'].content=replaceOnce(files['styles.css'].content,"url('./hero-orbit.jpg?v=4')",`url('${data('hero-orbit.jpg','image/jpeg')}')`);
 files['styles.css'].content=replaceOnce(files['styles.css'].content,"url('./manrope-latin.woff2')",`url('${data('manrope-latin.woff2','font/woff2')}')`);
 files['index.html'].content=replaceOnce(files['index.html'].content,
@@ -49,7 +56,8 @@ let exact=true;
 for(const name of Object.keys(files).filter(x=>x!=='sandbox.config.json')){
   const url=name==='index.html'?`${origin}/`:`${origin}/${name}`;
   const asset=await fetch(url,{signal:AbortSignal.timeout(60000)});const actual=await asset.text(),expected=files[name].content;
-  if(!asset.ok || actual!==expected){
+  const matches=name==='index.html'?htmlOnlyKnownAdditions(actual,expected):actual===expected;
+  if(!asset.ok || !matches){
     exact=false;let at=0;while(at<Math.min(actual.length,expected.length)&&actual[at]===expected[at])at++;
     console.log(`::warning title=Hosted asset mismatch::${name}: HTTP ${asset.status}, expected ${expected.length}/${digest(expected)}, actual ${actual.length}/${digest(actual)}, first difference ${at}`);
     if(name==='index.html')console.log(`::notice title=Hosted HTML scripts::${JSON.stringify([...actual.matchAll(/<script\b[^>]*>/gi)].map(m=>m[0]))}`);
@@ -59,5 +67,5 @@ const rpc=await fetch('https://rpc.testnet.near.org',{method:'POST',headers:{ori
   body:JSON.stringify({jsonrpc:'2.0',id:'candidate-cors-check',method:'status',params:[]}),signal:AbortSignal.timeout(20000)});
 const cors=rpc.headers.get('access-control-allow-origin'),json=await rpc.json();
 assert.ok(rpc.ok&&(cors==='*'||cors===origin)&&json?.result?.chain_id==='testnet');
-console.log(`::notice title=Hosted candidate check::Exact public website assets: ${exact}; read-only testnet RPC CORS: true. No wallet or transaction.`);
+console.log(`::notice title=Hosted candidate check::Reviewed assets and only the three known HTML script additions: ${exact}; read-only testnet RPC CORS: true. CSP execution blocking still requires a browser check. No wallet or transaction.`);
 if(!exact)process.exitCode=1;
