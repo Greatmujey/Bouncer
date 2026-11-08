@@ -18,16 +18,19 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           persist-credentials: false
+
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
         with:
           toolchain: 1.99.1
           targets: wasm32-unknown-unknown
+
       - name: Test V14 storage, policy and existing contract behavior
         working-directory: bouncer/contracts/bouncer
         env:
           CARGO_TERM_COLOR: never
           CARGO_PROFILE_DEV_DEBUG: 0
         run: cargo test --locked --lib --no-default-features --features native-storage-v14
+
       - name: Build fresh-state V14 testnet WASM
         working-directory: bouncer/contracts/bouncer
         env:
@@ -35,15 +38,19 @@ jobs:
         run: |
           cargo build --locked --target wasm32-unknown-unknown --release --no-default-features --features native-storage-v14
           sha256sum target/wasm32-unknown-unknown/release/bouncer.wasm
+
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: '22'
+
       - name: Install test dependencies
         working-directory: bouncer
         run: npm ci --ignore-scripts --no-audit --no-fund
+
       - name: Measure V14 mobile wallet payload lower bound
         working-directory: bouncer
         run: node scripts/inspect-v14-mobile-artifact.mjs contracts/bouncer/target/wasm32-unknown-unknown/release/bouncer.wasm
+
       - name: Build fabricated sandbox-only provider
         working-directory: bouncer/integration/fake-outlayer
         env:
@@ -55,6 +62,7 @@ jobs:
             exit 1
           fi
           cat "$RUNNER_TEMP/fake-provider-build.log"
+
       - name: Build pinned V14 phone-loader research artifact
         working-directory: bouncer
         env:
@@ -68,6 +76,7 @@ jobs:
             exit 1
           fi
           cat "$RUNNER_TEMP/v14-loader-build.log"
+
       - name: Download pinned isolated nearcore
         working-directory: bouncer
         run: |
@@ -75,6 +84,7 @@ jobs:
             'https://s3-us-west-1.amazonaws.com/build.nearprotocol.com/nearcore/Linux-x86_64/2.14.0/near-sandbox.tar.gz' \
             --output "$RUNNER_TEMP/near-sandbox.tar.gz"
           python3 scripts/extract-pinned-near-sandbox.py "$RUNNER_TEMP/near-sandbox.tar.gz" "$RUNNER_TEMP/near-sandbox"
+
       - name: Exercise contract and original-hash verifier on loopback only
         working-directory: bouncer
         env:
@@ -87,6 +97,7 @@ jobs:
             exit 1
           fi
           cat "$RUNNER_TEMP/v14-sandbox-result.log"
+
       - name: Exercise three guarded legs against a fabricated local provider
         working-directory: bouncer
         env:
@@ -100,6 +111,7 @@ jobs:
             exit 1
           fi
           cat "$RUNNER_TEMP/v14-mission-result.log"
+
       - name: Exercise research phone loader and full mission on isolated nearcore
         working-directory: bouncer
         env:
@@ -114,6 +126,7 @@ jobs:
             exit 1
           fi
           cat "$RUNNER_TEMP/v14-loader-mission-result.log"
+
       - uses: actions/upload-artifact@v4
         with:
           name: experimental-v14-testnet-wasm
@@ -127,9 +140,11 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           persist-credentials: false
+
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: '22'
+
       - name: Install dependencies and rebuild browser assets
         working-directory: bouncer
         run: |
@@ -138,6 +153,7 @@ jobs:
           npm run build:web
           git diff --exit-code -- web/wallet.bundle.js
           npm install --prefix "$RUNNER_TEMP/bouncer-browser" --no-save --no-audit --no-fund playwright-core@1.64.1
+
       - name: Test synthetic desktop and mobile wallet consent and recovery
         working-directory: bouncer
         env:
