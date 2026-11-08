@@ -9,7 +9,7 @@ import fs from 'node:fs';
 import { initWallet as bootWallet, walletOriginAllowed, nativeSetupOriginAllowed } from '../web-src/wallet-core.mjs';
 import { WALLET_MANIFEST } from '../web-src/wallet-manifest.mjs';
 import { encodeBase58 } from '../web-src/native-oracle-transaction.mjs';
-import { DIRECT_DEPOSIT, DIRECT_VERSION, DIRECT_PROJECT, DIRECT_UUID } from '../web-src/direct-outlayer-testnet.mjs';
+import { DIRECT_PREVIEW_ORIGIN, DIRECT_DEPOSIT, DIRECT_VERSION, DIRECT_PROJECT, DIRECT_UUID } from '../web-src/direct-outlayer-testnet.mjs';
 import { loadVerifiedExecutor, WALLET_EXECUTOR_SHA256 } from '../web-src/wallet-executor.mjs';
 
 const location = url => { const u = new URL(url); return { hostname: u.hostname, host: u.host, protocol: u.protocol, origin: u.origin }; };
@@ -130,6 +130,9 @@ test('wallet origin policy blocks shared origins, unapproved sites, HTTP and ifr
   assert.equal(walletOriginAllowed(location('https://safe-4173.app.github.dev/'), true), true);
   assert.equal(walletOriginAllowed(location('https://4173-example.e2b.app/'), true), true);
   assert.equal(walletOriginAllowed(location('https://4173-example.e2b.app/'), false), false);
+  assert.equal(walletOriginAllowed(location(`${DIRECT_PREVIEW_ORIGIN}/`), true), true);
+  assert.equal(walletOriginAllowed(location(`${DIRECT_PREVIEW_ORIGIN}/`), false), false);
+  assert.equal(walletOriginAllowed(location('https://different-preview.vercel.app/'), true), false);
   assert.equal(walletOriginAllowed(location('http://127.0.0.1:4173/'), true), true);
 });
 
@@ -241,9 +244,10 @@ test('connects and disconnects a wallet-reported account without requesting a ke
 
 test('direct OutLayer control is shown only for the named Meteor session on the dedicated preview', async () => {
   for (const [url, approved, account, walletId, visible] of [
-    ['https://4173-example.e2b.app/', '', 'great_mujey.testnet', 'meteor-wallet', true],
-    ['https://4173-example.e2b.app/', '', 'alice.testnet', 'meteor-wallet', false],
-    ['https://4173-example.e2b.app/', '', 'great_mujey.testnet', 'intear-wallet', false],
+    [`${DIRECT_PREVIEW_ORIGIN}/`, '', 'great_mujey.testnet', 'meteor-wallet', true],
+    [`${DIRECT_PREVIEW_ORIGIN}/`, '', 'alice.testnet', 'meteor-wallet', false],
+    [`${DIRECT_PREVIEW_ORIGIN}/`, '', 'great_mujey.testnet', 'intear-wallet', false],
+    ['https://4173-example.e2b.app/', '', 'great_mujey.testnet', 'meteor-wallet', false],
     ['https://bouncer-near.vercel.app/', 'https://bouncer-near.vercel.app', 'great_mujey.testnet', 'meteor-wallet', false],
     ['http://127.0.0.1:4173/', '', 'great_mujey.testnet', 'meteor-wallet', false],
   ]) {
@@ -257,7 +261,7 @@ test('direct OutLayer control is shown only for the named Meteor session on the 
 });
 
 test('direct preview review is read-only and one explicit tap invokes only the fixed wallet action', async () => {
-  const browser=fakeBrowser('https://4173-example.e2b.app/'), txHash=encodeBase58(new Uint8Array(32).fill(7));
+  const browser=fakeBrowser(`${DIRECT_PREVIEW_ORIGIN}/`), txHash=encodeBase58(new Uint8Array(32).fill(7));
   const config={account:'great_mujey.testnet',transactionResult:{transaction:{hash:txHash},transaction_outcome:{id:txHash}}};
   browser.win.indexedDB=new IDBFactory();browser.win.navigator.storage={persist:async()=>true,persisted:async()=>true};
   const prior=browser.win.fetch, block=encodeBase58(new Uint8Array(32).fill(9));

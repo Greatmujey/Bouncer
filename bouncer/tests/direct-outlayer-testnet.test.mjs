@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {IDBFactory} from 'fake-indexeddb';
 import {encodeBase58} from '../web-src/native-oracle-transaction.mjs';
-import {DIRECT_OWNER,DIRECT_PAYEE,DIRECT_DEPOSIT,DIRECT_GAS,DIRECT_PROJECT,DIRECT_UUID,DIRECT_VERSION,DIRECT_INPUT,
+import {DIRECT_PREVIEW_ORIGIN,DIRECT_OWNER,DIRECT_PAYEE,DIRECT_DEPOSIT,DIRECT_GAS,DIRECT_PROJECT,DIRECT_UUID,DIRECT_VERSION,DIRECT_INPUT,
   directOutlayerArgs,directOutlayerTransaction,inspectDirectOutlayerReadiness,verifyDirectOutlayerReceipt,createDirectOutlayerTest} from '../web-src/direct-outlayer-testnet.mjs';
 
 const hash=n=>encodeBase58(new Uint8Array(32).fill(n)),original=hash(7),block=hash(9),requestId=hash(10),completionId=hash(11),refundId=hash(12);
@@ -49,7 +49,7 @@ function environment({wallet:givenWallet,fetch=rpc(),isCurrent=()=>true}={}){
   const indexedDB=new IDBFactory(),storage={persist:async()=>true,persisted:async()=>true};let sends=0;
   const wallet=givenWallet??{manifest:{id:'meteor-wallet',features:{signAndSendTransaction:true}},async signAndSendTransaction(tx){
     sends++;assert.deepEqual(tx,directOutlayerTransaction());return {transaction:{hash:original},transaction_outcome:{id:original}}}};
-  const args={wallet,origin:'https://4173-example.e2b.app',isTopLevel:true,indexedDB,storage,fetch,isCurrent,now:()=>now};
+  const args={wallet,origin:DIRECT_PREVIEW_ORIGIN,isTopLevel:true,indexedDB,storage,fetch,isCurrent,now:()=>now};
   return {args,create:()=>createDirectOutlayerTest(args),sends:()=>sends};
 }
 
@@ -108,6 +108,16 @@ test('returned hash is retained even if the wallet session changes during approv
   while(!resolveSend)await new Promise(resolve=>setTimeout(resolve,1));active=false;
   resolveSend({transaction:{hash:original},transaction_outcome:{id:original}});await pending;active=true;
   const another=env.create();await another.review();assert.equal(another.getState().phase,'retained');assert.equal(another.getState().originalHash,original);assert.equal(calls,1);
+});
+
+test('older-original recovery can fall back to archival RPC without another wallet call',async()=>{
+  const base=rpc(),urls=[];
+  const fetch=async(url,options)=>{urls.push(url);const q=JSON.parse(options.body);
+    if(url==='https://rpc.testnet.near.org'&&q.method==='EXPERIMENTAL_tx_status')return new Response(JSON.stringify({jsonrpc:'2.0',id:q.id,error:{code:-32000}}));
+    return base(url,options);
+  };
+  const env=environment({fetch}),flow=env.create();await flow.review();await flow.send();await flow.check();
+  assert.equal(flow.getState().phase,'verified');assert.ok(urls.includes('https://archival-rpc.testnet.near.org'));assert.equal(env.sends(),1);
 });
 
 test('wrong wallets, accounts, or origins never produce a wallet request',async()=>{

@@ -10,7 +10,7 @@ import { createOwnerKeyFallbackFetch } from './read-only-owner-key-fallback.mjs'
 import { openNativeOracleDeviceKey } from './native-oracle-device-key.mjs';
 import { createNativeOracleSetupClient } from './native-oracle-setup-client.mjs';
 import { createNativeOracleOwnerFlow } from './native-oracle-owner-flow.mjs';
-import { createDirectOutlayerTest } from './direct-outlayer-testnet.mjs';
+import { createDirectOutlayerTest, directOutlayerOriginAllowed } from './direct-outlayer-testnet.mjs';
 
 // HTTP Date is coarse and can be cached. Only flag a large discrepancy when
 // the response provides a valid Date/Age and the request was reasonably fast.
@@ -36,6 +36,7 @@ export function walletOriginAllowed(location, isTopLevel, approvedOrigin = '') {
   if (hostname === 'github.io' || hostname.endsWith('.github.io')) return false;
   if (['localhost', '127.0.0.1', '[::1]'].includes(hostname)) return protocol === 'http:' || protocol === 'https:';
   if (protocol !== 'https:') return false;
+  if (directOutlayerOriginAllowed(origin, isTopLevel) && origin === `https://${hostname}`) return true;
   if (/^[a-z0-9-]+-\d+\.app\.github\.dev$/i.test(hostname)) return true;
   if (/^\d+-[a-z0-9-]+\.e2b\.app$/i.test(hostname)) return true;
   // For a real deployment, the owner can explicitly approve its exact dedicated
@@ -277,9 +278,8 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     }
     // This separate user-approved provider test is preview-only. It does not
     // enable the protected Bouncer flow or the public production site.
-    const directEnabled = isTop && win.location.protocol === 'https:' &&
-      /^4173-[a-z0-9-]+\.e2b\.app$/i.test(win.location.hostname) && win.location.origin === `https://${win.location.hostname}` &&
-      connected && connectedAccount === 'great_mujey.testnet' && selectedWallet?.manifest?.id === 'meteor-wallet' &&
+    const directEnabled = directOutlayerOriginAllowed(win.location.origin,isTop) && win.location.protocol === 'https:' &&
+      win.location.origin === `https://${win.location.hostname}` && connected && connectedAccount === 'great_mujey.testnet' && selectedWallet?.manifest?.id === 'meteor-wallet' &&
       selectedWallet?.manifest?.features?.signAndSendTransaction === true;
     if (directOpen) { directOpen.hidden = !directEnabled || Boolean(directFlow); directOpen.disabled = busyState; }
     if (directPanel) directPanel.hidden = !directEnabled || !directFlow;

@@ -10,7 +10,7 @@ const source={WasmUrl:{url:`https://wasmhub.testnet.fastfs.io/fastfs.testnet/${D
 const out={scope:'historical third-party RPC receipt, modified in memory as synthetic parser fixture; not owner payment or phone proof',
   historical_receipt_available:false,modified_fixture_verified:false,signed:false,sent:false};
 try {
-  const response=await fetch('https://rpc.testnet.near.org',{method:'POST',headers:{'content-type':'application/json'},redirect:'error',
+  const response=await fetch('https://archival-rpc.testnet.near.org',{method:'POST',headers:{'content-type':'application/json'},redirect:'error',
     signal:AbortSignal.timeout(30000),body:JSON.stringify({jsonrpc:'2.0',id:'historical-direct-probe',method:'EXPERIMENTAL_tx_status',
       params:{tx_hash:historical,sender_account_id:sender,wait_until:'FINAL'}})});
   if(!response.ok)throw Error('RPC unavailable');const text=await response.text();if(text.length>4000000)throw Error('oversized');

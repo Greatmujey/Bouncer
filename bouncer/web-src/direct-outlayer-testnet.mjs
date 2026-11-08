@@ -9,6 +9,10 @@
  */
 import {decodeNativeHash32} from './native-oracle-transaction.mjs';
 
+// This branch alias belongs to the existing Bouncer Vercel project. Keeping
+// the single attempt on one stable origin avoids creating independent local
+// one-shot records on multiple preview hosts.
+export const DIRECT_PREVIEW_ORIGIN='https://bouncer-git-arena-0e-9a17a9-abdullahimujeeb0505-stacks-projects.vercel.app';
 export const DIRECT_OWNER='great_mujey.testnet';
 export const DIRECT_PAYEE='outlayer.testnet';
 export const DIRECT_DEPOSIT='100000000000000000000000'; // 0.1 test NEAR, plus gas
@@ -17,7 +21,8 @@ export const DIRECT_PROJECT='zavodil2.testnet/price-oracle';
 export const DIRECT_UUID='p0000000000000007';
 export const DIRECT_VERSION='3585b3890f49748713b43ccb9b0ef4148f317d62f4d598db80fdaffc3f3185a0';
 export const DIRECT_INPUT='{"command":"fetch_external","token_id":"near","source":{"custom":{"url":"https://api.coinbase.com/v2/prices/NEAR-USD/spot","json_path":"data.amount","value_type":"number","method":"GET"}}}';
-const RPC='https://rpc.testnet.near.org',DB='bouncer-one-direct-outlayer-v1',STORE='claims',KEY='great_mujey.testnet:outlayer-direct-test-v1';
+const RPC='https://rpc.testnet.near.org',ARCHIVAL_RPC='https://archival-rpc.testnet.near.org',
+  DB='bouncer-one-direct-outlayer-v1',STORE='claims',KEY='great_mujey.testnet:outlayer-direct-test-v1';
 const LIMITS=Object.freeze({max_instructions:10000000000,max_memory_mb:256,max_execution_seconds:60});
 const SOURCE=Object.freeze({WasmUrl:Object.freeze({url:`https://wasmhub.testnet.fastfs.io/fastfs.testnet/${DIRECT_VERSION}.wasm`,hash:DIRECT_VERSION,build_target:'wasm32-wasip2'})});
 const fail=()=>new Error('Direct test unavailable or uncertain. Do not repeat a wallet transaction; reconcile the original.');
@@ -26,11 +31,7 @@ const stable=x=>Array.isArray(x)?x.map(stable):plain(x)?Object.fromEntries(Objec
 const equal=(a,b)=>JSON.stringify(stable(a))===JSON.stringify(stable(b));
 const hash=x=>{try{decodeNativeHash32(x);return true}catch{return false}};
 const amount=x=>typeof x==='string' && /^(?:0|[1-9][0-9]{0,38})$/.test(x)?BigInt(x):null;
-const safeOrigin=(origin,isTopLevel)=>{
-  try{const u=new URL(origin);return isTopLevel===true && u.protocol==='https:' && u.origin===origin &&
-    /^4173-[a-z0-9-]+\.e2b\.app$/i.test(u.hostname) && !u.username && !u.password}
-  catch{return false}
-};
+export const directOutlayerOriginAllowed=(origin,isTopLevel)=>isTopLevel===true && origin===DIRECT_PREVIEW_ORIGIN;
 export function directOutlayerArgs(){return {source:{Project:{project_id:DIRECT_PROJECT,version_key:DIRECT_VERSION}},resource_limits:{...LIMITS},
   input_data:DIRECT_INPUT,secrets_ref:null,response_format:'Json',payer_account_id:DIRECT_OWNER,params:null}}
 export function directOutlayerTransaction(){return {network:'testnet',signerId:DIRECT_OWNER,receiverId:DIRECT_PAYEE,
@@ -45,9 +46,10 @@ async function bounded(response,maximum){
   const bytes=new Uint8Array(total);let offset=0;for(const part of parts){bytes.set(part,offset);offset+=part.length}
   return JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes));
 }
-async function call(fetchImpl,method,params,maximum=1_000_000){
+async function call(fetchImpl,method,params,maximum=1_000_000,endpoint=RPC){
+  if(endpoint!==RPC && endpoint!==ARCHIVAL_RPC)throw fail();
   const id='bouncer-direct-outlayer-test';
-  const response=await fetchImpl(RPC,{method:'POST',mode:'cors',credentials:'omit',redirect:'error',referrerPolicy:'no-referrer',cache:'no-store',
+  const response=await fetchImpl(endpoint,{method:'POST',mode:'cors',credentials:'omit',redirect:'error',referrerPolicy:'no-referrer',cache:'no-store',
     headers:{'content-type':'application/json',accept:'application/json'},body:JSON.stringify({jsonrpc:'2.0',id,method,params}),
     signal:AbortSignal.timeout(25_000)});
   const body=await bounded(response,maximum);
@@ -180,7 +182,7 @@ export function verifyDirectOutlayerReceipt(original,result){
 
 /** Review, one wallet attempt, then read-only reconciliation. */
 export function createDirectOutlayerTest({wallet,origin,isTopLevel,indexedDB,storage,fetch:fetchImpl=globalThis.fetch,isCurrent,now=Date.now,onChange=()=>{}}={}){
-  if(!safeOrigin(origin,isTopLevel)||!wallet||wallet.manifest?.id!=='meteor-wallet'||wallet.manifest?.features?.signAndSendTransaction!==true||
+  if(!directOutlayerOriginAllowed(origin,isTopLevel)||!wallet||wallet.manifest?.id!=='meteor-wallet'||wallet.manifest?.features?.signAndSendTransaction!==true||
      typeof wallet.signAndSendTransaction!=='function'||!indexedDB||typeof storage?.persist!=='function'||typeof storage?.persisted!=='function'||
      typeof fetchImpl!=='function'||typeof isCurrent!=='function'||typeof now!=='function'||typeof onChange!=='function')throw fail();
   let state={phase:'initial',busy:false,message:'No wallet transaction has been requested by this screen.'},review=null,disposed=false;
@@ -194,9 +196,16 @@ export function createDirectOutlayerTest({wallet,origin,isTopLevel,indexedDB,sto
       else set({phase:'stopped',message:'The testnet check or phone storage is unavailable. No wallet transaction was requested by this action.'});
     }throw e}
     finally{if(!disposed&&isCurrent()===true)set({busy:false})}};
-  async function readReceipt(original){const status=await call(fetchImpl,'status',[]);if(status?.chain_id!=='testnet')throw fail();
-    const result=await call(fetchImpl,'EXPERIMENTAL_tx_status',{tx_hash:original,sender_account_id:DIRECT_OWNER,wait_until:'FINAL'},4_000_000);
-    return verifyDirectOutlayerReceipt(original,result)}
+  async function readReceipt(original){
+    // Public read-only fallback helps reconcile older originals after standard
+    // RPC nodes prune history. Failure or absence is never treated as non-send.
+    for(const endpoint of [RPC,ARCHIVAL_RPC])try{
+      const status=await call(fetchImpl,'status',[],1_000_000,endpoint);if(status?.chain_id!=='testnet')continue;
+      const result=await call(fetchImpl,'EXPERIMENTAL_tx_status',{tx_hash:original,sender_account_id:DIRECT_OWNER,wait_until:'FINAL'},4_000_000,endpoint);
+      return verifyDirectOutlayerReceipt(original,result);
+    }catch{ /* do not infer absence or retry the transaction */ }
+    throw fail();
+  }
   return Object.freeze({
     getState:()=>Object.freeze({...state}),destroy(){disposed=true},
     review:()=>guard(['initial','stopped'],async()=>{
