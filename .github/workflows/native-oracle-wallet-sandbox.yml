@@ -60,3 +60,17 @@ jobs:
           { echo '## Combined native setup research on isolated nearcore';
             echo 'Disposable sandbox only; marker ideas do not establish complete cross-device recovery and are not enabled on the phone.';
             echo '```json'; cat "$RUNNER_TEMP/native-atomic-result.json"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: Research competing marker-first reservations and original-hash recovery
+        env:
+          BOUNCER_SANDBOX_BIN: ${{ runner.temp }}/near-sandbox
+        run: |
+          set -euo pipefail
+          ulimit -Sn 65535
+          if ! node integration/native-oracle-marker-first-sandbox.mjs > "$RUNNER_TEMP/native-marker-result.json" 2> "$RUNNER_TEMP/native-marker-error.log"; then
+            python3 -c 'import os; s=open(os.environ["RUNNER_TEMP"]+"/native-marker-error.log").read()[-5000:]; print("::error title=Isolated marker-first research failed::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
+            exit 1
+          fi
+          python3 -c 'import os; s=open(os.environ["RUNNER_TEMP"]+"/native-marker-result.json").read(); print("::notice title=Isolated marker-first research::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
+          { echo '## Marker-first reservation research on isolated nearcore';
+            echo 'Fabricated provider and disposable keys only. This is not a phone flow, live purchase, complete recovery protocol or permission to retry an unknown transaction.';
+            echo '```json'; cat "$RUNNER_TEMP/native-marker-result.json"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
