@@ -34,11 +34,11 @@ let phase='ready',retained=null,claims=0,walletCalls=0,externalScripts=0;
 const report={trust_prompt:false,fragment_lost:false,reopened_same_link:false,csp_blocked:false,top_level:false,
   mocked_meteor_connected:false,read_only_review:false,mock_attempt_once:false,original_retained:false,no_real_transaction:true};
 const browser=await chromium.launch({executablePath,args:['--no-sandbox','--disable-gpu'],headless:true});
-let error;
+let error,stage='open',page;
 try{
   const context=await browser.newContext({viewport:{width:390,height:844},isMobile:true,hasTouch:true,reducedMotion:'reduce'});
   await context.addInitScript(()=>Object.defineProperty(navigator,'storage',{value:{persist:async()=>false,persisted:async()=>false},configurable:true}));
-  const page=await context.newPage();
+  page=await context.newPage();
   page.on('console',msg=>{if(msg.text()==='BOUNCER_SYNTHETIC_WALLET_CALLED')walletCalls++});
   const json=(route,value,extra={})=>route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(value),
     headers:{'access-control-allow-origin':origin,'access-control-allow-methods':'POST, OPTIONS','access-control-allow-headers':'content-type',...extra}});
@@ -97,24 +97,29 @@ try{
   });
   report.csp_blocked=!probe.inlineRan&&!probe.thirdPartyRan&&probe.policy.includes("script-src 'self'")&&externalScripts===0;
   assert.equal(report.top_level,true);assert.equal(report.csp_blocked,true);
+  stage='wallet initialization';
   await page.waitForFunction(()=>!document.querySelector('[data-wallet-id="meteor-wallet"]').disabled,null,{timeout:30000});
-  await page.locator('.top-connect').click();await page.locator('[data-wallet-id="meteor-wallet"]').click();
+  stage='synthetic Meteor connect';await page.locator('.top-connect').click();await page.locator('[data-wallet-id="meteor-wallet"]').click();
   await page.waitForFunction(()=>document.querySelector('#wallet-status').textContent.includes('great_mujey.testnet'),null,{timeout:30000});
   report.mocked_meteor_connected=true;assert.equal(claims,0);assert.equal(walletCalls,0);
-  await page.locator('.top-connect').click();await page.locator('#wallet-direct-outlayer-open').waitFor({state:'visible',timeout:15000});
+  stage='direct review';await page.locator('.top-connect').click();await page.locator('#wallet-direct-outlayer-open').waitFor({state:'visible',timeout:15000});
   await page.locator('#wallet-direct-outlayer-open').click();
   await page.locator('#wallet-direct-outlayer-send').waitFor({state:'visible',timeout:20000});
   const terms=await page.locator('#wallet-direct-outlayer-panel').innerText();
   assert.match(terms,/0\.1 test NEAR/);assert.match(terms,/bypasses Bouncer’s firewall/);
   report.read_only_review=claims===0&&walletCalls===0;assert.equal(report.read_only_review,true);
-  await page.locator('#wallet-direct-outlayer-send').click();
+  stage='synthetic one-shot';await page.locator('#wallet-direct-outlayer-send').click();
   await page.waitForFunction(()=>!document.querySelector('#wallet-direct-outlayer-hash').hidden,null,{timeout:20000});
   report.mock_attempt_once=claims===1&&walletCalls===1;report.original_retained=retained===original;
   assert.equal(report.mock_attempt_once,true);assert.equal(report.original_retained,true);
   assert.equal(await page.locator('#wallet-direct-outlayer-send').isVisible(),false);
   assert.match(await page.locator('#wallet-direct-outlayer-hash').innerText(),new RegExp(original));
   await context.close();
-}catch(e){error=String(e?.message||'browser check failed').slice(0,350);}
+}catch(e){
+  error=`${stage}: ${String(e?.message||'browser check failed').slice(0,250)}`;
+  try{report.wallet_status=(await page?.locator('#wallet-status').textContent({timeout:1000})||'').slice(0,180)}catch{}
+  try{report.direct_status=(await page?.locator('#wallet-direct-outlayer-status').textContent({timeout:1000})||'').slice(0,180)}catch{}
+}
 finally{await browser.close();}
 const encoded=JSON.stringify({...report,error}).replaceAll('%','%25').replaceAll('\n','%0A').replaceAll('\r','%0D');
 console.log(`::${error?'error':'notice'} title=Hosted synthetic mobile wallet::${encoded}`);

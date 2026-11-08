@@ -86,7 +86,7 @@ jobs:
       - name: Test the hosted candidate with synthetic wallet and journal
         working-directory: bouncer
         env:
-          CSB_CANDIDATE_ID: jt948x
+          CSB_CANDIDATE_ID: jh6y9p
           BOUNCER_PLAYWRIGHT_PATH: ${{ runner.temp }}/bouncer-browser/node_modules/playwright-core/index.mjs
         run: |
           npm ci --ignore-scripts --no-audit --no-fund
