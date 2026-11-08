@@ -7,6 +7,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {PUBLIC_WEB_FILES,validatePublicWeb} from './stage-public-web.mjs';
+process.on('uncaughtException',error=>{
+  const message=String(error?.message||'candidate check failed').slice(0,500).replaceAll('%','%25').replaceAll('\n','%0A').replaceAll('\r','%0D');
+  console.log(`::error title=Candidate check failed::${message}`);process.exitCode=1;
+});
 const root=fileURLToPath(new URL('../web/',import.meta.url));
 validatePublicWeb(root);
 const binary=new Set(['hero-orbit.jpg','manrope-latin.woff2','intear-wallet-source.zip']);
@@ -22,11 +26,15 @@ files['index.html'].content=replaceOnce(files['index.html'].content,
 files['index.html'].content=replaceOnce(files['index.html'].content,'href="./intear-wallet-source.zip"',
   `download="intear-wallet-source.zip" href="${data('intear-wallet-source.zip','application/zip')}"`);
 files['sandbox.config.json']={content:'{"template":"static"}',isBinary:false};
-const response=await fetch('https://codesandbox.io/api/v1/sandboxes/define?json=1',{
-  method:'POST',headers:{'content-type':'application/json',accept:'application/json'},body:JSON.stringify({files}),
-  signal:AbortSignal.timeout(60000)});
-if(!response.ok)throw Error(`Sandbox publish failed: HTTP ${response.status}`);
-const {sandbox_id:id}=await response.json();assert.match(id,/^[a-z0-9]{4,20}$/);
+let id=process.env.CSB_CANDIDATE_ID;
+if(!id){
+  const response=await fetch('https://codesandbox.io/api/v1/sandboxes/define?json=1',{
+    method:'POST',headers:{'content-type':'application/json',accept:'application/json'},body:JSON.stringify({files}),
+    signal:AbortSignal.timeout(60000)});
+  if(!response.ok)throw Error(`Sandbox publish failed: HTTP ${response.status}`);
+  ({sandbox_id:id}=await response.json());
+}
+assert.match(id,/^[a-z0-9]{4,20}$/);
 console.log(`::notice title=Public Bouncer candidate (no capability)::${id}`);
 if(process.env.BOUNCER_CSB_ID_FILE)fs.writeFileSync(process.env.BOUNCER_CSB_ID_FILE,id,{flag:'wx'});
 const metaResponse=await fetch(`https://codesandbox.io/api/v1/sandboxes/${id}`,{signal:AbortSignal.timeout(30000)});
@@ -39,13 +47,13 @@ for(const name of Object.keys(files).filter(x=>x!=='sandbox.config.json')){
   const asset=await fetch(url,{signal:AbortSignal.timeout(60000)});const actual=await asset.text(),expected=files[name].content;
   if(!asset.ok || actual!==expected){
     exact=false;let at=0;while(at<Math.min(actual.length,expected.length)&&actual[at]===expected[at])at++;
-    console.log(`Mismatch ${name}: HTTP ${asset.status}, expected ${expected.length}/${digest(expected)}, actual ${actual.length}/${digest(actual)}, first difference ${at}`);
-    if(name==='index.html')console.log(`Hosted HTML scripts: ${JSON.stringify([...actual.matchAll(/<script\b[^>]*>/gi)].map(m=>m[0]))}`);
+    console.log(`::warning title=Hosted asset mismatch::${name}: HTTP ${asset.status}, expected ${expected.length}/${digest(expected)}, actual ${actual.length}/${digest(actual)}, first difference ${at}`);
+    if(name==='index.html')console.log(`::notice title=Hosted HTML scripts::${JSON.stringify([...actual.matchAll(/<script\b[^>]*>/gi)].map(m=>m[0]))}`);
   }
 }
 const rpc=await fetch('https://rpc.testnet.near.org',{method:'POST',headers:{origin,'content-type':'application/json'},
   body:JSON.stringify({jsonrpc:'2.0',id:'candidate-cors-check',method:'status',params:[]}),signal:AbortSignal.timeout(20000)});
 const cors=rpc.headers.get('access-control-allow-origin'),json=await rpc.json();
 assert.ok(rpc.ok&&(cors==='*'||cors===origin)&&json?.result?.chain_id==='testnet');
-console.log(`Exact public website assets: ${exact}; read-only testnet RPC CORS: true. No wallet or transaction.`);
+console.log(`::notice title=Hosted candidate check::Exact public website assets: ${exact}; read-only testnet RPC CORS: true. No wallet or transaction.`);
 if(!exact)process.exitCode=1;
