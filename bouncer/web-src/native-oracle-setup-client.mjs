@@ -119,5 +119,27 @@ export function createNativeOracleSetupClient({wallet,accountId,ownerPublicKey,d
       const evidence=await sign({...context('verify_native_setup_completion'),identity},challenge);
       return pump(()=>request('completion',{identity,evidence}));
     },
+    /** Record the precomputed original once. Both signatures are off-chain
+     * owner authentication, not a transaction or proof of spending consent. */
+    async claimTrial({identity:rawIdentity,goal:rawGoal,trial:rawTrial,expectedWitnessHead}={}) {
+      session();const identity=structuredClone(rawIdentity),goal=structuredClone(rawGoal),trial=structuredClone(rawTrial);
+      if(identity?.owner!==OWNER || identity.owner_public_key!==ownerPublicKey)throw fail('NATIVE_SETUP_UNAVAILABLE');
+      const challenge=await request('trial-challenge',{identity,goal,trial,expectedWitnessHead});
+      const evidence=await sign({...context('claim_native_oracle_trial'),identity,trial,expectedWitnessHead},challenge);session();
+      const completionChallenge=await request('completion-challenge',{identity});
+      const completionEvidence=await sign({...context('verify_native_setup_completion'),identity},completionChallenge);session();
+      const result=await pump(()=>request('trial',{identity,goal,trial,expectedWitnessHead,evidence,completionEvidence}));session();
+      const fields=['status','owner','operation_id','review_sha256','goal_id','goal_sha256','agent_public_key','original_hash',
+        'witness_head','independently_witnessed','do_not_retry','execution_authorized','transaction_sent'];
+      if(!result || Object.keys(result).length!==fields.length || fields.some(k=>!Object.hasOwn(result,k)) ||
+          result.status!=='TRIAL_ORIGINAL_WITNESSED' || result.owner!==OWNER || result.operation_id!==identity.operation_id ||
+          result.review_sha256!==identity.review_sha256 || result.goal_id!==trial.goal_id || result.goal_sha256!==trial.goal_sha256 ||
+          result.agent_public_key!==trial.agent_public_key || result.original_hash!==trial.original_hash ||
+          !/^[a-f0-9]{40}$/.test(result.witness_head??'') || result.witness_head===expectedWitnessHead ||
+          result.independently_witnessed!==true || result.do_not_retry!==true || result.execution_authorized!==false || result.transaction_sent!==false) {
+        throw fail('NATIVE_SETUP_RESULT_UNKNOWN');
+      }
+      return result;
+    },
   });
 }

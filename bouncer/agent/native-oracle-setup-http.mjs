@@ -15,6 +15,8 @@ const specs=Object.freeze({
   'claim-challenge':['issueClaim',['identity','stageId']], claim:['claim',['identity','stageId','evidence']],
   'original-challenge':['issueOriginal',['identity','stageId','originalHash']], original:['recordOriginal',['identity','stageId','originalHash','evidence']],
   'completion-challenge':['issueCompletion',['identity']], completion:['verifyCompletion',['identity','evidence']],
+  'trial-challenge':['issueTrial',['identity','goal','trial','expectedWitnessHead']],
+  trial:['claimTrial',['identity','goal','trial','expectedWitnessHead','evidence','completionEvidence']],
   'inspect-challenge':['issueInspect',['ownerPublicKey']], inspect:['inspect',['ownerPublicKey','evidence']],
   'preview-original':['previewOriginal',['ownerPublicKey','stageId','originalHash','evidence']],
 });

@@ -12,6 +12,7 @@
 import { isDeepStrictEqual } from 'node:util';
 import { nativeSetupAuthAction } from '../web-src/native-oracle-setup-auth.mjs';
 import { verifyNativeOracleWalletReview, prepareNativeOracleWalletAttempt, inspectNativeOracleWalletAttempt } from './native-oracle-wallet-evidence.mjs';
+import { createAuthenticatedNativeOracleTrialClaim } from './authenticated-native-oracle-trial-claim.mjs';
 import { isTransactionHash } from '../shared/direct-payment-settlement.mjs';
 import { isTestnetAccount } from '../shared/account-id.mjs';
 import { V3_OWNER } from './v3-faucet-github-fence.mjs';
@@ -78,6 +79,13 @@ export function createAuthenticatedNativeOracleSetupService({ auth, fence, witne
     return {identity,state:snapshot.state,head:snapshot.head};
   }
   const action = (purpose, ownerPublicKey, extra={}) => nativeSetupAuthAction({ purpose, owner, ownerPublicKey, ...extra });
+  async function trialService(rawIdentity, rawGoal, rawTrial, getFreshCompletion) {
+    const {identity} = await witnessed(rawIdentity), goal = structuredClone(rawGoal), trial = structuredClone(rawTrial);
+    if (!trial || typeof auth.authenticate !== 'function' || typeof witness.claimTrial !== 'function') throw fail();
+    const review = await retained(identity.review_sha256,identity.owner_public_key,trial.agent_public_key);
+    return {identity,trial,service:createAuthenticatedNativeOracleTrialClaim({goal,review,identity,wasmBytes:wasm,
+      trustedReviewHash:identity.review_sha256,trustedOwnerPublicKey:identity.owner_public_key,auth,witness,otherWitness,getFreshCompletion})};
+  }
   return Object.freeze({
     async issueReservation({ taskId, ownerPublicKey, agentPublicKey } = {}) {
       const review = await retained(taskId,ownerPublicKey,agentPublicKey), snapshot = await witness.inspect(owner);
@@ -115,6 +123,22 @@ export function createAuthenticatedNativeOracleSetupService({ auth, fence, witne
     async verifyCompletion({ identity:raw, evidence } = {}) {
       const {identity,state} = await witnessed(raw); if (!['complete','trial_claimed'].includes(state.phase)) throw fail();
       return coordinator.verifyCompletion({identity,evidence});
+    },
+    /** Challenge binds the exact transaction hash, goal, key and current
+     * witness head. This only authenticates the owner, not spend consent. */
+    async issueTrial({ identity, goal, trial, expectedWitnessHead } = {}) {
+      const prepared=await trialService(identity,goal,trial,async()=>{throw fail()});
+      return prepared.service.issue({trial:prepared.trial,expectedWitnessHead});
+    },
+    /** Consume both one-use owner challenges, recheck setup, and retain the
+     * hash before returning any proof. No signer or broadcaster is exposed. */
+    async claimTrial({ identity, goal, trial, expectedWitnessHead, evidence, completionEvidence } = {}) {
+      const ownerIdentity=structuredClone(identity), completionAuth=structuredClone(completionEvidence), trialAuth=structuredClone(evidence);
+      const prepared=await trialService(ownerIdentity,goal,trial,()=>coordinator.verifyCompletion({identity:ownerIdentity,evidence:completionAuth}));
+      const saved=await prepared.service.claim({trial:prepared.trial,expectedWitnessHead,evidence:trialAuth});
+      return {status:'TRIAL_ORIGINAL_WITNESSED',owner:prepared.identity.owner,operation_id:prepared.identity.operation_id,
+        review_sha256:prepared.identity.review_sha256,...saved.state.trial,witness_head:saved.head,independently_witnessed:true,
+        do_not_retry:true,execution_authorized:false,transaction_sent:false};
     },
     async issueInspect({ ownerPublicKey } = {}) { return auth.issue(action('inspect_native_setup',ownerPublicKey)); },
     /** Verify an owner-supplied original hash before immutably recording it.

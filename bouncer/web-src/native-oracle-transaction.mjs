@@ -4,7 +4,8 @@
  * the completion snapshot. This module cannot sign or broadcast.
  */
 const ALPHABET='123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
-const GAS=300n*10n**12n,MAX_U64=(1n<<64n)-1n;
+export const NATIVE_ORACLE_TRIAL_GAS='300000000000000';
+const GAS=BigInt(NATIVE_ORACLE_TRIAL_GAS),MAX_U64=(1n<<64n)-1n;
 const text=new TextEncoder();
 const fail=()=>new Error('native oracle transaction unavailable; stop and reconcile');
 

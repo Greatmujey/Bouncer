@@ -8,7 +8,7 @@ import { createReadOnlyPreviewService } from '../agent/read-only-preview-service
 const wasm=fs.readFileSync(new URL('../../bouncer.wasm',import.meta.url)),SITE='https://phone.example.test';
 const HEADERS={origin:SITE,'x-bouncer-preview':'native-oracle-setup-v1','content-type':'application/json'};
 const methods=['issueReservation','reserve','issueClaim','claim','issueOriginal','recordOriginal','issueCompletion','verifyCompletion',
-  'issueInspect','inspect','previewOriginal'];
+  'issueTrial','claimTrial','issueInspect','inspect','previewOriginal'];
 const bridge={pending:()=>[],take:()=>null,submit:()=>false,takeForBrowser:()=>null,submitEncrypted:()=>false};
 function synthetic(calls){return Object.fromEntries(methods.map(method=>[method,async input=>{calls.push([method,input]);
   if(input.evidence==='bad'){const error=new Error('private detail');error.code='UNAUTHENTICATED';throw error}return {method,execution_authorized:false}}]));}
@@ -32,6 +32,11 @@ test('native setup is off by default and opt-in routes enforce exact same-origin
     assert.equal((await post(base,'broadcast',{payload:'not allowed'})).status,404);assert.equal(calls.length,0);
     const ok=await post(base,'claim',{identity:{},stageId:'x',evidence:'synthetic'});assert.equal(ok.status,200);
     assert.equal((await ok.json()).execution_authorized,false);assert.equal(calls[0][0],'claim');
+    const trial={identity:{},goal:{},trial:{},expectedWitnessHead:'synthetic',evidence:'synthetic',completionEvidence:'synthetic'};
+    assert.equal((await post(base,'trial',trial,{...HEADERS,origin:'https://evil.test'})).status,403);
+    assert.equal((await post(base,'trial',{...trial,unexpected:true})).status,400);
+    assert.equal((await post(base,'trial',{...trial,completionEvidence:undefined})).status,400);
+    assert.equal((await post(base,'trial',trial)).status,200);assert.equal(calls.at(-1)[0],'claimTrial');
     const bad=await post(base,'claim',{identity:{},stageId:'x',evidence:'bad'}),text=await bad.text();
     assert.equal(bad.status,409);assert.match(text,/UNAUTHENTICATED/);assert.doesNotMatch(text,/private detail|evidence/);
   });

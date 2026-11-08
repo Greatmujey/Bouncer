@@ -208,13 +208,14 @@ examples were **self-hosted development services**.
   variant retains the original hash at the separately anchored witness before
   requesting a signature, refreshes completion and requires a witness readback
   after the runner's local journal write and before its single send. The
-  completion supplier does not reserve chain state. The transport callback and
-  authenticated owner interface remain to be integrated.
+  completion supplier does not reserve chain state. A separate phone-side
+  composition now obtains an authenticated witness over the opt-in setup API
+  and signs locally; connecting that signature to this runner and an owner
+  interface is a separate step.
   Synthetic tests compare Borsh bytes against the NEAR SDK, verify signatures,
   race two tabs and independent journals, simulate unknown sends, and check a
-  fabricated result/refund recovered through the runner. A mobile-sized
-  Chromium test uses a real WebCrypto key but fabricated setup evidence and no
-  network send.
+  fabricated result/refund recovered through the runner. Mobile-sized Chromium
+  tests use a real WebCrypto key but fabricated setup evidence and no network send.
 - The local original record coordinates cooperating tabs **only in one browser
   profile**. Storage deletion, rollback, eviction, another device/origin or
   bypassing clients can defeat it; no local record does not prove a prior
@@ -262,16 +263,36 @@ single submission. Initial completion may be at most 120 seconds old in this
 path; the post-witness completion must still be within five seconds at signing.
 These checks cannot prevent chain state changing after the snapshot.
 
-For integration, create `createAuthenticatedNativeOracleTrialClaim` with the
-existing one-use PostgreSQL/NEP-413 authenticator, both anchored setup
-witnesses, the pinned review and a trusted fresh-completion supplier. Its
-challenge binds the owner, setup operation, goal fingerprint, agent key,
-original hash and expected witness head. It authenticates the current owner
-FullAccess key, consumes the challenge once, checks the other setup witness and
-current completion, then appends and rereads the original. Wrap it with
-`createOwnerAuthorizedNativeTrialWitness`; the provided evidence callback must
-securely carry the exact challenge to the owner wallet and its signature back.
-It never treats the off-chain signature as approval to spend.
+The opt-in setup service composes `createAuthenticatedNativeOracleTrialClaim`
+with the one-use PostgreSQL/NEP-413 authenticator, both anchored setup
+witnesses, the pinned review and a fresh-completion supplier. Its same-origin
+`POST /api/native-oracle-setup/trial-challenge` and
+`POST /api/native-oracle-setup/trial` routes bind the owner, setup operation,
+goal fingerprint, agent key, original hash and expected witness head. The trial
+request consumes separate owner-authentication challenges for the exact trial
+and the completion check, verifies the other setup witness and fresh state,
+then appends and rereads the original. An uncertain response is a stop for
+inspection, **not** a reason to submit another original. Neither route signs or
+sends a transaction, and an off-chain signature is not approval to spend.
+
+For the phone side, `createNativeOracleSetupClient().claimTrial()` performs
+those authenticated requests and verifies the response fields.
+`prepareWitnessedNativeOracleTrial()` in `web-src/witnessed-native-oracle-trial.mjs`
+constructs the fixed goal from the reviewed setup, exposes terms including the
+pinned project/input, maximum, rolling cap, gas limit/allowance, refund
+destination and limitations for display, and returns a one-shot `sign()` method. After the caller obtains
+explicit human consent, `sign({ownerConfirmed:true})` obtains fresh authenticated
+completion, computes the unsigned original locally, retains it through the
+witness, refreshes completion, and signs locally. It returns
+`SIGNED_NOT_BROADCAST` and does not submit anything. A lost claim response or
+any later failure consumes that preparation; inspect the authenticated witness
+and recover the retained original instead of trying a different transaction.
+A false consent flag cannot start the operation, but a true flag is only an
+integration guard, not evidence that a person actually saw or accepted the
+terms. The caller must display them and capture explicit approval before setting
+it. Treat the returned signed bytes as sensitive bearer material: do not log,
+commit, or expose them, and do not send them outside a guarded,
+original-hash-recoverable execution path.
 
 Create the guarded account with the same `goal`, `review`, `identity`, pinned
 WASM bytes, trusted review hash and owner public key used by setup, this
@@ -299,12 +320,15 @@ append-only Git history auditing. A local in-memory store or a public Git reposi
 not provide that guarantee; privileged or simultaneous rollback of all trusted
 systems, bypassing clients, compromised RPCs and same-origin XSS remain outside
 it. The tenth witness record changes the format: upgrade all witness readers and
-checkpoint monitors together; older readers reject it. The authenticated setup
-inspection returns witnessed records, including the trial hash. The claim
-service and adapter are not mounted as HTTP routes: the phone transport,
-separate checkpoint deployment and owner UI must still be integrated. No device
-key is restored by copying an original hash; a replacement device needs a
-separate owner-led key-revocation and installation procedure.
+checkpoint monitors together; older readers reject it. Authenticated setup
+inspection returns witnessed records, including the trial hash. The new routes
+are disabled unless the experimental setup service is explicitly configured;
+the owner UI, a guarded execution handoff and separate checkpoint deployment
+remain to be integrated. PostgreSQL and Chromium tests use synthetic owner,
+chain and witness data; their local Git/synthetic peer is not an independent
+checkpoint and they are not real-phone tests. No device key is restored by
+copying an original hash; a replacement device needs a separate owner-led
+key-revocation and installation procedure.
 
 ## Funding and refunds
 
