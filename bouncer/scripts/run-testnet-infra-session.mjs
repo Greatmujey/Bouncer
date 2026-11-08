@@ -15,7 +15,7 @@ import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
 import pg from 'pg';
-import { validateTestnetInfraConfig,testnetPoolerHosts,deriveTestnetCheckpointToken } from '../agent/testnet-infra-session-config.mjs';
+import { validateTestnetInfraConfig,testnetPoolerHosts,testnetPoolerSsl,deriveTestnetCheckpointToken } from '../agent/testnet-infra-session-config.mjs';
 import { auditFullGitWitnessHistory } from '../agent/full-git-witness-history-audit.mjs';
 import { initializePostgresWalletPromptAuth } from '../agent/postgres-wallet-prompt-auth.mjs';
 import { initializePostgresWalletPromptFence } from '../agent/postgres-wallet-prompt-fence.mjs';
@@ -39,7 +39,7 @@ function readProtected(file) {
 async function connect(config,password){
   const project=config.projects[ROLE], username=`bouncer_${ROLE}.${project.ref}`;
   for(const host of testnetPoolerHosts(ROLE,config)){
-    const pool=new pg.Pool({host,port:5432,database:'postgres',user:username,password,ssl:{rejectUnauthorized:true},
+    const pool=new pg.Pool({host,port:5432,database:'postgres',user:username,password,ssl:testnetPoolerSsl(),
       max:6,connectionTimeoutMillis:8_000,idleTimeoutMillis:20_000});
     try{
       const result=await pool.query('SELECT current_user AS role, current_database() AS database');

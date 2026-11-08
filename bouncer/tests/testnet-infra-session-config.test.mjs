@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
-import { validateTestnetInfraConfig,testnetPoolerHosts,deriveTestnetCheckpointToken } from '../agent/testnet-infra-session-config.mjs';
+import { validateTestnetInfraConfig,testnetPoolerHosts,testnetPoolerSsl,deriveTestnetCheckpointToken } from '../agent/testnet-infra-session-config.mjs';
 
 function pair(){const keys=crypto.generateKeyPairSync('x25519');return {privateKey:keys.privateKey.export({type:'pkcs8',format:'pem'}),
   publicKey:keys.publicKey.export({type:'spki',format:'der'}).toString('base64')}}
@@ -16,6 +16,15 @@ test('separate session keys derive one shared token without exposing either data
   assert.match(x,/^[A-Za-z0-9_-]{43}$/);assert.equal(x,y);
   assert.deepEqual(testnetPoolerHosts('coordinator',config),['aws-0-us-east-1.pooler.supabase.com','aws-1-us-east-1.pooler.supabase.com']);
   assert.notEqual(x,deriveTestnetCheckpointToken({role:'coordinator',config:{...config,run_id:'1235'},privateKey:a.privateKey}));
+});
+
+test('the Supabase pooler uses a pinned public CA with certificate and hostname verification enabled',()=>{
+  const options=testnetPoolerSsl();
+  assert.equal(options.rejectUnauthorized,true);
+  assert.equal(options.checkServerIdentity,undefined);
+  assert.ok(options.ca.length>1);
+  const root=new crypto.X509Certificate(options.ca.at(-1));
+  assert.equal(root.fingerprint256.replaceAll(':',''),'807025AD50D4ED219D2C9C7D299C004F824EB00CF7F65AFEF607D07B72E6CAFA');
 });
 
 test('configuration fails closed for wrong run, shared databases, extra fields and mismatched keys',()=>{

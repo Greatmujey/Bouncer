@@ -1,6 +1,8 @@
 /** Strict configuration for a single short-lived, infrastructure-only
  * testnet session. This module never connects to a wallet or sends a NEAR tx. */
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import tls from 'node:tls';
 
 const names = ['coordinator','checkpoint'];
 const record = value => value !== null && typeof value === 'object' && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
@@ -33,6 +35,17 @@ export function testnetPoolerHosts(role,config) {
   const region=c.projects[role].region;
   // These are fixed Supabase pooler domains, never a browser-provided URL.
   return [`aws-0-${region}.pooler.supabase.com`,`aws-1-${region}.pooler.supabase.com`];
+}
+/** The Supabase shared pooler's public root is not in Node's default trust
+ * store. Add its fingerprint-pinned public CA without disabling verification
+ * or hostname checks. This is used only for our fixed pooler hosts. */
+export function testnetPoolerSsl() {
+  const pem=fs.readFileSync(new URL('../infrastructure/supabase-root-2021.pem',import.meta.url),'utf8');
+  const root=new crypto.X509Certificate(pem);
+  const fingerprint='807025AD50D4ED219D2C9C7D299C004F824EB00CF7F65AFEF607D07B72E6CAFA';
+  if(root.fingerprint256.replaceAll(':','')!==fingerprint || root.ca!==true ||
+      Date.now()<Date.parse(root.validFrom) || Date.now()>=Date.parse(root.validTo)) throw Error('untrusted Supabase public root');
+  return {rejectUnauthorized:true,ca:[...tls.rootCertificates,pem]};
 }
 export function deriveTestnetCheckpointToken({role,config,privateKey}) {
   const c=validateTestnetInfraConfig(config,config?.run_id);
