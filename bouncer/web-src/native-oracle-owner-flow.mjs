@@ -68,8 +68,13 @@ export function createNativeOracleOwnerFlow({ client, deviceStore, ownerPublicKe
     set({ busy: true });
     try { const result = await work(); current(); return result; }
     catch (error) {
-      if (!disposed && isCurrent()) set({ phase: 'stopped', message: 'The setup needs recovery. Do not repeat a wallet transaction. Check the retained setup or original hash.',
-        error: error?.code || 'NATIVE_FLOW_STOPPED' });
+      if (!disposed && isCurrent()) {
+        if (error?.code === 'NATIVE_METEOR_DEPLOY_TOO_LARGE') {
+          set({ phase: 'blocked', error: error.code,
+            message: 'This vault upload is too large for the Meteor mobile bridge. Bouncer cannot distinguish Meteor mobile from web here, so this setup is paused. No transaction was requested by this action; original-hash recovery remains available.' });
+        } else set({ phase: 'stopped', message: 'The setup needs recovery. Do not repeat a wallet transaction. Check the retained setup or original hash.',
+          error: error?.code || 'NATIVE_FLOW_STOPPED' });
+      }
       throw error;
     } finally { if (!disposed && isCurrent()) set({ busy: false }); }
   };
@@ -197,6 +202,9 @@ export function createNativeOracleOwnerFlow({ client, deviceStore, ownerPublicKe
     async reserve({ ownerConfirmed } = {}) {
       if (ownerConfirmed !== true) throw fail('NATIVE_OWNER_CONFIRMATION_REQUIRED');
       return guarded(['review'], async () => {
+        // A deterministic compatibility rejection happens before the durable
+        // reservation starts; recovery of existing originals is unaffected.
+        if (typeof client.assertWalletDeployAvailable === 'function') client.assertWalletDeployAvailable();
         reservationStarted = true; // an uncertain response must never authorize another reservation
         const result = await wallet(() => client.reserve({ taskId, review }), 'Reserve this reviewed setup with an identity message. No transaction is requested.');
         if (result?.status !== 'RESERVED_NOT_CLAIMED' || !/^[a-f0-9]{40}$/.test(result.witness_head ?? '') || result.execution_authorized !== false ||

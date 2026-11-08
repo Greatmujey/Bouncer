@@ -9,9 +9,10 @@
  */
 import { signReviewedNativeSetupChallenge } from './native-oracle-setup-auth.mjs';
 import { prepareNativeOracleSetupWalletPrompt, prepareAtomicNativeOracleSetupWalletPrompt } from './native-oracle-setup-wallet-prompt.mjs';
+import { assertNativeOracleWalletDeployAvailable, NATIVE_ORACLE_V9_BYTES } from './native-oracle-wallet-compatibility.mjs';
 import { withReadOnlyRelay } from './buffer-readiness-preview.mjs';
 
-const OWNER='great_mujey.testnet', PREFIX='/api/native-oracle-setup/', BYTES=452_675;
+const OWNER='great_mujey.testnet', PREFIX='/api/native-oracle-setup/', BYTES=NATIVE_ORACLE_V9_BYTES;
 const HEADERS={'x-bouncer-preview':'native-oracle-setup-v1'};
 const STAGES=['create_keyless_native_vault','configure_native_oracle_policy','fund_native_vault','install_native_oracle_agent'];
 const ATOMIC_STAGES=['create_configure_fund_native_vault','install_native_oracle_agent'];
@@ -73,6 +74,8 @@ export function createNativeOracleSetupClient({wallet,accountId,ownerPublicKey,d
     }catch{return null}
   }
   return Object.freeze({
+    /** Does not assert compatibility for other wallets or smaller artifacts. */
+    assertWalletDeployAvailable() { session(); assertNativeOracleWalletDeployAvailable(wallet); },
     async enabled() { return Boolean(await config()); },
     /** Separately opt-in: enabling setup alone never enables submission. */
     async trialSubmissionEnabled() { return (await config())?.trial_submission_enabled===true; },
@@ -91,6 +94,9 @@ export function createNativeOracleSetupClient({wallet,accountId,ownerPublicKey,d
     },
     async reserve({taskId,review}={}) {
       session();if(!/^[a-f0-9]{64}$/.test(taskId??'') || taskId!==review?.review_sha256)throw fail('NATIVE_SETUP_UNAVAILABLE');
+      // Check before owner authentication or a durable reservation. A blocked
+      // route must not leave a claimed or apparently uncertain wallet prompt.
+      assertNativeOracleWalletDeployAvailable(wallet);
       await device(review);
       const agentPublicKey=review.agent_public_key;
       const challenge=await request('reserve-challenge',{taskId,ownerPublicKey,agentPublicKey});

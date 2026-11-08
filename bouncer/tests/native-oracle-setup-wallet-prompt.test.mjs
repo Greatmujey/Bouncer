@@ -65,6 +65,12 @@ test('all four exact reviewed stages convert into one explicit wallet call apiec
   }
 });
 
+test('four-stage Meteor vault deployment stops before any wallet call', async () => {
+  const f = fixture(0); f.wallet.manifest.id = 'meteor-wallet';
+  await assert.rejects(prepareNativeOracleSetupWalletPrompt(f.args), error => error.code === 'NATIVE_METEOR_DEPLOY_TOO_LARGE');
+  assert.equal(f.calls.length, 0);
+});
+
 test('canonical review survives JSONB object-key reordering without changing the digest', async () => {
   const f = fixture(2), review = reorder(f.review), identity = reorder(f.identity), deviceKey = reorder(f.deviceKey);
   const prompt = await prepareNativeOracleSetupWalletPrompt({ ...f.args, review, identity, deviceKey });

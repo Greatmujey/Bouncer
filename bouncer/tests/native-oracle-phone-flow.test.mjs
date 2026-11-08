@@ -79,6 +79,26 @@ async function ready(f,flow){
   assert.equal(flow.getState().phase,'verify_setup');await flow.verifySetup();assert.equal(flow.getState().phase,'setup_verified');
 }
 
+test('known Meteor size limit stops before a reservation and preserves read-only recovery',async()=>{
+  const f=await fixture();try{
+    let reserves=0;
+    f.client.inspect=async()=>({status:'NO_LOCAL_RECORD',execution_authorized:false});
+    f.client.createReview=async({agentPublicKey})=>{
+      assert.equal(agentPublicKey,f.review.agent_public_key);
+      return {task_id:f.review.review_sha256,review:f.review,signing_authorized:false,transaction_sent:false};
+    };
+    f.client.assertWalletDeployAvailable=()=>{throw Object.assign(new Error('NATIVE_METEOR_DEPLOY_TOO_LARGE'),{code:'NATIVE_METEOR_DEPLOY_TOO_LARGE'})};
+    f.client.reserve=async()=>{reserves++;throw Error('unexpected reservation')};
+    const flow=f.makeFlow();await flow.check();assert.equal(flow.getState().phase,'review');
+    await assert.rejects(flow.reserve({ownerConfirmed:true}),error=>error.code==='NATIVE_METEOR_DEPLOY_TOO_LARGE');
+    assert.equal(flow.getState().phase,'blocked');assert.match(flow.getState().message,/No transaction was requested/);
+    assert.equal(reserves,0);assert.deepEqual(f.counts(),{sends:0,claims:0});
+    // A read-only check is still permitted and does not treat a deterministic
+    // local compatibility stop as an uncertain reservation.
+    await flow.check();assert.equal(flow.getState().phase,'review');assert.equal(reserves,0);
+  }finally{f.device.close()}
+});
+
 test('owner reviews, explicitly authorizes one phone trial and verifies its synthetic receipt',async()=>{
   const f=await fixture();try{
     const flow=f.makeFlow();await ready(f,flow);assert.equal(flow.getState().trialAvailable,true);

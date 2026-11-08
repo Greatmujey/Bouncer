@@ -15,6 +15,7 @@
  * real-phone/wallet compatibility are complete and independently reviewed.
  */
 import { isTestnetAccount } from './wallet-utils.mjs';
+import { assertNativeOracleWalletDeployAvailable, NATIVE_ORACLE_V9_BYTES } from './native-oracle-wallet-compatibility.mjs';
 
 const STAGES = ['create_keyless_native_vault', 'configure_native_oracle_policy', 'fund_native_vault', 'install_native_oracle_agent'];
 // Selected only for an explicitly enabled, verified atomic review. This list
@@ -22,7 +23,7 @@ const STAGES = ['create_keyless_native_vault', 'configure_native_oracle_policy',
 const ATOMIC_STAGES = ['create_configure_fund_native_vault', 'install_native_oracle_agent'];
 const HEX64 = /^[a-f0-9]{64}$/, HEX32 = /^[a-f0-9]{32}$/, GIT = /^[a-f0-9]{40}$/;
 const B58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
-const WASM_BYTES = 452675, WASM_SHA256 = '835f0baa51d08ddf3af6812df0caefb93283480735a63e3d382073e04fbaf8ee';
+const WASM_BYTES = NATIVE_ORACLE_V9_BYTES, WASM_SHA256 = '835f0baa51d08ddf3af6812df0caefb93283480735a63e3d382073e04fbaf8ee';
 const WASM_HASH = '9qpU6d6MHZZXC2ivtQt3k3scGkiHLkkMnaTAiZWbaL6y';
 const STORAGE = '5400000000000000000000000', MAX_TRIAL = 10n ** 23n, MAX_ALLOWANCE = 10n ** 24n;
 const GAS = '30000000000000', METHOD = 'execute_outlayer_native_project', PAYEE = 'outlayer.testnet';
@@ -255,6 +256,9 @@ async function prepareWalletPrompt({ wallet, review: rawReview, identity: rawIde
   const review = structuredClone(rawReview), identity = structuredClone(rawIdentity), device = structuredClone(rawDevice);
   const index = (atomic ? ATOMIC_STAGES : STAGES).indexOf(stageId);
   if (index < 0) throw fail();
+  // Stop before a one-shot claim or wallet invocation. The manifest does not
+  // distinguish Meteor Mobile from Meteor Web, so both are held here.
+  if (index === 0) assertNativeOracleWalletDeployAvailable(wallet);
   const verify = atomic ? verifyAtomicNativeOracleSetupReview : verifyNativeOracleSetupReview;
   const canonical = await verify({ review, identity, deviceKey: device, origin, crypto });
   let code = null;

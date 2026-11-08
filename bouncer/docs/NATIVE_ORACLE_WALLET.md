@@ -9,6 +9,23 @@ used a different testnet owner; its single-source result is not a price accuracy
 market-freshness, TEE-attestation or SLA guarantee. The three later resource
 examples were **self-hosted development services**.
 
+## Known Meteor mobile deployment blocker
+
+The pinned [Meteor executor](https://github.com/Meteor-Wallet/meteor_wallet_sdk/blob/53a8b39d1aaaf067502c11e49ebb050c75df019e/packages/meteor-sdk-v1/src/MeteorConnect/target_clients/mobile_bridge/sdkActionToMobileBridge.ts) encodes a deployment as base64. Its bundled
+mobile-session validator rejects action requests over 400,000 bytes; the pinned
+V9 contract alone is 603,568 base64 bytes, before the envelope or other actions.
+Optimizing this existing binary with Binaryen 119 `-Oz` still produced 380,509
+WASM bytes (507,348 base64 bytes), too large for that bridge. This is a source
+and local size check, not a test on the user's phone or proof that every Meteor
+web/extension transport has the same limit.
+
+The current phone setup conservatively blocks a **new** Meteor reservation and
+first-stage prompt because its manifest does not distinguish mobile from web.
+Read-only original-hash recovery and other wallets are not blocked by this
+check; no other wallet is thereby declared compatible. The existing two- and
+four-stage setups remain default-off. A smaller/chunked deployment path needs
+its own receipt/recovery review and real-device test before it can be enabled.
+
 ## What is implemented
 
 - An explicitly opt-in, two-approval variant combines creation, configuration

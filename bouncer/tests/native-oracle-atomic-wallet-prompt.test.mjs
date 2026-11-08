@@ -63,6 +63,18 @@ test('atomic stages map exactly to connector actions and require two separate fe
   }
 });
 
+test('Meteor oversized deploy is blocked before a claim or wallet call; later setup preparation is unchanged', async () => {
+  const first = fixture(0);
+  first.wallet.manifest.id = 'meteor-wallet';
+  await assert.rejects(prepareAtomicNativeOracleSetupWalletPrompt(first.args), error => error.code === 'NATIVE_METEOR_DEPLOY_TOO_LARGE');
+  assert.equal(first.calls.length, 0);
+  const install = fixture(1);
+  install.wallet.manifest.id = 'meteor-wallet';
+  const prompt = await prepareAtomicNativeOracleSetupWalletPrompt(install.args);
+  assert.equal(install.calls.length, 0);
+  assert.equal(prompt.stage_id, 'install_native_oracle_agent');
+});
+
 test('atomic retained review survives key reordering but is not accepted by the four-stage adapter', async () => {
   const f = fixture(0), review = reorder(f.review), identity = reorder(f.identity), deviceKey = reorder(f.deviceKey);
   const recovered = await verifyAtomicNativeOracleRetainedReview({ review, identity, crypto: webcrypto });
