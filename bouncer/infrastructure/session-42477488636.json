@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "run_id": "42477488636",
+  "mode": "provision-only",
+  "projects": {
+    "coordinator": {
+      "ref": "itzqbvbpmbnimvpyaige",
+      "region": "us-east-1"
+    },
+    "checkpoint": {
+      "ref": "jiouaqwxkvlkmvyumzwc",
+      "region": "us-west-1"
+    }
+  },
+  "session_public_keys": {
+    "coordinator": "MCowBQYDK2VuAyEAXO9qbV94UvGWsRR81fIm0x0x477c28s+m+eGPM432iI=",
+    "checkpoint": "MCowBQYDK2VuAyEAnuIiTNPsOm+PHpwGeJL3UrfRL7xi/veJ43qrSXhE9X8="
+  }
+}
