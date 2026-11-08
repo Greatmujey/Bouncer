@@ -11,7 +11,7 @@ import { buildResearchPhonePlan, verifyResearchPhoneReview, researchPhoneBatchCo
 
 const wasm = fs.readFileSync(new URL('../../bouncer.wasm', import.meta.url));
 const loader = fs.readFileSync(new URL('../contracts/native-phone-loader/fixtures/native-phone-loader-research.wasm', import.meta.url));
-const compressed = zlib.deflateRawSync(wasm, {level:9});
+const compressed = fs.readFileSync(new URL('../contracts/native-phone-loader/fixtures/native-v9.deflate', import.meta.url));
 const ownerKey = String(nearApi.KeyPair.fromRandom('ed25519').getPublicKey());
 const agentKey = String(nearApi.KeyPair.fromRandom('ed25519').getPublicKey());
 const hash = n => nearApi.utils.serialize.base_encode(Buffer.alloc(32,n));
@@ -84,7 +84,7 @@ test('rejects corrupt, substituted, overlong or trailing artifact data and inval
     {compressedBytes:Buffer.concat([compressed,Buffer.from([1,2,3])])},{compressedBytes:Buffer.alloc(200_001)},
     {trustedOwnerPublicKey:agentKey},{trustedOwnerPublicKey:null}]) assert.throws(()=>buildResearchPhonePlan({...inputs,...patch}));
   const alternate=zlib.deflateRawSync(wasm,{level:8});
-  assert.equal(buildResearchPhonePlan({...inputs,compressedBytes:alternate}).review.compressed.sha256,crypto.createHash('sha256').update(alternate).digest('hex'));
+  assert.throws(()=>buildResearchPhonePlan({...inputs,compressedBytes:alternate}));
 });
 
 test('recognizes all three originals and complete linked self-upgrade without granting authority',()=>{

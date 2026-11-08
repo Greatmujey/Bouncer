@@ -16,7 +16,8 @@ import nearApi from 'near-api-js';
 import { act_impl_near, validateKnownFirstPartyActionRequest, MAX_ACTION_REQUEST_CANONICAL_JSON_LENGTH } from '@meteorwallet/connect-shared/internal';
 import { NATIVE_ORACLE_DEFAULT_GAS_ALLOWANCE,
   NATIVE_ORACLE_V9_CODE_HASH, NATIVE_ORACLE_V9_SHA256 } from '../agent/native-oracle-wallet-plan.mjs';
-import { buildResearchPhonePlan, prepareResearchPhoneAttempt, inspectResearchPhoneAttempt } from '../agent/native-phone-loader-research.mjs';
+import { buildResearchPhonePlan, prepareResearchPhoneAttempt, inspectResearchPhoneAttempt,
+  NATIVE_PHONE_COMPRESSED_BYTES, NATIVE_PHONE_COMPRESSED_SHA256, NATIVE_PHONE_MAX_COMPRESSED_BYTES } from '../agent/native-phone-loader-research.mjs';
 import { SANDBOX_CHAIN_ID, SANDBOX_SHA256, readVerifiedFile, assertSandboxStatus,
   requireFinalSuccess } from './v11-sandbox-support.mjs';
 import { withSandboxOnlyFetch } from './v11-sandbox-setup-rpc.mjs';
@@ -68,8 +69,9 @@ async function main() {
   if (!stat.isFile() || stat.size < 8 || stat.size > 200_000) throw Error('unexpected research loader size');
   const loader = fs.readFileSync(loaderPath);
   assert.deepEqual([...loader.subarray(0,8)], [0,97,115,109,1,0,0,0]);
-  const compressed = zlib.deflateRawSync(code, {level:9});
-  assert.ok(compressed.length < 200_000);
+  const compressed = readVerifiedFile(new URL('../contracts/native-phone-loader/fixtures/native-v9.deflate',import.meta.url).pathname,
+    NATIVE_PHONE_COMPRESSED_SHA256,{maxBytes:NATIVE_PHONE_MAX_COMPRESSED_BYTES});
+  assert.equal(compressed.length,NATIVE_PHONE_COMPRESSED_BYTES);
   assert.deepEqual(zlib.inflateRawSync(compressed), code);
   const request = syntheticMeteorRequest(loader, compressed);
   const requestBytes = Buffer.byteLength(JSON.stringify(request));

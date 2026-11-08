@@ -24,6 +24,8 @@ import { graph, rootOf, statusKind, onlyProtocolGasRefund, protocolGasRefund } f
 
 export const NATIVE_PHONE_LOADER_BYTES = 28_950;
 export const NATIVE_PHONE_LOADER_SHA256 = '28b358e4ee4e6c7327dc17c63934a63e4cdad5d424dbfe67a80381cf1027bb7b';
+export const NATIVE_PHONE_COMPRESSED_BYTES = 135_476;
+export const NATIVE_PHONE_COMPRESSED_SHA256 = '4fdc4feffcb7b690d3f6f4dec6f62af12b37cebdb3f1e78bc9486e366c81ec21';
 export const NATIVE_PHONE_MAX_COMPRESSED_BYTES = 200_000;
 const CREATE = 'create_compressed_native_vault', CONFIGURE = 'configure_fund_native_oracle', INSTALL = 'install_native_oracle_agent';
 const STAGES = [CREATE, CONFIGURE, INSTALL], COUNTS = [5, 5, 1], TGAS = 10n ** 12n;
@@ -45,7 +47,8 @@ function checkedArtifacts(loaderBytes, compressedBytes, wasmBytes) {
   }
   const loader = Buffer.from(loaderBytes), compressed = Buffer.from(compressedBytes), wasm = Buffer.from(wasmBytes);
   if (loader.length !== NATIVE_PHONE_LOADER_BYTES || sha(loader) !== NATIVE_PHONE_LOADER_SHA256 ||
-      compressed.length < 1 || compressed.length > NATIVE_PHONE_MAX_COMPRESSED_BYTES ||
+      compressed.length !== NATIVE_PHONE_COMPRESSED_BYTES || compressed.length > NATIVE_PHONE_MAX_COMPRESSED_BYTES ||
+      sha(compressed) !== NATIVE_PHONE_COMPRESSED_SHA256 ||
       wasm.length !== NATIVE_ORACLE_V9_BYTES || sha(wasm) !== NATIVE_ORACLE_V9_SHA256) {
     throw new Error('research artifacts do not match pinned loader, bounds and V9');
   }

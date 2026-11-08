@@ -21,6 +21,13 @@ const STAGES = ['create_keyless_native_vault', 'configure_native_oracle_policy',
 // Selected only for an explicitly enabled, verified atomic review. This list
 // does not itself enable a wallet prompt or provide an independent fence.
 const ATOMIC_STAGES = ['create_configure_fund_native_vault', 'install_native_oracle_agent'];
+// Research-only until a separately configured backend and complete recovery
+// are ready. This declaration alone does not enable a wallet prompt.
+const COMPRESSED_STAGES = ['create_compressed_native_vault', 'configure_fund_native_oracle', 'install_native_oracle_agent'];
+const COMPRESSED_FORMAT = 'bouncer-research-compressed-native-oracle-wallet-review-v1';
+const LOADER_BYTES = 28_950, LOADER_SHA = '28b358e4ee4e6c7327dc17c63934a63e4cdad5d424dbfe67a80381cf1027bb7b';
+const LOADER_HASH = '3jsvZj8cf2gPaAdregpu2tob8kMYCrMhe996Wb3Pss9t';
+const DEFLATE_BYTES = 135_476, DEFLATE_SHA = '4fdc4feffcb7b690d3f6f4dec6f62af12b37cebdb3f1e78bc9486e366c81ec21';
 const HEX64 = /^[a-f0-9]{64}$/, HEX32 = /^[a-f0-9]{32}$/, GIT = /^[a-f0-9]{40}$/;
 const B58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
 const WASM_BYTES = NATIVE_ORACLE_V9_BYTES, WASM_SHA256 = '835f0baa51d08ddf3af6812df0caefb93283480735a63e3d382073e04fbaf8ee';
@@ -39,6 +46,19 @@ const ATOMIC_TOP_FIELDS = ['format','status','network','owner','owner_public_key
   'per_tx_cap_yocto','daily_cap_yocto','vault_deposit_yocto','agent_gas_allowance_yocto','vault_storage_funding_yocto','base_review_sha256',
   'stages','limitations','signing_authorized','transaction_sent','agent_key_installed','independent_delivery_verified','review_sha256'];
 const ATOMIC_STAGE_FIELDS = ['id','signer_id','receiver_id','actions','action_commitment_sha256'];
+const COMPRESSED_TOP_FIELDS = ['format','status','network','owner','owner_public_key','vault','policy_id','agent_public_key','asset','payee','project',
+  'per_tx_cap_yocto','daily_cap_yocto','vault_deposit_yocto','agent_gas_allowance_yocto','vault_storage_funding_yocto',
+  'artifact','loader','compressed','base_review_sha256','stages','limitations','signing_authorized','transaction_sent',
+  'agent_key_installed','independent_delivery_verified','review_sha256'];
+const COMPRESSED_LIMITATIONS = Object.freeze([
+  'Research only. This review is not an owner approval, a wallet prompt, a purchase, or a provider receipt.',
+  'The first transaction self-upgrades asynchronously; failure can leave the loader and storage funds on the child.',
+  'Never retry an unknown original. Any owner refund requires separately verified final state and explicit authorization.',
+  'Each stage needs an independently retained one-shot claim, original hash, complete receipt graph and fresh FINAL state before the next prompt.',
+  'Vault storage may be locked; the native deposit and gas allowance are additional and testnet-only.',
+  'The agent key is restricted to the native OutLayer method and cannot attach the 1 yocto required for owner policy changes.',
+  'Provider delivery, current code and policy, real-phone behavior and the independent prompt fence are not established by this review.',
+]);
 const ATOMIC_LIMITATIONS = Object.freeze([
   'Offline testnet review only: it does not establish wallet control, user approval, a live purchase or provider delivery.',
   'The first wallet transaction creates, configures and funds the vault; the second separately installs the one-method agent key. Wallet support for the nine actions is unverified.',
@@ -172,6 +192,52 @@ function canonicalAtomicReview(review, identity) {
     transaction_sent: false, agent_key_installed: false, independent_delivery_verified: false };
 }
 
+function canonicalCompressedReview(review, identity) {
+  if (!exact(identity, ['owner','owner_public_key','operation_id','review_sha256','stages']) ||
+      !exact(review, COMPRESSED_TOP_FIELDS) || review.format !== COMPRESSED_FORMAT || review.status !== 'UNSIGNED_OFFLINE_PLAN_ONLY' ||
+      review.network !== 'testnet' || !directChild(review.vault, review.owner) || review.owner !== identity.owner ||
+      review.owner_public_key !== identity.owner_public_key || !publicKey(identity.owner_public_key) || !publicKey(review.agent_public_key) ||
+      review.agent_public_key === identity.owner_public_key || typeof review.policy_id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(review.policy_id) ||
+      review.asset !== 'native' || review.payee !== PAYEE || !same(review.project, PROJECT) ||
+      !positive(review.per_tx_cap_yocto, MAX_TRIAL) || !positive(review.daily_cap_yocto, MAX_TRIAL) ||
+      !positive(review.vault_deposit_yocto, MAX_TRIAL) || !positive(review.agent_gas_allowance_yocto, MAX_ALLOWANCE) ||
+      BigInt(review.per_tx_cap_yocto) > BigInt(review.daily_cap_yocto) || BigInt(review.per_tx_cap_yocto) > BigInt(review.vault_deposit_yocto) ||
+      BigInt(review.vault_deposit_yocto) > BigInt(review.daily_cap_yocto) || review.vault_storage_funding_yocto !== STORAGE ||
+      !same(review.artifact,{bytes:WASM_BYTES,sha256:WASM_SHA256,near_code_hash:WASM_HASH}) ||
+      !same(review.loader,{bytes:LOADER_BYTES,sha256:LOADER_SHA,near_code_hash:LOADER_HASH}) ||
+      !same(review.compressed,{bytes:DEFLATE_BYTES,sha256:DEFLATE_SHA,encoding:'raw-deflate'}) ||
+      review.signing_authorized !== false || review.transaction_sent !== false || review.agent_key_installed !== false ||
+      review.independent_delivery_verified !== false || !HEX64.test(review.base_review_sha256 ?? '') ||
+      !HEX64.test(review.review_sha256 ?? '') || identity.review_sha256 !== review.review_sha256 || !HEX32.test(identity.operation_id ?? '') ||
+      !Array.isArray(review.stages) || review.stages.length !== 3 || !Array.isArray(identity.stages) || identity.stages.length !== 3 ||
+      !same(review.limitations,COMPRESSED_LIMITATIONS)) throw fail();
+  const pieces = expectedActions(review);
+  const compressedCall = {type:'function_call',method:'loader_deploy',args_encoding:'raw-deflate',args_bytes:DEFLATE_BYTES,
+    args_sha256:DEFLATE_SHA,gas:'240000000000000',deposit_yocto:'1',
+    self_deployment:{artifact_sha256:WASM_SHA256,near_code_hash:WASM_HASH,method:'new',args:{owner:review.owner},gas:GAS,deposit_yocto:'0'}};
+  const expected = [[{type:'create_account'},{type:'transfer',deposit_yocto:STORAGE},
+    {type:'deploy_contract',byte_length:LOADER_BYTES,sha256:LOADER_SHA,near_code_hash:LOADER_HASH},
+    {type:'function_call',method:'loader_init',args:{},gas:'20000000000000',deposit_yocto:'1'},compressedCall],
+    [...pieces[1],...pieces[2]],pieces[3]];
+  const stages=review.stages.map((stage,i)=>{
+    if (!exact(stage,ATOMIC_STAGE_FIELDS) || stage.id!==COMPRESSED_STAGES[i] || stage.signer_id!==review.owner ||
+        stage.receiver_id!==(i===2?review.owner:review.vault) || !same(stage.actions,expected[i]) ||
+        !HEX64.test(stage.action_commitment_sha256??'') || !exact(identity.stages[i],['stage_id','action_commitment_sha256']) ||
+        identity.stages[i].stage_id!==stage.id || identity.stages[i].action_commitment_sha256!==stage.action_commitment_sha256) throw fail();
+    return {id:stage.id,signer_id:stage.signer_id,receiver_id:stage.receiver_id,actions:expected[i],
+      action_commitment_sha256:stage.action_commitment_sha256};
+  });
+  return {format:review.format,status:review.status,network:review.network,owner:review.owner,owner_public_key:review.owner_public_key,
+    vault:review.vault,policy_id:review.policy_id,agent_public_key:review.agent_public_key,asset:review.asset,payee:review.payee,
+    project:{...PROJECT},per_tx_cap_yocto:review.per_tx_cap_yocto,daily_cap_yocto:review.daily_cap_yocto,
+    vault_deposit_yocto:review.vault_deposit_yocto,agent_gas_allowance_yocto:review.agent_gas_allowance_yocto,
+    vault_storage_funding_yocto:STORAGE,artifact:{bytes:WASM_BYTES,sha256:WASM_SHA256,near_code_hash:WASM_HASH},
+    loader:{bytes:LOADER_BYTES,sha256:LOADER_SHA,near_code_hash:LOADER_HASH},
+    compressed:{bytes:DEFLATE_BYTES,sha256:DEFLATE_SHA,encoding:'raw-deflate'},base_review_sha256:review.base_review_sha256,
+    stages,limitations:[...COMPRESSED_LIMITATIONS],signing_authorized:false,transaction_sent:false,
+    agent_key_installed:false,independent_delivery_verified:false};
+}
+
 /** Reconstruct public terms for read-only original recovery. This does not
  * establish custody, consent, chain state or authority to sign or submit. */
 export async function verifyNativeOracleRetainedReview({ review: rawReview, identity: rawIdentity, crypto = globalThis.crypto } = {}) {
@@ -188,6 +254,13 @@ export async function verifyAtomicNativeOracleRetainedReview({ review: rawReview
   const review = structuredClone(rawReview), identity = structuredClone(rawIdentity);
   const canonical = canonicalAtomicReview(review, identity);
   if (await digest(crypto, bytes(JSON.stringify(canonical))) !== review.review_sha256) throw fail();
+  return canonical;
+}
+/** Research-only compressed-review validation; this does not enable a prompt. */
+export async function verifyCompressedNativeOracleRetainedReview({ review: rawReview, identity: rawIdentity, crypto = globalThis.crypto } = {}) {
+  if (!crypto?.subtle) throw fail();
+  const review=structuredClone(rawReview),identity=structuredClone(rawIdentity),canonical=canonicalCompressedReview(review,identity);
+  if (await digest(crypto,bytes(JSON.stringify(canonical)))!==review.review_sha256) throw fail();
   return canonical;
 }
 
@@ -208,25 +281,31 @@ export async function verifyNativeOracleSetupReview({ review, identity, deviceKe
 export async function verifyAtomicNativeOracleSetupReview({ review, identity, deviceKey, origin, crypto = globalThis.crypto } = {}) {
   return assertLocalDevice(await verifyAtomicNativeOracleRetainedReview({ review, identity, crypto }), deviceKey, origin);
 }
+/** Compressed research equivalent; still requires local, non-extractable key. */
+export async function verifyCompressedNativeOracleSetupReview({ review, identity, deviceKey, origin, crypto = globalThis.crypto } = {}) {
+  return assertLocalDevice(await verifyCompressedNativeOracleRetainedReview({review,identity,crypto}),deviceKey,origin);
+}
 /** Choose by the retained format, never by a caller-supplied stage count. */
 export async function verifySupportedNativeOracleRetainedReview(args = {}) {
   if (args.review?.format === 'bouncer-native-oracle-wallet-review-v1') return verifyNativeOracleRetainedReview(args);
   if (args.review?.format === 'bouncer-atomic-native-oracle-wallet-review-v1') return verifyAtomicNativeOracleRetainedReview(args);
+  if (args.review?.format === COMPRESSED_FORMAT) return verifyCompressedNativeOracleRetainedReview(args);
   throw fail();
 }
 export async function verifySupportedNativeOracleSetupReview(args = {}) {
   if (args.review?.format === 'bouncer-native-oracle-wallet-review-v1') return verifyNativeOracleSetupReview(args);
   if (args.review?.format === 'bouncer-atomic-native-oracle-wallet-review-v1') return verifyAtomicNativeOracleSetupReview(args);
+  if (args.review?.format === COMPRESSED_FORMAT) return verifyCompressedNativeOracleSetupReview(args);
   throw fail();
 }
 
-function walletActions(stage, code) {
+function walletActions(stage, code, compressed) {
   return stage.actions.map(a => {
     if (a.type === 'create_account') return { type: 'CreateAccount' };
     if (a.type === 'transfer') return { type: 'Transfer', params: { deposit: a.deposit_yocto } };
     if (a.type === 'deploy_contract') return { type: 'DeployContract', params: { code: new Uint8Array(code) } };
     if (a.type === 'function_call') return { type: 'FunctionCall', params: { methodName: a.method,
-      args: structuredClone(a.args), gas: a.gas, deposit: a.deposit_yocto } };
+      args: a.args_encoding === 'raw-deflate' ? new Uint8Array(compressed) : structuredClone(a.args), gas: a.gas, deposit: a.deposit_yocto } };
     if (a.type === 'add_function_call_key') return { type: 'AddKey', params: { publicKey: a.public_key,
       accessKey: { nonce: 0, permission: { receiverId: a.receiver_id, allowance: a.allowance_yocto, methodNames: [...a.method_names] } } } };
     throw fail();
@@ -236,15 +315,20 @@ function walletActions(stage, code) {
 /** Verify the entire review and (for creation) pinned WASM before a claim is
  * consumed. `deviceKey` is public metadata, never a private key. */
 export async function prepareNativeOracleSetupWalletPrompt(args = {}) {
-  return prepareWalletPrompt(args, false);
+  return prepareWalletPrompt(args, 'standard');
 }
-/** Experimental two-stage variant, deliberately not selected by the existing
- * owner UI. Never invoke without a separately anchored one-shot claim. */
+/** Experimental two-stage variant. Never invoke without a separately anchored one-shot claim. */
 export async function prepareAtomicNativeOracleSetupWalletPrompt(args = {}) {
-  return prepareWalletPrompt(args, true);
+  return prepareWalletPrompt(args, 'atomic');
+}
+/** Research-only compressed variant. Not enabled by this export; the caller
+ * still needs a separately anchored one-shot claim and real owner approval. */
+export async function prepareCompressedNativeOracleSetupWalletPrompt(args = {}) {
+  return prepareWalletPrompt(args, 'compressed');
 }
 async function prepareWalletPrompt({ wallet, review: rawReview, identity: rawIdentity, deviceKey: rawDevice,
-  stageId, wasmBytes, location = globalThis.location, isTopLevel, crypto = globalThis.crypto, now = Date.now } = {}, atomic = false) {
+  stageId, wasmBytes, loaderBytes, compressedBytes, location = globalThis.location, isTopLevel,
+  crypto = globalThis.crypto, now = Date.now } = {}, mode = 'standard') {
   if (!wallet || typeof wallet.signAndSendTransaction !== 'function' || wallet.manifest?.features?.signAndSendTransaction !== true ||
       !crypto?.subtle || typeof now !== 'function' || isTopLevel !== true || typeof location?.origin !== 'string') throw fail();
   let origin;
@@ -254,20 +338,28 @@ async function prepareWalletPrompt({ wallet, review: rawReview, identity: rawIde
         url.hostname === 'madethis.website' || url.hostname.endsWith('.madethis.website')) throw Error();
   } catch { throw fail(); }
   const review = structuredClone(rawReview), identity = structuredClone(rawIdentity), device = structuredClone(rawDevice);
-  const index = (atomic ? ATOMIC_STAGES : STAGES).indexOf(stageId);
+  const index = (mode === 'compressed' ? COMPRESSED_STAGES : mode === 'atomic' ? ATOMIC_STAGES : STAGES).indexOf(stageId);
   if (index < 0) throw fail();
-  // Stop before a one-shot claim or wallet invocation. The manifest does not
-  // distinguish Meteor Mobile from Meteor Web, so both are held here.
-  if (index === 0) assertNativeOracleWalletDeployAvailable(wallet);
-  const verify = atomic ? verifyAtomicNativeOracleSetupReview : verifyNativeOracleSetupReview;
+  // Direct V9 remains blocked for Meteor. The isolated compressed prototype
+  // checks its smaller pinned bytes below and is not selected by the UI.
+  if (index === 0 && mode !== 'compressed') assertNativeOracleWalletDeployAvailable(wallet);
+  const verify = mode === 'compressed' ? verifyCompressedNativeOracleSetupReview :
+    mode === 'atomic' ? verifyAtomicNativeOracleSetupReview : verifyNativeOracleSetupReview;
   const canonical = await verify({ review, identity, deviceKey: device, origin, crypto });
-  let code = null;
+  let code = null, compressed = null;
   if (index === 0) {
-    if (!(wasmBytes instanceof Uint8Array) || wasmBytes.length !== WASM_BYTES) throw fail();
-    code = new Uint8Array(wasmBytes);
-    if (!same([...code.slice(0, 8)], [0, 97, 115, 109, 1, 0, 0, 0]) || await digest(crypto, code) !== WASM_SHA256) throw fail();
+    const source = mode === 'compressed' ? loaderBytes : wasmBytes;
+    if (!(source instanceof Uint8Array) || source.length !== (mode === 'compressed' ? LOADER_BYTES : WASM_BYTES)) throw fail();
+    code = new Uint8Array(source);
+    if (!same([...code.slice(0, 8)], [0, 97, 115, 109, 1, 0, 0, 0]) ||
+        await digest(crypto, code) !== (mode === 'compressed' ? LOADER_SHA : WASM_SHA256)) throw fail();
+    if (mode === 'compressed') {
+      if (!(compressedBytes instanceof Uint8Array) || compressedBytes.length !== DEFLATE_BYTES) throw fail();
+      compressed = new Uint8Array(compressedBytes);
+      if (await digest(crypto, compressed) !== DEFLATE_SHA) throw fail();
+    }
   }
-  const stage = canonical.stages[index], actions = walletActions(stage, code); let invoked = false;
+  const stage = canonical.stages[index], actions = walletActions(stage, code, compressed); let invoked = false;
   return Object.freeze({
     stage_id: stageId, owner: review.owner, receiver_id: stage.receiver_id,
     async invoke(rawClaim) {
