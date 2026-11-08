@@ -16,12 +16,15 @@ import { probeNativeTestnetRpc, submitWitnessedNativeOracleTrialOnce } from './n
 const OWNER = 'great_mujey.testnet';
 const STAGES = ['create_keyless_native_vault', 'configure_native_oracle_policy', 'fund_native_vault', 'install_native_oracle_agent'];
 const ATOMIC_STAGES = ['create_configure_fund_native_vault', 'install_native_oracle_agent'];
-const VERIFIED_RECEIPTS = new Set(['FINAL_NATIVE_SETUP_RECEIPT_MATCH', 'FINAL_ATOMIC_NATIVE_SETUP_RECEIPT_MATCH', 'FINAL_LOCAL_ADD_KEY_OUTCOME_MATCH']);
+const COMPRESSED_STAGES = ['create_compressed_native_vault','configure_fund_native_oracle','install_native_oracle_agent'];
+const VERIFIED_RECEIPTS = new Set(['FINAL_NATIVE_SETUP_RECEIPT_MATCH', 'FINAL_ATOMIC_NATIVE_SETUP_RECEIPT_MATCH',
+  'FINAL_RESEARCH_LOADER_AND_UPGRADE_MATCH','FINAL_RESEARCH_NATIVE_SETUP_RECEIPT_MATCH','FINAL_LOCAL_ADD_KEY_OUTCOME_MATCH']);
 const fail = code => Object.assign(new Error(code), { code });
 const validHash = value => { try { decodeNativeHash32(value); return true; } catch { return false; } };
 function stagesFor(review) {
   if (review?.format === 'bouncer-native-oracle-wallet-review-v1') return STAGES;
   if (review?.format === 'bouncer-atomic-native-oracle-wallet-review-v1') return ATOMIC_STAGES;
+  if (review?.format === 'bouncer-research-compressed-native-oracle-wallet-review-v1') return COMPRESSED_STAGES;
   throw fail('NATIVE_REVIEW_INVALID');
 }
 
@@ -40,7 +43,9 @@ function publicTerms(review) {
 }
 
 function matchesReceipt(receipt, stageId, originalHash, recorded, review) {
-  const expected = review?.format === 'bouncer-atomic-native-oracle-wallet-review-v1' ?
+  const expected = review?.format === 'bouncer-research-compressed-native-oracle-wallet-review-v1' ?
+    (stageId==='create_compressed_native_vault'?'FINAL_RESEARCH_LOADER_AND_UPGRADE_MATCH':'FINAL_RESEARCH_NATIVE_SETUP_RECEIPT_MATCH') :
+    review?.format === 'bouncer-atomic-native-oracle-wallet-review-v1' ?
     'FINAL_ATOMIC_NATIVE_SETUP_RECEIPT_MATCH' : 'FINAL_NATIVE_SETUP_RECEIPT_MATCH';
   return receipt && VERIFIED_RECEIPTS.has(receipt.status) &&
     (receipt.status === expected || (receipt.status === 'FINAL_LOCAL_ADD_KEY_OUTCOME_MATCH' && stageId === 'install_native_oracle_agent')) &&
@@ -204,8 +209,8 @@ export function createNativeOracleOwnerFlow({ client, deviceStore, ownerPublicKe
       return guarded(['review'], async () => {
         // A deterministic compatibility rejection happens before the durable
         // reservation starts; recovery of existing originals is unaffected.
-        if (typeof client.assertWalletDeployAvailable === 'function') client.assertWalletDeployAvailable();
-        reservationStarted = true; // an uncertain response must never authorize another reservation
+        if (typeof client.assertWalletDeployAvailable === 'function') await client.assertWalletDeployAvailable({review});
+        current(); reservationStarted = true; // an uncertain response must never authorize another reservation
         const result = await wallet(() => client.reserve({ taskId, review }), 'Reserve this reviewed setup with an identity message. No transaction is requested.');
         if (result?.status !== 'RESERVED_NOT_CLAIMED' || !/^[a-f0-9]{40}$/.test(result.witness_head ?? '') || result.execution_authorized !== false ||
             !result.identity) throw fail('NATIVE_RESERVATION_UNKNOWN');

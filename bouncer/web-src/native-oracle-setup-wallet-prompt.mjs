@@ -340,8 +340,8 @@ async function prepareWalletPrompt({ wallet, review: rawReview, identity: rawIde
   const review = structuredClone(rawReview), identity = structuredClone(rawIdentity), device = structuredClone(rawDevice);
   const index = (mode === 'compressed' ? COMPRESSED_STAGES : mode === 'atomic' ? ATOMIC_STAGES : STAGES).indexOf(stageId);
   if (index < 0) throw fail();
-  // Direct V9 remains blocked for Meteor. The isolated compressed prototype
-  // checks its smaller pinned bytes below and is not selected by the UI.
+  // Direct V9 remains blocked for Meteor. The separately enabled compressed
+  // path checks its smaller pinned bytes below; real-wallet support is unproven.
   if (index === 0 && mode !== 'compressed') assertNativeOracleWalletDeployAvailable(wallet);
   const verify = mode === 'compressed' ? verifyCompressedNativeOracleSetupReview :
     mode === 'atomic' ? verifyAtomicNativeOracleSetupReview : verifyNativeOracleSetupReview;

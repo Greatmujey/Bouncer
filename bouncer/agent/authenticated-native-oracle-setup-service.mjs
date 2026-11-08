@@ -14,6 +14,9 @@ import { nativeSetupAuthAction } from '../web-src/native-oracle-setup-auth.mjs';
 import { verifyNativeOracleWalletReview, prepareNativeOracleWalletAttempt, inspectNativeOracleWalletAttempt } from './native-oracle-wallet-evidence.mjs';
 import { verifyAtomicNativeOracleWalletReview, prepareAtomicNativeOracleWalletAttempt,
   inspectAtomicNativeOracleWalletAttempt } from './native-oracle-atomic-wallet.mjs';
+import { verifyResearchPhoneReview, prepareResearchPhoneAttempt, inspectResearchPhoneAttempt,
+  NATIVE_PHONE_LOADER_BYTES, NATIVE_PHONE_LOADER_SHA256, NATIVE_PHONE_COMPRESSED_BYTES, NATIVE_PHONE_COMPRESSED_SHA256 } from './native-phone-loader-research.mjs';
+import crypto from 'node:crypto';
 import { createAuthenticatedNativeOracleTrialClaim } from './authenticated-native-oracle-trial-claim.mjs';
 import { validateWitnessedNativeOracleTrial, assertWitnessedNativeOracleTrial } from './native-oracle-phone-signer.mjs';
 import { verifyOracleResult } from './oracle-outlayer.mjs';
@@ -24,18 +27,24 @@ import { WalletWitnessError } from './git-wallet-prompt-witness.mjs';
 
 const STAGES = ['create_keyless_native_vault','configure_native_oracle_policy','fund_native_vault','install_native_oracle_agent'];
 const ATOMIC_STAGES = ['create_configure_fund_native_vault','install_native_oracle_agent'];
+const COMPRESSED_STAGES = ['create_compressed_native_vault','configure_fund_native_oracle','install_native_oracle_agent'];
 const fail = () => new WalletWitnessError('NATIVE_SETUP_UNAVAILABLE',
   'native setup review or authenticated witness is unavailable; stop and reconcile, never repeat a wallet prompt');
 const same = (a,b) => isDeepStrictEqual(a,b);
-function reviewOps(review, enableAtomic) {
+function reviewOps(review, enableAtomic, compact) {
   if (review?.format === 'bouncer-native-oracle-wallet-review-v1') return {stages:STAGES,verify:verifyNativeOracleWalletReview,
     prepare:prepareNativeOracleWalletAttempt,inspect:inspectNativeOracleWalletAttempt};
   if (enableAtomic && review?.format === 'bouncer-atomic-native-oracle-wallet-review-v1') return {stages:ATOMIC_STAGES,
     verify:verifyAtomicNativeOracleWalletReview,prepare:prepareAtomicNativeOracleWalletAttempt,inspect:inspectAtomicNativeOracleWalletAttempt};
+  if (compact && review?.format === 'bouncer-research-compressed-native-oracle-wallet-review-v1') {
+    const withArtifacts=fn=>args=>fn({...args,...compact});
+    return {stages:COMPRESSED_STAGES,verify:withArtifacts(verifyResearchPhoneReview),
+      prepare:withArtifacts(prepareResearchPhoneAttempt),inspect:withArtifacts(inspectResearchPhoneAttempt)};
+  }
   throw fail();
 }
-function idFromPlan(plan, enableAtomic) {
-  const expected = reviewOps(plan?.review, enableAtomic).stages;
+function idFromPlan(plan, enableAtomic, compact) {
+  const expected = reviewOps(plan?.review, enableAtomic, compact).stages;
   if (!plan || plan.review?.owner !== plan.owner || plan.review.review_sha256 !== plan.review_sha256 ||
       !Array.isArray(plan.review.stages) || plan.review.stages.length !== expected.length ||
       !Array.isArray(plan.stages) || plan.stages.length !== expected.length) throw fail();
@@ -46,8 +55,8 @@ function idFromPlan(plan, enableAtomic) {
       return {stage_id:s.id,action_commitment_sha256:s.action_commitment_sha256};
     }) };
 }
-function journalsMatch(plan,state,enableAtomic) {
-  if (!state || !same(idFromPlan(plan,enableAtomic),state.identity)) return false;
+function journalsMatch(plan,state,enableAtomic,compact) {
+  if (!state || !same(idFromPlan(plan,enableAtomic,compact),state.identity)) return false;
   return plan.stages.every(stage => {
     const claim = state.records.find(r=>r.event==='claim' && r.stage_id===stage.stage_id);
     const original = state.records.find(r=>r.event==='original' && r.stage_id===stage.stage_id);
@@ -62,8 +71,13 @@ async function checkPeer(other, owner, head) {
 }
 
 export function createAuthenticatedNativeOracleSetupService({ auth, fence, witness, otherWitness, coordinator,
-  getRetainedReview, wasmBytes, receiptProvider, owner, enableAtomic = false } = {}) {
-  if (typeof enableAtomic !== 'boolean' || !isTestnetAccount(owner) || !owner.endsWith('.testnet') || owner === V3_OWNER ||
+  getRetainedReview, wasmBytes, loaderBytes, compressedBytes, receiptProvider, owner, enableAtomic = false, enableCompressed = false } = {}) {
+  if (typeof enableAtomic !== 'boolean' || typeof enableCompressed !== 'boolean' ||
+      (enableCompressed && (!(loaderBytes instanceof Uint8Array) || loaderBytes.length!==NATIVE_PHONE_LOADER_BYTES ||
+        crypto.createHash('sha256').update(loaderBytes).digest('hex')!==NATIVE_PHONE_LOADER_SHA256 ||
+        !(compressedBytes instanceof Uint8Array) || compressedBytes.length!==NATIVE_PHONE_COMPRESSED_BYTES ||
+        crypto.createHash('sha256').update(compressedBytes).digest('hex')!==NATIVE_PHONE_COMPRESSED_SHA256)) ||
+      !isTestnetAccount(owner) || !owner.endsWith('.testnet') || owner === V3_OWNER ||
       !auth || typeof auth.issue !== 'function' || !fence || typeof fence.inspect !== 'function' ||
       !witness || ['inspect','assertClaimable'].some(k=>typeof witness[k]!=='function') ||
       !otherWitness || otherWitness === witness || typeof otherWitness.inspect !== 'function' ||
@@ -72,7 +86,8 @@ export function createAuthenticatedNativeOracleSetupService({ auth, fence, witne
       !receiptProvider || ['viewNodeStatus','txStatusReceipts'].some(k=>typeof receiptProvider[k]!=='function')) {
     throw Error('fixed named testnet owner, authenticated fence, both setup witnesses and retained native review required');
   }
-  const wasm = Buffer.from(wasmBytes);
+  const wasm = Buffer.from(wasmBytes), compact=enableCompressed ? Object.freeze({loaderBytes:Buffer.from(loaderBytes),
+    compressedBytes:Buffer.from(compressedBytes)}) : null;
   async function retained(taskId, ownerPublicKey, agentPublicKey) {
     if (typeof taskId !== 'string' || !/^[a-f0-9]{64}$/.test(taskId) || typeof agentPublicKey !== 'string' ||
         !/^ed25519:[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(agentPublicKey)) throw fail();
@@ -80,7 +95,7 @@ export function createAuthenticatedNativeOracleSetupService({ auth, fence, witne
     if (!value?.review || value.review.owner !== owner || value.review.agent_public_key !== agentPublicKey ||
         value.review.review_sha256 !== taskId) throw fail();
     const review = structuredClone(value.review);
-    try { reviewOps(review,enableAtomic).verify({ review, wasmBytes:wasm, trustedReviewHash:review.review_sha256, trustedOwnerPublicKey:ownerPublicKey }); }
+    try { reviewOps(review,enableAtomic,compact).verify({ review, wasmBytes:wasm, trustedReviewHash:review.review_sha256, trustedOwnerPublicKey:ownerPublicKey }); }
     catch { throw fail(); }
     return review;
   }
@@ -96,7 +111,7 @@ export function createAuthenticatedNativeOracleSetupService({ auth, fence, witne
     const {identity} = await witnessed(rawIdentity), goal = structuredClone(rawGoal), trial = structuredClone(rawTrial);
     if (!trial || typeof auth.authenticate !== 'function' || typeof witness.claimTrial !== 'function') throw fail();
     const review = await retained(identity.review_sha256,identity.owner_public_key,trial.agent_public_key);
-    return {identity,trial,service:createAuthenticatedNativeOracleTrialClaim({goal,review,identity,wasmBytes:wasm,
+    return {identity,trial,service:createAuthenticatedNativeOracleTrialClaim({goal,review,identity,wasmBytes:wasm,...(compact??{}),
       trustedReviewHash:identity.review_sha256,trustedOwnerPublicKey:identity.owner_public_key,auth,witness,otherWitness,getFreshCompletion})};
   }
   return Object.freeze({
@@ -159,8 +174,8 @@ export function createAuthenticatedNativeOracleSetupService({ auth, fence, witne
     async previewOriginal({ ownerPublicKey, stageId, originalHash, evidence } = {}) {
       if (!isTransactionHash(originalHash)) throw fail();
       const plan = await fence.inspect({owner,ownerPublicKey,evidence}), remote = await witness.inspect(owner), state = remote.state;
-      const ops = reviewOps(plan?.review,enableAtomic);
-      if (!ops.stages.includes(stageId) || !journalsMatch(plan,state,enableAtomic)) throw fail();
+      const ops = reviewOps(plan?.review,enableAtomic,compact);
+      if (!ops.stages.includes(stageId) || !journalsMatch(plan,state,enableAtomic,compact)) throw fail();
       await checkPeer(otherWitness,owner,remote.head);
       const last=state.records.at(-1), claimed=state.phase==='claimed' && state.identity.stages[state.stage_index].stage_id===stageId;
       const recorded=['original','complete'].includes(state.phase) && last?.event==='original' &&
@@ -181,7 +196,7 @@ export function createAuthenticatedNativeOracleSetupService({ auth, fence, witne
     async previewTrial({ ownerPublicKey, evidence } = {}) {
       const plan = await fence.inspect({owner,ownerPublicKey,evidence});
       const snapshot = await witness.inspect(owner), state = snapshot.state, trial = state?.trial;
-      if (!plan || !state || state.phase !== 'trial_claimed' || !trial || !journalsMatch(plan,state,enableAtomic) ||
+      if (!plan || !state || state.phase !== 'trial_claimed' || !trial || !journalsMatch(plan,state,enableAtomic,compact) ||
           state.identity.owner_public_key !== ownerPublicKey || typeof receiptProvider.block !== 'function') throw fail();
       await checkPeer(otherWitness,owner,snapshot.head);
       try {
@@ -189,7 +204,7 @@ export function createAuthenticatedNativeOracleSetupService({ auth, fence, witne
         const goal = {id:trial.goal_id,contract_id:review.vault,owner_account_id:review.owner,policy_id:review.policy_id,
           amount:review.per_tx_cap_yocto,route:{project:review.project,route_revision:1,policy_revision:1,payee_revision:1,active:true},
           max_age_seconds:300};
-        const checked = validateWitnessedNativeOracleTrial({goal,review,identity,wasmBytes:wasm,
+        const checked = validateWitnessedNativeOracleTrial({goal,review,identity,wasmBytes:wasm,...(compact??{}),
           trustedReviewHash:identity.review_sha256,trustedOwnerPublicKey:ownerPublicKey});
         if (checked.goalSha256 !== trial.goal_sha256 || checked.agentPublicKey !== trial.agent_public_key) throw Error();
         assertWitnessedNativeOracleTrial(snapshot,identity,trial);
@@ -212,14 +227,14 @@ export function createAuthenticatedNativeOracleSetupService({ auth, fence, witne
       catch (error) { if (error?.code !== 'OWNER_FENCED') throw error; }
       const remote = await witness.inspect(owner), state = remote.state, peer = await otherWitness.inspect(owner);
       const recovery = scope => ({status:'RECOVERY_REQUIRED',execution_authorized:false,
-        identity:state?.identity ?? (plan ? idFromPlan(plan,enableAtomic) : null), witnessed_records:state?.records ?? [],
+        identity:state?.identity ?? (plan ? idFromPlan(plan,enableAtomic,compact) : null), witnessed_records:state?.records ?? [],
         database_stages:plan?.stages ?? [], witness_head:remote.head,scope});
       if (!peer || !Object.hasOwn(peer,'state') || peer.head!==remote.head) return recovery(
         'Witness heads differ or are unavailable; preserve originals and never open another prompt.');
       if (peer.state!==null) return recovery('A different setup flow is witnessed; reconcile it before any native prompt.');
       if (!plan && !state) return {status:'NO_LOCAL_RECORD',execution_authorized:false,
         scope:'No record in these systems is not proof that no wallet prompt or original exists elsewhere.'};
-      if (!plan || !state || !journalsMatch(plan,state,enableAtomic)) return recovery(
+      if (!plan || !state || !journalsMatch(plan,state,enableAtomic,compact)) return recovery(
         'Independent journals disagree or one is missing; preserve originals and never open another prompt.');
       return {status:'WITNESSED',identity:state.identity,witnessed_records:state.records,review:structuredClone(plan.review),
         database_stages:structuredClone(plan.stages),witness_head:remote.head,execution_authorized:false,

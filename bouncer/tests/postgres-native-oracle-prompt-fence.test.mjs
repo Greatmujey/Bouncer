@@ -12,6 +12,7 @@ import { IDBFactory } from 'fake-indexeddb';
 import { buildNativeOracleWalletPlan, NATIVE_ORACLE_DEFAULT_GAS_ALLOWANCE, NATIVE_ORACLE_V9_CODE_HASH,
   NATIVE_ORACLE_VAULT_FUNDING } from '../agent/native-oracle-wallet-plan.mjs';
 import { buildAtomicNativeOracleWalletPlan } from '../agent/native-oracle-atomic-wallet.mjs';
+import { buildResearchPhonePlan } from '../agent/native-phone-loader-research.mjs';
 import { runOracleGoal, ORACLE_TESTNET_PROGRAM, ORACLE_PROJECT_ID, ORACLE_PROJECT_UUID } from '../agent/oracle-outlayer.mjs';
 import { V11_SELECTED_WASM_FEATURES } from '../agent/svalin-setup-preflight.mjs';
 import { NO_LOCAL_CONTRACT_HASH } from '../shared/plain-owner-profile.mjs';
@@ -44,6 +45,8 @@ if (process.env.BOUNCER_REQUIRE_POSTGRES_TESTS === '1' && !url) throw new Error(
 const dbtest = url ? test : test.skip;
 const pool = () => new pg.Pool({ connectionString: url, max: 12, connectionTimeoutMillis: 5000 });
 const wasm = fs.readFileSync(new URL('../../bouncer.wasm', import.meta.url));
+const loaderBytes=fs.readFileSync(new URL('../contracts/native-phone-loader/fixtures/native-phone-loader-research.wasm',import.meta.url));
+const compressedBytes=fs.readFileSync(new URL('../contracts/native-phone-loader/fixtures/native-v9.deflate',import.meta.url));
 const key = () => String(nearApi.KeyPair.fromRandom('ed25519').getPublicKey());
 const hash = n => nearApi.utils.serialize.base_encode(Buffer.alloc(32, n));
 const NEAR = 10n ** 24n, BLOCK = hash(70);
@@ -64,13 +67,23 @@ function actionView(a) {
 function receipt(plan, ownerKey, index) {
   const batch = plan.batches[index], transaction = hash(10 + index), root = hash(20 + index), actions = batch.actions.map(actionView);
   const omit = batch.id === 'install_native_oracle_agent';
-  return { final_execution_status: 'FINAL', status: { SuccessValue: '' },
+  const result = { final_execution_status: 'FINAL', status: { SuccessValue: '' },
     transaction: { hash: transaction, signer_id: batch.signerId, public_key: ownerKey, receiver_id: batch.receiverId, actions: structuredClone(actions) },
     transaction_outcome: { id: transaction, outcome: { executor_id: batch.signerId, receipt_ids: [root], status: { SuccessReceiptId: root } } },
     receipts: omit ? [] : [{ receipt_id: root, predecessor_id: batch.signerId, receiver_id: batch.receiverId,
       receipt: { Action: { signer_id: batch.signerId, signer_public_key: ownerKey, actions: structuredClone(actions), input_data_ids: [], output_data_receivers: [] } } }],
     receipts_outcome: [{ id: root, outcome: { executor_id: batch.receiverId, status: { SuccessValue: '' }, receipt_ids: [],
-      logs: ['fund_native_vault', 'create_configure_fund_native_vault'].includes(batch.id) ? ['BOUNCER native deposit received'] : [] } }] };
+      logs: ['fund_native_vault', 'create_configure_fund_native_vault','configure_fund_native_oracle'].includes(batch.id) ? ['BOUNCER native deposit received'] : [] } }] };
+  if(batch.id==='create_compressed_native_vault') {
+    const upgrade=hash(90);result.receipts_outcome[0].outcome.status={SuccessReceiptId:upgrade};
+    result.receipts_outcome[0].outcome.receipt_ids=[upgrade];
+    result.receipts.push({receipt_id:upgrade,predecessor_id:batch.receiverId,receiver_id:batch.receiverId,
+      receipt:{Action:{signer_id:batch.signerId,signer_public_key:ownerKey,input_data_ids:[],output_data_receivers:[],actions:[
+        {DeployContract:{code:crypto.createHash('sha256').update(wasm).digest('base64')}},
+        {FunctionCall:{method_name:'new',args:Buffer.from(JSON.stringify({owner:batch.signerId})).toString('base64'),gas:30_000_000_000_000,deposit:'0'}}]}}});
+    result.receipts_outcome.push({id:upgrade,outcome:{executor_id:batch.receiverId,status:{SuccessValue:''},receipt_ids:[],logs:[]}});
+  }
+  return result;
 }
 function scenario(db, overrides = {}) {
   const ownerId = overrides.ownerId ?? owner(), vault = `native.${ownerId}`, ownerPair = nearApi.KeyPair.fromRandom('ed25519'),
@@ -78,14 +91,20 @@ function scenario(db, overrides = {}) {
   const terms = { owner: ownerId, vault, policy_id: 'price', agent_public_key: agentKey,
     per_tx_cap_yocto: (NEAR / 10n).toString(), daily_cap_yocto: (NEAR / 10n).toString(), vault_deposit_yocto: (NEAR / 10n).toString(),
     agent_gas_allowance_yocto: NATIVE_ORACLE_DEFAULT_GAS_ALLOWANCE };
-  const plan = overrides.atomic ? buildAtomicNativeOracleWalletPlan({ wasmBytes: wasm, terms, trustedOwnerPublicKey: ownerKey }) :
+  const plan = overrides.compressed ? buildResearchPhonePlan({wasmBytes:wasm,loaderBytes,compressedBytes,terms,trustedOwnerPublicKey:ownerKey}) :
+    overrides.atomic ? buildAtomicNativeOracleWalletPlan({ wasmBytes: wasm, terms, trustedOwnerPublicKey: ownerKey }) :
     buildNativeOracleWalletPlan({ wasmBytes: wasm, terms });
-  const review = plan.review, state = { stage: 0, unavailable: false, blocked: false, mixed: false }, calls = [];
+  const review = plan.review, state = { stage: 0, unavailable: false, blocked: false, mixed: false, failedUpgrade: false }, calls = [];
   const source = { WasmUrl: { url: ORACLE_TESTNET_PROGRAM.url, hash: ORACLE_TESTNET_PROGRAM.sha256, build_target: ORACLE_TESTNET_PROGRAM.build_target } };
   const receiptProvider = { async viewNodeStatus() { return { chain_id: 'testnet' }; }, async txStatusReceipts(id, account, finality) {
     calls.push(id); assert.equal(account, ownerId); assert.equal(finality, 'FINAL');
     const i = plan.batches.findIndex((_, index) => hash(10 + index) === id); if (state.unavailable || i < 0) throw Error('synthetic receipt unavailable');
-    return receipt(plan, ownerKey, i);
+    const result=receipt(plan,ownerKey,i);
+    if(overrides.compressed && i===0 && state.failedUpgrade){
+      result.status={Failure:{ActionError:{index:0,kind:{FunctionCallError:'synthetic upgrade failure'}}}};
+      result.receipts_outcome[1].outcome.status=structuredClone(result.status);
+    }
+    return result;
   } };
   const provider = {
     async viewNodeStatus() { return { chain_id: 'testnet' }; },
@@ -130,7 +149,7 @@ function scenario(db, overrides = {}) {
     },
   };
   const options = { pool: db, authenticate: auth, wasmBytes: wasm, receiptProvider, preflightProvider: provider,
-    enableAtomic: overrides.atomic === true, ...overrides };
+    loaderBytes,compressedBytes,enableCompressed:overrides.compressed===true,enableAtomic: overrides.atomic === true, ...overrides };
   const fence = createPostgresNativeOraclePromptFence(options);
   const reserve = { review, trustedReviewHash: review.review_sha256, trustedOwnerPublicKey: ownerKey, evidence: 'synthetic-auth' };
   const req = (res, i) => ({ owner: ownerId, ownerPublicKey: ownerKey, operationId: res.operation_id,
@@ -506,7 +525,7 @@ dbtest('synthetic browser prompts, owner challenges, PostgreSQL, local Git and p
 // Fully synthetic browser/HTTP/DB/Git integration. The familiar account name
 // exists ONLY in an isolated disposable database with fabricated keys, RPC and
 // wallet outcomes. No user wallet, network transaction or provider is used.
-async function syntheticNativePhone({ dropClaim = false, dropTrial = false, unknownWallet = false, atomic = false } = {}, run) {
+async function syntheticNativePhone({ dropClaim = false, dropTrial = false, unknownWallet = false, atomic = false, compressed = false, corruptLoader = false } = {}, run) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bouncer-native-phone-e2e-'));
   const name = `bouncer_native_e2e_${crypto.randomBytes(6).toString('hex')}`, admin = pool();
   const site = { origin:'https://bouncer.example', host:'bouncer.example' }, ownerId = 'great_mujey.testnet', vault = `native.${ownerId}`;
@@ -518,7 +537,7 @@ async function syntheticNativePhone({ dropClaim = false, dropTrial = false, unkn
     await initializePostgresNativeOraclePromptFence({pool:db});await initializePostgresWalletPromptAuth({pool:db});
     device=await openNativeOracleDeviceKey({indexedDB:new IDBFactory(),storage:{persisted:async()=>true},crypto:crypto.webcrypto,
       origin:site.origin,isTopLevel:true});
-    const made=await device.create({owner:ownerId,vault}),scenarioOptions={ownerId,agentPublicKey:made.public_key,blockTimestamp:Date.now(),atomic},
+    const made=await device.create({owner:ownerId,vault}),scenarioOptions={ownerId,agentPublicKey:made.public_key,blockTimestamp:Date.now(),atomic,compressed},
       f=scenario(db,scenarioOptions);
     const bare=path.join(root,'remote.git'),work=path.join(root,'work'),branch='arena/0e4386ea-near-hub';
     fs.mkdirSync(work);git(root,['init','--bare','--initial-branch',branch,bare]);git(work,['init','--initial-branch',branch]);
@@ -536,19 +555,20 @@ async function syntheticNativePhone({ dropClaim = false, dropTrial = false, unkn
         return {block_hash:BLOCK,permission:'FullAccess'}}};
     const auth=createPostgresWalletPromptAuth({pool:db,origin:site.origin,provider:authProvider});
     const fence=createPostgresNativeOraclePromptFence({...f.options,authenticate:auth.authenticate});
-    const coordinator=createWitnessedNativeOracleSetup({fence,witness,otherWitness}),cache=createNativeOracleReviewCatalog({wasmBytes:wasm,enableAtomic:atomic});
+    const compact={loaderBytes,compressedBytes,enableCompressed:compressed};
+    const coordinator=createWitnessedNativeOracleSetup({fence,witness,otherWitness}),cache=createNativeOracleReviewCatalog({wasmBytes:wasm,...compact,enableAtomic:atomic});
     const service=createAuthenticatedNativeOracleSetupService({auth,fence,witness,otherWitness,coordinator,
-      getRetainedReview:cache.getRetainedReview,wasmBytes:wasm,receiptProvider:f.options.receiptProvider,owner:ownerId,enableAtomic:atomic});
-    const handler=createNativeOracleSetupHttpHandler({service,siteOrigin:site.origin,wasmBytes:wasm,owner:ownerId,createReview:cache.create,enableAtomic:atomic});
+      getRetainedReview:cache.getRetainedReview,wasmBytes:wasm,...compact,receiptProvider:f.options.receiptProvider,owner:ownerId,enableAtomic:atomic});
+    const handler=createNativeOracleSetupHttpHandler({service,siteOrigin:site.origin,wasmBytes:wasm,...compact,owner:ownerId,createReview:cache.create,enableAtomic:atomic});
     const bridge={pending:()=>[],take:()=>null,submit:()=>false,takeForBrowser:()=>null,submitEncrypted:()=>false};
     server=createReadOnlyPreviewService({bridge,siteOrigin:site.origin,inspectReadiness:async()=>({}),makeReview:async()=>({}),
       nativeSetupFactory:()=>handler});
     await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));const base=`http://127.0.0.1:${server.address().port}`;
-    let signatures=0,prompts=0,dropped=false;
-    const wallet={manifest:{id:'near-mobile',features:{signAndSendTransaction:true}},async signMessage(p){signatures++;
+    let signatures=0,prompts=0,dropped=false;const walletActions=[];
+    const wallet={manifest:{id:compressed?'meteor-wallet':'near-mobile',features:{signAndSendTransaction:true}},async signMessage(p){signatures++;
       const digest=crypto.createHash('sha256').update(nep413Payload(p)).digest();
       return {accountId:ownerId,publicKey:f.ownerKey,signature:Buffer.from(f.ownerPair.sign(digest).signature).toString('base64')};},
-      async signAndSendTransaction(){const index=prompts++;if(unknownWallet && index===0)return {};
+      async signAndSendTransaction(request){walletActions.push(request);const index=prompts++;if(unknownWallet && index===0)return {};
         return {transaction:{hash:hash(10+index)}};}}; // synthetic only
     const fetchImpl=async(address,init={})=>{
       if(address==='https://test.rpc.fastnear.com')return new Response(JSON.stringify({jsonrpc:'2.0',id:'bouncer-cli-login',
@@ -556,6 +576,10 @@ async function syntheticNativePhone({ dropClaim = false, dropTrial = false, unkn
       if(typeof address!=='string' || !address.startsWith('/api/'))throw Error('unexpected network');
       const headers=new Headers(init.headers||{});headers.set('origin',site.origin);
       const response=await fetch(`${base}${address}`,{...init,headers});
+      if(corruptLoader && address==='/api/native-oracle-setup/loader'){
+        const changed=new Uint8Array(await response.arrayBuffer());changed[80]^=1;
+        return new Response(changed,{status:response.status,headers:response.headers});
+      }
       if(((address==='/api/native-oracle-setup/claim' && dropClaim) || (address==='/api/native-oracle-setup/trial' && dropTrial)) && !dropped){
         dropped=true;await response.body?.cancel();throw Error('lost synthetic response')}
       return response;
@@ -565,7 +589,7 @@ async function syntheticNativePhone({ dropClaim = false, dropTrial = false, unkn
       relay:({work})=>work()}); // synthetic provider is direct; no live relay
     const prepared=await client.createReview({agentPublicKey:made.public_key});assert.deepEqual(prepared.review,f.review);
     await run({client,device,site,f,taskId:prepared.task_id,witness,otherWitness,anchor,
-      refreshSyntheticBlock:()=>{scenarioOptions.blockTimestamp=Date.now()},prompts:()=>prompts,signatures:()=>signatures});
+      refreshSyntheticBlock:()=>{scenarioOptions.blockTimestamp=Date.now()},prompts:()=>prompts,signatures:()=>signatures,walletActions});
   } finally {
     if(server)await new Promise(resolve=>server.close(resolve));device?.close();if(db)await db.end();
     if(created)await admin.query(`DROP DATABASE "${name}"`);await admin.end();fs.rmSync(root,{recursive:true,force:true});
@@ -814,5 +838,105 @@ dbtest('atomic lost claim or trial acknowledgement cannot reopen a wallet prompt
     assert.equal((await device.inspectNativeOracleOriginal({reviewSha256:f.review.review_sha256})).status,'NO_LOCAL_ORIGINAL');
     assert.equal((await client.inspect()).witnessed_records.at(-1).original_hash,remote.state.trial.original_hash);
     await assert.rejects(prepared.sign({ownerConfirmed:true}));assert.equal(prompts(),2);
+  });
+});
+
+dbtest('compressed fence is opt-in, retains all three original graphs and blocks retries', async () => resources(async db => {
+  const f=scenario(db,{compressed:true});
+  const disabled=createPostgresNativeOraclePromptFence({...f.options,enableCompressed:false});
+  await assert.rejects(disabled.reserve(f.reserve),e=>e.code==='INVALID_REQUEST');
+  assert.throws(()=>createPostgresNativeOraclePromptFence({...f.options,loaderBytes:Buffer.alloc(loaderBytes.length)}),e=>e.code==='UNSAFE_CONFIGURATION');
+  assert.throws(()=>createPostgresNativeOraclePromptFence({...f.options,compressedBytes:Buffer.alloc(compressedBytes.length)}),e=>e.code==='UNSAFE_CONFIGURATION');
+  const witness=createNativeOraclePromptWitness({store:memoryWitnessStore()});
+  const coordinator=createWitnessedNativeOracleSetup({fence:f.fence,witness,otherWitness:emptyCrossWitness(witness)});
+  const {identity}=await coordinator.reserve(f.reserve),ids=f.review.stages.map(s=>s.id);
+  assert.equal(identity.stages.length,3);
+  await assert.rejects(disabled.inspect({owner:f.ownerId,ownerPublicKey:f.ownerKey,evidence:'synthetic-auth'}),e=>e.code==='CORRUPT');
+  await assert.rejects(coordinator.claim({identity,stageId:ids[1],evidence:'synthetic-auth'}),e=>e.code==='WITNESS_NOT_CLAIMABLE');
+  for(let i=0;i<3;i++){
+    const claimed=await coordinator.claim({identity,stageId:ids[i],evidence:'synthetic-auth'});
+    assert.equal(claimed.independently_witnessed,true);assert.equal(claimed.execution_authorized,false);
+    await coordinator.recordOriginal({identity,stageId:ids[i],originalHash:hash(10+i),evidence:'synthetic-auth'});
+    f.state.stage=[1,3,4][i];
+    await assert.rejects(coordinator.claim({identity,stageId:ids[i],evidence:'synthetic-auth'}),e=>e.code==='WITNESS_NOT_CLAIMABLE');
+  }
+  const completion=await coordinator.verifyCompletion({identity,evidence:'synthetic-auth'});
+  assert.equal(completion.status,'THREE_ORIGINALS_AND_STATE_MATCH_NOT_AUTHORIZED');
+  assert.deepEqual(completion.prior_original_hashes,[hash(10),hash(11),hash(12)]);
+  assert.equal(completion.independently_witnessed,true);assert.equal(completion.independent_delivery_verified,false);
+}));
+
+dbtest('compressed Meteor owner flow composes authenticated HTTP, database, Git, three synthetic graphs and a retained trial',async()=>{
+  await syntheticNativePhone({compressed:true},async({client,device,site,f,witness,refreshSyntheticBlock,prompts,walletActions})=>{
+    const flow=createNativeOracleOwnerFlow({client,deviceStore:device,ownerPublicKey:f.ownerKey,origin:site.origin,
+      crypto:crypto.webcrypto,isCurrent:()=>true});
+    await flow.check();assert.equal(flow.getState().phase,'review');assert.equal(flow.getState().terms.setupStages,3);
+    await flow.reserve({ownerConfirmed:true});
+    for(let i=0;i<3;i++){
+      assert.equal(flow.getState().stageId,f.review.stages[i].id);
+      await flow.approveStage({ownerConfirmed:true});assert.equal(flow.getState().phase,'await_receipt');
+      f.state.stage=[1,3,4][i];
+      await flow.checkReceipt();assert.equal(flow.getState().phase,i===2?'verify_setup':'stage');
+    }
+    refreshSyntheticBlock();await flow.verifySetup();assert.equal(flow.getState().phase,'setup_verified');
+    assert.equal(prompts(),3);
+    assert.equal(walletActions[0].actions[2].params.code.length,loaderBytes.length);
+    assert.equal(walletActions[0].actions[4].params.args.length,compressedBytes.length);
+    const snapshot=await client.inspect(),identity=snapshot.identity;
+    assert.equal(snapshot.review.format,'bouncer-research-compressed-native-oracle-wallet-review-v1');
+    assert.deepEqual(snapshot.database_stages.map(s=>s.original_hash),[hash(10),hash(11),hash(12)]);
+    const completion=await client.verifyCompletion({identity});
+    assert.equal(completion.status,'THREE_ORIGINALS_AND_STATE_MATCH_NOT_AUTHORIZED');
+    assert.deepEqual(completion.prior_original_hashes,[hash(10),hash(11),hash(12)]);
+    const trial=await prepareWitnessedNativeOracleTrial({client,deviceStore:device,identity,review:f.review,
+      goalId:'native-oracle-trial-1',origin:site.origin,isTopLevel:true,crypto:crypto.webcrypto,isCurrent:()=>true});
+    await assert.rejects(trial.sign({ownerConfirmed:false}));
+    const signed=await trial.sign({ownerConfirmed:true});
+    assert.equal(signed.status,'SIGNED_NOT_BROADCAST');assert.equal(signed.transaction_sent,false);
+    assert.deepEqual(signed.setup_original_hashes,[hash(10),hash(11),hash(12)]);
+    assert.equal((await witness.inspect(f.ownerId)).state.trial.original_hash,signed.tx_hash);
+    await assert.rejects(trial.sign({ownerConfirmed:true}));assert.equal(prompts(),3);
+  });
+});
+
+dbtest('compressed unknown wallet and lost claim recover without reopening a prompt',async()=>{
+  await syntheticNativePhone({compressed:true,unknownWallet:true},async({client,device,site,f,prompts})=>{
+    const flow=createNativeOracleOwnerFlow({client,deviceStore:device,ownerPublicKey:f.ownerKey,origin:site.origin,
+      crypto:crypto.webcrypto,isCurrent:()=>true});
+    await flow.check();await flow.reserve({ownerConfirmed:true});await flow.approveStage({ownerConfirmed:true});
+    assert.equal(flow.getState().phase,'recover');assert.equal(prompts(),1);
+    await flow.recoverOriginal({hash:hash(10),ownerConfirmed:true});f.state.stage=1;
+    await flow.checkReceipt();assert.equal(flow.getState().stageId,'configure_fund_native_oracle');assert.equal(prompts(),1);
+  });
+  await syntheticNativePhone({compressed:true,dropClaim:true},async({client,f,taskId,prompts})=>{
+    const {identity}=await client.reserve({taskId,review:f.review}),stageId=f.review.stages[0].id;
+    await assert.rejects(client.approveStage({identity,review:f.review,stageId}),e=>e.code==='NATIVE_SETUP_RESULT_UNKNOWN');
+    assert.equal(prompts(),0);const current=await client.inspect();assert.equal(current.database_stages[0].claimed,true);
+    assert.equal(current.database_stages[0].original_hash,null);
+    await assert.rejects(client.approveStage({identity,review:f.review,stageId}),e=>e.code==='WITNESS_NOT_CLAIMABLE');assert.equal(prompts(),0);
+  });
+});
+
+dbtest('compressed artifact tampering stops before reservation, challenge or wallet prompt',async()=>{
+  await syntheticNativePhone({compressed:true,corruptLoader:true},async({client,device,site,f,witness,prompts,signatures})=>{
+    const flow=createNativeOracleOwnerFlow({client,deviceStore:device,ownerPublicKey:f.ownerKey,origin:site.origin,
+      crypto:crypto.webcrypto,isCurrent:()=>true});
+    await flow.check();assert.equal(flow.getState().phase,'review');
+    const before=signatures();await assert.rejects(flow.reserve({ownerConfirmed:true}));
+    assert.equal(signatures(),before);assert.equal(prompts(),0);assert.equal((await witness.inspect(f.ownerId)).state,null);
+    const snapshot=await client.inspect();assert.equal(snapshot.status,'NO_LOCAL_RECORD');
+  });
+});
+
+dbtest('failed compressed self-upgrade blocks the next stage and never requests an automatic refund',async()=>{
+  await syntheticNativePhone({compressed:true},async({client,device,site,f,prompts})=>{
+    const flow=createNativeOracleOwnerFlow({client,deviceStore:device,ownerPublicKey:f.ownerKey,origin:site.origin,
+      crypto:crypto.webcrypto,isCurrent:()=>true});
+    await flow.check();await flow.reserve({ownerConfirmed:true});await flow.approveStage({ownerConfirmed:true});
+    assert.equal(flow.getState().phase,'await_receipt');f.state.failedUpgrade=true;
+    await flow.checkReceipt();assert.equal(flow.getState().phase,'blocked');assert.equal(prompts(),1);
+    await assert.rejects(flow.approveStage({ownerConfirmed:true}),e=>e.code==='NATIVE_FLOW_ACTION_NOT_AVAILABLE');
+    const retained=await client.inspect();assert.equal(retained.database_stages[0].original_hash,hash(10));
+    assert.equal(retained.database_stages[1].claimed,false);assert.equal(prompts(),1);
   });
 });

@@ -7,6 +7,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import nearApi from 'near-api-js';
 import { buildNativeOracleWalletPlan, NATIVE_ORACLE_DEFAULT_GAS_ALLOWANCE } from '../agent/native-oracle-wallet-plan.mjs';
+import { buildResearchPhonePlan } from '../agent/native-phone-loader-research.mjs';
 import { nativeSetupAuthAction } from '../web-src/native-oracle-setup-auth.mjs';
 import { nep413Payload } from '../web-src/cli-login.mjs';
 import { WALLET_EXECUTOR_SHA256 } from '../web-src/wallet-executor.mjs';
@@ -20,6 +21,8 @@ if(!executablePath)throw Error('No Chromium executable found');
 const browser=await chromium.launch({executablePath,args:['--no-sandbox','--disable-gpu'],headless:true});
 const owner='great_mujey.testnet',vault=`native.${owner}`;
 const hash=n=>nearApi.utils.serialize.base_encode(Buffer.alloc(32,n)),wasm=fs.readFileSync(new URL('../../bouncer.wasm',import.meta.url));
+const loaderBytes=fs.readFileSync(new URL('../contracts/native-phone-loader/fixtures/native-phone-loader-research.wasm',import.meta.url));
+const compressedBytes=fs.readFileSync(new URL('../contracts/native-phone-loader/fixtures/native-v9.deflate',import.meta.url));
 const allowed=new Set(PUBLIC_WEB_FILES),types={'.html':'text/html','.css':'text/css','.mjs':'text/javascript','.js':'text/javascript',
   '.json':'application/json','.zip':'application/zip','.svg':'image/svg+xml','.jpg':'image/jpeg','.woff2':'font/woff2','.txt':'text/plain'};
 const checks=Object.fromEntries(['plain_owner','exact_owner_key','owner_native_estimate','protocol_and_selected_features',
@@ -29,10 +32,12 @@ const labels={reserve_native_setup:id=>`Reserve native setup prompt: ${id}`,clai
   record_native_setup_original:id=>`Record native setup original: ${id}`,inspect_native_setup:()=> 'Inspect retained native setup',
   verify_native_setup_completion:()=> 'Verify native setup originals and state',claim_native_oracle_trial:()=> 'Retain original native trial hash'};
 try {
-  for(const {width,unknown,origin,walletId,blocked} of [
+  for(const {width,unknown,origin,walletId,blocked,compact=false} of [
     {width:390,unknown:false,origin:'https://bouncer-near.vercel.app',walletId:'nightly-wallet',blocked:false},
     {width:320,unknown:true,origin:'https://4173-synthetic.e2b.app',walletId:'nightly-wallet',blocked:false},
     {width:390,unknown:false,origin:'https://bouncer-near.vercel.app',walletId:'meteor-wallet',blocked:true},
+    {width:390,unknown:false,origin:'https://bouncer-near.vercel.app',walletId:'meteor-wallet',blocked:false,compact:true},
+    {width:320,unknown:true,origin:'https://4173-synthetic.e2b.app',walletId:'meteor-wallet',blocked:false,compact:true},
   ]) {
     const context=await browser.newContext({viewport:{width,height:844},isMobile:true,hasTouch:true,reducedMotion:'reduce'}),page=await context.newPage();
     await page.addInitScript(() => Object.defineProperty(navigator,'storage',{value:{persist:async()=>true,persisted:async()=>true},configurable:true}));
@@ -53,7 +58,9 @@ try {
         return {accountId:signerId,publicKey:'${publicKey}',signature:btoa(String.fromCharCode(...sig))}},
       async signAndSendTransaction({network,signerId,actions}){if(network!=='testnet'||signerId!=='${owner}')throw Error();
         const first=actions?.[0],index=first?.type==='CreateAccount'?0:first?.params?.methodName==='set_policy'?1:
-          first?.params?.methodName==='deposit_native'?2:first?.type==='AddKey'?3:-1;
+          first?.params?.methodName==='deposit_native'?2:first?.type==='AddKey'?(${compact}?2:3):-1;
+        if(${compact}&&index===0&&(actions[2]?.params?.code?.length!==${loaderBytes.length}||actions[4]?.params?.args?.length!==${compressedBytes.length}))
+          throw Error('wrong compact synthetic artifacts');
         if(index<0)throw Error('unexpected synthetic action');if(${unknown}&&index===0)throw Error('synthetic unknown wallet result');
         return {transaction:{hash:${JSON.stringify(hashes)}[index]}}}
     });`;
@@ -73,7 +80,8 @@ try {
       assert.deepEqual(saved.action,nativeSetupAuthAction(ctx));assert.equal(evidence.accountId,owner);assert.equal(evidence.publicKey,publicKey);
       const payload=nep413Payload({message:saved.result.message,nonce:new Uint8Array(Buffer.from(saved.result.nonce_base64,'base64')),recipient:saved.result.recipient});
       assert.equal(verifySignature(null,createHash('sha256').update(payload).digest(),pair.publicKey,Buffer.from(evidence.signature,'base64')),true);saved.used=true;}
-    function completion(){const now=Date.now();blockTime??=now;return {version:1,network:'testnet',status:'FOUR_ORIGINALS_AND_STATE_MATCH_NOT_AUTHORIZED',
+    function completion(){const now=Date.now();blockTime??=now;return {version:1,network:'testnet',
+      status:compact?'THREE_ORIGINALS_AND_STATE_MATCH_NOT_AUTHORIZED':'FOUR_ORIGINALS_AND_STATE_MATCH_NOT_AUTHORIZED',
       stage_id:'verify_native_setup_completion',owner,vault,review_sha256:review.review_sha256,independently_witnessed:true,
       witness_head:(trial?'d':'c').repeat(40),
       execution_authorized:false,signing_authorized:false,transaction_sent:false,owner_approval_obtained:false,wallet_prompt_authorized:false,
@@ -100,15 +108,21 @@ try {
       if(url.origin!==origin)return route.abort();
       if(url.pathname==='/api/google-session')return json(route,{authenticated:false});
       if(url.pathname==='/api/wallet-setup/config')return json(route,{enabled:false,network:'testnet',owner});
-      if(url.pathname==='/api/native-oracle-setup/config')return json(route,{enabled:true,network:'testnet',owner,ready_for_real_spending:false,trial_submission_enabled:true});
+      if(url.pathname==='/api/native-oracle-setup/config')return json(route,{enabled:true,network:'testnet',owner,ready_for_real_spending:false,
+        compressed_review_enabled:compact,trial_submission_enabled:true});
       if(url.pathname==='/api/read-only/config')return json(route,{relay_url:'https://bouncer-testnet-readonly-relay-tau.vercel.app/api/read'});
       if(url.pathname==='/api/read-only/pending')return json(route,{jobs:[]});
       if(url.pathname==='/api/read-only/owner-key')return json(route,{full_access:true});
       if(url.pathname==='/api/native-oracle-setup/artifact')return route.fulfill({status:200,contentType:'application/wasm',body:wasm});
+      if(compact && url.pathname==='/api/native-oracle-setup/loader')return route.fulfill({status:200,contentType:'application/octet-stream',body:loaderBytes});
+      if(compact && url.pathname==='/api/native-oracle-setup/compressed')return route.fulfill({status:200,contentType:'application/octet-stream',body:compressedBytes});
       if(url.pathname==='/api/native-oracle-setup/review'){
-        const input=req.postDataJSON();review=buildNativeOracleWalletPlan({wasmBytes:wasm,terms:{owner,vault,policy_id:'price',agent_public_key:input.agentPublicKey,
+        const input=req.postDataJSON(),terms={owner,vault,policy_id:'price',agent_public_key:input.agentPublicKey,
           per_tx_cap_yocto:'100000000000000000000000',daily_cap_yocto:'100000000000000000000000',vault_deposit_yocto:'100000000000000000000000',
-          agent_gas_allowance_yocto:NATIVE_ORACLE_DEFAULT_GAS_ALLOWANCE}}).review;
+          agent_gas_allowance_yocto:NATIVE_ORACLE_DEFAULT_GAS_ALLOWANCE};
+        if(compact)assert.equal(input.ownerPublicKey,publicKey);
+        review=(compact?buildResearchPhonePlan({wasmBytes:wasm,loaderBytes,compressedBytes,terms,trustedOwnerPublicKey:publicKey}):
+          buildNativeOracleWalletPlan({wasmBytes:wasm,terms})).review;
         identity={owner,owner_public_key:publicKey,operation_id:'1'.repeat(32),review_sha256:review.review_sha256,
           stages:review.stages.map(s=>({stage_id:s.id,action_commitment_sha256:s.action_commitment_sha256}))};
         rows=identity.stages.map(s=>({...s,claimed:false,original_hash:null}));
@@ -136,7 +150,8 @@ try {
         return json(route,{status:'ORIGINAL_RECORDED',owner,operation_id:identity.operation_id,stage_id:row.stage_id,original_hash:row.original_hash,
           do_not_retry:true,execution_authorized:false});}
       if(name==='preview-original') {authenticate(input.evidence,common('inspect_native_setup'));const index=rows.findIndex(r=>r.stage_id===input.stageId),row=rows[index];
-        assert(row?.claimed);assert.equal(input.originalHash,hashes[index]);return json(route,{status:index===3?'FINAL_LOCAL_ADD_KEY_OUTCOME_MATCH':'FINAL_NATIVE_SETUP_RECEIPT_MATCH',
+        assert(row?.claimed);assert.equal(input.originalHash,hashes[index]);return json(route,{status:index===rows.length-1?'FINAL_LOCAL_ADD_KEY_OUTCOME_MATCH':
+          compact?(index===0?'FINAL_RESEARCH_LOADER_AND_UPGRADE_MATCH':'FINAL_RESEARCH_NATIVE_SETUP_RECEIPT_MATCH'):'FINAL_NATIVE_SETUP_RECEIPT_MATCH',
           stage_id:row.stage_id,tx_hash:input.originalHash,original_recorded:row.original_hash===input.originalHash,execution_authorized:false});}
       if(name==='completion-challenge')return json(route,challenge(common('verify_native_setup_completion')));
       if(name==='completion') {authenticate(input.evidence,common('verify_native_setup_completion'));return json(route,completion());}
@@ -185,8 +200,9 @@ try {
     }
     try { await page.locator('#wallet-native-setup-approve').waitFor({state:'visible',timeout:10_000}); }
     catch(error) { console.error('Synthetic reservation:',await page.locator('#wallet-native-setup-status').textContent(),errors,requests.slice(-15)); throw error; }
-    for(let i=0;i<4;i++){
-      assert.match(await page.locator('#wallet-native-setup-stage').innerText(),new RegExp(`${i+1} of 4`));
+    const stageCount=compact?3:4;
+    for(let i=0;i<stageCount;i++){
+      assert.match(await page.locator('#wallet-native-setup-stage').innerText(),new RegExp(`${i+1} of ${stageCount}`));
       assert.equal(claims,i);await page.locator('#wallet-native-setup-approve').click();
       if(unknown&&i===0){await page.locator('#wallet-native-setup-recover').waitFor({state:'visible'});
         assert.match(await page.locator('#wallet-native-setup-status').innerText(),/unknown.*do not repeat/i);
@@ -197,11 +213,11 @@ try {
       catch(error) { console.error('Synthetic stage:',i,await page.locator('#wallet-native-setup-status').textContent(),errors,requests.slice(-18)); throw error; }
       assert.equal(claims,i+1);
       await page.locator('#wallet-native-setup-receipt').click();
-      await page.locator(i===3?'#wallet-native-setup-verify':'#wallet-native-setup-approve').waitFor({state:'visible'});
+      await page.locator(i===stageCount-1?'#wallet-native-setup-verify':'#wallet-native-setup-approve').waitFor({state:'visible'});
     }
     await page.locator('#wallet-native-setup-verify').click();
     await page.waitForFunction(()=>document.querySelector('#wallet-native-setup-status').textContent.includes('did not buy a resource'));
-    assert.equal(claims,4);assert.equal(sends,0);assert.equal(trial,null);
+    assert.equal(claims,stageCount);assert.equal(sends,0);assert.equal(trial,null);
     await page.locator('#wallet-native-trial-review').waitFor({state:'visible'});await page.locator('#wallet-native-trial-review').click();
     await page.locator('#wallet-native-trial-send').waitFor({state:'visible'});
     assert.match(await page.locator('#wallet-native-setup-stage').innerText(),/maximum 0\.1 test NEAR/);
@@ -237,8 +253,8 @@ try {
     assert.equal(await page.locator('#wallet-native-trial-send').isVisible(),false);
     await page.locator('#wallet-native-trial-check').click();
     await page.waitForFunction(()=>document.querySelector('#wallet-native-setup-status').textContent.includes('OutLayer receipt verified'));
-    assert.equal(sends,1);assert.equal(claims,4);assert.deepEqual(errors,[]);
+    assert.equal(sends,1);assert.equal(claims,stageCount);assert.deepEqual(errors,[]);
     await context.close();
   }
-  console.log('Native owner UI: synthetic four-stage/trial/recovery and pre-reservation Meteor size block passed. No live transaction.');
+  console.log('Native owner UI: synthetic four-stage and compressed Meteor flows, trial/recovery and direct-deploy size block passed. No live transaction.');
 } finally {await browser.close();}

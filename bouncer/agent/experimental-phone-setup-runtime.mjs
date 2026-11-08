@@ -32,10 +32,11 @@ const sameCheckpoint = (a, b) => validCheckpoint(a) && validCheckpoint(b) && a.h
 const fail = () => new Error('experimental setup unavailable: preprovisioned schemas and the separately retained current witness head are required');
 
 export async function createExperimentalPhoneSetupRuntime({ pool, siteOrigin, provider, anchor, repo, branch, initialHead,
-  nativeWasmBytes, bufferWasmBytes, enableNative = false, enableBuffer = false, enableNativeTrial = false,
-  enableNativeAtomic = false } = {}) {
+  nativeWasmBytes, nativeLoaderBytes, nativeCompressedBytes, bufferWasmBytes, enableNative = false, enableBuffer = false, enableNativeTrial = false,
+  enableNativeAtomic = false, enableNativeCompressed = false } = {}) {
   if (typeof enableNative !== 'boolean' || typeof enableBuffer !== 'boolean' || typeof enableNativeTrial !== 'boolean' ||
-      typeof enableNativeAtomic !== 'boolean' || (enableNativeAtomic && !enableNative) ||
+      typeof enableNativeAtomic !== 'boolean' || typeof enableNativeCompressed !== 'boolean' ||
+      ((enableNativeAtomic || enableNativeCompressed) && !enableNative) ||
       (enableNativeTrial && (!enableNative || typeof provider?.block !== 'function')) || (!enableNative && !enableBuffer) ||
       !pool || typeof pool.connect !== 'function' || !anchor || typeof anchor.read !== 'function' ||
       typeof anchor.compareAndSet !== 'function') throw fail();
@@ -68,14 +69,15 @@ export async function createExperimentalPhoneSetupRuntime({ pool, siteOrigin, pr
     };
   }
   if (enableNative) {
-    const fence = createPostgresNativeOraclePromptFence({ pool, authenticate: auth.authenticate, wasmBytes: nativeWasmBytes,
+    const compact={loaderBytes:nativeLoaderBytes,compressedBytes:nativeCompressedBytes,enableCompressed:enableNativeCompressed};
+    const fence = createPostgresNativeOraclePromptFence({ pool, authenticate: auth.authenticate, wasmBytes: nativeWasmBytes,...compact,
       receiptProvider: provider, preflightProvider: provider, enableAtomic: enableNativeAtomic });
     const coordinator = createWitnessedNativeOracleSetup({ fence, witness: pair.native, otherWitness: pair.wallet });
-    const catalog = createNativeOracleReviewCatalog({ wasmBytes: nativeWasmBytes, enableAtomic: enableNativeAtomic });
+    const catalog = createNativeOracleReviewCatalog({ wasmBytes: nativeWasmBytes,...compact, enableAtomic: enableNativeAtomic });
     const service = createAuthenticatedNativeOracleSetupService({ auth, fence, witness: pair.native, otherWitness: pair.wallet,
-      coordinator, getRetainedReview: catalog.getRetainedReview, wasmBytes: nativeWasmBytes, receiptProvider: provider, owner: OWNER,
+      coordinator, getRetainedReview: catalog.getRetainedReview, wasmBytes: nativeWasmBytes,...compact, receiptProvider: provider, owner: OWNER,
       enableAtomic: enableNativeAtomic });
-    const handler = createNativeOracleSetupHttpHandler({ service, siteOrigin, wasmBytes: nativeWasmBytes,
+    const handler = createNativeOracleSetupHttpHandler({ service, siteOrigin, wasmBytes: nativeWasmBytes,...compact,
       owner: OWNER, createReview: catalog.create, enableTrialSubmission: enableNativeTrial, enableAtomic: enableNativeAtomic });
     nativeSetupFactory = () => handler;
   }

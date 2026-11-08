@@ -19,12 +19,13 @@ WASM bytes (507,348 base64 bytes), too large for that bridge. This is a source
 and local size check, not a test on the user's phone or proof that every Meteor
 web/extension transport has the same limit.
 
-The current phone setup conservatively blocks a **new** Meteor reservation and
+The direct V9 setup conservatively blocks a **new** Meteor reservation and
 first-stage prompt because its manifest does not distinguish mobile from web.
 Read-only original-hash recovery and other wallets are not blocked by this
-check; no other wallet is thereby declared compatible. The existing two- and
-four-stage setups remain default-off. A smaller/chunked deployment path needs
-its own receipt/recovery review and real-device test before it can be enabled.
+check; no other wallet is thereby declared compatible. The separately opt-in
+three-stage compressed route avoids that known request-size mismatch in the
+pinned SDK's synthetic validator, but real Meteor phone behavior is unproven.
+All setup variants remain disabled by default and undeployed.
 
 A **research-only** raw-DEFLATE loader has now been exercised on disposable
 loopback nearcore ([sandbox run](https://github.com/Greatmujey/Bouncer/actions/runs/42471038276)).
@@ -33,20 +34,38 @@ receipt and owner, configured a keyless vault, enforced a native cap, rejected
 unauthorized and corrupt calls, and exercised rollback and a separate manual
 owner-only refund. The built loader was 28,950 bytes (SHA-256
 `28b358e4ee4e6c7327dc17c63934a63e4cdad5d424dbfe67a80381cf1027bb7b`);
-compressed V9 was 135,476 bytes. A [second sandbox run](https://github.com/Greatmujey/Bouncer/actions/runs/42471487726)
+compressed V9 was 135,476 bytes (SHA-256
+`4fdc4feffcb7b690d3f6f4dec6f62af12b37cebdb3f1e78bc9486e366c81ec21`). A [second sandbox run](https://github.com/Greatmujey/Bouncer/actions/runs/42471487726)
 reproduced that loader and passed the pinned Meteor SDK validator with the
 actual built binary and compressed V9 (220,060-byte synthetic request); a
-direct V9 request was rejected by the same validator. A three-stage unsigned
-research review and offline receipt-graph inspector are under test, not wired
-to the production setup. These are not real-phone, independently anchored
-original-hash recovery, wallet-approval, public testnet, provider fulfillment
-or security-audit evidence. The loader is not integrated or deployed. In
-particular, an uncertain original must never be retried; an asynchronous failure
-can leave a loader and funds on the child and requires verified, explicitly
-owner-authorized recovery.
+direct V9 request was rejected by the same validator. The three-stage review,
+original-graph inspector, PostgreSQL fence, Git witness, owner authentication,
+phone prompt and trial are now connected behind a **separate default-off**
+flag. The browser and backend each validate the pinned artifacts; the browser
+does so before a reservation or wallet prompt. Synthetic tests include lost
+claims, unknown wallet results and the exact three retained originals. They do
+not establish real-phone behavior, a separately deployed independent checkpoint,
+wallet approval, public testnet execution, provider fulfillment or a security
+audit. Nothing in this route has been deployed for the user.
+
+The first original must include the loader's successful asynchronous V9
+deployment and `new` receipt; success of the outer transaction alone is not
+sufficient. [Isolated sandbox failure tests](https://github.com/Greatmujey/Bouncer/actions/runs/42472466629)
+showed that an insufficient-storage upgrade can leave a keyless loader and
+funds on the child; a separate owner-only refund succeeded in that sandbox.
+There is no automatic live refund or complete owner-facing refund procedure.
+Never retry an uncertain original; inspect the original and state first, and
+require explicit owner approval for any recovery transaction.
 
 ## What is implemented
 
+- A separately opt-in, three-approval compressed variant creates the keyless
+  child and asynchronously upgrades the pinned loader to the pinned V9 contract,
+  configures and funds it, then installs the restricted agent key. It preserves
+  three distinct originals and verifies the full upgrade graph and fresh state
+  before proceeding. The phone UI also discloses the asynchronous-upgrade and
+  potentially locked-funds risk. Disposable PostgreSQL/local Git and simulated
+  wallet/RPC tests cover this composition; they are not live-use evidence.
 - An explicitly opt-in, two-approval variant combines creation, configuration
   and funding into one nine-action transaction, followed by restricted agent-key
   installation. The browser, authenticated service, database fence and Git
@@ -145,7 +164,7 @@ owner-authorized recovery.
   or expired postcheck consumes the claim: stop and reconcile, never reopen the
   wallet prompt. FT retains its existing preflight behavior.
 - `postgres-native-oracle-prompt-fence.mjs` atomically retains one review and
-  four stage rows, checks earlier original receipts and fresh native preflights,
+  its exact two, three or four stage rows, checks earlier original receipts and fresh native preflights,
   and claims each prompt once. `witnessed-native-oracle-wallet-setup.mjs`
   combines it with the separate Git witness; NEP-413 challenges bind the exact
   native action to a fresh Ed25519 FullAccess-key view (not EVM/0x support).
@@ -210,12 +229,12 @@ owner-authorized recovery.
 - `authenticated-native-oracle-setup-service.mjs`, the opt-in
   `native-oracle-setup-http.mjs` and `web-src/native-oracle-setup-client.mjs`
   now compose the owner-message challenges, retained native review, both setup
-  witnesses, device-key check, four one-shot wallet prompts, original-hash
-  preview/recording and completion check. The HTTP bridge is **off by default**.
+  witnesses, device-key check, separately reviewed one-shot wallet prompts,
+  original-hash preview/recording and completion check. The HTTP bridge is **off by default**.
   The wallet account panel now exposes an experimental native setup screen only
   on the dedicated top-level Bouncer site or approved test preview, after wallet
   control verification and an enabled same-origin backend. It displays storage funding, deposit, caps, gas
-  allowance and four separate stage approvals. Each original is retained and
+  allowance and the selected plan's separate stage approvals. Each original is retained and
   checked at FINAL before another stage; unknown outcomes go to recovery. The
   screen requests persistent device storage, but does not provide key backup or
   revocation. A separately disabled-by-default testnet trial option now adds
@@ -240,8 +259,11 @@ owner-authorized recovery.
   Native-only preview does not require the V12 FT artifact. Both transport
   switches are off by default; trial submission also requires the separate
   `BOUNCER_ENABLE_NATIVE_ORACLE_TESTNET_TRIAL=1` opt-in with native setup.
-  The shorter review additionally requires `BOUNCER_ENABLE_NATIVE_ORACLE_ATOMIC_SETUP=1`;
-  neither option is enabled on the public app by this code.
+  The two-stage review additionally requires `BOUNCER_ENABLE_NATIVE_ORACLE_ATOMIC_SETUP=1`;
+  the three-stage loader requires `BOUNCER_ENABLE_NATIVE_ORACLE_COMPRESSED_SETUP=1`
+  and both pinned fixture files. If both are enabled, new reviews use the
+  compressed plan while retained atomic/four-stage reviews remain recognizable.
+  None of these options is enabled on the public app by this code.
   This wiring and its disposable DB/local Git
   tests are **not** an independently operated deployment, live phone flow or
   approval to fund a vault. The review catalog is reconstructable across
@@ -493,7 +515,7 @@ a recommendation to expose the current prototype or lock testnet funds.
 ## Before enabling a real phone flow
 
 1. Finish, deploy and independently monitor the per-owner prompt fence and
-   authenticated owner session for the exact reviewed two or four stages. Extend the
+   authenticated owner session for the exact reviewed two, three or four stages. Extend the
    single-database cross-flow hold to an independently anchored, safely
    reconciled handoff/release and establish an operational recovery procedure. Preserve the
    separately anchored review and every original hash across crashes, lost

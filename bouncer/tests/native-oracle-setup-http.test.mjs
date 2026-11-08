@@ -58,3 +58,38 @@ test('only pinned V9 bytes, the intended owner and a dedicated HTTPS origin can 
     assert.equal(bytes.length,452675);assert.equal(crypto.createHash('sha256').update(bytes).digest('hex'),
       '835f0baa51d08ddf3af6812df0caefb93283480735a63e3d382073e04fbaf8ee')});
 });
+
+test('compact artifact endpoints require explicit opt-in and exact pinned bytes',async()=>{
+  const loaderBytes=fs.readFileSync(new URL('../contracts/native-phone-loader/fixtures/native-phone-loader-research.wasm',import.meta.url));
+  const compressedBytes=fs.readFileSync(new URL('../contracts/native-phone-loader/fixtures/native-v9.deflate',import.meta.url));
+  const service=synthetic([]),base={service,siteOrigin:SITE,wasmBytes:wasm,owner:'great_mujey.testnet'};
+  assert.throws(()=>createNativeOracleSetupHttpHandler({...base,enableCompressed:true}));
+  assert.throws(()=>createNativeOracleSetupHttpHandler({...base,enableCompressed:true,loaderBytes:Buffer.alloc(loaderBytes.length),compressedBytes}));
+  assert.throws(()=>createNativeOracleSetupHttpHandler({...base,enableCompressed:true,loaderBytes,compressedBytes:Buffer.alloc(compressedBytes.length)}));
+  await withServer(async({base})=>{
+    const config=await (await fetch(`${base}/api/native-oracle-setup/config`,{headers:HEADERS})).json();
+    assert.equal(config.compressed_review_enabled,false);
+    assert.equal((await fetch(`${base}/api/native-oracle-setup/loader`,{headers:HEADERS})).status,404);
+    assert.equal((await fetch(`${base}/api/native-oracle-setup/compressed`,{headers:HEADERS})).status,404);
+  });
+  const createReview=async input=>({input,signing_authorized:false,transaction_sent:false});
+  const handler=createNativeOracleSetupHttpHandler({...base,loaderBytes,compressedBytes,enableCompressed:true,createReview});
+  // Handler owns immutable copies; later caller mutation cannot alter an artifact.
+  const expectedLoader=Buffer.from(loaderBytes),expectedCompressed=Buffer.from(compressedBytes);
+  loaderBytes[80]^=1;compressedBytes[80]^=1;
+  const server=createReadOnlyPreviewService({bridge,siteOrigin:SITE,inspectReadiness:async()=>({}),makeReview:async()=>({}),nativeSetupFactory:()=>handler});
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));const url=`http://127.0.0.1:${server.address().port}`;
+  try{
+    const config=await (await fetch(`${url}/api/native-oracle-setup/config`,{headers:HEADERS})).json();
+    assert.equal(config.compressed_review_enabled,true);assert.equal(config.trial_submission_enabled,false);
+    for(const [route,expected] of [['loader',expectedLoader],['compressed',expectedCompressed]]){
+      const response=await fetch(`${url}/api/native-oracle-setup/${route}`,{headers:HEADERS});
+      assert.equal(response.status,200);assert.equal(response.headers.get('cache-control'),'no-store');
+      assert.deepEqual(Buffer.from(await response.arrayBuffer()),expected);
+      assert.equal((await fetch(`${url}/api/native-oracle-setup/${route}`,{headers:{...HEADERS,origin:'https://evil.test'}})).status,403);
+    }
+    assert.equal((await post(url,'review',{agentPublicKey:'a'})).status,400);
+    const result=await post(url,'review',{agentPublicKey:'a',ownerPublicKey:'b'});assert.equal(result.status,200);
+    assert.deepEqual((await result.json()).input,{agentPublicKey:'a',ownerPublicKey:'b'});
+  }finally{await new Promise(resolve=>server.close(resolve));}
+});

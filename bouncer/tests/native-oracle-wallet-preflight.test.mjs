@@ -4,7 +4,9 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import nearApi from 'near-api-js';
 import { inspectNativeOracleWalletStage, inspectNativeOracleWalletCompletion,
-  inspectAtomicNativeOracleWalletStage, inspectAtomicNativeOracleWalletCompletion } from '../agent/native-oracle-wallet-preflight.mjs';
+  inspectAtomicNativeOracleWalletStage, inspectAtomicNativeOracleWalletCompletion,
+  inspectCompressedNativeOracleWalletStage, inspectCompressedNativeOracleWalletCompletion } from '../agent/native-oracle-wallet-preflight.mjs';
+import { buildResearchPhonePlan, prepareResearchPhoneAttempt } from '../agent/native-phone-loader-research.mjs';
 import { buildAtomicNativeOracleWalletPlan, prepareAtomicNativeOracleWalletAttempt } from '../agent/native-oracle-atomic-wallet.mjs';
 import { buildNativeOracleWalletPlan, NATIVE_ORACLE_DEFAULT_GAS_ALLOWANCE, NATIVE_ORACLE_V9_CODE_HASH,
   NATIVE_ORACLE_VAULT_FUNDING } from '../agent/native-oracle-wallet-plan.mjs';
@@ -258,5 +260,61 @@ test('atomic preflight blocks changed vault, budgets, route or agent key', async
   ]) {
     const f = atomicFixture(index, opts), result = await (index === 2 ? inspectAtomicNativeOracleWalletCompletion(f) : inspectAtomicNativeOracleWalletStage(f));
     assert.equal(result.status, 'BLOCKED_OR_UNKNOWN', blocker); assert(result.blockers.includes(blocker), blocker);
+  }
+});
+
+const compactLoader=fs.readFileSync(new URL('../contracts/native-phone-loader/fixtures/native-phone-loader-research.wasm',import.meta.url));
+const compactStream=fs.readFileSync(new URL('../contracts/native-phone-loader/fixtures/native-v9.deflate',import.meta.url));
+const compactPlan=buildResearchPhonePlan({wasmBytes:wasm,loaderBytes:compactLoader,compressedBytes:compactStream,trustedOwnerPublicKey:ownerKey,terms:{
+  owner,vault,policy_id:'price',agent_public_key:agentKey,per_tx_cap_yocto:plan.review.per_tx_cap_yocto,
+  daily_cap_yocto:plan.review.daily_cap_yocto,vault_deposit_yocto:plan.review.vault_deposit_yocto,
+  agent_gas_allowance_yocto:plan.review.agent_gas_allowance_yocto}});
+function compactOriginal(index){
+  const review=structuredClone(compactPlan.review),batch=compactPlan.batches[index],trustedOriginalHash=hash(101+index),root=hash(110+index),upgrade=hash(115);
+  const attempt=prepareResearchPhoneAttempt({review,wasmBytes:wasm,loaderBytes:compactLoader,compressedBytes:compactStream,
+    trustedReviewHash:review.review_sha256,trustedOriginalHash,trustedOwnerPublicKey:ownerKey,stageId:batch.id});
+  const actions=batch.actions.map(rpcAction),rootOutcome={executor_id:batch.receiverId,status:index===0?{SuccessReceiptId:upgrade}:{SuccessValue:''},
+    receipt_ids:index===0?[upgrade]:[],logs:index===1?['BOUNCER native deposit received']:[]};
+  const result={final_execution_status:'FINAL',status:{SuccessValue:''},transaction:{hash:trustedOriginalHash,signer_id:owner,
+    public_key:ownerKey,receiver_id:batch.receiverId,actions:structuredClone(actions)},
+    transaction_outcome:{id:trustedOriginalHash,outcome:{executor_id:owner,receipt_ids:[root],status:{SuccessReceiptId:root}}},
+    receipts:index===2?[]:[{receipt_id:root,predecessor_id:owner,receiver_id:batch.receiverId,receipt:{Action:{signer_id:owner,
+      signer_public_key:ownerKey,input_data_ids:[],output_data_receivers:[],actions:structuredClone(actions)}}}],
+    receipts_outcome:[{id:root,outcome:rootOutcome}]};
+  if(index===0){result.receipts.push({receipt_id:upgrade,predecessor_id:vault,receiver_id:vault,receipt:{Action:{signer_id:owner,
+    signer_public_key:ownerKey,input_data_ids:[],output_data_receivers:[],actions:[
+      {DeployContract:{code:crypto.createHash('sha256').update(wasm).digest('base64')}},
+      {FunctionCall:{method_name:'new',args:Buffer.from(JSON.stringify({owner})).toString('base64'),gas:30_000_000_000_000,deposit:'0'}}]}}});
+    result.receipts_outcome.push({id:upgrade,outcome:{executor_id:vault,status:{SuccessValue:''},receipt_ids:[],logs:[]}});}
+  return {attempt,trustedOriginalHash,result};
+}
+function compactFixture(index,opts={}){
+  const f=fixture([0,1,3,4][index],opts),review=structuredClone(compactPlan.review);
+  f.review=review;f.trustedReviewHash=review.review_sha256;f.loaderBytes=compactLoader;f.compressedBytes=compactStream;
+  f.prior=Array.from({length:index},(_,i)=>compactOriginal(i));
+  if(index<3)f.stageId=compactPlan.batches[index].id;else delete f.stageId;
+  return f;
+}
+test('compressed stages require their own genuine original graphs and fresh state',async()=>{
+  for(let i=0;i<3;i++){
+    const result=await inspectCompressedNativeOracleWalletStage(compactFixture(i));
+    assert.equal(result.status,'STATE_CHECKS_PASSED_NOT_AUTHORIZED');assert.deepEqual(result.blockers,[]);
+    assert.equal(result.stage_id,compactPlan.batches[i].id);assert.equal(result.wallet_prompt_authorized,false);
+  }
+  const result=await inspectCompressedNativeOracleWalletCompletion(compactFixture(3));
+  assert.equal(result.status,'THREE_ORIGINALS_AND_STATE_MATCH_NOT_AUTHORIZED');assert.deepEqual(result.blockers,[]);
+  assert.deepEqual(result.prior_original_hashes,[hash(101),hash(102),hash(103)]);
+  assert.equal(result.checks.exact_agent_key,true);assert.equal(result.independent_delivery_verified,false);
+});
+test('compressed preflight fails before RPC for missing or altered loader upgrade and blocks changed vault state',async()=>{
+  for(const mutate of [f=>f.prior.shift(),f=>{f.prior[0].result.receipts[1].receipt.Action.actions[1].FunctionCall.args=''},
+    f=>{f.prior[1].result.transaction.actions[4].FunctionCall.deposit='0'},
+    f=>{f.prior[0].result.status={Failure:{ActionError:{}}}}]){
+    const f=compactFixture(2);mutate(f);await assert.rejects(inspectCompressedNativeOracleWalletStage(f));assert.deepEqual(f.calls,[]);
+  }
+  for(const [i,opts,blocker] of [[0,{childExists:true},'new_direct_child_absent'],[1,{badVaultCode:true},'exact_keyless_vault'],
+    [2,{badCap:true},'native_policy_state'],[2,{badBalance:true},'vault_native_balance'],[3,{agentFullAccess:true},'exact_agent_key']]){
+    const f=compactFixture(i,opts),result=await (i===3?inspectCompressedNativeOracleWalletCompletion(f):inspectCompressedNativeOracleWalletStage(f));
+    assert.equal(result.status,'BLOCKED_OR_UNKNOWN');assert(result.blockers.includes(blocker));
   }
 });

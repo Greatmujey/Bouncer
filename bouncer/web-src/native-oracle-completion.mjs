@@ -14,8 +14,10 @@ export function assertNativeOracleCompletion(snapshot,review,clock,{maxAgeMs=500
   if (!Number.isSafeInteger(maxAgeMs) || maxAgeMs<1 || maxAgeMs>120_000) throw fail();
   const observed=Date.parse(snapshot?.observed_at);
   const atomic=review?.format==='bouncer-atomic-native-oracle-wallet-review-v1';
-  if (!atomic && review?.format!=='bouncer-native-oracle-wallet-review-v1') throw fail();
-  const count=atomic?2:4, expectedStatus=atomic?'TWO_ORIGINALS_AND_STATE_MATCH_NOT_AUTHORIZED':'FOUR_ORIGINALS_AND_STATE_MATCH_NOT_AUTHORIZED';
+  const compressed=review?.format==='bouncer-research-compressed-native-oracle-wallet-review-v1';
+  if (!atomic && !compressed && review?.format!=='bouncer-native-oracle-wallet-review-v1') throw fail();
+  const count=compressed?3:atomic?2:4, expectedStatus=compressed?'THREE_ORIGINALS_AND_STATE_MATCH_NOT_AUTHORIZED':
+    atomic?'TWO_ORIGINALS_AND_STATE_MATCH_NOT_AUTHORIZED':'FOUR_ORIGINALS_AND_STATE_MATCH_NOT_AUTHORIZED';
   if (!plain(snapshot) || snapshot.version!==1 || snapshot.network!=='testnet' ||
       snapshot.status!==expectedStatus || snapshot.stage_id!=='verify_native_setup_completion' ||
       snapshot.owner!==review?.owner || snapshot.vault!==review?.vault || snapshot.review_sha256!==review?.review_sha256 ||

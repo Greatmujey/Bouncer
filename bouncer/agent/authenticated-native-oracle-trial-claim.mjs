@@ -2,8 +2,8 @@
  * Owner-authenticated, one-shot claim of the native trial's ORIGINAL hash.
  * This composes an existing NEP-413 authenticator with both anchored setup
  * witnesses. It does not sign a transaction or grant spending consent. A
- * trusted completion supplier must independently verify all four setup
- * originals and current state; the caller must separately obtain human consent.
+ * trusted completion supplier must independently verify every reviewed setup
+ * original and current state; the caller must separately obtain human consent.
  *
  * Each challenge is single-use. An uncertain witness acknowledgement,
  * conflicting state or failed postcheck is reconciliation-only. Never issue
@@ -20,9 +20,9 @@ const exact=(value,keys)=>value!==null && typeof value==='object' && !Array.isAr
   [Object.prototype,null].includes(Object.getPrototypeOf(value)) && Reflect.ownKeys(value).length===keys.length &&
   keys.every(k=>Object.hasOwn(Object.getOwnPropertyDescriptor(value,k)??{},'value'));
 
-export function createAuthenticatedNativeOracleTrialClaim({goal,review,identity,wasmBytes,trustedReviewHash,trustedOwnerPublicKey,
+export function createAuthenticatedNativeOracleTrialClaim({goal,review,identity,wasmBytes,loaderBytes,compressedBytes,trustedReviewHash,trustedOwnerPublicKey,
   auth,witness,otherWitness,getFreshCompletion,now=Date.now}={}) {
-  const checked=validateWitnessedNativeOracleTrial({goal,review,identity,wasmBytes,trustedReviewHash,trustedOwnerPublicKey});
+  const checked=validateWitnessedNativeOracleTrial({goal,review,identity,wasmBytes,loaderBytes,compressedBytes,trustedReviewHash,trustedOwnerPublicKey});
   if(!auth || typeof auth.issue!=='function' || typeof auth.authenticate!=='function' ||
       !witness || typeof witness.inspect!=='function' || typeof witness.claimTrial!=='function' ||
       !otherWitness || otherWitness===witness || typeof otherWitness.inspect!=='function' ||

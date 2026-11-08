@@ -8,7 +8,8 @@
  * a lost claim/result must be reconciled and must NEVER be retried.
  */
 import { signReviewedNativeSetupChallenge } from './native-oracle-setup-auth.mjs';
-import { prepareNativeOracleSetupWalletPrompt, prepareAtomicNativeOracleSetupWalletPrompt } from './native-oracle-setup-wallet-prompt.mjs';
+import { prepareNativeOracleSetupWalletPrompt, prepareAtomicNativeOracleSetupWalletPrompt,
+  prepareCompressedNativeOracleSetupWalletPrompt } from './native-oracle-setup-wallet-prompt.mjs';
 import { assertNativeOracleWalletDeployAvailable, NATIVE_ORACLE_V9_BYTES } from './native-oracle-wallet-compatibility.mjs';
 import { withReadOnlyRelay } from './buffer-readiness-preview.mjs';
 
@@ -16,6 +17,8 @@ const OWNER='great_mujey.testnet', PREFIX='/api/native-oracle-setup/', BYTES=NAT
 const HEADERS={'x-bouncer-preview':'native-oracle-setup-v1'};
 const STAGES=['create_keyless_native_vault','configure_native_oracle_policy','fund_native_vault','install_native_oracle_agent'];
 const ATOMIC_STAGES=['create_configure_fund_native_vault','install_native_oracle_agent'];
+const COMPRESSED_STAGES=['create_compressed_native_vault','configure_fund_native_oracle','install_native_oracle_agent'];
+const COMPRESSED_FORMAT='bouncer-research-compressed-native-oracle-wallet-review-v1', LOADER_BYTES=28_950, COMPRESSED_BYTES=135_476;
 const codes=new Set(['UNAUTHENTICATED','OWNER_FENCED','OWNER_ALREADY_WITNESSED','ALREADY_CLAIMED','WITNESS_NOT_CLAIMABLE',
   'WITNESS_COMMIT_UNKNOWN','WITNESS_MISMATCH','WITNESS_HEAD_CHANGED','CROSS_FLOW_WITNESSED','GLOBAL_FENCE_UNSAFE',
   'GLOBAL_FENCE_LEGACY_RECONCILIATION_REQUIRED','PREFLIGHT_UNAVAILABLE','PREFLIGHT_BLOCKED','PREFLIGHT_STALE',
@@ -60,12 +63,14 @@ export function createNativeOracleSetupClient({wallet,accountId,ownerPublicKey,d
        result.local_storage_only!==true || result.signing_authorized!==false)throw fail('NATIVE_DEVICE_KEY_UNAVAILABLE');
     return result;
   }
-  async function artifact() {
+  async function artifactPart(name,size) {
     session();let response;
-    try{response=await fetchImpl(`${PREFIX}artifact`,{headers:HEADERS,credentials:'same-origin',cache:'no-store'})}catch{throw fail('NATIVE_SETUP_UNAVAILABLE')}
-    if(!response.ok)throw fail('NATIVE_SETUP_UNAVAILABLE');const data=await bounded(response,BYTES);
-    if(data.length!==BYTES)throw fail('NATIVE_SETUP_UNAVAILABLE');return data;
+    try{response=await fetchImpl(`${PREFIX}${name}`,{headers:HEADERS,credentials:'same-origin',cache:'no-store'})}catch{throw fail('NATIVE_SETUP_UNAVAILABLE')}
+    if(!response.ok)throw fail('NATIVE_SETUP_UNAVAILABLE');const data=await bounded(response,size);
+    if(data.length!==size)throw fail('NATIVE_SETUP_UNAVAILABLE');session();return data;
   }
+  const artifact=()=>artifactPart('artifact',BYTES);
+  const compactArtifacts=async()=>({loaderBytes:await artifactPart('loader',LOADER_BYTES),compressedBytes:await artifactPart('compressed',COMPRESSED_BYTES)});
   async function config() {
     session();try{const response=await fetchImpl(`${PREFIX}config`,{headers:HEADERS,credentials:'same-origin',cache:'no-store'});
       const body=JSON.parse(new TextDecoder().decode(await bounded(response,4096)));
@@ -73,9 +78,22 @@ export function createNativeOracleSetupClient({wallet,accountId,ownerPublicKey,d
       session();return body;
     }catch{return null}
   }
+  async function checkCompressedBeforeReservation(review) {
+    if((await config())?.compressed_review_enabled!==true)throw fail('NATIVE_SETUP_UNAVAILABLE');
+    const deviceKey=await device(review),artifacts=await compactArtifacts();
+    const identity={owner:OWNER,owner_public_key:ownerPublicKey,operation_id:'0'.repeat(32),review_sha256:review.review_sha256,
+      stages:review.stages?.map(s=>({stage_id:s.id,action_commitment_sha256:s.action_commitment_sha256}))};
+    // Rebuild and hash all reviewed bytes BEFORE any reservation or identity
+    // signature. Preparation itself never invokes the wallet or consumes a claim.
+    await prepareCompressedNativeOracleSetupWalletPrompt({wallet,identity,review,deviceKey,stageId:COMPRESSED_STAGES[0],
+      ...artifacts,location,isTopLevel,crypto,now});session();
+  }
   return Object.freeze({
-    /** Does not assert compatibility for other wallets or smaller artifacts. */
-    assertWalletDeployAvailable() { session(); assertNativeOracleWalletDeployAvailable(wallet); },
+    /** Direct V9 remains blocked for Meteor; compact is separately opt-in and
+     * validated before a reservation. Neither check proves real-wallet support. */
+    assertWalletDeployAvailable({review}={}) { session();
+      if(review?.format===COMPRESSED_FORMAT)return checkCompressedBeforeReservation(review);
+      return assertNativeOracleWalletDeployAvailable(wallet); },
     async enabled() { return Boolean(await config()); },
     /** Separately opt-in: enabling setup alone never enables submission. */
     async trialSubmissionEnabled() { return (await config())?.trial_submission_enabled===true; },
@@ -83,10 +101,11 @@ export function createNativeOracleSetupClient({wallet,accountId,ownerPublicKey,d
      * local device key. Creating a key or trusting its backup is a separate step. */
     async createReview({agentPublicKey}={}) {
       await device({owner:OWNER,vault:`native.${OWNER}`,agent_public_key:agentPublicKey});
-      const atomic=(await config())?.atomic_review_enabled===true;session();
-      const result=await request('review',atomic?{agentPublicKey,ownerPublicKey}:{agentPublicKey});
-      if(result?.review?.format!==(atomic?'bouncer-atomic-native-oracle-wallet-review-v1':'bouncer-native-oracle-wallet-review-v1') ||
-         (atomic && result.review.owner_public_key!==ownerPublicKey) ||
+      const settings=await config(),compressed=settings?.compressed_review_enabled===true,
+        atomic=!compressed && settings?.atomic_review_enabled===true;session();
+      const result=await request('review',atomic||compressed?{agentPublicKey,ownerPublicKey}:{agentPublicKey});
+      if(result?.review?.format!==(compressed?COMPRESSED_FORMAT:atomic?'bouncer-atomic-native-oracle-wallet-review-v1':'bouncer-native-oracle-wallet-review-v1') ||
+         ((atomic||compressed) && result.review.owner_public_key!==ownerPublicKey) ||
          !/^[a-f0-9]{64}$/.test(result?.task_id??'') || result.task_id!==result?.review?.review_sha256 || result?.review?.owner!==OWNER ||
          result.review.vault!==`native.${OWNER}` || result.review.agent_public_key!==agentPublicKey ||
          result.signing_authorized!==false || result.transaction_sent!==false)throw fail('NATIVE_SETUP_UNAVAILABLE');
@@ -96,7 +115,8 @@ export function createNativeOracleSetupClient({wallet,accountId,ownerPublicKey,d
       session();if(!/^[a-f0-9]{64}$/.test(taskId??'') || taskId!==review?.review_sha256)throw fail('NATIVE_SETUP_UNAVAILABLE');
       // Check before owner authentication or a durable reservation. A blocked
       // route must not leave a claimed or apparently uncertain wallet prompt.
-      assertNativeOracleWalletDeployAvailable(wallet);
+      if(review?.format===COMPRESSED_FORMAT)await checkCompressedBeforeReservation(review);
+      else assertNativeOracleWalletDeployAvailable(wallet);
       await device(review);
       const agentPublicKey=review.agent_public_key;
       const challenge=await request('reserve-challenge',{taskId,ownerPublicKey,agentPublicKey});
@@ -106,14 +126,15 @@ export function createNativeOracleSetupClient({wallet,accountId,ownerPublicKey,d
     /** Call only from an explicit owner action after reviewing this exact stage. */
     async approveStage({identity,review,stageId}={}) {
       session();
-      const atomic=review?.format==='bouncer-atomic-native-oracle-wallet-review-v1';
-      if(!atomic && review?.format!=='bouncer-native-oracle-wallet-review-v1')throw fail('NATIVE_SETUP_UNAVAILABLE');
-      const stages=atomic?ATOMIC_STAGES:STAGES;
+      const atomic=review?.format==='bouncer-atomic-native-oracle-wallet-review-v1',compressed=review?.format===COMPRESSED_FORMAT;
+      if(!atomic && !compressed && review?.format!=='bouncer-native-oracle-wallet-review-v1')throw fail('NATIVE_SETUP_UNAVAILABLE');
+      const stages=compressed?COMPRESSED_STAGES:atomic?ATOMIC_STAGES:STAGES;
       if(!stages.includes(stageId) || identity?.owner_public_key!==ownerPublicKey)throw fail('NATIVE_SETUP_UNAVAILABLE');
       onProgress(stageId===stages[0]?'Verifying the reviewed vault code…':'Preparing the reviewed native testnet action…');
-      const deviceKey=await device(review),wasmBytes=stageId===stages[0]?await artifact():undefined;
-      const prepare=atomic?prepareAtomicNativeOracleSetupWalletPrompt:prepareNativeOracleSetupWalletPrompt;
-      const prompt=await prepare({wallet,identity,review,deviceKey,stageId,wasmBytes,location,isTopLevel,crypto,now});
+      const deviceKey=await device(review),first=stageId===stages[0];
+      const wasmBytes=first && !compressed?await artifact():undefined, compact=first && compressed?await compactArtifacts():{};
+      const prepare=compressed?prepareCompressedNativeOracleSetupWalletPrompt:atomic?prepareAtomicNativeOracleSetupWalletPrompt:prepareNativeOracleSetupWalletPrompt;
+      const prompt=await prepare({wallet,identity,review,deviceKey,stageId,wasmBytes,...compact,location,isTopLevel,crypto,now});
       session();const challenge=await request('claim-challenge',{identity,stageId});
       const evidence=await sign({...context('claim_native_setup_stage'),identity,stageId},challenge);
       const claim=await pump(()=>request('claim',{identity,stageId,evidence}));session();

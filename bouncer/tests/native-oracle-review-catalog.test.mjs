@@ -61,3 +61,27 @@ test('opt-in atomic catalog binds the owner key and still reconstructs existing 
   Object.defineProperty(input, 'ownerPublicKey', { enumerable: true, get() { called = true; return ownerPublicKey; } });
   await assert.rejects(atomic.create(input)); assert.equal(called, false);
 });
+
+test('compressed catalog is separately enabled, pins both artifacts and reconstructs prior reviews',async()=>{
+  const loaderBytes=fs.readFileSync(new URL('../contracts/native-phone-loader/fixtures/native-phone-loader-research.wasm',import.meta.url));
+  const compressedBytes=fs.readFileSync(new URL('../contracts/native-phone-loader/fixtures/native-v9.deflate',import.meta.url));
+  const agentPublicKey=key(),ownerPublicKey=key();
+  const standard=createNativeOracleReviewCatalog({wasmBytes:wasm});
+  const previous=await standard.create({agentPublicKey});
+  const atomic=createNativeOracleReviewCatalog({wasmBytes:wasm,enableAtomic:true});
+  const shorter=await atomic.create({agentPublicKey,ownerPublicKey});
+  const compact=createNativeOracleReviewCatalog({wasmBytes:wasm,loaderBytes,compressedBytes,enableAtomic:true,enableCompressed:true});
+  const made=await compact.create({agentPublicKey,ownerPublicKey});
+  assert.equal(made.review.format,'bouncer-research-compressed-native-oracle-wallet-review-v1');
+  assert.equal(made.review.owner_public_key,ownerPublicKey);assert.equal(made.review.stages.length,3);
+  assert.equal(made.signing_authorized,false);assert.equal(made.transaction_sent,false);
+  for(const review of [previous,shorter,made])assert.deepEqual((await compact.getRetainedReview(review.task_id,agentPublicKey,ownerPublicKey)).review,review.review);
+  assert.equal(await standard.getRetainedReview(made.task_id,agentPublicKey,ownerPublicKey),null);
+  assert.equal(await compact.getRetainedReview(made.task_id,agentPublicKey,key()),null);
+  await assert.rejects(compact.create({agentPublicKey}));
+  const badLoader=Buffer.from(loaderBytes);badLoader[80]^=1;
+  const badCompressed=Buffer.from(compressedBytes);badCompressed[80]^=1;
+  assert.throws(()=>createNativeOracleReviewCatalog({wasmBytes:wasm,enableCompressed:true}));
+  assert.throws(()=>createNativeOracleReviewCatalog({wasmBytes:wasm,loaderBytes:badLoader,compressedBytes,enableCompressed:true}));
+  assert.throws(()=>createNativeOracleReviewCatalog({wasmBytes:wasm,loaderBytes,compressedBytes:badCompressed,enableCompressed:true}));
+});

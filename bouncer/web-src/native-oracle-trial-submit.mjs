@@ -92,7 +92,8 @@ export async function submitWitnessedNativeOracleTrialOnce({ signedResult: rawSi
         signed.local_original_retained !== true || signed.do_not_retry !== true || signed.broadcast_authorized !== false ||
         signed.transaction_sent !== false || !/^[a-f0-9]{40}$/.test(signed.witness_head ?? '') ||
         !Array.isArray(signed.setup_original_hashes) ||
-        signed.setup_original_hashes.length !== (review?.format === 'bouncer-atomic-native-oracle-wallet-review-v1' ? 2 : 4)) throw fail();
+        signed.setup_original_hashes.length !== (review?.format === 'bouncer-research-compressed-native-oracle-wallet-review-v1' ? 3 :
+          review?.format === 'bouncer-atomic-native-oracle-wallet-review-v1' ? 2 : 4)) throw fail();
     const device = await deviceStore.inspect({ owner: review.owner, vault: review.vault, expected_public_key: review.agent_public_key }); current();
     const canonical = await verifySupportedNativeOracleSetupReview({ review, identity, deviceKey: device, origin, crypto }); current();
     assertNativeOracleCompletion(completion, review, now());

@@ -23,9 +23,9 @@ const {transactions,utils}=nearApi;
 const fail=()=>new Error('witnessed phone original unavailable or uncertain; stop and reconcile, never retry automatically');
 const GAS=BigInt(NATIVE_ORACLE_TRIAL_GAS);
 
-export function createPresignedWitnessedNativeOracleAccount({goal,review,identity,wasmBytes,trustedReviewHash,trustedOwnerPublicKey,
+export function createPresignedWitnessedNativeOracleAccount({goal,review,identity,wasmBytes,loaderBytes,compressedBytes,trustedReviewHash,trustedOwnerPublicKey,
   signedResult,witness,otherWitness,getFreshCompletion,now=Date.now}={}) {
-  const checked=validateWitnessedNativeOracleTrial({goal,review,identity,wasmBytes,trustedReviewHash,trustedOwnerPublicKey});
+  const checked=validateWitnessedNativeOracleTrial({goal,review,identity,wasmBytes,loaderBytes,compressedBytes,trustedReviewHash,trustedOwnerPublicKey});
   if(!signedResult || signedResult.status!=='SIGNED_NOT_BROADCAST' || signedResult.owner!==checked.identity.owner ||
       signedResult.vault!==checked.review.vault || signedResult.review_sha256!==trustedReviewHash ||
       signedResult.maximum_native_yocto!==checked.review.per_tx_cap_yocto || signedResult.attached_deposit_yocto!=='0' ||
@@ -62,7 +62,7 @@ export function createPresignedWitnessedNativeOracleAccount({goal,review,identit
   const trial=Object.freeze({goal_id:checked.goal.id,goal_sha256:checked.goalSha256,agent_public_key:checked.agentPublicKey,original_hash:txHash});
   const copiedResult={status:'SIGNED_NOT_BROADCAST',tx_hash:txHash,signed_transaction:bytes,
     local_original_retained:true,do_not_retry:true,broadcast_authorized:false,transaction_sent:false};
-  const phoneSigner=createNativeOraclePhoneSigner({review:checked.review,wasmBytes,trustedReviewHash,trustedOwnerPublicKey,
+  const phoneSigner=createNativeOraclePhoneSigner({review:checked.review,wasmBytes,loaderBytes,compressedBytes,trustedReviewHash,trustedOwnerPublicKey,
     requestPhoneSignature:async request=>{
       if(request.transactionHash!==txHash)throw fail();
       return {...copiedResult,signed_transaction:Uint8Array.from(bytes)};

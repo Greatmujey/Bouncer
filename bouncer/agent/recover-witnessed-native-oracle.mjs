@@ -15,11 +15,11 @@ import { validateWitnessedNativeOracleTrial, assertWitnessedNativeOracleTrial } 
 
 const fail=()=>new Error('witnessed native original is unavailable or inconsistent; stop and reconcile, never resend');
 
-export async function recoverWitnessedNativeOracle({goal,review,identity,wasmBytes,trustedReviewHash,trustedOwnerPublicKey,
+export async function recoverWitnessedNativeOracle({goal,review,identity,wasmBytes,loaderBytes,compressedBytes,trustedReviewHash,trustedOwnerPublicKey,
   witness,provider,journal,log=console.log,exclusiveJournalScope}={}) {
   if(!witness || typeof witness.inspect!=='function' || !journal || typeof journal.get!=='function' ||
       typeof journal.put!=='function' || !provider)throw fail();
-  const checked=validateWitnessedNativeOracleTrial({goal,review,identity,wasmBytes,trustedReviewHash,trustedOwnerPublicKey});
+  const checked=validateWitnessedNativeOracleTrial({goal,review,identity,wasmBytes,loaderBytes,compressedBytes,trustedReviewHash,trustedOwnerPublicKey});
   return withExclusiveJournalOperation(journal,async scope=>{
     assertJournalScope(journal,checked.goal.contract_id,checked.goal.owner_account_id);
     const snapshot=await witness.inspect(checked.identity.owner),original=snapshot?.state?.trial?.original_hash;

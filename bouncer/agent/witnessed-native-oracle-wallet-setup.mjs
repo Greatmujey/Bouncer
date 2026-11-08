@@ -19,10 +19,11 @@ import { isTransactionHash } from '../shared/direct-payment-settlement.mjs';
 
 const STAGES = ['create_keyless_native_vault', 'configure_native_oracle_policy', 'fund_native_vault', 'install_native_oracle_agent'];
 const ATOMIC_STAGES = ['create_configure_fund_native_vault', 'install_native_oracle_agent'];
+const COMPRESSED_STAGES = ['create_compressed_native_vault','configure_fund_native_oracle','install_native_oracle_agent'];
 const fail = code => new WalletWitnessError(code, 'native wallet setup is uncertain or no longer fresh; stop and reconcile, never repeat a claimed prompt');
 function stageIds(stages, field) {
   if (!Array.isArray(stages)) throw fail('WITNESS_MISMATCH');
-  const expected = stages.length === ATOMIC_STAGES.length ? ATOMIC_STAGES : STAGES;
+  const expected = stages.length === COMPRESSED_STAGES.length ? COMPRESSED_STAGES : stages.length === ATOMIC_STAGES.length ? ATOMIC_STAGES : STAGES;
   if (stages.length !== expected.length || stages.some((stage, index) => stage?.[field] !== expected[index])) throw fail('WITNESS_MISMATCH');
   return expected;
 }

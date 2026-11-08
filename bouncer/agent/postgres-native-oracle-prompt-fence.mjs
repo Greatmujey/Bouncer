@@ -22,8 +22,11 @@ import { isDeepStrictEqual } from 'node:util';
 import { NATIVE_ORACLE_V9_BYTES, NATIVE_ORACLE_V9_SHA256 } from './native-oracle-wallet-plan.mjs';
 import { verifyNativeOracleWalletReview, prepareNativeOracleWalletAttempt } from './native-oracle-wallet-evidence.mjs';
 import { verifyAtomicNativeOracleWalletReview, prepareAtomicNativeOracleWalletAttempt } from './native-oracle-atomic-wallet.mjs';
+import { verifyResearchPhoneReview, prepareResearchPhoneAttempt, NATIVE_PHONE_LOADER_BYTES, NATIVE_PHONE_LOADER_SHA256,
+  NATIVE_PHONE_COMPRESSED_BYTES, NATIVE_PHONE_COMPRESSED_SHA256 } from './native-phone-loader-research.mjs';
 import { inspectNativeOracleWalletStage, inspectNativeOracleWalletCompletion,
-  inspectAtomicNativeOracleWalletStage, inspectAtomicNativeOracleWalletCompletion } from './native-oracle-wallet-preflight.mjs';
+  inspectAtomicNativeOracleWalletStage, inspectAtomicNativeOracleWalletCompletion,
+  inspectCompressedNativeOracleWalletStage, inspectCompressedNativeOracleWalletCompletion } from './native-oracle-wallet-preflight.mjs';
 import { isTestnetAccount } from '../shared/account-id.mjs';
 import { isTransactionHash } from '../shared/direct-payment-settlement.mjs';
 import { WalletOwnerFenceError, initializePostgresWalletOwnerFence, reservePostgresWalletOwnerFence,
@@ -32,9 +35,9 @@ import { WalletOwnerFenceError, initializePostgresWalletOwnerFence, reservePostg
 const SCHEMA = 'bouncer_native_wallet_prompt_v1';
 const STAGES = Object.freeze(['create_keyless_native_vault', 'configure_native_oracle_policy', 'fund_native_vault', 'install_native_oracle_agent']);
 const ATOMIC_STAGES = Object.freeze(['create_configure_fund_native_vault', 'install_native_oracle_agent']);
-// The atomic branch is intentionally opt-in and is not enabled by the live
-// service. Both plans use the same owner hold and immutable witness namespace.
-function reviewOps(review, enableAtomic) {
+const COMPRESSED_STAGES = Object.freeze(['create_compressed_native_vault','configure_fund_native_oracle','install_native_oracle_agent']);
+// Both shorter plans are explicitly opt-in and share the same owner hold.
+function reviewOps(review, enableAtomic, compact) {
   if (review?.format === 'bouncer-native-oracle-wallet-review-v1') return { stages: STAGES,
     verify: verifyNativeOracleWalletReview, prepare: prepareNativeOracleWalletAttempt,
     inspectStage: inspectNativeOracleWalletStage, inspectCompletion: inspectNativeOracleWalletCompletion,
@@ -43,6 +46,13 @@ function reviewOps(review, enableAtomic) {
     verify: verifyAtomicNativeOracleWalletReview, prepare: prepareAtomicNativeOracleWalletAttempt,
     inspectStage: inspectAtomicNativeOracleWalletStage, inspectCompletion: inspectAtomicNativeOracleWalletCompletion,
     completionStatus: 'TWO_ORIGINALS_AND_STATE_MATCH_NOT_AUTHORIZED' };
+  if (compact && review?.format === 'bouncer-research-compressed-native-oracle-wallet-review-v1') {
+    const withArtifacts = fn => args => fn({ ...args, ...compact });
+    return { stages: COMPRESSED_STAGES, verify: withArtifacts(verifyResearchPhoneReview),
+      prepare: withArtifacts(prepareResearchPhoneAttempt), inspectStage: withArtifacts(inspectCompressedNativeOracleWalletStage),
+      inspectCompletion: withArtifacts(inspectCompressedNativeOracleWalletCompletion),
+      completionStatus: 'THREE_ORIGINALS_AND_STATE_MATCH_NOT_AUTHORIZED' };
+  }
   throw fail('INVALID_REQUEST');
 }
 const PRE_METHODS = ['viewNodeStatus', 'viewBlock', 'query', 'viewTestnetAccountPresenceAt', 'callFunctionRaw', 'experimental_protocolConfig', 'gasPrice'];
@@ -184,9 +194,9 @@ export async function initializePostgresNativeOraclePromptFence({ pool } = {}) {
 
 const PLAN_COLUMNS = 'owner,operation_id,owner_public_key,review_sha256,review,created_at';
 const STAGE_COLUMNS = 'owner,operation_id,stage_index,stage_id,action_commitment_sha256,claimed,claimed_at,original_hash,created_at';
-function validated(plan, stages, wasm, enableAtomic) {
+function validated(plan, stages, wasm, enableAtomic, compact) {
   try {
-    const ops = reviewOps(plan?.review, enableAtomic);
+    const ops = reviewOps(plan?.review, enableAtomic, compact);
     if (!plain(plan) || !isTestnetAccount(plan.owner) || !hex32(plan.operation_id) || !hex64(plan.review_sha256) || !validDate(plan.created_at) ||
         !Array.isArray(stages) || stages.length !== ops.stages.length) throw Error();
     const identity = ops.verify({ review: plan.review, wasmBytes: wasm,
@@ -215,7 +225,7 @@ function publicPlan(row) {
 }
 function requireIdentity(value) {
   if (!plain(value) || !isTestnetAccount(value.owner) || typeof value.ownerPublicKey !== 'string' ||
-      !hex32(value.operationId) || !hex64(value.reviewSha256) || ![...STAGES, ...ATOMIC_STAGES].includes(value.stageId) || !hex64(value.actionCommitmentSha256)) {
+      !hex32(value.operationId) || !hex64(value.reviewSha256) || ![...STAGES, ...ATOMIC_STAGES, ...COMPRESSED_STAGES].includes(value.stageId) || !hex64(value.actionCommitmentSha256)) {
     throw fail('INVALID_REQUEST');
   }
 }
@@ -224,14 +234,20 @@ function requireIdentity(value) {
  * verify a fresh single-use owner challenge for the exact action. Providers,
  * pinned artifact and clock are server configuration, never browser input. */
 export function createPostgresNativeOraclePromptFence({ pool, authenticate, wasmBytes, receiptProvider, preflightProvider,
-  now = Date.now, enableAtomic = false } = {}) {
-  if (typeof enableAtomic !== 'boolean' || !pool || typeof pool.connect !== 'function' || typeof authenticate !== 'function' || typeof now !== 'function' ||
+  loaderBytes, compressedBytes, now = Date.now, enableAtomic = false, enableCompressed = false } = {}) {
+  if (typeof enableAtomic !== 'boolean' || typeof enableCompressed !== 'boolean' ||
+      !pool || typeof pool.connect !== 'function' || typeof authenticate !== 'function' || typeof now !== 'function' ||
       !(wasmBytes instanceof Uint8Array) || wasmBytes.length !== NATIVE_ORACLE_V9_BYTES ||
       crypto.createHash('sha256').update(wasmBytes).digest('hex') !== NATIVE_ORACLE_V9_SHA256 ||
+      (enableCompressed && (!(loaderBytes instanceof Uint8Array) || loaderBytes.length !== NATIVE_PHONE_LOADER_BYTES ||
+        crypto.createHash('sha256').update(loaderBytes).digest('hex') !== NATIVE_PHONE_LOADER_SHA256 ||
+        !(compressedBytes instanceof Uint8Array) || compressedBytes.length !== NATIVE_PHONE_COMPRESSED_BYTES ||
+        crypto.createHash('sha256').update(compressedBytes).digest('hex') !== NATIVE_PHONE_COMPRESSED_SHA256)) ||
       !receiptProvider || ['viewNodeStatus','txStatusReceipts'].some(m => typeof receiptProvider[m] !== 'function') ||
       !preflightProvider || PRE_METHODS.some(m => typeof preflightProvider[m] !== 'function')) throw fail('UNSAFE_CONFIGURATION');
-  const wasm = Buffer.from(wasmBytes), readStatus = receiptProvider.viewNodeStatus.bind(receiptProvider),
-    readReceipts = receiptProvider.txStatusReceipts.bind(receiptProvider);
+  const wasm = Buffer.from(wasmBytes), compact = enableCompressed ? Object.freeze({loaderBytes:Buffer.from(loaderBytes),
+      compressedBytes:Buffer.from(compressedBytes)}) : null,
+    readStatus = receiptProvider.viewNodeStatus.bind(receiptProvider), readReceipts = receiptProvider.txStatusReceipts.bind(receiptProvider);
   const provider = Object.freeze(Object.fromEntries(PRE_METHODS.map(m => [m, preflightProvider[m].bind(preflightProvider)])));
   const action = (purpose, owner, publicKey, extra = {}) => Object.freeze({ format: 'bouncer-wallet-prompt-auth-v1', network: 'testnet',
     purpose, owner, owner_public_key: publicKey, ...extra });
@@ -244,7 +260,7 @@ export function createPostgresNativeOraclePromptFence({ pool, authenticate, wasm
     const p = await client.query(`SELECT ${PLAN_COLUMNS} FROM ${SCHEMA}.plans WHERE owner=$1${lock ? ' FOR UPDATE' : ''}`, [owner]);
     if (p.rows.length !== 1) throw fail('OWNER_FENCED');
     const s = await client.query(`SELECT ${STAGE_COLUMNS} FROM ${SCHEMA}.stages WHERE owner=$1 ORDER BY stage_index${lock ? ' FOR UPDATE' : ''}`, [owner]);
-    return validated(p.rows[0], s.rows, wasm, enableAtomic);
+    return validated(p.rows[0], s.rows, wasm, enableAtomic, compact);
   }
   function target(row, request, alreadyClaimed = false) {
     const index = row.stages.findIndex(stage => stage.stage_id === request.stageId), stage = row.stages[index];
@@ -268,7 +284,7 @@ export function createPostgresNativeOraclePromptFence({ pool, authenticate, wasm
     let preflight;
     try {
       if ((await readStatus())?.chain_id !== 'testnet') throw Error();
-      const prior = [], ops = reviewOps(retained.row.review, enableAtomic);
+      const prior = [], ops = reviewOps(retained.row.review, enableAtomic, compact);
       for (let i = 0; i < retained.target.hashes.length; i++) {
         const trustedOriginalHash = retained.target.hashes[i];
         const attempt = ops.prepare({ review: retained.row.review, wasmBytes: wasm, trustedReviewHash: reviewSha256,
@@ -290,7 +306,7 @@ export function createPostgresNativeOraclePromptFence({ pool, authenticate, wasm
   return Object.freeze({
     async reserve({ review: rawReview, trustedReviewHash, trustedOwnerPublicKey, evidence } = {}) {
       const review = structuredClone(rawReview); let id, ops;
-      try { ops = reviewOps(review, enableAtomic); id = ops.verify({ review, wasmBytes: wasm, trustedReviewHash, trustedOwnerPublicKey });
+      try { ops = reviewOps(review, enableAtomic, compact); id = ops.verify({ review, wasmBytes: wasm, trustedReviewHash, trustedOwnerPublicKey });
         if (!id.owner_public_key.startsWith('ed25519:')) throw Error(); }
       catch { throw fail('INVALID_REQUEST'); }
       await authorize(action('reserve_native_setup', id.owner, id.owner_public_key, { review_sha256: trustedReviewHash,
@@ -387,7 +403,7 @@ export function createPostgresNativeOraclePromptFence({ pool, authenticate, wasm
       let result;
       try {
         if ((await readStatus())?.chain_id !== 'testnet') throw Error();
-        const prior = [], ops = reviewOps(retained.row.review, enableAtomic);
+        const prior = [], ops = reviewOps(retained.row.review, enableAtomic, compact);
         for (let i = 0; i < ops.stages.length; i++) {
           const trustedOriginalHash = retained.hashes[i];
           const attempt = ops.prepare({ review: retained.row.review, wasmBytes: wasm, trustedReviewHash: reviewSha256,
@@ -401,7 +417,7 @@ export function createPostgresNativeOraclePromptFence({ pool, authenticate, wasm
       const currentHashes = await transaction(pool, async client => completeHashes(await load(client, owner)));
       if (!isDeepStrictEqual(currentHashes, retained.hashes) || !isDeepStrictEqual(result?.prior_original_hashes, retained.hashes) ||
           result.owner !== owner || result.review_sha256 !== reviewSha256 ||
-          !['BLOCKED_OR_UNKNOWN', reviewOps(retained.row.review, enableAtomic).completionStatus].includes(result.status)) {
+          !['BLOCKED_OR_UNKNOWN', reviewOps(retained.row.review, enableAtomic, compact).completionStatus].includes(result.status)) {
         throw fail('MISMATCH');
       }
       return { ...result, execution_authorized: false, independently_witnessed: false };

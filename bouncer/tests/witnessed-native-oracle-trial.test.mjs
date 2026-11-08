@@ -6,6 +6,7 @@ import { IDBFactory } from 'fake-indexeddb';
 import nearApi from 'near-api-js';
 import { buildNativeOracleWalletPlan,NATIVE_ORACLE_DEFAULT_GAS_ALLOWANCE } from '../agent/native-oracle-wallet-plan.mjs';
 import { buildAtomicNativeOracleWalletPlan } from '../agent/native-oracle-atomic-wallet.mjs';
+import { buildResearchPhonePlan } from '../agent/native-phone-loader-research.mjs';
 import { createNativeOraclePromptWitness } from '../agent/git-native-oracle-prompt-witness.mjs';
 import { createWitnessedNativeOraclePhoneAccount } from '../agent/native-oracle-phone-signer.mjs';
 import { createPresignedWitnessedNativeOracleAccount } from '../agent/presigned-witnessed-native-oracle-account.mjs';
@@ -20,6 +21,8 @@ import { runOracleGoal,ORACLE_PROJECT_ID,ORACLE_PROJECT_UUID,ORACLE_TESTNET_PROG
 // All accounts, completion evidence, witnesses and receipts are synthetic.
 const OWNER='alice.testnet',VAULT=`native.${OWNER}`,base=1_800_000_000_000;
 const wasm=fs.readFileSync(new URL('../../bouncer.wasm',import.meta.url));
+const loaderBytes=fs.readFileSync(new URL('../contracts/native-phone-loader/fixtures/native-phone-loader-research.wasm',import.meta.url));
+const compressedBytes=fs.readFileSync(new URL('../contracts/native-phone-loader/fixtures/native-v9.deflate',import.meta.url));
 const hash=n=>nearApi.utils.serialize.base_encode(Buffer.alloc(32,n));
 const checks=Object.fromEntries(['plain_owner','exact_owner_key','owner_native_estimate','protocol_and_selected_features',
   'agent_gas_allowance_estimate','pinned_project_identity_and_native_pricing','exact_agent_key','exact_keyless_vault',
@@ -33,7 +36,7 @@ function store() {
     setLoseAck(value){loseAck=value},snapshot(){return {head:head(),text}}};
 }
 const journal=()=>{const rows=new Map();return {get:id=>rows.get(id),put:(id,v)=>rows.set(id,structuredClone(v)),rows}};
-async function fixture({atomic=false}={}) {
+async function fixture({atomic=false,compressed=false}={}) {
   let clock=base;
   const indexedDB=new IDBFactory();
   const device=await openNativeOracleDeviceKey({indexedDB,storage:{persisted:async()=>true},crypto:webcrypto,
@@ -43,7 +46,8 @@ async function fixture({atomic=false}={}) {
   const terms={owner:OWNER,vault:VAULT,policy_id:'price',agent_public_key:key.public_key,
     per_tx_cap_yocto:'100000000000000000000000',daily_cap_yocto:'100000000000000000000000',
     vault_deposit_yocto:'100000000000000000000000',agent_gas_allowance_yocto:NATIVE_ORACLE_DEFAULT_GAS_ALLOWANCE};
-  const review=(atomic?buildAtomicNativeOracleWalletPlan({wasmBytes:wasm,terms,trustedOwnerPublicKey:ownerKey}):
+  const review=(compressed?buildResearchPhonePlan({wasmBytes:wasm,loaderBytes,compressedBytes,terms,trustedOwnerPublicKey:ownerKey}):
+    atomic?buildAtomicNativeOracleWalletPlan({wasmBytes:wasm,terms,trustedOwnerPublicKey:ownerKey}):
     buildNativeOracleWalletPlan({wasmBytes:wasm,terms})).review;
   const identity={owner:OWNER,owner_public_key:ownerKey,operation_id:'a'.repeat(32),
     review_sha256:review.review_sha256,stages:review.stages.map(s=>({stage_id:s.id,action_commitment_sha256:s.action_commitment_sha256}))};
@@ -57,14 +61,14 @@ async function fixture({atomic=false}={}) {
   }
   let completionReads=0,signatures=0,nonce='77';
   const getFreshCompletion=async()=>{completionReads++;const {head}=await witness.inspect(OWNER);return {
-    version:1,network:'testnet',status:atomic?'TWO_ORIGINALS_AND_STATE_MATCH_NOT_AUTHORIZED':'FOUR_ORIGINALS_AND_STATE_MATCH_NOT_AUTHORIZED',stage_id:'verify_native_setup_completion',
+    version:1,network:'testnet',status:compressed?'THREE_ORIGINALS_AND_STATE_MATCH_NOT_AUTHORIZED':atomic?'TWO_ORIGINALS_AND_STATE_MATCH_NOT_AUTHORIZED':'FOUR_ORIGINALS_AND_STATE_MATCH_NOT_AUTHORIZED',stage_id:'verify_native_setup_completion',
     owner:OWNER,vault:VAULT,review_sha256:review.review_sha256,independently_witnessed:true,witness_head:head,
     execution_authorized:false,signing_authorized:false,transaction_sent:false,owner_approval_obtained:false,wallet_prompt_authorized:false,
     prior_original_hashes:identity.stages.map((_,i)=>hash(i+1)),checks:{...checks},blockers:[],observed_at:new Date(clock).toISOString(),
     block_hash:hash(9),block_height:100,block_timestamp_nanosec:(BigInt(clock)*1_000_000n).toString(),agent_key_nonce:nonce};};
   const requestPhoneSignature=async request=>{signatures++;return device.signNativeOracleTrial({review,identity,completion:request.completion,
     freshCompletion:request.freshCompletion,witness:request.witness,ownerConfirmed:true,expectedTransactionHash:request.transactionHash});};
-  const makeAccount=(overrides={})=>createWitnessedNativeOraclePhoneAccount({goal,review,identity,wasmBytes:wasm,
+  const makeAccount=(overrides={})=>createWitnessedNativeOraclePhoneAccount({goal,review,identity,wasmBytes:wasm,loaderBytes,compressedBytes,
     trustedReviewHash:review.review_sha256,trustedOwnerPublicKey:identity.owner_public_key,witness,getFreshCompletion,requestPhoneSignature,
     now:()=>clock,...overrides});
   let sends=0,statusReads=0;
@@ -86,7 +90,7 @@ async function fixture({atomic=false}={}) {
     counts:()=>({completionReads,signatures,sends,statusReads}),setNonce:value=>{nonce=value},setClock:value=>{clock=value}};
 }
 const run=(f,account,local)=>runOracleGoal({goal:f.goal,provider:f.provider,account,publicKey:f.publicKey,journal:local,execute:true,log:()=>{}});
-const recover=(f,local)=>recoverWitnessedNativeOracle({goal:f.goal,review:f.review,identity:f.identity,wasmBytes:wasm,
+const recover=(f,local)=>recoverWitnessedNativeOracle({goal:f.goal,review:f.review,identity:f.identity,wasmBytes:wasm,loaderBytes,compressedBytes,
   trustedReviewHash:f.review.review_sha256,trustedOwnerPublicKey:f.identity.owner_public_key,witness:f.witness,
   provider:f.provider,journal:local,log:()=>{}});
 
@@ -268,7 +272,7 @@ async function signedPhoneTrial(f) {
 }
 function presignedAccount(f,signedResult,overrides={}) {
   const otherWitness={async inspect(){return {head:(await f.witness.inspect(OWNER)).head,state:null}}};
-  return createPresignedWitnessedNativeOracleAccount({goal:f.goal,review:f.review,identity:f.identity,wasmBytes:wasm,
+  return createPresignedWitnessedNativeOracleAccount({goal:f.goal,review:f.review,identity:f.identity,wasmBytes:wasm,loaderBytes,compressedBytes,
     trustedReviewHash:f.review.review_sha256,trustedOwnerPublicKey:f.identity.owner_public_key,
     signedResult,witness:f.witness,otherWitness,getFreshCompletion:f.getFreshCompletion,now:()=>base,...overrides});
 }
@@ -467,5 +471,27 @@ test('two-stage setup signs and submits only its witnessed synthetic trial origi
     await assert.rejects(submitWitnessedNativeOracleTrialOnce(args));assert.equal(calls,1);
     const restored=journal();await assert.rejects(recover(f,restored),/synthetic original not yet found/);
     assert.equal(restored.get(f.goal.id).tx_hash,original);assert.equal(f.counts().sends,0);
+  }finally{f.device.close()}
+});
+
+test('compressed setup retains three originals and submits only its witnessed synthetic trial once',async()=>{
+  const f=await fixture({compressed:true});try{
+    const signed=await signedPhoneTrial(f),original=signed.tx_hash;let calls=0;
+    assert.deepEqual(signed.setup_original_hashes,[hash(1),hash(2),hash(3)]);
+    const args=await submitArgs(f,signed,{fetch:async(_url,options)=>{
+      calls++;const request=JSON.parse(options.body);
+      assert.equal((await inspectLocalNativeSubmission(f.indexedDB,f.review.review_sha256)).original_hash,original);
+      return new Response(JSON.stringify({jsonrpc:'2.0',id:request.id,result:{transaction:{hash:original},transaction_outcome:{id:original}}}));
+    }});
+    const wrong=structuredClone(args.completion);wrong.prior_original_hashes=[hash(1),hash(3),hash(2)];
+    await assert.rejects(submitWitnessedNativeOracleTrialOnce({...args,completion:wrong}));assert.equal(calls,0);
+    const result=await submitWitnessedNativeOracleTrialOnce(args);
+    assert.equal(result.status,'ORIGINAL_RPC_ACKNOWLEDGED');assert.equal(result.provider_delivery_verified,false);
+    assert.equal(result.original_hash,original);assert.equal(calls,1);
+    await assert.rejects(submitWitnessedNativeOracleTrialOnce(args));assert.equal(calls,1);
+    const restored=journal();await assert.rejects(recover(f,restored),/synthetic original not yet found/);
+    assert.equal(restored.get(f.goal.id).tx_hash,original);assert.equal(f.counts().sends,0);
+    assert.throws(()=>f.makeAccount({loaderBytes:Buffer.alloc(loaderBytes.length)}));
+    assert.throws(()=>presignedAccount(f,signed,{compressedBytes:Buffer.alloc(compressedBytes.length)}));
   }finally{f.device.close()}
 });

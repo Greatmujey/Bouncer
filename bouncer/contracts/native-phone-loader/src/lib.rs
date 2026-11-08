@@ -1,4 +1,4 @@
-//! RESEARCH ONLY. This is not wired to a wallet, review, UI or public deploy.
+//! RESEARCH ONLY. The wallet/review UI path is default-off and not publicly deployed.
 //!
 //! A freshly created, keyless testnet account initializes its owner in the
 //! same receipt as deploying this small loader. The owner can then provide a

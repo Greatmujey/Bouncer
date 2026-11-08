@@ -15,6 +15,7 @@ import nearApi from 'near-api-js';
 import { validateOracleGoal } from './oracle-outlayer.mjs';
 import { verifyNativeOracleWalletReview } from './native-oracle-wallet-evidence.mjs';
 import { verifyAtomicNativeOracleWalletReview } from './native-oracle-atomic-wallet.mjs';
+import { verifyResearchPhoneReview } from './native-phone-loader-research.mjs';
 import { assertNativeOracleCompletion } from '../web-src/native-oracle-completion.mjs';
 import { decodeNativeHash32 } from '../web-src/native-oracle-transaction.mjs';
 
@@ -24,14 +25,15 @@ const fail=()=>new Error('phone signature unavailable or uncertain; retain the o
 function verifySupportedReview(args) {
   if (args.review?.format === 'bouncer-native-oracle-wallet-review-v1') return verifyNativeOracleWalletReview(args);
   if (args.review?.format === 'bouncer-atomic-native-oracle-wallet-review-v1') return verifyAtomicNativeOracleWalletReview(args);
+  if (args.review?.format === 'bouncer-research-compressed-native-oracle-wallet-review-v1') return verifyResearchPhoneReview(args);
   throw fail();
 }
 
-export function createNativeOraclePhoneSigner({review:rawReview,wasmBytes,trustedReviewHash,trustedOwnerPublicKey,requestPhoneSignature}={}) {
+export function createNativeOraclePhoneSigner({review:rawReview,wasmBytes,loaderBytes,compressedBytes,trustedReviewHash,trustedOwnerPublicKey,requestPhoneSignature}={}) {
   const review=structuredClone(rawReview);
   if(typeof requestPhoneSignature!=='function')throw fail();
   let identity;
-  try{identity=verifySupportedReview({review,wasmBytes,trustedReviewHash,trustedOwnerPublicKey})}catch{throw fail()}
+  try{identity=verifySupportedReview({review,wasmBytes,loaderBytes,compressedBytes,trustedReviewHash,trustedOwnerPublicKey})}catch{throw fail()}
   const key=utils.PublicKey.from(identity.agent_public_key);
   if(key.keyType!==0)throw fail();
   // Rebuild JSON in the same order as validateOracleGoal and the phone codec;
@@ -89,14 +91,14 @@ export function createNativeOraclePhoneSigner({review:rawReview,wasmBytes,truste
  * backup or broadcast occurs here. The exact snapshot is delivered to the
  * phone along with the expected unsigned hash for independent checking. */
 export function createNativeOraclePhoneAccount({review:rawReview,completion:rawCompletion,getFreshCompletion,
-  wasmBytes,trustedReviewHash,trustedOwnerPublicKey,requestPhoneSignature,now=Date.now}={}) {
+  wasmBytes,loaderBytes,compressedBytes,trustedReviewHash,trustedOwnerPublicKey,requestPhoneSignature,now=Date.now}={}) {
   const review=structuredClone(rawReview),hasStatic=rawCompletion!==undefined,hasProvider=getFreshCompletion!==undefined;
   if(typeof now!=='function' || typeof requestPhoneSignature!=='function' || hasStatic===hasProvider ||
       (hasProvider && typeof getFreshCompletion!=='function'))throw fail();
   const staticCompletion=hasStatic?structuredClone(rawCompletion):undefined;
   if(hasStatic){try{assertNativeOracleCompletion(staticCompletion,review,now())}catch{throw fail()}}
   let preparedCompletion,preparedHash,preparationStarted=false;
-  const signer=createNativeOraclePhoneSigner({review,wasmBytes,trustedReviewHash,trustedOwnerPublicKey,
+  const signer=createNativeOraclePhoneSigner({review,wasmBytes,loaderBytes,compressedBytes,trustedReviewHash,trustedOwnerPublicKey,
     requestPhoneSignature:async request=>{
       if(!preparedCompletion || request.transactionHash!==preparedHash)throw fail();
       assertNativeOracleCompletion(preparedCompletion,review,now());
@@ -121,11 +123,11 @@ export function createNativeOraclePhoneAccount({review:rawReview,completion:rawC
 /** Reconstruct the exact native trial shared by the phone, runner and witness.
  * This checks identity and reviewed arguments, not owner consent or an RPC. */
 export function validateWitnessedNativeOracleTrial({goal:rawGoal,review:rawReview,identity:rawIdentity,
-  wasmBytes,trustedReviewHash,trustedOwnerPublicKey}={}) {
+  wasmBytes,loaderBytes,compressedBytes,trustedReviewHash,trustedOwnerPublicKey}={}) {
   const review=structuredClone(rawReview),identity=structuredClone(rawIdentity);
   let trusted,goal,expected;
   try {
-    trusted=verifySupportedReview({review,wasmBytes,trustedReviewHash,trustedOwnerPublicKey});
+    trusted=verifySupportedReview({review,wasmBytes,loaderBytes,compressedBytes,trustedReviewHash,trustedOwnerPublicKey});
     const expectedIdentity={owner:review.owner,owner_public_key:trustedOwnerPublicKey,operation_id:identity.operation_id,
       review_sha256:trustedReviewHash,stages:review.stages.map(stage=>({stage_id:stage.id,action_commitment_sha256:stage.action_commitment_sha256}))};
     if(!/^[a-f0-9]{32}$/.test(identity.operation_id??'') || !isDeepStrictEqual(identity,expectedIdentity))throw Error();
@@ -152,13 +154,13 @@ export function assertWitnessedNativeOracleTrial(snapshot,identity,trial) {
  * claim is write-once: a lost response, changed nonce, stale recheck or phone
  * failure never creates a replacement. The existing runner must re-read this
  * same witness after its local journal commit and before the one send. */
-export function createWitnessedNativeOraclePhoneAccount({goal,review,identity,wasmBytes,trustedReviewHash,trustedOwnerPublicKey,
+export function createWitnessedNativeOraclePhoneAccount({goal,review,identity,wasmBytes,loaderBytes,compressedBytes,trustedReviewHash,trustedOwnerPublicKey,
   getFreshCompletion,requestPhoneSignature,witness,now=Date.now}={}) {
-  const checked=validateWitnessedNativeOracleTrial({goal,review,identity,wasmBytes,trustedReviewHash,trustedOwnerPublicKey});
+  const checked=validateWitnessedNativeOracleTrial({goal,review,identity,wasmBytes,loaderBytes,compressedBytes,trustedReviewHash,trustedOwnerPublicKey});
   if(!witness || typeof witness.claimTrial!=='function' || typeof witness.inspect!=='function' ||
       typeof getFreshCompletion!=='function' || typeof requestPhoneSignature!=='function' || typeof now!=='function')throw fail();
   let retained;
-  const account=createNativeOraclePhoneAccount({review:checked.review,wasmBytes,trustedReviewHash,trustedOwnerPublicKey,
+  const account=createNativeOraclePhoneAccount({review:checked.review,wasmBytes,loaderBytes,compressedBytes,trustedReviewHash,trustedOwnerPublicKey,
     getFreshCompletion,now,requestPhoneSignature:async request=>{
       const trial={goal_id:checked.goal.id,goal_sha256:checked.goalSha256,agent_public_key:checked.agentPublicKey,
         original_hash:request.transactionHash};

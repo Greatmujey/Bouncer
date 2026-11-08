@@ -25,6 +25,7 @@ import { WalletWitnessError } from './git-wallet-prompt-witness.mjs';
 const ZERO = '0'.repeat(64), HEX32 = /^[a-f0-9]{32}$/, HEX64 = /^[a-f0-9]{64}$/;
 const STAGES = Object.freeze(['create_keyless_native_vault', 'configure_native_oracle_policy', 'fund_native_vault', 'install_native_oracle_agent']);
 const ATOMIC_STAGES = Object.freeze(['create_configure_fund_native_vault', 'install_native_oracle_agent']);
+const COMPRESSED_STAGES = Object.freeze(['create_compressed_native_vault','configure_fund_native_oracle','install_native_oracle_agent']);
 const FORMAT = 'bouncer-native-oracle-prompt-witness-v1';
 const sha = x => crypto.createHash('sha256').update(x).digest('hex');
 const obj = x => x !== null && typeof x === 'object' && !Array.isArray(x) && Object.getPrototypeOf(x) === Object.prototype;
@@ -37,7 +38,8 @@ function ownerKey(value) {
   catch { return false; }
 }
 function identity(input) {
-  const expectedStages = Array.isArray(input?.stages) && input.stages.length === ATOMIC_STAGES.length ? ATOMIC_STAGES : STAGES;
+  const expectedStages = input?.stages?.length === COMPRESSED_STAGES.length ? COMPRESSED_STAGES :
+    input?.stages?.length === ATOMIC_STAGES.length ? ATOMIC_STAGES : STAGES;
   if (!exact(input, ['owner', 'owner_public_key', 'operation_id', 'review_sha256', 'stages']) ||
       !isTestnetAccount(input.owner) || input.owner === V3_OWNER || !input.owner.endsWith('.testnet') || !ownerKey(input.owner_public_key) || !HEX32.test(input.operation_id ?? '') ||
       !HEX64.test(input.review_sha256 ?? '') || !Array.isArray(input.stages) || input.stages.length !== expectedStages.length ||

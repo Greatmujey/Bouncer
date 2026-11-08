@@ -11,6 +11,7 @@ import { verifyCliLogin } from './cli-login.mjs';
 const FORMAT = 'bouncer-wallet-prompt-auth-v1';
 const STAGES = ['create_keyless_native_vault', 'configure_native_oracle_policy', 'fund_native_vault', 'install_native_oracle_agent'];
 const ATOMIC_STAGES = ['create_configure_fund_native_vault', 'install_native_oracle_agent'];
+const COMPRESSED_STAGES = ['create_compressed_native_vault','configure_fund_native_oracle','install_native_oracle_agent'];
 const PURPOSES = ['reserve_native_setup', 'claim_native_setup_stage', 'record_native_setup_original', 'inspect_native_setup',
   'verify_native_setup_completion', 'claim_native_oracle_trial'];
 const HEX32 = /^[a-f0-9]{32}$/, HEX64 = /^[a-f0-9]{64}$/, BASE58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
@@ -26,7 +27,7 @@ function validHash(value) {
 }
 function reviewStages(stages, field) {
   if (!Array.isArray(stages)) return null;
-  const expected = stages.length === ATOMIC_STAGES.length ? ATOMIC_STAGES : STAGES;
+  const expected = stages.length === COMPRESSED_STAGES.length ? COMPRESSED_STAGES : stages.length === ATOMIC_STAGES.length ? ATOMIC_STAGES : STAGES;
   return stages.length === expected.length && stages.every((s, i) =>
     s?.[field] === expected[i] && HEX64.test(s.action_commitment_sha256 ?? '')) ? expected : null;
 }
@@ -41,7 +42,8 @@ export function nativeSetupAuthAction({ purpose, owner, ownerPublicKey, identity
   if (purpose === 'reserve_native_setup') {
     const stages = reviewStages(review?.stages, 'id');
     const validFormat = stages === STAGES ? review?.format === 'bouncer-native-oracle-wallet-review-v1' :
-      stages === ATOMIC_STAGES && review?.format === 'bouncer-atomic-native-oracle-wallet-review-v1' && review.owner_public_key === ownerPublicKey;
+      stages === ATOMIC_STAGES ? review?.format === 'bouncer-atomic-native-oracle-wallet-review-v1' && review.owner_public_key === ownerPublicKey :
+      stages === COMPRESSED_STAGES && review?.format === 'bouncer-research-compressed-native-oracle-wallet-review-v1' && review.owner_public_key === ownerPublicKey;
     if (!validFormat || review.owner !== owner || !HEX64.test(review.review_sha256 ?? '')) throw fail();
     return { ...base, review_sha256: review.review_sha256, stage_id: stages[0], action_commitment_sha256: review.stages[0].action_commitment_sha256 };
   }
