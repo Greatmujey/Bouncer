@@ -10,11 +10,12 @@ import os from 'node:os';
 import path from 'node:path';
 import zlib from 'node:zlib';
 import nearApi from 'near-api-js';
-import nearConnect from '@hot-labs/near-connect';
-import { act_impl_near, validateKnownFirstPartyActionRequest, MAX_ACTION_REQUEST_CANONICAL_JSON_LENGTH } from '@meteorwallet/connect-shared/internal';
+import { validateKnownFirstPartyActionRequest, MAX_ACTION_REQUEST_CANONICAL_JSON_LENGTH } from '@meteorwallet/connect-shared/internal';
+import { syntheticV14MeteorRequest } from './v14-synthetic-meteor.mjs';
 import { FileJournal } from '../agent/procurement.mjs';
 import { runNativeMission } from '../agent/native-mission.mjs';
 import { buildV14PhoneResearchPlan, verifyV14PhoneResearchPlan, v14PhoneBatchCommitment } from '../agent/native-v14-phone-plan.mjs';
+import { prepareV14PhoneAttempt, inspectV14PhoneAttempt } from '../agent/native-v14-phone-receipts.mjs';
 import { ORACLE_TESTNET_PROJECT } from '../agent/oracle-outlayer.mjs';
 import { SandboxSetupRpc, withSandboxOnlyFetch } from './v11-sandbox-setup-rpc.mjs';
 import { SANDBOX_SHA256, readVerifiedFile, assertSandboxStatus, requireFinalSuccess } from './v11-sandbox-support.mjs';
@@ -31,18 +32,6 @@ const program={url:'https://example.test/not-real.wasm',sha256:'a'.repeat(64),bu
 const sha=bytes=>crypto.createHash('sha256').update(bytes).digest();
 const createLoader=(loader,funding=20n*N)=>[tx.createAccount(),tx.transfer(funding),tx.deployContract(loader),call('loader_init',{},1n,20n*T)];
 const deployCompressed=(compressed,deposit=1n)=>call('loader_deploy',compressed,deposit,240n*T);
-function syntheticMeteorRequest(batch) {
-  // Mirror the pinned Meteor mobile adapter using the actual reviewed actions.
-  const actions=nearConnect.nearActionsToConnectorActions(batch.actions).map(action=>{
-    if (action.type==='DeployContract') return {...action,params:{...action.params,
-      code:Buffer.from(action.params.code).toString('base64'),codeEncoding:'base64'}};
-    if (action.type==='FunctionCall' && action.params.args instanceof Uint8Array) return {...action,params:{...action.params,
-      args:Buffer.from(action.params.args).toString('base64'),argsEncoding:'base64'}};
-    return action;
-  });
-  return act_impl_near.action.sign_and_send_transaction.request({network:'testnet',signerId:batch.signerId,
-    receiverId:batch.receiverId,actions}).toJsonObject();
-}
 function failed(result,label) { assert.equal(result?.final_execution_status,'FINAL',`${label}: not FINAL`); assert.ok(result?.status?.Failure,`${label}: expected failure`); }
 async function absent(provider,id) {
   let error; try { await provider.viewAccount(id,{finality:'final'}); } catch (caught) { error=caught; }
@@ -74,7 +63,7 @@ async function main() {
   const expectedCodeHash=nearApi.utils.serialize.base_encode(sha(vaultWasm));
   const expectedPrice={project:ORACLE_TESTNET_PROJECT,route_revision:1,policy_revision:1,payee_revision:1,active:true};
   const expectedStorage={prefix:'mission-',max_value_bytes:4096,route_revision:1,policy_revision:1,payee_revision:1,active:true};
-  let phonePlan=null;
+  let phonePlan=null,phonePlanAnchors=null;
   if (loader) {
     const inputs={mission:makeMission(expectedCodeHash,expectedPrice,expectedStorage),ownerPublicKey:pub(ownerKey),
       agentPublicKeys:Object.fromEntries(Object.entries(keys).map(([id,k])=>[id,pub(k)])),
@@ -83,8 +72,9 @@ async function main() {
       vaultStorageFundingYocto:String(20n*N),nativeDepositYocto:String(2n*N),vaultWasm,loaderWasm:loader,compressed,
       trustedArtifacts:{vault_sha256:sha(vaultWasm).toString('hex'),loader_sha256:sha(loader).toString('hex')}};
     phonePlan=buildV14PhoneResearchPlan(inputs);
-    verifyV14PhoneResearchPlan({...inputs,review:phonePlan.review,trustedReviewSha256:phonePlan.review.review_sha256});
-    const request=syntheticMeteorRequest(phonePlan.batches[0]); meteorBytes=Buffer.byteLength(JSON.stringify(request));
+    phonePlanAnchors={...inputs,review:phonePlan.review,trustedReviewSha256:phonePlan.review.review_sha256};
+    verifyV14PhoneResearchPlan(phonePlanAnchors);
+    const request=syntheticV14MeteorRequest(phonePlan.batches[0]); meteorBytes=Buffer.byteLength(JSON.stringify(request));
     const valid=validateKnownFirstPartyActionRequest(request);
     assert.equal(MAX_ACTION_REQUEST_CANONICAL_JSON_LENGTH,400_000); assert.equal(valid.ok,true,valid.reason);
     assert.ok(meteorBytes<380_000,`synthetic Meteor action request too large: ${meteorBytes}`);
@@ -97,6 +87,17 @@ async function main() {
       const root=account('testnet',provider,sandbox.rootKey), owner=account(OWNER,provider,ownerKey);
       const send=(signer,receiverId,actions)=>signer.signAndSendTransaction({receiverId,actions,waitUntil:'FINAL',throwOnFailure:false});
       const must=async(signer,receiver,actions,label)=>{const r=await send(signer,receiver,actions);requireFinalSuccess(r,label);return r;};
+      const setupProofs=[];
+      const inspectSetup=async(index,sent)=>{
+        const stage=phonePlan.batches[index],trustedOriginalHash=sent.transaction_outcome.id;
+        const attempt=prepareV14PhoneAttempt({...phonePlanAnchors,stageId:stage.id,trustedOriginalHash});
+        const result=await provider.txStatusReceipts(trustedOriginalHash,OWNER,'FINAL');
+        const proof=inspectV14PhoneAttempt({...phonePlanAnchors,trustedOriginalHash,attempt,result});
+        const expected=index===0?['FINAL_RESEARCH_V14_LOADER_AND_UPGRADE_MATCH']:index===5?
+          ['FINAL_LOCAL_ADD_KEYS_OUTCOME_MATCH','FINAL_RESEARCH_V14_SETUP_RECEIPT_MATCH']:['FINAL_RESEARCH_V14_SETUP_RECEIPT_MATCH'];
+        assert.ok(expected.includes(proof.status),`unexpected ${stage.id} proof: ${proof.status}`);
+        assert.equal(proof.do_not_resend,true);setupProofs.push(proof.status);
+      };
       for(const [id,k] of [[OWNER,ownerKey],[PROVIDER,fakeKey],...(loader?[[INTRUDER,intruderKey]]:[])])
         await must(root,id,[tx.createAccount(),tx.transfer(100n*N),tx.addKey(k.getPublicKey(),tx.fullAccessKey())],`create disposable ${id}`);
       await must(account(PROVIDER,provider,fakeKey),PROVIDER,[tx.deployContract(providerWasm),call('new')],'deploy fake provider locally');
@@ -130,6 +131,7 @@ async function main() {
         assert.ok(afterRefund>beforeRefund+N/2n,'failed-upgrade loader funding did not return to sandbox owner');
         assert.equal(v14PhoneBatchCommitment(phonePlan.batches[0]),phonePlan.review.stages[0].action_commitment_sha256);
         const sent=await must(owner,VAULT,phonePlan.batches[0].actions,'compressed V14 research self-deploy');
+        await inspectSetup(0,sent);
         const receipt=await provider.txStatusReceipts(sent.transaction_outcome.id,OWNER,'FINAL');
         const selfDeploy=receipt.receipts.filter(r=>r.predecessor_id===VAULT && r.receiver_id===VAULT &&
           r.receipt?.Action?.actions?.some(a=>a.DeployContract?.code===sha(vaultWasm).toString('base64')));
@@ -148,7 +150,8 @@ async function main() {
         for (let i=1;i<phonePlan.batches.length;i++) {
           const stage=phonePlan.batches[i];
           assert.equal(v14PhoneBatchCommitment(stage),phonePlan.review.stages[i].action_commitment_sha256);
-          await must(owner,stage.receiverId,stage.actions,stage.id);
+          const sent=await must(owner,stage.receiverId,stage.actions,stage.id);
+          await inspectSetup(i,sent);
         }
       } else {
         for(const id of Object.keys(keys)) {
@@ -206,7 +209,7 @@ async function main() {
       return {scope:'isolated nearcore and fabricated provider; no public chain or real service',
         research_loader:loader?{synthetic_meteor_request_bytes:meteorBytes,loader_wasm_bytes:loader.length,
           compressed_v14_bytes:compressed.length,all_unsigned_plan_stages_executed_only_in_sandbox:true,
-          failed_upgrade_owner_refund_tested:true,real_phone_tested:false}:null,
+          sandbox_original_receipt_proofs:setupProofs,failed_upgrade_owner_refund_tested:true,real_phone_tested:false}:null,
         three_guarded_legs_and_public_result_storage:true, sandbox_refunds_verified:true,
         original_hash_recovery_without_new_send:true, lost_response_recovered_and_remaining_legs_continued:true,
         independent_delivery_verified:false, public_chain_transactions:false};

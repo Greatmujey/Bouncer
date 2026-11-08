@@ -110,8 +110,11 @@ behavior need end-to-end verification. `agent/native-v14-phone-plan.mjs`
 constructs an **unsigned, offline research plan** from independently reviewed
 artifact digests, explicit limits and three distinct restricted public keys.
 It makes no wallet prompt, does not check live state, and is not connected to
-the UI or a durable setup fence. Fitting a code field within a bridge limit
-would not verify the complete wallet request. A published NEAR
+the UI or a durable setup fence. A separate research receipt inspector matches
+only independently retained originals against the reviewed actions and loader
+upgrade; failure or a missing result never permits a retry. Its trusted-RPC
+receipt checks do not establish a prompt fence or current state. Fitting a
+code field within a bridge limit would not verify the complete wallet request. A published NEAR
 global contract referenced by immutable code hash could
 reduce a wallet payload, but the [pinned Meteor mobile bridge](https://github.com/Meteor-Wallet/meteor_wallet_sdk/blob/53a8b39d1aaaf067502c11e49ebb050c75df019e/packages/meteor-sdk-v1/src/MeteorConnect/target_clients/mobile_bridge/sdkActionToMobileBridge.ts)
 does not map `UseGlobalContract`. Bouncer does not currently implement or
