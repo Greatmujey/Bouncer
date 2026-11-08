@@ -2,11 +2,14 @@
 # Never signs, broadcasts, contacts a wallet, or sends a valid relay job.
 name: Deployed testnet relay boundary (read only)
 on:
+  push:
+    branches: ['arena/**']
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
   relay-boundary:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[relay-live-smoke]')
     runs-on: ubuntu-24.04
     timeout-minutes: 3
     steps:
