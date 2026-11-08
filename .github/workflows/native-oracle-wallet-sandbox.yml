@@ -24,7 +24,7 @@ jobs:
       - name: Install and test gates
         run: |
           npm ci --ignore-scripts --no-audit --no-fund
-          node --test tests/native-oracle-wallet-plan.test.mjs tests/native-oracle-wallet-evidence.test.mjs tests/native-oracle-atomic-wallet.test.mjs tests/native-oracle-wallet-preflight.test.mjs tests/native-oracle-wallet-recovery.test.mjs tests/native-oracle-recovery-preflight.test.mjs
+          node --test tests/native-oracle-wallet-plan.test.mjs tests/native-oracle-wallet-evidence.test.mjs tests/native-oracle-atomic-wallet.test.mjs tests/native-oracle-atomic-wallet-prompt.test.mjs tests/native-oracle-wallet-preflight.test.mjs tests/native-oracle-wallet-recovery.test.mjs tests/native-oracle-recovery-preflight.test.mjs
       - name: Download and verify pinned isolated nearcore
         run: |
           set -euo pipefail

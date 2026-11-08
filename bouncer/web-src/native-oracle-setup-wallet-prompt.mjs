@@ -17,6 +17,9 @@
 import { isTestnetAccount } from './wallet-utils.mjs';
 
 const STAGES = ['create_keyless_native_vault', 'configure_native_oracle_policy', 'fund_native_vault', 'install_native_oracle_agent'];
+// Separate opt-in adapter only. The live flow still uses STAGES; this list does
+// not itself enable a wallet prompt or provide an independent prompt fence.
+const ATOMIC_STAGES = ['create_configure_fund_native_vault', 'install_native_oracle_agent'];
 const HEX64 = /^[a-f0-9]{64}$/, HEX32 = /^[a-f0-9]{32}$/, GIT = /^[a-f0-9]{40}$/;
 const B58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
 const WASM_BYTES = 452675, WASM_SHA256 = '835f0baa51d08ddf3af6812df0caefb93283480735a63e3d382073e04fbaf8ee';
@@ -31,6 +34,21 @@ const TOP_FIELDS = ['format','status','network','owner','vault','policy_id','age
   'daily_cap_yocto','vault_deposit_yocto','agent_gas_allowance_yocto','vault_storage_funding_yocto','artifact','stages','limitations',
   'signing_authorized','transaction_sent','agent_key_installed','independent_delivery_verified','review_sha256'];
 const STAGE_FIELDS = ['id','signer_id','receiver_id','prerequisite','actions','action_commitment_sha256'];
+const ATOMIC_TOP_FIELDS = ['format','status','network','owner','owner_public_key','vault','policy_id','agent_public_key','asset','payee','project','artifact',
+  'per_tx_cap_yocto','daily_cap_yocto','vault_deposit_yocto','agent_gas_allowance_yocto','vault_storage_funding_yocto','base_review_sha256',
+  'stages','limitations','signing_authorized','transaction_sent','agent_key_installed','independent_delivery_verified','review_sha256'];
+const ATOMIC_STAGE_FIELDS = ['id','signer_id','receiver_id','actions','action_commitment_sha256'];
+const ATOMIC_LIMITATIONS = Object.freeze([
+  'Offline testnet review only: it does not establish wallet control, user approval, a live purchase or provider delivery.',
+  'The first wallet transaction creates, configures and funds the vault; the second separately installs the one-method agent key. Wallet support for the nine actions is unverified.',
+  'The keyless vault storage funding may be locked. Native provider funding and gas are additional; verify actual testnet balance and protocol costs first.',
+  'A separately retained one-shot claim and original hash are required for each wallet prompt. An unknown, rejected or failed original must never be automatically resent.',
+  'Before each prompt, verify the exact original receipt graph and fresh FINAL state, including code, owner, caps, route, balance and key scope.',
+  'Atomic create/configure/fund prevents a successful duplicate vault creation, not all cross-device, rollback or bypassing-client risks.',
+  'The restricted key can call only the fixed native-project method and cannot attach the 1 yocto needed for owner policy changes.',
+  'OutLayer receives the maximum; a verified unused refund returns to the owner, not the vault. The full maximum remains in the rolling budget.',
+  'The reviewed trial is one OutLayer price-data task, not independent storage, FT delivery, attestation or proof of price accuracy.',
+]);
 const fail = () => new Error('NATIVE_SETUP_PROMPT_UNAVAILABLE');
 // Defense in depth within one JS realm only; reloads/devices still require the durable fence.
 const locallyUsedClaims = new Set();
@@ -113,6 +131,46 @@ function canonicalReview(review, identity) {
     agent_key_installed: false, independent_delivery_verified: false };
   return canonical;
 }
+
+// Reconstruct both atomic stages from fixed public terms, rather than trusting
+// action text supplied by a server. Reordering JSON object keys is harmless;
+// changing a cap, route, key scope, code, amount or action is not.
+function canonicalAtomicReview(review, identity) {
+  if (!exact(identity, ['owner','owner_public_key','operation_id','review_sha256','stages']) ||
+      !exact(review, ATOMIC_TOP_FIELDS) || review.format !== 'bouncer-atomic-native-oracle-wallet-review-v1' ||
+      review.status !== 'UNSIGNED_OFFLINE_PLAN_ONLY' || review.network !== 'testnet' || !directChild(review.vault, review.owner) ||
+      review.owner !== identity?.owner || review.owner_public_key !== identity?.owner_public_key ||
+      !publicKey(identity?.owner_public_key) || !publicKey(review.agent_public_key) || review.agent_public_key === identity.owner_public_key ||
+      typeof review.policy_id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(review.policy_id) ||
+      review.asset !== 'native' || review.payee !== PAYEE || !same(review.project, PROJECT) ||
+      !positive(review.per_tx_cap_yocto, MAX_TRIAL) || !positive(review.daily_cap_yocto, MAX_TRIAL) ||
+      !positive(review.vault_deposit_yocto, MAX_TRIAL) || !positive(review.agent_gas_allowance_yocto, MAX_ALLOWANCE) ||
+      BigInt(review.per_tx_cap_yocto) > BigInt(review.daily_cap_yocto) || BigInt(review.per_tx_cap_yocto) > BigInt(review.vault_deposit_yocto) ||
+      BigInt(review.vault_deposit_yocto) > BigInt(review.daily_cap_yocto) || review.vault_storage_funding_yocto !== STORAGE ||
+      !same(review.artifact, { bytes: WASM_BYTES, sha256: WASM_SHA256, near_code_hash: WASM_HASH }) ||
+      review.signing_authorized !== false || review.transaction_sent !== false || review.agent_key_installed !== false ||
+      review.independent_delivery_verified !== false || !HEX64.test(review.base_review_sha256 ?? '') ||
+      !HEX64.test(review.review_sha256 ?? '') || identity.review_sha256 !== review.review_sha256 || !HEX32.test(identity.operation_id ?? '') ||
+      !Array.isArray(review.stages) || review.stages.length !== 2 || !Array.isArray(identity.stages) || identity.stages.length !== 2 ||
+      !same(review.limitations, ATOMIC_LIMITATIONS)) throw fail();
+  const pieces = expectedActions(review), expected = [pieces.slice(0, 3).flat(), pieces[3]];
+  const stages = review.stages.map((stage, i) => {
+    if (!exact(stage, ATOMIC_STAGE_FIELDS) || stage.id !== ATOMIC_STAGES[i] || stage.signer_id !== review.owner ||
+        stage.receiver_id !== (i === 1 ? review.owner : review.vault) || !same(stage.actions, expected[i]) ||
+        !HEX64.test(stage.action_commitment_sha256 ?? '') || !exact(identity.stages[i], ['stage_id','action_commitment_sha256']) ||
+        identity.stages[i]?.stage_id !== stage.id || identity.stages[i]?.action_commitment_sha256 !== stage.action_commitment_sha256) throw fail();
+    return { id: stage.id, signer_id: stage.signer_id, receiver_id: stage.receiver_id,
+      actions: expected[i], action_commitment_sha256: stage.action_commitment_sha256 };
+  });
+  return { format: review.format, status: review.status, network: review.network, owner: review.owner, owner_public_key: review.owner_public_key,
+    vault: review.vault, policy_id: review.policy_id, agent_public_key: review.agent_public_key, asset: review.asset, payee: review.payee,
+    project: { ...PROJECT }, artifact: { bytes: WASM_BYTES, sha256: WASM_SHA256, near_code_hash: WASM_HASH },
+    per_tx_cap_yocto: review.per_tx_cap_yocto, daily_cap_yocto: review.daily_cap_yocto, vault_deposit_yocto: review.vault_deposit_yocto,
+    agent_gas_allowance_yocto: review.agent_gas_allowance_yocto, vault_storage_funding_yocto: STORAGE,
+    base_review_sha256: review.base_review_sha256, stages, limitations: [...ATOMIC_LIMITATIONS], signing_authorized: false,
+    transaction_sent: false, agent_key_installed: false, independent_delivery_verified: false };
+}
+
 /** Reconstruct public terms for read-only original recovery. This does not
  * establish custody, consent, chain state or authority to sign or submit. */
 export async function verifyNativeOracleRetainedReview({ review: rawReview, identity: rawIdentity, crypto = globalThis.crypto } = {}) {
@@ -123,16 +181,31 @@ export async function verifyNativeOracleRetainedReview({ review: rawReview, iden
   return canonical;
 }
 
-/** Signing paths additionally require the real local, non-extractable key. */
-export async function verifyNativeOracleSetupReview({ review, identity, deviceKey, origin, crypto = globalThis.crypto } = {}) {
+/** Public atomic-review recovery only; does not grant authority or custody. */
+export async function verifyAtomicNativeOracleRetainedReview({ review: rawReview, identity: rawIdentity, crypto = globalThis.crypto } = {}) {
+  if (!crypto?.subtle) throw fail();
+  const review = structuredClone(rawReview), identity = structuredClone(rawIdentity);
+  const canonical = canonicalAtomicReview(review, identity);
+  if (await digest(crypto, bytes(JSON.stringify(canonical))) !== review.review_sha256) throw fail();
+  return canonical;
+}
+
+function assertLocalDevice(canonical, deviceKey, origin) {
   if (typeof origin !== 'string') throw fail();
   const device = structuredClone(deviceKey);
-  const canonical = await verifyNativeOracleRetainedReview({ review, identity, crypto });
   if (device?.status !== 'LOCAL_DEVICE_KEY_AVAILABLE' || device.origin !== origin || device.owner !== canonical.owner ||
       device.vault !== canonical.vault || device.public_key !== canonical.agent_public_key ||
       device.expected_public_key_matched !== true || device.private_key_exportable !== false ||
       device.local_storage_only !== true || device.signing_authorized !== false) throw fail();
   return canonical;
+}
+/** Signing paths additionally require the real local, non-extractable key. */
+export async function verifyNativeOracleSetupReview({ review, identity, deviceKey, origin, crypto = globalThis.crypto } = {}) {
+  return assertLocalDevice(await verifyNativeOracleRetainedReview({ review, identity, crypto }), deviceKey, origin);
+}
+/** Atomic equivalent; separately fenced/anchored operation still required. */
+export async function verifyAtomicNativeOracleSetupReview({ review, identity, deviceKey, origin, crypto = globalThis.crypto } = {}) {
+  return assertLocalDevice(await verifyAtomicNativeOracleRetainedReview({ review, identity, crypto }), deviceKey, origin);
 }
 
 function walletActions(stage, code) {
@@ -150,8 +223,16 @@ function walletActions(stage, code) {
 
 /** Verify the entire review and (for creation) pinned WASM before a claim is
  * consumed. `deviceKey` is public metadata, never a private key. */
-export async function prepareNativeOracleSetupWalletPrompt({ wallet, review: rawReview, identity: rawIdentity, deviceKey: rawDevice,
-  stageId, wasmBytes, location = globalThis.location, isTopLevel, crypto = globalThis.crypto, now = Date.now } = {}) {
+export async function prepareNativeOracleSetupWalletPrompt(args = {}) {
+  return prepareWalletPrompt(args, false);
+}
+/** Experimental two-stage variant, deliberately not selected by the existing
+ * owner UI. Never invoke without a separately anchored one-shot claim. */
+export async function prepareAtomicNativeOracleSetupWalletPrompt(args = {}) {
+  return prepareWalletPrompt(args, true);
+}
+async function prepareWalletPrompt({ wallet, review: rawReview, identity: rawIdentity, deviceKey: rawDevice,
+  stageId, wasmBytes, location = globalThis.location, isTopLevel, crypto = globalThis.crypto, now = Date.now } = {}, atomic = false) {
   if (!wallet || typeof wallet.signAndSendTransaction !== 'function' || wallet.manifest?.features?.signAndSendTransaction !== true ||
       !crypto?.subtle || typeof now !== 'function' || isTopLevel !== true || typeof location?.origin !== 'string') throw fail();
   let origin;
@@ -160,9 +241,11 @@ export async function prepareNativeOracleSetupWalletPrompt({ wallet, review: raw
     if (url.protocol !== 'https:' || origin !== location.origin || url.hostname === 'github.io' || url.hostname.endsWith('.github.io') ||
         url.hostname === 'madethis.website' || url.hostname.endsWith('.madethis.website')) throw Error();
   } catch { throw fail(); }
-  const review = structuredClone(rawReview), identity = structuredClone(rawIdentity), device = structuredClone(rawDevice), index = STAGES.indexOf(stageId);
+  const review = structuredClone(rawReview), identity = structuredClone(rawIdentity), device = structuredClone(rawDevice);
+  const index = (atomic ? ATOMIC_STAGES : STAGES).indexOf(stageId);
   if (index < 0) throw fail();
-  const canonical = await verifyNativeOracleSetupReview({ review, identity, deviceKey: device, origin, crypto });
+  const verify = atomic ? verifyAtomicNativeOracleSetupReview : verifyNativeOracleSetupReview;
+  const canonical = await verify({ review, identity, deviceKey: device, origin, crypto });
   let code = null;
   if (index === 0) {
     if (!(wasmBytes instanceof Uint8Array) || wasmBytes.length !== WASM_BYTES) throw fail();
