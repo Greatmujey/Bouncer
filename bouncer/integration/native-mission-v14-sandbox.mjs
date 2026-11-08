@@ -78,6 +78,11 @@ async function main() {
         failed(await send(owner,FAILED,[...createLoader(loader),deployCompressed(bad)]),'bad compressed code');
         await absent(provider,FAILED);
         await must(owner,HOLD,createLoader(loader),'create research loader for access checks');
+        const changedWasm=Buffer.from(vaultWasm); changedWasm[changedWasm.length-1]^=1;
+        const changedCompressed=zlib.deflateRawSync(changedWasm,{level:9});
+        assert.deepEqual(zlib.inflateRawSync(changedCompressed),changedWasm);
+        failed(await send(owner,HOLD,[deployCompressed(changedCompressed)]),'valid compressed wrong-hash code');
+        failed(await send(owner,HOLD,[call('loader_init',{},1n,20n*T)]),'loader reinitialization');
         failed(await send(intruder,HOLD,[deployCompressed(compressed)]),'non-owner deployment');
         failed(await send(intruder,HOLD,[call('loader_refund',{},1n,60n*T)]),'non-owner refund');
         failed(await send(owner,HOLD,[deployCompressed(compressed,0n)]),'zero-yocto deployment');
@@ -162,6 +167,7 @@ async function main() {
         independent_delivery_verified:false, public_chain_transactions:false};
     });
     console.log(JSON.stringify(report,null,2));
+    if (loader && process.env.GITHUB_ACTIONS==='true') console.log(`::notice title=V14 research phone loader::Synthetic Meteor request ${meteorBytes} bytes; loader ${loader.length} bytes; compressed V14 ${compressed.length} bytes. Isolated chain and fake provider only; not a real phone, wallet approval or live fulfillment.`);
   } finally {journal?.close();if(sandbox)await stopSandboxChild(sandbox.child);fs.rmSync(dir,{recursive:true,force:true});}
 }
 main().catch(error=>{console.error('Isolated native mission FAILED:',error?.stack??String(error));process.exitCode=1;});

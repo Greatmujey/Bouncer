@@ -99,9 +99,14 @@ persistent journal, owner-authorized fresh V14 vault, policies/allowlists and
 scoped agent keys. There is no complete browser provisioning flow for that
 setup yet. A static Netlify or Vercel deployment alone cannot run missions.
 
-Mobile V14 provisioning is also unresolved. CI measures the artifact size, but
-fitting a code field within a bridge limit would not verify the complete wallet
-request. A published NEAR global contract referenced by immutable code hash could
+Mobile V14 provisioning is also unresolved. At commit `42255e1`, the CI-built
+WASM was 499,063 bytes; its 665,420-byte base64 code field alone exceeds the
+Meteor mobile bridge's 400,000-byte request limit. CI also investigates a
+separately pinned compressed loader, **research only**: an asynchronous upgrade
+can fail, and the UI, retained original, owner-controlled recovery and real
+wallet behavior still need end-to-end verification. Fitting a code field within
+a bridge limit would not verify the complete wallet request. A published NEAR
+global contract referenced by immutable code hash could
 reduce a wallet payload, but the [pinned Meteor mobile bridge](https://github.com/Meteor-Wallet/meteor_wallet_sdk/blob/53a8b39d1aaaf067502c11e49ebb050c75df019e/packages/meteor-sdk-v1/src/MeteorConnect/target_clients/mobile_bridge/sdkActionToMobileBridge.ts)
 does not map `UseGlobalContract`. Bouncer does not currently implement or
 claim a global-contract setup route; no global artifact was published here.

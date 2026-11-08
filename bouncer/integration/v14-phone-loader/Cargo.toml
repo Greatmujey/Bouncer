@@ -1,0 +1,18 @@
+[package]
+name = "bouncer-v14-phone-loader-research"
+version = "0.0.1"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+miniz_oxide = { version = "=0.8.9", default-features = false, features = ["with-alloc"] }
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+opt-level = "z"
+lto = true
+strip = "debuginfo"
