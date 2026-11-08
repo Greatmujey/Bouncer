@@ -41,3 +41,23 @@ test('requests do not exhaust process-local review slots, and a modified artifac
   assert.deepEqual(await catalog.getRetainedReview(first.task_id,agentPublicKey),{review:first.review});
   const bad=Buffer.from(wasm);bad[80]^=1;assert.throws(()=>createNativeOracleReviewCatalog({wasmBytes:bad}));
 });
+
+test('opt-in atomic catalog binds the owner key and still reconstructs existing four-stage reviews', async () => {
+  const agentPublicKey = key(), ownerPublicKey = key(), original = createNativeOracleReviewCatalog({ wasmBytes: wasm });
+  const old = await original.create({ agentPublicKey });
+  const atomic = createNativeOracleReviewCatalog({ wasmBytes: wasm, enableAtomic: true });
+  const made = await atomic.create({ agentPublicKey, ownerPublicKey });
+  assert.equal(made.review.format, 'bouncer-atomic-native-oracle-wallet-review-v1');
+  assert.equal(made.review.owner_public_key, ownerPublicKey); assert.equal(made.review.stages.length, 2);
+  assert.equal(made.signing_authorized, false); assert.equal(made.transaction_sent, false);
+  assert.deepEqual((await atomic.getRetainedReview(made.task_id, agentPublicKey, ownerPublicKey)).review, made.review);
+  assert.deepEqual((await atomic.getRetainedReview(old.task_id, agentPublicKey, ownerPublicKey)).review, old.review);
+  assert.equal(await atomic.getRetainedReview(made.task_id, agentPublicKey, key()), null);
+  assert.equal(await original.getRetainedReview(made.task_id, agentPublicKey, ownerPublicKey), null);
+  await assert.rejects(atomic.create({ agentPublicKey }));
+  await assert.rejects(atomic.create({ agentPublicKey, ownerPublicKey: agentPublicKey }));
+  await assert.rejects(atomic.create({ agentPublicKey, ownerPublicKey, extra: true }));
+  let called = false; const input = { agentPublicKey };
+  Object.defineProperty(input, 'ownerPublicKey', { enumerable: true, get() { called = true; return ownerPublicKey; } });
+  await assert.rejects(atomic.create(input)); assert.equal(called, false);
+});

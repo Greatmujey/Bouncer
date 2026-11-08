@@ -1,6 +1,6 @@
 /**
  * Experimental independent public witness for ONE named testnet owner's
- * four-stage native-oracle setup and ONE subsequent native trial. This records
+ * four-stage or reviewed two-stage atomic native-oracle setup and ONE subsequent native trial. This records
  * only public hashes, account IDs and public keys, never private keys,
  * signatures, wallet requests, seller credentials or signed transactions.
  *
@@ -24,6 +24,7 @@ import { WalletWitnessError } from './git-wallet-prompt-witness.mjs';
 
 const ZERO = '0'.repeat(64), HEX32 = /^[a-f0-9]{32}$/, HEX64 = /^[a-f0-9]{64}$/;
 const STAGES = Object.freeze(['create_keyless_native_vault', 'configure_native_oracle_policy', 'fund_native_vault', 'install_native_oracle_agent']);
+const ATOMIC_STAGES = Object.freeze(['create_configure_fund_native_vault', 'install_native_oracle_agent']);
 const FORMAT = 'bouncer-native-oracle-prompt-witness-v1';
 const sha = x => crypto.createHash('sha256').update(x).digest('hex');
 const obj = x => x !== null && typeof x === 'object' && !Array.isArray(x) && Object.getPrototypeOf(x) === Object.prototype;
@@ -36,11 +37,12 @@ function ownerKey(value) {
   catch { return false; }
 }
 function identity(input) {
+  const expectedStages = Array.isArray(input?.stages) && input.stages.length === ATOMIC_STAGES.length ? ATOMIC_STAGES : STAGES;
   if (!exact(input, ['owner', 'owner_public_key', 'operation_id', 'review_sha256', 'stages']) ||
       !isTestnetAccount(input.owner) || input.owner === V3_OWNER || !input.owner.endsWith('.testnet') || !ownerKey(input.owner_public_key) || !HEX32.test(input.operation_id ?? '') ||
-      !HEX64.test(input.review_sha256 ?? '') || !Array.isArray(input.stages) || input.stages.length !== STAGES.length ||
+      !HEX64.test(input.review_sha256 ?? '') || !Array.isArray(input.stages) || input.stages.length !== expectedStages.length ||
       input.stages.some((stage, i) => !exact(stage, ['stage_id', 'action_commitment_sha256']) ||
-        stage.stage_id !== STAGES[i] || !HEX64.test(stage.action_commitment_sha256 ?? ''))) throw blocked('WITNESS_INVALID');
+        stage.stage_id !== expectedStages[i] || !HEX64.test(stage.action_commitment_sha256 ?? ''))) throw blocked('WITNESS_INVALID');
   return { owner: input.owner, owner_public_key: input.owner_public_key, operation_id: input.operation_id,
     review_sha256: input.review_sha256, stages: input.stages.map(s => ({ stage_id: s.stage_id,
       action_commitment_sha256: s.action_commitment_sha256 })) };
@@ -91,12 +93,12 @@ function step(state, record) {
   }
   const expectEvent = state.phase === 'reserved' || state.phase === 'original' ? 'claim' : state.phase === 'claimed' ? 'original' : null;
   const index = state.phase === 'original' ? state.stage_index + 1 : state.stage_index;
-  if (!expectEvent || index >= STAGES.length || record.event !== expectEvent ||
+  if (!expectEvent || index >= state.identity.stages.length || record.event !== expectEvent ||
       (expectEvent === 'original' && (!isTransactionHash(record.original_hash) || state.records.some(r => r.original_hash === record.original_hash)))) throw blocked('WITNESS_INVALID');
   const expected = nextRecord(state, expectEvent, index, record.original_hash);
   if (!same(record, expected)) throw blocked('WITNESS_INVALID');
   return { identity: state.identity, records: [...state.records, record], last_hash: sha(JSON.stringify(record)),
-    stage_index: index, phase: expectEvent === 'claim' ? 'claimed' : index === STAGES.length - 1 ? 'complete' : 'original' };
+    stage_index: index, phase: expectEvent === 'claim' ? 'claimed' : index === state.identity.stages.length - 1 ? 'complete' : 'original' };
 }
 
 /** Strict, hash-linked canonical JSON lines; empty means NO known witness only
@@ -156,7 +158,7 @@ export function createNativeOraclePromptWitness({ store } = {}) {
       const id = identity(structuredClone(raw)), snapshot = await read(id.owner);
       assertIdentity(snapshot.state, id);
       const s = snapshot.state, index = s.phase === 'reserved' ? 0 : s.phase === 'original' ? s.stage_index + 1 : -1;
-      if (index < 0 || index >= STAGES.length || STAGES[index] !== stageId) throw blocked('WITNESS_NOT_CLAIMABLE');
+      if (index < 0 || index >= id.stages.length || id.stages[index].stage_id !== stageId) throw blocked('WITNESS_NOT_CLAIMABLE');
       return { head: snapshot.head, last_hash: s.last_hash, stage_id: stageId };
     },
     async claim(raw, stageId, prior) {
@@ -164,7 +166,7 @@ export function createNativeOraclePromptWitness({ store } = {}) {
       assertIdentity(snapshot.state, id);
       const s = snapshot.state, index = s.phase === 'reserved' ? 0 : s.phase === 'original' ? s.stage_index + 1 : -1;
       if (!exact(prior, ['head','last_hash','stage_id']) || prior.head !== snapshot.head || prior.last_hash !== s.last_hash ||
-          prior.stage_id !== stageId || index < 0 || index >= STAGES.length || STAGES[index] !== stageId) throw blocked('WITNESS_NOT_CLAIMABLE');
+          prior.stage_id !== stageId || index < 0 || index >= id.stages.length || id.stages[index].stage_id !== stageId) throw blocked('WITNESS_NOT_CLAIMABLE');
       return append(snapshot, id.owner, nextRecord(s, 'claim', index));
     },
     /** Atomically retain the only trial hash BEFORE phone signing. This is a
@@ -182,7 +184,7 @@ export function createNativeOraclePromptWitness({ store } = {}) {
       assertIdentity(snapshot.state, id);
       if (!isTransactionHash(originalHash)) throw blocked('WITNESS_INVALID');
       const s = snapshot.state;
-      if (s.phase === 'claimed' && STAGES[s.stage_index] === stageId) {
+      if (s.phase === 'claimed' && id.stages[s.stage_index]?.stage_id === stageId) {
         return append(snapshot, id.owner, nextRecord(s, 'original', s.stage_index, originalHash));
       }
       // Idempotent recording of the exact original is recovery, not a retry.

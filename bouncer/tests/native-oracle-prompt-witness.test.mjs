@@ -164,3 +164,46 @@ test('competing trial claims and a lost acknowledgment cannot grant a second tri
   otherStore.loseAck(false);assert.equal((await other.inspect(id2.owner)).state.trial.original_hash,request2.original_hash);
   await assert.rejects(other.claimTrial(id2,request2,head2),e=>e.code==='WITNESS_NOT_CLAIMABLE');
 });
+
+const atomicStages = ['create_configure_fund_native_vault', 'install_native_oracle_agent'];
+const atomicIdentity = (owner = 'alice.testnet') => ({ ...identity(owner),
+  stages: atomicStages.map((stage_id, i) => ({ stage_id, action_commitment_sha256: String(i + 5).repeat(64) })) });
+
+test('same witness namespace fences the two atomic originals before its single trial', async () => {
+  const store = memoryStore(), witness = createNativeOraclePromptWitness({ store }), id = atomicIdentity();
+  await witness.reserve(id); await assert.rejects(witness.reserve(identity()), e => e.code === 'OWNER_ALREADY_WITNESSED');
+  const wrong = { ...id, stages: identity().stages };
+  await assert.rejects(witness.assertClaimable(wrong, stages[0]), e => e.code === 'WITNESS_MISMATCH');
+  await assert.rejects(witness.assertClaimable(id, atomicStages[1]), e => e.code === 'WITNESS_NOT_CLAIMABLE');
+  for (let i = 0; i < atomicStages.length; i++) {
+    const checkpoint = await witness.assertClaimable(id, atomicStages[i]);
+    const claimed = await witness.claim(id, atomicStages[i], checkpoint);
+    assert.equal(claimed.state.phase, 'claimed');
+    await assert.rejects(witness.assertClaimable(id, atomicStages[i]), e => e.code === 'WITNESS_NOT_CLAIMABLE');
+    if (i === 1) await assert.rejects(witness.recordOriginal(id, atomicStages[i], tx(11)), e => e.code === 'WITNESS_INVALID');
+    const saved = await witness.recordOriginal(id, atomicStages[i], tx(11 + i));
+    assert.equal(saved.state.phase, i === 1 ? 'complete' : 'original');
+    assert.equal((await witness.recordOriginal(id, atomicStages[i], tx(11 + i))).head, saved.head);
+    await assert.rejects(witness.recordOriginal(id, atomicStages[i], tx(20 + i)), e => e.code === 'WITNESS_MISMATCH');
+  }
+  const complete = await witness.inspect(id.owner); assert.equal(complete.state.records.length, 5);
+  const request = trial(), claimed = await witness.claimTrial(id, request, complete.head);
+  assert.equal(claimed.state.phase, 'trial_claimed'); assert.equal(claimed.state.records.length, 6);
+  await assert.rejects(witness.claimTrial(id, request, claimed.head), e => e.code === 'WITNESS_NOT_CLAIMABLE');
+  assert.deepEqual(parseNativeOraclePromptWitness(store.snapshot().text, id.owner).trial, request);
+});
+
+test('atomic witness rejects mixed stages and lost acknowledgements cannot reopen an atomic claim', async () => {
+  const store = memoryStore(), witness = createNativeOraclePromptWitness({ store }), id = atomicIdentity();
+  for (const bad of [
+    { ...id, stages: [...id.stages].reverse() }, { ...id, stages: [id.stages[0], identity().stages[1]] },
+    { ...id, stages: [...id.stages, identity().stages[2]] }, { ...id, stages: [] },
+  ]) await assert.rejects(witness.reserve(bad), e => e.code === 'WITNESS_INVALID');
+  await witness.reserve(id);
+  const checkpoint = await witness.assertClaimable(id, atomicStages[0]); store.loseAck(true);
+  await assert.rejects(witness.claim(id, atomicStages[0], checkpoint), e => e.code === 'WITNESS_COMMIT_UNKNOWN');
+  store.loseAck(false); assert.equal((await witness.inspect(id.owner)).state.phase, 'claimed');
+  await assert.rejects(witness.assertClaimable(id, atomicStages[0]), e => e.code === 'WITNESS_NOT_CLAIMABLE');
+  const text = store.snapshot().text;
+  assert.throws(() => parseNativeOraclePromptWitness(text.replace('create_configure_fund_native_vault', stages[0]), id.owner), e => e.code === 'WITNESS_INVALID');
+});

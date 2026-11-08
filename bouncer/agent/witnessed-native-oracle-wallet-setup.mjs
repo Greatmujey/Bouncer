@@ -1,5 +1,6 @@
 /**
- * Experimental two-system coordinator for the four native wallet stages.
+ * Experimental two-system coordinator for four native wallet stages or the
+ * reviewed two-stage atomic plan. The live service remains on four stages.
  * PostgreSQL authenticates the exact owner action and verifies all prior
  * original receipt graphs plus a fresh same-block preflight. An independently
  * retained Git CAS witness must acknowledge and re-read the matching claim;
@@ -17,15 +18,23 @@ import { WalletWitnessError } from './git-wallet-prompt-witness.mjs';
 import { isTransactionHash } from '../shared/direct-payment-settlement.mjs';
 
 const STAGES = ['create_keyless_native_vault', 'configure_native_oracle_policy', 'fund_native_vault', 'install_native_oracle_agent'];
+const ATOMIC_STAGES = ['create_configure_fund_native_vault', 'install_native_oracle_agent'];
 const fail = code => new WalletWitnessError(code, 'native wallet setup is uncertain or no longer fresh; stop and reconcile, never repeat a claimed prompt');
+function stageIds(stages, field) {
+  if (!Array.isArray(stages)) throw fail('WITNESS_MISMATCH');
+  const expected = stages.length === ATOMIC_STAGES.length ? ATOMIC_STAGES : STAGES;
+  if (stages.length !== expected.length || stages.some((stage, index) => stage?.[field] !== expected[index])) throw fail('WITNESS_MISMATCH');
+  return expected;
+}
 function identityFrom(prompt) {
   if (!prompt || prompt.status !== 'RESERVED_NOT_CLAIMED' || prompt.execution_authorized !== false ||
       prompt.review?.owner !== prompt.owner || prompt.review?.review_sha256 !== prompt.review_sha256 ||
-      !Array.isArray(prompt.review?.stages) || prompt.review.stages.length !== STAGES.length ||
-      !Array.isArray(prompt.stages) || prompt.stages.length !== STAGES.length) throw fail('WITNESS_MISMATCH');
+      !Array.isArray(prompt.review?.stages) || !Array.isArray(prompt.stages)) throw fail('WITNESS_MISMATCH');
+  const expected = stageIds(prompt.review.stages, 'id');
+  if (prompt.stages.length !== expected.length) throw fail('WITNESS_MISMATCH');
   return { owner: prompt.owner, owner_public_key: prompt.owner_public_key, operation_id: prompt.operation_id,
     review_sha256: prompt.review_sha256, stages: prompt.review.stages.map((stage, index) => {
-      if (stage?.id !== STAGES[index] || prompt.stages[index]?.stage_id !== stage.id || prompt.stages[index]?.claimed !== false ||
+      if (stage?.id !== expected[index] || prompt.stages[index]?.stage_id !== stage.id || prompt.stages[index]?.claimed !== false ||
           prompt.stages[index]?.original_hash !== null || prompt.stages[index]?.action_commitment_sha256 !== stage.action_commitment_sha256) {
         throw fail('WITNESS_MISMATCH');
       }
@@ -33,8 +42,9 @@ function identityFrom(prompt) {
     }) };
 }
 function common(identity, stageId, evidence) {
-  const stage = identity?.stages?.find(s => s.stage_id === stageId);
-  if (!stage || !STAGES.includes(stageId)) throw fail('WITNESS_MISMATCH');
+  const expected = stageIds(identity?.stages, 'stage_id');
+  const stage = identity.stages.find(s => s.stage_id === stageId);
+  if (!stage || !expected.includes(stageId)) throw fail('WITNESS_MISMATCH');
   return { owner: identity.owner, ownerPublicKey: identity.owner_public_key, operationId: identity.operation_id,
     reviewSha256: identity.review_sha256, stageId, actionCommitmentSha256: stage.action_commitment_sha256, evidence };
 }
@@ -109,8 +119,9 @@ export function createWitnessedNativeOracleSetup({ fence, witness, otherWitness,
       const identity = structuredClone(raw), checkpoint = await witness.inspect(identity?.owner), state = checkpoint.state;
       if (!state || !['complete','trial_claimed'].includes(state.phase) || JSON.stringify(state.identity) !== JSON.stringify(identity)) throw fail('WITNESS_MISMATCH');
       await assertOtherFlowEmpty(otherWitness, identity.owner, checkpoint.head);
+      const expected = stageIds(identity.stages, 'stage_id');
       const originals = state.records.filter(r => r.event === 'original').map(r => r.original_hash);
-      if (originals.length !== STAGES.length) throw fail('WITNESS_MISMATCH');
+      if (originals.length !== expected.length) throw fail('WITNESS_MISMATCH');
       const result = await fence.verifyCompletion({ owner: identity.owner, ownerPublicKey: identity.owner_public_key,
         operationId: identity.operation_id, reviewSha256: identity.review_sha256, evidence });
       if (!Array.isArray(result?.prior_original_hashes) || JSON.stringify(result.prior_original_hashes) !== JSON.stringify(originals)) throw fail('WITNESS_MISMATCH');
@@ -118,7 +129,7 @@ export function createWitnessedNativeOracleSetup({ fence, witness, otherWitness,
       if (after.head !== checkpoint.head || JSON.stringify(after.state) !== JSON.stringify(state)) throw fail('WITNESS_MISMATCH');
       await assertOtherFlowEmpty(otherWitness, identity.owner, checkpoint.head);
       return { ...result, independently_witnessed: true, witness_head: checkpoint.head, execution_authorized: false,
-        scope: 'four original receipt graphs and current setup at one trusted-RPC FINAL block; not local custody, provider execution, spending approval or a state reservation' };
+        scope: `${expected.length} original receipt graphs and current setup at one trusted-RPC FINAL block; not local custody, provider execution, spending approval or a state reservation` };
     },
     async recordOriginal({ identity: raw, stageId, originalHash, evidence } = {}) {
       const identity = structuredClone(raw), args = common(identity, stageId, evidence), before = await witness.inspect(identity.owner);

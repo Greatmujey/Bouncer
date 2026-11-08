@@ -1,9 +1,10 @@
 /**
- * EXPERIMENTAL native-oracle four-stage write-ahead wallet-prompt fence.
+ * EXPERIMENTAL native-oracle write-ahead wallet-prompt fence. Four-stage is
+ * the default; the reviewed two-stage atomic variant requires explicit opt-in.
  * It does not invoke a wallet, sign, submit, unlock a policy or pay a provider.
  *
  * Each named testnet owner can reserve ONE canonical review in this schema.
- * The four single-use stage rows are created in the same DB transaction.
+ * All single-use stage rows are created in the same DB transaction.
  * A claim requires injected replay-resistant owner authentication, trusted-RPC
  * receipt checks for every preceding original, and a fresh same-block native
  * preflight. A claim commits before it can be returned. Unknown acknowledgments,
@@ -20,7 +21,9 @@ import crypto from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { NATIVE_ORACLE_V9_BYTES, NATIVE_ORACLE_V9_SHA256 } from './native-oracle-wallet-plan.mjs';
 import { verifyNativeOracleWalletReview, prepareNativeOracleWalletAttempt } from './native-oracle-wallet-evidence.mjs';
-import { inspectNativeOracleWalletStage, inspectNativeOracleWalletCompletion } from './native-oracle-wallet-preflight.mjs';
+import { verifyAtomicNativeOracleWalletReview, prepareAtomicNativeOracleWalletAttempt } from './native-oracle-atomic-wallet.mjs';
+import { inspectNativeOracleWalletStage, inspectNativeOracleWalletCompletion,
+  inspectAtomicNativeOracleWalletStage, inspectAtomicNativeOracleWalletCompletion } from './native-oracle-wallet-preflight.mjs';
 import { isTestnetAccount } from '../shared/account-id.mjs';
 import { isTransactionHash } from '../shared/direct-payment-settlement.mjs';
 import { WalletOwnerFenceError, initializePostgresWalletOwnerFence, reservePostgresWalletOwnerFence,
@@ -28,6 +31,20 @@ import { WalletOwnerFenceError, initializePostgresWalletOwnerFence, reservePostg
 
 const SCHEMA = 'bouncer_native_wallet_prompt_v1';
 const STAGES = Object.freeze(['create_keyless_native_vault', 'configure_native_oracle_policy', 'fund_native_vault', 'install_native_oracle_agent']);
+const ATOMIC_STAGES = Object.freeze(['create_configure_fund_native_vault', 'install_native_oracle_agent']);
+// The atomic branch is intentionally opt-in and is not enabled by the live
+// service. Both plans use the same owner hold and immutable witness namespace.
+function reviewOps(review, enableAtomic) {
+  if (review?.format === 'bouncer-native-oracle-wallet-review-v1') return { stages: STAGES,
+    verify: verifyNativeOracleWalletReview, prepare: prepareNativeOracleWalletAttempt,
+    inspectStage: inspectNativeOracleWalletStage, inspectCompletion: inspectNativeOracleWalletCompletion,
+    completionStatus: 'FOUR_ORIGINALS_AND_STATE_MATCH_NOT_AUTHORIZED' };
+  if (enableAtomic === true && review?.format === 'bouncer-atomic-native-oracle-wallet-review-v1') return { stages: ATOMIC_STAGES,
+    verify: verifyAtomicNativeOracleWalletReview, prepare: prepareAtomicNativeOracleWalletAttempt,
+    inspectStage: inspectAtomicNativeOracleWalletStage, inspectCompletion: inspectAtomicNativeOracleWalletCompletion,
+    completionStatus: 'TWO_ORIGINALS_AND_STATE_MATCH_NOT_AUTHORIZED' };
+  throw fail('INVALID_REQUEST');
+}
 const PRE_METHODS = ['viewNodeStatus', 'viewBlock', 'query', 'viewTestnetAccountPresenceAt', 'callFunctionRaw', 'experimental_protocolConfig', 'gasPrice'];
 const PLAN_GUARD = `
 BEGIN
@@ -167,17 +184,18 @@ export async function initializePostgresNativeOraclePromptFence({ pool } = {}) {
 
 const PLAN_COLUMNS = 'owner,operation_id,owner_public_key,review_sha256,review,created_at';
 const STAGE_COLUMNS = 'owner,operation_id,stage_index,stage_id,action_commitment_sha256,claimed,claimed_at,original_hash,created_at';
-function validated(plan, stages, wasm) {
+function validated(plan, stages, wasm, enableAtomic) {
   try {
+    const ops = reviewOps(plan?.review, enableAtomic);
     if (!plain(plan) || !isTestnetAccount(plan.owner) || !hex32(plan.operation_id) || !hex64(plan.review_sha256) || !validDate(plan.created_at) ||
-        !Array.isArray(stages) || stages.length !== STAGES.length) throw Error();
-    const identity = verifyNativeOracleWalletReview({ review: plan.review, wasmBytes: wasm,
+        !Array.isArray(stages) || stages.length !== ops.stages.length) throw Error();
+    const identity = ops.verify({ review: plan.review, wasmBytes: wasm,
       trustedReviewHash: plan.review_sha256, trustedOwnerPublicKey: plan.owner_public_key });
     if (identity.owner !== plan.owner) throw Error();
     let gap = false; const hashes = new Set();
     stages.forEach((row, i) => {
       if (!plain(row) || row.owner !== plan.owner || row.operation_id !== plan.operation_id || row.stage_index !== i ||
-          row.stage_id !== STAGES[i] || row.action_commitment_sha256 !== plan.review.stages[i].action_commitment_sha256 ||
+          row.stage_id !== ops.stages[i] || row.action_commitment_sha256 !== plan.review.stages[i].action_commitment_sha256 ||
           typeof row.claimed !== 'boolean' || !validDate(row.created_at) ||
           (!row.claimed && (row.claimed_at !== null || row.original_hash !== null)) ||
           (row.claimed && (!validDate(row.claimed_at) || (row.original_hash !== null && !isTransactionHash(row.original_hash)))) ||
@@ -197,7 +215,7 @@ function publicPlan(row) {
 }
 function requireIdentity(value) {
   if (!plain(value) || !isTestnetAccount(value.owner) || typeof value.ownerPublicKey !== 'string' ||
-      !hex32(value.operationId) || !hex64(value.reviewSha256) || !STAGES.includes(value.stageId) || !hex64(value.actionCommitmentSha256)) {
+      !hex32(value.operationId) || !hex64(value.reviewSha256) || ![...STAGES, ...ATOMIC_STAGES].includes(value.stageId) || !hex64(value.actionCommitmentSha256)) {
     throw fail('INVALID_REQUEST');
   }
 }
@@ -205,8 +223,9 @@ function requireIdentity(value) {
 /** `authenticate({action,evidence})` is a mandatory trust boundary and must
  * verify a fresh single-use owner challenge for the exact action. Providers,
  * pinned artifact and clock are server configuration, never browser input. */
-export function createPostgresNativeOraclePromptFence({ pool, authenticate, wasmBytes, receiptProvider, preflightProvider, now = Date.now } = {}) {
-  if (!pool || typeof pool.connect !== 'function' || typeof authenticate !== 'function' || typeof now !== 'function' ||
+export function createPostgresNativeOraclePromptFence({ pool, authenticate, wasmBytes, receiptProvider, preflightProvider,
+  now = Date.now, enableAtomic = false } = {}) {
+  if (typeof enableAtomic !== 'boolean' || !pool || typeof pool.connect !== 'function' || typeof authenticate !== 'function' || typeof now !== 'function' ||
       !(wasmBytes instanceof Uint8Array) || wasmBytes.length !== NATIVE_ORACLE_V9_BYTES ||
       crypto.createHash('sha256').update(wasmBytes).digest('hex') !== NATIVE_ORACLE_V9_SHA256 ||
       !receiptProvider || ['viewNodeStatus','txStatusReceipts'].some(m => typeof receiptProvider[m] !== 'function') ||
@@ -225,10 +244,10 @@ export function createPostgresNativeOraclePromptFence({ pool, authenticate, wasm
     const p = await client.query(`SELECT ${PLAN_COLUMNS} FROM ${SCHEMA}.plans WHERE owner=$1${lock ? ' FOR UPDATE' : ''}`, [owner]);
     if (p.rows.length !== 1) throw fail('OWNER_FENCED');
     const s = await client.query(`SELECT ${STAGE_COLUMNS} FROM ${SCHEMA}.stages WHERE owner=$1 ORDER BY stage_index${lock ? ' FOR UPDATE' : ''}`, [owner]);
-    return validated(p.rows[0], s.rows, wasm);
+    return validated(p.rows[0], s.rows, wasm, enableAtomic);
   }
   function target(row, request, alreadyClaimed = false) {
-    const index = STAGES.indexOf(request.stageId), stage = row.stages[index];
+    const index = row.stages.findIndex(stage => stage.stage_id === request.stageId), stage = row.stages[index];
     if (row.owner_public_key !== request.ownerPublicKey || row.operation_id !== request.operationId || row.review_sha256 !== request.reviewSha256 ||
         !stage || stage.action_commitment_sha256 !== request.actionCommitmentSha256) throw fail('MISMATCH');
     if (alreadyClaimed ? !stage.claimed || stage.original_hash !== null : stage.claimed) {
@@ -249,15 +268,15 @@ export function createPostgresNativeOraclePromptFence({ pool, authenticate, wasm
     let preflight;
     try {
       if ((await readStatus())?.chain_id !== 'testnet') throw Error();
-      const prior = [];
+      const prior = [], ops = reviewOps(retained.row.review, enableAtomic);
       for (let i = 0; i < retained.target.hashes.length; i++) {
         const trustedOriginalHash = retained.target.hashes[i];
-        const attempt = prepareNativeOracleWalletAttempt({ review: retained.row.review, wasmBytes: wasm, trustedReviewHash: reviewSha256,
-          trustedOwnerPublicKey: ownerPublicKey, stageId: STAGES[i], trustedOriginalHash });
+        const attempt = ops.prepare({ review: retained.row.review, wasmBytes: wasm, trustedReviewHash: reviewSha256,
+          trustedOwnerPublicKey: ownerPublicKey, stageId: ops.stages[i], trustedOriginalHash });
         const result = structuredClone(await readReceipts(trustedOriginalHash, owner, 'FINAL'));
         prior.push({ attempt, trustedOriginalHash, result });
       }
-      preflight = await inspectNativeOracleWalletStage({ review: retained.row.review, wasmBytes: wasm, trustedReviewHash: reviewSha256,
+      preflight = await ops.inspectStage({ review: retained.row.review, wasmBytes: wasm, trustedReviewHash: reviewSha256,
         trustedOwnerPublicKey: ownerPublicKey, stageId, prior, provider, now });
     } catch { throw fail('PREFLIGHT_UNAVAILABLE'); }
     if (preflight.status !== 'STATE_CHECKS_PASSED_NOT_AUTHORIZED' || preflight.owner !== owner || preflight.review_sha256 !== reviewSha256 ||
@@ -270,12 +289,12 @@ export function createPostgresNativeOraclePromptFence({ pool, authenticate, wasm
   }
   return Object.freeze({
     async reserve({ review: rawReview, trustedReviewHash, trustedOwnerPublicKey, evidence } = {}) {
-      const review = structuredClone(rawReview); let id;
-      try { id = verifyNativeOracleWalletReview({ review, wasmBytes: wasm, trustedReviewHash, trustedOwnerPublicKey });
+      const review = structuredClone(rawReview); let id, ops;
+      try { ops = reviewOps(review, enableAtomic); id = ops.verify({ review, wasmBytes: wasm, trustedReviewHash, trustedOwnerPublicKey });
         if (!id.owner_public_key.startsWith('ed25519:')) throw Error(); }
       catch { throw fail('INVALID_REQUEST'); }
       await authorize(action('reserve_native_setup', id.owner, id.owner_public_key, { review_sha256: trustedReviewHash,
-        stage_id: STAGES[0], action_commitment_sha256: review.stages[0].action_commitment_sha256 }), evidence);
+        stage_id: ops.stages[0], action_commitment_sha256: review.stages[0].action_commitment_sha256 }), evidence);
       const operation = crypto.randomBytes(16).toString('hex');
       return transaction(pool, async client => {
         await verifySchema(client);
@@ -285,9 +304,9 @@ export function createPostgresNativeOraclePromptFence({ pool, authenticate, wasm
           VALUES($1,$2,$3,$4,$5::jsonb) ON CONFLICT DO NOTHING RETURNING owner`,
         [id.owner, operation, id.owner_public_key, trustedReviewHash, JSON.stringify(review)]);
         if (inserted.rows.length !== 1) throw fail('OWNER_FENCED');
-        for (let i = 0; i < STAGES.length; i++) {
+        for (let i = 0; i < ops.stages.length; i++) {
           await client.query(`INSERT INTO ${SCHEMA}.stages(owner,operation_id,stage_index,stage_id,action_commitment_sha256)
-            VALUES($1,$2,$3,$4,$5)`, [id.owner, operation, i, STAGES[i], review.stages[i].action_commitment_sha256]);
+            VALUES($1,$2,$3,$4,$5)`, [id.owner, operation, i, ops.stages[i], review.stages[i].action_commitment_sha256]);
         }
         const row = await load(client, id.owner);
         return { ...publicPlan(row), status: 'RESERVED_NOT_CLAIMED' };
@@ -354,7 +373,7 @@ export function createPostgresNativeOraclePromptFence({ pool, authenticate, wasm
         preflight_block_hash:preflight.block_hash, preflight_checked_at:preflight.observed_at,
         do_not_retry:true, execution_authorized:false };
     },
-    /** Read-only verification of ALL four retained originals and installed
+    /** Read-only verification of ALL retained originals and installed
      * state. This never authorizes or sends a provider request. */
     async verifyCompletion({ owner, ownerPublicKey, operationId, reviewSha256, evidence } = {}) {
       if (!isTestnetAccount(owner) || typeof ownerPublicKey !== 'string' || !hex32(operationId) || !hex64(reviewSha256)) throw fail('INVALID_REQUEST');
@@ -368,20 +387,21 @@ export function createPostgresNativeOraclePromptFence({ pool, authenticate, wasm
       let result;
       try {
         if ((await readStatus())?.chain_id !== 'testnet') throw Error();
-        const prior = [];
-        for (let i = 0; i < STAGES.length; i++) {
+        const prior = [], ops = reviewOps(retained.row.review, enableAtomic);
+        for (let i = 0; i < ops.stages.length; i++) {
           const trustedOriginalHash = retained.hashes[i];
-          const attempt = prepareNativeOracleWalletAttempt({ review: retained.row.review, wasmBytes: wasm, trustedReviewHash: reviewSha256,
-            trustedOwnerPublicKey: ownerPublicKey, stageId: STAGES[i], trustedOriginalHash });
+          const attempt = ops.prepare({ review: retained.row.review, wasmBytes: wasm, trustedReviewHash: reviewSha256,
+            trustedOwnerPublicKey: ownerPublicKey, stageId: ops.stages[i], trustedOriginalHash });
           const chainResult = structuredClone(await readReceipts(trustedOriginalHash, owner, 'FINAL'));
           prior.push({ attempt, trustedOriginalHash, result: chainResult });
         }
-        result = await inspectNativeOracleWalletCompletion({ review: retained.row.review, wasmBytes: wasm, trustedReviewHash: reviewSha256,
+        result = await ops.inspectCompletion({ review: retained.row.review, wasmBytes: wasm, trustedReviewHash: reviewSha256,
           trustedOwnerPublicKey: ownerPublicKey, prior, provider, now });
       } catch { throw fail('PREFLIGHT_UNAVAILABLE'); }
       const currentHashes = await transaction(pool, async client => completeHashes(await load(client, owner)));
       if (!isDeepStrictEqual(currentHashes, retained.hashes) || !isDeepStrictEqual(result?.prior_original_hashes, retained.hashes) ||
-          result.owner !== owner || result.review_sha256 !== reviewSha256 || !['BLOCKED_OR_UNKNOWN', 'FOUR_ORIGINALS_AND_STATE_MATCH_NOT_AUTHORIZED'].includes(result.status)) {
+          result.owner !== owner || result.review_sha256 !== reviewSha256 ||
+          !['BLOCKED_OR_UNKNOWN', reviewOps(retained.row.review, enableAtomic).completionStatus].includes(result.status)) {
         throw fail('MISMATCH');
       }
       return { ...result, execution_authorized: false, independently_witnessed: false };
@@ -393,7 +413,7 @@ export function createPostgresNativeOraclePromptFence({ pool, authenticate, wasm
       await authorize(action('record_native_setup_original', owner, ownerPublicKey, { operation_id: operationId, review_sha256: reviewSha256,
         stage_id: stageId, action_commitment_sha256: actionCommitmentSha256, original_hash: originalHash }), evidence);
       return transaction(pool, async client => {
-        const row = await load(client, owner, true), index = STAGES.indexOf(stageId), stage = row.stages[index];
+        const row = await load(client, owner, true), index = row.stages.findIndex(stage => stage.stage_id === stageId), stage = row.stages[index];
         if (row.owner_public_key !== ownerPublicKey || row.operation_id !== operationId || row.review_sha256 !== reviewSha256 ||
             !stage || stage.action_commitment_sha256 !== actionCommitmentSha256 || !stage.claimed) throw fail('MISMATCH');
         if (stage.original_hash !== null) {

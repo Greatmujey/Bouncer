@@ -11,6 +11,7 @@ import nearApi from 'near-api-js';
 import { IDBFactory } from 'fake-indexeddb';
 import { buildNativeOracleWalletPlan, NATIVE_ORACLE_DEFAULT_GAS_ALLOWANCE, NATIVE_ORACLE_V9_CODE_HASH,
   NATIVE_ORACLE_VAULT_FUNDING } from '../agent/native-oracle-wallet-plan.mjs';
+import { buildAtomicNativeOracleWalletPlan } from '../agent/native-oracle-atomic-wallet.mjs';
 import { runOracleGoal, ORACLE_TESTNET_PROGRAM, ORACLE_PROJECT_ID, ORACLE_PROJECT_UUID } from '../agent/oracle-outlayer.mjs';
 import { V11_SELECTED_WASM_FEATURES } from '../agent/svalin-setup-preflight.mjs';
 import { NO_LOCAL_CONTRACT_HASH } from '../shared/plain-owner-profile.mjs';
@@ -62,26 +63,28 @@ function actionView(a) {
 }
 function receipt(plan, ownerKey, index) {
   const batch = plan.batches[index], transaction = hash(10 + index), root = hash(20 + index), actions = batch.actions.map(actionView);
-  const omit = index === 3;
+  const omit = batch.id === 'install_native_oracle_agent';
   return { final_execution_status: 'FINAL', status: { SuccessValue: '' },
     transaction: { hash: transaction, signer_id: batch.signerId, public_key: ownerKey, receiver_id: batch.receiverId, actions: structuredClone(actions) },
     transaction_outcome: { id: transaction, outcome: { executor_id: batch.signerId, receipt_ids: [root], status: { SuccessReceiptId: root } } },
     receipts: omit ? [] : [{ receipt_id: root, predecessor_id: batch.signerId, receiver_id: batch.receiverId,
       receipt: { Action: { signer_id: batch.signerId, signer_public_key: ownerKey, actions: structuredClone(actions), input_data_ids: [], output_data_receivers: [] } } }],
     receipts_outcome: [{ id: root, outcome: { executor_id: batch.receiverId, status: { SuccessValue: '' }, receipt_ids: [],
-      logs: index === 2 ? ['BOUNCER native deposit received'] : [] } }] };
+      logs: ['fund_native_vault', 'create_configure_fund_native_vault'].includes(batch.id) ? ['BOUNCER native deposit received'] : [] } }] };
 }
 function scenario(db, overrides = {}) {
   const ownerId = overrides.ownerId ?? owner(), vault = `native.${ownerId}`, ownerPair = nearApi.KeyPair.fromRandom('ed25519'),
     ownerKey = String(ownerPair.getPublicKey()), agentKey = overrides.agentPublicKey ?? key();
-  const plan = buildNativeOracleWalletPlan({ wasmBytes: wasm, terms: { owner: ownerId, vault, policy_id: 'price', agent_public_key: agentKey,
+  const terms = { owner: ownerId, vault, policy_id: 'price', agent_public_key: agentKey,
     per_tx_cap_yocto: (NEAR / 10n).toString(), daily_cap_yocto: (NEAR / 10n).toString(), vault_deposit_yocto: (NEAR / 10n).toString(),
-    agent_gas_allowance_yocto: NATIVE_ORACLE_DEFAULT_GAS_ALLOWANCE } });
+    agent_gas_allowance_yocto: NATIVE_ORACLE_DEFAULT_GAS_ALLOWANCE };
+  const plan = overrides.atomic ? buildAtomicNativeOracleWalletPlan({ wasmBytes: wasm, terms, trustedOwnerPublicKey: ownerKey }) :
+    buildNativeOracleWalletPlan({ wasmBytes: wasm, terms });
   const review = plan.review, state = { stage: 0, unavailable: false, blocked: false, mixed: false }, calls = [];
   const source = { WasmUrl: { url: ORACLE_TESTNET_PROGRAM.url, hash: ORACLE_TESTNET_PROGRAM.sha256, build_target: ORACLE_TESTNET_PROGRAM.build_target } };
   const receiptProvider = { async viewNodeStatus() { return { chain_id: 'testnet' }; }, async txStatusReceipts(id, account, finality) {
     calls.push(id); assert.equal(account, ownerId); assert.equal(finality, 'FINAL');
-    const i = [0,1,2,3].find(i => hash(10 + i) === id); if (state.unavailable || i === undefined) throw Error('synthetic receipt unavailable');
+    const i = plan.batches.findIndex((_, index) => hash(10 + index) === id); if (state.unavailable || i < 0) throw Error('synthetic receipt unavailable');
     return receipt(plan, ownerKey, i);
   } };
   const provider = {
@@ -126,7 +129,8 @@ function scenario(db, overrides = {}) {
       return { block_hash: BLOCK, result: [...Buffer.from(JSON.stringify(result))] };
     },
   };
-  const options = { pool: db, authenticate: auth, wasmBytes: wasm, receiptProvider, preflightProvider: provider, ...overrides };
+  const options = { pool: db, authenticate: auth, wasmBytes: wasm, receiptProvider, preflightProvider: provider,
+    enableAtomic: overrides.atomic === true, ...overrides };
   const fence = createPostgresNativeOraclePromptFence(options);
   const reserve = { review, trustedReviewHash: review.review_sha256, trustedOwnerPublicKey: ownerKey, evidence: 'synthetic-auth' };
   const req = (res, i) => ({ owner: ownerId, ownerPublicKey: ownerKey, operationId: res.operation_id,
@@ -695,3 +699,45 @@ dbtest('a lost trial-witness response retains the original and never invokes the
     assert.equal((await device.inspectNativeOracleOriginal({reviewSha256:f.review.review_sha256})).status,'NO_LOCAL_ORIGINAL');
   });
 });
+
+dbtest('opt-in atomic fence requires two ordered originals, one-shot claims and fresh completion', async () => resources(async db => {
+  const f = scenario(db, { atomic: true });
+  const disabled = createPostgresNativeOraclePromptFence({ ...f.options, enableAtomic: false });
+  await assert.rejects(disabled.reserve(f.reserve), e => e.code === 'INVALID_REQUEST');
+  const store = memoryWitnessStore(), witness = createNativeOraclePromptWitness({ store });
+  const coordinator = createWitnessedNativeOracleSetup({ fence: f.fence, witness, otherWitness: emptyCrossWitness(witness) });
+  const reserved = await coordinator.reserve(f.reserve), identity = reserved.identity;
+  assert.equal(identity.stages.length, 2); assert.equal(reserved.execution_authorized, false);
+  // A server that is not opted in must stop on the existing atomic record,
+  // not reinterpret it as a four-stage operation or start a new one.
+  await assert.rejects(disabled.inspect({ owner: f.ownerId, ownerPublicKey: f.ownerKey, evidence: 'synthetic-auth' }), e => e.code === 'CORRUPT');
+  const ids = f.review.stages.map(s => s.id);
+  await assert.rejects(coordinator.claim({ identity, stageId: ids[1], evidence: 'synthetic-auth' }), e => e.code === 'WITNESS_NOT_CLAIMABLE');
+  const first = await coordinator.claim({ identity, stageId: ids[0], evidence: 'synthetic-auth' });
+  assert.equal(first.independently_witnessed, true); assert.equal(first.execution_authorized, false);
+  await coordinator.recordOriginal({ identity, stageId: ids[0], originalHash: hash(10), evidence: 'synthetic-auth' });
+  f.state.stage = 3; f.state.unavailable = true;
+  await assert.rejects(coordinator.claim({ identity, stageId: ids[1], evidence: 'synthetic-auth' }), e => e.code === 'PREFLIGHT_UNAVAILABLE');
+  assert.equal((await witness.inspect(f.ownerId)).state.phase, 'original');
+  f.state.unavailable = false;
+  const second = await coordinator.claim({ identity, stageId: ids[1], evidence: 'synthetic-auth' });
+  assert.equal(second.independently_witnessed, true); assert.equal(second.execution_authorized, false);
+  await assert.rejects(coordinator.recordOriginal({ identity, stageId: ids[1], originalHash: hash(10), evidence: 'synthetic-auth' }), e => e.code === 'MISMATCH');
+  await coordinator.recordOriginal({ identity, stageId: ids[1], originalHash: hash(11), evidence: 'synthetic-auth' });
+  f.state.stage = 4;
+  const complete = await coordinator.verifyCompletion({ identity, evidence: 'synthetic-auth' });
+  assert.equal(complete.status, 'TWO_ORIGINALS_AND_STATE_MATCH_NOT_AUTHORIZED');
+  assert.deepEqual(complete.prior_original_hashes, [hash(10), hash(11)]);
+  assert.equal(complete.independently_witnessed, true); assert.equal(complete.execution_authorized, false);
+  assert.equal(complete.independent_delivery_verified, false);
+  await assert.rejects(coordinator.claim({ identity, stageId: ids[1], evidence: 'synthetic-auth' }), e => e.code === 'WITNESS_NOT_CLAIMABLE');
+}));
+
+dbtest('atomic database fence cannot issue two competing first-stage claims', async () => resources(async db => {
+  const f = scenario(db, { atomic: true }), reserved = await f.fence.reserve(f.reserve), request = f.req(reserved, 0);
+  const outcomes = await Promise.allSettled([f.fence.claim(request), f.fence.claim(request)]);
+  assert.equal(outcomes.filter(x => x.status === 'fulfilled').length, 1);
+  const state = await f.fence.inspect({ owner: f.ownerId, ownerPublicKey: f.ownerKey, evidence: 'synthetic-auth' });
+  assert.equal(state.stages.length, 2); assert.equal(state.stages[0].claimed, true); assert.equal(state.stages[0].original_hash, null);
+  await assert.rejects(f.fence.claim(request), e => e.code === 'ALREADY_CLAIMED');
+}));

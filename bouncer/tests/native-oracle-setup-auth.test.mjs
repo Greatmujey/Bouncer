@@ -97,3 +97,20 @@ test('trial-hash challenge binds owner, exact goal, agent key, original and witn
   const signed=await signReviewedNativeSetupChallenge({...f.args,context,challenge});
   assert.equal(signed.publicKey,context.ownerPublicKey);assert.equal(f.prompts(),1);assert.equal(f.sends(),0);
 });
+
+test('atomic owner challenges bind exactly two stages without accepting a mixed or wrong-key review', () => {
+  const f = fixture(), ownerPublicKey = f.context.ownerPublicKey, stages = ['create_configure_fund_native_vault', 'install_native_oracle_agent'];
+  const identity = { ...f.identity, stages: stages.map((stage_id, i) => ({ stage_id, action_commitment_sha256: String(i + 5).repeat(64) })) };
+  const review = { format: 'bouncer-atomic-native-oracle-wallet-review-v1', owner: OWNER, owner_public_key: ownerPublicKey,
+    review_sha256: identity.review_sha256, stages: identity.stages.map(s => ({ id: s.stage_id, action_commitment_sha256: s.action_commitment_sha256 })) };
+  const common = { owner: OWNER, ownerPublicKey };
+  assert.equal(nativeSetupAuthAction({ ...common, purpose: 'reserve_native_setup', review }).stage_id, stages[0]);
+  for (let i = 0; i < stages.length; i++) {
+    assert.equal(nativeSetupAuthAction({ ...common, purpose: 'claim_native_setup_stage', identity, stageId: stages[i] }).action_commitment_sha256, String(i + 5).repeat(64));
+    assert.equal(nativeSetupAuthAction({ ...common, purpose: 'record_native_setup_original', identity, stageId: stages[i], originalHash: hash(i + 1) }).original_hash, hash(i + 1));
+  }
+  assert.equal(nativeSetupAuthAction({ ...common, purpose: 'verify_native_setup_completion', identity }).operation_id, identity.operation_id);
+  assert.throws(() => nativeSetupAuthAction({ ...common, purpose: 'reserve_native_setup', review: { ...review, owner_public_key: String(KeyPair.fromRandom('ed25519').getPublicKey()) } }));
+  assert.throws(() => nativeSetupAuthAction({ ...common, purpose: 'reserve_native_setup', review: { ...review, format: f.review.format } }));
+  assert.throws(() => nativeSetupAuthAction({ ...common, purpose: 'claim_native_setup_stage', identity, stageId: STAGES[0] }));
+});

@@ -142,3 +142,29 @@ test('completion rechecks the peer witness both before and after its read-only s
   mode='after';peerReads=0;await assert.rejects(coordinator.verifyCompletion({identity:n,evidence:'synthetic'}),e=>e.code==='CROSS_FLOW_WITNESSED');
   assert.equal(reads,2);assert.equal(peerReads,2);
 }));
+
+test('two-stage coordinator preserves the peer fence, original ordering and independent completion', async () => fixture(async ({ native, ft, n: original, f }) => {
+  const two = ['create_configure_fund_native_vault', 'install_native_oracle_agent'];
+  const n = { ...original, stages: two.map((stage_id, i) => ({ stage_id, action_commitment_sha256: String(i + 5).repeat(64) })) };
+  const db = fences(n, f), hashes = two.map((_, i) => nearApi.utils.serialize.base_encode(Buffer.alloc(32, 31 + i)));
+  db.native.recordOriginal = async ({ originalHash }) => ({ original_hash: originalHash });
+  db.native.verifyCompletion = async () => ({ prior_original_hashes: hashes });
+  const nc = createWitnessedNativeOracleSetup({ fence: db.native, witness: native, otherWitness: ft });
+  const fc = createWitnessedWalletSetup({ fence: db.ft, witness: ft, otherWitness: native });
+  const reserved = await nc.reserve({ review: review(n) });
+  assert.equal(reserved.identity.stages.length, 2); assert.equal(reserved.execution_authorized, false);
+  await assert.rejects(fc.reserve({ review: review(f) }), e => e.code === 'CROSS_FLOW_WITNESSED');
+  await assert.rejects(nc.claim({ identity: n, stageId: nativeStages[0] }), e => e.code === 'WITNESS_MISMATCH');
+  for (let i = 0; i < two.length; i++) {
+    const claim = await nc.claim({ identity: n, stageId: two[i] });
+    assert.equal(claim.independently_witnessed, true); assert.equal(claim.execution_authorized, false);
+    const saved = await nc.recordOriginal({ identity: n, stageId: two[i], originalHash: hashes[i] });
+    assert.equal(saved.original_hash, hashes[i]); assert.equal(saved.do_not_retry, true);
+  }
+  const done = await nc.verifyCompletion({ identity: n, evidence: 'synthetic' });
+  assert.deepEqual(done.prior_original_hashes, hashes); assert.equal(done.independently_witnessed, true);
+  assert.equal(done.execution_authorized, false);
+  db.native.verifyCompletion = async () => ({ prior_original_hashes: hashes.slice(0, 1) });
+  await assert.rejects(nc.verifyCompletion({ identity: n, evidence: 'synthetic' }), e => e.code === 'WITNESS_MISMATCH');
+  assert.equal(db.counts.ft, 0);
+}));

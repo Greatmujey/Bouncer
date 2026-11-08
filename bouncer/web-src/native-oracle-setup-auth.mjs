@@ -10,6 +10,7 @@ import { verifyCliLogin } from './cli-login.mjs';
 
 const FORMAT = 'bouncer-wallet-prompt-auth-v1';
 const STAGES = ['create_keyless_native_vault', 'configure_native_oracle_policy', 'fund_native_vault', 'install_native_oracle_agent'];
+const ATOMIC_STAGES = ['create_configure_fund_native_vault', 'install_native_oracle_agent'];
 const PURPOSES = ['reserve_native_setup', 'claim_native_setup_stage', 'record_native_setup_original', 'inspect_native_setup',
   'verify_native_setup_completion', 'claim_native_oracle_trial'];
 const HEX32 = /^[a-f0-9]{32}$/, HEX64 = /^[a-f0-9]{64}$/, BASE58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
@@ -24,8 +25,10 @@ function validHash(value) {
   return leading + bytes === 32;
 }
 function reviewStages(stages, field) {
-  return Array.isArray(stages) && stages.length === STAGES.length && stages.every((s, i) =>
-    s?.[field] === STAGES[i] && HEX64.test(s.action_commitment_sha256 ?? ''));
+  if (!Array.isArray(stages)) return null;
+  const expected = stages.length === ATOMIC_STAGES.length ? ATOMIC_STAGES : STAGES;
+  return stages.length === expected.length && stages.every((s, i) =>
+    s?.[field] === expected[i] && HEX64.test(s.action_commitment_sha256 ?? '')) ? expected : null;
 }
 /** Fixed field order and stage list exactly match the server's action hash. */
 export function nativeSetupAuthAction({ purpose, owner, ownerPublicKey, identity, review, stageId, originalHash,
@@ -36,12 +39,15 @@ export function nativeSetupAuthAction({ purpose, owner, ownerPublicKey, identity
   const base = { format: FORMAT, network: 'testnet', purpose, owner, owner_public_key: ownerPublicKey };
   if (purpose === 'inspect_native_setup') return base;
   if (purpose === 'reserve_native_setup') {
-    if (review?.format !== 'bouncer-native-oracle-wallet-review-v1' || review.owner !== owner || !HEX64.test(review.review_sha256 ?? '') ||
-        !reviewStages(review.stages, 'id')) throw fail();
-    return { ...base, review_sha256: review.review_sha256, stage_id: STAGES[0], action_commitment_sha256: review.stages[0].action_commitment_sha256 };
+    const stages = reviewStages(review?.stages, 'id');
+    const validFormat = stages === STAGES ? review?.format === 'bouncer-native-oracle-wallet-review-v1' :
+      stages === ATOMIC_STAGES && review?.format === 'bouncer-atomic-native-oracle-wallet-review-v1' && review.owner_public_key === ownerPublicKey;
+    if (!validFormat || review.owner !== owner || !HEX64.test(review.review_sha256 ?? '')) throw fail();
+    return { ...base, review_sha256: review.review_sha256, stage_id: stages[0], action_commitment_sha256: review.stages[0].action_commitment_sha256 };
   }
+  const stages = reviewStages(identity?.stages, 'stage_id');
   if (!identity || identity.owner !== owner || identity.owner_public_key !== ownerPublicKey || !HEX32.test(identity.operation_id ?? '') ||
-      !HEX64.test(identity.review_sha256 ?? '') || !reviewStages(identity.stages, 'stage_id')) throw fail();
+      !HEX64.test(identity.review_sha256 ?? '') || !stages) throw fail();
   if (purpose === 'verify_native_setup_completion') return { ...base, operation_id: identity.operation_id, review_sha256: identity.review_sha256 };
   if (purpose === 'claim_native_oracle_trial') {
     const fields=['goal_id','goal_sha256','agent_public_key','original_hash'];
@@ -54,7 +60,7 @@ export function nativeSetupAuthAction({ purpose, owner, ownerPublicKey, identity
     return {...base,operation_id:identity.operation_id,review_sha256:identity.review_sha256,goal_id:trial.goal_id,
       goal_sha256:trial.goal_sha256,agent_public_key:trial.agent_public_key,original_hash:trial.original_hash,witness_head:expectedWitnessHead};
   }
-  const index = STAGES.indexOf(stageId); if (index < 0) throw fail();
+  const index = stages.indexOf(stageId); if (index < 0) throw fail();
   const action = { ...base, operation_id: identity.operation_id, review_sha256: identity.review_sha256,
     stage_id: stageId, action_commitment_sha256: identity.stages[index].action_commitment_sha256 };
   if (purpose === 'record_native_setup_original') {
