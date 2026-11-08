@@ -72,6 +72,25 @@ jobs:
         env:
           BOUNCER_CSB_ID_FILE: ${{ runner.temp }}/bouncer-csb-candidate-id
         run: node bouncer/scripts/publish-codesandbox-direct.mjs
+  bouncer-csb-live-journal:
+    if: contains(github.event.head_commit.message, '[bouncer-csb-live-journal]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+      - name: Check only a dummy journal row from the candidate browser
+        working-directory: bouncer
+        env:
+          CSB_CANDIDATE_ID: jh6y9p
+          BOUNCER_PLAYWRIGHT_PATH: ${{ runner.temp }}/bouncer-browser/node_modules/playwright-core/index.mjs
+        run: |
+          npm install --prefix "$RUNNER_TEMP/bouncer-browser" --no-save --no-audit --no-fund playwright-core@1.64.1
+          node scripts/probe-hosted-direct-journal.mjs
   bouncer-csb-mobile:
     if: contains(github.event.head_commit.message, '[bouncer-csb-mobile]')
     runs-on: ubuntu-24.04
