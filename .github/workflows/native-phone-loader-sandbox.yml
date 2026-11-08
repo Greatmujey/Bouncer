@@ -30,6 +30,13 @@ jobs:
           artifact=target/wasm32-unknown-unknown/release/bouncer_native_phone_loader_research.wasm
           echo '28b358e4ee4e6c7327dc17c63934a63e4cdad5d424dbfe67a80381cf1027bb7b  '"$artifact" | sha256sum -c -
           test "$(wc -c < "$artifact")" -eq 28950
+      # Public research binary only; opt-in one-time transport for comparing the
+      # reproducible build in environments that cannot download Actions artifacts.
+      - name: Publish research binary as a check annotation
+        if: contains(github.event.head_commit.message, '[emit-phone-loader]')
+        working-directory: bouncer/contracts/native-phone-loader
+        run: |
+          python3 -c 'import base64; p="target/wasm32-unknown-unknown/release/bouncer_native_phone_loader_research.wasm"; print("::notice title=Public research loader base64::"+base64.b64encode(open(p,"rb").read()).decode())'
       - name: Install test dependencies and retrieve pinned sandbox
         working-directory: bouncer
         run: |
