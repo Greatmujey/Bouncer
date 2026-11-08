@@ -98,19 +98,8 @@ jobs:
             exit 1
           fi
           cat "$RUNNER_TEMP/v14-sandbox-result.log"
-      - name: Exercise three guarded legs against a fabricated local provider
-        working-directory: bouncer
-        env:
-          BOUNCER_SANDBOX_BIN: ${{ runner.temp }}/near-sandbox
-          BOUNCER_V14_WASM_PATH: ${{ github.workspace }}/bouncer/contracts/bouncer/target/wasm32-unknown-unknown/release/bouncer.wasm
-          BOUNCER_FAKE_OUTLAYER_WASM_PATH: ${{ github.workspace }}/bouncer/contracts/bouncer/target/wasm32-unknown-unknown/release/bouncer_fake_outlayer.wasm
-        run: |
-          ulimit -Sn 65535
-          if ! node integration/native-mission-v14-sandbox.mjs > "$RUNNER_TEMP/v14-mission-result.log" 2>&1; then
-            python3 -c 'import os; s=open(os.environ["RUNNER_TEMP"]+"/v14-mission-result.log").read()[-4500:]; print("::error title=Isolated three-leg mission failed::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
-            exit 1
-          fi
-          cat "$RUNNER_TEMP/v14-mission-result.log"
+      # One integrated rehearsal covers the guarded legs, recovery and the
+      # disabled research loader together; do not rerun the same mission twice.
       - name: Exercise research phone loader and full mission on isolated nearcore
         working-directory: bouncer
         env:
@@ -131,6 +120,28 @@ jobs:
           path: bouncer/contracts/bouncer/target/wasm32-unknown-unknown/release/bouncer.wasm
           retention-days: 7
 
+  railway-image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Build testnet backend container and check its default-off runtime
+        run: |
+          docker build --file bouncer/Dockerfile --tag bouncer-native-railway:ci bouncer
+          docker run --rm --network none --entrypoint /usr/bin/flock bouncer-native-railway:ci --version
+          docker run --rm --network none --entrypoint node bouncer-native-railway:ci --input-type=module -e 'await import("./agent/configured-native-mission-site.mjs")'
+          set +e
+          output=$(docker run --rm --network none bouncer-native-railway:ci 2>&1)
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ] || [[ "$output" != *"did not start"* ]]; then
+            echo 'The unconfigured container did not fail closed.'
+            exit 1
+          fi
+          echo 'Unconfigured container failed closed without network access.'
+
   browser:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -147,7 +158,7 @@ jobs:
           npm ci --ignore-scripts --no-audit --no-fund
           npm ci --prefix walletconnect --ignore-scripts --no-audit --no-fund
           npm run build:web
-          git diff --exit-code -- web/wallet.bundle.js
+          git diff --exit-code -- web/wallet.bundle.js web/api/native-mission
           npm install --prefix "$RUNNER_TEMP/bouncer-browser" --no-save --no-audit --no-fund playwright@1.64.1
           node "$RUNNER_TEMP/bouncer-browser/node_modules/playwright/cli.js" install chromium
           CHROMIUM_PATH="$(node -e "console.log(require('$RUNNER_TEMP/bouncer-browser/node_modules/playwright-core').chromium.executablePath())")"

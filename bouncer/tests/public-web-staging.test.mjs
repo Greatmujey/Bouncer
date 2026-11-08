@@ -114,6 +114,7 @@ test('public staging requires six wallets, WalletConnect, then Google', t => {
 test('deployment revalidates HTML, permits Google popups, and versions its assets', () => {
   const config = JSON.parse(fs.readFileSync(path.join(realSource, 'vercel.json'), 'utf8'));
   assert.equal(config.git?.deploymentEnabled?.['arena/6d538ba2-near-hub'], false);
+  assert.equal(config.git?.deploymentEnabled?.['arena/82d80f6e-near-hub'], false);
   for (const source of ['/', '/index.html']) {
     const headers = config.headers.find(rule => rule.source === source)?.headers || [];
     assert.match(headers.find(header => header.key.toLowerCase() === 'cache-control')?.value || '', /no-cache.*must-revalidate/);
@@ -128,11 +129,34 @@ test('deployment revalidates HTML, permits Google popups, and versions its asset
   for (const file of ['styles.css', 'app.mjs', 'google-signin.mjs', 'wallet.bundle.js']) assert.match(html, new RegExp(`\\./${file.replaceAll('.', '\\.') }\\?v=\\d+`));
 });
 
-test('Google session and WalletConnect relay are server functions, never public static files', async () => {
-  assert.deepEqual(fs.readdirSync(path.join(realSource, 'api')).sort(), ['google-session.mjs', 'wc-relay.mjs']);
-  for (const file of ['api/google-session.mjs', 'api/wc-relay.mjs']) assert.ok(!PUBLIC_WEB_FILES.includes(file));
+test('Google, WalletConnect and disabled-by-default mission proxies are server functions, never public static files', async () => {
+  assert.deepEqual(fs.readdirSync(path.join(realSource, 'api')).sort(), ['google-session.mjs', 'native-mission', 'wc-relay.mjs']);
+  const actions=['challenge','config','execute','originals','preview','recover'];
+  assert.deepEqual(fs.readdirSync(path.join(realSource,'api/native-mission')).sort(),actions.map(action=>`${action}.mjs`));
+  for (const file of ['api/google-session.mjs','api/wc-relay.mjs',...actions.map(action=>`api/native-mission/${action}.mjs`)]) {
+    assert.ok(!PUBLIC_WEB_FILES.includes(file));
+  }
   const api = await import('../web/api/google-session.mjs');
   assert.equal(typeof api.default, 'function');
+  // Exercise the generated deployment artifacts, not just their source.
+  // All destinations and credentials below are synthetic; fetch is replaced.
+  const proxyScript=`import assert from 'node:assert/strict';
+    const actions=${JSON.stringify(actions)},base=${JSON.stringify(new URL('../web/api/native-mission/',import.meta.url).href)};
+    let calls=[];globalThis.fetch=async (url,options)=>{calls.push([url,options]);return new Response('{"status":"synthetic"}',{headers:{'content-type':'application/json'}})};
+    const modules=await Promise.all(actions.map(action=>import(base+action+'.mjs')));
+    const invoke=async (handler,req)=>{let status,body;await handler(req,{writeHead(code){status=code},end(data){body=data}});return {status,body}};
+    for(const [i,module] of modules.entries()){
+      const action=actions[i],req={method:action==='config'?'GET':'POST',url:'/api/native-mission/'+action,
+        headers:{host:'bouncer-near.vercel.app','x-forwarded-proto':'https','x-bouncer-native-mission':'v1',origin:'https://bouncer-near.vercel.app','content-type':'application/json'},body:{missionSha256:'a'.repeat(64)}};
+      assert.equal((await invoke(module.default,req)).status,404);
+      process.env.BOUNCER_NATIVE_MISSION_PROXY_ENABLED='1';process.env.BOUNCER_WALLET_ORIGIN='https://bouncer-near.vercel.app';
+      process.env.BOUNCER_NATIVE_MISSION_BACKEND_ORIGIN='https://bouncer-synthetic.up.railway.app';process.env.BOUNCER_NATIVE_MISSION_PROXY_SECRET='ab'.repeat(32);
+      assert.equal((await invoke(module.default,req)).status,200);assert.equal(calls.at(-1)[0],'https://bouncer-synthetic.up.railway.app/api/native-mission/'+action);
+      assert.equal((await invoke(module.default,{...req,url:'/api/native-mission/not-'+action})).status,403);
+      process.env.BOUNCER_NATIVE_MISSION_PROXY_ENABLED='';
+    }
+    assert.equal(calls.length,actions.length);`;
+  execFileSync(process.execPath,['--input-type=module','-e',proxyScript],{env:{...process.env,BOUNCER_NATIVE_MISSION_PROXY_ENABLED:''}});
   const script = `import http from 'node:http'; import server from ${JSON.stringify(new URL('../web/api/wc-relay.mjs', import.meta.url).href)};
     if (!(server instanceof http.Server)) throw new Error('Not an HTTP server');
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));

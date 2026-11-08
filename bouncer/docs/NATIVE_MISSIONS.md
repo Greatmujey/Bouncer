@@ -124,12 +124,13 @@ is not proof that a transaction never happened.
 `agent/authenticated-native-mission-service.mjs` composes a fixed manifest,
 server-side scoped agent signers, trusted RPC, `FileJournal` and the existing
 PostgreSQL one-use owner authenticator. `npm run native-mission:serve` now
-wires these pieces to the reviewed website in **one fixed-origin, single-host
-Node service**; it is disabled unless explicitly configured. It serves the
-same site and mission API for computer and phone, as well as the optional
-WalletConnect relay and Google identity endpoint when configured. Its startup
-performs no wallet prompt or transaction. It is not a deployment, and has not
-been tested with a real wallet or live mission.
+wires these pieces to a **single-host Node service**; it is disabled unless
+explicitly configured. Its original loopback mode serves the reviewed website
+and mission API, with the optional WalletConnect relay and Google identity.
+An experimental Vercel-to-Railway split described below keeps the same browser
+origin and runs only the mission API on Railway. Startup performs no wallet
+prompt or transaction. Neither setup has been tested with a real wallet or
+live mission.
 
 The operator still needs a dedicated HTTPS host, PostgreSQL challenge store,
 persistent original journal, and an owner-authorized fresh V14 vault with
@@ -194,7 +195,9 @@ then run `npm run native-mission:serve`. Optional public configuration is
 `BOUNCER_WALLETCONNECT_PROJECT_ID` and `BOUNCER_GOOGLE_CLIENT_ID`; port defaults
 to 8789 (`BOUNCER_NATIVE_MISSION_PORT`). The server refuses to recreate a
 missing journal or initialize its database on startup. It listens on loopback
-only and must be behind the dedicated TLS proxy; this has not been deployed.
+only in the original same-origin mode and must be behind the dedicated TLS
+proxy; the Railway API-only mode below must be explicitly selected instead.
+Neither mode has been deployed for this mission.
 
 To investigate retained originals without loading agent keys or the consent
 database, start with `BOUNCER_NATIVE_MISSION_MODE=recover` and the same mission,
@@ -203,6 +206,76 @@ sign/send. Graceful shutdown waits for in-flight work, even after a browser
 disconnect; a forced kill or lost disk still requires reconciliation. The
 filesystem, database and operator may be compromised or rolled back. A missing
 hash never proves that a transaction did not happen.
+
+### Experimental Vercel website + Railway API
+
+This is an **unprovisioned testnet option**, not a claim that Railway is set up
+or that its volume has been verified. Charges may apply; review the actual plan
+and obtain approval before creating a paid service. The website stays on the
+exact approved Vercel wallet origin. Six bundled `/api/native-mission/*`
+functions are **off by default** and forward only their fixed actions to one
+configured Railway HTTPS origin. They do not forward cookies, select a
+browser-provided destination, follow redirects, sign, or retry. An ambiguous
+execution response must be reconciled by the original hash.
+
+The `bouncer/Dockerfile` builds a persistent Node service with Linux `flock`;
+the Railway project root must be `bouncer`. It creates no mission, vault, keys,
+consent database or journal. Attach a persistent volume to **one instance**;
+under it, provision an owner-only 0700 directory containing the already
+reviewed mission, its dedicated **original** encrypted journal and its key.
+The journal must retain that mission's intent and no unrelated entries. The
+container user must own those private files. Do not put private state in the build, Git,
+serverless `/tmp`, logs, or a browser. The current project has no complete
+browser setup to create these files or the V14 vault.
+
+The Railway service must explicitly set `BOUNCER_NATIVE_MISSION_ENABLED=1`,
+`BOUNCER_NATIVE_MISSION_MODE=recover`,
+`BOUNCER_NATIVE_MISSION_INGRESS=railway-proxy`,
+`BOUNCER_NATIVE_MISSION_BIND=0.0.0.0`, the exact `BOUNCER_WALLET_ORIGIN`, a
+trusted `BOUNCER_TESTNET_RPC_URL`, and absolute volume paths for
+`BOUNCER_NATIVE_MISSION_FILE`, `BOUNCER_NATIVE_MISSION_JOURNAL_FILE` and
+`BOUNCER_FILE_JOURNAL_KEY_FILE`. Set `BOUNCER_NATIVE_MISSION_BACKEND_ORIGIN`
+to its exact HTTPS `*.up.railway.app` origin and
+`BOUNCER_NATIVE_MISSION_PROXY_SECRET` to a newly generated 32-byte random
+lowercase-hex secret. Railway supplies `PORT` and
+`RAILWAY_VOLUME_MOUNT_PATH`; the service checks the file parents resolve
+inside that declared mount. If overriding the port it must match `PORT`.
+
+Only after the backend is checked, the Vercel project can deliberately set
+`BOUNCER_NATIVE_MISSION_PROXY_ENABLED=1` and the **same** fixed wallet origin,
+backend origin and proxy secret. Store the secret in provider secret settings,
+never in Git, the browser or chat. The secret is only a network gate: it does
+not authorize the owner, and a compromised host can bypass it. Recovery needs
+no agent keys or database. Execution startup is blocked until the recovery-only
+service has returned its original-journal check; this creates a
+`.recovery-started` marker, which is **not** proof that no transaction occurred
+or that receipts were verified. Execution must remain disabled until the
+separately reviewed vault, restricted keys, PostgreSQL one-use owner
+authentication and original-hash recording are ready. A fresh owner signature
+remains required for each market leg. Enabling or deploying is not itself
+permission to spend.
+
+For the Railway mode the runtime holds an exclusive kernel lock on a persistent
+`.host-fence` beside the journal and checks that a second open cannot take it.
+The process keeps the lock until a drained shutdown or death; never remove or
+replace this fence file while a process may be running. On an unclean stop, an
+exact marker from this fenced runtime can be reclaimed **only in recover mode**.
+A durable `.recovery-required` marker blocks execution across restarts or a
+wrong key until recovery has verified all retained mission-original receipts
+and the journal records them complete. If there is no verifiable original, or the
+marker is legacy, partial or unrecognized, the service fails closed for manual
+review. Do not delete locks, reset state, invent an original or retry a payment.
+A graceful recovery start alone does not clear the requirement. Tests exercise
+this on a local Linux filesystem; actual Railway volume locking, persistence,
+headers and routing still need a non-paying deployed check.
+
+This host fence coordinates only cooperating processes sharing that same honest
+filesystem. It cannot prevent a second journal, another host, volume loss,
+rollback, a forged mount setting, compromised operator or old snapshot. A
+backup must never be restored as if it were current authority. Keep a separately
+protected record of original hashes and reconcile uncertainty before any new
+approval. Railway and Vercel remain unavailable for this mission until their
+actual service, cost, configuration and deployed behavior are verified.
 
 Mobile V14 provisioning is also unresolved. At commit `42255e1`, the CI-built
 WASM was 499,063 bytes; its 665,420-byte base64 code field alone exceeds the

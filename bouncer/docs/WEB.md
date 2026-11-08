@@ -119,7 +119,11 @@ Ledger device, Google login or transaction is tested. `google-session.test.mjs`
 uses locally generated RSA keys to test signatures, claims, nonce, CSRF,
 expiry, restoration, sign-out and key rotation.
 
-`stage-public-web.mjs` publishes only the 16 allowlisted website files. Vercel
-separately detects `web/api/google-session.mjs` and `web/api/wc-relay.mjs`;
-neither function is published as a static source file. The public URL is
+`stage-public-web.mjs` publishes only the 18 allowlisted website files. Vercel
+separately detects the Google and WalletConnect functions and six fixed-action
+mission proxy functions under `web/api/native-mission/`; none is a static source
+file. The mission proxies are disabled unless explicitly configured, and do not
+provide a backend or authorize spending by themselves. The experimental
+Vercel/Railway split and its unverified hosting limits are described in
+[NATIVE_MISSIONS.md](NATIVE_MISSIONS.md). The public URL is
 https://bouncer-near.vercel.app/. The site and functions remain unaudited.

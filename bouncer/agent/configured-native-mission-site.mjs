@@ -17,6 +17,9 @@ import { ReadOnlyNearRpcProvider } from './read-only-near-rpc.mjs';
 import { createPostgresWalletPromptAuth, inspectPostgresWalletPromptAuthSchema } from './postgres-wallet-prompt-auth.mjs';
 import { createAuthenticatedNativeMissionService } from './authenticated-native-mission-service.mjs';
 import { createNativeMissionSite } from './native-mission-site.mjs';
+import { createRailwayNativeMissionBackend } from './native-mission-railway.mjs';
+import { acquireRailwayNativeJournalFence } from './railway-native-journal-fence.mjs';
+import { validateNativeProxySiteOrigin, validateRailwayNativeBackend, validateNativeProxySecret } from './native-mission-proxy.mjs';
 import { validateSellerDatabaseUrl } from '../services/shared-resource-provider.mjs';
 
 const MAX_KEY_ALLOWANCE=10n**24n;
@@ -51,6 +54,28 @@ function readJsonFile(file,{secret=false,max=65536}={}) {
   finally {bytes?.fill(0);if(fd!==undefined)fs.closeSync(fd)}
 }
 export function readConfiguredMission(file) {return validateNativeMission(readJsonFile(file));}
+
+/** Railway supplies this mount path only when a volume is attached. Require
+ * the original, key and reviewed inputs to resolve inside that declared
+ * volume. This detects common ephemeral-path mistakes, not rollback, a forged
+ * environment, volume loss or whether the provider's storage is durable. */
+export function assertRailwayNativeVolume({mountPath, files} = {}) {
+  if (typeof mountPath !== 'string' || !path.isAbsolute(mountPath) || mountPath === '/' ||
+      !Array.isArray(files) || files.length < 3) throw new Error('a Railway persistent volume and all original paths are required');
+  let root;
+  try {
+    const stat = fs.lstatSync(mountPath);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) throw Error();
+    root = fs.realpathSync(mountPath);
+    if (root === '/') throw Error();
+    for (const file of files) {
+      if (typeof file !== 'string' || !path.isAbsolute(file)) throw Error();
+      const parent = fs.realpathSync(path.dirname(file)), relative = path.relative(root, parent);
+      if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw Error();
+      assertPrivateParent(file);
+    }
+  } catch { throw new Error('original journal, key and mission must live inside the declared Railway volume'); }
+}
 
 /** Never accept signers from HTTP. Only a private operator file is supported. */
 export function readConfiguredNativeSigners(file,mission,provider) {
@@ -120,18 +145,40 @@ export async function configureNativeMissionSite({env=process.env}={}) {
     throw new Error('explicit testnet mission enablement and mode are required');
   }
   if(env.NODE_TLS_REJECT_UNAUTHORIZED==='0')throw new Error('TLS certificate validation cannot be disabled');
-  const mission=readConfiguredMission(env.BOUNCER_NATIVE_MISSION_FILE);
+  const ingress=env.BOUNCER_NATIVE_MISSION_INGRESS || 'same-origin';
+  if(!['same-origin','railway-proxy'].includes(ingress))throw new Error('invalid native mission ingress');
   const siteOrigin=env.BOUNCER_WALLET_ORIGIN;
+  if(ingress==='railway-proxy') {
+    validateNativeProxySiteOrigin(siteOrigin);
+    validateRailwayNativeBackend(env.BOUNCER_NATIVE_MISSION_BACKEND_ORIGIN);
+    validateNativeProxySecret(env.BOUNCER_NATIVE_MISSION_PROXY_SECRET);
+    assertRailwayNativeVolume({mountPath:env.RAILWAY_VOLUME_MOUNT_PATH,files:[env.BOUNCER_NATIVE_MISSION_FILE,
+      env.BOUNCER_NATIVE_MISSION_JOURNAL_FILE,env.BOUNCER_FILE_JOURNAL_KEY_FILE,
+      ...(env.BOUNCER_NATIVE_MISSION_MODE==='execute'?[env.BOUNCER_NATIVE_MISSION_AGENT_KEYS_FILE]:[])]});
+  } else if(env.BOUNCER_NATIVE_MISSION_BACKEND_ORIGIN || env.BOUNCER_NATIVE_MISSION_PROXY_SECRET) {
+    throw new Error('Railway proxy settings require explicit railway-proxy ingress');
+  }
+  const mission=readConfiguredMission(env.BOUNCER_NATIVE_MISSION_FILE);
   assertPrivateParent(env.BOUNCER_NATIVE_MISSION_JOURNAL_FILE);
   assertPrivateParent(env.BOUNCER_FILE_JOURNAL_KEY_FILE);
   const provider=new PaymentRpcProvider(env.BOUNCER_TESTNET_RPC_URL);
   if((await provider.viewNodeStatus())?.chain_id!=='testnet')throw new Error('testnet RPC is required');
-  let journal,pool,server,key;
+  let journal,pool,server,key,hostFence;
   try {
+    if(ingress==='railway-proxy') hostFence=acquireRailwayNativeJournalFence({journalFile:env.BOUNCER_NATIVE_MISSION_JOURNAL_FILE,
+      mode:env.BOUNCER_NATIVE_MISSION_MODE});
     key=readFileJournalKeyFile(env.BOUNCER_FILE_JOURNAL_KEY_FILE);
     journal=new FileJournal(env.BOUNCER_NATIVE_MISSION_JOURNAL_FILE,mission.contract_id,mission.owner_account_id,
       {encryptionKey:key,keyFile:env.BOUNCER_FILE_JOURNAL_KEY_FILE,requireExisting:true});
+    hostFence?.mark(journal);
     key.fill(0);key=null;
+    if(hostFence) {
+      const ids=new Set([`native-mission:${mission.id}`,...mission.goals.map(({goal})=>goal.id)]);
+      const entries=journal.list();
+      if(!entries.some(entry=>entry.id===`native-mission:${mission.id}`) || entries.some(entry=>!ids.has(entry.id))) {
+        throw new Error('a dedicated original mission journal is required; stop and reconcile');
+      }
+    }
     let signers,auth;
     if(env.BOUNCER_NATIVE_MISSION_MODE==='execute') {
       signers=readConfiguredNativeSigners(env.BOUNCER_NATIVE_MISSION_AGENT_KEYS_FILE,mission,provider);
@@ -143,22 +190,40 @@ export async function configureNativeMissionSite({env=process.env}={}) {
       auth=createPostgresWalletPromptAuth({pool,origin:siteOrigin,provider:new ReadOnlyNearRpcProvider(env.BOUNCER_TESTNET_RPC_URL)});
     }
     const service=createAuthenticatedNativeMissionService({mission,provider,signers,journal,auth});
+    // Validate the retained manifest and known originals before serving even a
+    // read-only request. This does not replace live original-hash recovery.
+    if(hostFence) await service.originals({missionSha256:service.getReview().mission_sha256});
+    const guardedService=hostFence ? {...service,async originals(input) {
+      const result=await service.originals(input);
+      if(env.BOUNCER_NATIVE_MISSION_MODE==='recover')hostFence.recordRecoveryStart();
+      return result;
+    },async recover(input) {
+      const result=await service.recover(input);
+      if(hostFence.recoveryRequired) hostFence.completeRecovery({result,originals:await service.originals(input)});
+      if(env.BOUNCER_NATIVE_MISSION_MODE==='recover')hostFence.recordRecoveryStart();
+      return result;
+    }} : service;
     // A disconnect does not cancel server-side work. Track each service call
     // so a graceful shutdown never closes the original journal during a send.
-    const tracking=trackNativeMissionWork(service);
-    server=createNativeMissionSite({siteOrigin,service:tracking.service,walletConnectProjectId:env.BOUNCER_WALLETCONNECT_PROJECT_ID||'',
-      googleClientId:env.BOUNCER_GOOGLE_CLIENT_ID||''});
+    const tracking=trackNativeMissionWork(guardedService);
+    server=ingress==='railway-proxy'
+      ? createRailwayNativeMissionBackend({siteOrigin,backendOrigin:env.BOUNCER_NATIVE_MISSION_BACKEND_ORIGIN,
+        proxySecret:env.BOUNCER_NATIVE_MISSION_PROXY_SECRET,service:tracking.service})
+      : createNativeMissionSite({siteOrigin,service:tracking.service,walletConnectProjectId:env.BOUNCER_WALLETCONNECT_PROJECT_ID||'',
+        googleClientId:env.BOUNCER_GOOGLE_CLIENT_ID||''});
     let closed;
-    return {server,mode:env.BOUNCER_NATIVE_MISSION_MODE,async close(){
+    return {server,mode:env.BOUNCER_NATIVE_MISSION_MODE,ingress,async close(){
       if(!closed)closed=(async()=>{
         tracking.stop();
         if(server.listening)await new Promise((resolve,reject)=>server.close(error=>error?reject(error):resolve()));
         await tracking.drain();
-        journal.close();if(pool)await pool.end();
+        try {journal.close()} finally {hostFence?.close();if(pool)await pool.end()}
       })();
       return closed;
     }};
   } catch(error) {
-    key?.fill(0);if(server?.listening)server.close();journal?.close();if(pool)await pool.end();throw error;
+    key?.fill(0);if(server?.listening)server.close();
+    try {journal?.close()} finally {hostFence?.close();if(pool)await pool.end()}
+    throw error;
   }
 }

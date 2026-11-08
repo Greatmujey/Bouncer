@@ -938,6 +938,10 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     try {
       const local = await flow.originals(review);
       retained = JSON.stringify(local.originals || [], null, 2);
+      if (local.status === 'NO_LOCAL_ORIGINALS') {
+        if (current()) missionStatus.textContent = 'No local original was found. This does not prove a transaction was never sent. If any attempt is uncertain, stop and reconcile it before approving anything.';
+        return;
+      }
       if (current()) missionStatus.textContent = `Retained local original hashes (not proof of non-execution):\n${retained}\nChecking receipts…`;
       const result = await flow.recover(review);
       renderMissionReceipts(result.deliveries);

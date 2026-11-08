@@ -53,7 +53,8 @@ export function createNativeMissionClient({ wallet, accountId, ownerPublicKey, l
   async function request(name, input) {
     current();
     const response = await fetch(`/api/native-mission/${name}`, { method: input === undefined ? 'GET' : 'POST', credentials: 'same-origin',
-      cache: 'no-store', redirect: 'error', referrerPolicy: 'no-referrer', signal: AbortSignal.timeout(name === 'execute' ? 180_000 : 30_000),
+      cache: 'no-store', redirect: 'error', referrerPolicy: 'no-referrer',
+      signal: AbortSignal.timeout(name === 'execute' ? 180_000 : name === 'recover' ? 120_000 : 30_000),
       headers: { 'x-bouncer-native-mission': 'v1', ...(input === undefined ? {} : { 'content-type': 'application/json' }) },
       ...(input === undefined ? {} : { body: JSON.stringify(input) }) });
     current();

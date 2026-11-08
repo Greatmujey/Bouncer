@@ -48,7 +48,8 @@ try {
   for(const {width,mode,origin} of [{width:1280,mode:'market',origin:defaultOrigin}, {width:390,mode:'market',origin:defaultOrigin},
     {width:1280,mode:'success',origin:defaultOrigin},
     {width:390,mode:'success',origin:defaultOrigin},{width:320,mode:'unknown',origin:defaultOrigin},
-    {width:390,mode:'blocked',origin:defaultOrigin},{width:390,mode:'success',origin:'https://synthetic-bouncer.netlify.app'}]) {
+    {width:390,mode:'blocked',origin:defaultOrigin},{width:390,mode:'recovery-empty',origin:defaultOrigin},
+    {width:390,mode:'success',origin:'https://synthetic-bouncer.netlify.app'}]) {
     const mission=mode==='market'?marketMission:randomMission;
     const review={format:'bouncer-native-mission-review-v1',network:'testnet',mission,mission_sha256:sha(JSON.stringify(mission))};
     const siteDir=path.join(staging,`site-${fs.readdirSync(staging).length}`);
@@ -93,7 +94,7 @@ try {
       if(url.pathname==='/api/native-mission/config')return json(route,{enabled:true,network:'testnet',review});
       if(url.pathname.startsWith('/api/native-mission/')) {
         const name=url.pathname.split('/').pop(),input=req.postDataJSON();assert.equal(input.missionSha256,review.mission_sha256);
-        if(name==='preview')return json(route,{review,preview:{status:mode==='blocked'?'BLOCKED':'READY',stage:'synthetic',
+        if(name==='preview')return json(route,{review,preview:{status:['blocked','recovery-empty'].includes(mode)?'BLOCKED':'READY',stage:'synthetic',
           ...(mode==='market'?{next_goal_id:mission.goals[executes]?.goal.id??null,verified_prior_deliveries:deliveries(executes)}:{})}});
         if(name==='challenge') {
           assert.equal(input.ownerPublicKey,publicKey);challengeCount++;
@@ -116,7 +117,8 @@ try {
             ...(executes<3?{remaining_goal_ids:mission.goals.slice(executes).map(x=>x.goal.id)}:{}),deliveries:deliveries(executes),note:'Synthetic test only.'});
           return json(route,{status:'FULFILLED',new_payments:3,deliveries:[],note:'Synthetic test only.'});
         }
-        if(name==='originals')return json(route,{status:'LOCAL_ORIGINALS',originals:[{goal_id:'compute',kind:'random',status:'pending',original_hash:base58(43)}]});
+        if(name==='originals')return json(route,mode==='recovery-empty'?{status:'NO_LOCAL_ORIGINALS',originals:[]}:
+          {status:'LOCAL_ORIGINALS',originals:[{goal_id:'compute',kind:'random',status:'pending',original_hash:base58(43)}]});
         if(name==='recover'){recovers++;if(mode==='unknown')return json(route,{error:'synthetic receipt unavailable'},409);
           return json(route,{status:'RECOVERED',new_payments:0,deliveries:[]});}
         return json(route,{error:'unavailable'},404);
@@ -139,9 +141,15 @@ try {
     await page.locator('#wallet-native-mission-details summary').click();
     assert.match(await page.locator('#wallet-native-mission-manifest').innerText(),/"from_goal_ids"/);
     assert.equal(executes,0);assert.equal(challengeCount,0);
-    if(mode==='blocked') {
+    if(['blocked','recovery-empty'].includes(mode)) {
       await page.waitForFunction(()=>document.querySelector('#wallet-native-mission-status').textContent.includes('Mission blocked'));
       assert.equal(await page.locator('#wallet-native-mission-approve').isVisible(),false);
+      if(mode==='recovery-empty') {
+        await page.locator('#wallet-native-mission-recover').click();
+        await page.waitForFunction(()=>document.querySelector('#wallet-native-mission-status').textContent.includes('No local original was found'));
+        assert.match(await page.locator('#wallet-native-mission-status').innerText(),/does not prove a transaction was never sent/i);
+        assert.equal(recovers,0);assert.equal(executes,0);assert.equal(challengeCount,0);
+      }
     } else {
       await page.locator('#wallet-native-mission-approve').waitFor({state:'visible'});
       assert.equal(await page.locator('#wallet-native-mission-approve').isDisabled(),true);
@@ -169,5 +177,5 @@ try {
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
     assert.deepEqual(errors,[]);await context.close();
   }
-  console.log('Synthetic desktop and mobile mission UI: per-step market checkpoints, review, blocked preflight, unknown response and no-key recovery passed.');
+  console.log('Synthetic desktop and mobile mission UI: per-step checkpoints, blocked preflight, unknown response, no-key recovery and empty-original warning passed.');
 } finally { await browser.close(); fs.rmSync(staging,{recursive:true,force:true}); }
