@@ -21,3 +21,6 @@ jobs:
           node-version: '22'
       - name: Check production-origin CORS and deny an unsigned job
         run: node bouncer/scripts/check-live-readonly-relay.mjs
+      - name: Check direct archival RPC browser compatibility (read-only)
+        continue-on-error: true
+        run: node bouncer/scripts/check-native-archive-cors.mjs
