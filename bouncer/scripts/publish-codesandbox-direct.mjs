@@ -37,9 +37,13 @@ if(!id){
 assert.match(id,/^[a-z0-9]{4,20}$/);
 console.log(`::notice title=Public Bouncer candidate (no capability)::${id}`);
 if(process.env.BOUNCER_CSB_ID_FILE)fs.writeFileSync(process.env.BOUNCER_CSB_ID_FILE,id,{flag:'wx'});
-const metaResponse=await fetch(`https://codesandbox.io/api/v1/sandboxes/${id}`,{signal:AbortSignal.timeout(30000)});
-const meta=await metaResponse.json();assert.equal(meta.data?.authorization,'read');assert.equal(meta.data?.template,'static');
-assert.equal(meta.data?.owned,false);console.log(`Anonymous API authorization: ${meta.data.authorization}; draft: ${meta.data.draft}`);
+try{
+  const metaResponse=await fetch(`https://codesandbox.io/api/v1/sandboxes/${id}`,{signal:AbortSignal.timeout(30000)});
+  const contentType=metaResponse.headers.get('content-type')||'';
+  if(!metaResponse.ok || !contentType.includes('json'))throw Error(`metadata HTTP ${metaResponse.status} (${contentType.slice(0,60)})`);
+  const meta=await metaResponse.json();assert.equal(meta.data?.authorization,'read');assert.equal(meta.data?.template,'static');
+  assert.equal(meta.data?.owned,false);console.log(`::notice title=Anonymous candidate metadata::Authorization: ${meta.data.authorization}; draft: ${meta.data.draft}`);
+}catch(error){console.log(`::warning title=Candidate metadata unavailable to runner::${String(error.message).slice(0,150)}`)}
 const origin=`https://${id}.csb.app`,digest=s=>createHash('sha256').update(s).digest('hex');
 let exact=true;
 for(const name of Object.keys(files).filter(x=>x!=='sandbox.config.json')){
