@@ -9,6 +9,43 @@ on:
 permissions:
   contents: read
 jobs:
+  netlify-static-preview-readonly:
+    if: contains(github.event.head_commit.message, '[verify-netlify-static]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 7
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          fetch-depth: 60
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+      - name: Check verifier and inspect the last ready static deploy without a wallet
+        working-directory: bouncer
+        env:
+          BOUNCER_STATIC_EXPECTED_WALLET_ORIGIN: https://bouncer-near.netlify.app
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts --no-audit --no-fund
+          node --test tests/verify-hosted-static.test.mjs
+          # This immutable deploy was marked ready at 42255e1. Confirm the
+          # tracked static inputs have not changed since that successful build.
+          git diff --quiet 42255e1d18d0690cf20d4039407f6af310733fad HEAD -- web scripts/stage-public-web.mjs ../netlify.toml
+          for origin in \
+            https://6af0ad979973bd8b2abf7cba--bouncer-near.netlify.app \
+            https://deploy-preview-18--bouncer-near.netlify.app; do
+            export BOUNCER_STATIC_PREVIEW_ORIGIN="$origin"
+            # Report only a strictly parsed public meta value, not arbitrary HTML.
+            node --input-type=module -e '
+              const r = await fetch(process.env.BOUNCER_STATIC_PREVIEW_ORIGIN, {redirect:"manual", signal:AbortSignal.timeout(30000)});
+              if (r.status !== 200) throw Error(`HTTP ${r.status}`);
+              const text = await r.text();
+              const matches = [...text.matchAll(/<meta name="bouncer-wallet-origin" content="(https:\/\/[a-z0-9.-]+)">/g)];
+              console.log(JSON.stringify({origin:process.env.BOUNCER_STATIC_PREVIEW_ORIGIN, observed_wallet_origin:matches.length === 1 ? matches[0][1] : null}));
+            '
+            node scripts/verify-hosted-static.mjs
+          done
   nearblocks-form:
     if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[public-route-probe]')
     runs-on: ubuntu-24.04
