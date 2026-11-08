@@ -217,6 +217,17 @@ test('recovery rejects a different transaction or a tampered completed record', 
   assert.equal(f.sends(), 1);
 });
 
+test('oracle broadcast guard rechecks after the durable original is recorded', async () => {
+  const f = fixture(); let checks = 0;
+  await assert.rejects(run(f, { execute: true, beforeBroadcast() {
+    if (++checks === 2) throw new Error('synthetic dependency expired');
+  } }), /synthetic dependency expired/);
+  assert.equal(checks, 2);
+  assert.equal(f.sends(), 0);
+  assert.equal(f.journal.get(goal.id).status, 'pending');
+  assert.equal(f.journal.get(goal.id).tx_hash, hash);
+});
+
 test('oracle runner rejects altered transactions and signatures before journal or broadcast', async () => {
   for (const mutate of [
     tx => { tx.receiverId = 'other.testnet'; }, tx => { tx.signerId = 'other.testnet'; },

@@ -19,7 +19,8 @@ import { isTestnetAccount } from '../shared/account-id.mjs';
 import { signReviewedCall } from './reviewed-transaction.mjs';
 import { withExclusiveJournalOperation } from './journal-operation.mjs';
 import { assertJournalScope } from './journal-write.mjs';
-import { readNativeJournal, writeConfirmedNativeJournal } from './synchronous-native-journal.mjs';
+import { readNativeJournal, writeConfirmedNativeJournal, assertNativeJournalUnchanged } from './synchronous-native-journal.mjs';
+import { validateNativeBroadcastGuard, checkNativeBroadcastGuard } from './native-broadcast-guard.mjs';
 
 const { KeyPair, KeyPairSigner } = nearApi;
 export const OUTLAYER = 'outlayer.testnet';
@@ -232,7 +233,8 @@ async function recoverOutlayerGoalUnlocked({ goal: rawGoal, provider, journal, p
 }
 
 /** Preflight, one guarded send, and chain-based recovery without resending. */
-async function runOutlayerGoalUnlocked({ goal: rawGoal, provider, account, publicKey, journal, execute = false, log = console.log }) {
+async function runOutlayerGoalUnlocked({ goal: rawGoal, provider, account, publicKey, journal, execute = false, log = console.log, beforeBroadcast }) {
+  validateNativeBroadcastGuard(beforeBroadcast);
   if (journal?.sharedDirectV3 === true) throw new Error('shared buyer journal does not coordinate OutLayer payments');
   const goal = validateOutlayerGoal(rawGoal);
   assertJournalScope(journal, goal.contract_id, goal.owner_account_id);
@@ -266,6 +268,7 @@ async function runOutlayerGoalUnlocked({ goal: rawGoal, provider, account, publi
   if (!verdict[0]) { log(`[outlayer] BLOCKED ${goal.id}: ${String(verdict[1]).slice(0, 200)}`); return { status: 'BLOCKED' }; }
   if (!execute) { log(`[outlayer] READY ${goal.id}: at most ${goal.amount} yoctoNEAR to ${OUTLAYER} (dry run)`); return { status: 'READY' }; }
   if (typeof provider.sendTransactionOnce !== 'function') throw new Error('live execution requires a bounded one-shot transaction transport');
+  checkNativeBroadcastGuard(beforeBroadcast);
   // Sign locally, persist the exact signed transaction hash and only then
   // broadcast. If the RPC times out or the process crashes, the journal can
   // be queried without signing or submitting another transaction. We do not
@@ -277,6 +280,10 @@ async function runOutlayerGoalUnlocked({ goal: rawGoal, provider, account, publi
     tx_hash: txHash, started_at: new Date().toISOString() };
   writeConfirmedNativeJournal(journal, goal.id, pending, null);
   try {
+    // Recheck after the durable write as well. If freshness expired during
+    // signing/fsync, retain the pending original and do not broadcast.
+    checkNativeBroadcastGuard(beforeBroadcast);
+    assertNativeJournalUnchanged(journal, goal.id, pending);
     // Never retry this payment, including explicit expiry or a timeout.
     const sent = await provider.sendTransactionOnce(signed, 'FINAL');
     if (sent?.transaction_outcome?.id !== txHash) throw new Error('RPC returned a different or missing transaction hash');

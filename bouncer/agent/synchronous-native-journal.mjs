@@ -29,6 +29,13 @@ export function readNativeJournal(journal, id) {
   return entry;
 }
 
+/** Recheck the exact original after any external synchronous guard and before
+ * handing a signed transaction to the one-shot transport. */
+export function assertNativeJournalUnchanged(journal, id, expected) {
+  const current = readNativeJournal(journal, id);
+  if (!isDeepStrictEqual(withoutId(current, id), withoutId(expected, id))) throw unavailable();
+}
+
 /** `expected` is null only for a new reservation; otherwise it is the exact
  * previously read record. No asynchronous gap exists between the final check
  * and put, but callers must hold the participating journal operation lock. */

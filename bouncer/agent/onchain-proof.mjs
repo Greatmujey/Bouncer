@@ -27,6 +27,7 @@ import { isTransactionHash, verifyDirectPayment } from '../shared/direct-payment
 import { openConfiguredFileJournal, requestFingerprint, validatePlan } from './procurement.mjs';
 import { MonotonicAccount, PaymentRpcProvider } from './near-account.mjs';
 import { signReviewedCall } from './reviewed-transaction.mjs';
+import { withExclusiveJournalOperation } from './journal-operation.mjs';
 
 const { KeyPair, KeyPairSigner } = nearApi;
 const U128_MAX = (1n << 128n) - 1n;
@@ -234,8 +235,11 @@ async function readQuote(goal, fetchImpl, timeoutMs) {
 }
 
 /** Read-only by default. An execution writes before one send and one redemption. */
-export async function runOnchainProofGoal({ goal: rawGoal, provider, account, publicKey, journal, execute = false,
-  fetchImpl = globalThis.fetch, timeoutMs = 20_000, log = console.log }) {
+export async function runOnchainProofGoal(options) {
+  return withExclusiveJournalOperation(options?.journal, scope => runOnchainProofGoalUnlocked(options, scope), options?.exclusiveJournalScope);
+}
+async function runOnchainProofGoalUnlocked({ goal: rawGoal, provider, account, publicKey, journal, execute = false,
+  fetchImpl = globalThis.fetch, timeoutMs = 20_000, log = console.log }, exclusiveJournalScope) {
   if (journal?.sharedDirectV3 === true) throw new Error('shared buyer journal does not coordinate x402 onchain-proof payments');
   const goal = validateOnchainProofGoal(rawGoal);
   if (typeof fetchImpl !== 'function' || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 120_000) throw new Error('invalid HTTP client');
@@ -264,17 +268,23 @@ export async function runOnchainProofGoal({ goal: rawGoal, provider, account, pu
   journal.put(goal.id, pending); // fsync file AND directory before any broadcast
   if (performance.now() - started > goal.max_quote_age_seconds * 1000) throw new Error(`${goal.id}: quote expired after journal write; no broadcast; retain and reconcile the pending hash`);
   try {
-    const sent = await provider.sendTransactionUntil(signed, 'FINAL');
+    // Production PaymentRpcProvider offers a bounded one-shot transport.
+    // Legacy injected providers must enforce equivalent no-retry semantics.
+    const sent = await (typeof provider.sendTransactionOnce === 'function'
+      ? provider.sendTransactionOnce(signed, 'FINAL') : provider.sendTransactionUntil(signed, 'FINAL'));
     if (sent?.transaction_outcome?.id !== txHash) throw new Error('RPC returned a different or missing transaction hash');
-    await recoverOnchainProofGoal({ goal, provider, journal, log: () => {} });
+    await recoverOnchainProofGoal({ goal, provider, journal, log: () => {}, exclusiveJournalScope });
   } catch (error) {
     throw new Error(`${goal.id}: payment ${txHash} is unresolved; retain the original journal, never resend automatically: ${error.message}`, { cause: error });
   }
-  return redeemOnchainProofOnce({ goal, provider, journal, fetchImpl, timeoutMs, log });
+  return redeemOnchainProofOnce({ goal, provider, journal, fetchImpl, timeoutMs, log, exclusiveJournalScope });
 }
 
 /** Only reads FINAL receipts by the original hash. Never contacts the seller. */
-export async function recoverOnchainProofGoal({ goal: rawGoal, provider, journal, update = true, log = console.log }) {
+export async function recoverOnchainProofGoal(options) {
+  return withExclusiveJournalOperation(options?.journal, () => recoverOnchainProofGoalUnlocked(options), options?.exclusiveJournalScope);
+}
+async function recoverOnchainProofGoalUnlocked({ goal: rawGoal, provider, journal, update = true, log = console.log }) {
   const goal = validateOnchainProofGoal(rawGoal);
   if (typeof update !== 'boolean') throw new Error('invalid reconciliation mode');
   requireJournal(journal);
@@ -302,11 +312,14 @@ export async function recoverOnchainProofGoal({ goal: rawGoal, provider, journal
  * automatically. A merchant's single-use store and its delivery remain trust
  * assumptions, not guarantees supplied by the on-chain transfer.
  */
-export async function redeemOnchainProofOnce({ goal: rawGoal, provider, journal, fetchImpl = globalThis.fetch,
-  timeoutMs = 20_000, log = console.log }) {
+export async function redeemOnchainProofOnce(options) {
+  return withExclusiveJournalOperation(options?.journal, scope => redeemOnchainProofOnceUnlocked(options, scope), options?.exclusiveJournalScope);
+}
+async function redeemOnchainProofOnceUnlocked({ goal: rawGoal, provider, journal, fetchImpl = globalThis.fetch,
+  timeoutMs = 20_000, log = console.log }, exclusiveJournalScope) {
   const goal = validateOnchainProofGoal(rawGoal);
   if (typeof fetchImpl !== 'function' || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 120_000) throw new Error('invalid HTTP client');
-  await recoverOnchainProofGoal({ goal, provider, journal, log: () => {} });
+  await recoverOnchainProofGoal({ goal, provider, journal, log: () => {}, exclusiveJournalScope });
   const entry = journal.get(goal.id), { offer } = validateEntry(goal, entry);
   if (entry.redemption.status === 'delivered') return { status: 'REUSED', settlement: entry.settlement, response: delivered(entry) };
   if (entry.redemption.status !== 'not_started') throw new Error(`${goal.id}: redemption already attempted; seller outcome is uncertain, never retry automatically`);

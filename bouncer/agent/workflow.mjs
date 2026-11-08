@@ -28,6 +28,8 @@ import { normalizeOrder, challengeFromOrderMemo, challengeFromOrderMemoV3, start
 import { validateProviderOrigin } from '../shared/provider-origin.mjs';
 import { isTestnetAccount, isTestnetToken } from '../shared/account-id.mjs';
 import { isTransactionHash } from '../shared/direct-payment-settlement.mjs';
+import { withExclusiveJournalOperation } from './journal-operation.mjs';
+import { assertJournalScope } from './journal-write.mjs';
 
 const U128_MAX = (1n << 128n) - 1n;
 const plain = value => value !== null && typeof value === 'object' && !Array.isArray(value) &&
@@ -225,10 +227,14 @@ export async function previewWorkflowBudget({ workflow, remaining, provider, acc
  * untrusted implementations. recoverOnly reconciles existing work without keys
  * or new sends. Every new FT step uses durable signed-hash journaling.
  */
-export async function runWorkflow({ workflow: rawWorkflow, source = {}, resources = {}, provider, journal, execute = false,
-  recoverOnly = false, redeemSource = false, log = console.log, runners = {} }) {
+export async function runWorkflow(options) {
+  return withExclusiveJournalOperation(options?.journal, scope => runWorkflowUnlocked(options, scope), options?.exclusiveJournalScope);
+}
+async function runWorkflowUnlocked({ workflow: rawWorkflow, source = {}, resources = {}, provider, journal, execute = false,
+  recoverOnly = false, redeemSource = false, log = console.log, runners = {} }, exclusiveJournalScope) {
   if (journal?.sharedDirectV3 === true) throw new Error('shared buyer journal does not coordinate dependent or x402 workflows');
   const workflow = validateWorkflow(rawWorkflow), goal = workflow.source.goal, kind = workflow.source.kind;
+  assertJournalScope(journal, goal.contract_id, goal.owner_account_id);
   if (execute && recoverOnly) throw new Error('execute and recoverOnly cannot be combined');
   if (typeof redeemSource !== 'boolean' || (redeemSource && (!recoverOnly || kind !== 'onchain-proof'))) {
     throw new Error('redeemSource is only available for key-free x402 source recovery');
@@ -236,15 +242,26 @@ export async function runWorkflow({ workflow: rawWorkflow, source = {}, resource
   if ((execute || recoverOnly) && (!journal || typeof journal.get !== 'function' || typeof journal.put !== 'function')) throw new Error('the original shared journal is required');
   if (journal && (typeof journal.get !== 'function' || typeof journal.put !== 'function')) throw new Error('invalid workflow journal');
   if (resources.beforePayment !== undefined && typeof resources.beforePayment !== 'function') throw new Error('invalid pre-payment guard');
-  const runSource = runners.source ?? (kind === 'onchain-proof'
+  const injectedSource = runners.source, injectedRecovery = runners.recoverSource;
+  const runSource = injectedSource ?? (kind === 'onchain-proof'
     ? options => runOnchainProofWorkflowSource({ ...options, selection: workflow.source.output, fetchImpl: source.fetchImpl })
     : kind === 'oracle' ? runOracleGoal : kind === 'project' ? runProjectGoal : runOutlayerGoal);
-  const recoverSource = runners.recoverSource ?? (kind === 'onchain-proof'
+  const recoverSource = injectedRecovery ?? (kind === 'onchain-proof'
     ? options => recoverOnchainProofWorkflowSource({ ...options, selection: workflow.source.output, redeemSource, fetchImpl: source.fetchImpl })
     : kind === 'oracle' ? recoverOracleGoal : kind === 'project' ? recoverProjectGoal : recoverOutlayerGoal);
   const runResource = runners.resource ?? runResourceAgent, recoverResource = runners.recoverResource ?? recoverResourceDelivery;
   const budget = runners.budget ?? previewWorkflowBudget;
   if ([runSource, recoverSource, runResource, recoverResource, budget].some(fn => typeof fn !== 'function')) throw new Error('invalid workflow runner');
+  // The scope is a private in-process lock capability. Pass it only to the
+  // built-in nested journal participants, never to injected runners, providers,
+  // signers, quote/fulfillment callbacks or other externally supplied code.
+  const nested = (fn, trusted, args) => fn(trusted && args.journal != null ? { ...args, exclusiveJournalScope } : args);
+  const trustedSource = injectedSource == null || [runOracleGoal, runOutlayerGoal, runProjectGoal].includes(runSource);
+  const trustedRecovery = injectedRecovery == null || [recoverOracleGoal, recoverOutlayerGoal, recoverProjectGoal].includes(recoverSource);
+  const callSource = args => nested(runSource, trustedSource, args);
+  const callRecovery = args => nested(recoverSource, trustedRecovery, args);
+  const callResource = args => nested(runResource, runResource === runResourceAgent, args);
+  const callResourceRecovery = args => nested(recoverResource, recoverResource === recoverResourceDelivery, args);
   const { record, fp } = checkManifest(workflow, journal), entries = inspectPrefix(workflow, journal);
   const priorSource = journal?.get(goal.id), priorCount = entries.filter(Boolean).length;
   if (record?.status === 'completed' && (!priorSource || priorCount !== workflow.steps.length || entries.some(entry => entry?.delivery?.status !== 'verified'))) {
@@ -253,14 +270,14 @@ export async function runWorkflow({ workflow: rawWorkflow, source = {}, resource
   if (recoverOnly && !priorSource) return { status: 'NOT_STARTED', next: goal.id, new_payments: 0 };
   let independent;
   if (priorSource) {
-    independent = await recoverSource({ goal, provider, journal, update: execute || recoverOnly, log });
+    independent = await callRecovery({ goal, provider, journal, update: execute || recoverOnly, log });
     if (independent?.status === 'RECOVERY_REQUIRED' && kind === 'onchain-proof') {
       if (priorCount || record?.status === 'completed') throw new Error('workflow has downstream payments without a delivered x402 source; stop');
       return { status: 'RECOVERY_REQUIRED', stage: 'source-redemption', independent, new_payments: 0, note: independent.note };
     }
     if (independent?.status !== 'REUSED' || !independent.delivery) throw new Error('source recovery did not verify delivery');
   } else {
-    independent = await runSource({ goal, provider, account: source.account, publicKey: source.publicKey, execute: false, log });
+    independent = await callSource({ goal, provider, account: source.account, publicKey: source.publicKey, execute: false, log });
     if (['BLOCKED', 'FUNDING_REQUIRED'].includes(independent?.status)) return { status: 'BLOCKED', stage: 'source-preflight', independent };
     if (independent?.status !== 'READY') throw new Error('invalid independent source preflight');
     if (kind === 'project' && !(await projectCreditAvailable(provider, goal))) {
@@ -286,7 +303,7 @@ export async function runWorkflow({ workflow: rawWorkflow, source = {}, resource
       return { status: 'BLOCKED', stage: 'source-provider-credit', independent, preview };
     }
     if (!record) journal.put(manifestId(workflow), { kind: 'workflow-intent-v1', fingerprint: fp, status: 'pending', workflow, started_at: new Date().toISOString() });
-    independent = await runSource({ goal, provider, account: source.account, publicKey: source.publicKey, journal, execute: true, log });
+    independent = await callSource({ goal, provider, account: source.account, publicKey: source.publicKey, journal, execute: true, log });
     if (independent?.status === 'BLOCKED' || independent?.status === 'FUNDING_REQUIRED') return { status: 'BLOCKED', stage: 'source-execution', independent };
     if (!['FULFILLED', 'REUSED'].includes(independent?.status) || !independent.delivery) throw new Error('independent source delivery was not verified');
   }
@@ -310,7 +327,7 @@ export async function runWorkflow({ workflow: rawWorkflow, source = {}, resource
   for (let i = 0; i < priorCount; i++) {
     const stage = materializeWorkflowStep(workflow.steps[i], artifacts);
     checkChallenge(stage, journal.get(stage.id)?.request, true);
-    const delivery = await recoverResource({ ...common, goal: stage });
+    const delivery = await callResourceRecovery({ ...common, goal: stage });
     if (delivery?.id !== stage.id || !delivery.receipt || !isDeepStrictEqual(delivery.receipt.result, delivery.result)) throw new Error(`${stage.id}: recovered delivery is invalid`);
     artifacts.set(stage.id, artifact(stage.resource, stage.id, delivery.receipt.tx_hash, delivery.result));
     deliveries.push(delivery);
@@ -331,7 +348,7 @@ export async function runWorkflow({ workflow: rawWorkflow, source = {}, resource
     // oracle or a recent local x402 receipt, including immediately before send.
     checkSourceAge();
     const stage = materializeWorkflowStep(template, artifacts);
-    const result = await runResource({ ...common, goals: [stage], getQuote: resources.getQuote, account: resources.account, publicKey: resources.publicKey,
+    const result = await callResource({ ...common, goals: [stage], getQuote: resources.getQuote, account: resources.account, publicKey: resources.publicKey,
       execute: true, durablePayment: true, beforePayment: async request => {
         checkChallenge(stage, request);
         checkSourceAge();

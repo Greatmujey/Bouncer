@@ -248,6 +248,30 @@ test('live native execution requires one-shot transport and never falls back to 
   assert.deepEqual(await run(f), { status: 'READY' });
 });
 
+test('native freshness guard runs after durable journaling and retains an unsent original on expiry', async () => {
+  const f = fixture(); let checks = 0;
+  await assert.rejects(run(f, { execute: true, beforeBroadcast() {
+    checks++;
+    if (checks === 2) throw new Error('synthetic source expired');
+  } }), /synthetic source expired/);
+  assert.equal(checks, 2);
+  assert.equal(f.sends(), 0);
+  assert.equal(f.state.get(goal.id).status, 'pending');
+  assert.equal(f.state.get(goal.id).tx_hash, hash);
+});
+
+test('native guard cannot change the recorded original or defer its final check', async () => {
+  const f = fixture(); let checks = 0;
+  await assert.rejects(run(f, { execute: true, beforeBroadcast() {
+    if (++checks === 2) f.journal.put(goal.id, { ...f.journal.get(goal.id), tx_hash: 'Z'.repeat(44) });
+  } }), /original journal is uncertain/);
+  assert.equal(f.sends(), 0);
+  const asyncGuard = fixture();
+  await assert.rejects(run(asyncGuard, { execute: true, beforeBroadcast: async () => {} }), /guard must be synchronous/);
+  assert.equal(asyncGuard.sends(), 0);
+  assert.equal(asyncGuard.state.size, 0);
+});
+
 test('simultaneous native requests on one journal cannot sign or broadcast twice', async () => {
   const f=fixture(), entered=Promise.withResolvers(), release=Promise.withResolvers(), status=f.provider.viewNodeStatus;
   f.provider.viewNodeStatus=async()=>{entered.resolve();await release.promise;return status()};

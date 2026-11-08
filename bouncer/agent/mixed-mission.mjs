@@ -31,9 +31,10 @@ import { readNativeJournal } from './synchronous-native-journal.mjs';
 export async function runNativeResource(options = {}) {
   return withExclusiveJournalOperation(options?.journal, scope => runNativeResourceUnlocked(options, scope), options?.exclusiveJournalScope);
 }
-async function runNativeResourceUnlocked({ outlayer, provider, journal, execute = false, log = console.log, runners = {} }, operationScope) {
+async function runNativeResourceUnlocked({ outlayer, provider, journal, execute = false, log = console.log, beforeBroadcast, runners = {} }, operationScope) {
   if (journal?.sharedDirectV3 === true) throw new Error('shared buyer journal does not coordinate OutLayer payments');
-  if (typeof execute !== 'boolean' || typeof log !== 'function' || !outlayer || !provider || !runners || typeof runners !== 'object') {
+  if (typeof execute !== 'boolean' || typeof log !== 'function' || (beforeBroadcast !== undefined && typeof beforeBroadcast !== 'function') ||
+      !outlayer || !provider || !runners || typeof runners !== 'object') {
     throw new Error('invalid native resource request');
   }
   if (journal && (typeof journal.get !== 'function' || typeof journal.put !== 'function')) throw new Error('invalid native resource journal');
@@ -59,7 +60,7 @@ async function runNativeResourceUnlocked({ outlayer, provider, journal, execute 
     if (kind === 'oracle') { try { assertOracleFreshForUse(independent.delivery); freshForUse = true; } catch { freshForUse = false; } }
     return {status:'NATIVE_RESOURCE_REUSED',independent,resources:null,scope,oracle_fresh_for_use:freshForUse};
   }
-  const args = {goal,provider,account:outlayer.account,publicKey:outlayer.publicKey,log};
+  const args = {goal,provider,account:outlayer.account,publicKey:outlayer.publicKey,log,beforeBroadcast};
   const preview = await runGuarded({...args,execute:false});
   if (preview?.status === 'BLOCKED') return {status:'BLOCKED',stage:'native-preflight',independent:preview,resources:null,scope};
   if (preview?.status !== 'READY') throw new Error('invalid native resource preflight');
