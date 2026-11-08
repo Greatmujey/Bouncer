@@ -24,7 +24,7 @@ import { startSandbox, stopSandboxChild } from './v11-nearcore-sandbox.mjs';
 
 const { transactions: tx } = nearApi;
 const ONE = 10n ** 24n, TGAS = 10n ** 12n, OWNER = 'loader-buyer.testnet', VAULT = `native.${OWNER}`;
-const INTRUDER = 'loader-intruder.testnet', HOLD = `hold.${OWNER}`, FAILED = `failed.${OWNER}`;
+const INTRUDER = 'loader-intruder.testnet', HOLD = `hold.${OWNER}`, FAILED = `failed.${OWNER}`, LOW = `low.${OWNER}`;
 const ref = { finality: 'final' };
 const key = () => nearApi.KeyPair.fromRandom('ed25519');
 const pub = pair => String(pair.getPublicKey());
@@ -41,8 +41,8 @@ async function absent(provider, id) {
   assert.ok(error, `expected ${id} to be absent`);
   assert.match(`${error.message ?? ''} ${JSON.stringify(error)}`, /UNKNOWN_ACCOUNT|does not exist|doesn't exist|unknown account/i);
 }
-function createLoader(loader) {
-  return [tx.createAccount(), tx.transfer(54n * ONE / 10n), tx.deployContract(loader),
+function createLoader(loader, funding = 54n * ONE / 10n) {
+  return [tx.createAccount(), tx.transfer(funding), tx.deployContract(loader),
     tx.functionCall('loader_init', {}, 20n * TGAS, 1n)];
 }
 function deploy(compressed, deposit = 1n) {
@@ -104,6 +104,8 @@ async function main() {
 
       await must(owner, HOLD, createLoader(loader), 'create initialized loader for access-control checks');
       failure(await send(intruder,HOLD,[deploy(compressed)]),'non-owner loader deployment');
+      failure(await send(intruder,HOLD,[tx.functionCall('loader_refund',{},60n*TGAS,1n)]),'non-owner loader refund');
+      failure(await send(owner,HOLD,[tx.functionCall('loader_refund',{},60n*TGAS,0n)]),'zero-yocto loader refund');
       failure(await send(owner,HOLD,[deploy(compressed,0n)]),'zero-yocto loader deployment');
       failure(await send(owner,HOLD,[tx.functionCall('loader_init',{},20n*TGAS,1n)]),'loader reinitialization');
       failure(await send(owner,HOLD,[deploy(bad)]),'wrong compressed code');
@@ -112,6 +114,21 @@ async function main() {
       await absent(provider,HOLD);
       const afterRefund = BigInt((await provider.viewAccount(OWNER, ref)).amount);
       assert.ok(afterRefund > beforeRefund + 5n*ONE, 'unused loader funding did not return to sandbox owner');
+
+      // Deliberately insufficient storage: the original loader receipt can
+      // succeed while its returned self-upgrade receipt fails. The account is
+      // then a funded, pending loader, not a V9 vault. No automatic retry/refund.
+      const lowResult=await send(owner,LOW,[...createLoader(loader,ONE),deploy(compressed)]);
+      failure(lowResult,'insufficient-storage asynchronous upgrade',/LackBalance|Storage|storage|ActionError/i);
+      const stranded=await provider.viewAccount(LOW,ref);
+      assert.equal(stranded.code_hash,nearApi.utils.serialize.base_encode(digest(loader)));
+      assert.deepEqual((await provider.viewAccessKeyList(LOW,ref)).keys,[]);
+      failure(await send(owner,LOW,[deploy(compressed)]),'pending loader rejects another deployment');
+      const beforeLowRefund=BigInt((await provider.viewAccount(OWNER,ref)).amount);
+      await must(owner,LOW,[tx.functionCall('loader_refund',{},60n*TGAS,1n)],'owner explicitly refunds failed upgrade');
+      await absent(provider,LOW);
+      const afterLowRefund=BigInt((await provider.viewAccount(OWNER,ref)).amount);
+      assert.ok(afterLowRefund>beforeLowRefund+ONE/2n,'failed-upgrade loader funding did not return to sandbox owner');
 
       const terms={owner:OWNER,vault:VAULT,policy_id:'loader-native',agent_public_key:pub(agentKey),
         per_tx_cap_yocto:(ONE/10n).toString(),daily_cap_yocto:(ONE/10n).toString(),vault_deposit_yocto:(ONE/10n).toString(),
@@ -170,7 +187,8 @@ async function main() {
         self_deployment_receipt_and_owner_matched:true,keyless_vault_and_policy_configured:true,agent_cap_enforced:true,
         non_owner_zero_yocto_reinitialization_and_corruption_rejected:true,
         failed_creation_rolled_back_except_gas:true,unused_loader_owner_refund_verified:true,
-        complete_recovery_or_real_phone_proven:false };
+        failed_async_upgrade_left_keyless_pending_loader:true,duplicate_deploy_rejected:true,
+        failed_upgrade_manual_owner_refund_verified:true,complete_recovery_or_real_phone_proven:false };
     });
     assertSandboxStatus(await provider.status());
     console.log(JSON.stringify({...result,chain_id:SANDBOX_CHAIN_ID,nearcore_version:sandbox.versionText},null,2));
