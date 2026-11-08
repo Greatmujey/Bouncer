@@ -49,7 +49,8 @@ allowlist and 1-yocto owner-only escalation guard; agent calls attach zero.
 
 For storage, the reviewed amount is a maximum: actual incremental protocol
 storage stake is debited from the vault and counted against rolling spend.
-The owner can release data with a 1-yocto action; actually freed stake is
+The vault must also retain backing for its rolling-budget metadata and an
+operational reserve. The owner can release data with a 1-yocto action; actually freed stake is
 credited back to the vault, a tombstone permanently reserves the object ID,
 and the rolling spend is not reversed. OutLayer's independently verified
 refunds go to the owner; they do not automatically restore the vault balance

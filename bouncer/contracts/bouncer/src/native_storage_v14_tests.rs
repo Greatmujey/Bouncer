@@ -169,6 +169,21 @@ fn actual_stake_cannot_exceed_signed_maximum() {
 
 #[test]
 #[should_panic(expected = "vault needs storage and operational reserve")]
+fn a_new_rolling_budget_row_must_also_be_backed() {
+    let (mut b, agent, route) = fixture();
+    let usage = env::storage_usage();
+    let exact_existing_backing = N + NATIVE_SURPLUS_RESERVE +
+        (usage as u128) * env::storage_byte_cost().as_yoctonear();
+    let mut limited = context("owner.testnet", "owner.testnet", &agent, 0, exact_existing_backing);
+    limited.storage_usage = usage;
+    testing_env!(limited);
+    // The object stake is deducted from the tracked balance exactly as the
+    // object bytes are written. There is no surplus for a new budget row.
+    put(&mut b, &route, "mission-budget", "public");
+}
+
+#[test]
+#[should_panic(expected = "vault needs storage and operational reserve")]
 fn cannot_consume_the_vaults_operational_reserve() {
     let (mut b, agent, route) = fixture();
     testing_env!(context("owner.testnet", "owner.testnet", &agent, 0, N));

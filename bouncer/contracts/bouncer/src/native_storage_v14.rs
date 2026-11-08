@@ -158,13 +158,17 @@ impl Bouncer {
         record[1..17].copy_from_slice(&stake.to_le_bytes());
         env::storage_write(&key, &record); // fixed-width stake; no added storage
         let next_balance = balance - stake;
-        require(storage_backed(next_balance), "BLOCKED: vault needs storage and operational reserve");
         let bucket = env::block_timestamp() / NS_PER_HOUR;
         let dk = daily_key(&policy_id, bucket);
         let spent = self.daily_spent.get(&dk).copied().unwrap_or(0);
         let next = spent.checked_add(stake).unwrap_or_else(|| abort_with("daily spend overflow"));
-        self.native_balance = next_balance;
         self.daily_spent.insert(dk, next);
+        // LookupMap buffers writes. Include a newly created rolling-budget row
+        // in storage_usage before checking that every tracked NEAR and the
+        // operational reserve remain backed. A panic reverts the entire call.
+        self.daily_spent.flush();
+        require(storage_backed(next_balance), "BLOCKED: vault needs storage and operational reserve");
+        self.native_balance = next_balance;
         env::log_str("BOUNCER public native storage written; stake reserved");
         object_from_record(policy_id, object_id, &record).unwrap()
     }
