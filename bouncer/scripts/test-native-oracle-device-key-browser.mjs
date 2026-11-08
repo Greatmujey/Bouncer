@@ -15,6 +15,7 @@ import { buildNativeOracleWalletPlan, NATIVE_ORACLE_DEFAULT_GAS_ALLOWANCE } from
 const files = new Map([
   ['/native-oracle-device-key.mjs', fs.readFileSync(new URL('../web-src/native-oracle-device-key.mjs', import.meta.url))],
   ['/native-oracle-setup-wallet-prompt.mjs', fs.readFileSync(new URL('../web-src/native-oracle-setup-wallet-prompt.mjs', import.meta.url))],
+  ['/native-oracle-wallet-compatibility.mjs', fs.readFileSync(new URL('../web-src/native-oracle-wallet-compatibility.mjs', import.meta.url))],
   ['/native-oracle-transaction.mjs', fs.readFileSync(new URL('../web-src/native-oracle-transaction.mjs', import.meta.url))],
   ['/native-oracle-local-attempt.mjs', fs.readFileSync(new URL('../web-src/native-oracle-local-attempt.mjs', import.meta.url))],
   ['/native-oracle-completion.mjs', fs.readFileSync(new URL('../web-src/native-oracle-completion.mjs', import.meta.url))],
