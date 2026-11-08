@@ -38,6 +38,9 @@ jobs:
       - name: Install test dependencies
         working-directory: bouncer
         run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Measure V14 mobile wallet payload lower bound
+        working-directory: bouncer
+        run: node scripts/inspect-v14-mobile-artifact.mjs contracts/bouncer/target/wasm32-unknown-unknown/release/bouncer.wasm
       - name: Build fabricated sandbox-only provider
         working-directory: bouncer/integration/fake-outlayer
         env:
