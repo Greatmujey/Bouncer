@@ -2,11 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash, webcrypto } from 'node:crypto';
 import { KeyPair } from '@near-js/crypto';
+import { IDBFactory } from 'fake-indexeddb';
 import { nep413Payload } from '../web-src/cli-login.mjs';
 import { setupAuthAction } from '../web-src/witnessed-setup-auth.mjs';
 import fs from 'node:fs';
 import { initWallet as bootWallet, walletOriginAllowed, nativeSetupOriginAllowed } from '../web-src/wallet-core.mjs';
 import { WALLET_MANIFEST } from '../web-src/wallet-manifest.mjs';
+import { encodeBase58 } from '../web-src/native-oracle-transaction.mjs';
+import { DIRECT_DEPOSIT, DIRECT_VERSION, DIRECT_PROJECT, DIRECT_UUID } from '../web-src/direct-outlayer-testnet.mjs';
 import { loadVerifiedExecutor, WALLET_EXECUTOR_SHA256 } from '../web-src/wallet-executor.mjs';
 
 const location = url => { const u = new URL(url); return { hostname: u.hostname, host: u.host, protocol: u.protocol, origin: u.origin }; };
@@ -21,6 +24,12 @@ class FakeSandboxWallet {
     const publicKey = pair.getPublicKey().toString(), accountId = this.config.account || 'cli.testnet';
     const signature = Buffer.from(pair.sign(hash).signature).toString('base64');
     return [{ accountId, publicKey, signedMessage: { accountId, publicKey, signature: this.config.badSignature ? 'bad' : signature } }];
+  }
+  async signAndSendTransaction(params) {
+    this.config.transactionRequests ??= [];
+    this.config.transactionRequests.push(params);
+    if (this.config.transactionResult instanceof Error) throw this.config.transactionResult;
+    return this.config.transactionResult;
   }
   async signMessage(params) {
     this.config.messageRequests ??= [];
@@ -54,6 +63,9 @@ function fakeBrowser(url, { top = true, storageFails = false, approved = '' } = 
   const ids = ['wallet-connect', 'wallet-disconnect', 'wallet-status', 'wallet-open-site', 'wallet-dialog', 'wallet-close', 'wallet-options', 'wallet-dialog-status', 'wallet-title-text', 'wallet-dialog-description', 'wallet-banner', 'wallet-safety',
     'wallet-account-entry', 'wallet-account-form', 'wallet-account-id', 'wallet-account-error', 'wallet-account-back', 'wallet-cli-verify',
     'wallet-account-view', 'wallet-account-name', 'wallet-account-badge', 'wallet-account-warning', 'wallet-account-near', 'wallet-account-usdc', 'wallet-account-balance-status', 'wallet-account-use-wallet', 'wallet-account-refresh', 'wallet-owner-verify', 'wallet-owner-status',
+    'wallet-direct-outlayer-open', 'wallet-direct-outlayer-panel', 'wallet-direct-outlayer-status', 'wallet-direct-outlayer-hash',
+    'wallet-direct-outlayer-result', 'wallet-direct-outlayer-review', 'wallet-direct-outlayer-send', 'wallet-direct-outlayer-check',
+    'wallet-direct-outlayer-recover', 'wallet-direct-outlayer-original', 'wallet-direct-outlayer-recover-original',
     'wallet-buffer-readiness', 'wallet-buffer-readiness-status', 'wallet-buffer-setup-start', 'wallet-buffer-setup-panel',
     'wallet-buffer-setup-terms', 'wallet-buffer-setup-reserve', 'wallet-buffer-setup-approve', 'wallet-buffer-setup-status',
     'wallet-setup-recovery', 'wallet-setup-recovery-status',
@@ -225,6 +237,64 @@ test('connects and disconnects a wallet-reported account without requesting a ke
   assert.ok(browser.openers.every(button => button.attributes['aria-label'] === 'Connect wallet or Google account'));
   assert.equal(browser.nodes['wallet-title-text'].textContent, 'Connect an account');
   assert.match(browser.nodes['wallet-dialog-description'].textContent, /Google/);
+});
+
+test('direct OutLayer control is shown only for the named Meteor session on the dedicated preview', async () => {
+  for (const [url, approved, account, walletId, visible] of [
+    ['https://4173-example.e2b.app/', '', 'great_mujey.testnet', 'meteor-wallet', true],
+    ['https://4173-example.e2b.app/', '', 'alice.testnet', 'meteor-wallet', false],
+    ['https://4173-example.e2b.app/', '', 'great_mujey.testnet', 'intear-wallet', false],
+    ['https://bouncer-near.vercel.app/', 'https://bouncer-near.vercel.app', 'great_mujey.testnet', 'meteor-wallet', false],
+    ['http://127.0.0.1:4173/', '', 'great_mujey.testnet', 'meteor-wallet', false],
+  ]) {
+    const browser=fakeBrowser(url,{approved}), config={account};
+    await initWallet({window:browser.win,document:browser.doc,NearConnector:connectorClass(config)});
+    await browser.options.find(option=>option.dataset.walletId===walletId).click();
+    assert.equal(browser.nodes['wallet-direct-outlayer-open'].hidden,!visible);
+    assert.equal(browser.nodes['wallet-direct-outlayer-panel'].hidden,true);
+    assert.equal(config.transactionRequests,undefined,'connecting never starts the direct transaction');
+  }
+});
+
+test('direct preview review is read-only and one explicit tap invokes only the fixed wallet action', async () => {
+  const browser=fakeBrowser('https://4173-example.e2b.app/'), txHash=encodeBase58(new Uint8Array(32).fill(7));
+  const config={account:'great_mujey.testnet',transactionResult:{transaction:{hash:txHash},transaction_outcome:{id:txHash}}};
+  browser.win.indexedDB=new IDBFactory();browser.win.navigator.storage={persist:async()=>true,persisted:async()=>true};
+  const prior=browser.win.fetch, block=encodeBase58(new Uint8Array(32).fill(9));
+  const source={WasmUrl:{url:`https://wasmhub.testnet.fastfs.io/fastfs.testnet/${DIRECT_VERSION}.wasm`,hash:DIRECT_VERSION,build_target:'wasm32-wasip2'}};
+  browser.win.fetch=async(url,options={})=>{
+    if(url!=='https://rpc.testnet.near.org')return prior(url,options);
+    const q=JSON.parse(options.body);let result;
+    if(q.method==='status')result={chain_id:'testnet'};
+    else if(q.method==='block')result={header:{hash:block,height:123,timestamp_nanosec:String(BigInt(Date.now())*1000000n)}};
+    else if(q.method==='EXPERIMENTAL_protocol_config')result={chain_id:'testnet',runtime_config:{storage_amount_per_byte:'10000000000000000000'}};
+    else if(q.method==='query'){
+      if(q.params.request_type==='view_account')result={block_hash:block,amount:'22000000000000000000000000',storage_usage:1024};
+      else if(q.params.request_type==='view_access_key_list')result={block_hash:block,keys:[{access_key:{permission:'FullAccess'}}]};
+      else {const value=q.params.method_name==='get_project'?{project_id:DIRECT_PROJECT,uuid:DIRECT_UUID,owner:'zavodil2.testnet'}:
+        q.params.method_name==='get_version'?{wasm_hash:DIRECT_VERSION,source}:null;
+        result={block_hash:block,result:[...Buffer.from(JSON.stringify(value))]};}
+    }
+    return new Response(JSON.stringify({jsonrpc:'2.0',id:q.id,result}),{headers:{'content-type':'application/json'}});
+  };
+  await initWallet({window:browser.win,document:browser.doc,NearConnector:connectorClass(config)});
+  await browser.options.find(option=>option.dataset.walletId==='meteor-wallet').click();
+  await browser.nodes['wallet-direct-outlayer-open'].click();
+  assert.equal(browser.nodes['wallet-direct-outlayer-panel'].hidden,false);
+  assert.equal(browser.nodes['wallet-direct-outlayer-send'].hidden,false);
+  assert.equal(config.transactionRequests,undefined,'checking readiness does not prompt');
+  await browser.nodes['wallet-direct-outlayer-send'].click();
+  for(let i=0;i<50 && !config.transactionRequests;i++)await new Promise(resolve=>setTimeout(resolve,2));
+  assert.equal(config.transactionRequests.length,1);
+  assert.equal(config.transactionRequests[0].signerId,'great_mujey.testnet');
+  assert.equal(config.transactionRequests[0].receiverId,'outlayer.testnet');
+  assert.equal(config.transactionRequests[0].actions[0].params.deposit,DIRECT_DEPOSIT);
+  for(let i=0;i<50 && browser.nodes['wallet-direct-outlayer-hash'].hidden;i++)await new Promise(resolve=>setTimeout(resolve,2));
+  assert.match(browser.nodes['wallet-direct-outlayer-hash'].textContent,new RegExp(txHash));
+  assert.equal(browser.nodes['wallet-direct-outlayer-send'].hidden,true);
+  assert.equal(browser.nodes['wallet-direct-outlayer-check'].hidden,false);
+  await browser.nodes['wallet-direct-outlayer-send'].click();
+  assert.equal(config.transactionRequests.length,1);
 });
 
 test('connected phone-wallet accounts can verify a fresh identity message without approving spending', async () => {

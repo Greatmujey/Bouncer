@@ -24,7 +24,11 @@ jobs:
       - name: Test offline plan, receipt evidence and read-only boundaries
         run: |
           npm ci --ignore-scripts --no-audit --no-fund
-          node --test tests/native-oracle-wallet-plan.test.mjs tests/native-oracle-wallet-evidence.test.mjs tests/native-oracle-readiness.test.mjs tests/oracle-outlayer.test.mjs
+          node --test tests/native-oracle-wallet-plan.test.mjs tests/native-oracle-wallet-evidence.test.mjs tests/native-oracle-readiness.test.mjs tests/oracle-outlayer.test.mjs tests/direct-outlayer-testnet.test.mjs tests/wallet.test.mjs
+      - name: Check direct-test browser RPC and pinned project (read only)
+        run: node scripts/check-direct-outlayer-readiness.mjs
+      - name: Check public historical direct-receipt shape (synthetic, read only)
+        run: node scripts/probe-outlayer-direct-receipt.mjs
       - name: Inspect named wallet and native OutLayer project
         run: |
           set -euo pipefail

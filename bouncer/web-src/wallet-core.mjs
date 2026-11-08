@@ -10,6 +10,7 @@ import { createOwnerKeyFallbackFetch } from './read-only-owner-key-fallback.mjs'
 import { openNativeOracleDeviceKey } from './native-oracle-device-key.mjs';
 import { createNativeOracleSetupClient } from './native-oracle-setup-client.mjs';
 import { createNativeOracleOwnerFlow } from './native-oracle-owner-flow.mjs';
+import { createDirectOutlayerTest } from './direct-outlayer-testnet.mjs';
 
 // HTTP Date is coarse and can be cached. Only flag a large discrepancy when
 // the response provides a valid Date/Age and the request was reasonably fast.
@@ -104,6 +105,17 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
   const accountRefresh = doc.querySelector('#wallet-account-refresh');
   const ownerVerify = doc.querySelector('#wallet-owner-verify');
   const ownerStatus = doc.querySelector('#wallet-owner-status');
+  const directOpen = doc.querySelector('#wallet-direct-outlayer-open');
+  const directPanel = doc.querySelector('#wallet-direct-outlayer-panel');
+  const directStatus = doc.querySelector('#wallet-direct-outlayer-status');
+  const directHash = doc.querySelector('#wallet-direct-outlayer-hash');
+  const directResult = doc.querySelector('#wallet-direct-outlayer-result');
+  const directReview = doc.querySelector('#wallet-direct-outlayer-review');
+  const directSend = doc.querySelector('#wallet-direct-outlayer-send');
+  const directCheck = doc.querySelector('#wallet-direct-outlayer-check');
+  const directRecover = doc.querySelector('#wallet-direct-outlayer-recover');
+  const directOriginal = doc.querySelector('#wallet-direct-outlayer-original');
+  const directRecoverOriginal = doc.querySelector('#wallet-direct-outlayer-recover-original');
   const nativeOpen = doc.querySelector('#wallet-native-setup-open');
   const nativePanel = doc.querySelector('#wallet-native-setup-panel');
   const nativeTerms = doc.querySelector('#wallet-native-setup-terms');
@@ -145,6 +157,8 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
       !ethereumInfoPanel || !ethereumContinue || !ethereumBack) return;
 
   const approved = doc.querySelector('meta[name="bouncer-wallet-origin"]')?.content || '';
+  let isTop = false;
+  try { isTop = win.top === win.self; } catch { /* fail closed */ }
   const previewModeMessage = 'Preview mode: Bouncer spending setup is read-only unless its backend is enabled. Some wallets may request their own setup; review every wallet prompt.';
   const allowedIds = new Set([...WALLET_MANIFEST.wallets.map(wallet => wallet.id), 'wallet-connect']);
   let connector, selectedWallet = null, connected = false, connectedAccount = '', ready = false, busyState = false, opener = null;
@@ -155,7 +169,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
   // In-memory proof only, bound to the selected session. It never grants
   // spending access, authenticates a backend, or survives account changes.
   let ownerVerification = null, ownerSessionVersion = 0, setupRecoveryAvailable = false, setupRecoverySelection = null, matchedOriginal = null;
-  let bufferSetupDraft = null, nativeSetupAvailable = false, nativeFlow = null, nativeSetupOpening = false;
+  let bufferSetupDraft = null, nativeSetupAvailable = false, nativeFlow = null, nativeSetupOpening = false, directFlow = null;
   const bufferSetupStages = ['create_keyless_vault', 'register_vault_circle', 'fund_vault_circle'];
   let bannerTimer;
   const trusted = new Set(WALLET_MANIFEST.wallets);
@@ -178,6 +192,22 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
       `Stage 3 deposits ${formatPublicAmount(fundingAmount, 6)} test USDC into the vault, not to Buffer. ` +
       `The reviewed Buffer product costs ${formatPublicAmount(review.fixed_product_price_atoms, 6)} test USDC and is a separate later payment. ` +
       'Each stage needs its own wallet approval; no order is created here.';
+  }
+  function renderDirectState(state) {
+    if (!state) return;
+    if (directStatus) directStatus.textContent = state.message || '';
+    if (directHash) { directHash.hidden = !state.originalHash; directHash.textContent = state.originalHash ? `Original transaction: ${state.originalHash}` : ''; }
+    if (directResult) {
+      directResult.hidden = !state.receipt;
+      directResult.textContent = state.receipt ? `Verified direct provider receipt · maximum ${formatPublicAmount(state.receipt.maximum_yocto,24)} test NEAR · charged ${formatPublicAmount(state.receipt.charged_yocto,24)} · refund ${formatPublicAmount(state.receipt.refunded_to_owner_yocto,24)} to your wallet · reported NEAR price $${state.receipt.price_usd}. This did not use Bouncer's firewall.` : '';
+    }
+    const disabled = busyState || state.busy;
+    if (directReview) { directReview.hidden = !['initial','stopped'].includes(state.phase); directReview.disabled = disabled; }
+    if (directSend) { directSend.hidden = state.phase !== 'reviewed'; directSend.disabled = disabled; }
+    if (directCheck) { directCheck.hidden = state.phase !== 'retained' || !state.originalHash; directCheck.disabled = disabled; }
+    if (directRecover) directRecover.hidden = !['unknown','stopped'].includes(state.phase);
+    if (directOriginal) directOriginal.disabled = disabled;
+    if (directRecoverOriginal) directRecoverOriginal.disabled = disabled;
   }
   function renderNativeState(state) {
     if (!state) return;
@@ -245,6 +275,15 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
       bufferReadiness.hidden = !(experimentalPreview && ownerVerified && connectedAccount === 'great_mujey.testnet');
       bufferReadiness.disabled = busyState;
     }
+    // This separate user-approved provider test is preview-only. It does not
+    // enable the protected Bouncer flow or the public production site.
+    const directEnabled = isTop && win.location.protocol === 'https:' &&
+      /^4173-[a-z0-9-]+\.e2b\.app$/i.test(win.location.hostname) && win.location.origin === `https://${win.location.hostname}` &&
+      connected && connectedAccount === 'great_mujey.testnet' && selectedWallet?.manifest?.id === 'meteor-wallet' &&
+      selectedWallet?.manifest?.features?.signAndSendTransaction === true;
+    if (directOpen) { directOpen.hidden = !directEnabled || Boolean(directFlow); directOpen.disabled = busyState; }
+    if (directPanel) directPanel.hidden = !directEnabled || !directFlow;
+    if (directFlow) renderDirectState(directFlow.getState());
     const nativeEnabled = nativeSetupAvailable && ownerVerified && connectedAccount === 'great_mujey.testnet';
     if (nativeOpen) { nativeOpen.hidden = !nativeEnabled || Boolean(nativeFlow) || nativeSetupOpening; nativeOpen.disabled = busyState; }
     if (nativePanel) nativePanel.hidden = !nativeEnabled || (!nativeFlow && !nativeSetupOpening);
@@ -306,6 +345,9 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     accountReadVersion++;
     ownerSessionVersion++; ownerVerification = null; setupRecoveryAvailable = false; setupRecoverySelection = null; matchedOriginal = null; bufferSetupDraft = null;
     nativeSetupAvailable = false; nativeSetupOpening = false; nativeFlow?.destroy(); nativeFlow = null;
+    directFlow?.destroy(); directFlow = null;
+    if (directStatus) directStatus.textContent = ''; if (directHash) { directHash.hidden = true; directHash.textContent = ''; }
+    if (directResult) { directResult.hidden = true; directResult.textContent = ''; } if (directOriginal) directOriginal.value = '';
     if (nativeTerms) nativeTerms.textContent = ''; if (nativeStage) nativeStage.textContent = '';
     if (nativeStatus) nativeStatus.textContent = ''; if (nativeHash) { nativeHash.hidden = true; nativeHash.textContent = ''; }
     if (nativeOriginal) nativeOriginal.value = '';
@@ -432,8 +474,6 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
   });
   renderControls();
 
-  let isTop = false;
-  try { isTop = win.top === win.self; } catch { /* fail closed */ }
   if (!walletOriginAllowed(win.location, isTop, approved)) {
     setStatus('Open Bouncer in a new tab to connect your testnet wallet.');
     if (openSite) {
@@ -740,6 +780,49 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
       stopWalletPresentation(); busy(false);
       if (stillCurrent()) { renderControls(); hideBanner(); openPicker(opener); }
     }
+  });
+  directOpen?.addEventListener('click', async () => {
+    const wallet = selectedWallet, accountId = connectedAccount, version = ownerSessionVersion;
+    if (busyState || directFlow || !connected || accountId !== 'great_mujey.testnet' || wallet?.manifest?.id !== 'meteor-wallet') return;
+    const stillCurrent = () => connected && selectedWallet === wallet && connectedAccount === accountId && ownerSessionVersion === version;
+    let flow;
+    try {
+      const currentFlow = () => stillCurrent() && directFlow === flow;
+      flow = createDirectOutlayerTest({wallet,origin:win.location.origin,isTopLevel:isTop,indexedDB:win.indexedDB,
+        storage:win.navigator?.storage,fetch:win.fetch.bind(win),isCurrent:currentFlow,
+        onChange:state=>{if(currentFlow())renderDirectState(state)}});
+      directFlow = flow; renderControls(); busy(true);
+      await flow.review();
+    } catch {
+      if (stillCurrent() && !flow) {
+        const message = 'The direct test is unavailable on this browser. No wallet transaction was requested.';
+        if (ownerStatus) { ownerStatus.hidden = false; ownerStatus.textContent = message; }
+        setStatus(message);
+      }
+    } finally { busy(false); if (stillCurrent()) renderControls(); }
+  });
+  const runDirect = async (work, presentWallet = false) => {
+    const flow = directFlow;
+    if (busyState || !flow) return;
+    const stillCurrent = () => directFlow === flow && connected && connectedAccount === 'great_mujey.testnet';
+    busy(true);
+    if (presentWallet) {
+      closePicker();
+      setStatus('Review the one direct testnet request in Meteor. Do not repeat it if the result is unknown.');
+      notify('Review the direct testnet request in Meteor. No Bouncer firewall is used.', true);
+    }
+    try { await work(flow); } catch { /* never repeat a wallet request; receipt reads may be checked again */ }
+    finally {
+      busy(false);
+      if (stillCurrent()) { renderControls(); if (presentWallet) { hideBanner(); openPicker(opener); } }
+    }
+  };
+  directReview?.addEventListener('click', () => { void runDirect(flow => flow.review()); });
+  directSend?.addEventListener('click', () => { void runDirect(flow => flow.send(), true); });
+  directCheck?.addEventListener('click', () => { void runDirect(flow => flow.check()); });
+  directRecoverOriginal?.addEventListener('click', () => {
+    const original = directOriginal?.value?.trim() || '';
+    void runDirect(flow => flow.recover(original));
   });
   nativeOpen?.addEventListener('click', async () => {
     const wallet = selectedWallet, accountId = connectedAccount, version = ownerSessionVersion, proof = ownerVerification;

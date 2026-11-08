@@ -188,6 +188,23 @@
     <p class="account-view-warning" id="wallet-account-warning">Unverified account name. No wallet is connected and no spending access was granted.</p>
     <button class="account-entry-primary" id="wallet-owner-verify" type="button" hidden>Verify account in wallet</button>
     <p class="account-view-status" id="wallet-owner-status" role="status" aria-live="polite" hidden></p>
+    <button class="account-entry-primary" id="wallet-direct-outlayer-open" type="button" hidden>Review one direct OutLayer test →</button>
+    <section class="setup-recovery native-setup" id="wallet-direct-outlayer-panel" aria-label="One direct OutLayer testnet purchase" hidden>
+      <strong>One direct OutLayer test · testnet only</strong>
+      <p class="account-view-status">From great_mujey.testnet to outlayer.testnet. One NEAR/USD price lookup from Coinbase using the pinned zavodil2.testnet/price-oracle project. The maximum deposit is 0.1 test NEAR; network gas is extra. OutLayer may refund unused funds to your wallet; the receipt must confirm this.</p>
+      <p class="account-view-status">This direct provider test bypasses Bouncer’s firewall, policies and agent. It does not prove the autonomous agent works. The one-shot record is only on this browser and can be lost if storage is cleared. If a wallet result is unknown, do not approve the transaction again.</p>
+      <p class="account-view-status" id="wallet-direct-outlayer-status" role="status" aria-live="polite"></p>
+      <p class="account-view-status" id="wallet-direct-outlayer-hash" hidden></p>
+      <p class="account-view-status" id="wallet-direct-outlayer-result" hidden></p>
+      <button class="account-entry-secondary" id="wallet-direct-outlayer-review" type="button" hidden>Check the testnet review →</button>
+      <button class="account-entry-primary" id="wallet-direct-outlayer-send" type="button" hidden>Approve one direct test in Meteor →</button>
+      <button class="account-entry-secondary" id="wallet-direct-outlayer-check" type="button" hidden>Check the original receipt →</button>
+      <div id="wallet-direct-outlayer-recover" hidden>
+        <label for="wallet-direct-outlayer-original">Original transaction hash from Meteor history</label>
+        <input id="wallet-direct-outlayer-original" type="text" maxlength="50" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Paste the original hash" />
+        <button class="account-entry-secondary" id="wallet-direct-outlayer-recover-original" type="button">Check this original only →</button>
+      </div>
+    </section>
     <button class="account-entry-primary" id="wallet-native-setup-open" type="button" hidden>Review native NEAR resource setup →</button>
     <section class="setup-recovery native-setup" id="wallet-native-setup-panel" aria-label="Native NEAR testnet resource setup" hidden>
       <strong>Experimental native NEAR · testnet only</strong>
@@ -277,7 +294,7 @@
   </dialog>
   <dialog class="tour-dialog" id="welcome-tour" aria-labelledby="tour-title" aria-describedby="tour-description"><div class="tour-topline"><span class="brand-mark" aria-hidden="true"><svg viewBox="16 17 300 300"><use href="#i-bouncer"/></svg></span><span class="tour-count" id="tour-count">STEP 1 OF 4</span><button type="button" class="tour-close" id="tour-skip" aria-label="Close the tour">×</button></div><div class="tour-progress" aria-hidden="true"><span></span><span></span><span></span><span></span></div><div class="tour-copy" aria-live="polite"><div class="section-kicker" id="tour-kicker">WELCOME TO BOUNCER</div><h2 id="tour-title">Meet your resource agent.</h2><p id="tour-description">Bouncer helps an agent get compute, storage and API services while your on-chain rules guard its spending.</p><div class="tour-callout" id="tour-callout">Bouncer is a testnet prototype, not an open marketplace.</div></div><div class="tour-actions"><button class="button tour-back" type="button" id="tour-back" disabled>Back</button><button class="button tour-next" type="button" id="tour-next">Next →</button></div></dialog>
   <script type="module" src="./app.mjs?v=7"></script>
-  <script type="module" src="./wallet.bundle.js?v=27"></script>
+  <script type="module" src="./wallet.bundle.js?v=28"></script>
   <script type="module" src="./google-signin.mjs?v=2"></script>
 </body>
 </html>
