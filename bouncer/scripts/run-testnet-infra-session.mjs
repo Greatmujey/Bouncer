@@ -40,25 +40,32 @@ function readProtected(file) {
 }
 async function connect(config,password){
   const project=config.projects[ROLE], username=`bouncer_${ROLE}.${project.ref}`;
-  for(const host of testnetPoolerHosts(ROLE,config)){
-    const pool=new pg.Pool({host,port:5432,database:'postgres',user:username,password,ssl:testnetPoolerSsl(),
-      max:6,connectionTimeoutMillis:8_000,idleTimeoutMillis:20_000});
-    try{
-      const result=await pool.query('SELECT current_user AS role, current_database() AS database');
-      if(result.rows.length!==1 || result.rows[0].role!==`bouncer_${ROLE}` || result.rows[0].database!=='postgres')throw failed();
-      console.log(`Verified TLS and the dedicated ${ROLE} database role.`);
-      return pool;
-    }catch(error){
-      // Report only a fixed category, never an exception message, connection
-      // string, password, token or arbitrary database response.
-      const code=typeof error?.code==='string' ? error.code : '';
-      const category=code==='28P01' ? 'authentication' :
-        (code==='XX000' && /tenant or user not found/i.test(error?.message??'')) ? 'pooler-tenant' :
-        ['ECONNREFUSED','ETIMEDOUT','ENOTFOUND','EHOSTUNREACH','ECONNRESET'].includes(code) ? 'network' :
-        /CERT|TLS|SSL/i.test(code) ? 'tls' : 'other';
-      console.log(`::warning title=Testnet ${ROLE} database connection::${host.split('.')[0]} ${category}`);
-      await pool.end().catch(()=>{});
+  // Supavisor may briefly cache a previous SCRAM verifier after rotation. Only
+  // bounded, read-only connection handshakes are repeated, never wallet calls.
+  for(let attempt=0;attempt<3;attempt++){
+    let sawAuthenticationFailure=false;
+    for(const host of testnetPoolerHosts(ROLE,config)){
+      const pool=new pg.Pool({host,port:5432,database:'postgres',user:username,password,ssl:testnetPoolerSsl(),
+        max:6,connectionTimeoutMillis:8_000,idleTimeoutMillis:20_000});
+      try{
+        const result=await pool.query('SELECT current_user AS role, current_database() AS database');
+        if(result.rows.length!==1 || result.rows[0].role!==`bouncer_${ROLE}` || result.rows[0].database!=='postgres')throw failed();
+        console.log(`Verified TLS and the dedicated ${ROLE} database role.`);
+        return pool;
+      }catch(error){
+        // Report only fixed categories, never driver messages or credentials.
+        const code=typeof error?.code==='string' ? error.code : '';
+        const category=code==='28P01' ? 'authentication' :
+          (code==='XX000' && /tenant or user not found/i.test(error?.message??'')) ? 'pooler-tenant' :
+          ['ECONNREFUSED','ETIMEDOUT','ENOTFOUND','EHOSTUNREACH','ECONNRESET'].includes(code) ? 'network' :
+          /CERT|TLS|SSL/i.test(code) ? 'tls' : 'other';
+        if(category==='authentication')sawAuthenticationFailure=true;
+        console.log(`::warning title=Testnet ${ROLE} database connection::${host.split('.')[0]} ${category}`);
+        await pool.end().catch(()=>{});
+      }
     }
+    if(!sawAuthenticationFailure || attempt===2)break;
+    await delay(20_000);
   }
   throw failed();
 }
