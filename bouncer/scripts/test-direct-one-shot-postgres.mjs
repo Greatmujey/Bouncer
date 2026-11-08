@@ -13,7 +13,7 @@ try{
   const current=fs.readFileSync(new URL('../infrastructure/direct-test-one-shot.sql',import.meta.url),'utf8');
   const old=current.replace(" OR origin = 'https://bouncer-near.vercel.app'",'')
     .replace("(p_origin !~ '^https://[a-z0-9]{4,20}\\.csb\\.app$' AND p_origin <> 'https://bouncer-near.vercel.app')",
-      "p_origin !~ '^https://[a-z0-9]{4,20}\\.csb\\.app$'");
+      () => "p_origin !~ '^https://[a-z0-9]{4,20}\\.csb\\.app$'");
   assert.notEqual(old,current);assert.ok(!old.includes('bouncer-near.vercel.app'));
   await pool.query(old);
   await pool.query(`INSERT INTO bouncer_direct_test.claims (capability_hash,origin,scope,expires_at)
