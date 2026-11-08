@@ -1,10 +1,12 @@
 # Guarded native-NEAR missions (experimental testnet)
 
 This is the **standard Bouncer-guarded** path, not the separate direct
-wallet-to-OutLayer test. A fixed, owner-reviewed manifest can sequence random
-compute, a price/API result and a **public, self-hosted NEAR contract storage**
-write. The storage value can be assembled from earlier verified compute/API
-results and their original transaction hashes. This is not an independent
+wallet-to-OutLayer test. An owner-reviewed manifest can sequence either random
+compute and a price/API result, or a **dependent price → calculation** task,
+followed by a **public, self-hosted NEAR contract storage** write. The latter
+uses a verified OutLayer price as input to a separate pinned WASI calculation.
+The public value records both verified results and their original transaction
+hashes. This is not an independent
 storage purchase, private storage, an availability guarantee, or proof of
 permanence. Never store secrets; transaction history remains public even after
 release. FT functionality remains separately supported.
@@ -20,7 +22,20 @@ Do not use real funds.
 ## Mission interface and safety
 
 [`native-mission.example.json`](../examples/native-mission.example.json)
-shows all three kinds in order and a storage goal referencing the first two.
+shows the original random example. The separate
+[`native-market-mission.example.json`](../examples/native-market-mission.example.json)
+shows the dependent price → compute → storage sequence. Both are unsigned,
+illustrative templates, not live vaults or spending authorization. The market
+input names an earlier oracle goal and an owner-reviewed integer quantity.
+Bouncer checks the oracle transaction/receipts and freshness, rounds the
+reported USD price half-up to micro-dollars, and binds the calculation input to
+the oracle's original hash. It independently rechecks the returned integer
+product before storing anything. This does not prove market accuracy, TEE
+execution, the source's observation time, or that OutLayer can fetch the WASI
+program. See the [program and reproducible build](../programs/market-summary/README.md).
+OutLayer charges for fetching public data and compute; storage is protocol stake
+locked in the vault, not an independent vendor purchase.
+
 One storage goal must pin the actual V14 deployed-code hash; multiple storage
 goals must agree on it. The mission checks the reviewed hash and an empty
 vault access-key list at FINAL before each leg, and verifies the reported
@@ -29,7 +44,12 @@ RPC end-of-block views: they cannot prevent a later owner-authorized upgrade or
 prove ordering within a block.
 
 The programmatic entry point is `runNativeMission({ mission, provider, journal,
-signers, execute, recoverOnly })`. Preview is the default (`execute: false`).
+signers, execute, recoverOnly, checkpointGoalId })`. Preview is the default
+(`execute: false`). Passing `checkpointGoalId` with execution authorizes only
+that next unpaid goal; it returns `CHECKPOINT` before the next goal. Omitting it
+from a direct programmatic call can run all remaining goals: callers must
+supply their own consent boundary. The browser service enforces checkpoints for
+market missions.
 New calls require the original exclusive journal and `execute: true`.
 `recoverOnly: true` must not include signers; it reconciles existing original
 hashes without creating transactions. The signers map is keyed by goal ID;
@@ -64,12 +84,30 @@ Receipt and object verification trust the RPC and provider; an oracle result is
 not a guarantee of truth or a TEE attestation. Preflight is a snapshot, not a
 reservation.
 
+## Bounded natural-language proposals
+
+`agent/native-mission-planner.mjs` can ask an operator-selected, OpenAI-compatible
+model to choose **market valuation or random compute** and bounded parameters
+from an owner-controlled catalog. It creates a normal V14 mission manifest for
+review; it never chooses the vault, account, policy, payee, program, amount,
+public-storage ID or key. The catalog and proposal are validated before the
+normal runner can use them; there is no fake fallback. Model output can still
+misinterpret an objective and must be reviewed. The objective is sent to the
+chosen model endpoint, which may retain it: never include secrets. Current tests
+use mocked model responses. This planner is **not yet connected to the hosted
+UI**, and it does not authorize or autonomously spend. A live model-backed
+mission remains unproven.
+
 ## Optional browser review and service
 
 The wallet panel offers **Review a guarded testnet mission** after identity
 verification. If an operator has deliberately mounted the optional same-origin
 backend, it displays the exact manifest, hash, maximum plus gas, public-storage
 and non-atomic/no-retry warnings before an explicit NEP-413 owner approval.
+For a market mission it requires a distinct one-use approval for each next step,
+shows the verified prior outputs and each step maximum, and links original
+transactions to a testnet explorer. The older random demo retains its one-mission
+approval. This is not yet the planned review-once autonomous live mode.
 Connecting, entering an account name, or signing the separate identity message
 does not grant spending authority. The explicit approval is an off-chain
 instruction to the configured agent, not an on-chain transaction signed by

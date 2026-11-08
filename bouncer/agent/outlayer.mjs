@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Owner-pinned OutLayer testnet randomness procurement. The NEAR deposit and
+ * Owner-pinned OutLayer testnet compute procurement. The NEAR deposit and
  * delivery are one cross-contract transaction through Bouncer v5, v6 or v7, not x402.
  * A local journal records intent before the single send and never repays an
  * unresolved transaction. Chain evidence is checked against a trusted RPC;
@@ -21,6 +21,7 @@ import { withExclusiveJournalOperation } from './journal-operation.mjs';
 import { assertJournalScope } from './journal-write.mjs';
 import { readNativeJournal, writeConfirmedNativeJournal, assertNativeJournalUnchanged } from './synchronous-native-journal.mjs';
 import { validateNativeBroadcastGuard, checkNativeBroadcastGuard } from './native-broadcast-guard.mjs';
+import { MARKET_SUMMARY_SHA256, validateMarketInput, verifyMarketOutput } from './market-summary.mjs';
 
 const { KeyPair, KeyPairSigner } = nearApi;
 export const OUTLAYER = 'outlayer.testnet';
@@ -65,7 +66,7 @@ export function normalizeProgram(value) {
     max_execution_seconds: integer(value.max_execution_seconds, 1, 180, 'execution time limit') };
 }
 
-/** A bounded random-number task, not a general arbitrary-code execution API. */
+/** A bounded random task or pinned market calculation, never arbitrary code. */
 export function validateOutlayerGoal(value) {
   const keys = ['id', 'contract_id', 'owner_account_id', 'policy_id', 'amount', 'input', 'program'];
   if (!ownKeys(value, keys)) throw new Error('goal must contain exactly id, contract_id, owner_account_id, policy_id, amount, input and program');
@@ -73,13 +74,22 @@ export function validateOutlayerGoal(value) {
   if (!/^[A-Za-z0-9_-]+$/.test(id)) throw new Error('invalid goal id');
   if (!isTestnetAccount(value.contract_id) || !isTestnetAccount(value.owner_account_id)) throw new Error('only named NEAR testnet accounts are supported');
   const policy = boundedString(value.policy_id, 'policy id', 128);
-  if (!ownKeys(value.input, ['min', 'max'])) throw new Error('random input must contain only min and max');
-  const min = integer(value.input.min, 0, 1_000_000_000, 'random minimum');
-  const max = integer(value.input.max, min, 1_000_000_000, 'random maximum');
+  const program = normalizeProgram(value.program);
+  let input;
+  if (ownKeys(value.input, ['min', 'max'])) {
+    const min = integer(value.input.min, 0, 1_000_000_000, 'random minimum');
+    const max = integer(value.input.max, min, 1_000_000_000, 'random maximum');
+    input = { min, max };
+  } else {
+    input = validateMarketInput(value.input);
+    if (program.sha256 !== MARKET_SUMMARY_SHA256 || program.build_target !== 'wasm32-wasip1') {
+      throw new Error('market calculation requires the pinned WASI program');
+    }
+  }
   const amount = unsigned(value.amount, 'maximum deposit');
   if (amount === 0n) throw new Error('maximum deposit must be positive');
   return { id, contract_id: value.contract_id, owner_account_id: value.owner_account_id, policy_id: policy,
-    amount: amount.toString(), input: { min, max }, program: normalizeProgram(value.program) };
+    amount: amount.toString(), input, program };
 }
 
 const goalFingerprint = goal => crypto.createHash('sha256').update(JSON.stringify(goal)).digest('hex');
@@ -194,11 +204,15 @@ export function verifyOutlayerEvidence(goal, result, publicKey, methodName, sign
     result: output, completion_block_hash: completed[0].blockHash };
 }
 
-/** Verify the bounded random task after the shared payment/receipt checks. */
+/** Verify bounded compute after the shared payment/receipt checks. */
 export function verifyOutlayerResult(rawGoal, result, publicKey) {
   const goal = validateOutlayerGoal(rawGoal);
   const { completion_block_hash, ...evidence } = verifyOutlayerEvidence(goal, result, publicKey, 'execute_outlayer', expectedArgs(goal));
   const output = evidence.result;
+  if (Object.hasOwn(goal.input, 'price_usd_micros')) {
+    verifyMarketOutput(goal.input, output);
+    return { ...evidence, verification: 'trusted RPC and provider receipts; exact arithmetic rechecked; no TEE or oracle-accuracy proof' };
+  }
   if (!ownKeys(output, ['random_number']) || !Number.isSafeInteger(output.random_number) ||
       output.random_number < goal.input.min || output.random_number > goal.input.max) {
     throw new Error('provider result is not a random number inside the requested range');

@@ -1,0 +1,87 @@
+{
+  "version": 1,
+  "id": "native-market-example",
+  "contract_id": "native.great_mujey.testnet",
+  "owner_account_id": "great_mujey.testnet",
+  "max_native_amount": "3000000000000000000000",
+  "required_resources": [
+    "compute",
+    "storage",
+    "api"
+  ],
+  "goals": [
+    {
+      "kind": "oracle",
+      "goal": {
+        "id": "price",
+        "contract_id": "native.great_mujey.testnet",
+        "owner_account_id": "great_mujey.testnet",
+        "policy_id": "price",
+        "amount": "1000000000000000000000",
+        "route": {
+          "project": {
+            "project_id": "zavodil2.testnet/price-oracle",
+            "version_key": "3585b3890f49748713b43ccb9b0ef4148f317d62f4d598db80fdaffc3f3185a0",
+            "input_data": "{\"command\":\"fetch_external\",\"token_id\":\"near\",\"source\":{\"custom\":{\"url\":\"https://api.coinbase.com/v2/prices/NEAR-USD/spot\",\"json_path\":\"data.amount\",\"value_type\":\"number\",\"method\":\"GET\"}}}",
+            "max_instructions": 10000000000,
+            "max_memory_mb": 256,
+            "max_execution_seconds": 60
+          },
+          "route_revision": 1,
+          "policy_revision": 1,
+          "payee_revision": 1,
+          "active": true
+        },
+        "max_age_seconds": 300
+      }
+    },
+    {
+      "kind": "market",
+      "goal": {
+        "id": "compute",
+        "contract_id": "native.great_mujey.testnet",
+        "owner_account_id": "great_mujey.testnet",
+        "policy_id": "compute",
+        "amount": "1000000000000000000000",
+        "input": {
+          "from_goal_id": "price",
+          "quantity": 10
+        },
+        "program": {
+          "url": "https://raw.githubusercontent.com/Greatmujey/Bouncer/e26eb30dfc95b4bfdc1ed685c3bb76cf6ec152e7/bouncer/programs/market-summary/market-summary.wasm",
+          "sha256": "0016209450769d4a03ee802e4dcbca854f14ca54f9185bed03333924e31b5ef6",
+          "build_target": "wasm32-wasip1",
+          "max_instructions": 10000000,
+          "max_memory_mb": 128,
+          "max_execution_seconds": 60
+        }
+      }
+    },
+    {
+      "kind": "storage",
+      "goal": {
+        "id": "storage",
+        "contract_id": "native.great_mujey.testnet",
+        "contract_code_hash": "3qbR1eZRqXUWroWKKYhbDmR3FfqTHfqSU8zZSxtANzYh",
+        "owner_account_id": "great_mujey.testnet",
+        "policy_id": "storage",
+        "amount": "1000000000000000000000",
+        "object_id": "mission-results",
+        "value": {
+          "from_goal_ids": [
+            "price",
+            "compute"
+          ]
+        },
+        "route": {
+          "prefix": "mission-",
+          "max_value_bytes": 4096,
+          "route_revision": 1,
+          "policy_revision": 1,
+          "payee_revision": 1,
+          "active": true
+        }
+      }
+    }
+  ]
+}

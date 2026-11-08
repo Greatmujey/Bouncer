@@ -125,6 +125,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
   const missionDetails = doc.querySelector('#wallet-native-mission-details');
   const missionManifest = doc.querySelector('#wallet-native-mission-manifest');
   const missionStatus = doc.querySelector('#wallet-native-mission-status');
+  const missionReceipts = doc.querySelector('#wallet-native-mission-receipts');
   const missionConsentLabel = doc.querySelector('#wallet-native-mission-consent-label');
   const missionConsent = doc.querySelector('#wallet-native-mission-consent');
   const missionApprove = doc.querySelector('#wallet-native-mission-approve');
@@ -312,7 +313,9 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     if (missionConsentLabel) missionConsentLabel.hidden = !missionReview || !missionReady || missionStarted;
     if (missionConsent) missionConsent.disabled = busyState || !missionReady || missionStarted || !missionDetails?.open;
     if (missionApprove) { missionApprove.hidden = !missionReview || !missionReady || missionStarted;
-      missionApprove.disabled = busyState || !missionDetails?.open || !missionConsent?.checked; }
+      missionApprove.disabled = busyState || !missionDetails?.open || !missionConsent?.checked;
+      missionApprove.textContent = missionReview?.mission.goals.some(item => item.kind === 'market')
+        ? 'Approve this step in my wallet →' : 'Approve this mission in my wallet →'; }
     if (missionRecover) { missionRecover.hidden = !missionReview; missionRecover.disabled = busyState; }
     if (bufferReadiness) {
       const experimentalPreview = /^4173-[a-z0-9-]+\.e2b\.app$/i.test(win.location.hostname);
@@ -384,6 +387,21 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     });
   }
   function busy(value) { busyState = value; renderControls(); }
+  function renderMissionReceipts(deliveries) {
+    if (!missionReceipts) return;
+    missionReceipts.replaceChildren();
+    for (const item of Array.isArray(deliveries) ? deliveries : []) {
+      const hash = item?.delivery?.tx_hash;
+      if (typeof hash !== 'string' || !/^[1-9A-HJ-NP-Za-km-z]{32,50}$/.test(hash)) continue;
+      const link = doc.createElement('a');
+      link.href = `https://testnet.nearblocks.io/txns/${hash}`;
+      link.target = '_blank'; link.rel = 'noopener noreferrer';
+      link.textContent = `${item.goal_id || 'Step'} transaction: ${hash}`;
+      missionReceipts.append(link);
+    }
+    missionReceipts.hidden = !missionReceipts.childElementCount;
+  }
+
   function clearAccountView() {
     accountReadVersion++;
     ownerSessionVersion++; ownerVerification = null; setupRecoveryAvailable = false; setupRecoverySelection = null; matchedOriginal = null; bufferSetupDraft = null;
@@ -393,6 +411,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     if (missionConsent) missionConsent.checked = false;
     if (missionSummary) missionSummary.textContent = ''; if (missionStatus) missionStatus.textContent = '';
     if (missionManifest) missionManifest.textContent = ''; if (missionDetails) { missionDetails.hidden = true; missionDetails.open = false; }
+    renderMissionReceipts([]);
     if (directStatus) directStatus.textContent = ''; if (directHash) { directHash.hidden = true; directHash.textContent = ''; }
     if (directResult) { directResult.hidden = true; directResult.textContent = ''; } if (directOriginal) directOriginal.value = '';
     if (nativeTerms) nativeTerms.textContent = ''; if (nativeStage) nativeStage.textContent = '';
@@ -855,10 +874,15 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
         const { review, preview } = await client.preview();
         if (!current()) return;
         if (review.mission_sha256 !== missionReview.mission_sha256) throw Error();
-        missionReady = preview.status === 'READY';
+        const checkpoint = mission.goals.some(item => item.kind === 'market');
+        const next = checkpoint ? mission.goals.find(item => item.goal.id === preview.next_goal_id)?.goal : null;
+        missionReady = preview.status === 'READY' && (!checkpoint || Boolean(next));
+        renderMissionReceipts(preview.verified_prior_deliveries);
         missionStatus.textContent = missionReady
-          ? 'Checks passed for the reviewed mission. Read the full terms before choosing whether to approve.'
-          : `Mission blocked: ${preview.stage || preview.budget?.reason || 'a required check failed'}. No new transaction was sent.`;
+          ? checkpoint ? `Ready to review step ${next.id}; maximum ${formatPublicAmount(next.amount, 24)} test NEAR plus gas. Prior verified results:\n` +
+            JSON.stringify((preview.verified_prior_deliveries || []).map(item => ({goal:item.goal_id,original_hash:item.delivery?.tx_hash,result:item.delivery?.result})), null, 2)
+            : 'Checks passed for the reviewed mission. Read the full terms before choosing whether to approve.'
+          : `Mission blocked or already complete: ${preview.stage || preview.budget?.reason || 'no unpaid step is ready'}. No new transaction was sent.`;
       } catch {
         if (current()) missionStatus.textContent = 'Preflight unavailable or an original is unresolved. Check original receipts; do not approve another run.';
       }
@@ -874,8 +898,9 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     if (busyState || !flow || !review || !missionReady || missionStarted || !missionDetails?.open || !missionConsent?.checked || proof?.wallet !== wallet) return;
     const current = () => connected && missionFlow === flow && ownerVerification === proof && ownerSessionVersion === version;
     missionStarted = true; busy(true); closePicker();
-    setStatus('Review the one testnet mission approval in your wallet. If uncertain, check the originals; do not approve again.');
-    notify('Review the testnet mission approval. This authorizes the bounded agent run.', true);
+    const checkpoint = review.mission.goals.some(item => item.kind === 'market');
+    setStatus(`Review the testnet ${checkpoint ? 'step' : 'mission'} approval in your wallet. If uncertain, check the originals; do not approve again.`);
+    notify(`Review the testnet ${checkpoint ? 'step' : 'mission'} approval.`, true);
     let stopWalletPresentation = () => {};
     try {
       if (['near-mobile', 'nightly-wallet', 'ledger'].includes(wallet.manifest.id)) stopWalletPresentation = decorateWalletPopup(wallet.manifest.id);
@@ -885,6 +910,19 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
         `${result.note || 'Check original receipts before taking any further action.'}\n` +
         JSON.stringify((result.deliveries || []).map(item => ({ goal: item.goal_id, kind: item.kind,
           original_hash: item.delivery?.tx_hash, result: item.delivery?.result })), null, 2);
+      renderMissionReceipts(result.deliveries);
+      if (checkpoint && result.status === 'CHECKPOINT') {
+        missionStarted = false; missionReady = false; if (missionConsent) missionConsent.checked = false;
+        try {
+          const {preview} = await flow.preview();
+          if (!current()) return;
+          const next = review.mission.goals.find(item => item.goal.id === preview.next_goal_id)?.goal;
+          missionReady = preview.status === 'READY' && Boolean(next);
+          missionStatus.textContent += missionReady
+            ? `\nNext step: ${next.id}, maximum ${formatPublicAmount(next.amount, 24)} test NEAR plus gas. Review the result and approve separately.`
+            : `\nNext step is blocked: ${preview.stage || preview.budget?.reason || 'no unpaid step is ready'}.`;
+        } catch { missionStatus.textContent += '\nNext preflight is unavailable. Check originals before continuing.'; }
+      }
     } catch {
       if (current()) missionStatus.textContent = 'Approval or result is uncertain. Do not approve again; check the original receipts below.';
     } finally {
@@ -902,6 +940,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
       retained = JSON.stringify(local.originals || [], null, 2);
       if (current()) missionStatus.textContent = `Retained local original hashes (not proof of non-execution):\n${retained}\nChecking receipts…`;
       const result = await flow.recover(review);
+      renderMissionReceipts(result.deliveries);
       const updated = await flow.originals(review);
       retained = JSON.stringify(updated.originals || [], null, 2);
       if (current()) missionStatus.textContent = `${result.status || 'UNKNOWN'} · No new transaction.\nRetained original hashes:\n${retained}\n` +

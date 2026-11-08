@@ -41,7 +41,10 @@ export function createNativeMissionHttpHandler({ service, siteOrigin, now = Date
     try {
       const timer = setTimeout(() => req.destroy(), bodyTimeoutMs); timer.unref?.();
       let value; try { value = await body(req); } finally { clearTimeout(timer); }
-      if (!exact(value, spec[1])) return reply(res, 400, { error: 'invalid request' });
+      const mayIncludeGoal = ['challenge','execute'].includes(match[1]);
+      if (!exact(value, spec[1]) && !(mayIncludeGoal && exact(value, [...spec[1], 'goalId']))) {
+        return reply(res, 400, { error: 'invalid request' });
+      }
       return reply(res, 200, await service[spec[0]](value));
     } catch {
       return reply(res, 409, { error: 'NATIVE_MISSION_UNAVAILABLE', do_not_retry: true,

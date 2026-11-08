@@ -23,6 +23,7 @@ import { buildV14PhoneResearchPlan, verifyV14PhoneResearchPlan, v14PhoneBatchCom
 import { prepareV14PhoneAttempt, inspectV14PhoneAttempt } from '../agent/native-v14-phone-receipts.mjs';
 import { inspectV14PhoneSetupCompletion } from '../agent/native-v14-phone-completion.mjs';
 import { ORACLE_TESTNET_PROJECT } from '../agent/oracle-outlayer.mjs';
+import { MARKET_SUMMARY_PROGRAM } from '../agent/market-summary.mjs';
 import { SandboxSetupRpc, withSandboxOnlyFetch } from './v11-sandbox-setup-rpc.mjs';
 import { SANDBOX_SHA256, readVerifiedFile, assertSandboxStatus, requireFinalSuccess } from './v11-sandbox-support.mjs';
 import { startSandbox, stopSandboxChild } from './v11-nearcore-sandbox.mjs';
@@ -33,8 +34,7 @@ const INTRUDER='loader-intruder.testnet', HOLD=`hold.${OWNER}`, FAILED=`failed.$
 const pair=()=>nearApi.KeyPair.fromRandom('ed25519'), pub=k=>String(k.getPublicKey());
 const account=(id,provider,key)=>new nearApi.Account(id,provider,new nearApi.KeyPairSigner(key));
 const call=(method,args={},deposit=0n,gas=30n*T)=>tx.functionCall(method,args,gas,deposit);
-const program={url:'https://example.test/not-real.wasm',sha256:'a'.repeat(64),build_target:'wasm32-wasip1',
-  max_instructions:10_000_000,max_memory_mb:128,max_execution_seconds:60};
+const program=MARKET_SUMMARY_PROGRAM; // The local fake reports arithmetic; it never fetches this program.
 const sha=bytes=>crypto.createHash('sha256').update(bytes).digest();
 const createLoader=(loader,funding=20n*N)=>[tx.createAccount(),tx.transfer(funding),tx.deployContract(loader),call('loader_init',{},1n,20n*T)];
 const deployCompressed=(compressed,deposit=1n)=>call('loader_deploy',compressed,deposit,240n*T);
@@ -76,10 +76,11 @@ function siteRequest(server,{route='/',input}={}) {
 function makeMission(codeHash,priceRoute,storageRoute,suffix='') {
   return {version:1,id:`sandbox-mission${suffix}`,contract_id:VAULT,owner_account_id:OWNER,
     max_native_amount:String(3n*N/10n),required_resources:['compute','api','storage'],goals:[
-      {kind:'random',goal:{id:`compute${suffix}`,contract_id:VAULT,owner_account_id:OWNER,policy_id:'compute',amount:String(N/10n),input:{min:1,max:100},program}},
       {kind:'oracle',goal:{id:`price${suffix}`,contract_id:VAULT,owner_account_id:OWNER,policy_id:'price',amount:String(N/10n),route:priceRoute,max_age_seconds:300}},
+      {kind:'market',goal:{id:`compute${suffix}`,contract_id:VAULT,owner_account_id:OWNER,policy_id:'compute',amount:String(N/10n),
+        input:{from_goal_id:`price${suffix}`,quantity:10},program}},
       {kind:'storage',goal:{id:`store${suffix}`,contract_id:VAULT,contract_code_hash:codeHash,owner_account_id:OWNER,policy_id:'store',amount:String(N/10n),
-        object_id:`mission-results${suffix}`,value:{from_goal_ids:[`compute${suffix}`,`price${suffix}`]},route:storageRoute}},
+        object_id:`mission-results${suffix}`,value:{from_goal_ids:[`price${suffix}`,`compute${suffix}`]},route:storageRoute}},
     ]};
 }
 async function main() {
@@ -230,7 +231,9 @@ async function main() {
       const completed=await run(mission,{signers:signers(),execute:true});
       assert.equal(completed.status,'FULFILLED');assert.equal(completed.new_payments,3);assert.equal(rpc.transportCalls,3);
       const saved=JSON.parse(completed.deliveries[2].delivery.result.value);
-      assert.deepEqual(saved.resources.map(x=>x.goal_id),['compute','price']);
+      assert.deepEqual(saved.resources.map(x=>x.goal_id),['price','compute']);
+      assert.equal(saved.resources[1].result.value_usd_micros,27_500_000);
+      assert.equal(journal.get('compute').outlayer_goal.input.oracle_tx_hash,completed.deliveries[0].delivery.tx_hash);
       assert.deepEqual(saved.resources.map(x=>x.tx_hash),completed.deliveries.slice(0,2).map(x=>x.delivery.tx_hash));
       for(const delivery of completed.deliveries.slice(0,2)) assert.equal(delivery.delivery.refunded_to_owner_yocto,String(N/100n));
       const recovered=await run(mission,{signers:{},recoverOnly:true});assert.equal(recovered.status,'RECOVERED');assert.equal(rpc.transportCalls,3);
@@ -239,12 +242,12 @@ async function main() {
       const second=make('-second');activeIds={compute:'compute-second',price:'price-second',store:'store-second'};
       rpc.loseNextAcknowledgementForTest();
       await assert.rejects(run(second,{signers:signers('-second'),execute:true}),/unresolved/);
-      const original=journal.get('compute-second').tx_hash;assert.equal(rpc.transportCalls,4);
+      const original=journal.get('price-second').tx_hash;assert.equal(rpc.transportCalls,4);
       const partial=await run(second,{signers:{},recoverOnly:true});assert.equal(partial.status,'RECOVERED_PARTIAL');
       assert.equal(partial.deliveries[0].delivery.tx_hash,original);assert.equal(rpc.transportCalls,4);
       const resumed=await run(second,{signers:signers('-second'),execute:true});
       assert.equal(resumed.status,'FULFILLED');assert.equal(resumed.new_payments,2);assert.equal(rpc.transportCalls,6);
-      assert.equal(journal.get('compute-second').tx_hash,original);
+      assert.equal(journal.get('price-second').tx_hash,original);
 
       // Wire the real same-origin HTTP service to the real three guarded
       // runners. Consent and provider are still synthetic, and everything is
@@ -257,29 +260,34 @@ async function main() {
       try {
         assert.equal((await siteRequest(site)).status,200);
         const config=JSON.parse((await siteRequest(site,{route:'/api/native-mission/config'})).body),reviewHash=config.review.mission_sha256;
-        const preview=JSON.parse((await siteRequest(site,{route:'/api/native-mission/preview',input:{missionSha256:reviewHash}})).body);
-        assert.equal(preview.preview.status,'READY');assert.equal(rpc.transportCalls,6);
-        const challenge=JSON.parse((await siteRequest(site,{route:'/api/native-mission/challenge',input:{missionSha256:reviewHash,ownerPublicKey:pub(ownerKey)}})).body);
-        const payload=nep413Payload({message:challenge.message,nonce:new Uint8Array(Buffer.from(challenge.nonce_base64,'base64')),recipient:challenge.recipient});
-        const evidence={challenge_id:challenge.challenge_id,accountId:OWNER,publicKey:pub(ownerKey),
-          signature:Buffer.from(ownerKey.sign(sha(payload)).signature).toString('base64')};
-        const input={missionSha256:reviewHash,ownerPublicKey:pub(ownerKey),evidence};
-        const response=await siteRequest(site,{route:'/api/native-mission/execute',input}),executed=JSON.parse(response.body);
-        assert.equal(response.status,200);assert.equal(executed.status,'FULFILLED');assert.equal(executed.new_payments,3);assert.equal(rpc.transportCalls,9);
+        let executed;
+        for (const [index,goalId] of ['price-http','compute-http','store-http'].entries()) {
+          const preview=JSON.parse((await siteRequest(site,{route:'/api/native-mission/preview',input:{missionSha256:reviewHash}})).body);
+          assert.equal(preview.preview.status,'READY');assert.equal(preview.preview.next_goal_id,goalId);assert.equal(rpc.transportCalls,6+index);
+          const challenge=JSON.parse((await siteRequest(site,{route:'/api/native-mission/challenge',input:{missionSha256:reviewHash,ownerPublicKey:pub(ownerKey),goalId}})).body);
+          assert.ok(challenge.message.includes(`Step: ${goalId}`));
+          const payload=nep413Payload({message:challenge.message,nonce:new Uint8Array(Buffer.from(challenge.nonce_base64,'base64')),recipient:challenge.recipient});
+          const evidence={challenge_id:challenge.challenge_id,accountId:OWNER,publicKey:pub(ownerKey),
+            signature:Buffer.from(ownerKey.sign(sha(payload)).signature).toString('base64')};
+          const input={missionSha256:reviewHash,ownerPublicKey:pub(ownerKey),goalId,evidence};
+          const response=await siteRequest(site,{route:'/api/native-mission/execute',input});executed=JSON.parse(response.body);
+          assert.equal(response.status,200);assert.equal(executed.status,index===2?'FULFILLED':'CHECKPOINT');
+          assert.equal(executed.new_payments,1);assert.equal(rpc.transportCalls,7+index);
+          assert.equal((await siteRequest(site,{route:'/api/native-mission/execute',input})).status,409);assert.equal(rpc.transportCalls,7+index);
+        }
         const list=JSON.parse((await siteRequest(site,{route:'/api/native-mission/originals',input:{missionSha256:reviewHash}})).body);
         assert.deepEqual(list.originals.map(row=>row.original_hash),executed.deliveries.map(row=>row.delivery.tx_hash));
         const receiptOnly=JSON.parse((await siteRequest(site,{route:'/api/native-mission/recover',input:{missionSha256:reviewHash}})).body);
         assert.equal(receiptOnly.status,'RECOVERED');assert.equal(receiptOnly.new_payments,0);assert.equal(rpc.transportCalls,9);
-        assert.equal((await siteRequest(site,{route:'/api/native-mission/execute',input})).status,409);assert.equal(rpc.transportCalls,9);
       } finally {await new Promise(resolve=>site.close(resolve))}
       return {scope:'isolated nearcore and fabricated provider; no public chain or real service',
         research_loader:loader?{synthetic_meteor_request_bytes:meteorBytes,loader_wasm_bytes:loader.length,
           compressed_v14_bytes:compressed.length,all_unsigned_plan_stages_executed_only_in_sandbox:true,
           sandbox_original_receipt_proofs:setupProofs,sandbox_completion_snapshot:completion?.status,
           failed_upgrade_owner_refund_tested:true,real_phone_tested:false}:null,
-        three_guarded_legs_and_public_result_storage:true, sandbox_refunds_verified:true,
+        dependent_price_calculation_and_public_result_storage:true, fake_provider_did_not_run_wasi:true, sandbox_refunds_verified:true,
         original_hash_recovery_without_new_send:true, lost_response_recovered_and_remaining_legs_continued:true,
-        fixed_site_http_synthetic_consent_three_real_runners:true,
+        fixed_site_http_three_distinct_synthetic_step_consents:true,
         independent_delivery_verified:false, public_chain_transactions:false};
     });
     console.log(JSON.stringify(report,null,2));

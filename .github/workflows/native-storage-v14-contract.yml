@@ -41,6 +41,17 @@ jobs:
       - name: Install test dependencies
         working-directory: bouncer
         run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Rebuild and compare the pinned market WASI artifact
+        working-directory: bouncer/programs/market-summary
+        run: |
+          cp market-summary.wasm "$RUNNER_TEMP/market-summary-reviewed.wasm"
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm run build
+          cmp "$RUNNER_TEMP/market-summary-reviewed.wasm" market-summary.wasm
+          sha256sum market-summary.wasm
+      - name: Test dependent market and WASI safety checks
+        working-directory: bouncer
+        run: node --test tests/market-summary-wasi.test.mjs tests/native-mission-planner.test.mjs tests/native-mission.test.mjs tests/native-v14-phone-plan.test.mjs
       - name: Measure V14 mobile wallet payload lower bound
         working-directory: bouncer
         run: node scripts/inspect-v14-mobile-artifact.mjs contracts/bouncer/target/wasm32-unknown-unknown/release/bouncer.wasm

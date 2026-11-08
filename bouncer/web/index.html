@@ -193,12 +193,13 @@
     <section class="setup-recovery native-setup" id="wallet-native-mission-panel" aria-label="Guarded native testnet mission" hidden>
       <strong>Compute + data + public storage</strong>
       <p class="account-view-status">The Bouncer vault enforces the reviewed caps and allowlist. Storage is public NEAR contract state, not an independent storage provider; results and original hashes may be public. Never put secrets in storage.</p>
-      <p class="account-view-status">Your wallet signs an approval message authorizing the configured server's restricted agent keys to run this mission. Gas is extra; steps cannot be rolled back together. If any result is unknown, do not approve again—check the original receipts. The server and RPC must be trusted.</p>
+      <p class="account-view-status">Your wallet signs an approval for the displayed mission or single step, authorizing the configured server's restricted agent keys. OutLayer fetches public API data; public NEAR storage locks protocol stake. Gas is extra; steps cannot be rolled back together. If any result is unknown, do not approve again—check the original receipts. The server and RPC must be trusted.</p>
       <p class="account-view-status" id="wallet-native-mission-summary"></p>
       <details id="wallet-native-mission-details" hidden><summary>Review the complete mission and limits</summary><pre id="wallet-native-mission-manifest" class="native-mission-manifest"></pre></details>
       <p class="account-view-status" id="wallet-native-mission-status" role="status" aria-live="polite"></p>
-      <label id="wallet-native-mission-consent-label" class="native-mission-consent" hidden><input id="wallet-native-mission-consent" type="checkbox"> I reviewed the full mission, maximum and public storage. I approve this one testnet run.</label>
-      <button class="account-entry-primary" id="wallet-native-mission-approve" type="button" hidden>Approve this mission in my wallet →</button>
+      <div id="wallet-native-mission-receipts" class="native-mission-receipts" aria-label="Verified testnet transaction links" hidden></div>
+      <label id="wallet-native-mission-consent-label" class="native-mission-consent" hidden><input id="wallet-native-mission-consent" type="checkbox"> I reviewed the full mission, maximum and public storage. I approve the action shown above.</label>
+      <button class="account-entry-primary" id="wallet-native-mission-approve" type="button" hidden>Approve the reviewed action in my wallet →</button>
       <button class="account-entry-secondary" id="wallet-native-mission-recover" type="button" hidden>Check original receipts only →</button>
     </section>
     <button class="account-entry-primary" id="wallet-direct-outlayer-open" type="button" hidden>Review one direct OutLayer test →</button>

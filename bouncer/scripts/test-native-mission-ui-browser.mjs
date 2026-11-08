@@ -7,6 +7,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import nearApi from 'near-api-js';
 import { ORACLE_TESTNET_PROJECT } from '../agent/oracle-outlayer.mjs';
+import { MARKET_SUMMARY_PROGRAM } from '../agent/market-summary.mjs';
 import { validateNativeMission } from '../agent/native-mission.mjs';
 import { nativeMissionAction, nativeMissionApprovalMessage } from '../web-src/native-mission-auth.mjs';
 import { nep413Payload } from '../web-src/cli-login.mjs';
@@ -24,22 +25,32 @@ const base58=n=>nearApi.utils.serialize.base_encode(Buffer.alloc(32,n));
 const program={url:'https://example.test/random.wasm',sha256:'a'.repeat(64),build_target:'wasm32-wasip1',max_instructions:10_000_000,max_memory_mb:128,max_execution_seconds:60};
 const route={project:{...ORACLE_TESTNET_PROJECT},route_revision:1,policy_revision:1,payee_revision:1,active:true};
 const storageRoute={prefix:'mission-',max_value_bytes:4096,route_revision:1,policy_revision:1,payee_revision:1,active:true};
-const mission=validateNativeMission({version:1,id:'ui-demo',contract_id:vault,owner_account_id:owner,max_native_amount:'3000000000000000000000',
+const randomMission=validateNativeMission({version:1,id:'ui-demo',contract_id:vault,owner_account_id:owner,max_native_amount:'3000000000000000000000',
   required_resources:['compute','storage','api'],goals:[
     {kind:'random',goal:{id:'compute',contract_id:vault,owner_account_id:owner,policy_id:'compute',amount:'1000000000000000000000',input:{min:1,max:10},program}},
     {kind:'oracle',goal:{id:'price',contract_id:vault,owner_account_id:owner,policy_id:'price',amount:'1000000000000000000000',route,max_age_seconds:300}},
     {kind:'storage',goal:{id:'store',contract_id:vault,contract_code_hash:base58(42),owner_account_id:owner,policy_id:'store',amount:'1000000000000000000000',
       object_id:'mission-demo',value:{from_goal_ids:['compute','price']},route:storageRoute}},
   ]});
+const marketMission=validateNativeMission({version:1,id:'ui-market-demo',contract_id:vault,owner_account_id:owner,max_native_amount:'3000000000000000000000',
+  required_resources:['compute','storage','api'],goals:[
+    {kind:'oracle',goal:{id:'price',contract_id:vault,owner_account_id:owner,policy_id:'price',amount:'1000000000000000000000',route,max_age_seconds:300}},
+    {kind:'market',goal:{id:'compute',contract_id:vault,owner_account_id:owner,policy_id:'compute',amount:'1000000000000000000000',
+      input:{from_goal_id:'price',quantity:10},program:MARKET_SUMMARY_PROGRAM}},
+    {kind:'storage',goal:{id:'store',contract_id:vault,contract_code_hash:base58(42),owner_account_id:owner,policy_id:'store',amount:'1000000000000000000000',
+      object_id:'mission-demo',value:{from_goal_ids:['price','compute']},route:storageRoute}},
+  ]});
 const sha=x=>createHash('sha256').update(x).digest('hex');
-const review={format:'bouncer-native-mission-review-v1',network:'testnet',mission,mission_sha256:sha(JSON.stringify(mission))};
 const allowed=new Set(PUBLIC_WEB_FILES),types={'.html':'text/html','.css':'text/css','.mjs':'text/javascript','.js':'text/javascript',
   '.json':'application/json','.zip':'application/zip','.svg':'image/svg+xml','.jpg':'image/jpeg','.woff2':'font/woff2','.txt':'text/plain'};
 const staging=fs.mkdtempSync(path.join(os.tmpdir(),'bouncer-mission-ui-'));
 try {
-  for(const {width,mode,origin} of [{width:1280,mode:'success',origin:defaultOrigin},
+  for(const {width,mode,origin} of [{width:1280,mode:'market',origin:defaultOrigin}, {width:390,mode:'market',origin:defaultOrigin},
+    {width:1280,mode:'success',origin:defaultOrigin},
     {width:390,mode:'success',origin:defaultOrigin},{width:320,mode:'unknown',origin:defaultOrigin},
     {width:390,mode:'blocked',origin:defaultOrigin},{width:390,mode:'success',origin:'https://synthetic-bouncer.netlify.app'}]) {
+    const mission=mode==='market'?marketMission:randomMission;
+    const review={format:'bouncer-native-mission-review-v1',network:'testnet',mission,mission_sha256:sha(JSON.stringify(mission))};
     const siteDir=path.join(staging,`site-${fs.readdirSync(staging).length}`);
     stagePublicWeb(siteDir,web,{walletOrigin:origin,walletConnectProjectId:''});
     const mobile=width<600;
@@ -62,6 +73,9 @@ try {
     const bundle=fs.readFileSync(path.join(siteDir,'wallet.bundle.js'),'utf8'),pinned=WALLET_EXECUTOR_SHA256['meteor-wallet'];
     assert(bundle.includes(pinned));const mockDigest=sha(mock);
     let saved, executes=0, recovers=0, challengeCount=0;
+    const deliveries = count => mission.goals.slice(0,count).map((item,index)=>({kind:item.kind,goal_id:item.goal.id,
+      delivery:{tx_hash:base58(40+index),result:item.kind==='oracle'?{price_usd:2.75}:item.kind==='market'?
+        {value_usd_micros:27500000}:{value:'synthetic public object'}}}));
     const json=(route,data,status=200)=>route.fulfill({status,contentType:'application/json',body:JSON.stringify(data),headers:{'cache-control':'no-store'}});
     await page.route('**/*',async route=>{
       const req=route.request(),url=new URL(req.url());requests.push(`${req.method()} ${url.pathname}`);
@@ -79,10 +93,13 @@ try {
       if(url.pathname==='/api/native-mission/config')return json(route,{enabled:true,network:'testnet',review});
       if(url.pathname.startsWith('/api/native-mission/')) {
         const name=url.pathname.split('/').pop(),input=req.postDataJSON();assert.equal(input.missionSha256,review.mission_sha256);
-        if(name==='preview')return json(route,{review,preview:{status:mode==='blocked'?'BLOCKED':'READY',stage:'synthetic'}});
+        if(name==='preview')return json(route,{review,preview:{status:mode==='blocked'?'BLOCKED':'READY',stage:'synthetic',
+          ...(mode==='market'?{next_goal_id:mission.goals[executes]?.goal.id??null,verified_prior_deliveries:deliveries(executes)}:{})}});
         if(name==='challenge') {
           assert.equal(input.ownerPublicKey,publicKey);challengeCount++;
-          const action=nativeMissionAction({owner,ownerPublicKey:publicKey,vault,missionId:mission.id,missionSha256:review.mission_sha256,maxNativeYocto:mission.max_native_amount});
+          if(mode==='market')assert.equal(input.goalId,mission.goals[executes].goal.id);
+          const action=nativeMissionAction({owner,ownerPublicKey:publicKey,vault,missionId:mission.id,missionSha256:review.mission_sha256,
+            maxNativeYocto:mission.max_native_amount,...(mode==='market'?{goalId:input.goalId,goalMaxNativeYocto:mission.goals[executes].goal.amount}:{})});
           const issued=Date.now(),expires=issued+120_000,id=String(challengeCount).padStart(32,'0'),nonce=Buffer.alloc(32,challengeCount);
           const challenge={challenge_id:id,nonce_base64:nonce.toString('base64'),recipient:new URL(origin).host,expires_at_ms:expires,
             message:nativeMissionApprovalMessage(action,sha(JSON.stringify(action)),origin,issued,expires)};
@@ -93,7 +110,10 @@ try {
           assert.equal(input.evidence.accountId,owner);assert.equal(input.evidence.publicKey,publicKey);
           const payload=nep413Payload({message:saved.challenge.message,nonce:new Uint8Array(saved.nonce),recipient:saved.challenge.recipient});
           assert.equal(verify(null,createHash('sha256').update(payload).digest(),keys.publicKey,Buffer.from(input.evidence.signature,'base64')),true);
+          if(mode==='market')assert.equal(input.goalId,mission.goals[executes].goal.id);
           saved.used=true;executes++;if(mode==='unknown')return route.abort('failed');
+          if(mode==='market')return json(route,{status:executes<3?'CHECKPOINT':'FULFILLED',new_payments:1,
+            ...(executes<3?{remaining_goal_ids:mission.goals.slice(executes).map(x=>x.goal.id)}:{}),deliveries:deliveries(executes),note:'Synthetic test only.'});
           return json(route,{status:'FULFILLED',new_payments:3,deliveries:[],note:'Synthetic test only.'});
         }
         if(name==='originals')return json(route,{status:'LOCAL_ORIGINALS',originals:[{goal_id:'compute',kind:'random',status:'pending',original_hash:base58(43)}]});
@@ -126,19 +146,28 @@ try {
       await page.locator('#wallet-native-mission-approve').waitFor({state:'visible'});
       assert.equal(await page.locator('#wallet-native-mission-approve').isDisabled(),true);
       await page.locator('#wallet-native-mission-consent').check();await page.locator('#wallet-native-mission-approve').click();
+      if(mode==='market') {
+        for(const [index,next] of ['compute','store'].entries()) {
+          await page.waitForFunction(goal=>document.querySelector('#wallet-native-mission-status').textContent.includes(`Next step: ${goal}`),next,{timeout:15_000});
+          assert.equal(executes,index+1);assert.equal(challengeCount,index+1);
+          assert.equal(await page.locator('#wallet-native-mission-receipts a').count(),index+1);
+          assert.match(await page.locator('#wallet-native-mission-receipts a').first().getAttribute('href'),/^https:\/\/testnet\.nearblocks\.io\/txns\//);
+          await page.locator('#wallet-native-mission-consent').check();await page.locator('#wallet-native-mission-approve').click();
+        }
+      }
       await page.waitForFunction(()=>/FULFILLED|uncertain/.test(document.querySelector('#wallet-native-mission-status').textContent),null,{timeout:15_000});
-      assert.equal(executes,1);assert.equal(challengeCount,1);
+      assert.equal(executes,mode==='market'?3:1);assert.equal(challengeCount,mode==='market'?3:1);
       assert.equal(await page.locator('#wallet-native-mission-approve').isVisible(),false);
       await page.locator('#wallet-native-mission-recover').click();
       if(mode==='unknown') {
         await page.waitForFunction(()=>document.querySelector('#wallet-native-mission-status').textContent.includes('Original receipts are unavailable'));
         assert.match(await page.locator('#wallet-native-mission-status').innerText(),new RegExp(base58(43)));
       } else await page.waitForFunction(()=>document.querySelector('#wallet-native-mission-status').textContent.includes('RECOVERED'));
-      assert.equal(executes,1);assert.equal(challengeCount,1);assert.equal(recovers,1);
+      assert.equal(executes,mode==='market'?3:1);assert.equal(challengeCount,mode==='market'?3:1);assert.equal(recovers,1);
     }
     assert.equal(await page.locator('#wallet-dialog').evaluate(el=>el.scrollWidth<=el.clientWidth),true);
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
     assert.deepEqual(errors,[]);await context.close();
   }
-  console.log('Synthetic desktop and mobile mission UI: review, explicit consent, blocked preflight, unknown response and no-key recovery passed.');
+  console.log('Synthetic desktop and mobile mission UI: per-step market checkpoints, review, blocked preflight, unknown response and no-key recovery passed.');
 } finally { await browser.close(); fs.rmSync(staging,{recursive:true,force:true}); }

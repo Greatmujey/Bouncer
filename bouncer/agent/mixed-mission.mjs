@@ -41,9 +41,11 @@ async function runNativeResourceUnlocked({ outlayer, provider, journal, execute 
   if (journal && (typeof journal.get !== 'function' || typeof journal.put !== 'function')) throw new Error('invalid native resource journal');
   if (execute && !journal) throw new Error('native execution requires the exclusive original-hash journal');
   const kind = outlayer.kind ?? 'random';
-  if (!['random','oracle','storage'].includes(kind)) throw new Error('unsupported native resource kind');
+  if (!['random','market','oracle','storage'].includes(kind)) throw new Error('unsupported native resource kind');
   const goal = kind === 'oracle' ? validateOracleGoal(outlayer.goal) :
     kind === 'storage' ? validateNativeStorageGoal(outlayer.goal) : validateOutlayerGoal(outlayer.goal);
+  if ((kind === 'market' && !Object.hasOwn(goal.input, 'price_usd_micros')) ||
+      (kind === 'random' && !Object.hasOwn(goal.input, 'min'))) throw new Error('native resource kind does not match the reviewed input');
   assertJournalScope(journal, goal.contract_id, goal.owner_account_id);
   const defaultRun = kind === 'oracle' ? runOracleGoal : kind === 'storage' ? runNativeStorageGoal : runOutlayerGoal;
   const defaultRecover = kind === 'oracle' ? recoverOracleGoal : kind === 'storage' ? recoverNativeStorageGoal : recoverOutlayerGoal;

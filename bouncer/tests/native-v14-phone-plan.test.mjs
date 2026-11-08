@@ -5,6 +5,7 @@ import crypto from 'node:crypto';
 import zlib from 'node:zlib';
 import nearApi from 'near-api-js';
 import { ORACLE_TESTNET_PROJECT } from '../agent/oracle-outlayer.mjs';
+import { MARKET_SUMMARY_PROGRAM } from '../agent/market-summary.mjs';
 import { buildV14PhoneResearchPlan, verifyV14PhoneResearchPlan, v14PhoneBatchCommitment } from '../agent/native-v14-phone-plan.mjs';
 import { prepareV14PhoneAttempt, inspectV14PhoneAttempt } from '../agent/native-v14-phone-receipts.mjs';
 import { syntheticV14MeteorRequest } from '../integration/v14-synthetic-meteor.mjs';
@@ -62,6 +63,19 @@ test('fresh V14 plan binds public terms, caps, one-yocto configuration and three
   assert.throws(()=>verifyV14PhoneResearchPlan({...f,review:altered,trustedReviewSha256:review.review_sha256}),/differs/);
   const changed={...batches[0],actions:[...batches[0].actions]}; changed.actions[1]=nearApi.transactions.transfer(601n);
   assert.notEqual(v14PhoneBatchCommitment(changed),review.stages[0].action_commitment_sha256);
+});
+
+test('offline research plan recognizes dependent oracle/market order without enabling the loader', () => {
+  const f=fixture(),[compute,price,storage]=f.mission.goals;
+  compute.kind='market';compute.goal.input={from_goal_id:'price',quantity:10};compute.goal.program={...MARKET_SUMMARY_PROGRAM};
+  storage.goal.value.from_goal_ids=['price','compute'];f.mission.goals=[price,compute,storage];
+  const {review,batches}=buildV14PhoneResearchPlan(f);
+  assert.equal(review.signing_authorized,false);assert.equal(review.transaction_sent,false);
+  assert.deepEqual(review.mission.goals.map(x=>x.kind),['oracle','market','storage']);
+  assert.deepEqual(review.stages[5].actions.map(x=>x.method_names),[['execute_outlayer_native_project'],['execute_outlayer'],['execute_native_storage']]);
+  assert.equal(review.stages[1].actions[2].args.program.sha256,MARKET_SUMMARY_PROGRAM.sha256);
+  assert.deepEqual(verifyV14PhoneResearchPlan({...f,review,trustedReviewSha256:review.review_sha256}).review,review);
+  assert.ok(batches.every(batch=>batch.actions.length>0));
 });
 
 test('rejects changed pins, streams, owner/agent keys, scope, insufficient funds and old route revisions', () => {

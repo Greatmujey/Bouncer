@@ -9,6 +9,8 @@ import nearApi from 'near-api-js';
 import { FileJournal } from '../agent/procurement.mjs';
 import { runNativeResource } from '../agent/mixed-mission.mjs';
 import { runNativeMission, validateNativeMission } from '../agent/native-mission.mjs';
+import { MARKET_SUMMARY_PROGRAM, marketInputFromOracle, priceToMicros, verifyMarketOutput } from '../agent/market-summary.mjs';
+import { planNativeObjective } from '../agent/native-mission-planner.mjs';
 import { ORACLE_TESTNET_PROJECT, ORACLE_TESTNET_PROGRAM, ORACLE_PROJECT_ID, ORACLE_PROJECT_UUID } from '../agent/oracle-outlayer.mjs';
 import { createAuthenticatedNativeMissionService } from '../agent/authenticated-native-mission-service.mjs';
 import { createNativeMissionHttpServer } from '../agent/native-mission-http.mjs';
@@ -32,14 +34,21 @@ const encode = value => Buffer.from(JSON.stringify(value)).toString('base64');
 const event = (name, data) => `EVENT_JSON:${JSON.stringify({ standard: 'near-outlayer', version: '1.0.0', event: name, data: [data] })}`;
 const blockHash = 'B'.repeat(44), executionBlockHash = 'A'.repeat(44), requestId = '7'.repeat(44), completeId = '8'.repeat(44), refundId = '9'.repeat(44);
 
-function fixture({ stale = false, ambiguous = false, samePolicy = false, storage = false } = {}) {
+function fixture({ stale = false, ambiguous = false, ambiguousGoal = null, samePolicy = false, storage = false, market = false, badMarketOutput = false } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bouncer-native-mission-'));
   const journalPath = path.join(dir, 'original.json');
   let journal = new FileJournal(journalPath, vault, owner);
   const mission = makeMission();
   if (samePolicy) mission.goals[1].goal.policy_id = mission.goals[0].goal.policy_id;
+  if (market) {
+    mission.goals[0] = { kind:'market', goal:{ ...structuredClone(randomGoal), input:{from_goal_id:'price',quantity:10},
+      program:structuredClone(MARKET_SUMMARY_PROGRAM) } };
+    mission.goals.reverse();
+  }
   if (storage) { mission.max_native_amount = '300'; mission.required_resources.push('storage');
-    mission.goals.push({ kind: 'storage', goal: structuredClone(storageGoal) }); }
+    const goal = structuredClone(storageGoal);
+    if (market) goal.value.from_goal_ids = ['price','compute'];
+    mission.goals.push({ kind: 'storage', goal }); }
   const reviewed = structuredClone(mission);
   const keys = Object.fromEntries(mission.goals.map(({ goal }) => [goal.id, nearApi.KeyPair.fromRandom('ed25519')]));
   const signers = Object.fromEntries(mission.goals.map(({ goal }) => {
@@ -71,7 +80,7 @@ function fixture({ stale = false, ambiguous = false, samePolicy = false, storage
       if (method === 'get_policy') return { token: 'native', per_tx_cap: perTx.toString(), daily_cap: daily.toString() };
       if (method === 'daily_spent') return (spent.get(args.policy_id) ?? 0n).toString();
       if (method === 'vault_balance') { assert.deepEqual(args, { token: 'native' }); return balance.toString(); }
-      if (method === 'get_outlayer_program') return structuredClone(randomGoal.program);
+      if (method === 'get_outlayer_program') return structuredClone(reviewed.goals.find(item => ['random','market'].includes(item.kind)).goal.program);
       if (method === 'get_outlayer_native_project') return structuredClone(reviewed.goals.find(item => item.kind === 'oracle').goal.route);
       if (method === 'get_native_storage_route') return structuredClone(reviewed.goals.find(item => item.kind === 'storage').goal.route);
       if (method === 'native_storage_id_reserved') return storageReserved;
@@ -88,9 +97,10 @@ function fixture({ stale = false, ambiguous = false, samePolicy = false, storage
     async sendTransactionOnce(signed, wait) {
       assert.equal(wait, 'FINAL');
       const action = signed.transaction.actions[0].functionCall;
-      const kind = action.methodName === 'execute_outlayer' ? 'random' :
+      const kind = action.methodName === 'execute_outlayer' ? (market ? 'market' : 'random') :
         action.methodName === 'execute_native_storage' ? 'storage' : 'oracle';
-      const goal = reviewed.goals.find(item => item.kind === kind).goal;
+      const template = reviewed.goals.find(item => item.kind === kind).goal;
+      const goal = kind === 'market' ? journal.get(template.id).outlayer_goal : template;
       const args = JSON.parse(Buffer.from(action.args).toString());
       const hash = nearApi.utils.serialize.base_encode(crypto.createHash('sha256').update(nearApi.transactions.encodeTransaction(signed.transaction)).digest());
       assert.equal(journal.get(`native-mission:${mission.id}`).status, 'pending');
@@ -118,7 +128,8 @@ function fixture({ stale = false, ambiguous = false, samePolicy = false, storage
         max_memory_mb: project.max_memory_mb, max_execution_seconds: project.max_execution_seconds } : goal.program;
       const input = project ? project.input_data : JSON.stringify(goal.input);
       const source = { WasmUrl: { url: program.url, hash: program.sha256, build_target: program.build_target } };
-      const output = project ? { success: true, token_id: 'near', source: 'custom', price_usd: 2.75, timestamp } : { random_number: 48 };
+      const output = project ? { success: true, token_id: 'near', source: 'custom', price_usd: 2.75, timestamp } :
+        kind === 'market' ? { value_usd_micros: goal.input.price_usd_micros * goal.input.quantity + (badMarketOutput ? 1 : 0) } : { random_number: 48 };
       const request = { sender_id: owner, predecessor_id: vault, payment: goal.amount, input_data: input, code_source: source,
         ...(project ? { project_id: ORACLE_PROJECT_ID, project_uuid: ORACLE_PROJECT_UUID, attached_usd: '0' } : {}) };
       const completion = { success: true, sender_id: owner, code_source: source, payment_charged: '10', payment_refunded: '90' };
@@ -139,7 +150,7 @@ function fixture({ stale = false, ambiguous = false, samePolicy = false, storage
         receipts: [receipt(requestId, vault, 'outlayer.testnet', [{ FunctionCall: { method_name: 'request_execution', deposit: goal.amount, args: encode(providerArgs) } }]),
           receipt(refundId, 'outlayer.testnet', owner, [{ Transfer: { deposit: '90' } }])] };
       transactions.set(hash, result);
-      if (loseFirst) { loseFirst = false; throw new Error('synthetic timeout after submission'); }
+      if (loseFirst || ambiguousGoal === goal.id) { loseFirst = false; ambiguousGoal = null; throw new Error('synthetic timeout after submission'); }
       return { transaction_outcome: { id: hash } };
     },
     async txStatusReceipts(hash, account, wait) {
@@ -469,3 +480,175 @@ test('execution-block V14 mismatch stops subsequent legs and cannot be bypassed 
   f.setExecutedCode(null);
   assert.equal((await f.invoke({execute:true})).status,'FULFILLED'); assert.equal(f.sends,3);
 }, {storage:true}));
+
+test('dependent market example binds the earlier oracle, pinned code, quantity and public storage', () => {
+  const example = JSON.parse(fs.readFileSync(new URL('../examples/native-market-mission.example.json', import.meta.url), 'utf8'));
+  const mission = validateNativeMission(example);
+  assert.deepEqual(mission.goals.map(item => item.kind), ['oracle','market','storage']);
+  assert.deepEqual(mission.goals[1].goal.input, {from_goal_id:'price',quantity:10});
+  assert.deepEqual(mission.goals[2].goal.value.from_goal_ids, ['price','compute']);
+  for (const change of [
+    m => { m.goals.reverse(); },
+    m => { m.goals[1].goal.input.from_goal_id = 'compute'; },
+    m => { m.goals[1].goal.input.from_goal_id = 'missing'; },
+    m => { m.goals[1].goal.input.quantity = 0; },
+    m => { m.goals[1].goal.input.quantity = 1001; },
+    m => { m.goals[1].goal.input.quantity = 1.5; },
+    m => { m.goals[1].goal.input.price_usd_micros = 1; },
+    m => { m.goals[1].goal.program.sha256 = 'a'.repeat(64); },
+    m => { m.goals[1].goal.program.build_target = 'wasm32-wasip2'; },
+    m => { m.goals[2].goal.value.from_goal_ids = ['storage']; },
+  ]) { const altered = structuredClone(example); change(altered); assert.throws(() => validateNativeMission(altered)); }
+});
+
+test('verified oracle prices round deterministically and market results are independently recalculated', () => {
+  for (const [price,expected] of [[2.75,2750000],[1.2345674,1234567],[1.2345675,1234568],
+    [0.0000005,1],[999999.9999999,1000000000000],[1e6,1000000000000]]) assert.equal(priceToMicros(price), expected);
+  for (const price of [0,-1,NaN,Infinity,0.0000004,1000000.000001]) assert.throws(() => priceToMicros(price));
+  const oracle = {tx_hash:nearApi.utils.serialize.base_encode(Buffer.alloc(32,1)),result:{price_usd:2.75}};
+  const input = marketInputFromOracle(10,oracle);
+  assert.deepEqual(input, {price_usd_micros:2750000,quantity:10,oracle_tx_hash:oracle.tx_hash});
+  assert.deepEqual(verifyMarketOutput(input,{value_usd_micros:27500000}),{value_usd_micros:27500000});
+  for (const output of [{value_usd_micros:27500001},{value_usd_micros:'27500000'},
+    {value_usd_micros:27500000,extra:true},{random_number:48}]) assert.throws(() => verifyMarketOutput(input,output));
+  assert.throws(() => marketInputFromOracle(10,{...oracle,tx_hash:'invalid'}));
+});
+
+test('dependent synthetic mission stores the oracle and calculated result and recovers originals without another send', () => withFixture(async f => {
+  const preview = await f.invoke();
+  assert.equal(preview.status,'READY'); assert.equal(f.sends,0);
+  const result = await f.invoke({execute:true});
+  assert.equal(result.status,'FULFILLED'); assert.equal(result.new_payments,3); assert.equal(f.sends,3);
+  assert.deepEqual(result.deliveries.map(item=>item.kind),['oracle','market','storage']);
+  const [oracle, market, storage] = result.deliveries;
+  assert.deepEqual(market.delivery.result,{value_usd_micros:27500000});
+  const actual = f.journal.get('compute').outlayer_goal.input;
+  assert.deepEqual(actual,{price_usd_micros:2750000,quantity:10,oracle_tx_hash:oracle.delivery.tx_hash});
+  const saved = JSON.parse(storage.delivery.result.value);
+  assert.deepEqual(saved.resources.map(x=>x.tx_hash),[oracle.delivery.tx_hash,market.delivery.tx_hash]);
+  assert.deepEqual(saved.resources.map(x=>x.kind),['oracle','market']);
+  assert.deepEqual(saved.resources[1].result,{value_usd_micros:27500000});
+  f.reopen();
+  const recovery = await f.invoke({recoverOnly:true,signers:{}});
+  assert.equal(recovery.status,'RECOVERED'); assert.equal(recovery.new_payments,0); assert.equal(f.sends,3);
+  assert.deepEqual(recovery.deliveries.map(x=>x.delivery.tx_hash),result.deliveries.map(x=>x.delivery.tx_hash));
+  const service = createAuthenticatedNativeMissionService({mission:f.mission,provider:f.provider,journal:f.journal});
+  const review = service.getReview(), originals = await service.originals({missionSha256:review.mission_sha256});
+  assert.equal(originals.status,'LOCAL_ORIGINALS');
+  assert.deepEqual(originals.originals.map(x=>x.original_hash),result.deliveries.map(x=>x.delivery.tx_hash));
+}, {market:true,storage:true}));
+
+test('stale oracle or incorrect provider calculation stops dependent synthetic work', () => withFixture(async f => {
+  const result = await f.invoke({execute:true});
+  assert.equal(result.status,'BLOCKED'); assert.equal(result.stage,'stale-oracle');
+  assert.equal(result.new_payments,1); assert.equal(f.sends,1);
+  assert.equal(f.journal.get('compute'),undefined); assert.equal(f.journal.get('store'),undefined);
+}, {market:true,storage:true,stale:true}));
+
+test('bad arithmetic remains pending and neither storage nor a duplicate calculation is sent', () => withFixture(async f => {
+  await assert.rejects(f.invoke({execute:true}),/payment\/delivery unresolved/);
+  assert.equal(f.sends,2); assert.equal(f.journal.get('compute').status,'pending');
+  assert.equal(f.journal.get('store'),undefined);
+  await assert.rejects(f.invoke({recoverOnly:true,signers:{}}),/provider market calculation/);
+  assert.equal(f.sends,2);
+}, {market:true,storage:true,badMarketOutput:true}));
+
+test('lost market response is recovered from its original hash, not resent', () => withFixture(async f => {
+  await assert.rejects(f.invoke({execute:true}),/payment\/delivery unresolved/);
+  assert.equal(f.sends,2); const original=f.journal.get('compute').tx_hash;
+  assert.equal(f.journal.get('compute').status,'pending');
+  assert.equal(f.journal.get('store'),undefined);
+  f.reopen();
+  const recovered=await f.invoke({recoverOnly:true,signers:{}});
+  assert.equal(recovered.status,'RECOVERED_PARTIAL'); assert.equal(f.sends,2);
+  assert.equal(f.journal.get('compute').tx_hash,original); assert.equal(f.journal.get('compute').status,'completed');
+  const finished=await f.invoke({execute:true});
+  assert.equal(finished.status,'FULFILLED'); assert.equal(finished.new_payments,1); assert.equal(f.sends,3);
+  assert.equal(f.journal.get('compute').tx_hash,original);
+}, {market:true,storage:true,ambiguousGoal:'compute'}));
+
+test('each checkpoint authorizes only the next goal and requires a fresh approval to proceed', () => withFixture(async f => {
+  assert.equal((await f.invoke()).next_goal_id,'price');
+  await assert.rejects(f.invoke({execute:true,checkpointGoalId:'compute'}),/not the next unpaid goal/);
+  assert.equal(f.sends,0);
+  const first=await f.invoke({execute:true,checkpointGoalId:'price'});
+  assert.equal(first.status,'CHECKPOINT'); assert.equal(first.new_payments,1); assert.equal(f.sends,1);
+  assert.deepEqual(first.remaining_goal_ids,['compute','store']);
+  await assert.rejects(f.invoke({execute:true,checkpointGoalId:'price'}),/not the next unpaid goal/);
+  assert.equal(f.sends,1);
+  const preview=await f.invoke();
+  assert.equal(preview.next_goal_id,'compute'); assert.equal(preview.verified_prior_deliveries[0].delivery.result.price_usd,2.75);
+  const second=await f.invoke({execute:true,checkpointGoalId:'compute'});
+  assert.equal(second.status,'CHECKPOINT'); assert.equal(second.new_payments,1); assert.equal(f.sends,2);
+  assert.deepEqual(second.remaining_goal_ids,['store']);
+  const last=await f.invoke({execute:true,checkpointGoalId:'store'});
+  assert.equal(last.status,'FULFILLED'); assert.equal(last.new_payments,1); assert.equal(f.sends,3);
+  assert.equal((await f.invoke({recoverOnly:true,signers:{}})).status,'RECOVERED'); assert.equal(f.sends,3);
+}, {market:true,storage:true}));
+
+test('synthetic browser signs a distinct bounded checkpoint for each dependent leg', () => withFixture(async f => {
+  const site='https://bouncer.example', ownerPair=nearApi.KeyPair.fromRandom('ed25519'), ownerPublicKey=String(ownerPair.getPublicKey());
+  let saved, prompts=0; const seen=[];
+  const auth={
+    async issue(action) {
+      const issued=Date.now(),expires=issued+120_000,nonce=crypto.randomBytes(32);
+      const challenge={challenge_id:crypto.randomBytes(16).toString('hex'),nonce_base64:nonce.toString('base64'),
+        recipient:'bouncer.example',expires_at_ms:expires,
+        message:nativeMissionApprovalMessage(action,crypto.createHash('sha256').update(JSON.stringify(action)).digest('hex'),site,issued,expires)};
+      saved={action:structuredClone(action),challenge,nonce,used:false};seen.push(structuredClone(action));return challenge;
+    },
+    async authenticate({action,evidence}) {
+      if(!saved||saved.used||JSON.stringify(action)!==JSON.stringify(saved.action)||evidence?.challenge_id!==saved.challenge.challenge_id||
+        evidence.accountId!==owner||evidence.publicKey!==ownerPublicKey)return false;
+      const payload=nep413Payload({message:saved.challenge.message,nonce:new Uint8Array(saved.nonce),recipient:saved.challenge.recipient});
+      if(!ownerPair.getPublicKey().verify(crypto.createHash('sha256').update(payload).digest(),Buffer.from(evidence.signature,'base64')))return false;
+      saved.used=true;return true;
+    },
+  };
+  const service=createAuthenticatedNativeMissionService({mission:f.mission,provider:f.provider,signers:f.signers,journal:f.journal,auth});
+  const server=createNativeMissionHttpServer({service,siteOrigin:site});
+  await new Promise((resolve,reject)=>server.listen(0,'127.0.0.1',resolve).once('error',reject));
+  const local=`http://127.0.0.1:${server.address().port}`;
+  const fetchForBrowser=(url,options={})=>url==='https://test.rpc.fastnear.com'
+    ? Promise.resolve(new Response(JSON.stringify({jsonrpc:'2.0',id:'bouncer-cli-login',result:{permission:'FullAccess'}})))
+    : fetch(`${local}${url}`,{...options,headers:{...options.headers,origin:site}});
+  const wallet={manifest:{id:'meteor-wallet'},async signMessage({message,nonce,recipient,signerId}) {
+    prompts++;assert.match(message,/I approve only this one Bouncer testnet mission step/);assert.match(message,/Step maximum: 100 yoctoNEAR/);
+    const payload=nep413Payload({message,nonce,recipient}),digest=crypto.createHash('sha256').update(payload).digest();
+    return {accountId:owner,publicKey:ownerPublicKey,signature:Buffer.from(ownerPair.sign(digest).signature).toString('base64')};
+  }};
+  const client=createNativeMissionClient({wallet,accountId:owner,ownerPublicKey,location:{origin:site,host:'bouncer.example'},
+    crypto:crypto.webcrypto,fetch:fetchForBrowser});
+  try {
+    let {review,preview}=await client.preview();
+    assert.equal(preview.next_goal_id,'price'); assert.equal(f.sends,0);
+    await assert.rejects(service.issue({missionSha256:review.mission_sha256,ownerPublicKey}),/reconcile/);
+    await assert.rejects(service.issue({missionSha256:review.mission_sha256,ownerPublicKey,goalId:'compute'}),/reconcile/);
+    const first=await client.approve(review);assert.equal(first.status,'CHECKPOINT');assert.equal(f.sends,1);assert.equal(prompts,1);
+    await assert.rejects(client.approve(review),/UNAVAILABLE/); // must preview again
+    ({review,preview}=await client.preview());assert.equal(preview.next_goal_id,'compute');
+    assert.equal(preview.verified_prior_deliveries[0].delivery.result.price_usd,2.75);
+    const second=await client.approve(review);assert.equal(second.status,'CHECKPOINT');assert.equal(f.sends,2);assert.equal(prompts,2);
+    ({review,preview}=await client.preview());assert.equal(preview.next_goal_id,'store');
+    assert.equal(preview.verified_prior_deliveries[1].delivery.result.value_usd_micros,27500000);
+    const third=await client.approve(review);assert.equal(third.status,'FULFILLED');assert.equal(f.sends,3);assert.equal(prompts,3);
+    assert.deepEqual(seen.map(action=>action.goal_id),['price','compute','store']);
+    assert.ok(seen.every(action=>action.purpose==='authorize_native_mission_leg'&&action.goal_max_native_yocto==='100'));
+    assert.equal((await client.recover(review)).status,'RECOVERED');assert.equal(f.sends,3);
+  } finally {await new Promise(resolve=>server.close(resolve));}
+}, {market:true,storage:true}));
+
+
+test('a model-proposed bounded market goal enters the guarded V14 runner in an offline test', () => withFixture(async f => {
+  const random=makeMission();random.id='other-native-template';random.max_native_amount='300';random.required_resources.push('storage');
+  random.goals.push({kind:'storage',goal:structuredClone(storageGoal)});
+  const catalog={version:1,market:{mission:f.mission,max_quantity:20},random:{mission:random,min:0,max:100,max_span:100}};
+  const planned=await planNativeObjective({objective:'Value 12 NEAR and record it',catalog,modelClient:async()=>({kind:'market',quantity:12})});
+  assert.equal(planned.goals[1].goal.input.quantity,12);assert.equal(f.sends,0);
+  const call=checkpointGoalId=>runNativeMission({mission:planned,provider:f.provider,signers:f.signers,journal:f.journal,
+    execute:true,checkpointGoalId,log:()=>{}});
+  assert.equal((await call('price')).status,'CHECKPOINT');
+  const computed=await call('compute');assert.equal(computed.status,'CHECKPOINT');
+  assert.equal(computed.deliveries[1].delivery.result.value_usd_micros,33000000);
+  assert.equal((await call('store')).status,'FULFILLED');assert.equal(f.sends,3);
+}, {market:true,storage:true}));

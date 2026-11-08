@@ -48,8 +48,12 @@ service is bundled. This is unaudited testnet software, not suitable
 for real funds.
 
 The experimental [native-mission flow](bouncer/docs/NATIVE_MISSIONS.md)
-sequences owner-pinned compute, API data and **public, self-hosted NEAR state**
-through a fresh V14 vault, with aggregate budgets and original-hash recovery.
+can sequence an OutLayer price into pinned compute and **public, self-hosted
+NEAR state** through a fresh V14 vault, with aggregate budgets and original-hash
+recovery. The first dependent market flow requires a separate signed checkpoint
+for each step; a bounded model planner can propose (but does not authorize) a
+reviewed mission. Neither a live provider run nor autonomous hosted operation
+has been established.
 The wallet UI can review and explicitly approve a fixed mission when the
 opt-in same-origin backend is provisioned. A single-host testnet server is now
 available, but V14 is not deployed or configured here and browser onboarding

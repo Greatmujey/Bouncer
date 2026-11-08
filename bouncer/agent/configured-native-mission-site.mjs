@@ -20,7 +20,7 @@ import { createNativeMissionSite } from './native-mission-site.mjs';
 import { validateSellerDatabaseUrl } from '../services/shared-resource-provider.mjs';
 
 const MAX_KEY_ALLOWANCE=10n**24n;
-const METHODS={random:'execute_outlayer',oracle:'execute_outlayer_native_project',storage:'execute_native_storage'};
+const METHODS={random:'execute_outlayer',market:'execute_outlayer',oracle:'execute_outlayer_native_project',storage:'execute_native_storage'};
 const keysEqual=(a,b)=>Array.isArray(a) && a.length===1 && a[0]===b;
 const exact=(obj,fields)=>obj && Object.getPrototypeOf(obj)===Object.prototype && Object.keys(obj).length===fields.length && fields.every(x=>Object.hasOwn(obj,x));
 

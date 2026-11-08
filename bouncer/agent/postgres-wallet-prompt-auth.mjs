@@ -66,14 +66,18 @@ function actionFields(action) {
   const purpose = Object.getOwnPropertyDescriptor(action, 'purpose');
   if (!purpose || !Object.hasOwn(purpose, 'value')) throw new Error('invalid owner authorization action');
   const common = ['format', 'network', 'purpose', 'owner', 'owner_public_key'];
-  if (purpose.value === 'authorize_native_mission') {
-    const extra = ['vault', 'mission_id', 'mission_sha256', 'max_native_yocto'];
+  if (['authorize_native_mission','authorize_native_mission_leg'].includes(purpose.value)) {
+    const leg = purpose.value === 'authorize_native_mission_leg';
+    const extra = ['vault', 'mission_id', 'mission_sha256', 'max_native_yocto', ...(leg ? ['goal_id','goal_max_native_yocto'] : [])];
     if (!exact(action, [...common, ...extra]) || action.format !== 'bouncer-wallet-prompt-auth-v1' || action.network !== 'testnet' ||
         !isTestnetAccount(action.owner) || !action.owner.endsWith('.testnet') ||
         action.owner === 'bouncer-owner-12f343b795633e357ae5560d.testnet' || !isTestnetAccount(action.vault) ||
         typeof action.mission_id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(action.mission_id) ||
         !HEX64.test(action.mission_sha256 ?? '') || typeof action.max_native_yocto !== 'string' ||
-        !/^[1-9][0-9]{0,38}$/.test(action.max_native_yocto) || BigInt(action.max_native_yocto) > (1n << 128n) - 1n) {
+        !/^[1-9][0-9]{0,38}$/.test(action.max_native_yocto) || BigInt(action.max_native_yocto) > (1n << 128n) - 1n ||
+        (leg && (typeof action.goal_id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(action.goal_id) ||
+          typeof action.goal_max_native_yocto !== 'string' || !/^[1-9][0-9]{0,38}$/.test(action.goal_max_native_yocto) ||
+          BigInt(action.goal_max_native_yocto) > BigInt(action.max_native_yocto)))) {
       throw new Error('invalid native mission authorization');
     }
     parseOwnerKey(action.owner_public_key);
@@ -161,7 +165,7 @@ function fixedOrigin(value) {
   return value;
 }
 function challengeMessage(action, digest, origin, issued, expires) {
-  if (action.purpose === 'authorize_native_mission') return nativeMissionApprovalMessage(action, digest, origin, issued, expires);
+  if (['authorize_native_mission','authorize_native_mission_leg'].includes(action.purpose)) return nativeMissionApprovalMessage(action, digest, origin, issued, expires);
   const orderLabels = {reserve_buffer_order:'Reserve an encrypted Buffer order',claim_buffer_order:'Claim one Buffer order attempt',
     record_buffer_order:'Record the encrypted Buffer order',inspect_buffer_order:'Inspect the encrypted Buffer order'};
   const nativeLabels = { reserve_native_setup: `Reserve native setup prompt: ${action.stage_id}`,
