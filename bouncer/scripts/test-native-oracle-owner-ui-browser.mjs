@@ -222,8 +222,13 @@ try {
     await page.locator('#wallet-native-trial-send').waitFor({state:'visible'});
     assert.match(await page.locator('#wallet-native-setup-stage').innerText(),/maximum 0\.1 test NEAR/);
     assert.equal(sends,0);assert.equal(trial,null);await page.locator('#wallet-native-trial-send').click();
-    try { await page.locator('#wallet-native-trial-check').waitFor({state:'visible',timeout:15_000}); }
-    catch(error) { console.error('Synthetic trial:',await page.locator('#wallet-native-setup-status').textContent(),
+    try {
+      await page.locator('#wallet-native-trial-check').waitFor({state:'visible',timeout:15_000});
+      // The original is shown before the asynchronous completion recheck and
+      // one submission finish. Visibility alone does not mean the action has
+      // completed; the button remains disabled while the flow is busy.
+      await page.waitForFunction(()=>{const b=document.querySelector('#wallet-native-trial-check');return b && !b.hidden && !b.disabled},null,{timeout:15_000});
+    } catch(error) { console.error('Synthetic trial:',await page.locator('#wallet-native-setup-status').textContent(),
       {trialRetained:Boolean(trial),sends},errors,requests.slice(-18)); throw error; }
     assert.equal(sends,1);assert(trial?.original_hash);assert.match(await page.locator('#wallet-native-setup-hash').innerText(),new RegExp(trial.original_hash));
     await page.locator('#wallet-native-trial-check').click();
