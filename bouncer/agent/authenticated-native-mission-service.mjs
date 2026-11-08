@@ -8,6 +8,9 @@
  * is not a production deployment, independent checkpoint or security audit.
  */
 import crypto from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
+import { isTransactionHash } from '../shared/direct-payment-settlement.mjs';
+import { readNativeJournal } from './synchronous-native-journal.mjs';
 import { FileJournal } from './procurement.mjs';
 import { runNativeMission, validateNativeMission } from './native-mission.mjs';
 import { nativeMissionAction } from '../web-src/native-mission-auth.mjs';
@@ -36,6 +39,30 @@ export function createAuthenticatedNativeMissionService({ mission: raw, provider
     vault: mission.contract_id, missionId: mission.id, missionSha256, maxNativeYocto: mission.max_native_amount });
   const checkHash = value => { if (value !== missionSha256) throw fail(); };
   const executeRun = options => run({ mission, provider, journal, log, ...options });
+  function originals() {
+    const intent = readNativeJournal(journal, `native-mission:${mission.id}`);
+    const entries = mission.goals.map(({goal}) => readNativeJournal(journal, goal.id));
+    if (!intent && !entries.some(Boolean)) return { status:'NO_LOCAL_ORIGINALS', originals:[] };
+    const fingerprint = crypto.createHash('sha256').update(`bouncer-native-mission-v1\0${JSON.stringify(mission)}`).digest('hex');
+    if (!intent || intent.kind !== 'native-mission-intent-v1' || intent.status !== 'pending' || intent.fingerprint !== fingerprint ||
+        !isDeepStrictEqual(intent.mission, mission)) throw fail();
+    let stopped = false; const result = [];
+    mission.goals.forEach(({kind,goal}, i) => {
+      const entry = entries[i];
+      if (!entry) { stopped = true; return; }
+      const key = kind === 'random' ? 'outlayer_goal' : kind === 'oracle' ? 'oracle_goal' : 'storage_goal';
+      const saved = entry[key];
+      const comparable = kind === 'storage' && typeof goal.value !== 'string' && saved
+        ? { ...saved, value:goal.value } : saved;
+      if (stopped || !['pending','completed'].includes(entry.status) || !isTransactionHash(entry.tx_hash) ||
+          !saved || !isDeepStrictEqual(comparable, goal) ||
+          entry.fingerprint !== crypto.createHash('sha256').update(JSON.stringify(saved)).digest('hex')) throw fail();
+      result.push({goal_id:goal.id,kind,status:entry.status,original_hash:entry.tx_hash});
+      if (entry.status === 'pending') stopped = true;
+    });
+    return {status:result.length ? 'LOCAL_ORIGINALS' : 'NO_LOCAL_ORIGINALS',originals:result,
+      note:'Local journal only; not proof of non-execution or an independent checkpoint.'};
+  }
   return Object.freeze({
     getReview() { return structuredClone(review); },
     async preview({ missionSha256: requested } = {}) {
@@ -55,6 +82,9 @@ export function createAuthenticatedNativeMissionService({ mission: raw, provider
       // The authenticated message explicitly approves this exact mission and
       // maximum. Re-run every current preflight; no input comes from the client.
       return executeRun({ signers: signerSnapshot, execute: true });
+    },
+    async originals({ missionSha256: requested } = {}) {
+      checkHash(requested); return originals();
     },
     async recover({ missionSha256: requested } = {}) {
       checkHash(requested);

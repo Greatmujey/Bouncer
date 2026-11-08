@@ -74,7 +74,9 @@ instruction to the configured agent, not an on-chain transaction signed by
 the wallet. The frontend never sends private keys, chosen transactions,
 receiver addresses or mutable goals to the backend. Recovery uses the original
 hashes and no signing keys. Unknown/error results hide the approval button for
-that session and offer receipt-only checking.
+that session and offer receipt-only checking, first displaying any matching
+original hashes retained by that server's local journal. A missing local hash
+is not proof that a transaction never happened.
 
 `agent/authenticated-native-mission-service.mjs` composes a fixed manifest,
 server-side scoped agent signers, trusted RPC, `FileJournal` and the existing

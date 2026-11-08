@@ -58,7 +58,14 @@ async function fixture({ blocked = false, executeThrows = false } = {}) {
     assert.deepEqual(options.mission, mission);
     if (options.recoverOnly) { recovers++; assert.deepEqual(options.signers, {}); return {status:'RECOVERED',new_payments:0,deliveries:[]}; }
     if (!options.execute) { previews++; return { status:blocked?'BLOCKED':'READY', budget:{required_yocto:'300'} }; }
-    runs++; if (executeThrows) throw Error('synthetic lost acknowledgement');
+    runs++; if (executeThrows) {
+      const reviewed = options.mission, first = reviewed.goals[0].goal;
+      journal.put(`native-mission:${reviewed.id}`, {kind:'native-mission-intent-v1',status:'pending',
+        fingerprint:digest(`bouncer-native-mission-v1\0${JSON.stringify(reviewed)}`),mission:reviewed});
+      journal.put(first.id, {status:'pending',outlayer_goal:first,fingerprint:digest(JSON.stringify(first)),
+        tx_hash:nearApi.utils.serialize.base_encode(Buffer.alloc(32,43))});
+      throw Error('synthetic lost acknowledgement');
+    }
     return {status:'FULFILLED',new_payments:3,deliveries:[],note:'synthetic only'};
   };
   const service = createAuthenticatedNativeMissionService({ mission, provider:{}, signers, journal, auth, run });
@@ -78,7 +85,7 @@ async function fixture({ blocked = false, executeThrows = false } = {}) {
   } };
   const client = createNativeMissionClient({ wallet, accountId:owner, ownerPublicKey, location:{origin:site,host:'bouncer.example'},
     crypto:crypto.webcrypto, fetch:browserFetch });
-  return { client, service, server, auth, ownerPublicKey, local, wallet, browserFetch,
+  return { client, service, server, auth, ownerPublicKey, local, wallet, browserFetch, journal,
     get previews(){return previews}, get runs(){return runs}, get recovers(){return recovers}, get prompts(){return prompts},
     get evidence(){return evidenceSeen}, async close(){await new Promise(resolve=>server.close(resolve)); journal.close(); fs.rmSync(dir,{recursive:true,force:true})} };
 }
@@ -111,7 +118,12 @@ test('unknown result does not reopen the approval; receipt-only recovery never e
   const {review} = await f.client.preview();
   await assert.rejects(f.client.approve(review), /UNAVAILABLE/); assert.equal(f.runs,1); assert.equal(f.prompts,1);
   await assert.rejects(f.client.approve(review), /UNAVAILABLE/); assert.equal(f.runs,1);
+  const local = await f.client.originals(review);
+  assert.equal(local.status,'LOCAL_ORIGINALS'); assert.equal(local.originals[0].status,'pending');
+  assert.equal(local.originals[0].original_hash,nearApi.utils.serialize.base_encode(Buffer.alloc(32,43)));
   assert.equal((await f.client.recover(review)).new_payments,0); assert.equal(f.runs,1); assert.equal(f.recovers,1);
+  const saved = f.journal.get('compute'); f.journal.put('compute',{...saved,fingerprint:'tampered'});
+  await assert.rejects(f.client.originals(review),/UNAVAILABLE/); assert.equal(f.runs,1);
 }, {executeThrows:true}));
 
 test('HTTP rejects other origins, missing headers, extra fields and client-selected signers', () => use(async f => {

@@ -89,7 +89,9 @@ try {
           saved.used=true;executes++;if(mode==='unknown')return route.abort('failed');
           return json(route,{status:'FULFILLED',new_payments:3,deliveries:[],note:'Synthetic test only.'});
         }
-        if(name==='recover'){recovers++;return json(route,{status:'RECOVERED',new_payments:0,deliveries:[]});}
+        if(name==='originals')return json(route,{status:'LOCAL_ORIGINALS',originals:[{goal_id:'compute',kind:'random',status:'pending',original_hash:base58(43)}]});
+        if(name==='recover'){recovers++;if(mode==='unknown')return json(route,{error:'synthetic receipt unavailable'},409);
+          return json(route,{status:'RECOVERED',new_payments:0,deliveries:[]});}
         return json(route,{error:'unavailable'},404);
       }
       const file=url.pathname.slice(1)||'index.html';if(!allowed.has(file))return route.fulfill({status:404,body:'blocked test route'});
@@ -121,7 +123,10 @@ try {
       assert.equal(executes,1);assert.equal(challengeCount,1);
       assert.equal(await page.locator('#wallet-native-mission-approve').isVisible(),false);
       await page.locator('#wallet-native-mission-recover').click();
-      await page.waitForFunction(()=>document.querySelector('#wallet-native-mission-status').textContent.includes('RECOVERED'));
+      if(mode==='unknown') {
+        await page.waitForFunction(()=>document.querySelector('#wallet-native-mission-status').textContent.includes('Original receipts are unavailable'));
+        assert.match(await page.locator('#wallet-native-mission-status').innerText(),new RegExp(base58(43)));
+      } else await page.waitForFunction(()=>document.querySelector('#wallet-native-mission-status').textContent.includes('RECOVERED'));
       assert.equal(executes,1);assert.equal(challengeCount,1);assert.equal(recovers,1);
     }
     assert.equal(await page.locator('#wallet-dialog').evaluate(el=>el.scrollWidth<=el.clientWidth),true);

@@ -86,6 +86,11 @@ export function createNativeMissionClient({ wallet, accountId, ownerPublicKey, l
       current();
       return request('execute', { missionSha256: reviewHash, ownerPublicKey, evidence });
     },
+    async originals(review) {
+      current();
+      const verified = await checkReview(review);
+      return request('originals', { missionSha256: verified.mission_sha256 });
+    },
     async recover(review) {
       current();
       const verified = await checkReview(review);

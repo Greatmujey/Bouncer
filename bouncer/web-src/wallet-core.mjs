@@ -785,6 +785,8 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
       nativeFlow?.destroy(); nativeFlow = null; nativeSetupOpening = false; nativeSetupAvailable = false;
       missionFlow = null; missionReview = null; missionReady = false; missionStarted = false;
       if (missionConsent) missionConsent.checked = false;
+      if (missionDetails) { missionDetails.hidden = true; missionDetails.open = false; }
+      if (missionManifest) missionManifest.textContent = '';
       ownerVerification = { wallet, accountId: proof.accountId, publicKey: proof.publicKey };
       if (ownerStatus) {
         ownerStatus.hidden = false;
@@ -863,7 +865,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     } catch {
       if (current()) {
         missionFlow = null; missionReview = null;
-        if (ownerStatus) { ownerStatus.hidden = false; ownerStatus.textContent = 'The guarded mission backend is not configured on this site. No approval or transaction was requested.'; }
+        if (ownerStatus) { ownerStatus.hidden = false; ownerStatus.textContent = 'The guarded mission backend is unavailable or not configured on this site. No approval or transaction was requested.'; }
       }
     } finally { busy(false); if (current()) renderControls(); }
   });
@@ -894,13 +896,19 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     const flow = missionFlow, review = missionReview, proof = ownerVerification, version = ownerSessionVersion;
     if (busyState || !flow || !review || !proof) return;
     const current = () => connected && missionFlow === flow && ownerVerification === proof && ownerSessionVersion === version;
-    busy(true);
+    busy(true); let retained = '';
     try {
+      const local = await flow.originals(review);
+      retained = JSON.stringify(local.originals || [], null, 2);
+      if (current()) missionStatus.textContent = `Retained local original hashes (not proof of non-execution):\n${retained}\nChecking receipts…`;
       const result = await flow.recover(review);
-      if (current()) missionStatus.textContent = `${result.status || 'UNKNOWN'} · No new transaction.\n` +
+      const updated = await flow.originals(review);
+      retained = JSON.stringify(updated.originals || [], null, 2);
+      if (current()) missionStatus.textContent = `${result.status || 'UNKNOWN'} · No new transaction.\nRetained original hashes:\n${retained}\n` +
         JSON.stringify((result.deliveries || []).map(item => ({ goal: item.goal_id, kind: item.kind,
           original_hash: item.delivery?.tx_hash, result: item.delivery?.result })), null, 2);
-    } catch { if (current()) missionStatus.textContent = 'Original receipts are unavailable or inconsistent. Do not approve another run.'; }
+    } catch { if (current()) missionStatus.textContent = 'Original receipts are unavailable or inconsistent. Do not approve another run.' +
+      (retained ? `\nRetained local original hashes:\n${retained}` : ''); }
     finally { busy(false); if (current()) renderControls(); }
   });
   directOpen?.addEventListener('click', async () => {

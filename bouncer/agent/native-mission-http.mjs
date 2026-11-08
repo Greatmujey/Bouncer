@@ -19,13 +19,14 @@ export function createNativeMissionHttpHandler({ service, siteOrigin, now = Date
   if (site.protocol !== 'https:' || site.origin !== siteOrigin || site.username || site.password || site.pathname !== '/' || site.search || site.hash ||
       site.hostname === 'github.io' || site.hostname.endsWith('.github.io') || site.hostname === 'madethis.website' ||
       site.hostname.endsWith('.madethis.website') || !service ||
-      ['getReview','preview','issue','execute','recover'].some(name => typeof service[name] !== 'function') ||
+      ['getReview','preview','issue','execute','originals','recover'].some(name => typeof service[name] !== 'function') ||
       typeof now !== 'function' || !Number.isSafeInteger(bodyTimeoutMs) || bodyTimeoutMs < 10 || bodyTimeoutMs > 10_000) {
     throw new Error('fixed dedicated HTTPS site origin and configured testnet mission service required');
   }
   let pending = 0, count = 0, started = now();
   const specs = { preview: ['preview', ['missionSha256']], challenge: ['issue', ['missionSha256','ownerPublicKey']],
-    execute: ['execute', ['missionSha256','ownerPublicKey','evidence']], recover: ['recover', ['missionSha256']] };
+    execute: ['execute', ['missionSha256','ownerPublicKey','evidence']], originals: ['originals', ['missionSha256']],
+    recover: ['recover', ['missionSha256']] };
   return async function handle(req, res, pathname) {
     if (req.headers['x-bouncer-native-mission'] !== 'v1' || (req.headers.origin && req.headers.origin !== siteOrigin)) return reply(res, 403, { error: 'unavailable' });
     if (pathname === `${PREFIX}config` && req.method === 'GET') return reply(res, 200, { enabled: true, network: 'testnet', review: service.getReview() });
