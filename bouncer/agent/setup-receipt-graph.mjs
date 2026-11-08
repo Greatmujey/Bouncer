@@ -32,6 +32,8 @@ function actionMatches(expected, actual) {
   if (expected.enum === 'deployContract') return keysAre(actual, ['DeployContract']) && keysAre(actual.DeployContract, ['code']) &&
     actual.DeployContract.code === digest(Buffer.from(expected.deployContract.code)).toString('base64');
   if (expected.enum === 'functionCall') return keysAre(actual, ['FunctionCall']) && callMatches(expected.functionCall, actual.FunctionCall);
+  if (expected.enum === 'deleteKey') return keysAre(actual, ['DeleteKey']) &&
+    keysAre(actual.DeleteKey, ['public_key']) && actual.DeleteKey.public_key === String(expected.deleteKey.publicKey);
   if (expected.enum === 'addKey') {
     if (!keysAre(actual, ['AddKey']) || !keysAre(actual.AddKey, ['public_key', 'access_key'])) return false;
     const key = actual.AddKey, access = key.access_key, expectedAccess = expected.addKey.accessKey;
@@ -103,12 +105,13 @@ export function rootOf(result, batch, attempt, g) {
   }
   // nearcore does not include the local root receipt body in tx_status when
   // signer and receiver are the same. Accept ONLY this planner's self-directed
-  // single AddKey stage without the body: the original trusted hash, exact
+  // single reviewed AddKey or DeleteKey stage without the body: the original trusted hash, exact
   // transaction actions, root link and root outcome were checked above. This
   // remains trusted-RPC evidence, not an independently verified receipt body.
-  if (!receipt && attempt.stage_id === 'install_restricted_agent_key' &&
-      attempt.signer_id === attempt.receiver_id && txOutcome.receipt_ids.length === 1 && txOutcome.receipt_ids[0] === id &&
-      batch.actions.length === 1 && batch.actions[0].enum === 'addKey') {
+  const permittedLocalAction = (['install_restricted_agent_key', 'install_native_oracle_agent'].includes(attempt.stage_id) && batch.actions[0]?.enum === 'addKey') ||
+    (attempt.stage_id === 'remove_native_oracle_access_key' && batch.actions[0]?.enum === 'deleteKey');
+  if (!receipt && permittedLocalAction && attempt.signer_id === attempt.receiver_id &&
+      txOutcome.receipt_ids.length === 1 && txOutcome.receipt_ids[0] === id && batch.actions.length === 1) {
     return { id, receipt: null, outcome, localReceiptOmitted: true };
   }
   const action = receipt?.receipt?.Action;
@@ -123,7 +126,7 @@ export function rootOf(result, batch, attempt, g) {
 // contract created no promise. Do not mistake that for a storage-deposit refund
 // from the token. Match only the protocol's system transfer to this original
 // signer and key; any unknown/missing child or contract-origin transfer blocks.
-function protocolGasRefund(receipt, outcome, attempt) {
+export function protocolGasRefund(receipt, outcome, attempt) {
   const action = receipt?.receipt?.Action, actions = action?.actions, transfer = actions?.[0]?.Transfer;
   const deposit = numericString(transfer?.deposit);
   const knownActionFields = ['signer_id', 'signer_public_key', 'gas_price', 'input_data_ids', 'output_data_receivers',

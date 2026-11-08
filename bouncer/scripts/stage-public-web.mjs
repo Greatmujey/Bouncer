@@ -34,6 +34,11 @@ export function validatePublicWeb(source = DEFAULT_SOURCE) {
   if (metas.length !== 1 || metas[0] !== '<meta name="bouncer-wallet-origin" content="https://bouncer-near.vercel.app">') {
     throw new Error('Public website must approve exactly the dedicated Bouncer wallet origin');
   }
+  const cspMetas = (html.match(/<meta\b[^>]*>/gi) || [])
+    .filter(tag => /\bname\s*=\s*["']bouncer-csp-nonce["']/i.test(tag));
+  if (cspMetas.length !== 1 || cspMetas[0] !== '<meta name="bouncer-csp-nonce" content="Qm91bmNlclRlc3RuZXQyMDI2">') {
+    throw new Error('Public website must include the reviewed CSP execution marker');
+  }
   const walletIds = [...html.matchAll(/data-wallet-id="([a-z-]+)"/g)].map(match => match[1]);
   const expected = ['near-mobile', 'meteor-wallet', 'intear-wallet', 'nightly-wallet', 'ledger', 'ethereum-wallets', 'near-cli', 'wallet-connect'];
   const pickerStart = html.indexOf('id="wallet-dialog"');

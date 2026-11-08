@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "run_id": "42478289045",
+  "mode": "resume-only",
+  "projects": {
+    "coordinator": {
+      "ref": "itzqbvbpmbnimvpyaige",
+      "region": "us-east-1"
+    },
+    "checkpoint": {
+      "ref": "jiouaqwxkvlkmvyumzwc",
+      "region": "us-west-1"
+    }
+  },
+  "session_public_keys": {
+    "coordinator": "MCowBQYDK2VuAyEAo3Xdz+h0AL0qN/gGfS0bhyXYv/kt0A3+jFQEM5laMW8=",
+    "checkpoint": "MCowBQYDK2VuAyEA4Jdg3RysTP1qQYrOc7LrbcaqSMLoT7k7swiSjFbVFyE="
+  },
+  "resume_from": {
+    "run_id": "42477753401",
+    "initial_head": "d26d52d9de12da8b4ade8e340711afb3d6916870"
+  }
+}

@@ -24,7 +24,13 @@ export async function withExclusiveJournalOperation(journal, operation, scope) {
     if (!scope || active.get(journal) !== scope) throw new Error('invalid or expired journal operation scope');
     return operation(scope);
   }
-  if (active.has(journal)) throw new Error('another payment operation is already running on this journal');
+  if (active.has(journal)) {
+    const error = new Error('another payment operation is already running on this journal');
+    // Preserve the shared-buyer API's established contention code. This is
+    // only an in-process conflict, not proof a PostgreSQL owner lock was held.
+    if (journal.sharedDirectV3 === true) error.code = 'OWNER_BUSY';
+    throw error;
+  }
   const ownedScope = Object.freeze(Object.create(null));
   active.set(journal, ownedScope);
   try { return await operation(ownedScope); } finally { active.delete(journal); }

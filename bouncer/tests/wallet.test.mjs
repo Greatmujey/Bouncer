@@ -2,11 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash, webcrypto } from 'node:crypto';
 import { KeyPair } from '@near-js/crypto';
+import { IDBFactory } from 'fake-indexeddb';
 import { nep413Payload } from '../web-src/cli-login.mjs';
 import { setupAuthAction } from '../web-src/witnessed-setup-auth.mjs';
 import fs from 'node:fs';
-import { initWallet as bootWallet, walletOriginAllowed } from '../web-src/wallet-core.mjs';
+import { initWallet as bootWallet, walletOriginAllowed, nativeSetupOriginAllowed } from '../web-src/wallet-core.mjs';
 import { WALLET_MANIFEST } from '../web-src/wallet-manifest.mjs';
+import { encodeBase58 } from '../web-src/native-oracle-transaction.mjs';
+import { DIRECT_PREVIEW_ORIGIN, DIRECT_DEPOSIT, DIRECT_VERSION, DIRECT_PROJECT, DIRECT_UUID } from '../web-src/direct-outlayer-testnet.mjs';
 import { loadVerifiedExecutor, WALLET_EXECUTOR_SHA256 } from '../web-src/wallet-executor.mjs';
 
 const location = url => { const u = new URL(url); return { hostname: u.hostname, host: u.host, protocol: u.protocol, origin: u.origin }; };
@@ -21,6 +24,12 @@ class FakeSandboxWallet {
     const publicKey = pair.getPublicKey().toString(), accountId = this.config.account || 'cli.testnet';
     const signature = Buffer.from(pair.sign(hash).signature).toString('base64');
     return [{ accountId, publicKey, signedMessage: { accountId, publicKey, signature: this.config.badSignature ? 'bad' : signature } }];
+  }
+  async signAndSendTransaction(params) {
+    this.config.transactionRequests ??= [];
+    this.config.transactionRequests.push(params);
+    if (this.config.transactionResult instanceof Error) throw this.config.transactionResult;
+    return this.config.transactionResult;
   }
   async signMessage(params) {
     this.config.messageRequests ??= [];
@@ -54,6 +63,9 @@ function fakeBrowser(url, { top = true, storageFails = false, approved = '' } = 
   const ids = ['wallet-connect', 'wallet-disconnect', 'wallet-status', 'wallet-open-site', 'wallet-dialog', 'wallet-close', 'wallet-options', 'wallet-dialog-status', 'wallet-title-text', 'wallet-dialog-description', 'wallet-banner', 'wallet-safety',
     'wallet-account-entry', 'wallet-account-form', 'wallet-account-id', 'wallet-account-error', 'wallet-account-back', 'wallet-cli-verify',
     'wallet-account-view', 'wallet-account-name', 'wallet-account-badge', 'wallet-account-warning', 'wallet-account-near', 'wallet-account-usdc', 'wallet-account-balance-status', 'wallet-account-use-wallet', 'wallet-account-refresh', 'wallet-owner-verify', 'wallet-owner-status',
+    'wallet-direct-outlayer-open', 'wallet-direct-outlayer-panel', 'wallet-direct-outlayer-status', 'wallet-direct-outlayer-hash',
+    'wallet-direct-outlayer-result', 'wallet-direct-outlayer-review', 'wallet-direct-outlayer-send', 'wallet-direct-outlayer-check',
+    'wallet-direct-outlayer-recover', 'wallet-direct-outlayer-original', 'wallet-direct-outlayer-recover-original',
     'wallet-buffer-readiness', 'wallet-buffer-readiness-status', 'wallet-buffer-setup-start', 'wallet-buffer-setup-panel',
     'wallet-buffer-setup-terms', 'wallet-buffer-setup-reserve', 'wallet-buffer-setup-approve', 'wallet-buffer-setup-status',
     'wallet-setup-recovery', 'wallet-setup-recovery-status',
@@ -118,15 +130,29 @@ test('wallet origin policy blocks shared origins, unapproved sites, HTTP and ifr
   assert.equal(walletOriginAllowed(location('https://safe-4173.app.github.dev/'), true), true);
   assert.equal(walletOriginAllowed(location('https://4173-example.e2b.app/'), true), true);
   assert.equal(walletOriginAllowed(location('https://4173-example.e2b.app/'), false), false);
+  assert.equal(walletOriginAllowed(location(`${DIRECT_PREVIEW_ORIGIN}/`), true), true);
+  assert.equal(walletOriginAllowed(location(`${DIRECT_PREVIEW_ORIGIN}/`), false), false);
+  assert.equal(walletOriginAllowed(location('https://different-preview.vercel.app/'), true), false);
   assert.equal(walletOriginAllowed(location('http://127.0.0.1:4173/'), true), true);
 });
 
-test('preview mode explicitly states the app is read-only until the backend is enabled', async () => {
+test('native setup is restricted to the dedicated top-level site or its test preview', () => {
+  assert.equal(nativeSetupOriginAllowed(location('https://bouncer-near.vercel.app/'), true), true);
+  assert.equal(nativeSetupOriginAllowed(location('https://4173-example.e2b.app/'), true), true);
+  assert.equal(nativeSetupOriginAllowed(location('https://bouncer-near.vercel.app/'), false), false);
+  assert.equal(nativeSetupOriginAllowed(location('https://other.vercel.app/'), true), false);
+  assert.equal(nativeSetupOriginAllowed(location('https://4174-example.e2b.app/'), true), false);
+  assert.equal(nativeSetupOriginAllowed(location('http://4173-example.e2b.app/'), true), false);
+  assert.equal(nativeSetupOriginAllowed(location('http://127.0.0.1:4173/'), true), false);
+});
+
+test('preview mode explains the setup gate without ruling out wallet onboarding', async () => {
   const browser = fakeBrowser('http://127.0.0.1:4173/');
   await initWallet({ window: browser.win, document: browser.doc, NearConnector: connectorClass({}) });
-  assert.match(browser.nodes['wallet-status'].textContent, /Preview mode: read-only/i);
-  assert.match(browser.nodes['wallet-dialog-status'].textContent, /Preview mode: read-only/i);
-  assert.match(browser.nodes['wallet-status'].textContent, /no wallet transaction or key request is sent/i);
+  assert.match(browser.nodes['wallet-status'].textContent, /Preview mode: Bouncer spending setup is read-only/i);
+  assert.equal(browser.nodes['wallet-dialog-status'].textContent, browser.nodes['wallet-status'].textContent);
+  assert.match(browser.nodes['wallet-status'].textContent, /Some wallets may request their own setup/i);
+  assert.doesNotMatch(browser.nodes['wallet-status'].textContent, /no wallet transaction or key request is sent/i);
 });
 
 test('wallet manifests are curated testnet choices with pinned, integrity-checked executors', () => {
@@ -214,6 +240,65 @@ test('connects and disconnects a wallet-reported account without requesting a ke
   assert.ok(browser.openers.every(button => button.attributes['aria-label'] === 'Connect wallet or Google account'));
   assert.equal(browser.nodes['wallet-title-text'].textContent, 'Connect an account');
   assert.match(browser.nodes['wallet-dialog-description'].textContent, /Google/);
+});
+
+test('direct OutLayer control is shown only for the named Meteor session on the dedicated preview', async () => {
+  for (const [url, approved, account, walletId, visible] of [
+    [`${DIRECT_PREVIEW_ORIGIN}/`, '', 'great_mujey.testnet', 'meteor-wallet', true],
+    [`${DIRECT_PREVIEW_ORIGIN}/`, '', 'alice.testnet', 'meteor-wallet', false],
+    [`${DIRECT_PREVIEW_ORIGIN}/`, '', 'great_mujey.testnet', 'intear-wallet', false],
+    ['https://4174-example.e2b.app/', '', 'great_mujey.testnet', 'meteor-wallet', false],
+    ['https://bouncer-near.vercel.app/', 'https://bouncer-near.vercel.app', 'great_mujey.testnet', 'meteor-wallet', false],
+    ['http://127.0.0.1:4173/', '', 'great_mujey.testnet', 'meteor-wallet', false],
+  ]) {
+    const browser=fakeBrowser(url,{approved}), config={account};
+    await initWallet({window:browser.win,document:browser.doc,NearConnector:connectorClass(config)});
+    await browser.options.find(option=>option.dataset.walletId===walletId).click();
+    assert.equal(browser.nodes['wallet-direct-outlayer-open'].hidden,!visible);
+    assert.equal(browser.nodes['wallet-direct-outlayer-panel'].hidden,true);
+    assert.equal(config.transactionRequests,undefined,'connecting never starts the direct transaction');
+  }
+});
+
+test('direct preview review is read-only and one explicit tap invokes only the fixed wallet action', async () => {
+  const browser=fakeBrowser(`${DIRECT_PREVIEW_ORIGIN}/`), txHash=encodeBase58(new Uint8Array(32).fill(7));
+  const config={account:'great_mujey.testnet',transactionResult:{transaction:{hash:txHash},transaction_outcome:{id:txHash}}};
+  browser.win.indexedDB=new IDBFactory();browser.win.navigator.storage={persist:async()=>true,persisted:async()=>true};
+  const prior=browser.win.fetch, block=encodeBase58(new Uint8Array(32).fill(9));
+  const source={WasmUrl:{url:`https://wasmhub.testnet.fastfs.io/fastfs.testnet/${DIRECT_VERSION}.wasm`,hash:DIRECT_VERSION,build_target:'wasm32-wasip2'}};
+  browser.win.fetch=async(url,options={})=>{
+    if(url!=='https://rpc.testnet.near.org')return prior(url,options);
+    const q=JSON.parse(options.body);let result;
+    if(q.method==='status')result={chain_id:'testnet'};
+    else if(q.method==='block')result={header:{hash:block,height:123,timestamp_nanosec:String(BigInt(Date.now())*1000000n)}};
+    else if(q.method==='EXPERIMENTAL_protocol_config')result={chain_id:'testnet',runtime_config:{storage_amount_per_byte:'10000000000000000000'}};
+    else if(q.method==='query'){
+      if(q.params.request_type==='view_account')result={block_hash:block,amount:'22000000000000000000000000',storage_usage:1024};
+      else if(q.params.request_type==='view_access_key_list')result={block_hash:block,keys:[{access_key:{permission:'FullAccess'}}]};
+      else {const value=q.params.method_name==='get_project'?{project_id:DIRECT_PROJECT,uuid:DIRECT_UUID,owner:'zavodil2.testnet'}:
+        q.params.method_name==='get_version'?{wasm_hash:DIRECT_VERSION,source}:null;
+        result={block_hash:block,result:[...Buffer.from(JSON.stringify(value))]};}
+    }
+    return new Response(JSON.stringify({jsonrpc:'2.0',id:q.id,result}),{headers:{'content-type':'application/json'}});
+  };
+  await initWallet({window:browser.win,document:browser.doc,NearConnector:connectorClass(config)});
+  await browser.options.find(option=>option.dataset.walletId==='meteor-wallet').click();
+  await browser.nodes['wallet-direct-outlayer-open'].click();
+  assert.equal(browser.nodes['wallet-direct-outlayer-panel'].hidden,false);
+  assert.equal(browser.nodes['wallet-direct-outlayer-send'].hidden,false);
+  assert.equal(config.transactionRequests,undefined,'checking readiness does not prompt');
+  await browser.nodes['wallet-direct-outlayer-send'].click();
+  for(let i=0;i<50 && !config.transactionRequests;i++)await new Promise(resolve=>setTimeout(resolve,2));
+  assert.equal(config.transactionRequests.length,1);
+  assert.equal(config.transactionRequests[0].signerId,'great_mujey.testnet');
+  assert.equal(config.transactionRequests[0].receiverId,'outlayer.testnet');
+  assert.equal(config.transactionRequests[0].actions[0].params.deposit,DIRECT_DEPOSIT);
+  for(let i=0;i<50 && browser.nodes['wallet-direct-outlayer-hash'].hidden;i++)await new Promise(resolve=>setTimeout(resolve,2));
+  assert.match(browser.nodes['wallet-direct-outlayer-hash'].textContent,new RegExp(txHash));
+  assert.equal(browser.nodes['wallet-direct-outlayer-send'].hidden,true);
+  assert.equal(browser.nodes['wallet-direct-outlayer-check'].hidden,false);
+  await browser.nodes['wallet-direct-outlayer-send'].click();
+  assert.equal(config.transactionRequests.length,1);
 });
 
 test('connected phone-wallet accounts can verify a fresh identity message without approving spending', async () => {
@@ -454,6 +539,24 @@ test('Ethereum wallet connection failure does not claim a setup transaction was 
   await browser.nodes['wallet-ethereum-continue'].click();
   assert.match(browser.nodes['wallet-status'].textContent, /Setup may have been submitted.*do not retry.*original transaction.*reconciled/);
   assert.doesNotMatch(browser.nodes['wallet-status'].textContent, /No transaction was sent/);
+});
+
+test('a late WalletConnect configuration cannot erase an uncertain wallet result', async () => {
+  const browser = fakeBrowser('http://127.0.0.1:4173/'), config = { fail: true };
+  let releaseConfig;
+  const configReady = new Promise(resolve => { releaseConfig = resolve; });
+  const originalFetch = browser.win.fetch;
+  browser.win.fetch = async target => String(target).endsWith('/walletconnect-config.json')
+    ? configReady : originalFetch(target);
+  await initWallet({ window: browser.win, document: browser.doc, NearConnector: connectorClass(config) });
+  await browser.options.find(option => option.dataset.walletId === 'ethereum-wallets').click();
+  await browser.nodes['wallet-ethereum-continue'].click();
+  const uncertain = browser.nodes['wallet-status'].textContent;
+  assert.match(uncertain, /Setup may have been submitted.*do not retry/);
+  releaseConfig(new Response(JSON.stringify({ projectId: 'a'.repeat(32) }), { status: 200 }));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(browser.nodes['wallet-status'].textContent, uncertain);
+  assert.equal(browser.nodes['wallet-dialog-status'].textContent, uncertain);
 });
 
 test('typed account selects an unverified, view-only account without a CLI, signer, key or transaction', async () => {
@@ -746,4 +849,89 @@ test('Mobile sign-in events cannot bypass the verified message-only path', async
   await browser.options.find(option => option.dataset.walletId === 'near-mobile').click();
   assert.match(browser.nodes['wallet-status'].textContent, /Connected: mobile\.testnet \(NEAR Mobile login verified against testnet\)/);
   assert.ok(browser.openers.every(button => button.dataset.walletState === 'connected'));
+});
+
+test('a capability-verified temporary host shows the direct test and records its original with persistence denied', async () => {
+  const browser=fakeBrowser('https://abcd1234.csb.app/'), txHash=encodeBase58(new Uint8Array(32).fill(7));
+  const config={account:'great_mujey.testnet',transactionResult:{transaction:{hash:txHash},transaction_outcome:{id:txHash}}};
+  const saved=new Map();browser.win.location.hash=`#bouncer-direct=${'a'.repeat(43)}`;
+  browser.win.sessionStorage={setItem:(k,v)=>saved.set(k,v),getItem:k=>saved.get(k)};
+  browser.win.indexedDB=new IDBFactory();browser.win.navigator.storage={persist:async()=>false,persisted:async()=>false};
+  const prior=browser.win.fetch, block=encodeBase58(new Uint8Array(32).fill(9));let state='ready',retained=null,claims=0;
+  const source={WasmUrl:{url:`https://wasmhub.testnet.fastfs.io/fastfs.testnet/${DIRECT_VERSION}.wasm`,hash:DIRECT_VERSION,build_target:'wasm32-wasip2'}};
+  browser.win.fetch=async(url,options={})=>{
+    if(String(url).includes('/functions/v1/bouncer-direct-one-shot')){
+      const {capability,operation,original_hash}=JSON.parse(options.body);assert.equal(capability,'a'.repeat(43));let won=false;
+      if(operation==='claim'&&state==='ready'){state='claimed';claims++;won=true;}
+      if(operation==='retain'){state='retained';retained=original_hash;}
+      return new Response(JSON.stringify({scope:'direct',state,original_hash:retained,claim_acquired:won,expired:false}));
+    }
+    if(url!=='https://rpc.testnet.near.org')return prior(url,options);
+    const q=JSON.parse(options.body);let result;
+    if(q.method==='status')result={chain_id:'testnet'};
+    else if(q.method==='block')result={header:{hash:block,height:123,timestamp_nanosec:String(BigInt(Date.now())*1000000n)}};
+    else if(q.method==='EXPERIMENTAL_protocol_config')result={chain_id:'testnet',runtime_config:{storage_amount_per_byte:'10000000000000000000'}};
+    else if(q.method==='query'){
+      if(q.params.request_type==='view_account')result={block_hash:block,amount:'22000000000000000000000000',storage_usage:1024};
+      else if(q.params.request_type==='view_access_key_list')result={block_hash:block,keys:[{access_key:{permission:'FullAccess'}}]};
+      else {const value=q.params.method_name==='get_project'?{project_id:DIRECT_PROJECT,uuid:DIRECT_UUID,owner:'zavodil2.testnet'}:
+        q.params.method_name==='get_version'?{wasm_hash:DIRECT_VERSION,source}:null;
+        result={block_hash:block,result:[...Buffer.from(JSON.stringify(value))]};}
+    }
+    return new Response(JSON.stringify({jsonrpc:'2.0',id:q.id,result}),{headers:{'content-type':'application/json'}});
+  };
+  await initWallet({window:browser.win,document:browser.doc,NearConnector:connectorClass(config)});
+  await browser.options.find(option=>option.dataset.walletId==='meteor-wallet').click();
+  assert.equal(browser.nodes['wallet-direct-outlayer-open'].hidden,false);
+  await browser.nodes['wallet-direct-outlayer-open'].click();
+  assert.equal(config.transactionRequests,undefined);assert.equal(claims,0);
+  await browser.nodes['wallet-direct-outlayer-send'].click();
+  for(let i=0;i<50 && retained!==txHash;i++)await new Promise(resolve=>setTimeout(resolve,2));
+  assert.equal(config.transactionRequests.length,1);assert.equal(claims,1);assert.equal(retained,txHash);
+  assert.equal(config.transactionRequests[0].receiverId,'outlayer.testnet');
+  assert.equal(config.transactionRequests[0].actions[0].params.deposit,DIRECT_DEPOSIT);
+  assert.equal(browser.nodes['wallet-direct-outlayer-send'].hidden,true);
+});
+
+test('temporary wallet host remains blocked when its capability cannot be checked', async () => {
+  const browser=fakeBrowser('https://abcd1234.csb.app/'),config={account:'great_mujey.testnet'};
+  browser.win.location.hash=`#bouncer-direct=${'a'.repeat(43)}`;
+  browser.win.sessionStorage={setItem(){},getItem(){return null}};
+  browser.win.fetch=async()=>new Response('{}',{status:503});
+  await initWallet({window:browser.win,document:browser.doc,NearConnector:connectorClass(config)});
+  assert.equal(config.instance,undefined);
+  assert.equal(browser.nodes['wallet-direct-outlayer-open'].hidden,true);
+  assert.equal(config.transactionRequests,undefined);
+});
+
+test('opening the private link again reloads after the hosting trust page drops its fragment',async()=>{
+  const browser=fakeBrowser('https://abcd1234.csb.app/'),config={};let handler,reloads=0;
+  browser.win.location.hash='';browser.win.location.reload=()=>{reloads++};
+  browser.win.addEventListener=(type,fn)=>{if(type==='hashchange')handler=fn};
+  browser.win.sessionStorage={setItem(){},getItem(){return null}};
+  await initWallet({window:browser.win,document:browser.doc,NearConnector:connectorClass(config)});
+  assert.equal(config.instance,undefined);assert.equal(typeof handler,'function');
+  browser.win.location.hash='#connect';handler();assert.equal(reloads,0);
+  browser.win.location.hash=`#bouncer-direct=${'a'.repeat(43)}`;handler();assert.equal(reloads,1);
+});
+
+test('the public site shows the direct test only after its exact-origin journal responds',async()=>{
+  const browser=fakeBrowser('https://bouncer-near.vercel.app/',{approved:'https://bouncer-near.vercel.app'}),config={account:'great_mujey.testnet'};
+  browser.win.location.hash=`#bouncer-direct=${'a'.repeat(43)}`;
+  browser.win.sessionStorage={setItem(){},getItem(){return null}};
+  const prior=browser.win.fetch;
+  browser.win.fetch=async(url,options)=>String(url).includes('/functions/v1/bouncer-direct-one-shot')
+    ?new Response(JSON.stringify({scope:'direct',state:'ready',original_hash:null,claim_acquired:false,expired:false})):prior(url,options);
+  await initWallet({window:browser.win,document:browser.doc,NearConnector:connectorClass(config)});
+  await browser.options.find(option=>option.dataset.walletId==='meteor-wallet').click();
+  assert.equal(browser.nodes['wallet-direct-outlayer-open'].hidden,false);assert.equal(config.transactionRequests,undefined);
+});
+
+test('opening a private direct link in an existing public-site tab reloads to check it',async()=>{
+  const browser=fakeBrowser('https://bouncer-near.vercel.app/',{approved:'https://bouncer-near.vercel.app'}),config={};let handler,reloads=0;
+  browser.win.location.hash='';browser.win.location.reload=()=>{reloads++};
+  browser.win.addEventListener=(type,fn)=>{if(type==='hashchange')handler=fn};browser.win.sessionStorage={setItem(){},getItem(){return null}};
+  await initWallet({window:browser.win,document:browser.doc,NearConnector:connectorClass(config)});
+  browser.win.location.hash='#connect';handler();assert.equal(reloads,0);
+  browser.win.location.hash=`#bouncer-direct=${'a'.repeat(43)}`;handler();assert.equal(reloads,1);
 });

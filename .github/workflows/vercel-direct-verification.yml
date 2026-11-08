@@ -1,0 +1,49 @@
+# These push-triggered checks use no real wallet, key, signature, or NEAR transaction.
+name: Verify direct-test Vercel route
+on:
+  push:
+    branches: ['arena/**']
+permissions:
+  contents: read
+jobs:
+  browser:
+    if: contains(github.event.head_commit.message, '[vercel-direct-staged]') || contains(github.event.head_commit.message, '[vercel-direct-live]') || contains(github.event.head_commit.message, '[vercel-direct-journal]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 9
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+      - name: Install browser test dependencies
+        working-directory: bouncer
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm install --prefix "$RUNNER_TEMP/bouncer-browser" --no-save --no-audit --no-fund playwright-core@1.64.1
+      - name: Verify production assets and CSP before live browser tests
+        if: contains(github.event.head_commit.message, '[vercel-direct-live]')
+        working-directory: bouncer
+        run: node scripts/verify-live-vercel-direct.mjs
+      - name: Exercise mobile UI with a synthetic wallet and journal
+        if: contains(github.event.head_commit.message, '[vercel-direct-staged]') || contains(github.event.head_commit.message, '[vercel-direct-live]')
+        working-directory: bouncer
+        env:
+          BOUNCER_VERCEL_MODE: ${{ contains(github.event.head_commit.message, '[vercel-direct-live]') && 'live' || 'staged' }}
+          BOUNCER_PLAYWRIGHT_PATH: ${{ runner.temp }}/bouncer-browser/node_modules/playwright-core/index.mjs
+        run: node scripts/test-hosted-direct-mobile.mjs
+      - name: Exercise the real pinned Meteor mobile handoff without a wallet
+        if: contains(github.event.head_commit.message, '[vercel-direct-staged]') || contains(github.event.head_commit.message, '[vercel-direct-live]')
+        working-directory: bouncer
+        env:
+          BOUNCER_VERCEL_MODE: ${{ contains(github.event.head_commit.message, '[vercel-direct-live]') && 'live' || 'staged' }}
+          BOUNCER_PLAYWRIGHT_PATH: ${{ runner.temp }}/bouncer-browser/node_modules/playwright-core/index.mjs
+        run: node scripts/probe-real-meteor-adapter.mjs
+      - name: Exercise one disposable live journal row from the Vercel origin
+        if: contains(github.event.head_commit.message, '[vercel-direct-journal]')
+        working-directory: bouncer
+        env:
+          BOUNCER_VERCEL_JOURNAL: '1'
+          BOUNCER_PLAYWRIGHT_PATH: ${{ runner.temp }}/bouncer-browser/node_modules/playwright-core/index.mjs
+        run: node scripts/probe-hosted-direct-journal.mjs

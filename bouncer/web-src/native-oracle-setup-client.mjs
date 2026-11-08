@@ -1,0 +1,193 @@
+/**
+ * Experimental phone-side native setup transport. The account UI exposes it
+ * only when the disabled-by-default preview backend advertises availability.
+ * A separately operated checkpoint, safe custody/recovery and a real
+ * device/wallet test remain prerequisites before live use. This code cannot
+ * purchase a resource or broadcast directly. `approveStage` asks the wallet
+ * for one exact reviewed transaction only after authenticated one-shot claim;
+ * a lost claim/result must be reconciled and must NEVER be retried.
+ */
+import { signReviewedNativeSetupChallenge } from './native-oracle-setup-auth.mjs';
+import { prepareNativeOracleSetupWalletPrompt, prepareAtomicNativeOracleSetupWalletPrompt,
+  prepareCompressedNativeOracleSetupWalletPrompt } from './native-oracle-setup-wallet-prompt.mjs';
+import { assertNativeOracleWalletDeployAvailable, NATIVE_ORACLE_V9_BYTES } from './native-oracle-wallet-compatibility.mjs';
+import { withReadOnlyRelay } from './buffer-readiness-preview.mjs';
+
+const OWNER='great_mujey.testnet', PREFIX='/api/native-oracle-setup/', BYTES=NATIVE_ORACLE_V9_BYTES;
+const HEADERS={'x-bouncer-preview':'native-oracle-setup-v1'};
+const STAGES=['create_keyless_native_vault','configure_native_oracle_policy','fund_native_vault','install_native_oracle_agent'];
+const ATOMIC_STAGES=['create_configure_fund_native_vault','install_native_oracle_agent'];
+const COMPRESSED_STAGES=['create_compressed_native_vault','configure_fund_native_oracle','install_native_oracle_agent'];
+const COMPRESSED_FORMAT='bouncer-research-compressed-native-oracle-wallet-review-v1', LOADER_BYTES=28_950, COMPRESSED_BYTES=135_476;
+const codes=new Set(['UNAUTHENTICATED','OWNER_FENCED','OWNER_ALREADY_WITNESSED','ALREADY_CLAIMED','WITNESS_NOT_CLAIMABLE',
+  'WITNESS_COMMIT_UNKNOWN','WITNESS_MISMATCH','WITNESS_HEAD_CHANGED','CROSS_FLOW_WITNESSED','GLOBAL_FENCE_UNSAFE',
+  'GLOBAL_FENCE_LEGACY_RECONCILIATION_REQUIRED','PREFLIGHT_UNAVAILABLE','PREFLIGHT_BLOCKED','PREFLIGHT_STALE',
+  'CLAIM_COMMITTED_PREFLIGHT_STALE','WITNESSED_CLAIM_STALE','WITNESSED_POSTCHECK_UNAVAILABLE',
+  'PRIOR_UNRESOLVED','RECEIPT_UNKNOWN','MISMATCH','DATABASE_UNKNOWN']);
+const fail=code=>{const error=new Error(code);error.code=code;return error};
+async function bounded(response,max) {
+  const length=response.headers?.get?.('content-length');
+  if(length!==null && length!==undefined && (!/^\d+$/.test(length) || Number(length)>max))throw fail('NATIVE_SETUP_UNAVAILABLE');
+  if(!response.body?.getReader)throw fail('NATIVE_SETUP_UNAVAILABLE');
+  const reader=response.body.getReader(),parts=[];let count=0;
+  try { while(true){const {value,done}=await reader.read();if(done)break;count+=value.length;
+    if(count>max){await reader.cancel();throw fail('NATIVE_SETUP_UNAVAILABLE')}parts.push(value)} }
+  finally {reader.releaseLock()}
+  const out=new Uint8Array(count);let offset=0;for(const part of parts){out.set(part,offset);offset+=part.length}return out;
+}
+export function createNativeOracleSetupClient({wallet,accountId,ownerPublicKey,deviceStore,location,crypto,
+  fetch:fetchImpl=globalThis.fetch,isCurrent,isTopLevel,now=Date.now,onProgress=()=>{},relay=withReadOnlyRelay}={}) {
+  if(accountId!==OWNER || !wallet || typeof wallet.signMessage!=='function' || typeof ownerPublicKey!=='string' ||
+      !deviceStore || typeof deviceStore.inspect!=='function' || !location || !crypto?.subtle || typeof fetchImpl!=='function' ||
+      typeof isCurrent!=='function' || isTopLevel!==true || typeof now!=='function' || typeof onProgress!=='function' || typeof relay!=='function') {
+    throw fail('NATIVE_SETUP_UNAVAILABLE');
+  }
+  const session=()=>{if(isCurrent()!==true)throw fail('NATIVE_SETUP_SESSION_CHANGED')};
+  const context=purpose=>({purpose,owner:OWNER,ownerPublicKey});
+  async function request(route,data) {
+    session();let response,body;
+    try {
+      response=await fetchImpl(`${PREFIX}${route}`,{method:'POST',credentials:'same-origin',cache:'no-store',
+        headers:{...HEADERS,'content-type':'application/json'},body:JSON.stringify(data)});
+      body=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(await bounded(response,64_000)));
+    }catch{throw fail('NATIVE_SETUP_RESULT_UNKNOWN')}
+    if(!response.ok)throw fail(codes.has(body?.error)?body.error:'NATIVE_SETUP_RESULT_UNKNOWN');return body;
+  }
+  const pump=work=>relay({fetch:fetchImpl,work,onProgress,now});
+  const sign=(ctx,challenge)=>{session();return signReviewedNativeSetupChallenge({wallet,context:ctx,challenge,location,crypto,fetch:fetchImpl,now})};
+  async function device(review) {
+    session();if(review?.owner!==OWNER || typeof review.vault!=='string' || typeof review.agent_public_key!=='string')throw fail('NATIVE_SETUP_UNAVAILABLE');
+    const result=await deviceStore.inspect({owner:OWNER,vault:review.vault,expected_public_key:review.agent_public_key});session();
+    if(result?.status!=='LOCAL_DEVICE_KEY_AVAILABLE' || result.owner!==OWNER || result.vault!==review.vault || result.origin!==location.origin ||
+       result.public_key!==review.agent_public_key || result.expected_public_key_matched!==true || result.private_key_exportable!==false ||
+       result.local_storage_only!==true || result.signing_authorized!==false)throw fail('NATIVE_DEVICE_KEY_UNAVAILABLE');
+    return result;
+  }
+  async function artifactPart(name,size) {
+    session();let response;
+    try{response=await fetchImpl(`${PREFIX}${name}`,{headers:HEADERS,credentials:'same-origin',cache:'no-store'})}catch{throw fail('NATIVE_SETUP_UNAVAILABLE')}
+    if(!response.ok)throw fail('NATIVE_SETUP_UNAVAILABLE');const data=await bounded(response,size);
+    if(data.length!==size)throw fail('NATIVE_SETUP_UNAVAILABLE');session();return data;
+  }
+  const artifact=()=>artifactPart('artifact',BYTES);
+  const compactArtifacts=async()=>({loaderBytes:await artifactPart('loader',LOADER_BYTES),compressedBytes:await artifactPart('compressed',COMPRESSED_BYTES)});
+  async function config() {
+    session();try{const response=await fetchImpl(`${PREFIX}config`,{headers:HEADERS,credentials:'same-origin',cache:'no-store'});
+      const body=JSON.parse(new TextDecoder().decode(await bounded(response,4096)));
+      if(!response.ok || body?.enabled!==true || body.network!=='testnet' || body.owner!==OWNER || body.ready_for_real_spending!==false)return null;
+      session();return body;
+    }catch{return null}
+  }
+  async function checkCompressedBeforeReservation(review) {
+    if((await config())?.compressed_review_enabled!==true)throw fail('NATIVE_SETUP_UNAVAILABLE');
+    const deviceKey=await device(review),artifacts=await compactArtifacts();
+    const identity={owner:OWNER,owner_public_key:ownerPublicKey,operation_id:'0'.repeat(32),review_sha256:review.review_sha256,
+      stages:review.stages?.map(s=>({stage_id:s.id,action_commitment_sha256:s.action_commitment_sha256}))};
+    // Rebuild and hash all reviewed bytes BEFORE any reservation or identity
+    // signature. Preparation itself never invokes the wallet or consumes a claim.
+    await prepareCompressedNativeOracleSetupWalletPrompt({wallet,identity,review,deviceKey,stageId:COMPRESSED_STAGES[0],
+      ...artifacts,location,isTopLevel,crypto,now});session();
+  }
+  return Object.freeze({
+    /** Direct V9 remains blocked for Meteor; compact is separately opt-in and
+     * validated before a reservation. Neither check proves real-wallet support. */
+    assertWalletDeployAvailable({review}={}) { session();
+      if(review?.format===COMPRESSED_FORMAT)return checkCompressedBeforeReservation(review);
+      return assertNativeOracleWalletDeployAvailable(wallet); },
+    async enabled() { return Boolean(await config()); },
+    /** Separately opt-in: enabling setup alone never enables submission. */
+    async trialSubmissionEnabled() { return (await config())?.trial_submission_enabled===true; },
+    /** Generate only an unsigned fixed testnet review for an already retained
+     * local device key. Creating a key or trusting its backup is a separate step. */
+    async createReview({agentPublicKey}={}) {
+      await device({owner:OWNER,vault:`native.${OWNER}`,agent_public_key:agentPublicKey});
+      const settings=await config(),compressed=settings?.compressed_review_enabled===true,
+        atomic=!compressed && settings?.atomic_review_enabled===true;session();
+      const result=await request('review',atomic||compressed?{agentPublicKey,ownerPublicKey}:{agentPublicKey});
+      if(result?.review?.format!==(compressed?COMPRESSED_FORMAT:atomic?'bouncer-atomic-native-oracle-wallet-review-v1':'bouncer-native-oracle-wallet-review-v1') ||
+         ((atomic||compressed) && result.review.owner_public_key!==ownerPublicKey) ||
+         !/^[a-f0-9]{64}$/.test(result?.task_id??'') || result.task_id!==result?.review?.review_sha256 || result?.review?.owner!==OWNER ||
+         result.review.vault!==`native.${OWNER}` || result.review.agent_public_key!==agentPublicKey ||
+         result.signing_authorized!==false || result.transaction_sent!==false)throw fail('NATIVE_SETUP_UNAVAILABLE');
+      await device(result.review);return result;
+    },
+    async reserve({taskId,review}={}) {
+      session();if(!/^[a-f0-9]{64}$/.test(taskId??'') || taskId!==review?.review_sha256)throw fail('NATIVE_SETUP_UNAVAILABLE');
+      // Check before owner authentication or a durable reservation. A blocked
+      // route must not leave a claimed or apparently uncertain wallet prompt.
+      if(review?.format===COMPRESSED_FORMAT)await checkCompressedBeforeReservation(review);
+      else assertNativeOracleWalletDeployAvailable(wallet);
+      await device(review);
+      const agentPublicKey=review.agent_public_key;
+      const challenge=await request('reserve-challenge',{taskId,ownerPublicKey,agentPublicKey});
+      const evidence=await sign({...context('reserve_native_setup'),review},challenge);
+      return pump(()=>request('reserve',{taskId,ownerPublicKey,agentPublicKey,evidence}));
+    },
+    /** Call only from an explicit owner action after reviewing this exact stage. */
+    async approveStage({identity,review,stageId}={}) {
+      session();
+      const atomic=review?.format==='bouncer-atomic-native-oracle-wallet-review-v1',compressed=review?.format===COMPRESSED_FORMAT;
+      if(!atomic && !compressed && review?.format!=='bouncer-native-oracle-wallet-review-v1')throw fail('NATIVE_SETUP_UNAVAILABLE');
+      const stages=compressed?COMPRESSED_STAGES:atomic?ATOMIC_STAGES:STAGES;
+      if(!stages.includes(stageId) || identity?.owner_public_key!==ownerPublicKey)throw fail('NATIVE_SETUP_UNAVAILABLE');
+      onProgress(stageId===stages[0]?'Verifying the reviewed vault code…':'Preparing the reviewed native testnet action…');
+      const deviceKey=await device(review),first=stageId===stages[0];
+      const wasmBytes=first && !compressed?await artifact():undefined, compact=first && compressed?await compactArtifacts():{};
+      const prepare=compressed?prepareCompressedNativeOracleSetupWalletPrompt:atomic?prepareAtomicNativeOracleSetupWalletPrompt:prepareNativeOracleSetupWalletPrompt;
+      const prompt=await prepare({wallet,identity,review,deviceKey,stageId,wasmBytes,...compact,location,isTopLevel,crypto,now});
+      session();const challenge=await request('claim-challenge',{identity,stageId});
+      const evidence=await sign({...context('claim_native_setup_stage'),identity,stageId},challenge);
+      const claim=await pump(()=>request('claim',{identity,stageId,evidence}));session();
+      return prompt.invoke(claim);
+    },
+    async recordOriginal({identity,stageId,originalHash}={}) {
+      session();const challenge=await request('original-challenge',{identity,stageId,originalHash});
+      const evidence=await sign({...context('record_native_setup_original'),identity,stageId,originalHash},challenge);
+      return pump(()=>request('original',{identity,stageId,originalHash,evidence}));
+    },
+    async inspect() {
+      session();const challenge=await request('inspect-challenge',{ownerPublicKey});
+      const evidence=await sign(context('inspect_native_setup'),challenge);
+      return pump(()=>request('inspect',{ownerPublicKey,evidence}));
+    },
+    async previewOriginal({stageId,originalHash}={}) {
+      session();const challenge=await request('inspect-challenge',{ownerPublicKey});
+      const evidence=await sign(context('inspect_native_setup'),challenge);
+      return pump(()=>request('preview-original',{ownerPublicKey,stageId,originalHash,evidence}));
+    },
+    /** Receipt-only recovery of the independently witnessed trial. A missing
+     * or mismatched receipt never authorizes another submission. */
+    async previewTrial() {
+      session();const challenge=await request('inspect-challenge',{ownerPublicKey});
+      const evidence=await sign(context('inspect_native_setup'),challenge);
+      return pump(()=>request('preview-trial',{ownerPublicKey,evidence}));
+    },
+    async verifyCompletion({identity}={}) {
+      session();const challenge=await request('completion-challenge',{identity});
+      const evidence=await sign({...context('verify_native_setup_completion'),identity},challenge);
+      return pump(()=>request('completion',{identity,evidence}));
+    },
+    /** Record the precomputed original once. Both signatures are off-chain
+     * owner authentication, not a transaction or proof of spending consent. */
+    async claimTrial({identity:rawIdentity,goal:rawGoal,trial:rawTrial,expectedWitnessHead}={}) {
+      session();const identity=structuredClone(rawIdentity),goal=structuredClone(rawGoal),trial=structuredClone(rawTrial);
+      if(identity?.owner!==OWNER || identity.owner_public_key!==ownerPublicKey)throw fail('NATIVE_SETUP_UNAVAILABLE');
+      const challenge=await request('trial-challenge',{identity,goal,trial,expectedWitnessHead});
+      const evidence=await sign({...context('claim_native_oracle_trial'),identity,trial,expectedWitnessHead},challenge);session();
+      const completionChallenge=await request('completion-challenge',{identity});
+      const completionEvidence=await sign({...context('verify_native_setup_completion'),identity},completionChallenge);session();
+      const result=await pump(()=>request('trial',{identity,goal,trial,expectedWitnessHead,evidence,completionEvidence}));session();
+      const fields=['status','owner','operation_id','review_sha256','goal_id','goal_sha256','agent_public_key','original_hash',
+        'witness_head','independently_witnessed','do_not_retry','execution_authorized','transaction_sent'];
+      if(!result || Object.keys(result).length!==fields.length || fields.some(k=>!Object.hasOwn(result,k)) ||
+          result.status!=='TRIAL_ORIGINAL_WITNESSED' || result.owner!==OWNER || result.operation_id!==identity.operation_id ||
+          result.review_sha256!==identity.review_sha256 || result.goal_id!==trial.goal_id || result.goal_sha256!==trial.goal_sha256 ||
+          result.agent_public_key!==trial.agent_public_key || result.original_hash!==trial.original_hash ||
+          !/^[a-f0-9]{40}$/.test(result.witness_head??'') || result.witness_head===expectedWitnessHead ||
+          result.independently_witnessed!==true || result.do_not_retry!==true || result.execution_authorized!==false || result.transaction_sent!==false) {
+        throw fail('NATIVE_SETUP_RESULT_UNKNOWN');
+      }
+      return result;
+    },
+  });
+}

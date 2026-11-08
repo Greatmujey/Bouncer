@@ -17,6 +17,7 @@ import { execFileSync } from 'node:child_process';
 import { isTestnetAccount } from '../shared/account-id.mjs';
 import { parseWalletWitness, WalletWitnessError } from './git-wallet-prompt-witness.mjs';
 import { parseBufferOrderWitness } from './git-buffer-order-witness.mjs';
+import { parseNativeOraclePromptWitness } from './git-native-oracle-prompt-witness.mjs';
 
 const failed = () => new WalletWitnessError('GIT_WITNESS_UNAVAILABLE',
   'remote Git witness is dirty, changed, unavailable or uncertain; stop and reconcile, never repeat a wallet prompt');
@@ -30,15 +31,26 @@ const objectId = value => typeof value === 'string' && /^[a-f0-9]{40}$/.test(val
 export function createGitBranchWitnessStore(options = {}) { return createStore(options, 'wallet'); }
 /** Separate fixed namespace, but the same checkout lock and branch discipline. */
 export function createGitBufferOrderWitnessStore(options = {}) { return createStore(options, 'buffer-order'); }
+/** Separate native-oracle namespace; it cannot parse or overwrite FT setup evidence. */
+export function createGitNativeOraclePromptWitnessStore(options = {}) { return createStore(options, 'native-oracle'); }
 function createStore({ repo, branch, remote = 'origin', initialHead } = {}, kind) {
-  const parse = kind === 'wallet' ? parseWalletWitness : parseBufferOrderWitness;
-  const pathFor = owner => `bouncer/evidence/${kind === 'wallet' ? 'wallet-prompt-witness-v1' : 'buffer-order-witness-v1'}/${hash(owner)}.jsonl`;
+  const configs = {
+    wallet: { parse: parseWalletWitness, folder: 'wallet-prompt-witness-v1', message: 'Record public testnet wallet prompt witness' },
+    'buffer-order': { parse: parseBufferOrderWitness, folder: 'buffer-order-witness-v1', message: 'Record public testnet Buffer order witness' },
+    'native-oracle': { parse: parseNativeOraclePromptWitness, folder: 'native-oracle-prompt-witness-v1', message: 'Record public testnet native oracle prompt witness' },
+  };
+  const config = configs[kind]; if (!config) throw failed();
+  const { parse } = config;
+  const pathFor = owner => `bouncer/evidence/${config.folder}/${hash(owner)}.jsonl`;
   if (typeof repo !== 'string' || !path.isAbsolute(repo) || typeof branch !== 'string' ||
       !/^arena\/[a-z0-9][a-z0-9-]{2,99}$/.test(branch) || remote !== 'origin' || !objectId(initialHead)) throw failed();
   const root = fs.realpathSync(repo);
+  // Git replacement objects must not make the witness store read a different
+  // history from the independently audited, original commit graph.
+  const gitEnv = { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_NO_REPLACE_OBJECTS: '1', GIT_NO_LAZY_FETCH: '1' };
   function git(args) {
     try { return execFileSync('git', args, { cwd: root, encoding: 'utf8', timeout: 30_000, maxBuffer: 128_000,
-      stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } }).trimEnd(); }
+      stdio: ['ignore', 'pipe', 'pipe'], env: gitEnv }).trimEnd(); }
     catch { throw failed(); }
   }
   if (git(['rev-parse', '--show-toplevel']) !== root || git(['branch', '--show-current']) !== branch ||
@@ -59,8 +71,8 @@ function createStore({ repo, branch, remote = 'origin', initialHead } = {}, kind
     if (!objectId(head) || local !== head) throw failed();
     // Never accept a remote revision before the operator's baseline.
     try {
-      execFileSync('git', ['merge-base', '--is-ancestor', initialHead, head], { cwd: root, stdio: 'ignore', timeout: 10_000 });
-      execFileSync('git', ['merge-base', '--is-ancestor', lastSeenHead, head], { cwd: root, stdio: 'ignore', timeout: 10_000 });
+      execFileSync('git', ['merge-base', '--is-ancestor', initialHead, head], { cwd: root, stdio: 'ignore', timeout: 10_000, env: gitEnv });
+      execFileSync('git', ['merge-base', '--is-ancestor', lastSeenHead, head], { cwd: root, stdio: 'ignore', timeout: 10_000, env: gitEnv });
     } catch { throw failed(); }
     lastSeenHead = head;
     return head;
@@ -114,7 +126,7 @@ function createStore({ repo, branch, remote = 'origin', initialHead } = {}, kind
         } finally { if (fd !== undefined) fs.closeSync(fd); }
         git(['add', '--', file]);
         if (git(['diff', '--cached', '--name-only']) !== file) throw failed();
-        git(['commit', '-m', kind === 'wallet' ? 'Record public testnet wallet prompt witness' : 'Record public testnet Buffer order witness', '--', file]);
+        git(['commit', '-m', config.message, '--', file]);
         const committed = git(['rev-parse', 'HEAD']);
         // Push only the configured current arena branch. A failed/unknown push
         // is never retried here and is never returned as a usable claim.

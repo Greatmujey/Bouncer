@@ -33,7 +33,7 @@ export function validateReadOnlyJob(job) {
   const { method, params, id } = job;
   if (method === 'status' && id === 'bouncer-read-only' && (params === undefined || Array.isArray(params) && params.length === 0)) return job;
   if (method === 'block' && id === 'bouncer-read-only' && record(params) &&
-      Object.keys(params).length === 1 && params.finality === 'final') return job;
+      Object.keys(params).length === 1 && (params.finality === 'final' || isHash(params.block_id))) return job;
   if (method === 'EXPERIMENTAL_protocol_config' && id === 'bouncer-read-only' && record(params) &&
       Object.keys(params).length === 1 && isHash(params.block_id)) return job;
   if (method === 'gas_price' && id === 'bouncer-read-only' && Array.isArray(params) &&
@@ -96,7 +96,8 @@ export async function executeReadOnlyJob({ jobId, callbackOrigin, getToken, fetc
   const rawJob = await bounded(work, MAX_INPUT);
   let job; try { job = JSON.parse(rawJob.toString('utf8')); } catch { throw new Error('invalid read-only RPC job'); }
   validateReadOnlyJob(job);
-  const rpc = job.method === 'EXPERIMENTAL_tx_status' ? ARCHIVAL_RPC : TESTNET_RPC;
+  const rpc = job.method === 'EXPERIMENTAL_tx_status' || (job.method === 'block' && isHash(job.params.block_id))
+    ? ARCHIVAL_RPC : TESTNET_RPC;
   const upstream = await fetchImpl(rpc, { method: 'POST', redirect: 'error',
     headers: { 'content-type': 'application/json', accept: 'application/json' },
     body: JSON.stringify(job), signal: AbortSignal.timeout(15_000) });
@@ -180,7 +181,8 @@ export async function executeEncryptedBrowserJob({ signedJob, callbackOrigin, si
   }
   let job; try { job = JSON.parse(signedJob.request_json); } catch { throw new Error('invalid signed read-only job'); }
   validateReadOnlyJob(job);
-  const rpc = job.method === 'EXPERIMENTAL_tx_status' ? ARCHIVAL_RPC : TESTNET_RPC;
+  const rpc = job.method === 'EXPERIMENTAL_tx_status' || (job.method === 'block' && isHash(job.params.block_id))
+    ? ARCHIVAL_RPC : TESTNET_RPC;
   const upstream = await fetchImpl(rpc, { method: 'POST', redirect: 'error',
     headers: { 'content-type': 'application/json', accept: 'application/json' },
     body: signedJob.request_json, signal: AbortSignal.timeout(15_000) });

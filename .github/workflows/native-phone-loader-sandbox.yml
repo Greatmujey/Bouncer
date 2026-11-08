@@ -1,0 +1,65 @@
+# Research on disposable loopback nearcore only; no testnet or wallet access.
+name: Compressed native phone loader research
+on:
+  push:
+    branches: ['arena/**']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  sandbox:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[phone-loader-sandbox]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: '1.88.0'
+          targets: wasm32-unknown-unknown
+      - name: Build the pinned-dependency research loader
+        working-directory: bouncer/contracts/native-phone-loader
+        run: |
+          set -euo pipefail
+          RUSTFLAGS='-C link-arg=-s' cargo build --locked --release --target wasm32-unknown-unknown
+          artifact=target/wasm32-unknown-unknown/release/bouncer_native_phone_loader_research.wasm
+          echo '28b358e4ee4e6c7327dc17c63934a63e4cdad5d424dbfe67a80381cf1027bb7b  '"$artifact" | sha256sum -c -
+          test "$(wc -c < "$artifact")" -eq 28950
+          cmp "$artifact" fixtures/native-phone-loader-research.wasm
+      - name: Install test dependencies and retrieve pinned sandbox
+        working-directory: bouncer
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts --no-audit --no-fund
+          curl --fail --show-error --silent --location --proto '=https' --tlsv1.2 --max-time 180 --retry 2 --max-filesize 419430400 \
+            'https://s3-us-west-1.amazonaws.com/build.nearprotocol.com/nearcore/Linux-x86_64/2.14.0/near-sandbox.tar.gz' \
+            --output "$RUNNER_TEMP/near-sandbox.tar.gz"
+          python3 scripts/extract-pinned-near-sandbox.py "$RUNNER_TEMP/near-sandbox.tar.gz" "$RUNNER_TEMP/near-sandbox"
+      - name: Exercise compressed self-deployment and recovery on loopback
+        working-directory: bouncer
+        env:
+          BOUNCER_SANDBOX_BIN: ${{ runner.temp }}/near-sandbox
+          BOUNCER_PHONE_LOADER_WASM: ${{ github.workspace }}/bouncer/contracts/native-phone-loader/target/wasm32-unknown-unknown/release/bouncer_native_phone_loader_research.wasm
+        run: |
+          set -euo pipefail
+          ulimit -Sn 65535
+          if ! node integration/native-oracle-compressed-loader-sandbox.mjs > "$RUNNER_TEMP/phone-loader-result.json" 2> "$RUNNER_TEMP/phone-loader-error.log"; then
+            python3 -c 'import os; s=open(os.environ["RUNNER_TEMP"]+"/phone-loader-error.log").read()[-5000:]; print("::error title=Compressed phone loader sandbox failed::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
+            exit 1
+          fi
+          python3 -c 'import os; s=open(os.environ["RUNNER_TEMP"]+"/phone-loader-result.json").read(); print("::notice title=Compressed phone loader sandbox results::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
+          { echo '## Compressed native phone loader research';
+            echo 'Disposable sandbox only. Not a real wallet, independently anchored receipt verifier, public purchase or provider delivery.';
+            echo '```json'; cat "$RUNNER_TEMP/phone-loader-result.json"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: Retain the verified research binary
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: native-phone-loader-research
+          path: bouncer/contracts/native-phone-loader/target/wasm32-unknown-unknown/release/bouncer_native_phone_loader_research.wasm
+          if-no-files-found: error
+          retention-days: 7

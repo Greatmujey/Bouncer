@@ -179,3 +179,4 @@ body.wallet-dialog-open{overflow:hidden}
 .ethereum-logo{background:linear-gradient(145deg,#29355d,#536fbd);color:#d8e3ff}.ethereum-logo svg{stroke-width:1.8}.ethereum-info>strong{display:block;color:#eaf9e4;font-size:14px}.ethereum-info code{color:#e6f5d6;overflow-wrap:anywhere}
 
 .setup-recovery{margin-top:12px;padding:12px;border:1px solid #49634f;border-radius:10px}.setup-recovery label{display:block;color:#cee6c6;font-size:11px;line-height:1.5}.setup-recovery input{width:100%;margin-top:8px;padding:11px 10px;border:1px solid #597661;border-radius:8px;background:#0e2115;color:#f2ffed;font-size:14px;overflow-wrap:anywhere}.setup-recovery input:focus-visible{outline:2px solid #c1ef80;outline-offset:2px}
+.native-setup strong{color:#edffe4;font-size:12px}.native-setup .account-view-status{white-space:pre-line;overflow-wrap:anywhere}.native-setup [hidden]{display:none!important}

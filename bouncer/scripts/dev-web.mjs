@@ -15,15 +15,17 @@ const port = Number(process.env.PORT || 4173);
 // Only this local preview may opt in to the read-only testnet service. The
 // browser uses same-origin /api paths; loopback never appears in browser code.
 const readOnlyBackend = process.env.BOUNCER_READONLY_PREVIEW === '1';
+const backendPort = Number(process.env.BOUNCER_READONLY_PREVIEW_PORT || 8787);
 const walletConnectProjectId = process.env.BOUNCER_WALLETCONNECT_PROJECT_ID || '';
-if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Invalid PORT');
+if (!Number.isInteger(port) || port < 1 || port > 65535 || !Number.isInteger(backendPort) || backendPort < 1 || backendPort > 65535) throw new Error('Invalid preview port');
 if (walletConnectProjectId && !/^[a-f0-9]{32}$/i.test(walletConnectProjectId)) throw new Error('Invalid WalletConnect project ID');
 http.createServer((req, res) => {
   const pathname = new URL(req.url, 'http://preview.invalid').pathname;
   if (pathname === '/api/google-session') return void session(req, res);
-  if (readOnlyBackend && (pathname.startsWith('/api/read-only/') || pathname.startsWith('/api/wallet-setup/'))) {
+  if (readOnlyBackend && (pathname.startsWith('/api/read-only/') || pathname.startsWith('/api/wallet-setup/') ||
+      pathname.startsWith('/api/native-oracle-setup/'))) {
     if (!['GET', 'POST'].includes(req.method)) { res.writeHead(405); res.end(); return; }
-    const upstream = http.request({ hostname: '127.0.0.1', port: 8787, path: req.url, method: req.method,
+    const upstream = http.request({ hostname: '127.0.0.1', port: backendPort, path: req.url, method: req.method,
       headers: { origin: req.headers.origin || '', 'x-bouncer-preview': req.headers['x-bouncer-preview'] || '',
         ...(req.headers['content-type'] ? { 'content-type': req.headers['content-type'] } : {}),
         ...(req.headers['content-length'] ? { 'content-length': req.headers['content-length'] } : {}),

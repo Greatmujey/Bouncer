@@ -32,6 +32,8 @@ import { inspectBufferWalletSetupStage } from './buffer-wallet-setup-preflight.m
 import { V12_EXPECTED_BYTES, V12_EXPECTED_SHA256 } from './keyless-vault-v12-readiness.mjs';
 import { isTestnetAccount } from '../shared/account-id.mjs';
 import { isTransactionHash } from '../shared/direct-payment-settlement.mjs';
+import { WalletOwnerFenceError, initializePostgresWalletOwnerFence, reservePostgresWalletOwnerFence,
+  assertPostgresWalletOwnerFence, verifyPostgresWalletOwnerFence } from './postgres-wallet-owner-fence.mjs';
 
 const SCHEMA = 'bouncer_wallet_prompt_v1';
 // Guard accidental writes by cooperating services/roles. A database owner can
@@ -143,6 +145,8 @@ async function transaction(pool, run) {
     destroy = true;
     if (client && begun) { try { await client.query('ROLLBACK'); } catch { /* poisoned connection */ } }
     if (error instanceof WalletPromptFenceError) throw error;
+    if (error instanceof WalletOwnerFenceError) throw fail(error.code === 'GLOBAL_OWNER_FENCED' ? 'OWNER_FENCED' : error.code,
+      'global wallet owner fence is unavailable or conflicting; stop and reconcile');
     throw fail('DATABASE_UNKNOWN', 'wallet prompt database failed or its commit is uncertain; stop and reconcile, never open or repeat a prompt');
   } finally { client?.release(destroy); }
 }
@@ -193,11 +197,23 @@ async function verifySchema(client) {
   }
 }
 
+/** Check existing prompt and shared-owner fences without creating, repairing,
+ * reserving or releasing anything. This is not rollback or consent proof. */
+export async function inspectPostgresWalletPromptFenceSchema({ pool } = {}) {
+  if (!pool || typeof pool.connect !== 'function') throw new Error('PostgreSQL pool required');
+  return transaction(pool, async client => {
+    await verifySchema(client);
+    await verifyPostgresWalletOwnerFence(client);
+    return { status: 'SCHEMA_CHECKED', prompt_authorized: false };
+  });
+}
+
 /** Privileged testnet schema initialization; does not contact NEAR or wallets. */
 export async function initializePostgresWalletPromptFence({ pool } = {}) {
   if (!pool || typeof pool.connect !== 'function') throw new Error('PostgreSQL pool required');
   await transaction(pool, async client => {
     await client.query('SELECT pg_catalog.pg_advisory_xact_lock(1702243041, 903135)');
+    await initializePostgresWalletOwnerFence(client);
     await client.query(`CREATE SCHEMA IF NOT EXISTS ${SCHEMA}`);
     await client.query(`CREATE TABLE IF NOT EXISTS ${SCHEMA}.meta (
       singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton), version integer NOT NULL
@@ -489,6 +505,8 @@ export function createPostgresWalletPromptFence({ pool, authenticate, setupWasmB
       const operation = crypto.randomBytes(16).toString('hex');
       return transaction(pool, async client => {
         await verifySchema(client);
+        await reservePostgresWalletOwnerFence(client, { owner: identity.owner, flow: 'buffer_wallet', operationId: operation,
+          ownerPublicKey: trustedOwnerPublicKey, reviewSha256: trustedReviewHash });
         const inserted = await client.query(`INSERT INTO ${SCHEMA}.prompts
           (owner_account_id,operation_id,owner_public_key,review_sha256,stage_id,action_commitment_sha256,review)
           VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb) ON CONFLICT (owner_account_id) DO NOTHING RETURNING ${columns}`,
@@ -556,8 +574,10 @@ export function createPostgresWalletPromptFence({ pool, authenticate, setupWasmB
       requireSetupProviders();
       await authorize(context('claim_setup_stage', owner, ownerPublicKey, { operation_id: operationId,
         review_sha256: reviewSha256, stage_id: stageId, action_commitment_sha256: actionCommitmentSha256 }), evidence);
+      const globalIdentity = { owner, flow: 'buffer_wallet', operationId, ownerPublicKey, reviewSha256 };
       const retained = await transaction(pool, async client => {
         const value = await loadSetup(client, { owner, ownerPublicKey, operationId, reviewSha256 });
+        await assertPostgresWalletOwnerFence(client, globalIdentity);
         const stage = value.progress.stages[index];
         assertStageIdentity(value.prompt, stage, stageId, actionCommitmentSha256);
         if (stage.claimed) throw fail('ALREADY_CLAIMED', 'setup prompt was already claimed; never open it again');
@@ -568,6 +588,7 @@ export function createPostgresWalletPromptFence({ pool, authenticate, setupWasmB
       assertFreshSetupPreflight(preflight);
       const claimed = await transaction(pool, async client => {
         const { prompt, progress } = await loadSetup(client, { owner, ownerPublicKey, operationId, reviewSha256 }, true);
+        await assertPostgresWalletOwnerFence(client, globalIdentity);
         const stage = progress.stages[index];
         assertStageIdentity(prompt, stage, stageId, actionCommitmentSha256);
         if (stage.claimed) throw fail('ALREADY_CLAIMED', 'setup prompt was already claimed; never open it again');
@@ -649,6 +670,7 @@ export function createPostgresWalletPromptFence({ pool, authenticate, setupWasmB
           throw fail('MISMATCH', 'original prompt, reviewed action or hash differs; stop and reconcile');
         }
       };
+      const globalIdentity = { owner, flow: 'buffer_wallet', operationId, ownerPublicKey, reviewSha256 };
       let preflight;
       if (stageId === SETUP_STAGE) {
         // Do not hold a database lock across network requests. Read the
@@ -667,6 +689,7 @@ export function createPostgresWalletPromptFence({ pool, authenticate, setupWasmB
           if (status === 'CLAIMED') throw fail('ALREADY_CLAIMED', 'wallet prompt was already claimed; never open it again');
           if (status === 'LEGACY_NOT_CLAIMABLE') throw fail('LEGACY_NOT_CLAIMABLE', 'legacy prompt may already have been opened; stop and reconcile');
           if (status !== 'AVAILABLE') throw fail('MISMATCH', 'original setup prompt is not claimable; stop and reconcile');
+          await assertPostgresWalletOwnerFence(client, globalIdentity);
           return row;
         });
         try { if ((await readStatus())?.chain_id !== 'testnet') throw new Error('not testnet'); }
@@ -705,6 +728,7 @@ export function createPostgresWalletPromptFence({ pool, authenticate, setupWasmB
         if (claims.rows.length === 0) throw fail('LEGACY_NOT_CLAIMABLE', 'legacy prompt may already have been opened; stop and reconcile');
         if (claims.rows.length !== 1) throw fail('CORRUPT', 'duplicate wallet prompt claims; stop');
         if (checkedClaim(claims.rows[0], row).claimed) throw fail('ALREADY_CLAIMED', 'wallet prompt was already claimed; never open it again');
+        await assertPostgresWalletOwnerFence(client, globalIdentity);
         assertFreshPreflight();
         const updated = await client.query(`UPDATE ${SCHEMA}.claims SET claimed=true,claimed_at=pg_catalog.clock_timestamp()
           WHERE owner_account_id=$1 AND operation_id=$2 AND claimed=false

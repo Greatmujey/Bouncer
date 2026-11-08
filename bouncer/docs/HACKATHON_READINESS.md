@@ -1,6 +1,6 @@
 # Hackathon readiness — in progress, not a submission
 
-Status updated on November 2, 2026. Re-read the [official live rules](https://nearhackathon.com/HACKATHON.md) before any submission; they may change. The development/submission deadline currently stated there is **November 14, 2026 at 23:59 UTC** (November 15 at 00:59 in Lagos). There is one submission per project. Testnet-only projects are eligible; using any particular partner integration is not mandatory.
+Status updated on November 7, 2026. Re-read the [official live rules](https://nearhackathon.com/HACKATHON.md) before any submission; they may change. The development/submission deadline currently stated there is **November 14, 2026 at 23:59 UTC** (November 15 at 00:59 in Lagos). There is one submission per project. Testnet-only projects are eligible; using any particular partner integration is not mandatory.
 
 ## What judges can reproduce now
 
@@ -42,7 +42,9 @@ Existing private-repository and first-attempt CI gates do not retroactively prot
 
 ## Finish before submitting
 
-- [ ] Complete and verify the intended independent FT-paid multi-resource flow; distinguish any still-missing resource and provider behavior.
+- [ ] Complete the owner-approved, bounded **native-NEAR** OutLayer path and verify the original transaction, provider execution, result and any actual refund; a historical run is not a new purchase.
+- [ ] Complete and verify a real compute, storage and API/data mission under owner policies and budgets. Clearly distinguish independent providers from self-hosted services and identify any still-missing delivery; an independent FT-paid purchase is optional rather than a critical-path requirement. Keep existing FT support.
+- [ ] Finish the authenticated phone flow, durable cross-flow prompt exclusion, independently monitored witness heads and device-key recovery before enabling spending. The current database hold has no safe release and is not a hosted solution.
 - [ ] Complete the outstanding security, privacy and rights review of the now-public repository and Actions history; get explicit approval before any additional publication.
 - [ ] Keep the hosted testnet site available; wallet connection is identity-only and the page is not a live purchasing dashboard. Verify real wallet sign-in end to end and preserve the shared-origin restrictions.
 - [ ] After the full intended flow works, the human records and posts the public X demo: state it was built at NEAR HACKATHON, include `@NEARProtocol` and `#NEARHackathon`, and attach the appropriate video or screenshots. A local-only demo requires video under the current rules. Do not post on the human's behalf.

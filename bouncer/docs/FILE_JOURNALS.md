@@ -105,6 +105,11 @@ reuses its recorded v3 claim with the pinned seller. Both need the same
 recovery can contact the seller and requires its idempotent redemption policy;
 it cannot prove an arbitrary seller's external side effect was not performed.
 A failed or unknown RPC lookup remains unresolved; never repay automatically.
+Direct payment and delivery recovery also reject overlapping participating
+operations on the same journal object in one process. They snapshot and recheck
+the original before writing a result; a changed record stops reconciliation.
+This is not a distributed fence, backup-freshness proof, or seller-side
+idempotency guarantee. Bypassing clients and other journals are not covered.
 
 The FT-call, Ref-swap, OutLayer, oracle and paid-project CLIs now inspect an
 existing journal even during dry runs. A preview of a pending hash may verify

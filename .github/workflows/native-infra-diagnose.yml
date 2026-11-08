@@ -1,0 +1,41 @@
+# One-time diagnostic of our own infrastructure-only run. The job reads its
+# prior logs but reports ONLY fixed boolean milestones; no log lines, secrets,
+# URLs, signatures or wallet data are published.
+name: Diagnose testnet infrastructure provisioning
+on:
+  push:
+    branches: ['arena/0e4386ea-near-hub']
+permissions:
+  contents: read
+  actions: read
+jobs:
+  diagnose:
+    if: contains(github.event.head_commit.message, '[phone-infra-diagnose]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 4
+    steps:
+      - name: Read only fixed status markers from the infrastructure job
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          for item in coordinator:128720000876 checkpoint:128720001129; do
+            role="${item%%:*}"; id="${item#*:}"
+            gh run view 42476847969 --job "$id" --log > "$RUNNER_TEMP/$role.log" 2>/dev/null
+            python3 - "$RUNNER_TEMP/$role.log" "$role" <<'PY'
+          import sys
+          text=open(sys.argv[1],encoding='utf-8').read()
+          role=sys.argv[2]
+          marks={
+            'instruction_received':'Found the run-specific provisioning instruction.' in text,
+            'verified_database_tls':f'Verified TLS and the dedicated {role} database role.' in text,
+            'database_provisioned':f'The {role} testnet database was provisioned' in text,
+            'provisioning_reported_uncertain':'Testnet infrastructure provisioning unavailable or uncertain.' in text,
+            'module_not_found':'ERR_MODULE_NOT_FOUND' in text,
+            'provisioning_outcome_uncertain':'provisioning outcome uncertain' in text,
+          }
+          result=' '.join(f'{k}={str(v).lower()}' for k,v in marks.items())
+          print(f'::notice title={role} fixed diagnostic markers::{result}')
+          PY
+          done

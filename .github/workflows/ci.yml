@@ -39,6 +39,9 @@ jobs:
           node-version: '22'
       - run: npm ci --no-audit --no-fund
       - run: npm ci --prefix walletconnect --ignore-scripts --no-audit --no-fund
+      - name: Check testnet RPC browser compatibility (read-only)
+        continue-on-error: true
+        run: node scripts/check-native-testnet-rpc-cors.mjs
       # Fail quickly on browser or asset regressions before the broader suite.
       - name: Rebuild and verify wallet, WalletConnect and Google website assets
         shell: bash
@@ -54,11 +57,19 @@ jobs:
         shell: bash
         run: |
           npm install --prefix "$RUNNER_TEMP/bouncer-browser" --no-save --no-audit --no-fund playwright-core@1.64.1
-          node scripts/test-web-browser.mjs
-          node scripts/test-witnessed-setup-browser.mjs
-          node scripts/test-buffer-private-order-browser.mjs
-          node scripts/test-walletconnect-browser.mjs
-          node scripts/test-wallet-prompt-fence-browser.mjs
+          for script in test-web-browser.mjs test-witnessed-setup-browser.mjs test-buffer-private-order-browser.mjs \
+            test-walletconnect-browser.mjs test-wallet-prompt-fence-browser.mjs test-native-oracle-device-key-browser.mjs \
+            test-native-oracle-setup-browser.mjs test-witnessed-native-oracle-phone-browser.mjs \
+            test-native-oracle-owner-ui-browser.mjs; do
+            set +e
+            node "scripts/$script" 2>&1 | tee "$RUNNER_TEMP/browser-test.log"
+            result=${PIPESTATUS[0]}
+            set -e
+            if [ "$result" -ne 0 ]; then
+              node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8").slice(-5000).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");console.log("::error title=Browser test failed::"+s)' "$RUNNER_TEMP/browser-test.log"
+              exit "$result"
+            fi
+          done
       - name: Test pinned wallet adapters with synthetic signers
         shell: bash
         env:
@@ -1727,6 +1738,186 @@ jobs:
           node-version: '22'
       - name: Read public catalog (no credentials or payments)
         run: node bouncer/scripts/probe-market-discovery.mjs
+
+  native-qa-creation-read:
+    name: Verify the retained native QA original (read only)
+    # Re-reads the ONE already-sent creation hash and current state. No signer,
+    # account creation, funding, payment or transaction broadcast is possible.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/arena/0e4386ea-near-hub' && github.event.before == '725b22d936fcfda6359bcd310fb8b6e794d734a3' && github.run_attempt == '1' && contains(github.event.head_commit.message, '[native-qa-read-original]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    permissions:
+      contents: read
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      - name: Retrieve only public bootstrap and original artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/bootstrap" "$RUNNER_TEMP/original"
+          gh run download 42459498770 --repo Greatmujey/Bouncer --name native-qa-42459498770-bootstrap-e793fab4399a79308e1998863d12bbffe6f6a739455ad77e44374cf0ca816fc5 --dir "$RUNNER_TEMP/bootstrap" > "$RUNNER_TEMP/qa-download.log" 2>&1 || { echo '::error::Could not read public QA bootstrap.'; exit 1; }
+          gh run download 42459498770 --repo Greatmujey/Bouncer --name native-qa-42459498770-stage0-8a940ca8f364ed8523b573ac9705e0dbbf9799e81af6cca83fa5b9d4a71b3df6 --dir "$RUNNER_TEMP/original" >> "$RUNNER_TEMP/qa-download.log" 2>&1 || { echo '::error::Could not read public QA original.'; exit 1; }
+      - name: Verify original FINAL receipt and next-stage read-only state
+        run: node bouncer/scripts/inspect-native-qa-original.mjs "$RUNNER_TEMP/bootstrap/bootstrap.json" "$RUNNER_TEMP/original/stage0.json"
+
+  native-qa-original-diagnosis:
+    name: Inspect the previous QA failure (read only)
+    # Read only: no faucet, wallet, signer or transaction. Fetch the old log
+    # privately and expose only its bounded, redacted QA error line.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/arena/0e4386ea-near-hub' && github.event.before == '903bc3bc2935ebd873fa155c4db38b920d543bbb' && github.run_attempt == '1' && contains(github.event.head_commit.message, '[native-qa-read-original-log]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Read the stopped QA job without exposing log URLs or secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! curl --fail --silent --show-error --location --max-time 60 -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" https://api.github.com/repos/Greatmujey/Bouncer/actions/jobs/128664415262/logs > "$RUNNER_TEMP/old-qa.log" 2> "$RUNNER_TEMP/log-download.err"; then
+            node - "$RUNNER_TEMP/log-download.err" <<'NODE'
+          const fs = require('fs'); let text = fs.readFileSync(process.argv[2], 'utf8').replace(/https?:\/\/\S+/g, '[url]').replace(/ed25519:[1-9A-HJ-NP-Za-km-z]+/g, '[key]').slice(0, 400).replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A');
+          console.log('::notice title=Read-only log access::' + text);
+          NODE
+            exit 1
+          fi
+          node - "$RUNNER_TEMP/old-qa.log" <<'NODE'
+          const fs = require('fs');
+          const lines = fs.readFileSync(process.argv[2], 'utf8').split('\n').filter(x => x.includes('QA stopped:'));
+          if (lines.length !== 1) { console.log('::error::Expected one bounded QA stop line.'); process.exit(1); }
+          const text = lines[0].slice(lines[0].indexOf('QA stopped:')).replace(/https?:\/\/\S+/g, '[url]').replace(/ed25519:[1-9A-HJ-NP-Za-km-z]+/g, 'ed25519:[redacted]').slice(0, 700).replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A');
+          console.log('::notice title=Previous QA stop::' + text);
+          NODE
+          mkdir -p "$RUNNER_TEMP/public-qa"
+          gh run download 42458530561 --repo Greatmujey/Bouncer --name native-qa-42458530561-public-results --dir "$RUNNER_TEMP/public-qa" > "$RUNNER_TEMP/artifact-download.log" 2>&1 || { echo '::error::Previous public QA result unavailable.'; exit 1; }
+          node - "$RUNNER_TEMP/public-qa/faucet-result.json" <<'NODE'
+          const fs = require('fs'); const x = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (x.status !== 'OWNER_OBSERVED_AT_FINAL' || !/^bouncer-owner-[a-f0-9]{24}\.testnet$/.test(x.account_id) || !/^[1-9A-HJ-NP-Za-km-z]{32,60}$/.test(x.block_hash)) process.exit(1);
+          console.log('::notice title=Previous QA account::' + JSON.stringify({status:x.status, account_id:x.account_id, block_hash:x.block_hash, helper_acknowledgement:x.helper_acknowledgement, do_not_repeat_helper_request:x.do_not_repeat_helper_request}));
+          NODE
+
+  native-wallet-qa:
+    name: One-shot native wallet plan (disposable testnet QA)
+    # This one run uses a new, locally generated QA account, NEVER the user's
+    # wallet. Each original is uploaded separately before its one send. Public
+    # artifacts contain only public hashes/terms; private keys and signed bytes
+    # remain in RUNNER_TEMP and are destroyed with the runner. No reruns.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/arena/0e4386ea-near-hub' && github.event.before == '42e5239b28449058ea2c076b6bfea86d99c0e98b' && github.run_attempt == '1' && contains(github.event.head_commit.message, '[native-wallet-qa-once-v3]')
+    # The preceding full JS/Rust CI passed; this job independently checks the
+    # pinned V9 bytes and the targeted one-shot tests before any mutation.
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      actions: read
+    env:
+      BOUNCER_NATIVE_QA: one-shot-testnet-only
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix bouncer --no-audit --no-fund
+      - name: Check QA transaction and one-shot protections
+        working-directory: bouncer
+        run: node --test tests/native-testnet-qa.test.mjs
+      - name: Generate disposable QA identity and public review (no network mutation)
+        id: boot
+        run: node bouncer/scripts/native-testnet-qa.mjs init
+      - name: Retain the public bootstrap before the one helper request
+        id: boot_artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.boot.outputs.artifact_name }}
+          path: ${{ steps.boot.outputs.artifact_file }}
+          if-no-files-found: error
+          retention-days: 90
+      - name: Request the new disposable testnet owner once
+        run: node bouncer/scripts/native-testnet-qa.mjs faucet '${{ steps.boot_artifact.outputs.artifact-id }}'
+      - name: Prepare creation original without broadcasting
+        id: stage0
+        run: node bouncer/scripts/native-testnet-qa.mjs prepare-stage 0
+      - name: Retain creation original before sending
+        id: stage0_artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.stage0.outputs.artifact_name }}
+          path: ${{ steps.stage0.outputs.artifact_file }}
+          if-no-files-found: error
+          retention-days: 90
+      - name: Send creation original once and verify FINAL
+        run: node bouncer/scripts/native-testnet-qa.mjs send-stage 0 '${{ steps.stage0_artifact.outputs.artifact-id }}'
+      - name: Prepare policy original without broadcasting
+        id: stage1
+        run: node bouncer/scripts/native-testnet-qa.mjs prepare-stage 1
+      - name: Retain policy original before sending
+        id: stage1_artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.stage1.outputs.artifact_name }}
+          path: ${{ steps.stage1.outputs.artifact_file }}
+          if-no-files-found: error
+          retention-days: 90
+      - name: Send policy original once and verify FINAL
+        run: node bouncer/scripts/native-testnet-qa.mjs send-stage 1 '${{ steps.stage1_artifact.outputs.artifact-id }}'
+      - name: Prepare funding original without broadcasting
+        id: stage2
+        run: node bouncer/scripts/native-testnet-qa.mjs prepare-stage 2
+      - name: Retain funding original before sending
+        id: stage2_artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.stage2.outputs.artifact_name }}
+          path: ${{ steps.stage2.outputs.artifact_file }}
+          if-no-files-found: error
+          retention-days: 90
+      - name: Send funding original once and verify FINAL
+        run: node bouncer/scripts/native-testnet-qa.mjs send-stage 2 '${{ steps.stage2_artifact.outputs.artifact-id }}'
+      - name: Prepare agent-key original without broadcasting
+        id: stage3
+        run: node bouncer/scripts/native-testnet-qa.mjs prepare-stage 3
+      - name: Retain agent-key original before sending
+        id: stage3_artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.stage3.outputs.artifact_name }}
+          path: ${{ steps.stage3.outputs.artifact_file }}
+          if-no-files-found: error
+          retention-days: 90
+      - name: Send agent-key original once and verify FINAL
+        run: node bouncer/scripts/native-testnet-qa.mjs send-stage 3 '${{ steps.stage3_artifact.outputs.artifact-id }}'
+      - name: Prepare a single guarded OutLayer original without broadcasting
+        id: trial
+        run: node bouncer/scripts/native-testnet-qa.mjs prepare-trial
+      - name: Retain the guarded trial original before sending
+        id: trial_artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.trial.outputs.artifact_name }}
+          path: ${{ steps.trial.outputs.artifact_file }}
+          if-no-files-found: error
+          retention-days: 90
+      - name: Send the guarded trial once and verify provider receipts
+        run: node bouncer/scripts/native-testnet-qa.mjs send-trial '${{ steps.trial_artifact.outputs.artifact-id }}'
+      - name: Preserve only public verified result summaries
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-qa-${{ github.run_id }}-public-results
+          path: ${{ runner.temp }}/bouncer-native-qa/public/*-result.json
+          if-no-files-found: ignore
+          retention-days: 90
 
   testnet-smoke:
     name: Live testnet restricted-key smoke test

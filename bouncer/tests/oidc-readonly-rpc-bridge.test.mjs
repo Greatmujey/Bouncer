@@ -54,7 +54,7 @@ test('invalid, weak or duplicate key pins are rejected', () => {
 
 test('read-only allowlist denies broadcasts, extra fields and unpinned views', () => {
   const examples = [
-    request('status', []), request('block', { finality: 'final' }),
+    request('status', []), request('block', { finality: 'final' }), request('block', { block_id: hash }),
     request('EXPERIMENTAL_protocol_config', { block_id: hash }),
     request('gas_price', [hash]), request('query', { request_type: 'view_account', account_id: 'great_mujey.testnet', block_id: hash }),
     request('query', { request_type: 'call_function', account_id: 'great_mujey.testnet', block_id: hash, method_name: 'get_owner', args_base64: 'e30=' }),
@@ -63,6 +63,8 @@ test('read-only allowlist denies broadcasts, extra fields and unpinned views', (
   for (const sample of examples) assert.equal(validateReadOnlyJob(sample), sample);
   for (const bad of [
     request('broadcast_tx_commit', ['signed-bytes']), request('send_tx', {}), request('block', { finality: 'optimistic' }),
+    request('block', { block_id: 42 }), request('block', { block_id: hash, finality: 'final' }),
+    request('block', { block_id: 'not-a-block-hash' }), request('block', { block_id: hash }, 'bouncer-read-only-receipts'),
     request('query', { request_type: 'view_account', account_id: 'great_mujey.near', block_id: hash }),
     request('query', { request_type: 'view_account', account_id: 'great_mujey.testnet', block_id: hash, extra: true }),
     request('query', { request_type: 'call_function', account_id: 'great_mujey.testnet', finality: 'final', method_name: 'new', args_base64: 'e30=' }),
@@ -165,6 +167,9 @@ test('real read-only provider shapes cross the authenticated queue', async () =>
   const provider = new ReadOnlyNearReceiptProvider('https://test.rpc.fastnear.com', { fetchImpl: bridge.fetch });
   assert.equal((await run(provider.viewNodeStatus())).chain_id, 'testnet');
   assert.equal((await run(provider.viewBlock({ finality: 'final' }))).header.hash, hash);
+  assert.equal(seen.at(-1)[0], 'https://test.rpc.fastnear.com');
+  assert.equal((await run(provider.block({ blockId: hash }))).header.hash, hash);
+  assert.deepEqual(seen.at(-1), ['https://archival-rpc.testnet.near.org', 'block']);
   assert.equal((await run(provider.callFunctionRaw('great_mujey.testnet', 'get_owner', {}, { blockId: hash }))).block_hash, hash);
   assert.equal((await run(provider.txStatusReceipts(hash, 'great_mujey.testnet'))).status, 'FINAL');
   assert.equal(seen.at(-1)[0], 'https://archival-rpc.testnet.near.org');
@@ -191,14 +196,14 @@ test('encrypted browser relay binds job and response without exposing its OIDC t
   const waiting = bridge.fetch('https://test.rpc.fastnear.com/', rpcOptions(request('status', [])));
   const [id] = bridge.pending(), job = bridge.takeForBrowser(id);
   assert.equal(bridge.takeForBrowser(id), null);
-  let tokenText;
+  let tokenText; const rpcUrls = [];
   const execute = async signedJob => {
     const { executeEncryptedBrowserJob } = await import('../testnet-relay/core.mjs');
     return executeEncryptedBrowserJob({ signedJob, callbackOrigin: callback, now: () => now,
       signingPublicKey: pem(signing.publicKey), encryptionPublicKey: pem(encryption.publicKey),
       getToken: async ({ audience }) => { tokenText = token(audience); return tokenText; },
-      fetchImpl: async (_url, options) => { const rpc = JSON.parse(options.body);
-        return response({ jsonrpc: '2.0', id: rpc.id, result: { chain_id: 'testnet' } }); } });
+      fetchImpl: async (url, options) => { const rpc = JSON.parse(options.body); rpcUrls.push(url);
+        return response({ jsonrpc: '2.0', id: rpc.id, result: rpc.method === 'block' ? { header: { hash } } : { chain_id: 'testnet' } }); } });
   };
   await assert.rejects(execute({ ...job, request_json: JSON.stringify(request('send_tx', {})) }));
   await assert.rejects(execute({ ...job, job_id: 'b'.repeat(32) }));
@@ -213,6 +218,12 @@ test('encrypted browser relay binds job and response without exposing its OIDC t
   assert.equal(bridge.submitEncrypted(envelope), true);
   assert.equal(bridge.submitEncrypted(envelope), false);
   assert.equal((await (await waiting).json()).result.chain_id, 'testnet');
+  const historical = bridge.fetch('https://test.rpc.fastnear.com/', rpcOptions(request('block', { block_id: hash })));
+  const historicalJob = bridge.takeForBrowser(bridge.pending()[0]);
+  const historicalEnvelope = await execute(historicalJob);
+  assert.equal(rpcUrls.at(-1), 'https://archival-rpc.testnet.near.org');
+  assert.equal(bridge.submitEncrypted(historicalEnvelope), true);
+  assert.equal((await (await historical).json()).result.header.hash, hash);
 });
 
 test('a different backend key cannot decrypt or authorize a browser relay result', async () => {

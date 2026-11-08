@@ -27,8 +27,12 @@ const setFor = (map, name) => { if (!map.has(name)) map.set(name, new Set()); re
 globalThis.fetch = async () => ({ ok: true, json: async () => ({}) });
 Account.prototype.deployContract = async function () { return outcome(); };
 let createAttempts = 0;
-Account.prototype.createAccount = async function () {
+Account.prototype.createAccount = async function (accountId, _publicKey, amount) {
   createAttempts++;
+  if (!accountId.endsWith(`.${this.accountId}`) || typeof amount !== 'bigint') fail('invalid funded child account');
+  if (createAttempts === 1 && (this.accountId !== 'great_mujey.testnet' || amount !== 5n * 10n ** 24n)) {
+    fail('contract must be created under the funded owner with the reviewed test funding');
+  }
   const mode = process.env.BOUNCER_MOCK_MODE;
   if ((mode === 'setup_expired_once' && createAttempts === 1) || mode === 'setup_expired_twice') fail('Transaction has expired', 'Expired');
   if (mode === 'setup_timeout') fail('RPC timed out', 'Timeout');
@@ -71,6 +75,9 @@ Account.prototype.callFunctionRaw = async function ({ contractId, methodName, ar
     case 'storage_deposit':
       if (process.env.BOUNCER_MOCK_MODE === 'storage_failure') fail('RPC warning: storage failed');
       if (deposit !== 1_250_000_000_000_000_000_000n) fail('incorrect storage deposit');
+      if (process.env.BOUNCER_MOCK_MODE === 'existing_wnear' && args.account_id === owner && !tokenBalances.has(owner)) {
+        tokenBalances.set(owner, 10n ** 24n);
+      }
       return outcome();
     case 'near_deposit':
       credit(this.accountId, deposit);
@@ -128,9 +135,9 @@ Account.prototype.callFunctionRaw = async function ({ contractId, methodName, ar
             (process.env.BOUNCER_MOCK_MODE === 'probe_expired_once' && refundAttempts === 1)) fail('Transaction has expired', 'Expired');
         const refunded = outcome();
         refunded.receipts_outcome = [
-          { outcome: { executor_id: owner, status: { SuccessValue: '' }, logs: ['BOUNCER payment initiated'] } },
+          { outcome: { executor_id: contractId, status: { SuccessValue: '' }, logs: ['BOUNCER payment initiated'] } },
           { outcome: { executor_id: 'wrap.testnet', status: process.env.BOUNCER_MOCK_MODE === 'missing_ft_failure' ? { SuccessValue: '' } : { Failure: { error: 'not registered' } }, logs: [] } },
-          { outcome: { executor_id: owner, status: { SuccessValue: '' }, logs: process.env.BOUNCER_MOCK_MODE === 'missing_refund_log' ? [] : ['BOUNCER ft_transfer failed; vault refunded'] } },
+          { outcome: { executor_id: contractId, status: { SuccessValue: '' }, logs: process.env.BOUNCER_MOCK_MODE === 'missing_refund_log' ? [] : ['BOUNCER ft_transfer failed; vault refunded'] } },
         ];
         if (process.env.BOUNCER_MOCK_MODE === 'broken_refund') vault -= amount;
         if (['broken_refund', 'broken_daily_refund'].includes(process.env.BOUNCER_MOCK_MODE)) spent.set(args.policy_id, (spent.get(args.policy_id) || 0n) + amount);

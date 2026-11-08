@@ -7,9 +7,9 @@ import { orderMemoV3 } from '../packages/provider-sdk/index.mjs';
 const key = nearApi.KeyPair.fromRandom('ed25519'), publicKey = key.getPublicKey(), signer = new nearApi.KeyPairSigner(key);
 const contract = 'bouncer.testnet', owner = 'owner.testnet', origin = 'https://seller.example';
 function fixture() {
-  const entries = new Map(); let nonce = 0n, sends = 0, ready, release, reached = 0;
+  const entries = new Map(); let nonce = 0n, sends = 0, ready, release;
   const arrived = new Promise(resolve => { ready = resolve; }), gate = new Promise(resolve => { release = resolve; });
-  const beforePayment = async () => { if (++reached === 2) ready(); await gate; };
+  const beforePayment = async () => { ready(); await gate; };
   const journal = { get: id => entries.get(id), list: () => structuredClone([...entries.values()]),
     put: (id, value) => entries.set(id, { ...structuredClone(value), id }) };
   const account = { accountId: owner, signer, async createTransaction(receiver, actions) {
@@ -46,17 +46,19 @@ test('a direct v3 memo cannot bypass the reviewed claim origin', async () => {
 test('two concurrent callers sharing one journal cannot both broadcast the same goal ID', async () => {
   const f = fixture();
   const a = run(f, 'same', 'legacy-memo'), b = run(f, 'same', 'legacy-memo');
-  await f.arrived; f.release(); const outcomes = await Promise.allSettled([a, b]);
+  const settled = Promise.allSettled([a, b]); await f.arrived; f.release(); const outcomes = await settled;
   assert.equal(f.sends, 1); assert.equal(f.journal.get('same').status, 'pending');
   assert.ok(outcomes.every(item => item.status === 'rejected'));
-  assert.ok(outcomes.some(item => /journal entry appeared/.test(item.reason.message)));
+  assert.ok(outcomes.some(item => /another payment operation is already running/.test(item.reason.message)));
   assert.ok(outcomes.some(item => /synthetic ambiguous submission/.test(item.reason.message)));
 });
 test('concurrent v3 goals cannot pay a reused seller challenge in one journal', async () => {
   const f = fixture(), memo = orderMemoV3('api', { text: 'same task' }, 'a'.repeat(32));
   const a = run(f, 'first', memo, true), b = run(f, 'second', memo, true);
-  await f.arrived; f.release(); const outcomes = await Promise.allSettled([a, b]);
+  const settled = Promise.allSettled([a, b]); await f.arrived; f.release(); const outcomes = await settled;
   assert.equal(f.sends, 1); assert.equal(f.journal.list().length, 1);
-  assert.ok(outcomes.some(item => /seller challenge is already recorded/.test(item.reason?.message)));
+  assert.ok(outcomes.some(item => /another payment operation is already running/.test(item.reason?.message)));
   assert.ok(outcomes.some(item => /synthetic ambiguous submission/.test(item.reason?.message)));
+  await assert.rejects(run(f, 'second', memo, true), /seller challenge is already recorded/);
+  assert.equal(f.sends, 1);
 });

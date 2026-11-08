@@ -213,3 +213,13 @@ test('workspace picker contains the six testnet wallets, WalletConnect and Googl
   assert.match(html, /THE IDEA IN MOTION/);
   assert.match(css, /prefers-reduced-motion:reduce/);
 });
+
+test('proof page distinguishes historical independent native lookup from self-hosted resource examples', () => {
+  const html = fs.readFileSync(new URL('../web/index.html', import.meta.url), 'utf8');
+  assert.match(html, /Independent OutLayer price lookup/);
+  assert.match(html, /Historical testnet NEAR payment and owner refund/);
+  assert.match(html, /A recorded price lookup used independent OutLayer with testnet NEAR/);
+  assert.match(html, /compute, storage and API examples used self-hosted development services/);
+  assert.match(html, /live wallet-initiated purchase is not yet enabled/);
+  assert.match(html, /The OutLayer row records an independent native-NEAR price lookup/);
+});

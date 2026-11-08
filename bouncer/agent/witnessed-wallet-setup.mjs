@@ -34,21 +34,34 @@ function freshClaim(claim, id, stageId, now) {
       !Number.isSafeInteger(clock) || !Number.isSafeInteger(checked) || clock < checked || clock - checked > 5_000) throw fail('WITNESSED_CLAIM_STALE');
 }
 
-export function createWitnessedWalletSetup({ fence, witness, now = Date.now } = {}) {
+// Both namespace witnesses must share the same physical branch/CAS and,
+// for live use, the same independent latest-head anchor. Matching heads alone
+// cannot prove two operator-supplied backends are the same service.
+async function assertOtherFlowEmpty(other, owner, expectedHead) {
+  const result = await other.inspect(owner);
+  if (!result || typeof result.head !== 'string' || !result.head || result.head !== expectedHead || !Object.hasOwn(result, 'state')) {
+    throw fail('WITNESS_HEAD_CHANGED');
+  }
+  if (result.state !== null) throw fail('CROSS_FLOW_WITNESSED');
+}
+export function createWitnessedWalletSetup({ fence, witness, otherWitness, now = Date.now } = {}) {
   const fenceMethods = ['reserve', 'claimPrompt', 'claimSetupStage', 'recordOriginalHash', 'recordSetupStageOriginal'];
   if (!fence || fenceMethods.some(m => typeof fence[m] !== 'function') || !witness ||
-      ['inspect', 'reserve', 'assertClaimable', 'claim', 'recordOriginal'].some(m => typeof witness[m] !== 'function') || typeof now !== 'function') {
-    throw Error('authenticated PostgreSQL fence and independent CAS witness required');
+      ['inspect', 'reserve', 'assertClaimable', 'claim', 'recordOriginal'].some(m => typeof witness[m] !== 'function') ||
+      !otherWitness || otherWitness === witness || typeof otherWitness.inspect !== 'function' || typeof now !== 'function') {
+    throw Error('authenticated PostgreSQL fence and both same-branch setup witnesses required');
   }
   return Object.freeze({
     async reserve(request) {
       const owner = request?.review?.owner;
       const existing = await witness.inspect(owner);
       if (existing.state) throw fail('OWNER_ALREADY_WITNESSED');
+      await assertOtherFlowEmpty(otherWitness, owner, existing.head);
       // The DB authenticates and retains the exact reviewed snapshot first.
-      // A failed witness append means no prompt is returned to the client.
+      // Bind the Git append to the head at which BOTH flows were empty.
       const prompt = await fence.reserve(request), id = identityFrom(prompt);
-      const saved = await witness.reserve(id);
+      if (id.owner !== owner) throw fail('WITNESS_MISMATCH');
+      const saved = await witness.reserve(id, existing.head);
       return { identity: id, witness_head: saved.head, status: 'RESERVED_NOT_CLAIMED',
         execution_authorized: false, wallet_invocation_verified: false,
         scope: 'testnet reservation and separate public witness only; no wallet, approval or spending' };
@@ -56,6 +69,7 @@ export function createWitnessedWalletSetup({ fence, witness, now = Date.now } = 
     async claim({ identity: rawId, stageId, evidence } = {}) {
       const id = structuredClone(rawId), args = common(id, stageId, evidence);
       const expected = await witness.assertClaimable(id, stageId);
+      await assertOtherFlowEmpty(otherWitness, id.owner, expected.head);
       const claim = await (stageId === STAGES[0] ? fence.claimPrompt(args) : fence.claimSetupStage(args));
       // Even if PostgreSQL returned, no cooperating client sees a claim until
       // the independent append is acknowledged and re-read. Any uncertainty

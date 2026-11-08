@@ -119,7 +119,7 @@ export async function payMultiAgencyQuoteOnce({ goal: rawGoal, journal, provider
   fetchImpl = globalThis.fetch, now = Date.now, execute = false, log = console.log }) {
   const goal = validateMultiAgencyGoal(rawGoal); requireJournal(journal, goal);
   if (execute !== true) throw new Error('explicit payment execution is required; no payment was sent');
-  return withExclusiveJournalOperation(journal, async () => {
+  return withExclusiveJournalOperation(journal, async scope => {
     const quote = issuedQuote(journal, goal, now), plan = multiAgencyPaymentPlan(goal, quote, { nowMs: timestamp(now) });
     assertUnusedMemo(journal, goal, quote);
     // Identity and registration are separate from the policy verdict. A code
@@ -140,7 +140,7 @@ export async function payMultiAgencyQuoteOnce({ goal: rawGoal, journal, provider
       throw new Error('reviewed keyless vault identity, owner or Circle recipient registration differs; no payment sent');
     }
     assertFreshFinalBlock(snapshot, timestamp(now));
-    const totals = await runProcurement({ plan, provider, account, publicKey, journal, durablePayment: true, execute: true, log,
+    const totals = await runProcurement({ plan, provider, account, publicKey, journal, exclusiveJournalScope: scope, durablePayment: true, execute: true, log,
       beforePayment: async () => {
         assertUnusedMemo(journal, goal, quote); await stillAwaiting(goal, quote, fetchImpl, now);
         assertFreshFinalBlock(snapshot, timestamp(now));
@@ -163,12 +163,12 @@ export async function payMultiAgencyQuoteOnce({ goal: rawGoal, journal, provider
  * or broadcast. Unknown hashes and missing events remain unresolved. */
 export async function recoverMultiAgencyPayment({ goal: rawGoal, journal, provider, now = Date.now, log = console.log }) {
   const goal = validateMultiAgencyGoal(rawGoal); requireJournal(journal, goal);
-  return withExclusiveJournalOperation(journal, async () => {
+  return withExclusiveJournalOperation(journal, async scope => {
     const quote = issuedQuote(journal, goal, now, true), plan = multiAgencyPaymentPlan(goal, quote, { nowMs: timestamp(now), allowExpired: true });
     const entry = journal.get(goal.id);
     if (!entry || journal.list().filter(e => e.request?.memo === quote.code && e.request?.payee === quote.payment.receiver &&
         e.request?.token === quote.payment.token).length !== 1) throw new Error('original payment/memo reservation is missing or ambiguous');
-    const recovered = await recoverDirectPayment({ plan, requestId: goal.id, provider, journal, update: false, log });
+    const recovered = await recoverDirectPayment({ plan, requestId: goal.id, provider, journal, update: false, log, exclusiveJournalScope: scope });
     const chain = await provider.txStatusReceipts(entry.tx_hash, goal.owner, 'FINAL');
     const vaultState = await vaultAtTransaction(provider, goal, chain);
     const settlement = verifyMultiAgencyPayment({ goal, quote, result: chain, publicKey: entry.agent_public_key, txHash: entry.tx_hash, vaultState });
@@ -291,12 +291,12 @@ export async function inspectMultiAgencyResearchTask({ goal: rawGoal, journal, p
       (githubToken !== undefined && (typeof githubToken !== 'string' || !githubToken || githubToken.length > 4096 || /[\r\n]/.test(githubToken)))) {
     throw new Error('valid public task number and optional GitHub read token required');
   }
-  return withExclusiveJournalOperation(journal, async () => {
+  return withExclusiveJournalOperation(journal, async scope => {
     const quote = issuedQuote(journal, goal, now, true), plan = multiAgencyPaymentPlan(goal, quote, { nowMs: timestamp(now), allowExpired: true });
     const entry = journal.get(goal.id);
     if (!entry || journal.list().filter(e => e.request?.memo === quote.code && e.request?.payee === quote.payment.receiver &&
         e.request?.token === quote.payment.token).length !== 1) throw new Error('original payment/memo reservation is missing or ambiguous');
-    await recoverDirectPayment({ plan, requestId: goal.id, provider, journal, update: false, log: () => {} });
+    await recoverDirectPayment({ plan, requestId: goal.id, provider, journal, update: false, log: () => {}, exclusiveJournalScope: scope });
     const chain = await provider.txStatusReceipts(entry.tx_hash, goal.owner, 'FINAL');
     const vaultState = await vaultAtTransaction(provider, goal, chain);
     const sellerQuote = await requestJson(`${MULTIAGENCY_ORIGIN}/api/quotes/${quote.code}`,

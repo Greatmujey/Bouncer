@@ -111,6 +111,9 @@ function summarizeAction(action) {
     case 'functionCall': return { type: 'function_call', method: action.functionCall.methodName,
       args: JSON.parse(Buffer.from(action.functionCall.args).toString('utf8')),
       gas: action.functionCall.gas.toString(), deposit_yocto: action.functionCall.deposit.toString() };
+    // DeleteKey appears only in separately reviewed recovery batches; the
+    // commitment still binds signer, receiver and the exact public key.
+    case 'deleteKey': return { type: 'delete_key', public_key: String(action.deleteKey.publicKey) };
     case 'addKey': {
       const key = action.addKey, permission = key.accessKey.permission.functionCall;
       if (key.accessKey.permission.enum !== 'functionCall' || !permission || permission.allowance === null) {

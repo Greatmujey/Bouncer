@@ -180,6 +180,9 @@ async function main() {
   await callFrom(bouncer, WNEAR, 'storage_deposit', { account_id: vendorId }, STORAGE, GAS_50);
   await callFrom(bouncer, WNEAR, 'storage_deposit', { account_id: bouncerId }, STORAGE, GAS_50);
 
+  // The funded owner can already hold wNEAR. Preserve and account for the
+  // existing balance instead of assuming this is a newly created user.
+  const initialUserBalance = BigInt(await view(WNEAR, 'ft_balance_of', { account_id: userId }));
   console.log('\n=== 5) User wraps 2 NEAR ===');
   await callFrom(user, WNEAR, 'near_deposit', {}, 2n * ONE_NEAR, GAS_50);
 
@@ -258,7 +261,7 @@ async function main() {
     policy_id: COMPUTE_POLICY, payee: vendorId, amount: (9n * ONE_NEAR / 10n).toString(),
   });
   if (!Array.isArray(refundBudget) || refundBudget[0] !== true) throw new Error('failed transfer did not restore daily budget');
-  await callFrom(bouncer, bouncerId, 'revoke_payee', { policy_id: COMPUTE_POLICY, payee: unregisteredId }, YOCTO);
+  await callFrom(owner, bouncerId, 'revoke_payee', { policy_id: COMPUTE_POLICY, payee: unregisteredId }, YOCTO);
   console.log(`    ✅ Failed transfer refunded vault and daily budget  tx: ${txUrl(failedTransfer.transaction_outcome.id)}`);
 
   console.log('\n=== 10) Reject policy breaches from the actual agent key ===');
@@ -316,7 +319,7 @@ async function main() {
   const vendorBalance = await view(WNEAR, 'ft_balance_of', { account_id: vendorId });
   const vaultBalance = await view(bouncerId, 'vault_balance', { token: WNEAR });
   const tokenBalance = await view(WNEAR, 'ft_balance_of', { account_id: bouncerId });
-  assertAmount(userBalance, ONE_NEAR / 2n, 'user wNEAR');
+  assertAmount(userBalance, initialUserBalance + ONE_NEAR / 2n, 'user wNEAR');
   assertAmount(vendorBalance, ONE_NEAR / 10n, 'vendor wNEAR');
   assertAmount(vaultBalance, 14n * ONE_NEAR / 10n, 'recorded vault wNEAR');
   assertAmount(tokenBalance, 14n * ONE_NEAR / 10n, 'actual vault wNEAR');

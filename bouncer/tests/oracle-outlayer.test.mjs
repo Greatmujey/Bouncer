@@ -1,8 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { ORACLE_TESTNET_PROGRAM, ORACLE_NEAR_INPUT, ORACLE_COINBASE_NEAR_INPUT, ORACLE_TESTNET_PROJECT, ORACLE_PROJECT_ID, ORACLE_PROJECT_UUID, validateOracleGoal, verifyOracleResult, assertOracleFreshForUse,
   runOracleGoal, recoverOracleGoal } from '../agent/oracle-outlayer.mjs';
 import { signingFixture } from './signing-fixture.mjs';
+import { runNativeResource, runMixedMission } from '../agent/mixed-mission.mjs';
+import { FileJournal, runProcurement } from '../agent/procurement.mjs';
+import { runResourceAgent } from '../agent/resource-agent.mjs';
 const blockHash = 'B'.repeat(44), bouncerReceipt = '6'.repeat(44), requestReceipt = '7'.repeat(44);
 const completedReceipt = '8'.repeat(44), refundReceipt = '9'.repeat(44), stamp = 1_700_000_000;
 const goal = { id: 'oracle-near', contract_id: 'bouncer.testnet', owner_account_id: 'owner.testnet', policy_id: 'external-api',
@@ -59,7 +65,7 @@ function fixture() {
       throw new Error(`unexpected view ${method}`);
     },
     async block(query) { assert.deepEqual(query, { blockId: blockHash }); return { header: { hash: blockHash, timestamp_nanosec: `${stamp + 8}000000000` } }; },
-    async sendTransactionUntil(signed, wait) {
+    async sendTransactionOnce(signed, wait) {
       sends++; assert.equal(wait, 'FINAL'); assert.equal(signed.transaction.receiverId, goal.contract_id);
       assert.equal(journal.get(goal.id).status, 'pending'); assert.equal(journal.get(goal.id).tx_hash, hash);
       return { transaction_outcome: { id: hash } };
@@ -157,7 +163,7 @@ test('dry run is read-only; a paid result is journaled before broadcast and reco
 
 test('dry-run recovery of a pending oracle hash leaves the journal untouched', async () => {
   const f = fixture(); let sends = 0;
-  f.provider.sendTransactionUntil = async () => { sends++; throw new Error('response lost'); };
+  f.provider.sendTransactionOnce = async () => { sends++; throw new Error('response lost'); };
   await assert.rejects(run(f, { execute: true }), /do not resend automatically/);
   const pending = structuredClone(f.journal.get(goal.id));
   f.journal.put(goal.id, { ...pending, status: 'invalid' });
@@ -170,7 +176,7 @@ test('dry-run recovery of a pending oracle hash leaves the journal untouched', a
 
 test('lost response recovers by hash without a key or second payment', async () => {
   const f = fixture(); let calls = 0;
-  f.provider.sendTransactionUntil = async () => { calls++; assert.equal(f.journal.get(goal.id).tx_hash, hash); throw new Error('timeout after possible broadcast'); };
+  f.provider.sendTransactionOnce = async () => { calls++; assert.equal(f.journal.get(goal.id).tx_hash, hash); throw new Error('timeout after possible broadcast'); };
   await assert.rejects(run(f, { execute: true }), /do not resend automatically/);
   assert.equal(f.journal.get(goal.id).status, 'pending');
   f.provider.viewAccessKey = async () => { throw new Error('key revoked'); };
@@ -238,4 +244,144 @@ test('oracle runner does not broadcast if the pending journal write fails', asyn
   const f = fixture(); f.journal.put = () => { throw new Error('simulated fsync failure'); };
   await assert.rejects(run(f, { execute: true }), /simulated fsync failure/);
   assert.equal(f.sends(), 0); assert.equal(f.entries.size, 0);
+});
+
+test('live oracle execution requires one-shot transport and never falls back to a retrying sender', async () => {
+  const f = fixture(); let legacy = 0;
+  f.provider.sendTransactionOnce = undefined;
+  f.provider.sendTransactionUntil = async () => { legacy++; };
+  await assert.rejects(run(f, { execute: true }), /bounded one-shot transaction transport/);
+  assert.equal(f.entries.size, 0); assert.equal(legacy, 0); assert.equal(f.sends(), 0);
+  assert.deepEqual(await run(f), { status: 'READY' }); // read-only preview needs no sender
+});
+
+
+test('concurrent native, FT and recovery operations on one journal stop before a second signature or broadcast', async () => {
+  const f = fixture(), entered = Promise.withResolvers(), release = Promise.withResolvers();
+  const status = f.provider.viewNodeStatus;
+  f.provider.viewNodeStatus = async () => { entered.resolve(); await release.promise; return status(); };
+  const first = run(f,{execute:true}); await entered.promise;
+  try {
+    await assert.rejects(run(f,{execute:true}), /another payment operation is already running/);
+    await assert.rejects(recoverOracleGoal({goal,provider:f.provider,journal:f.journal,log:()=>{}}),/another payment operation is already running/);
+    await assert.rejects(runProcurement({journal:f.journal}),/another payment operation is already running/);
+    await assert.rejects(runResourceAgent({journal:f.journal}),/another payment operation is already running/);
+    assert.equal(f.sends(),0); assert.equal(f.entries.size,0);
+  } finally { release.resolve(); }
+  assert.equal((await first).status,'FULFILLED'); assert.equal(f.sends(),1);
+  assert.equal((await run(f,{execute:true})).status,'REUSED'); assert.equal(f.sends(),1);
+});
+
+test('real native and mixed orchestration safely nests its private journal scope', async () => {
+  const f=fixture();
+  const outlayer={kind:'oracle',goal,account:f.account,publicKey:key};
+  let leaked=false;
+  const preview=await runMixedMission({outlayer,provider:f.provider,journal:f.journal,log:()=>{},
+    resources:{contractId:goal.contract_id,ownerAccountId:goal.owner_account_id,goals:[{id:'synthetic-ft'}]},
+    runners:{resources:async input=>{leaked ||= Object.hasOwn(input,'exclusiveJournalScope');return {payments:{blocked:0}}}}});
+  assert.equal(preview.status,'READY'); assert.equal(f.sends(),0); assert.equal(leaked,false);
+  const execution=await runNativeResource({outlayer,provider:f.provider,journal:f.journal,execute:true,log:()=>{}});
+  assert.equal(execution.status,'NATIVE_RESOURCE_FULFILLED'); assert.equal(f.sends(),1);
+  const reused=await runNativeResource({outlayer,provider:f.provider,journal:f.journal,execute:true,log:()=>{}});
+  assert.equal(reused.status,'NATIVE_RESOURCE_REUSED'); assert.equal(f.sends(),1);
+});
+
+test('a failed preflight releases the local lock without recording or sending', async () => {
+  const f=fixture(), status=f.provider.viewNodeStatus;
+  f.provider.viewNodeStatus=async()=>{throw Error('synthetic preflight failure')};
+  await assert.rejects(run(f,{execute:true}),/synthetic preflight failure/);
+  assert.equal(f.entries.size,0);assert.equal(f.sends(),0);
+  f.provider.viewNodeStatus=status;
+  assert.equal((await run(f,{execute:true})).status,'FULFILLED');assert.equal(f.sends(),1);
+});
+
+test('async or mismatched native journal acknowledgement never authorizes a broadcast', async () => {
+  for (const mode of ['async','mismatch']) {
+    const f=fixture();
+    if (mode==='async') f.journal.put=()=>Promise.reject(Error('synthetic late write failure'));
+    else f.journal.put=(id,entry)=>f.entries.set(id,{...structuredClone(entry),tx_hash:'different'});
+    await assert.rejects(run(f,{execute:true}),/native original journal is uncertain/);
+    assert.equal(f.sends(),0,mode);
+  }
+});
+
+test('an original inserted while signing cannot be overwritten or broadcast', async () => {
+  const f=fixture(), signer=f.account.signer, original=signer.signTransaction.bind(signer);
+  const retained={fingerprint:'retained-original',status:'pending',tx_hash:'B'.repeat(44)};
+  signer.signTransaction=async transaction=>{const signed=await original(transaction);f.entries.set(goal.id,retained);return signed};
+  await assert.rejects(run(f,{execute:true}),/native original journal is uncertain/);
+  assert.deepEqual(f.entries.get(goal.id),retained);assert.equal(f.sends(),0);
+});
+
+test('uncertain completed-entry readback preserves the pending hash and never triggers another send', async () => {
+  const f=fixture(), put=f.journal.put.bind(f.journal);
+  f.journal.put=(id,entry)=>{if(entry.status==='completed')return;put(id,entry)};
+  await assert.rejects(run(f,{execute:true}),/do not resend automatically/);
+  assert.equal(f.sends(),1);assert.equal(f.journal.get(goal.id).status,'pending');assert.equal(f.journal.get(goal.id).tx_hash,hash);
+  f.journal.put=put;assert.equal((await recoverOracleGoal({goal,provider:f.provider,journal:f.journal,log:()=>{}})).status,'REUSED');
+  assert.equal(f.sends(),1);
+});
+
+
+test('a real local FileJournal records and reads back the original before the synthetic one-shot transport', async () => {
+  const f=fixture(), dir=fs.mkdtempSync(path.join(os.tmpdir(),'bouncer-native-journal-'));
+  const file=path.join(dir,'journal.json');let journal=new FileJournal(file,goal.contract_id,goal.owner_account_id),sends=0;
+  try {
+    f.provider.sendTransactionOnce=async()=>{sends++;assert.equal(journal.get(goal.id).tx_hash,hash);assert.equal(journal.get(goal.id).status,'pending');
+      return {transaction_outcome:{id:hash}}};
+    assert.equal((await runOracleGoal({goal,provider:f.provider,account:f.account,publicKey:key,journal,execute:true,log:()=>{}})).status,'FULFILLED');
+    assert.equal(journal.get(goal.id).status,'completed');journal.close();
+    journal=new FileJournal(file,goal.contract_id,goal.owner_account_id,{requireExisting:true});
+    assert.equal((await recoverOracleGoal({goal,provider:f.provider,journal,log:()=>{}})).status,'REUSED');assert.equal(sends,1);
+  }finally{journal?.close();fs.rmSync(dir,{recursive:true,force:true})}
+});
+
+test('injected mission runner cannot obtain the private nested journal scope', async () => {
+  const f=fixture();let calls=0;
+  const result=await runNativeResource({outlayer:{kind:'oracle',goal},provider:f.provider,journal:f.journal,log:()=>{},
+    runners:{outlayer:async input=>{
+      calls++;assert.equal(Object.hasOwn(input,'exclusiveJournalScope'),false);
+      await assert.rejects(run(f),/another payment operation is already running/);
+      return {status:'READY'};
+    }}});
+  assert.equal(result.status,'READY');assert.equal(calls,1);assert.equal(f.sends(),0);
+});
+
+test('a FileJournal scoped to a different owner or contract cannot preflight, recover or pay', async () => {
+  for (const [contractId,ownerId] of [['other.testnet',goal.owner_account_id],[goal.contract_id,'other.testnet']]) {
+    const f=fixture(), dir=fs.mkdtempSync(path.join(os.tmpdir(),'bouncer-wrong-scope-'));
+    const journal=new FileJournal(path.join(dir,'journal.json'),contractId,ownerId);let queries=0;
+    f.provider.viewNodeStatus=async()=>{queries++;return {chain_id:'testnet'}};
+    try {
+      await assert.rejects(runOracleGoal({goal,provider:f.provider,account:f.account,publicKey:key,journal,execute:true}),/different contract\/account/);
+      await assert.rejects(recoverOracleGoal({goal,provider:f.provider,journal}),/different contract\/account/);
+      await assert.rejects(runNativeResource({outlayer:{kind:'oracle',goal},provider:f.provider,journal}),/different contract\/account/);
+      assert.equal(queries,0);assert.equal(f.sends(),0);assert.deepEqual(journal.list(),[]);
+    }finally{journal.close();fs.rmSync(dir,{recursive:true,force:true})}
+  }
+});
+
+test('an asynchronous journal scope assertion cannot authorize a native payment', async () => {
+  const f=fixture();let queries=0;
+  f.journal.assertScope=()=>Promise.reject(Error('late scope failure'));
+  f.provider.viewNodeStatus=async()=>{queries++;return {chain_id:'testnet'}};
+  await assert.rejects(run(f,{execute:true}),/scope check must be synchronous/);
+  assert.equal(queries,0);assert.equal(f.sends(),0);assert.equal(f.entries.size,0);
+});
+
+test('async or malformed native journal reads fail closed without unhandled rejection or broadcast', async () => {
+  for (const mode of ['rejected','null','wrong-id']) {
+    const f=fixture();f.journal.get=()=>mode==='rejected'?Promise.reject(Error('late read failure')):mode==='null'?null:{id:'other'};
+    await assert.rejects(run(f,{execute:true}),/native original journal is uncertain/);
+    assert.equal(f.sends(),0);
+  }
+});
+
+test('an async acknowledgement after writing the original remains recovery-only', async () => {
+  const f=fixture(), put=f.journal.put.bind(f.journal);
+  f.journal.put=(id,entry)=>{put(id,entry);return Promise.resolve()};
+  await assert.rejects(run(f,{execute:true}),/native original journal is uncertain/);
+  assert.equal(f.journal.get(goal.id).tx_hash,hash);assert.equal(f.journal.get(goal.id).status,'pending');assert.equal(f.sends(),0);
+  f.journal.put=put;f.provider.txStatusReceipts=async()=>{throw Error('synthetic original unavailable')};
+  await assert.rejects(run(f,{execute:true}),/synthetic original unavailable/);assert.equal(f.sends(),0);
 });

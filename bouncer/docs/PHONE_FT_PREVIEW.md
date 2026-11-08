@@ -126,10 +126,15 @@ The recovery interface was also exercised at 320 px and 390 px widths in
 Chromium with a synthetic wallet and synthetic backend; this is not a real
 phone or wallet test.
 
-The setup endpoints are **disabled by default** and the visible app does not
-initiate setup transactions. The opt-in backend requires a separate PostgreSQL
-URL and independently retained Git head; the temporary PostgreSQL here is
-**not** durable hosted storage. This is not production-ready: independent
+The setup endpoints are **disabled by default**; the visible app can request
+individual wallet transactions only after the experimental backend is enabled
+and the owner explicitly chooses each stage. The backend checks both existing
+prompt-fence schemas, a shared owner fence and a configured HTTPS checkpoint
+against the explicitly configured Git branch; the checkpoint must be separately
+operated. The backend never initializes
+or repairs missing schemas or a checkpoint. It requires an exact current
+checkpoint head at startup. The temporary PostgreSQL in tests is **not**
+durable hosted storage. This is not production-ready: independent
 restore/monitoring, rate limiting, a real wallet and phone, mobile deployment
 size, policy/agent execution, provider order/payment and verified delivery all
 remain unproven. Fresh preflight cannot prevent state changes while a wallet

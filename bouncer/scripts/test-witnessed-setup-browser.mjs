@@ -29,6 +29,12 @@ try {
     const publicKey = `ed25519:${baseEncode(Buffer.from(synthetic.publicKey.export({format:'jwk'}).x,'base64url'))}`;
     const identity = {owner,owner_public_key:publicKey,operation_id:'1'.repeat(32),review_sha256:'2'.repeat(64),
       stages:['create_keyless_vault','register_vault_circle','fund_vault_circle'].map((stage_id,i)=>({stage_id,action_commitment_sha256:String(i+3).repeat(64)}))};
+    // Display-only synthetic review for the recovery flow. No transactions
+    // are prepared, approved or broadcast in this browser test.
+    const review = { owner, vault:`vault.${owner}`, vault_wasm_sha256:'a'.repeat(64), fixed_product_price_atoms:'20000000',
+      stages:[{id:stage,actions:[{type:'transfer',deposit_yocto:'1000000000000000000000000'}]},
+        {id:'register_vault_circle',actions:[{deposit_yocto:'1250000000000000000000'}]},
+        {id:'fund_vault_circle',actions:[{args:{amount:'20000000'}}]}] };
     const mock = `window.selector.ready({
       async signIn(p) { if(p.network !== 'testnet' || p.addFunctionCallKey) throw Error(); return [{accountId:'${owner}'}]; },
       async signOut() {}, async getAccounts() { return [{accountId:'${owner}'}]; },
@@ -57,20 +63,24 @@ try {
       if (u.pathname === '/api/read-only/config') return reply(route,{relay_url:'https://bouncer-testnet-readonly-relay-tau.vercel.app/api/read'});
       if (u.pathname === '/api/read-only/pending') return reply(route,{jobs:[]});
       if (u.pathname === '/api/read-only/owner-key') return reply(route,{full_access:true});
-      if (['/api/wallet-setup/inspect-challenge','/api/wallet-setup/original-challenge'].includes(u.pathname)) {
-        const recording = u.pathname.endsWith('/original-challenge');
-        const ctx = recording ? {purpose:'record_original_hash',owner,ownerPublicKey:publicKey,identity,stageId:stage,originalHash:hash}
+      if (['/api/wallet-setup/inspect-challenge','/api/wallet-setup/original-challenge',
+        '/api/wallet-setup/reconcile-challenge'].includes(u.pathname)) {
+        const recording = u.pathname.endsWith('/original-challenge'), reconciling = u.pathname.endsWith('/reconcile-challenge');
+        const ctx = recording || reconciling
+          ? {purpose:recording?'record_original_hash':'reconcile_setup_original',owner,ownerPublicKey:publicKey,identity,stageId:stage,originalHash:hash}
           : {purpose:'inspect',owner,ownerPublicKey:publicKey};
         const action = setupAuthAction(ctx), actionDigest = createHash('sha256').update(JSON.stringify(action)).digest('hex');
-        const issued=Date.now(), expires=issued+120_000, label=recording?'Record the original transaction hash':'Inspect the retained prompt';
+        const issued=Date.now(), expires=issued+120_000, label=recording?'Record the original transaction hash'
+          : reconciling?`Reconcile original: ${stage}`:'Inspect the retained prompt';
         return reply(route,{challenge_id:'a'.repeat(32),nonce_base64:Buffer.alloc(32,8).toString('base64'),recipient:new URL(origin).host,
           expires_at_ms:expires,message:`Bouncer testnet owner authentication\n${label}\nAccount: ${owner}\nPublic key: ${publicKey}\n` +
             `Action SHA-256: ${actionDigest}\nSite: ${origin}\nIssued: ${new Date(issued).toISOString()}\nExpires: ${new Date(expires).toISOString()}\n` +
             'This message is not a transaction and does not itself approve spending.'});
       }
-      if (u.pathname === '/api/wallet-setup/inspect') return reply(route,{status:'WITNESSED',identity,witnessed_records:[{event:'claim',stage_id:stage}]});
+      if (u.pathname === '/api/wallet-setup/inspect') return reply(route,{status:'WITNESSED',identity,review,witnessed_records:[{event:'claim',stage_id:stage}]});
       if (u.pathname === '/api/wallet-setup/preview-original') return reply(route,{status:'FINAL_SETUP_RECEIPT_MATCH',tx_hash:hash,stage_id:stage,original_recorded:false});
       if (u.pathname === '/api/wallet-setup/original') return reply(route,{status:'ORIGINAL_RECORDED',original_hash:hash,stage_id:stage});
+      if (u.pathname === '/api/wallet-setup/reconcile') return reply(route,{status:'FINAL_SETUP_RECEIPT_MATCH',tx_hash:hash,stage_id:stage});
       const file = u.pathname.slice(1) || 'index.html';
       if (!allowed.has(file)) return route.fulfill({status:404,body:'blocked'});
       const content = file === 'wallet.bundle.js' ? bundle.replace(pinned,digest) : fs.readFileSync(path.join(web,file));
@@ -82,6 +92,7 @@ try {
     await page.waitForFunction(() => document.querySelector('#wallet-status').textContent.includes('great_mujey.testnet'));
     await page.locator('.top-connect').click(); await page.locator('#wallet-owner-verify').click();
     await page.waitForFunction(() => document.querySelector('#wallet-account-badge').textContent === 'OWNER VERIFIED');
+    assert.equal(await page.locator('#wallet-native-setup-open').isHidden(),true); // no native backend advertised
     await page.locator('#wallet-setup-recovery').click();
     await page.waitForFunction(() => /claimed.*Do not repeat.*wallet history/i.test(document.querySelector('#wallet-setup-recovery-status').textContent));
     await page.locator('#wallet-setup-original').fill(hash);
@@ -90,11 +101,13 @@ try {
     assert.equal(await page.locator('#wallet-setup-recovery-form').evaluate(el=>el.scrollWidth<=el.clientWidth),true);
     assert.equal(await page.locator('#wallet-dialog').evaluate(el=>el.scrollWidth<=el.clientWidth),true);
     await page.locator('#wallet-setup-record-original').click();
-    await page.waitForFunction(() => /recorded for recovery.*not a purchase or delivery/i.test(document.querySelector('#wallet-setup-recovery-status').textContent));
+    await page.waitForFunction(() => /reconciled at FINAL.*Review the next setup stage/i.test(document.querySelector('#wallet-setup-recovery-status').textContent));
     assert.equal(await page.locator('#wallet-setup-recovery-form').isVisible(),false);
+    assert.match(await page.locator('#wallet-buffer-setup-approve').innerText(), /register vault circle/i);
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
     assert.ok(calls.some(x=>x.endsWith('/api/read-only/owner-key')));
-    assert.ok(!calls.some(x=>/wallet-setup\/(claim|reserve|broadcast)/.test(x)));
+    assert.ok(calls.some(x=>x.endsWith('/api/wallet-setup/reconcile')));
+    assert.ok(!calls.some(x=>/wallet-setup\/(claim|reserve|broadcast)/.test(x)), 'recovery never automatically claims another stage');
     assert.deepEqual(errors,[]); await page.close();
   }
   console.log('Phone-sized setup recovery inspected and recorded a synthetic original without a transaction. No live wallet or real phone was used.');

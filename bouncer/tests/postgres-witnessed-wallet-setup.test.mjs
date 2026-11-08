@@ -1,3 +1,4 @@
+import { emptyCrossWitness } from './fixtures/empty-cross-witness.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
@@ -6,6 +7,7 @@ import nearApi from 'near-api-js';
 import { buildBufferWalletSetup } from '../agent/buffer-wallet-setup-plan.mjs';
 import { createPostgresWalletPromptFence, initializePostgresWalletPromptFence } from '../agent/postgres-wallet-prompt-fence.mjs';
 import { createWalletPromptWitness } from '../agent/git-wallet-prompt-witness.mjs';
+import { createNativeOraclePromptWitness } from '../agent/git-native-oracle-prompt-witness.mjs';
 import { createWitnessedWalletSetup } from '../agent/witnessed-wallet-setup.mjs';
 import { wasm as V12, NOW, snapshot as setupSnapshot } from './buffer-wallet-setup-fixture.mjs';
 import { firstSetupPreflightFixture } from './fixtures/wallet-setup-preflight-provider.mjs';
@@ -33,7 +35,7 @@ dbtest('actual PostgreSQL setup claim is independently witnessed before it retur
     const receiptProvider = { async viewNodeStatus() { return { chain_id: 'testnet' }; }, async txStatusReceipts() { throw Error('no synthetic receipt'); } };
     const fence = createPostgresWalletPromptFence({ pool: db, authenticate: async ({ evidence }) => evidence === 'synthetic-auth',
       setupWasmBytes: V12, setupPreflightProvider: provider, setupReceiptProvider: receiptProvider });
-    const witness = createWalletPromptWitness({ store: store() }), coordinator = createWitnessedWalletSetup({ fence, witness });
+    const witness = createWalletPromptWitness({ store: store() }), coordinator = createWitnessedWalletSetup({ fence, witness, otherWitness: emptyCrossWitness(witness) });
     const result = await coordinator.reserve({ review, setupSnapshot: snapshot, trustedReviewHash: review.review_sha256,
       trustedOwnerPublicKey: ownerKey, stageId: 'create_keyless_vault', evidence: 'synthetic-auth' });
     assert.equal(result.execution_authorized, false); assert.equal(result.status, 'RESERVED_NOT_CLAIMED');
@@ -59,7 +61,7 @@ dbtest('NEP-413 authenticated setup binds the database and an independent Git wi
   const { nep413Payload } = await import('../web-src/cli-login.mjs');
   const { signReviewedSetupChallenge } = await import('../web-src/witnessed-setup-auth.mjs');
   const { createPostgresWalletPromptAuth, initializePostgresWalletPromptAuth } = await import('../agent/postgres-wallet-prompt-auth.mjs');
-  const { createGitBranchWitnessStore } = await import('../agent/git-branch-witness-store.mjs');
+  const { createGitBranchWitnessStore, createGitNativeOraclePromptWitnessStore } = await import('../agent/git-branch-witness-store.mjs');
   const { createAuthenticatedWitnessedSetupService } = await import('../agent/authenticated-witnessed-setup-service.mjs');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bouncer-auth-witness-'));
   const bare = path.join(dir, 'remote.git'), work = path.join(dir, 'work'), branch = 'arena/0ee9ab70-near-hub';
@@ -82,7 +84,8 @@ dbtest('NEP-413 authenticated setup binds the database and an independent Git wi
     const fence = createPostgresWalletPromptFence({ pool: db, authenticate: auth.authenticate, setupWasmBytes: V12,
       setupPreflightProvider: provider, setupReceiptProvider: receiptProvider });
     const witness = createWalletPromptWitness({ store: createGitBranchWitnessStore({ repo: work, branch, initialHead: base }) });
-    const coordinator = createWitnessedWalletSetup({ fence, witness });
+    const otherWitness = createNativeOraclePromptWitness({ store: createGitNativeOraclePromptWitnessStore({ repo: work, branch, initialHead: base }) });
+    const coordinator = createWitnessedWalletSetup({ fence, witness, otherWitness });
     const taskId = 'a'.repeat(32);
     const service = createAuthenticatedWitnessedSetupService({ auth, fence, witness, coordinator, setupWasmBytes: V12, owner,
       async getRetainedReview(id) { return id === taskId ? { snapshot, review } : null; } });

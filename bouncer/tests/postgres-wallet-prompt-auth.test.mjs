@@ -273,3 +273,55 @@ dbtest('unsafe schema, unsupported keys and malformed signatures fail closed', a
   } finally { await db.query('ALTER TABLE bouncer_wallet_auth_v1.challenges ENABLE TRIGGER challenge_immutable'); }
   assert.equal(await auth.authenticate({ action: f.action, evidence }), true);
 }));
+
+dbtest('native setup challenges bind all four exact stages, originals and the one-use owner key', async () => resources(async (db, rpc, auth) => {
+  const f = fixture(), base = { format: 'bouncer-wallet-prompt-auth-v1', network: 'testnet', owner: f.owner, owner_public_key: pk(f.ownerKey) };
+  const stages = ['create_keyless_native_vault','configure_native_oracle_policy','fund_native_vault','install_native_oracle_agent'];
+  const reserve = { ...base, purpose: 'reserve_native_setup', review_sha256: 'a'.repeat(64), stage_id: stages[0], action_commitment_sha256: 'b'.repeat(64) };
+  const inspect = { ...base, purpose: 'inspect_native_setup' };
+  const complete = { ...base, purpose: 'verify_native_setup_completion', operation_id: 'c'.repeat(32), review_sha256: 'a'.repeat(64) };
+  const actions = [reserve, inspect, ...stages.flatMap((stage_id, i) => {
+    const stage = { ...base, operation_id: 'c'.repeat(32), review_sha256: 'a'.repeat(64), stage_id,
+      action_commitment_sha256: 'b'.repeat(64) };
+    return [{ ...stage, purpose: 'claim_native_setup_stage' }, { ...stage, purpose: 'record_native_setup_original', original_hash: hash(60 + i) }];
+  }), complete];
+  for (const action of actions) {
+    const challenge = await auth.issue(action), evidence = signed(challenge, f);
+    assert.match(challenge.message, /not a transaction/);
+    assert.equal(await auth.authenticate({ action, evidence }), true);
+    assert.equal(await auth.authenticate({ action, evidence }), false);
+  }
+  const trial={...base,purpose:'claim_native_oracle_trial',operation_id:'c'.repeat(32),review_sha256:'a'.repeat(64),
+    goal_id:'native-oracle-trial-1',goal_sha256:'d'.repeat(64),agent_public_key:pk(pair()),original_hash:hash(77),witness_head:'e'.repeat(40)};
+  const challenge=await auth.issue(trial),trialEvidence=signed(challenge,f);
+  for (const changed of [{...trial,original_hash:hash(78)},{...trial,goal_sha256:'f'.repeat(64)},
+    {...trial,agent_public_key:pk(pair())},{...trial,witness_head:'f'.repeat(40)}]) {
+    assert.equal(await auth.authenticate({action:changed,evidence:trialEvidence}),false);
+  }
+  assert.equal(await auth.authenticate({action:trial,evidence:trialEvidence}),true);
+  assert.equal(await auth.authenticate({action:trial,evidence:trialEvidence}),false);
+  for (const bad of [
+    { ...reserve, stage_id: stages[1] }, { ...reserve, review_sha256: 'A'.repeat(64) },
+    { ...reserve, owner: 'buyer.near' }, { ...reserve, owner: 'bouncer-owner-12f343b795633e357ae5560d.testnet' },
+    { ...reserve, extra: 'unexpected' }, { ...actions[2], operation_id: '0'.repeat(31) },
+    { ...actions[3], original_hash: 'bad' }, { ...complete, operation_id: 'x'.repeat(32) },
+    { ...complete, review_sha256: 'A'.repeat(64) }, { ...complete, stage_id: stages[0] },
+    { ...trial, agent_public_key: f.action.owner_public_key },{ ...trial, original_hash:'bad' },
+    { ...trial, witness_head:'g'.repeat(40) },{ ...trial, goal_sha256:'F'.repeat(64) },
+  ]) await assert.rejects(auth.issue(bad));
+}));
+
+dbtest('atomic challenge binds its exact first stage and cannot be reused for the agent installation', async () => resources(async (_db, _rpc, auth) => {
+  const f=fixture(),base={format:'bouncer-wallet-prompt-auth-v1',network:'testnet',owner:f.owner,owner_public_key:pk(f.ownerKey)};
+  const reserve={...base,purpose:'reserve_native_setup',review_sha256:'a'.repeat(64),
+    stage_id:'create_configure_fund_native_vault',action_commitment_sha256:'b'.repeat(64)};
+  const claim={...reserve,purpose:'claim_native_setup_stage',operation_id:'c'.repeat(32)};
+  const challenge=await auth.issue(claim),evidence=signed(challenge,f);
+  assert.equal(await auth.authenticate({action:{...claim,stage_id:'install_native_oracle_agent'},evidence}),false);
+  assert.equal(await auth.authenticate({action:claim,evidence}),true);
+  assert.equal(await auth.authenticate({action:claim,evidence}),false);
+  const reservation=await auth.issue(reserve);
+  assert.equal(await auth.authenticate({action:reserve,evidence:signed(reservation,f)}),true);
+  for (const stage_id of ['install_native_oracle_agent','configure_native_oracle_policy','fund_native_vault'])
+    await assert.rejects(auth.issue({...reserve,stage_id}));
+}));

@@ -62,7 +62,10 @@ export async function runDependentLiveProof({ workflow: raw, provider, source, r
   } };
   let sourceBroadcasts = 0, resourceBroadcasts = 0, injected = false;
   const trackedProvider = new Proxy(provider, { get(target, property) {
-    if (property === 'sendTransactionUntil') return async (...args) => {
+    if (property === 'sendTransactionUntil' || property === 'sendTransactionOnce') {
+      const transport = Reflect.get(target, property, target);
+      if (typeof transport !== 'function') return transport;
+      return async (...args) => {
       const method = signedMethod(args[0]);
       if (method === 'execute_outlayer_native_project') {
         assert(++sourceBroadcasts === 1, 'attempted more than one source broadcast');
@@ -71,13 +74,14 @@ export async function runDependentLiveProof({ workflow: raw, provider, source, r
       } else throw new Error('dependent proof: unexpected signed transaction');
       // The signed hash has already been durably saved by the runner. Do not
       // retry if the RPC itself errors or the outcome is ambiguous.
-      const result = await target.sendTransactionUntil(...args);
+      const result = await transport.apply(target, args);
       if (method === 'execute' && !injected) {
         injected = true;
         throw new Error('injected lost response after actual broadcast');
       }
       return result;
-    };
+      };
+    }
     const value = Reflect.get(target, property, target);
     return typeof value === 'function' ? value.bind(target) : value;
   } });
