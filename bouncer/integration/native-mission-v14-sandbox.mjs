@@ -16,6 +16,7 @@ import { FileJournal } from '../agent/procurement.mjs';
 import { runNativeMission } from '../agent/native-mission.mjs';
 import { buildV14PhoneResearchPlan, verifyV14PhoneResearchPlan, v14PhoneBatchCommitment } from '../agent/native-v14-phone-plan.mjs';
 import { prepareV14PhoneAttempt, inspectV14PhoneAttempt } from '../agent/native-v14-phone-receipts.mjs';
+import { inspectV14PhoneSetupCompletion } from '../agent/native-v14-phone-completion.mjs';
 import { ORACLE_TESTNET_PROJECT } from '../agent/oracle-outlayer.mjs';
 import { SandboxSetupRpc, withSandboxOnlyFetch } from './v11-sandbox-setup-rpc.mjs';
 import { SANDBOX_SHA256, readVerifiedFile, assertSandboxStatus, requireFinalSuccess } from './v11-sandbox-support.mjs';
@@ -87,7 +88,7 @@ async function main() {
       const root=account('testnet',provider,sandbox.rootKey), owner=account(OWNER,provider,ownerKey);
       const send=(signer,receiverId,actions)=>signer.signAndSendTransaction({receiverId,actions,waitUntil:'FINAL',throwOnFailure:false});
       const must=async(signer,receiver,actions,label)=>{const r=await send(signer,receiver,actions);requireFinalSuccess(r,label);return r;};
-      const setupProofs=[];
+      const setupProofs=[],setupPrior=[];
       const inspectSetup=async(index,sent)=>{
         const stage=phonePlan.batches[index],trustedOriginalHash=sent.transaction_outcome.id;
         const attempt=prepareV14PhoneAttempt({...phonePlanAnchors,stageId:stage.id,trustedOriginalHash});
@@ -96,7 +97,7 @@ async function main() {
         const expected=index===0?['FINAL_RESEARCH_V14_LOADER_AND_UPGRADE_MATCH']:index===5?
           ['FINAL_LOCAL_ADD_KEYS_OUTCOME_MATCH','FINAL_RESEARCH_V14_SETUP_RECEIPT_MATCH']:['FINAL_RESEARCH_V14_SETUP_RECEIPT_MATCH'];
         assert.ok(expected.includes(proof.status),`unexpected ${stage.id} proof: ${proof.status}`);
-        assert.equal(proof.do_not_resend,true);setupProofs.push(proof.status);
+        assert.equal(proof.do_not_resend,true);setupProofs.push(proof.status);setupPrior.push({attempt,trustedOriginalHash,result});
       };
       for(const [id,k] of [[OWNER,ownerKey],[PROVIDER,fakeKey],...(loader?[[INTRUDER,intruderKey]]:[])])
         await must(root,id,[tx.createAccount(),tx.transfer(100n*N),tx.addKey(k.getPublicKey(),tx.fullAccessKey())],`create disposable ${id}`);
@@ -178,9 +179,13 @@ async function main() {
         const method=signed.transaction.actions[0]?.functionCall?.methodName, id=activeIds[idForMethod[method]];
         assert.equal(journal.get(id)?.status,'pending');assert.equal(journal.get(id)?.tx_hash,hash);
       }});
+      let completion=null;
       if (phonePlan) {
         assert.equal(codeHash,expectedCodeHash);
         assert.deepEqual(priceRoute,expectedPrice); assert.deepEqual(storageRoute,expectedStorage);
+        completion=await inspectV14PhoneSetupCompletion({...phonePlanAnchors,prior:setupPrior,provider:new SandboxSetupRpc(rpcUrl)});
+        assert.equal(completion.status,'ORIGINALS_AND_SETUP_SNAPSHOT_MATCH_NOT_AUTHORIZED',JSON.stringify(completion.blockers));
+        assert.equal(completion.wallet_prompt_authorized,false);
       }
       const make=(suffix='')=>makeMission(codeHash,priceRoute,storageRoute,suffix);
       const signers=(suffix='')=>Object.fromEntries(Object.entries(keys).map(([id,k])=>[`${id}${suffix}`,{account:account(OWNER,rpc,k),publicKey:k.getPublicKey()}]));
@@ -209,7 +214,8 @@ async function main() {
       return {scope:'isolated nearcore and fabricated provider; no public chain or real service',
         research_loader:loader?{synthetic_meteor_request_bytes:meteorBytes,loader_wasm_bytes:loader.length,
           compressed_v14_bytes:compressed.length,all_unsigned_plan_stages_executed_only_in_sandbox:true,
-          sandbox_original_receipt_proofs:setupProofs,failed_upgrade_owner_refund_tested:true,real_phone_tested:false}:null,
+          sandbox_original_receipt_proofs:setupProofs,sandbox_completion_snapshot:completion?.status,
+          failed_upgrade_owner_refund_tested:true,real_phone_tested:false}:null,
         three_guarded_legs_and_public_result_storage:true, sandbox_refunds_verified:true,
         original_hash_recovery_without_new_send:true, lost_response_recovered_and_remaining_legs_continued:true,
         independent_delivery_verified:false, public_chain_transactions:false};

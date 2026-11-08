@@ -9,6 +9,7 @@ import { buildV14PhoneResearchPlan, verifyV14PhoneResearchPlan, v14PhoneBatchCom
 import { prepareV14PhoneAttempt, inspectV14PhoneAttempt } from '../agent/native-v14-phone-receipts.mjs';
 import { syntheticV14MeteorRequest } from '../integration/v14-synthetic-meteor.mjs';
 import { validateKnownFirstPartyActionRequest } from '@meteorwallet/connect-shared/internal';
+import { inspectV14PhoneSetupCompletion } from '../agent/native-v14-phone-completion.mjs';
 
 const owner='owner.testnet',vault=`native.${owner}`,sha=bytes=>crypto.createHash('sha256').update(bytes).digest('hex');
 const codeHash=bytes=>nearApi.utils.serialize.base_encode(crypto.createHash('sha256').update(bytes).digest());
@@ -92,13 +93,13 @@ function rpcAction(action) {
   return {AddKey:{public_key:String(a.publicKey),access_key:{nonce:Number(a.accessKey.nonce),permission:{FunctionCall:{
     allowance:String(p.allowance),receiver_id:p.receiverId,method_names:[...p.methodNames]}}}}};
 }
-function receiptFixture(index=0,omitLocal=false) {
-  const inputs=fixture(),plan=buildV14PhoneResearchPlan(inputs),{review}=plan,batch=plan.batches[index],root=hash(2),upgrade=hash(3);
-  const anchored={...inputs,review,trustedReviewSha256:review.review_sha256,trustedOriginalHash:hash(1)},
+function receiptFixture(index=0,omitLocal=false,inputs=fixture(),originalHash=hash(1)) {
+  const plan=buildV14PhoneResearchPlan(inputs),{review}=plan,batch=plan.batches[index],root=hash(2),upgrade=hash(3);
+  const anchored={...inputs,review,trustedReviewSha256:review.review_sha256,trustedOriginalHash:originalHash},
     attempt=prepareV14PhoneAttempt({...anchored,stageId:batch.id}),actions=batch.actions.map(rpcAction);
   const result={final_execution_status:'FINAL',status:{SuccessValue:''},
-    transaction:{hash:hash(1),signer_id:batch.signerId,public_key:inputs.ownerPublicKey,receiver_id:batch.receiverId,actions:structuredClone(actions)},
-    transaction_outcome:{id:hash(1),outcome:{executor_id:batch.signerId,receipt_ids:[root],status:{SuccessReceiptId:root}}},
+    transaction:{hash:originalHash,signer_id:batch.signerId,public_key:inputs.ownerPublicKey,receiver_id:batch.receiverId,actions:structuredClone(actions)},
+    transaction_outcome:{id:originalHash,outcome:{executor_id:batch.signerId,receipt_ids:[root],status:{SuccessReceiptId:root}}},
     receipts:omitLocal?[]:[{receipt_id:root,predecessor_id:batch.signerId,receiver_id:batch.receiverId,
       receipt:{Action:{signer_id:batch.signerId,signer_public_key:inputs.ownerPublicKey,input_data_ids:[],output_data_receivers:[],actions:structuredClone(actions)}}}],
     receipts_outcome:[{id:root,outcome:{executor_id:batch.receiverId,status:index===0?{SuccessReceiptId:upgrade}:{SuccessValue:''},
@@ -156,4 +157,48 @@ test('a V14 FINAL failure is a state-review warning, never retry or refund autho
   const f=receiptFixture();f.result.status={Failure:{ActionError:{index:4}}};f.result.receipts_outcome[0].outcome.status=structuredClone(f.result.status);
   const proof=inspectV14PhoneAttempt(f);assert.equal(proof.status,'FINAL_FAILURE_NEEDS_STATE_REVIEW');assert.equal(proof.do_not_resend,true);
   assert.equal(proof.wallet_prompt_authorized,false);assert.equal(proof.current_state_verified,false);
+});
+
+function completionFixture() {
+  const inputs=fixture(),plan=buildV14PhoneResearchPlan(inputs),{review}=plan,blockHash=hash(9),time=1_800_000_000_000;
+  const prior=plan.batches.map((_,i)=>{const {attempt,trustedOriginalHash,result}=receiptFixture(i,i===5,inputs,hash(10+i));
+    return {attempt,trustedOriginalHash,result};});
+  const state={owner:{block_hash:blockHash,code_hash:hash(0)},vault:{block_hash:blockHash,code_hash:review.artifacts.vault_code_hash,amount:'10000',storage_usage:100},
+    ownerKeys:{block_hash:blockHash,keys:[{public_key:inputs.ownerPublicKey,access_key:{nonce:0,permission:'FullAccess'}},
+      ...review.mission.goals.map(({kind,goal})=>({public_key:inputs.agentPublicKeys[goal.id],access_key:{nonce:0,permission:{FunctionCall:{
+        receiver_id:vault,allowance:inputs.gasAllowances[goal.id],method_names:[kind==='random'?'execute_outlayer':
+          kind==='oracle'?'execute_outlayer_native_project':'execute_native_storage']}}}}))]},
+    vaultKeys:{block_hash:blockHash,keys:[]},ledger:inputs.nativeDepositYocto};
+  const provider={async viewNodeStatus(){return {chain_id:'testnet'}},async viewBlock(){return {header:{hash:blockHash,height:42,timestamp_nanosec:`${time}000000`}}},
+    async experimental_protocolConfig({blockId}){assert.equal(blockId,blockHash);return {chain_id:'testnet',runtime_config:{storage_amount_per_byte:'1'}}},
+    async query({request_type,account_id,block_id}){assert.equal(block_id,blockHash);
+      return request_type==='view_account'?(account_id===owner?state.owner:state.vault):(account_id===owner?state.ownerKeys:state.vaultKeys);},
+    async callFunctionRaw(contract,method,args,{blockId}){assert.equal(contract,vault);assert.equal(blockId,blockHash);
+      const entry=review.mission.goals.find(x=>x.goal.policy_id===args.policy_id),g=entry?.goal;
+      const values={contract_version:'bouncer-agent-v14-native-storage-testnet',get_owner:owner,vault_balance:state.ledger,
+        get_policy:g?{token:'native',per_tx_cap:g.amount,daily_cap:review.rolling_caps_yocto[g.id]}:null,
+        get_outlayer_program:g?.program,get_outlayer_native_project:g?.route,get_native_storage_route:g?.route,
+        is_agent_key_allowed:true,check:[true,'ok']};
+      return {block_hash:blockHash,result:[...Buffer.from(JSON.stringify(values[method]))]};}};
+  return {inputs,review,prior,provider,state,now:()=>time,trustedReviewSha256:review.review_sha256};
+}
+
+test('read-only V14 completion requires all distinct originals and one fresh pinned state snapshot',async()=>{
+  const f=completionFixture(),options={...f.inputs,review:f.review,prior:f.prior,provider:f.provider,now:f.now,trustedReviewSha256:f.trustedReviewSha256};
+  const proof=await inspectV14PhoneSetupCompletion(options);
+  assert.equal(proof.status,'ORIGINALS_AND_SETUP_SNAPSHOT_MATCH_NOT_AUTHORIZED');assert.deepEqual(proof.blockers,[]);
+  assert.equal(proof.prior_original_hashes.length,6);assert.equal(proof.wallet_prompt_authorized,false);assert.equal(proof.local_key_custody_verified,false);
+  assert.equal(proof.independent_delivery_verified,false);assert.equal(proof.no_inflight_request_proven,false);
+  await assert.rejects(inspectV14PhoneSetupCompletion({...options,prior:f.prior.slice(0,5)}),/every earlier/);
+  const repeated=structuredClone(f.prior);repeated[1].trustedOriginalHash=repeated[0].trustedOriginalHash;
+  await assert.rejects(inspectV14PhoneSetupCompletion({...options,prior:repeated}),/repeated/);
+  const reversed=[...f.prior].reverse();await assert.rejects(inspectV14PhoneSetupCompletion({...options,prior:reversed}),/order/);
+  f.state.vault.code_hash=hash(8);assert.ok((await inspectV14PhoneSetupCompletion(options)).blockers.includes('exact_keyless_vault'));
+  f.state.vault.code_hash=f.review.artifacts.vault_code_hash;f.state.vaultKeys.keys.push({public_key:key()});
+  assert.ok((await inspectV14PhoneSetupCompletion(options)).blockers.includes('exact_keyless_vault'));
+  f.state.vaultKeys.keys=[];f.state.ledger='0';assert.ok((await inspectV14PhoneSetupCompletion(options)).blockers.includes('deposited_and_storage_backed'));
+  f.state.ledger=f.inputs.nativeDepositYocto;f.state.ownerKeys.keys[1].access_key.permission='FullAccess';
+  assert.ok((await inspectV14PhoneSetupCompletion(options)).blockers.includes('compute_agent_key'));
+  f.state.owner.block_hash=hash(8);await assert.rejects(inspectV14PhoneSetupCompletion(options),/mixed-block/);
+  await assert.rejects(inspectV14PhoneSetupCompletion({...options,now:()=>f.now()+300_000}),/stale/);
 });
