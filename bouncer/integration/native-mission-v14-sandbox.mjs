@@ -10,9 +10,11 @@ import os from 'node:os';
 import path from 'node:path';
 import zlib from 'node:zlib';
 import nearApi from 'near-api-js';
+import nearConnect from '@hot-labs/near-connect';
 import { act_impl_near, validateKnownFirstPartyActionRequest, MAX_ACTION_REQUEST_CANONICAL_JSON_LENGTH } from '@meteorwallet/connect-shared/internal';
 import { FileJournal } from '../agent/procurement.mjs';
 import { runNativeMission } from '../agent/native-mission.mjs';
+import { buildV14PhoneResearchPlan, verifyV14PhoneResearchPlan, v14PhoneBatchCommitment } from '../agent/native-v14-phone-plan.mjs';
 import { ORACLE_TESTNET_PROJECT } from '../agent/oracle-outlayer.mjs';
 import { SandboxSetupRpc, withSandboxOnlyFetch } from './v11-sandbox-setup-rpc.mjs';
 import { SANDBOX_SHA256, readVerifiedFile, assertSandboxStatus, requireFinalSuccess } from './v11-sandbox-support.mjs';
@@ -29,18 +31,32 @@ const program={url:'https://example.test/not-real.wasm',sha256:'a'.repeat(64),bu
 const sha=bytes=>crypto.createHash('sha256').update(bytes).digest();
 const createLoader=(loader,funding=20n*N)=>[tx.createAccount(),tx.transfer(funding),tx.deployContract(loader),call('loader_init',{},1n,20n*T)];
 const deployCompressed=(compressed,deposit=1n)=>call('loader_deploy',compressed,deposit,240n*T);
-function syntheticMeteorRequest(loader,compressed) {
-  return act_impl_near.action.sign_and_send_transaction.request({network:'testnet',signerId:OWNER,receiverId:VAULT,
-    actions:[{type:'CreateAccount',params:{}},{type:'Transfer',params:{deposit:String(20n*N)}},
-      {type:'DeployContract',params:{code:loader.toString('base64'),codeEncoding:'base64'}},
-      {type:'FunctionCall',params:{methodName:'loader_init',args:{},gas:String(20n*T),deposit:'1'}},
-      {type:'FunctionCall',params:{methodName:'loader_deploy',args:compressed.toString('base64'),argsEncoding:'base64',gas:String(240n*T),deposit:'1'}}]}).toJsonObject();
+function syntheticMeteorRequest(batch) {
+  // Mirror the pinned Meteor mobile adapter using the actual reviewed actions.
+  const actions=nearConnect.nearActionsToConnectorActions(batch.actions).map(action=>{
+    if (action.type==='DeployContract') return {...action,params:{...action.params,
+      code:Buffer.from(action.params.code).toString('base64'),codeEncoding:'base64'}};
+    if (action.type==='FunctionCall' && action.params.args instanceof Uint8Array) return {...action,params:{...action.params,
+      args:Buffer.from(action.params.args).toString('base64'),argsEncoding:'base64'}};
+    return action;
+  });
+  return act_impl_near.action.sign_and_send_transaction.request({network:'testnet',signerId:batch.signerId,
+    receiverId:batch.receiverId,actions}).toJsonObject();
 }
 function failed(result,label) { assert.equal(result?.final_execution_status,'FINAL',`${label}: not FINAL`); assert.ok(result?.status?.Failure,`${label}: expected failure`); }
 async function absent(provider,id) {
   let error; try { await provider.viewAccount(id,{finality:'final'}); } catch (caught) { error=caught; }
   assert.ok(error,`${id} should be absent`);
   assert.match(`${error.message ?? ''} ${JSON.stringify(error)}`,/UNKNOWN_ACCOUNT|does not exist|doesn't exist|unknown account/i);
+}
+function makeMission(codeHash,priceRoute,storageRoute,suffix='') {
+  return {version:1,id:`sandbox-mission${suffix}`,contract_id:VAULT,owner_account_id:OWNER,
+    max_native_amount:String(3n*N/10n),required_resources:['compute','api','storage'],goals:[
+      {kind:'random',goal:{id:`compute${suffix}`,contract_id:VAULT,owner_account_id:OWNER,policy_id:'compute',amount:String(N/10n),input:{min:1,max:100},program}},
+      {kind:'oracle',goal:{id:`price${suffix}`,contract_id:VAULT,owner_account_id:OWNER,policy_id:'price',amount:String(N/10n),route:priceRoute,max_age_seconds:300}},
+      {kind:'storage',goal:{id:`store${suffix}`,contract_id:VAULT,contract_code_hash:codeHash,owner_account_id:OWNER,policy_id:'store',amount:String(N/10n),
+        object_id:`mission-results${suffix}`,value:{from_goal_ids:[`compute${suffix}`,`price${suffix}`]},route:storageRoute}},
+    ]};
 }
 async function main() {
   const binary=process.env.BOUNCER_SANDBOX_BIN, vaultWasm=fs.readFileSync(process.env.BOUNCER_V14_WASM_PATH),
@@ -52,13 +68,27 @@ async function main() {
   if (loader) {
     compressed=zlib.deflateRawSync(vaultWasm,{level:9}); assert.ok(compressed.length<=200_000);
     assert.deepEqual(zlib.inflateRawSync(compressed),vaultWasm);
-    const request=syntheticMeteorRequest(loader,compressed); meteorBytes=Buffer.byteLength(JSON.stringify(request));
+  }
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'bouncer-v14-mission-'));
+  const rootSeed=pair(),ownerKey=pair(),fakeKey=pair(),intruderKey=pair(),keys={compute:pair(),price:pair(),store:pair()};
+  const expectedCodeHash=nearApi.utils.serialize.base_encode(sha(vaultWasm));
+  const expectedPrice={project:ORACLE_TESTNET_PROJECT,route_revision:1,policy_revision:1,payee_revision:1,active:true};
+  const expectedStorage={prefix:'mission-',max_value_bytes:4096,route_revision:1,policy_revision:1,payee_revision:1,active:true};
+  let phonePlan=null;
+  if (loader) {
+    const inputs={mission:makeMission(expectedCodeHash,expectedPrice,expectedStorage),ownerPublicKey:pub(ownerKey),
+      agentPublicKeys:Object.fromEntries(Object.entries(keys).map(([id,k])=>[id,pub(k)])),
+      gasAllowances:Object.fromEntries(Object.keys(keys).map(id=>[id,String(N/2n)])),
+      dailyCaps:Object.fromEntries(Object.keys(keys).map(id=>[id,String(N)])),
+      vaultStorageFundingYocto:String(20n*N),nativeDepositYocto:String(2n*N),vaultWasm,loaderWasm:loader,compressed,
+      trustedArtifacts:{vault_sha256:sha(vaultWasm).toString('hex'),loader_sha256:sha(loader).toString('hex')}};
+    phonePlan=buildV14PhoneResearchPlan(inputs);
+    verifyV14PhoneResearchPlan({...inputs,review:phonePlan.review,trustedReviewSha256:phonePlan.review.review_sha256});
+    const request=syntheticMeteorRequest(phonePlan.batches[0]); meteorBytes=Buffer.byteLength(JSON.stringify(request));
     const valid=validateKnownFirstPartyActionRequest(request);
     assert.equal(MAX_ACTION_REQUEST_CANONICAL_JSON_LENGTH,400_000); assert.equal(valid.ok,true,valid.reason);
     assert.ok(meteorBytes<380_000,`synthetic Meteor action request too large: ${meteorBytes}`);
   }
-  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'bouncer-v14-mission-'));
-  const rootSeed=pair(),ownerKey=pair(),fakeKey=pair(),intruderKey=pair(),keys={compute:pair(),price:pair(),store:pair()};
   let sandbox,journal;
   try {
     sandbox=await startSandbox(binary,dir,pub(rootSeed)); const {provider,rpcUrl}=sandbox;
@@ -98,7 +128,8 @@ async function main() {
         await must(owner,LOW,[call('loader_refund',{},1n,60n*T)],'owner explicitly refunds failed upgrade'); await absent(provider,LOW);
         const afterRefund=BigInt((await provider.viewAccount(OWNER,{finality:'final'})).amount);
         assert.ok(afterRefund>beforeRefund+N/2n,'failed-upgrade loader funding did not return to sandbox owner');
-        const sent=await must(owner,VAULT,[...createLoader(loader),deployCompressed(compressed)],'compressed V14 research self-deploy');
+        assert.equal(v14PhoneBatchCommitment(phonePlan.batches[0]),phonePlan.review.stages[0].action_commitment_sha256);
+        const sent=await must(owner,VAULT,phonePlan.batches[0].actions,'compressed V14 research self-deploy');
         const receipt=await provider.txStatusReceipts(sent.transaction_outcome.id,OWNER,'FINAL');
         const selfDeploy=receipt.receipts.filter(r=>r.predecessor_id===VAULT && r.receiver_id===VAULT &&
           r.receipt?.Action?.actions?.some(a=>a.DeployContract?.code===sha(vaultWasm).toString('base64')));
@@ -111,16 +142,26 @@ async function main() {
         assert.equal(await provider.callFunction(VAULT,'get_owner',{}, {finality:'final'}),OWNER);
       }
       const methods={compute:'execute_outlayer',price:'execute_outlayer_native_project',store:'execute_native_storage'};
-      for(const id of Object.keys(keys)) {
-        await must(owner,VAULT,[call('set_policy',{policy_id:id,token:'native',per_tx_cap:String(N/10n),daily_cap:String(N)},1n)],`policy ${id}`);
-        await must(owner,VAULT,[call('allow_payee',{policy_id:id,payee:id==='store'?VAULT:PROVIDER},1n)],`allow ${id}`);
-        await must(owner,VAULT,[call('grant_agent_key',{policy_id:id,public_key:pub(keys[id])},1n)],`grant ${id}`);
-        await must(owner,OWNER,[tx.addKey(keys[id].getPublicKey(),tx.functionCallAccessKey(VAULT,[methods[id]],N/2n))],`restrict ${id}`);
+      if (phonePlan) {
+        // This executes the exact unsigned plan only on disposable nearcore;
+        // it is not a phone prompt or public-chain setup.
+        for (let i=1;i<phonePlan.batches.length;i++) {
+          const stage=phonePlan.batches[i];
+          assert.equal(v14PhoneBatchCommitment(stage),phonePlan.review.stages[i].action_commitment_sha256);
+          await must(owner,stage.receiverId,stage.actions,stage.id);
+        }
+      } else {
+        for(const id of Object.keys(keys)) {
+          await must(owner,VAULT,[call('set_policy',{policy_id:id,token:'native',per_tx_cap:String(N/10n),daily_cap:String(N)},1n)],`policy ${id}`);
+          await must(owner,VAULT,[call('allow_payee',{policy_id:id,payee:id==='store'?VAULT:PROVIDER},1n)],`allow ${id}`);
+          await must(owner,VAULT,[call('grant_agent_key',{policy_id:id,public_key:pub(keys[id])},1n)],`grant ${id}`);
+          await must(owner,OWNER,[tx.addKey(keys[id].getPublicKey(),tx.functionCallAccessKey(VAULT,[methods[id]],N/2n))],`restrict ${id}`);
+        }
+        await must(owner,VAULT,[call('set_outlayer_program',{policy_id:'compute',program},1n)],'pin fake compute');
+        await must(owner,VAULT,[call('set_outlayer_native_project',{policy_id:'price',project:ORACLE_TESTNET_PROJECT},1n)],'pin fake data route');
+        await must(owner,VAULT,[call('set_native_storage_route',{policy_id:'store',prefix:'mission-',max_value_bytes:4096},1n)],'pin public storage route');
+        await must(owner,VAULT,[call('deposit_native',{},2n*N)],'fund local vault');
       }
-      await must(owner,VAULT,[call('set_outlayer_program',{policy_id:'compute',program},1n)],'pin fake compute');
-      await must(owner,VAULT,[call('set_outlayer_native_project',{policy_id:'price',project:ORACLE_TESTNET_PROJECT},1n)],'pin fake data route');
-      await must(owner,VAULT,[call('set_native_storage_route',{policy_id:'store',prefix:'mission-',max_value_bytes:4096},1n)],'pin public storage route');
-      await must(owner,VAULT,[call('deposit_native',{},2n*N)],'fund local vault');
       const view=(method,args={})=>provider.callFunction(VAULT,method,args,{finality:'final'});
       const priceRoute=await view('get_outlayer_native_project',{policy_id:'price'}),storageRoute=await view('get_native_storage_route',{policy_id:'store'});
       const codeHash=(await provider.viewAccount(VAULT,{finality:'final'})).code_hash;
@@ -134,13 +175,11 @@ async function main() {
         const method=signed.transaction.actions[0]?.functionCall?.methodName, id=activeIds[idForMethod[method]];
         assert.equal(journal.get(id)?.status,'pending');assert.equal(journal.get(id)?.tx_hash,hash);
       }});
-      const make=(suffix='')=>({version:1,id:`sandbox-mission${suffix}`,contract_id:VAULT,owner_account_id:OWNER,
-        max_native_amount:String(3n*N/10n),required_resources:['compute','api','storage'],goals:[
-          {kind:'random',goal:{id:`compute${suffix}`,contract_id:VAULT,owner_account_id:OWNER,policy_id:'compute',amount:String(N/10n),input:{min:1,max:100},program}},
-          {kind:'oracle',goal:{id:`price${suffix}`,contract_id:VAULT,owner_account_id:OWNER,policy_id:'price',amount:String(N/10n),route:priceRoute,max_age_seconds:300}},
-          {kind:'storage',goal:{id:`store${suffix}`,contract_id:VAULT,contract_code_hash:codeHash,owner_account_id:OWNER,policy_id:'store',amount:String(N/10n),
-            object_id:`mission-results${suffix}`,value:{from_goal_ids:[`compute${suffix}`,`price${suffix}`]},route:storageRoute}},
-        ]});
+      if (phonePlan) {
+        assert.equal(codeHash,expectedCodeHash);
+        assert.deepEqual(priceRoute,expectedPrice); assert.deepEqual(storageRoute,expectedStorage);
+      }
+      const make=(suffix='')=>makeMission(codeHash,priceRoute,storageRoute,suffix);
       const signers=(suffix='')=>Object.fromEntries(Object.entries(keys).map(([id,k])=>[`${id}${suffix}`,{account:account(OWNER,rpc,k),publicKey:k.getPublicKey()}]));
       journal=new FileJournal(path.join(dir,'mission-originals.json'),VAULT,OWNER);
       const run=(mission,opts={})=>runNativeMission({mission,provider:rpc,journal,log:()=>{},...opts});
@@ -166,7 +205,8 @@ async function main() {
       assert.equal(journal.get('compute-second').tx_hash,original);
       return {scope:'isolated nearcore and fabricated provider; no public chain or real service',
         research_loader:loader?{synthetic_meteor_request_bytes:meteorBytes,loader_wasm_bytes:loader.length,
-          compressed_v14_bytes:compressed.length,failed_upgrade_owner_refund_tested:true,real_phone_tested:false}:null,
+          compressed_v14_bytes:compressed.length,all_unsigned_plan_stages_executed_only_in_sandbox:true,
+          failed_upgrade_owner_refund_tested:true,real_phone_tested:false}:null,
         three_guarded_legs_and_public_result_storage:true, sandbox_refunds_verified:true,
         original_hash_recovery_without_new_send:true, lost_response_recovered_and_remaining_legs_continued:true,
         independent_delivery_verified:false, public_chain_transactions:false};

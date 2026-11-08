@@ -106,8 +106,12 @@ separately pinned compressed loader, **research only**: at commit `236aeca`,
 the synthetic Meteor request was 242,375 bytes and isolated tests covered a
 failed upgrade and explicit owner refund. An asynchronous upgrade can still
 fail, and the UI, retained original, owner-controlled recovery and real wallet
-behavior need end-to-end verification. Fitting a code field within
-a bridge limit would not verify the complete wallet request. A published NEAR
+behavior need end-to-end verification. `agent/native-v14-phone-plan.mjs`
+constructs an **unsigned, offline research plan** from independently reviewed
+artifact digests, explicit limits and three distinct restricted public keys.
+It makes no wallet prompt, does not check live state, and is not connected to
+the UI or a durable setup fence. Fitting a code field within a bridge limit
+would not verify the complete wallet request. A published NEAR
 global contract referenced by immutable code hash could
 reduce a wallet payload, but the [pinned Meteor mobile bridge](https://github.com/Meteor-Wallet/meteor_wallet_sdk/blob/53a8b39d1aaaf067502c11e49ebb050c75df019e/packages/meteor-sdk-v1/src/MeteorConnect/target_clients/mobile_bridge/sdkActionToMobileBridge.ts)
 does not map `UseGlobalContract`. Bouncer does not currently implement or
