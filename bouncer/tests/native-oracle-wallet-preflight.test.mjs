@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import nearApi from 'near-api-js';
-import { inspectNativeOracleWalletStage, inspectNativeOracleWalletCompletion } from '../agent/native-oracle-wallet-preflight.mjs';
+import { inspectNativeOracleWalletStage, inspectNativeOracleWalletCompletion,
+  inspectAtomicNativeOracleWalletStage, inspectAtomicNativeOracleWalletCompletion } from '../agent/native-oracle-wallet-preflight.mjs';
+import { buildAtomicNativeOracleWalletPlan, prepareAtomicNativeOracleWalletAttempt } from '../agent/native-oracle-atomic-wallet.mjs';
 import { buildNativeOracleWalletPlan, NATIVE_ORACLE_DEFAULT_GAS_ALLOWANCE, NATIVE_ORACLE_V9_CODE_HASH,
   NATIVE_ORACLE_VAULT_FUNDING } from '../agent/native-oracle-wallet-plan.mjs';
 import { prepareNativeOracleWalletAttempt } from '../agent/native-oracle-wallet-evidence.mjs';
@@ -179,5 +181,82 @@ test('completion rejects an unresolved or altered fourth original before reading
   ]) {
     const { stageId, ...f } = fixture(4); mutate(f);
     await assert.rejects(inspectNativeOracleWalletCompletion(f)); assert.deepEqual(f.calls, []);
+  }
+});
+
+// The atomic path must verify two genuine, differently shaped originals. It
+// reuses the state checks above, never synthetic individual-stage receipts.
+const atomicPlan = buildAtomicNativeOracleWalletPlan({ wasmBytes: wasm, trustedOwnerPublicKey: ownerKey, terms: {
+  owner, vault, policy_id: plan.review.policy_id, agent_public_key: agentKey,
+  per_tx_cap_yocto: plan.review.per_tx_cap_yocto, daily_cap_yocto: plan.review.daily_cap_yocto,
+  vault_deposit_yocto: plan.review.vault_deposit_yocto, agent_gas_allowance_yocto: plan.review.agent_gas_allowance_yocto,
+} });
+function atomicOriginal(index) {
+  const review = structuredClone(atomicPlan.review), batch = atomicPlan.batches[index], trustedOriginalHash = hash(80 + index), root = hash(90 + index);
+  const attempt = prepareAtomicNativeOracleWalletAttempt({ review, wasmBytes: wasm, trustedReviewHash: review.review_sha256,
+    trustedOriginalHash, trustedOwnerPublicKey: ownerKey, stageId: batch.id });
+  const actions = batch.actions.map(rpcAction);
+  const result = { final_execution_status: 'FINAL', status: { SuccessValue: '' },
+    transaction: { hash: trustedOriginalHash, signer_id: owner, public_key: ownerKey, receiver_id: batch.receiverId, actions: structuredClone(actions) },
+    transaction_outcome: { id: trustedOriginalHash, outcome: { executor_id: owner, receipt_ids: [root], status: { SuccessReceiptId: root } } },
+    receipts: index === 1 ? [] : [{ receipt_id: root, predecessor_id: owner, receiver_id: batch.receiverId, receipt: { Action: {
+      signer_id: owner, signer_public_key: ownerKey, input_data_ids: [], output_data_receivers: [], actions: structuredClone(actions) } } }],
+    receipts_outcome: [{ id: root, outcome: { executor_id: batch.receiverId, status: { SuccessValue: '' }, receipt_ids: [],
+      logs: index === 0 ? ['BOUNCER native deposit received'] : [] } }] };
+  return { attempt, trustedOriginalHash, result };
+}
+function atomicFixture(index, opts = {}) {
+  const f = fixture([0, 3, 4][index], opts), review = structuredClone(atomicPlan.review);
+  f.review = review; f.trustedReviewHash = review.review_sha256;
+  f.prior = Array.from({ length: index }, (_, i) => atomicOriginal(i));
+  if (index < 2) f.stageId = atomicPlan.batches[index].id; else delete f.stageId;
+  return f;
+}
+
+test('atomic setup preflights both genuine originals and installed state, without authorizing prompts or spending', async () => {
+  for (let i = 0; i < 2; i++) {
+    const f = atomicFixture(i), result = await inspectAtomicNativeOracleWalletStage(f);
+    assert.equal(result.status, 'STATE_CHECKS_PASSED_NOT_AUTHORIZED'); assert.deepEqual(result.blockers, []);
+    assert.equal(result.stage_id, atomicPlan.batches[i].id);
+    assert.equal(result.action_commitment_sha256, atomicPlan.review.stages[i].action_commitment_sha256);
+    assert.deepEqual(result.prior_original_hashes, Array.from({ length: i }, (_, j) => hash(80 + j)));
+    assert.equal(result.wallet_prompt_authorized, false); assert.equal(result.signing_authorized, false);
+  }
+  const result = await inspectAtomicNativeOracleWalletCompletion(atomicFixture(2));
+  assert.equal(result.status, 'TWO_ORIGINALS_AND_STATE_MATCH_NOT_AUTHORIZED'); assert.deepEqual(result.blockers, []);
+  assert.deepEqual(result.prior_original_hashes, [hash(80), hash(81)]);
+  assert.equal(result.checks.exact_agent_key, true); assert.equal(result.local_key_custody_verified, false);
+  assert.equal(result.independent_delivery_verified, false); assert.equal(result.no_inflight_request_proven, false);
+});
+
+test('atomic preflight fails before RPC on missing, altered, duplicated, failed or wrong-stage originals', async () => {
+  for (const mutate of [
+    f => { f.prior.pop(); }, f => { f.prior.reverse(); },
+    f => { f.prior[0].trustedOriginalHash = hash(99); },
+    f => { f.prior[1].trustedOriginalHash = f.prior[0].trustedOriginalHash; },
+    f => { f.prior[0].result.final_execution_status = 'EXECUTED'; },
+    f => { f.prior[0].result.status = { Failure: { ActionError: {} } }; f.prior[0].result.receipts_outcome[0].outcome.status = { Failure: { ActionError: {} } }; },
+    f => { f.prior[0].result.transaction.actions[4].FunctionCall.deposit = '0'; },
+    f => { f.prior[1].result.transaction.actions[0].AddKey.access_key.permission = 'FullAccess'; },
+    f => { f.prior[0].result.receipts_outcome[0].outcome.logs = []; },
+  ]) { const f = atomicFixture(2); mutate(f); await assert.rejects(inspectAtomicNativeOracleWalletCompletion(f)); assert.deepEqual(f.calls, []); }
+  const wrong = atomicFixture(0); wrong.stageId = 'configure_native_oracle_policy';
+  await assert.rejects(inspectAtomicNativeOracleWalletStage(wrong)); assert.deepEqual(wrong.calls, []);
+  const mixed = atomicFixture(1); mixed.prior = [original(0), original(1), original(2)];
+  await assert.rejects(inspectAtomicNativeOracleWalletStage(mixed)); assert.deepEqual(mixed.calls, []);
+});
+
+test('atomic preflight blocks changed vault, budgets, route or agent key', async () => {
+  for (const [index, opts, blocker] of [
+    [0, { childExists: true }, 'new_direct_child_absent'], [0, { lowNear: true }, 'owner_native_estimate'],
+    [0, { ownerRestricted: true }, 'exact_owner_key'], [0, { priceChanged: true }, 'pinned_project_identity_and_native_pricing'],
+    [1, { childMissing: true }, 'exact_keyless_vault'], [1, { badVaultCode: true }, 'exact_keyless_vault'],
+    [1, { badCap: true }, 'native_policy_state'], [1, { routeInactive: true }, 'native_policy_state'],
+    [1, { noGrant: true }, 'native_policy_state'], [1, { badBalance: true }, 'vault_native_balance'],
+    [1, { checkBlocked: true }, 'onchain_policy_check'], [2, { agentFullAccess: true }, 'exact_agent_key'],
+    [2, { agentWrongMethod: true }, 'exact_agent_key'], [2, { agentMissing: true }, 'exact_agent_key'],
+  ]) {
+    const f = atomicFixture(index, opts), result = await (index === 2 ? inspectAtomicNativeOracleWalletCompletion(f) : inspectAtomicNativeOracleWalletStage(f));
+    assert.equal(result.status, 'BLOCKED_OR_UNKNOWN', blocker); assert(result.blockers.includes(blocker), blocker);
   }
 });

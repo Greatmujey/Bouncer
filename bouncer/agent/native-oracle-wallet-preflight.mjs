@@ -7,6 +7,7 @@
 import { isDeepStrictEqual } from 'node:util';
 import { readPinnedJsonView } from './read-only-near-rpc.mjs';
 import { verifyNativeOracleWalletReview, inspectNativeOracleWalletAttempt } from './native-oracle-wallet-evidence.mjs';
+import { verifyAtomicNativeOracleWalletReview, inspectAtomicNativeOracleWalletAttempt } from './native-oracle-atomic-wallet.mjs';
 import { NATIVE_ORACLE_V9_CODE_HASH, NATIVE_ORACLE_V9_BYTES, NATIVE_ORACLE_VAULT_FUNDING, NATIVE_ORACLE_PAYEE } from './native-oracle-wallet-plan.mjs';
 import { ORACLE_TESTNET_PROGRAM, ORACLE_PROJECT_ID, ORACLE_PROJECT_UUID } from './oracle-outlayer.mjs';
 import { MIN_V11_TESTNET_PROTOCOL, selectedV11WasmFeaturesEnabled } from './svalin-setup-preflight.mjs';
@@ -17,6 +18,7 @@ import { assertFreshFinalBlock } from '../shared/fresh-final-block.mjs';
 import { isTransactionHash } from '../shared/direct-payment-settlement.mjs';
 
 const STAGES = ['create_keyless_native_vault', 'configure_native_oracle_policy', 'fund_native_vault', 'install_native_oracle_agent'];
+const ATOMIC_STAGES = ['create_configure_fund_native_vault', 'install_native_oracle_agent'];
 const MAX = (1n << 128n) - 1n, ONE = 10n ** 24n, VAULT_RESERVE = ONE / 10n, OWNER_RESERVE = ONE;
 const record = x => x !== null && typeof x === 'object' && !Array.isArray(x);
 const exact = (x, names) => record(x) && Object.keys(x).length === names.length && names.every(name => Object.hasOwn(x, name));
@@ -41,27 +43,46 @@ export async function inspectNativeOracleWalletCompletion(args = {}) {
   return inspectNativeOracleWalletState({ ...args, stageId: 'verify_native_setup_completion' }, true);
 }
 
+/** The atomic variant has two ORIGINALS, not four: one indivisible vault
+ * create/configure/fund receipt and a separate owner-account AddKey receipt.
+ * This is not a prompt fence, transaction submission or live phone feature. */
+export async function inspectAtomicNativeOracleWalletStage(args = {}) {
+  return inspectNativeOracleWalletState(args, false, true);
+}
+export async function inspectAtomicNativeOracleWalletCompletion(args = {}) {
+  if (Object.hasOwn(args, 'stageId')) throw new Error('completion does not accept a wallet stage');
+  return inspectNativeOracleWalletState({ ...args, stageId: 'verify_native_setup_completion' }, true, true);
+}
+
 async function inspectNativeOracleWalletState({ review: rawReview, wasmBytes, trustedReviewHash, trustedOwnerPublicKey,
-  stageId, prior = [], provider, now = Date.now } = {}, completion = false) {
+  stageId, prior = [], provider, now = Date.now } = {}, completion = false, atomic = false) {
   if (!(wasmBytes instanceof Uint8Array)) throw new Error('pinned native artifact required');
   const wasm = Buffer.from(wasmBytes), review = structuredClone(rawReview), previous = structuredClone(prior);
-  const identity = verifyNativeOracleWalletReview({ review, wasmBytes: wasm, trustedReviewHash, trustedOwnerPublicKey });
-  const index = completion ? STAGES.length : STAGES.indexOf(stageId);
-  if (index < 0 || !Array.isArray(previous) || previous.length !== index) {
+  const verifyReview = atomic ? verifyAtomicNativeOracleWalletReview : verifyNativeOracleWalletReview;
+  const inspectAttempt = atomic ? inspectAtomicNativeOracleWalletAttempt : inspectNativeOracleWalletAttempt;
+  const stages = atomic ? ATOMIC_STAGES : STAGES;
+  const identity = verifyReview({ review, wasmBytes: wasm, trustedReviewHash, trustedOwnerPublicKey });
+  const stageIndex = completion ? stages.length : stages.indexOf(stageId);
+  if (stageIndex < 0 || !Array.isArray(previous) || previous.length !== stageIndex) {
     throw new Error('exactly the earlier original native stages are required');
   }
   const hashes = new Set();
   for (let i = 0; i < previous.length; i++) {
     const item = previous[i];
-    if (!exact(item, ['attempt', 'trustedOriginalHash', 'result']) || item.attempt?.stage_id !== STAGES[i] ||
+    if (!exact(item, ['attempt', 'trustedOriginalHash', 'result']) || item.attempt?.stage_id !== stages[i] ||
         !isTransactionHash(item.trustedOriginalHash) || hashes.has(item.trustedOriginalHash)) throw new Error('earlier original stage or hash is missing, repeated or out of order');
     hashes.add(item.trustedOriginalHash);
-    const proof = inspectNativeOracleWalletAttempt({ review, wasmBytes: wasm, trustedReviewHash, trustedOwnerPublicKey,
+    const proof = inspectAttempt({ review, wasmBytes: wasm, trustedReviewHash, trustedOwnerPublicKey,
       trustedOriginalHash: item.trustedOriginalHash, attempt: item.attempt, result: item.result });
-    if (!['FINAL_NATIVE_SETUP_RECEIPT_MATCH', 'FINAL_LOCAL_ADD_KEY_OUTCOME_MATCH'].includes(proof.status)) {
+    if (!(atomic ? ['FINAL_ATOMIC_NATIVE_SETUP_RECEIPT_MATCH', 'FINAL_LOCAL_ADD_KEY_OUTCOME_MATCH'] :
+      ['FINAL_NATIVE_SETUP_RECEIPT_MATCH', 'FINAL_LOCAL_ADD_KEY_OUTCOME_MATCH']).includes(proof.status)) {
       throw new Error('an earlier native original failed or remains unresolved; reconcile before another prompt');
     }
   }
+  // The original state machine's 0, 3 and 4 snapshots correspond exactly to
+  // before atomic creation, after the funded vault, and after AddKey. We still
+  // verify the atomic originals above; never fabricate four separate receipts.
+  const index = atomic ? [0, 3, 4][stageIndex] : stageIndex;
   if (typeof now !== 'function' || !provider || ['viewNodeStatus', 'viewBlock', 'query', 'viewTestnetAccountPresenceAt',
       'callFunctionRaw', 'experimental_protocolConfig', 'gasPrice'].some(name => typeof provider[name] !== 'function')) {
     throw new Error('read-only testnet provider required');
@@ -152,9 +173,9 @@ async function inspectNativeOracleWalletState({ review: rawReview, wasmBytes, tr
   assertFreshFinalBlock(block, finished);
   const blockers = Object.keys(checks).filter(name => !checks[name]);
   return { version: 1, network: 'testnet', status: blockers.length ? 'BLOCKED_OR_UNKNOWN' :
-      completion ? 'FOUR_ORIGINALS_AND_STATE_MATCH_NOT_AUTHORIZED' : 'STATE_CHECKS_PASSED_NOT_AUTHORIZED',
+      completion ? (atomic ? 'TWO_ORIGINALS_AND_STATE_MATCH_NOT_AUTHORIZED' : 'FOUR_ORIGINALS_AND_STATE_MATCH_NOT_AUTHORIZED') : 'STATE_CHECKS_PASSED_NOT_AUTHORIZED',
     owner: review.owner, vault: review.vault, stage_id: stageId, review_sha256: trustedReviewHash,
-    action_commitment_sha256: completion ? null : review.stages[index].action_commitment_sha256, prior_original_hashes: [...hashes],
+    action_commitment_sha256: completion ? null : review.stages[stageIndex].action_commitment_sha256, prior_original_hashes: [...hashes],
     block_hash: hash, block_height: block.header.height, block_timestamp_nanosec: block.header.timestamp_nanosec,
     observed_at: new Date(finished).toISOString(), owner_key_nonce: nonce?.toString() ?? null,
     ...(completion ? { agent_key_nonce: agentNonce?.toString() ?? null, local_key_custody_verified: false, no_inflight_request_proven: false } : {}),

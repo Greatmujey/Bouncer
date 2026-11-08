@@ -15,13 +15,15 @@ const ATTEMPT_FIELDS = ['kind', 'status', 'network', 'review_sha256', 'stage_id'
   'tx_hash', 'signer_id', 'signer_public_key', 'receiver_id'];
 const record = x => x !== null && typeof x === 'object' && !Array.isArray(x);
 const exact = (x, names) => record(x) && Object.keys(x).length === names.length && names.every(name => Object.hasOwn(x, name));
-function ownerKey(value) {
+/** Validate public keys only; this does not prove wallet control or consent. */
+export function validateNativeOracleOwnerPublicKey(value, restrictedAgentKey) {
   try {
     const key = nearApi.utils.PublicKey.from(value);
     if (typeof value !== 'string' || String(key) !== value ||
         !((key.keyType === 0 && key.ed25519Key?.data?.length === 32) || (key.keyType === 1 && key.secp256k1Key?.data?.length === 64))) throw Error();
-    return value;
   } catch { throw new Error('canonical owner public key required'); }
+  if (value === restrictedAgentKey) throw new Error('owner and restricted agent keys must be distinct');
+  return value;
 }
 function canonicalPlan(review, wasmBytes, trustedReviewHash) {
   if (!record(review) || typeof trustedReviewHash !== 'string' || !/^[a-f0-9]{64}$/.test(trustedReviewHash) ||
@@ -37,8 +39,8 @@ function canonicalPlan(review, wasmBytes, trustedReviewHash) {
   } catch { throw new Error('native review differs from its constrained canonical plan'); }
 }
 export function verifyNativeOracleWalletReview({ review, wasmBytes, trustedReviewHash, trustedOwnerPublicKey } = {}) {
-  const plan = canonicalPlan(review, wasmBytes, trustedReviewHash), key = ownerKey(trustedOwnerPublicKey);
-  if (key === plan.review.agent_public_key) throw new Error('owner and restricted agent keys must be distinct');
+  const plan = canonicalPlan(review, wasmBytes, trustedReviewHash);
+  const key = validateNativeOracleOwnerPublicKey(trustedOwnerPublicKey, plan.review.agent_public_key);
   return { review_sha256: trustedReviewHash, owner: plan.review.owner, vault: plan.review.vault,
     owner_public_key: key, agent_public_key: plan.review.agent_public_key };
 }
