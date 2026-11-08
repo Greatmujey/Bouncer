@@ -171,8 +171,8 @@ examples were **self-hosted development services**.
   witnesses, device-key check, four one-shot wallet prompts, original-hash
   preview/recording and completion check. The HTTP bridge is **off by default**.
   The wallet account panel now exposes an experimental native setup screen only
-  on the approved top-level preview, after wallet control verification and an
-  enabled same-origin backend. It displays storage funding, deposit, caps, gas
+  on the dedicated top-level Bouncer site or approved test preview, after wallet
+  control verification and an enabled same-origin backend. It displays storage funding, deposit, caps, gas
   allowance and four separate stage approvals. Each original is retained and
   checked at FINAL before another stage; unknown outcomes go to recovery. The
   screen requests persistent device storage, but does not provide key backup or
@@ -316,10 +316,12 @@ claim before one direct `send_tx` call. It never automatically resends. A lost
 response remains unknown; the owner can recheck the same witnessed original.
 The read-only `preview-trial` route verifies the FINAL transaction, OutLayer
 request/completion, historical block and refund to the owner; an RPC
-acknowledgment alone is not delivery. The read-only relay must run the updated
-code that permits an exact historical block hash and routes that lookup to the
-archival testnet RPC; the existing hosted relay has not been updated here.
-Local submission claims coordinate
+acknowledgment alone is not delivery. If the phone key or persistent storage is
+unavailable, the owner can inspect a retained trial and check its receipt without
+signing, creating a replacement key or submitting again. This does not restore
+the lost key. The read-only relay must run the updated code that permits an exact
+historical block hash and routes that lookup to the archival testnet RPC; the
+existing hosted relay has not been updated here. Local submission claims coordinate
 cooperating tabs only, not rollback, other devices or bypassing clients. Signed
 bytes are sent to the public testnet RPC, not uploaded to the setup service.
 Browser-sized tests use synthetic wallets, witnesses and responses; no real

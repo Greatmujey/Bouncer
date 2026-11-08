@@ -42,13 +42,20 @@ export function walletOriginAllowed(location, isTopLevel, approvedOrigin = '') {
   return approvedOrigin !== '' && approvedOrigin === origin;
 }
 
+/** Native setup remains hidden unless the same-origin backend opts in. Only
+ * the dedicated Bouncer origin and its test preview may offer that flow. */
+export function nativeSetupOriginAllowed(location, isTopLevel) {
+  if (isTopLevel !== true || location?.protocol !== 'https:') return false;
+  if (location.origin === 'https://bouncer-near.vercel.app' && location.hostname === 'bouncer-near.vercel.app') return true;
+  return /^4173-[a-z0-9-]+\.e2b\.app$/i.test(location.hostname ?? '') && location.origin === `https://${location.hostname}`;
+}
+
 /**
- * Identity-only NEAR Connect integration. Bouncer calls no transaction or
- * add-key methods, but the Ethereum provider may request its own approved
- * relayer-onboarding transaction during sign-in. A typed account is a separate,
- * unverified public view, not a wallet session. Mobile and optional CLI use
- * off-chain login messages; other accounts are wallet-reported. Executors are
- * sandboxed and the picker is our own accessible dialog.
+ * NEAR Connect sign-in is identity-only; Ethereum onboarding may request its
+ * own approval. The separately gated testnet setup can later ask for explicit
+ * wallet transactions and one reviewed trial. A typed account is an unverified
+ * public view, not a signer. Mobile and CLI use off-chain login messages;
+ * executors are sandboxed and the picker is our own accessible dialog.
  */
 export async function initWallet({ window: win, document: doc, NearConnector, SandboxWallet, loadWalletConnect, walletConnectStartTimeoutMs = 50_000 }) {
   const dialog = doc.querySelector('#wallet-dialog');
@@ -153,7 +160,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
   let bannerTimer;
   const trusted = new Set(WALLET_MANIFEST.wallets);
   const walletReadFetch = createOwnerKeyFallbackFetch({ fetch:win.fetch.bind(win),
-    enabled:/^4173-[a-z0-9-]+\.e2b\.app$/i.test(win.location.hostname) });
+    enabled:nativeSetupOriginAllowed(win.location, true) });
   function setWalletLabels(label) {
     doc.querySelectorAll('[data-wallet-label]').forEach(node => { node.textContent = label; });
   }
@@ -695,10 +702,12 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
       // Recovery is deliberately optional and only becomes visible when the
       // experimental same-origin backend explicitly advertises it. This never
       // opens a transaction or turns on purchasing.
-      if (/^4173-[a-z0-9-]+\.e2b\.app$/i.test(win.location.hostname) && accountId === 'great_mujey.testnet') {
-        const client = createWitnessedSetupClient({ wallet, accountId, ownerPublicKey:proof.publicKey,
-          location:win.location, crypto:win.crypto, fetch:walletReadFetch, isCurrent:stillCurrent });
-        void client.enabled().then(enabled => { if (stillCurrent()) { setupRecoveryAvailable = enabled; renderControls(); } });
+      if (nativeSetupOriginAllowed(win.location, isTop) && accountId === 'great_mujey.testnet') {
+        if (/^4173-[a-z0-9-]+\.e2b\.app$/i.test(win.location.hostname)) {
+          const client = createWitnessedSetupClient({ wallet, accountId, ownerPublicKey:proof.publicKey,
+            location:win.location, crypto:win.crypto, fetch:walletReadFetch, isCurrent:stillCurrent });
+          void client.enabled().then(enabled => { if (stillCurrent()) { setupRecoveryAvailable = enabled; renderControls(); } });
+        }
         if (wallet.manifest?.features?.signAndSendTransaction && typeof wallet.signAndSendTransaction === 'function') {
           const currentProof = ownerVerification;
           try {
@@ -739,13 +748,21 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     nativeSetupOpening = true; busy(true);
     if (nativeStatus) nativeStatus.textContent = 'Checking persistent browser storage and the retained setup. No transaction is requested.';
     try {
-      if (typeof win.navigator?.storage?.persist !== 'function') throw Error('PERSISTENT_STORAGE_UNAVAILABLE');
-      // Request on the button gesture; do not silently fall back to evictable storage.
-      const persistRequest = win.navigator.storage.persist();
-      if (!(await persistRequest) && !(await win.navigator.storage.persisted())) throw Error('PERSISTENT_STORAGE_UNAVAILABLE');
-      if (!stillCurrent()) return;
-      store = await openNativeOracleDeviceKey({ origin:win.location.origin, indexedDB:win.indexedDB,
-        crypto:win.crypto, storage:win.navigator.storage, isTopLevel:isTop });
+      try {
+        if (typeof win.navigator?.storage?.persist !== 'function') throw Error('PERSISTENT_STORAGE_UNAVAILABLE');
+        // Request on the button gesture; never sign with evictable storage.
+        const persistRequest = win.navigator.storage.persist();
+        if (!(await persistRequest) && !(await win.navigator.storage.persisted())) throw Error('PERSISTENT_STORAGE_UNAVAILABLE');
+        if (!stillCurrent()) return;
+        store = await openNativeOracleDeviceKey({ origin:win.location.origin, indexedDB:win.indexedDB,
+          crypto:win.crypto, storage:win.navigator.storage, isTopLevel:isTop });
+      } catch {
+        if (!stillCurrent()) return;
+        // Recovery-only: do not treat unavailable storage as an absent key or
+        // allow creating/replacing one. Authenticated receipt reads stay useful.
+        store = Object.freeze({ async inspect() { return {status:'DEVICE_STORAGE_UNAVAILABLE'}; },
+          async create() { throw Error('PERSISTENT_STORAGE_UNAVAILABLE'); }, close() {} });
+      }
       if (!stillCurrent()) return;
       let flow;
       const currentFlow = () => stillCurrent() && nativeFlow === flow;

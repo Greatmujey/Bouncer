@@ -7,7 +7,7 @@
  * read-only receipt verification. The authenticated backend, paired witness,
  * wallet, phone storage and trusted RPC remain independent trust boundaries.
  */
-import { verifyNativeOracleSetupReview } from './native-oracle-setup-wallet-prompt.mjs';
+import { verifyNativeOracleSetupReview, verifyNativeOracleRetainedReview } from './native-oracle-setup-wallet-prompt.mjs';
 import { decodeNativeHash32 } from './native-oracle-transaction.mjs';
 import { assertNativeOracleCompletion } from './native-oracle-completion.mjs';
 import { prepareWitnessedNativeOracleTrial } from './witnessed-native-oracle-trial.mjs';
@@ -71,8 +71,11 @@ export function createNativeOracleOwnerFlow({ client, deviceStore, ownerPublicKe
   const validateReview = async (candidate, retainedIdentity, local) => {
     const temporary = retainedIdentity || { owner: OWNER, owner_public_key: ownerPublicKey, operation_id: '0'.repeat(32),
       review_sha256: candidate?.review_sha256, stages: candidate?.stages?.map(s => ({ stage_id: s.id, action_commitment_sha256: s.action_commitment_sha256 })) };
-    if (temporary.owner_public_key !== ownerPublicKey) throw fail('NATIVE_OWNER_KEY_CHANGED');
-    await verifyNativeOracleSetupReview({ review: candidate, identity: temporary, deviceKey: local, origin, crypto }); current();
+    if (temporary.owner !== OWNER || candidate?.owner !== OWNER || candidate?.vault !== vault ||
+        temporary.owner_public_key !== ownerPublicKey) throw fail('NATIVE_OWNER_KEY_CHANGED');
+    if (local) await verifyNativeOracleSetupReview({ review: candidate, identity: temporary, deviceKey: local, origin, crypto });
+    else await verifyNativeOracleRetainedReview({ review: candidate, identity: temporary, crypto });
+    current();
     return publicTerms(candidate);
   };
   const makeReview = async local => {
@@ -97,16 +100,24 @@ export function createNativeOracleOwnerFlow({ client, deviceStore, ownerPublicKe
         set({ phase: 'create_device', terms: null, stageId: null, originalHash: null,
           message: 'Create a non-exportable key on this phone. There is no phone backup or revocation flow yet; losing this browser or its storage can make the agent unavailable.' });
       } else if (local.status === 'LOCAL_DEVICE_KEY_AVAILABLE') await makeReview(local);
-      else throw fail('NATIVE_DEVICE_KEY_UNAVAILABLE');
+      else if (local.status === 'DEVICE_STORAGE_UNAVAILABLE') {
+        set({ phase: 'blocked', message: 'Persistent phone storage is unavailable. No key or transaction was created; do not assume an earlier setup was absent.' });
+      } else throw fail('NATIVE_DEVICE_KEY_UNAVAILABLE');
       return;
     }
     if (remote.status !== 'WITNESSED' || !remote.identity || !remote.review || !Array.isArray(remote.database_stages) ||
         !Array.isArray(remote.witnessed_records) || remote.database_stages.length !== STAGES.length) throw fail('NATIVE_RETAINED_STATE_INVALID');
-    const local = await device(remote.review.agent_public_key);
-    if (local.status !== 'LOCAL_DEVICE_KEY_AVAILABLE' || local.expected_public_key_matched !== true) {
+    const last = remote.witnessed_records.at(-1);
+    let local;
+    try { local = await device(remote.review.agent_public_key); }
+    catch { current(); local = null; }
+    const hasLocalKey = local?.status === 'LOCAL_DEVICE_KEY_AVAILABLE' && local.expected_public_key_matched === true;
+    if (!hasLocalKey && last?.event !== 'trial_claim') {
       set({ phase: 'blocked', message: 'This phone does not have the retained agent key. Do not create a replacement or repeat a transaction; recover the existing setup first.' }); return;
     }
-    const terms = await validateReview(remote.review, remote.identity, local);
+    // Public review reconstruction here is for receipt-only recovery. Every
+    // path that signs, reserves or prompts still requires the local device key.
+    const terms = await validateReview(remote.review, remote.identity, hasLocalKey ? local : null);
     const rows = remote.database_stages;
     let gap = false, next = null, lastOriginal = null;
     for (let i = 0; i < rows.length; i++) {
@@ -120,12 +131,12 @@ export function createNativeOracleOwnerFlow({ client, deviceStore, ownerPublicKe
     const hashes = rows.map(row => row.original_hash).filter(Boolean);
     if (new Set(hashes).size !== hashes.length) throw fail('NATIVE_RETAINED_STATE_INVALID');
     review = remote.review; identity = remote.identity; taskId = review.review_sha256; originals = hashes;
-    const last = remote.witnessed_records.at(-1);
     if (last?.event === 'trial_claim') {
       if (next || hashes.length !== STAGES.length || !validHash(last.original_hash) || hashes.includes(last.original_hash)) throw fail('NATIVE_RETAINED_STATE_INVALID');
       originalHash = last.original_hash; trialStarted = true; trial = null;
       set({ phase: 'trial_retained', terms, stageId: null, originalHash,
-        message: 'This original is retained. Check its receipt; do not request another payment.' }); return;
+        message: hasLocalKey ? 'This original is retained. Check its receipt; do not request another payment.'
+          : 'The phone key is unavailable. You can check this retained original’s receipt, but cannot sign another request. Do not resend.' }); return;
     }
     if (next?.claimed) {
       stageId = next.stage_id; originalHash = null;

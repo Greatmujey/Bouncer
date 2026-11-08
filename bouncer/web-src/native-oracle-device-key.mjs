@@ -6,7 +6,8 @@
  * native-oracle transaction after a checked setup snapshot and a local original
  * hash record. It never invokes a wallet, calls an RPC or broadcasts. It also
  * signs a domain-separated possession challenge internally before reporting
- * local availability. The signing method is not connected to the live UI.
+ * local availability. The experimental UI connects it only through the
+ * separately disabled-by-default testnet trial flow, not a live deployment.
  *
  * This is NOT a backup, independent fence, secure enclave guarantee or proof
  * of an on-chain grant. The browser/OS may lose or roll back storage; clearing

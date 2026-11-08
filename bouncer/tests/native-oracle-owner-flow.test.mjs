@@ -176,3 +176,12 @@ test('native display formatting is exact and rejects malformed amounts', () => {
   assert.equal(formatNativeNear('123456789012345678901234567890'),'123456.78901234567890123456789');
   for(const invalid of ['01','-1','1.0',1,null]) assert.throws(()=>formatNativeNear(invalid));
 });
+
+test('unavailable storage permits only inspection, not creating a replacement agent key', async () => {
+  const f=fixture();f.store.inspect=async()=>({status:'DEVICE_STORAGE_UNAVAILABLE'});
+  await f.flow.check();assert.equal(f.flow.getState().phase,'blocked');
+  assert.match(f.flow.getState().message,/Persistent phone storage is unavailable/);
+  await assert.rejects(f.flow.createDevice(),e=>e.code==='NATIVE_FLOW_ACTION_NOT_AVAILABLE');
+  assert.equal(f.calls.includes('device-create'),false);
+  assert.equal(f.calls.some(call=>call.startsWith('prompt:')),false);
+});

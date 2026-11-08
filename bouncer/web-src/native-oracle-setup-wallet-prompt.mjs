@@ -74,7 +74,7 @@ function expectedActions(r) {
       method_names: [METHOD], allowance_yocto: r.agent_gas_allowance_yocto }],
   ];
 }
-function canonicalReview(review, identity, device, origin) {
+function canonicalReview(review, identity) {
   if (!exact(identity, ['owner','owner_public_key','operation_id','review_sha256','stages']) ||
       !exact(review, TOP_FIELDS) || review.format !== 'bouncer-native-oracle-wallet-review-v1' ||
       review.status !== 'UNSIGNED_OFFLINE_PLAN_ONLY' || review.network !== 'testnet' || !directChild(review.vault, review.owner) ||
@@ -90,10 +90,7 @@ function canonicalReview(review, identity, device, origin) {
       !HEX64.test(review.review_sha256 ?? '') || identity.review_sha256 !== review.review_sha256 || !HEX32.test(identity.operation_id ?? '') ||
       !Array.isArray(review.stages) || review.stages.length !== 4 || !Array.isArray(identity.stages) || identity.stages.length !== 4 ||
       !Array.isArray(review.limitations) || review.limitations.length !== 7 ||
-      review.limitations.some(x => typeof x !== 'string' || !x || x.length > 512) ||
-      device?.status !== 'LOCAL_DEVICE_KEY_AVAILABLE' || device.origin !== origin || device.owner !== review.owner || device.vault !== review.vault ||
-      device.public_key !== review.agent_public_key || device.expected_public_key_matched !== true || device.private_key_exportable !== false ||
-      device.local_storage_only !== true || device.signing_authorized !== false) throw fail();
+      review.limitations.some(x => typeof x !== 'string' || !x || x.length > 512)) throw fail();
   const expected = expectedActions(review);
   const stages = review.stages.map((stage, i) => {
     if (!exact(stage, STAGE_FIELDS) || stage.id !== STAGES[i] || stage.signer_id !== review.owner ||
@@ -116,12 +113,25 @@ function canonicalReview(review, identity, device, origin) {
     agent_key_installed: false, independent_delivery_verified: false };
   return canonical;
 }
-/** Reconstruct and hash the exact pinned setup review on the device. This is
- * not evidence that the setup happened, current state, consent or authority. */
-export async function verifyNativeOracleSetupReview({ review, identity, deviceKey, origin, crypto = globalThis.crypto } = {}) {
-  if (!crypto?.subtle || typeof origin !== 'string') throw fail();
-  const canonical = canonicalReview(structuredClone(review), structuredClone(identity), structuredClone(deviceKey), origin);
+/** Reconstruct public terms for read-only original recovery. This does not
+ * establish custody, consent, chain state or authority to sign or submit. */
+export async function verifyNativeOracleRetainedReview({ review: rawReview, identity: rawIdentity, crypto = globalThis.crypto } = {}) {
+  if (!crypto?.subtle) throw fail();
+  const review = structuredClone(rawReview), identity = structuredClone(rawIdentity);
+  const canonical = canonicalReview(review, identity);
   if (await digest(crypto, bytes(JSON.stringify(canonical))) !== review.review_sha256) throw fail();
+  return canonical;
+}
+
+/** Signing paths additionally require the real local, non-extractable key. */
+export async function verifyNativeOracleSetupReview({ review, identity, deviceKey, origin, crypto = globalThis.crypto } = {}) {
+  if (typeof origin !== 'string') throw fail();
+  const device = structuredClone(deviceKey);
+  const canonical = await verifyNativeOracleRetainedReview({ review, identity, crypto });
+  if (device?.status !== 'LOCAL_DEVICE_KEY_AVAILABLE' || device.origin !== origin || device.owner !== canonical.owner ||
+      device.vault !== canonical.vault || device.public_key !== canonical.agent_public_key ||
+      device.expected_public_key_matched !== true || device.private_key_exportable !== false ||
+      device.local_storage_only !== true || device.signing_authorized !== false) throw fail();
   return canonical;
 }
 

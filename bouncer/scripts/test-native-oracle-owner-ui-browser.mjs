@@ -18,7 +18,7 @@ const {chromium}=await import(pathToFileURL(path.resolve(playwrightPath)));
 const executablePath=process.env.CHROMIUM_PATH || ['/usr/bin/google-chrome','/usr/bin/google-chrome-stable','/usr/bin/chromium','/usr/bin/chromium-browser'].find(fs.existsSync);
 if(!executablePath)throw Error('No Chromium executable found');
 const browser=await chromium.launch({executablePath,args:['--no-sandbox','--disable-gpu'],headless:true});
-const origin='https://4173-synthetic.e2b.app',owner='great_mujey.testnet',vault=`native.${owner}`;
+const owner='great_mujey.testnet',vault=`native.${owner}`;
 const hash=n=>nearApi.utils.serialize.base_encode(Buffer.alloc(32,n)),wasm=fs.readFileSync(new URL('../../bouncer.wasm',import.meta.url));
 const allowed=new Set(PUBLIC_WEB_FILES),types={'.html':'text/html','.css':'text/css','.mjs':'text/javascript','.js':'text/javascript',
   '.json':'application/json','.zip':'application/zip','.svg':'image/svg+xml','.jpg':'image/jpeg','.woff2':'font/woff2','.txt':'text/plain'};
@@ -29,7 +29,10 @@ const labels={reserve_native_setup:id=>`Reserve native setup prompt: ${id}`,clai
   record_native_setup_original:id=>`Record native setup original: ${id}`,inspect_native_setup:()=> 'Inspect retained native setup',
   verify_native_setup_completion:()=> 'Verify native setup originals and state',claim_native_oracle_trial:()=> 'Retain original native trial hash'};
 try {
-  for(const {width,unknown} of [{width:390,unknown:false},{width:320,unknown:true}]) {
+  for(const {width,unknown,origin} of [
+    {width:390,unknown:false,origin:'https://bouncer-near.vercel.app'},
+    {width:320,unknown:true,origin:'https://4173-synthetic.e2b.app'},
+  ]) {
     const context=await browser.newContext({viewport:{width,height:844},isMobile:true,hasTouch:true,reducedMotion:'reduce'}),page=await context.newPage();
     await page.addInitScript(() => Object.defineProperty(navigator,'storage',{value:{persist:async()=>true,persisted:async()=>true},configurable:true}));
     const errors=[],requests=[],challenges=new Map();page.on('pageerror',e=>errors.push(e.message));
@@ -202,7 +205,29 @@ try {
     assert.match(await page.locator('#wallet-native-setup-status').innerText(),/charged 0\.01 test NEAR, refunded 0\.09/);
     assert.equal(sends,1);assert.equal(await page.locator('#wallet-native-trial-send').isVisible(),false);
     assert.equal(await page.locator('#wallet-dialog').evaluate(el=>el.scrollWidth<=el.clientWidth),true);
-    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);assert.deepEqual(errors,[]);
+    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+
+    // Reopen without persistent device storage: only authenticated read-only
+    // recovery of the witnessed original is available, never another send.
+    await page.reload({waitUntil:'networkidle'});
+    try { await page.waitForFunction(()=>!document.querySelector('[data-wallet-id="meteor-wallet"]').disabled ||
+      document.querySelector('#wallet-status').textContent.includes('great_mujey.testnet'),null,{timeout:12_000}); }
+    catch(error) { console.error('Synthetic reconnect:',await page.locator('#wallet-status').textContent(),errors,requests.slice(-12));throw error; }
+    if(!(await page.locator('#wallet-status').textContent()).includes(owner)){
+      await page.locator('.top-connect').click();await page.locator('[data-wallet-id="meteor-wallet"]').click();
+      await page.waitForFunction(()=>document.querySelector('#wallet-status').textContent.includes('great_mujey.testnet'));
+    }
+    await page.locator('.top-connect').click();await page.locator('#wallet-owner-verify').click();
+    await page.waitForFunction(()=>document.querySelector('#wallet-account-badge').textContent==='OWNER VERIFIED');
+    await page.evaluate(()=>Object.defineProperty(navigator,'storage',{value:{persist:async()=>false,persisted:async()=>false},configurable:true}));
+    await page.locator('#wallet-native-setup-open').waitFor({state:'visible'});await page.locator('#wallet-native-setup-open').click();
+    await page.locator('#wallet-native-trial-check').waitFor({state:'visible'});
+    assert.match(await page.locator('#wallet-native-setup-status').innerText(),/phone key is unavailable/i);
+    assert.match(await page.locator('#wallet-native-setup-hash').innerText(),new RegExp(trial.original_hash));
+    assert.equal(await page.locator('#wallet-native-trial-send').isVisible(),false);
+    await page.locator('#wallet-native-trial-check').click();
+    await page.waitForFunction(()=>document.querySelector('#wallet-native-setup-status').textContent.includes('OutLayer receipt verified'));
+    assert.equal(sends,1);assert.equal(claims,4);assert.deepEqual(errors,[]);
     await context.close();
   }
   console.log('Native owner UI: four simulated wallet approvals, one reviewed trial, receipt/refund checks and lost-result recovery passed. No live transaction.');

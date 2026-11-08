@@ -5,7 +5,7 @@ import { KeyPair } from '@near-js/crypto';
 import { nep413Payload } from '../web-src/cli-login.mjs';
 import { setupAuthAction } from '../web-src/witnessed-setup-auth.mjs';
 import fs from 'node:fs';
-import { initWallet as bootWallet, walletOriginAllowed } from '../web-src/wallet-core.mjs';
+import { initWallet as bootWallet, walletOriginAllowed, nativeSetupOriginAllowed } from '../web-src/wallet-core.mjs';
 import { WALLET_MANIFEST } from '../web-src/wallet-manifest.mjs';
 import { loadVerifiedExecutor, WALLET_EXECUTOR_SHA256 } from '../web-src/wallet-executor.mjs';
 
@@ -119,6 +119,16 @@ test('wallet origin policy blocks shared origins, unapproved sites, HTTP and ifr
   assert.equal(walletOriginAllowed(location('https://4173-example.e2b.app/'), true), true);
   assert.equal(walletOriginAllowed(location('https://4173-example.e2b.app/'), false), false);
   assert.equal(walletOriginAllowed(location('http://127.0.0.1:4173/'), true), true);
+});
+
+test('native setup is restricted to the dedicated top-level site or its test preview', () => {
+  assert.equal(nativeSetupOriginAllowed(location('https://bouncer-near.vercel.app/'), true), true);
+  assert.equal(nativeSetupOriginAllowed(location('https://4173-example.e2b.app/'), true), true);
+  assert.equal(nativeSetupOriginAllowed(location('https://bouncer-near.vercel.app/'), false), false);
+  assert.equal(nativeSetupOriginAllowed(location('https://other.vercel.app/'), true), false);
+  assert.equal(nativeSetupOriginAllowed(location('https://4174-example.e2b.app/'), true), false);
+  assert.equal(nativeSetupOriginAllowed(location('http://4173-example.e2b.app/'), true), false);
+  assert.equal(nativeSetupOriginAllowed(location('http://127.0.0.1:4173/'), true), false);
 });
 
 test('preview mode explains the setup gate without ruling out wallet onboarding', async () => {

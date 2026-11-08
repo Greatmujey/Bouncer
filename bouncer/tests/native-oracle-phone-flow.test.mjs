@@ -66,7 +66,7 @@ async function fixture({enabled=true,unknownSend=false,wrongNetwork=false}={}) {
     sends++;if(unknownSend)throw Error('synthetic lost RPC response');
     const original=(await witness.inspect(OWNER)).state.trial.original_hash;
     return new Response(JSON.stringify({jsonrpc:'2.0',id:request.id,result:{transaction:{hash:original},transaction_outcome:{id:original}}}))};
-  const makeFlow=()=>createNativeOracleOwnerFlow({client,deviceStore:device,ownerPublicKey:ownerKey,origin:ORIGIN,crypto:webcrypto,
+  const makeFlow=(deviceStore=device)=>createNativeOracleOwnerFlow({client,deviceStore,ownerPublicKey:ownerKey,origin:ORIGIN,crypto:webcrypto,
     indexedDB,isTopLevel:true,fetch,now:()=>NOW,isCurrent:()=>true,interact:work=>work()});
   return {device,client,witness,makeFlow,review,counts:()=>({sends,claims}),setEnabled:value=>{enabled=value},
     setReceiptAvailable:value=>{receiptAvailable=value}};
@@ -124,5 +124,39 @@ test('wrong-network or unreachable browser RPC stops before the original is clai
     const flow=f.makeFlow();await ready(f,flow);await flow.reviewTrial();await flow.runTrial({ownerConfirmed:true});
     assert.equal(flow.getState().phase,'trial_review');assert.match(flow.getState().message,/No trial was claimed or signed/);
     assert.equal((await f.witness.inspect(OWNER)).state.phase,'complete');assert.deepEqual(f.counts(),{sends:0,claims:0});
+  }finally{f.device.close()}
+});
+
+test('a second device without the agent key can verify only the witnessed original and refund',async()=>{
+  const f=await fixture({unknownSend:true});try{
+    const first=f.makeFlow();await ready(f,first);await first.reviewTrial();await first.runTrial({ownerConfirmed:true});
+    const original=first.getState().originalHash;
+    for(const deviceStore of [
+      {async inspect(){return {status:'NO_LOCAL_DEVICE_KEY'}}},
+      {async inspect(){throw Error('synthetic storage unavailable')}},
+    ]){
+      const recovery=f.makeFlow(deviceStore);await recovery.check();
+      assert.equal(recovery.getState().phase,'trial_retained');assert.equal(recovery.getState().originalHash,original);
+      assert.match(recovery.getState().message,/phone key is unavailable/i);
+      await assert.rejects(recovery.reviewTrial(),e=>e.code==='NATIVE_FLOW_ACTION_NOT_AVAILABLE');
+      await assert.rejects(recovery.runTrial({ownerConfirmed:true}),e=>e.code==='NATIVE_FLOW_ACTION_NOT_AVAILABLE');
+      await recovery.checkTrial();assert.equal(recovery.getState().phase,'trial_verified');
+      assert.deepEqual(recovery.getState().delivery,{priceUsd:2.75,chargedNear:'0.01',refundNear:'0.09'});
+      assert.deepEqual(f.counts(),{sends:1,claims:1});
+    }
+    const originalInspect=f.client.inspect;
+    f.client.inspect=async()=>{const remote=structuredClone(await originalInspect());remote.review.per_tx_cap_yocto='1';return remote};
+    const tampered=f.makeFlow({async inspect(){return {status:'NO_LOCAL_DEVICE_KEY'}}});
+    await assert.rejects(tampered.check());assert.equal(tampered.getState().phase,'stopped');
+    assert.deepEqual(f.counts(),{sends:1,claims:1});
+  }finally{f.device.close()}
+});
+
+test('without a local key an unfinished setup remains blocked and cannot request another transaction',async()=>{
+  const f=await fixture();try{
+    const recovery=f.makeFlow({async inspect(){return {status:'NO_LOCAL_DEVICE_KEY'}}});await recovery.check();
+    assert.equal(recovery.getState().phase,'blocked');
+    await assert.rejects(recovery.approveStage({ownerConfirmed:true}),e=>e.code==='NATIVE_FLOW_ACTION_NOT_AVAILABLE');
+    assert.deepEqual(f.counts(),{sends:0,claims:0});
   }finally{f.device.close()}
 });

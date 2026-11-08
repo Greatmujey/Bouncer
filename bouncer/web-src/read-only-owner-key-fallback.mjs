@@ -1,4 +1,4 @@
-/** Phone-preview fallback when the browser cannot reach the public testnet
+/** Phone fallback when the browser cannot reach the public testnet
  * key-view RPC. Only the exact CLI/NEP-413 key check can be relayed. Signature
  * verification still happens locally and the backend checks a pinned fresh
  * FINAL block. This cannot sign, broadcast or grant spending permission. */

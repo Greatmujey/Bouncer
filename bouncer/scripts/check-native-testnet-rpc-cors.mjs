@@ -21,7 +21,9 @@ try {
   const body=JSON.parse(text);
   if(body?.jsonrpc!=='2.0' || body.id!==id || body.error || body.result?.chain_id!=='testnet')throw Error('unexpected chain or RPC response');
   console.log('Public RPC CORS and testnet status: OK (read-only).');
+  if(process.env.GITHUB_ACTIONS==='true')console.log('::notice title=Testnet RPC CORS::Read-only preflight and testnet status passed. This is not a real-phone test.');
 } catch(error) {
   console.error(`Public RPC browser compatibility unconfirmed: ${error.message}. No transaction was sent.`);
+  if(process.env.GITHUB_ACTIONS==='true')console.log('::warning title=Testnet RPC CORS::Read-only compatibility unconfirmed; do not attempt submission until resolved.');
   process.exitCode=1;
 }
