@@ -5,6 +5,7 @@
  * oracle or a cryptographic proof of truth. No output can select authority.
  */
 import { runOnchainProofGoal, recoverOnchainProofGoal, redeemOnchainProofOnce } from './onchain-proof.mjs';
+import { withExclusiveJournalOperation } from './journal-operation.mjs';
 
 const plain = value => value !== null && typeof value === 'object' && !Array.isArray(value) &&
   (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null);
@@ -84,24 +85,30 @@ function deliveryFrom(goal, selection, journal, result) {
   return delivery;
 }
 
-export async function runOnchainProofWorkflowSource({ goal, selection, provider, account, publicKey, journal,
-  execute = false, fetchImpl = globalThis.fetch, log = console.log }) {
-  const result = await runOnchainProofGoal({ goal, provider, account, publicKey, journal, execute, fetchImpl, log });
+export async function runOnchainProofWorkflowSource(options) {
+  return withExclusiveJournalOperation(options?.journal, scope => runSourceUnlocked(options, scope), options?.exclusiveJournalScope);
+}
+async function runSourceUnlocked({ goal, selection, provider, account, publicKey, journal,
+  execute = false, fetchImpl = globalThis.fetch, log = console.log }, exclusiveJournalScope) {
+  const result = await runOnchainProofGoal({ goal, provider, account, publicKey, journal, execute, fetchImpl, log, exclusiveJournalScope });
   if (!execute || result.status === 'BLOCKED') return result;
   if (result.status !== 'RESPONDED') throw new Error('x402 source did not return a recorded response');
   return { status: 'FULFILLED', delivery: deliveryFrom(goal, selection, journal, result) };
 }
 
 /** Reconcile FINAL payment without keys; only explicit opt-in may start the first seller request. */
-export async function recoverOnchainProofWorkflowSource({ goal, selection, provider, journal, redeemSource = false,
-  update = true, fetchImpl = globalThis.fetch, log = console.log }) {
+export async function recoverOnchainProofWorkflowSource(options) {
+  return withExclusiveJournalOperation(options?.journal, scope => recoverSourceUnlocked(options, scope), options?.exclusiveJournalScope);
+}
+async function recoverSourceUnlocked({ goal, selection, provider, journal, redeemSource = false,
+  update = true, fetchImpl = globalThis.fetch, log = console.log }, exclusiveJournalScope) {
   if (redeemSource && !update) throw new Error('first seller redemption requires writable recovery');
-  const recovered = await recoverOnchainProofGoal({ goal, provider, journal, update, log });
+  const recovered = await recoverOnchainProofGoal({ goal, provider, journal, update, log, exclusiveJournalScope });
   if (recovered.redemption_status === 'delivered') {
     return { status: 'REUSED', delivery: deliveryFrom(goal, selection, journal, recovered) };
   }
   if (recovered.redemption_status === 'not_started' && redeemSource) {
-    const response = await redeemOnchainProofOnce({ goal, provider, journal, fetchImpl, log });
+    const response = await redeemOnchainProofOnce({ goal, provider, journal, fetchImpl, log, exclusiveJournalScope });
     return { status: 'REUSED', delivery: deliveryFrom(goal, selection, journal, response) };
   }
   return { status: 'RECOVERY_REQUIRED', redemption_status: recovered.redemption_status,

@@ -47,6 +47,12 @@ There is **no verified independent FT-paid fulfillment by Bouncer**. The marketp
 service is bundled. This is unaudited testnet software, not suitable
 for real funds.
 
+A new [partial native-mission API](bouncer/docs/NATIVE_MISSIONS.md) sequences
+owner-pinned compute and oracle calls through Bouncer with aggregate native
+budgets and original-hash recovery. It is not wired to the browser. A mission
+requiring storage fails closed because no native storage purchase route is
+supported yet; synthetic tests are not live multi-resource fulfillment.
+
 ## Reproduce the safety checks without a wallet
 
 From the repository root, with Node.js 22 and npm:
@@ -819,6 +825,7 @@ real testnet transactions. To build locally with Rust and the wasm target, run
 - `bouncer/demo-onchain-proof.mjs` — explicitly gated one-shot testnet check against a local third-party SDK gate.
 - `bouncer/agent/resource-agent.mjs` — quote, guarded payment, fulfillment orchestration.
 - `bouncer/agent/workflow.mjs` — owner-reviewed dependent source → resource workflows and key-free recovery.
+- `bouncer/agent/native-mission.mjs` — partial native compute/oracle sequencing, aggregate budgets and hash-only recovery; no native storage route.
 - `bouncer/agent/verify-delivery.mjs` — bounded result checks and local receipt validation.
 - `bouncer/agent/market-discovery.mjs` — isolated, read-only public catalog search.
 - `bouncer/agent/goal-planner.mjs`, `autonomous.mjs` — model proposals constrained by the owner catalog.

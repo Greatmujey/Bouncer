@@ -19,6 +19,12 @@ key-free recovery of the original compute hash. Its restricted artifact contains
 replayable signatures and must remain private. Transaction links and limitations
 are in the [README](../../README.md).
 
+The whole workflow now holds the local journal-operation lock across source,
+recovery and resource stages; standalone project and x402 helpers participate
+in the same lock. The scope is not passed to provider or injected callbacks.
+This prevents overlapping cooperative calls on the same open journal, not
+other journals, rollback, bypassing processes or a compromised filesystem.
+
 ## Paid x402 data as a workflow source (experimental)
 
 The optional [`onchain-proof-workflow.example.json`](../examples/onchain-proof-workflow.example.json)

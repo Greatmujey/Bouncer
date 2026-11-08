@@ -245,6 +245,48 @@ test('duplicate nonce and concurrent executions cannot create two payments withi
   assert.equal(results.filter(r => r.status === 'rejected').length, 1);
 });
 
+test('onchain-proof quote, payment, recovery and redemption share an exclusive journal operation', async () => {
+  const f = fixture();
+  let reached, release;
+  const entered = new Promise(resolve => { reached = resolve; });
+  const gate = new Promise(resolve => { release = resolve; });
+  const slow = async (url, options) => {
+    assert.equal(Object.hasOwn(options, 'exclusiveJournalScope'), false);
+    if (!options.headers) { reached(); await gate; }
+    return f.fetchImpl(url, options);
+  };
+  const first = run(f, { fetchImpl: slow });
+  try {
+    await entered;
+    await assert.rejects(run(f), /another payment operation is already running/);
+    await assert.rejects(recover(f), /another payment operation is already running/);
+    await assert.rejects(redeem(f), /another payment operation is already running/);
+    assert.equal(f.sends, 0);
+    assert.equal(f.redemptions, 0);
+  } finally { release(); await first.catch(() => {}); }
+  assert.equal((await first).status, 'RESPONDED');
+  assert.equal(f.sends, 1);
+  assert.equal(f.redemptions, 1);
+  assert.equal((await recover(f)).status, 'RECONCILED');
+});
+
+test('onchain-proof prefers one-shot transport and does not fall back after an ambiguous send', async () => {
+  const f = fixture();
+  let oneShot = 0, legacy = 0;
+  f.provider.sendTransactionOnce = async () => { oneShot++; throw new Error('synthetic lost one-shot response'); };
+  f.provider.sendTransactionUntil = async () => { legacy++; throw new Error('unexpected fallback'); };
+  await assert.rejects(run(f), /unresolved/);
+  assert.equal(oneShot, 1); assert.equal(legacy, 0);
+  assert.equal(f.journal.get(goal.id).status, 'pending'); assert.ok(f.journal.get(goal.id).tx_hash);
+});
+
+test('onchain-proof operation releases its lock on preflight errors', async () => {
+  const f = fixture();
+  await assert.rejects(run(f, { fetchImpl: async () => { throw new Error('synthetic unavailable'); } }), /synthetic unavailable/);
+  assert.equal((await run(f)).status, 'RESPONDED');
+  assert.equal(f.sends, 1);
+});
+
 test('non-idempotent concurrent redemption and oversized response are never auto-retried', async () => {
   const f = fixture(); f.setLoss(true); await assert.rejects(run(f)); await recover(f);
   let calls = 0;

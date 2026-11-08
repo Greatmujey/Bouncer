@@ -12,7 +12,7 @@ import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import nearApi from 'near-api-js';
 import { FileJournal } from '../agent/procurement.mjs';
-import { httpResourceProvider } from '../agent/resource-agent.mjs';
+import { httpResourceProvider, runResourceAgent } from '../agent/resource-agent.mjs';
 import { ORACLE_TESTNET_PROJECT } from '../agent/oracle-outlayer.mjs';
 import { expectedBurnChecksum } from '../agent/outlayer-project.mjs';
 import { validateWorkflow, materializeWorkflowStep, runWorkflow } from '../agent/workflow.mjs';
@@ -147,6 +147,59 @@ test('verified independent data flows through real offline compute, storage and 
   assert.deepEqual(f.workflow.steps.map(s => f.journal.get(s.id).tx_hash), hashes);
   const again = await f.invoke(); assert.equal(again.status, 'FULFILLED');
   assert.equal(again.new_source_payments, 0); assert.equal(again.new_resource_payments, 0); assert.equal(f.sends, 3);
+}));
+
+test('one workflow holds the journal across all stages; callbacks cannot reenter or receive its private scope', () => withFixture(async f => {
+  let reached, release;
+  const entered = new Promise(resolve => { reached = resolve; });
+  const gate = new Promise(resolve => { release = resolve; });
+  const originalSource = f.runners.source;
+  f.runners.source = async options => {
+    assert.equal(Object.hasOwn(options, 'exclusiveJournalScope'), false);
+    return originalSource(options);
+  };
+  let held = false;
+  f.setBeforeQuote(async (_order, context) => {
+    assert.equal(Object.hasOwn(context, 'exclusiveJournalScope'), false);
+    if (!held) { held = true; reached(); await gate; }
+  });
+  const first = f.invoke();
+  try {
+    await entered;
+    await assert.rejects(f.invoke(), /another payment operation is already running/);
+    await assert.rejects(runResourceAgent({ journal: f.journal }), /another payment operation is already running/);
+    assert.equal(f.sourcePays, 1);
+    assert.equal(f.sends, 0);
+  } finally { release(); await first.catch(() => {}); }
+  const result = await first;
+  assert.equal(result.status, 'FULFILLED');
+  assert.equal(f.sourcePays, 1);
+  assert.equal(f.sends, 3);
+  const replay = await f.invoke(); // the lock is released after the first operation
+  assert.equal(replay.new_source_payments, 0);
+  assert.equal(replay.new_resource_payments, 0);
+}));
+
+test('mutating the runner table after preview cannot grant a custom runner the private scope', () => withFixture(async f => {
+  const original = f.runners.source; let calls = 0;
+  f.runners.source = async options => {
+    calls++;
+    assert.equal(Object.hasOwn(options, 'exclusiveJournalScope'), false);
+    if (!options.execute) f.runners.source = undefined;
+    return original(options);
+  };
+  const result = await f.invoke();
+  assert.equal(result.status, 'FULFILLED'); assert.equal(calls, 2); assert.equal(f.sends, 3);
+}));
+
+test('a journal scoped to a different owner or vault fails before any workflow operation', () => withFixture(async f => {
+  const wrong = { get() { throw new Error('unexpected read'); }, put() { throw new Error('unexpected write'); },
+    assertScope() { throw new Error('journal owner or contract mismatch'); } };
+  await assert.rejects(f.invoke({ journal: wrong }), /journal owner or contract mismatch/);
+  assert.equal(f.sourcePays, 0);
+  assert.equal(f.sourcePreviews, 0);
+  assert.equal(f.sends, 0);
+  assert.equal(f.quotes.length, 0);
 }));
 
 test('seller-v2 dependent workflow resumes the original signed hash after buyer and seller restart', () => withFixture(async f => {

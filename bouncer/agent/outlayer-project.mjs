@@ -374,10 +374,10 @@ async function runProjectGoalUnlocked({ goal: rawGoal, provider, account, public
   }
 }
 export function recoverProjectGoal(options) {
-  return withExclusiveJournalOperation(options?.journal, () => recoverProjectGoalUnlocked(options));
+  return withExclusiveJournalOperation(options?.journal, () => recoverProjectGoalUnlocked(options), options?.exclusiveJournalScope);
 }
 export function runProjectGoal(options) {
-  return withExclusiveJournalOperation(options?.journal, () => runProjectGoalUnlocked(options));
+  return withExclusiveJournalOperation(options?.journal, () => runProjectGoalUnlocked(options), options?.exclusiveJournalScope);
 }
 
 function home(value) { return value.startsWith('~/') ? path.join(os.homedir(), value.slice(2)) : value; }
