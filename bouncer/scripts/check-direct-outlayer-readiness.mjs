@@ -15,7 +15,7 @@ const probe=await fetch(endpoint,{method:'POST',headers:{origin,'content-type':'
 if(!probe.ok||!allowed(probe))throw Error('browser RPC CORS unavailable');
 const body=await probe.json();if(body.id!=='bouncer-cors-probe'||body.result?.chain_id!=='testnet')throw Error('RPC is not testnet');
 const ready=await inspectDirectOutlayerReadiness({fetch});
-const summary={scope:'public testnet FINAL views and exact preview-origin CORS; no phone or wallet verification',
+const summary={scope:'public testnet FINAL views and representative preview-origin CORS; no phone or wallet verification',
   block_hash:ready.block_hash,block_height:ready.block_height,owner:ready.owner,
   owner_available_yocto:ready.owner_available_yocto,receiver:ready.payee,project_id:ready.project_id,
   maximum_yocto:ready.maximum_yocto,gas:ready.gas,browser_rpc_cors:true,firewall_used:false,signed:false,sent:false};

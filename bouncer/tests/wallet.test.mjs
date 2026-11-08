@@ -247,7 +247,7 @@ test('direct OutLayer control is shown only for the named Meteor session on the 
     [`${DIRECT_PREVIEW_ORIGIN}/`, '', 'great_mujey.testnet', 'meteor-wallet', true],
     [`${DIRECT_PREVIEW_ORIGIN}/`, '', 'alice.testnet', 'meteor-wallet', false],
     [`${DIRECT_PREVIEW_ORIGIN}/`, '', 'great_mujey.testnet', 'intear-wallet', false],
-    ['https://4173-example.e2b.app/', '', 'great_mujey.testnet', 'meteor-wallet', false],
+    ['https://4174-example.e2b.app/', '', 'great_mujey.testnet', 'meteor-wallet', false],
     ['https://bouncer-near.vercel.app/', 'https://bouncer-near.vercel.app', 'great_mujey.testnet', 'meteor-wallet', false],
     ['http://127.0.0.1:4173/', '', 'great_mujey.testnet', 'meteor-wallet', false],
   ]) {

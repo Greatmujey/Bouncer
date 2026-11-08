@@ -9,10 +9,9 @@
  */
 import {decodeNativeHash32} from './native-oracle-transaction.mjs';
 
-// This branch alias belongs to the existing Bouncer Vercel project. Keeping
-// the single attempt on one stable origin avoids creating independent local
-// one-shot records on multiple preview hosts.
-export const DIRECT_PREVIEW_ORIGIN='https://bouncer-git-arena-0e-9a17a9-abdullahimujeeb0505-stacks-projects.vercel.app';
+// Representative Arena preview origin used by read-only CORS probes and tests.
+// The real preview has the same host shape but a session-specific sandbox ID.
+export const DIRECT_PREVIEW_ORIGIN='https://4173-read-only-probe.e2b.app';
 export const DIRECT_OWNER='great_mujey.testnet';
 export const DIRECT_PAYEE='outlayer.testnet';
 export const DIRECT_DEPOSIT='100000000000000000000000'; // 0.1 test NEAR, plus gas
@@ -31,7 +30,11 @@ const stable=x=>Array.isArray(x)?x.map(stable):plain(x)?Object.fromEntries(Objec
 const equal=(a,b)=>JSON.stringify(stable(a))===JSON.stringify(stable(b));
 const hash=x=>{try{decodeNativeHash32(x);return true}catch{return false}};
 const amount=x=>typeof x==='string' && /^(?:0|[1-9][0-9]{0,38})$/.test(x)?BigInt(x):null;
-export const directOutlayerOriginAllowed=(origin,isTopLevel)=>isTopLevel===true && origin===DIRECT_PREVIEW_ORIGIN;
+export const directOutlayerOriginAllowed=(origin,isTopLevel)=>{
+  try{const u=new URL(origin);return isTopLevel===true && u.protocol==='https:' && u.origin===origin &&
+    /^4173-[a-z0-9-]+\.e2b\.app$/i.test(u.hostname) && !u.username && !u.password}
+  catch{return false}
+};
 export function directOutlayerArgs(){return {source:{Project:{project_id:DIRECT_PROJECT,version_key:DIRECT_VERSION}},resource_limits:{...LIMITS},
   input_data:DIRECT_INPUT,secrets_ref:null,response_format:'Json',payer_account_id:DIRECT_OWNER,params:null}}
 export function directOutlayerTransaction(){return {network:'testnet',signerId:DIRECT_OWNER,receiverId:DIRECT_PAYEE,
