@@ -122,8 +122,14 @@ offline tests only.
 Unit tests use synthetic FINAL receipts and ephemeral keys for three-leg
 sequencing, budget checks, storage readback, authentication, challenge
 replay/tampering, unknown results and original-only recovery. A separate
-loopback-only nearcore scenario exercises a disposable V14 contract and the
-real JS storage runner. These tests cannot prove live OutLayer delivery,
-independent storage, a real phone/wallet approval or safe deployment. See the
-corresponding CI run for its actual result; a script's existence is not a
-passing test.
+loopback-only nearcore scenarios exercise a disposable V14 contract and all
+three real guarded JS runners. The three-leg scenario uses a fabricated local
+provider: its outputs are not independent OutLayer execution, although the
+sandbox executes the vault calls, storage writes and refund transfers. These
+tests cannot prove live OutLayer delivery, independent storage, a real
+phone/wallet approval or safe deployment. A mocked mobile-browser test also
+checks the dedicated Netlify origin and review/recovery UI. See the corresponding
+CI run for its actual result; a script's existence is not a passing test.
+[Run 42503338044](https://github.com/Greatmujey/Bouncer/actions/runs/42503338044)
+passed the isolated three-leg/fabricated-provider scenario and the mocked browser
+checks at commit `5d2f894`; it was not a public-chain or real-wallet test.
