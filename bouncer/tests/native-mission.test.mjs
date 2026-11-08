@@ -45,12 +45,12 @@ function fixture({ stale = false, ambiguous = false, samePolicy = false, storage
   }));
   const transactions = new Map(), spent = new Map(), events = [];
   let balance = 1000n, daily = 1000n, perTx = 100n, loseFirst = ambiguous, denyReceipts = false, beforeSend, beforeView, sends = 0;
-  let storedObject = null, storageReserved = false;
+  let storedObject = null, storageReserved = false, deployedCode = storageCodeHash, vaultKeys = [];
   const timestamp = Math.floor(Date.now() / 1000) - (stale ? 1000 : 0);
   const provider = {
     async viewNodeStatus() { return { chain_id: 'testnet' }; },
-    async viewAccount() { return { code_hash: storageCodeHash }; },
-    async viewAccessKeyList() { return { keys: [] }; },
+    async viewAccount() { return { code_hash: deployedCode }; },
+    async viewAccessKeyList() { return { keys: vaultKeys }; },
     async viewAccessKey(account, key) {
       assert.equal(account, owner);
       const id = Object.keys(signers).find(id => String(signers[id].publicKey) === String(key));
@@ -146,6 +146,7 @@ function fixture({ stale = false, ambiguous = false, samePolicy = false, storage
   return { mission, signers, provider, events, invoke, transactions, get journal() { return journal; },
     get sends() { return sends; }, setDaily(value) { daily = BigInt(value); }, setPerTx(value) { perTx = BigInt(value); },
     setBalance(value) { balance = BigInt(value); }, setReceiptFailure(value) { denyReceipts = value; },
+    setCode(value) { deployedCode = value; }, setVaultKeys(value) { vaultKeys = value; },
     setBeforeView(fn) { beforeView = fn; }, setBeforeSend(fn) { beforeSend = fn; },
     reopen() { journal.close(); journal = new FileJournal(journalPath, vault, owner, { requireExisting: true }); },
     close() { journal.close(); fs.rmSync(dir, { recursive: true, force: true }); } };
@@ -209,6 +210,16 @@ test('real native runners sequence synthetic compute and oracle, then recover bo
   assert.deepEqual(f.mission.goals.map(item => f.journal.get(item.goal.id).tx_hash), hashes);
   assert.equal((await f.invoke({ execute: true })).new_payments, 0);
 }));
+
+test('a changed V14 vault stops later compute/API legs even after storage completed', () => withFixture(async f => {
+  const [compute, oracle, storage] = f.mission.goals;
+  storage.goal.value = {from_goal_ids:['compute']}; f.mission.goals = [compute, storage, oracle];
+  const log = message => { if (String(message).includes('[storage] FULFILLED')) f.setVaultKeys([{public_key:'ed25519:synthetic'}]); };
+  await assert.rejects(f.invoke({execute:true,log}), /code hash or keyless/);
+  assert.equal(f.sends,2); assert.equal(f.journal.get('store').status,'completed'); assert.equal(f.journal.get('price'),undefined);
+  f.setVaultKeys([]); f.setCode(nearApi.utils.serialize.base_encode(Buffer.alloc(32,43)));
+  await assert.rejects(f.invoke({execute:true}), /code hash or keyless/); assert.equal(f.sends,2);
+}, {storage:true}));
 
 test('lost original is never resent; unresolved receipts stop before later payments', () => withFixture(async f => {
   await assert.rejects(f.invoke({ execute: true }), /unresolved/);

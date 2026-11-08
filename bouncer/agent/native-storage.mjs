@@ -74,7 +74,7 @@ function successful(status) {
     ((typeof status.SuccessValue === 'string' && status.SuccessReceiptId === undefined) ||
      (typeof status.SuccessReceiptId === 'string' && status.SuccessValue === undefined));
 }
-async function assertPinnedVault(provider, goal, reference) {
+export async function assertPinnedNativeStorageVault(provider, goal, reference) {
   if (typeof provider?.viewAccount !== 'function' || typeof provider?.viewAccessKeyList !== 'function') {
     throw new Error('trusted RPC must verify the pinned, keyless V14 vault');
   }
@@ -119,10 +119,11 @@ export async function verifyNativeStorageResult(rawGoal, result, publicKey, prov
       receiptCall?.method_name !== 'execute_native_storage' || String(receiptCall.deposit) !== '0' ||
       !equal(decodeJson(receiptCall.args, 'storage receipt arguments'), argsFor(goal))) throw new Error('missing exact Bouncer storage receipt');
   if (!isTransactionHash(executed[0].block_hash)) throw new Error('storage receipt block is unavailable');
-  await assertPinnedVault(provider, goal, { blockId: executed[0].block_hash });
+  await assertPinnedNativeStorageVault(provider, goal, { blockId: executed[0].block_hash });
   const receiptObject = validateObject(goal, decodeJson(executed[0].outcome.status.SuccessValue, 'storage receipt result'));
   const returnedObject = validateObject(goal, decodeJson(result.status.SuccessValue, 'storage final result'));
   if (!equal(receiptObject, returnedObject) || !provider || typeof provider.callFunction !== 'function') throw new Error('storage results do not match');
+  await assertPinnedNativeStorageVault(provider, goal, { finality: 'final' });
   const current = await provider.callFunction(goal.contract_id, 'get_native_storage_object',
     { policy_id: goal.policy_id, object_id: goal.object_id }, { finality: 'final' });
   if (!equal(validateObject(goal, current), receiptObject)) throw new Error('current public storage object no longer matches the original');
@@ -162,7 +163,7 @@ async function runUnlocked({ goal: raw, provider, account, publicKey, journal, e
   if (execute && (!journal || typeof journal.get !== 'function' || typeof journal.put !== 'function')) throw new Error('storage execution requires the original journal');
   if ((await provider.viewNodeStatus())?.chain_id !== 'testnet') throw new Error('RPC must report testnet');
   const final = { finality: 'final' };
-  await assertPinnedVault(provider, goal, final);
+  await assertPinnedNativeStorageVault(provider, goal, final);
   const [version, owner, access] = await Promise.all([
     provider.callFunction(goal.contract_id, 'contract_version', {}, final),
     provider.callFunction(goal.contract_id, 'get_owner', {}, final),

@@ -23,11 +23,11 @@ function fixture({ timeout = false } = {}) {
   } };
   const journal = memoryJournal(), chains = new Map();
   let sent = 0, lost = timeout, object = null, reserved = false, chainId = 'testnet', method = 'execute_native_storage',
-    routeView = structuredClone(route), verdict = [true, 'ok'], beforeSend;
+    routeView = structuredClone(route), verdict = [true, 'ok'], beforeSend, deployedCode = codeHash, vaultKeys = [];
   const provider = {
     async viewNodeStatus() { return { chain_id: chainId }; },
-    async viewAccount() { return { code_hash: codeHash }; },
-    async viewAccessKeyList() { return { keys: [] }; },
+    async viewAccount() { return { code_hash: deployedCode }; },
+    async viewAccessKeyList() { return { keys: vaultKeys }; },
     async viewAccessKey() { return { permission: { FunctionCall: { receiver_id: vault, method_names: [method] } } }; },
     async callFunction(receiver, view) {
       assert.equal(receiver, vault);
@@ -70,6 +70,7 @@ function fixture({ timeout = false } = {}) {
   return { goal, account, publicKey, journal, provider, chains, get sent() { return sent; },
     setChain(v) { chainId = v; }, setMethod(v) { method = v; }, setRoute(v) { routeView = v; }, setVerdict(v) { verdict = v; },
     setObject(v) { object = v; }, setReserved(v) { reserved = v; }, setBeforeSend(fn) { beforeSend = fn; },
+    setCode(v) { deployedCode = v; }, setVaultKeys(v) { vaultKeys = v; },
     run(opts = {}) { return runNativeStorageGoal({ goal, account, publicKey, journal, provider, log: () => {}, ...opts }); },
     recover(opts = {}) { return recoverNativeStorageGoal({ goal, journal, provider, log: () => {}, ...opts }); } };
 }
@@ -91,6 +92,18 @@ test('storage preflight is read-only and rejects wrong chain, broad keys, stale 
   f.setReserved(true); await assert.rejects(f.run(), /unused object ID/); f.setReserved(false);
   f.setVerdict([false, 'cap exceeded']); assert.equal((await f.run({ execute: true })).status, 'BLOCKED');
   assert.equal(f.sent, 0); assert.equal(f.journal.entries.size, 0);
+});
+
+test('wrong deployed code or any vault access key blocks preflight and later recovery', async () => {
+  const f = fixture(), other = nearApi.utils.serialize.base_encode(Buffer.alloc(32, 43));
+  f.setCode(other); await assert.rejects(f.run({execute:true}), /code hash or keyless/); assert.equal(f.sent, 0);
+  f.setCode(codeHash); f.setVaultKeys([{ public_key:'ed25519:synthetic', access_key:{permission:'FullAccess'} }]);
+  await assert.rejects(f.run({execute:true}), /code hash or keyless/); assert.equal(f.sent, 0);
+  f.setVaultKeys([]); const result = await f.run({execute:true}); assert.equal(f.sent, 1);
+  f.setCode(other); await assert.rejects(f.recover(), /code hash or keyless/);
+  f.setCode(codeHash); f.setVaultKeys([{public_key:'ed25519:synthetic'}]);
+  await assert.rejects(f.recover(), /code hash or keyless/); assert.equal(f.sent, 1);
+  f.setVaultKeys([]); assert.equal((await f.recover()).delivery.tx_hash, result.delivery.tx_hash);
 });
 
 test('one storage original is journaled before send and recovered without keys or another transaction', async () => {

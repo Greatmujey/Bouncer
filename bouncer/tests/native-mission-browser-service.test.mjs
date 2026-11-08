@@ -10,7 +10,7 @@ import { FileJournal } from '../agent/procurement.mjs';
 import { ORACLE_TESTNET_PROJECT } from '../agent/oracle-outlayer.mjs';
 import { createAuthenticatedNativeMissionService } from '../agent/authenticated-native-mission-service.mjs';
 import { createNativeMissionHttpServer } from '../agent/native-mission-http.mjs';
-import { nativeMissionApprovalMessage } from '../web-src/native-mission-auth.mjs';
+import { nativeMissionAction, nativeMissionApprovalMessage, signReviewedMissionChallenge } from '../web-src/native-mission-auth.mjs';
 import { createNativeMissionClient, validatePublicNativeMissionReview } from '../web-src/native-mission-client.mjs';
 import { nep413Payload } from '../web-src/cli-login.mjs';
 
@@ -123,4 +123,37 @@ test('HTTP rejects other origins, missing headers, extra fields and client-selec
   assert.equal((await fetch(`${f.local}/api/native-mission/config`)).status,403);
   assert.equal((await req(site,{...body,missionSha256:'0'.repeat(64)})).status,409);
   assert.equal(f.runs,0); assert.equal(f.prompts,0);
+}));
+
+test('challenge tampering, wrong owner, site, maximum, hash, nonce or expiry cannot reach the wallet', () => use(async f => {
+  const review = f.service.getReview(), context = {owner, ownerPublicKey:f.ownerPublicKey, vault, missionId:mission.id,
+    missionSha256:review.mission_sha256, maxNativeYocto:mission.max_native_amount};
+  const challenge = await f.auth.issue(nativeMissionAction(context));
+  const options = {context,challenge,location:{origin:site,host:'bouncer.example'},crypto:crypto.webcrypto,wallet:f.wallet,fetch:f.browserFetch};
+  const cases = [
+    {challenge:{...challenge,recipient:'evil.example'}},
+    {challenge:{...challenge,nonce_base64:Buffer.alloc(31).toString('base64')}},
+    {challenge:{...challenge,challenge_id:'fake'}},
+    {challenge:{...challenge,message:challenge.message.replace('Maximum: 300','Maximum: 301')}},
+    {challenge:{...challenge,message:challenge.message.replace(site,'https://evil.example')}},
+    {challenge:{...challenge,expires_at_ms:challenge.expires_at_ms+1}},
+    {context:{...context,owner:'other.testnet'}},
+    {context:{...context,missionSha256:'0'.repeat(64)}},
+    {context:{...context,maxNativeYocto:'301'}},
+    {location:{origin:'https://evil.example',host:'evil.example'}},
+    {now:()=>challenge.expires_at_ms+1},
+  ];
+  for(const bad of cases) await assert.rejects(signReviewedMissionChallenge({...options,...bad}));
+  assert.equal(f.prompts,0); assert.equal(f.runs,0);
+}));
+
+test('same signed challenge raced through the service authorizes at most one execution', () => use(async f => {
+  const review=f.service.getReview(), context={owner,ownerPublicKey:f.ownerPublicKey,vault,missionId:mission.id,
+    missionSha256:review.mission_sha256,maxNativeYocto:mission.max_native_amount};
+  const challenge=await f.auth.issue(nativeMissionAction(context));
+  const signed=await f.wallet.signMessage({message:challenge.message,nonce:new Uint8Array(Buffer.from(challenge.nonce_base64,'base64')),
+    recipient:challenge.recipient,signerId:owner});
+  const evidence={challenge_id:challenge.challenge_id,...signed}, input={missionSha256:review.mission_sha256,ownerPublicKey:f.ownerPublicKey,evidence};
+  const attempts=await Promise.allSettled(Array.from({length:8},()=>f.service.execute(input)));
+  assert.equal(attempts.filter(item=>item.status==='fulfilled').length,1); assert.equal(f.runs,1);
 }));

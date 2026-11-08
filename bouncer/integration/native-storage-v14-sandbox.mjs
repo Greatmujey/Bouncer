@@ -4,6 +4,7 @@
  * The test adapter aliases the sandbox's checked identity to testnet solely
  * for the runner; the network fence rejects every non-loopback fetch. */
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -54,6 +55,15 @@ async function main() {
       assert.equal(route.active, true);
       failed(await send(owner, VAULT, [call('clear_native_storage_route', { policy_id: 'store' })]), /exactly 1 yoctoNEAR/);
       const rpc = new SandboxSetupRpc(rpcUrl), localAgent = account(OWNER, rpc, agentKey);
+      // This test-only adapter normally requires a setup-specific last-moment
+      // guard. Supply one for the native runner while keeping its one-shot,
+      // loopback-fenced transport; never use this adapter in production.
+      const setupSend = rpc.sendTransactionOnce.bind(rpc);
+      rpc.sendTransactionOnce = (signed, wait) => setupSend(signed, wait, { beforeSubmit: () => {
+        const original = nearApi.utils.serialize.base_encode(crypto.createHash('sha256').update(tx.encodeTransaction(signed.transaction)).digest());
+        assert.equal(signed.transaction.signerId, OWNER); assert.equal(signed.transaction.receiverId, VAULT);
+        assert.equal(journal.get('storage')?.status, 'pending'); assert.equal(journal.get('storage')?.tx_hash, original);
+      } });
       const codeHash = (await provider.viewAccount(VAULT, { finality: 'final' })).code_hash;
       const goal = { id: 'storage', contract_id: VAULT, contract_code_hash: codeHash, owner_account_id: OWNER, policy_id: 'store', amount: String(N / 10n),
         object_id: 'mission-sandbox', value: 'public sandbox result', route };

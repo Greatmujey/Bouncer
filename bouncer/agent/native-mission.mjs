@@ -10,7 +10,7 @@ import { isTestnetAccount } from '../shared/account-id.mjs';
 import { isTransactionHash } from '../shared/direct-payment-settlement.mjs';
 import { validateOutlayerGoal } from './outlayer.mjs';
 import { validateOracleGoal, assertOracleFreshForUse } from './oracle-outlayer.mjs';
-import { validateNativeStorageGoal } from './native-storage.mjs';
+import { validateNativeStorageGoal, assertPinnedNativeStorageVault } from './native-storage.mjs';
 import { runNativeResource } from './mixed-mission.mjs';
 import { withExclusiveJournalOperation } from './journal-operation.mjs';
 import { assertJournalScope } from './journal-write.mjs';
@@ -73,6 +73,9 @@ export function validateNativeMission(raw) {
     if (total > maximum) throw new Error('native goal maximums exceed the owner-reviewed mission maximum');
     return { kind: item.kind, goal };
   });
+  if (new Set(goals.filter(item => item.kind === 'storage').map(item => item.goal.contract_code_hash)).size > 1) {
+    throw new Error('all storage goals must pin the same V14 vault code');
+  }
   return freeze({ version: 1, id: raw.id, contract_id: raw.contract_id, owner_account_id: raw.owner_account_id,
     max_native_amount: maximum.toString(), required_resources: [...raw.required_resources], goals });
 }
@@ -228,6 +231,12 @@ async function runNativeMissionUnlocked({ mission: raw, signers = {}, provider, 
     try { guardFresh(deliveries); }
     catch { return { status: 'BLOCKED', stage: 'stale-oracle', new_payments: 0, note: 'An earlier oracle is stale; no later payment was sent.' }; }
   }
+  // When storage occurs before another leg, it no longer has an unpaid
+  // storage preflight. Still pin the same keyless V14 vault for every later
+  // call; FINAL RPC views are a conservative check, not an atomic guarantee
+  // against a subsequent owner-authorized upgrade.
+  const pinnedStorage = mission.goals.find(item => item.kind === 'storage')?.goal;
+  if (remaining.length && pinnedStorage) await assertPinnedNativeStorageVault(provider, pinnedStorage, { finality: 'final' });
   // All remaining resource-specific policy/provider/key preflights must pass
   // before the first new signature or payment.
   for (const template of remaining) {
@@ -261,6 +270,8 @@ async function runNativeMissionUnlocked({ mission: raw, signers = {}, provider, 
     if (budget.status !== 'READY') return { status: 'BLOCKED', stage: 'budget', goal_id: item.goal.id, budget, new_payments: newPayments };
     try { guardFresh(deliveries); }
     catch { return { status: 'BLOCKED', stage: 'stale-oracle', goal_id: item.goal.id, new_payments: newPayments }; }
+    if (pinnedStorage) await assertPinnedNativeStorageVault(provider, pinnedStorage, { finality: 'final' });
+    assertSnapshot(mission, journal, state);
     const result = await call(item, { execute: true, beforeBroadcast: () => {
       guardFresh(deliveries);
       assertSnapshot(mission, journal, state, item.goal.id);
