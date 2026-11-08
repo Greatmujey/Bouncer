@@ -8,7 +8,9 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import zlib from 'node:zlib';
 import nearApi from 'near-api-js';
+import { act_impl_near, validateKnownFirstPartyActionRequest, MAX_ACTION_REQUEST_CANONICAL_JSON_LENGTH } from '@meteorwallet/connect-shared/internal';
 import { FileJournal } from '../agent/procurement.mjs';
 import { runNativeMission } from '../agent/native-mission.mjs';
 import { ORACLE_TESTNET_PROJECT } from '../agent/oracle-outlayer.mjs';
@@ -18,18 +20,45 @@ import { startSandbox, stopSandboxChild } from './v11-nearcore-sandbox.mjs';
 
 const {transactions:tx}=nearApi, N=10n**24n, T=10n**12n;
 const OWNER='mission-buyer.testnet', VAULT=`native.${OWNER}`, PROVIDER='outlayer.testnet';
+const INTRUDER='loader-intruder.testnet', HOLD=`hold.${OWNER}`, FAILED=`failed.${OWNER}`, LOW=`low.${OWNER}`;
 const pair=()=>nearApi.KeyPair.fromRandom('ed25519'), pub=k=>String(k.getPublicKey());
 const account=(id,provider,key)=>new nearApi.Account(id,provider,new nearApi.KeyPairSigner(key));
 const call=(method,args={},deposit=0n,gas=30n*T)=>tx.functionCall(method,args,gas,deposit);
 const program={url:'https://example.test/not-real.wasm',sha256:'a'.repeat(64),build_target:'wasm32-wasip1',
   max_instructions:10_000_000,max_memory_mb:128,max_execution_seconds:60};
+const sha=bytes=>crypto.createHash('sha256').update(bytes).digest();
+const createLoader=(loader,funding=20n*N)=>[tx.createAccount(),tx.transfer(funding),tx.deployContract(loader),call('loader_init',{},1n,20n*T)];
+const deployCompressed=(compressed,deposit=1n)=>call('loader_deploy',compressed,deposit,240n*T);
+function syntheticMeteorRequest(loader,compressed) {
+  return act_impl_near.action.sign_and_send_transaction.request({network:'testnet',signerId:OWNER,receiverId:VAULT,
+    actions:[{type:'CreateAccount',params:{}},{type:'Transfer',params:{deposit:String(20n*N)}},
+      {type:'DeployContract',params:{code:loader.toString('base64'),codeEncoding:'base64'}},
+      {type:'FunctionCall',params:{methodName:'loader_init',args:{},gas:String(20n*T),deposit:'1'}},
+      {type:'FunctionCall',params:{methodName:'loader_deploy',args:compressed.toString('base64'),argsEncoding:'base64',gas:String(240n*T),deposit:'1'}}]}).toJsonObject();
+}
+function failed(result,label) { assert.equal(result?.final_execution_status,'FINAL',`${label}: not FINAL`); assert.ok(result?.status?.Failure,`${label}: expected failure`); }
+async function absent(provider,id) {
+  let error; try { await provider.viewAccount(id,{finality:'final'}); } catch (caught) { error=caught; }
+  assert.ok(error,`${id} should be absent`);
+  assert.match(`${error.message ?? ''} ${JSON.stringify(error)}`,/UNKNOWN_ACCOUNT|does not exist|doesn't exist|unknown account/i);
+}
 async function main() {
   const binary=process.env.BOUNCER_SANDBOX_BIN, vaultWasm=fs.readFileSync(process.env.BOUNCER_V14_WASM_PATH),
     providerWasm=fs.readFileSync(process.env.BOUNCER_FAKE_OUTLAYER_WASM_PATH);
+  const loader=process.env.BOUNCER_V14_RESEARCH_LOADER ? fs.readFileSync(process.env.BOUNCER_V14_RESEARCH_LOADER) : null;
   readVerifiedFile(binary,SANDBOX_SHA256);
-  for(const wasm of [vaultWasm,providerWasm]) assert.ok(wasm.length>8 && wasm.length<2_000_000 && wasm.subarray(0,4).equals(Buffer.from([0,97,115,109])));
+  for(const wasm of [vaultWasm,providerWasm,...(loader?[loader]:[])]) assert.ok(wasm.length>8 && wasm.length<2_000_000 && wasm.subarray(0,4).equals(Buffer.from([0,97,115,109])));
+  let compressed=null, meteorBytes=null;
+  if (loader) {
+    compressed=zlib.deflateRawSync(vaultWasm,{level:9}); assert.ok(compressed.length<=200_000);
+    assert.deepEqual(zlib.inflateRawSync(compressed),vaultWasm);
+    const request=syntheticMeteorRequest(loader,compressed); meteorBytes=Buffer.byteLength(JSON.stringify(request));
+    const valid=validateKnownFirstPartyActionRequest(request);
+    assert.equal(MAX_ACTION_REQUEST_CANONICAL_JSON_LENGTH,400_000); assert.equal(valid.ok,true,valid.reason);
+    assert.ok(meteorBytes<380_000,`synthetic Meteor action request too large: ${meteorBytes}`);
+  }
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'bouncer-v14-mission-'));
-  const rootSeed=pair(),ownerKey=pair(),fakeKey=pair(),keys={compute:pair(),price:pair(),store:pair()};
+  const rootSeed=pair(),ownerKey=pair(),fakeKey=pair(),intruderKey=pair(),keys={compute:pair(),price:pair(),store:pair()};
   let sandbox,journal;
   try {
     sandbox=await startSandbox(binary,dir,pub(rootSeed)); const {provider,rpcUrl}=sandbox;
@@ -38,10 +67,39 @@ async function main() {
       const root=account('testnet',provider,sandbox.rootKey), owner=account(OWNER,provider,ownerKey);
       const send=(signer,receiverId,actions)=>signer.signAndSendTransaction({receiverId,actions,waitUntil:'FINAL',throwOnFailure:false});
       const must=async(signer,receiver,actions,label)=>{const r=await send(signer,receiver,actions);requireFinalSuccess(r,label);return r;};
-      for(const [id,k] of [[OWNER,ownerKey],[PROVIDER,fakeKey]])
+      for(const [id,k] of [[OWNER,ownerKey],[PROVIDER,fakeKey],...(loader?[[INTRUDER,intruderKey]]:[])])
         await must(root,id,[tx.createAccount(),tx.transfer(100n*N),tx.addKey(k.getPublicKey(),tx.fullAccessKey())],`create disposable ${id}`);
       await must(account(PROVIDER,provider,fakeKey),PROVIDER,[tx.deployContract(providerWasm),call('new')],'deploy fake provider locally');
-      await must(owner,VAULT,[tx.createAccount(),tx.transfer(20n*N),tx.deployContract(vaultWasm),call('new',{owner:OWNER})],'deploy local V14 vault');
+      if (!loader) {
+        await must(owner,VAULT,[tx.createAccount(),tx.transfer(20n*N),tx.deployContract(vaultWasm),call('new',{owner:OWNER})],'deploy local V14 vault');
+      } else {
+        // RESEARCH ONLY: all transactions here are fenced to disposable nearcore.
+        const bad=Buffer.from(compressed.subarray(0,compressed.length-100)),intruder=account(INTRUDER,provider,intruderKey);
+        failed(await send(owner,FAILED,[...createLoader(loader),deployCompressed(bad)]),'bad compressed code');
+        await absent(provider,FAILED);
+        await must(owner,HOLD,createLoader(loader),'create research loader for access checks');
+        failed(await send(intruder,HOLD,[deployCompressed(compressed)]),'non-owner deployment');
+        failed(await send(intruder,HOLD,[call('loader_refund',{},1n,60n*T)]),'non-owner refund');
+        failed(await send(owner,HOLD,[deployCompressed(compressed,0n)]),'zero-yocto deployment');
+        failed(await send(owner,HOLD,[call('loader_refund',{},0n,60n*T)]),'zero-yocto refund');
+        await must(owner,HOLD,[call('loader_refund',{},1n,60n*T)],'owner explicitly refunds research loader'); await absent(provider,HOLD);
+        failed(await send(owner,LOW,[...createLoader(loader,N),deployCompressed(compressed)]),'insufficient-storage upgrade');
+        assert.equal((await provider.viewAccount(LOW,{finality:'final'})).code_hash,nearApi.utils.serialize.base_encode(sha(loader)));
+        assert.deepEqual((await provider.viewAccessKeyList(LOW,{finality:'final'})).keys,[]);
+        failed(await send(owner,LOW,[deployCompressed(compressed)]),'pending loader cannot redeploy');
+        await must(owner,LOW,[call('loader_refund',{},1n,60n*T)],'owner explicitly refunds failed upgrade'); await absent(provider,LOW);
+        const sent=await must(owner,VAULT,[...createLoader(loader),deployCompressed(compressed)],'compressed V14 research self-deploy');
+        const receipt=await provider.txStatusReceipts(sent.transaction_outcome.id,OWNER,'FINAL');
+        const selfDeploy=receipt.receipts.filter(r=>r.predecessor_id===VAULT && r.receiver_id===VAULT &&
+          r.receipt?.Action?.actions?.some(a=>a.DeployContract?.code===sha(vaultWasm).toString('base64')));
+        assert.equal(selfDeploy.length,1,'matching V14 self-deployment receipt missing or duplicated');
+        const actions=selfDeploy[0].receipt.Action.actions; assert.equal(actions.length,2);
+        assert.equal(actions[1]?.FunctionCall?.method_name,'new');
+        assert.deepEqual(JSON.parse(Buffer.from(actions[1].FunctionCall.args,'base64').toString('utf8')),{owner:OWNER});
+        assert.equal((await provider.viewAccount(VAULT,{finality:'final'})).code_hash,nearApi.utils.serialize.base_encode(sha(vaultWasm)));
+        assert.deepEqual((await provider.viewAccessKeyList(VAULT,{finality:'final'})).keys,[]);
+        assert.equal(await provider.callFunction(VAULT,'get_owner',{}, {finality:'final'}),OWNER);
+      }
       const methods={compute:'execute_outlayer',price:'execute_outlayer_native_project',store:'execute_native_storage'};
       for(const id of Object.keys(keys)) {
         await must(owner,VAULT,[call('set_policy',{policy_id:id,token:'native',per_tx_cap:String(N/10n),daily_cap:String(N)},1n)],`policy ${id}`);
@@ -97,6 +155,8 @@ async function main() {
       assert.equal(resumed.status,'FULFILLED');assert.equal(resumed.new_payments,2);assert.equal(rpc.transportCalls,6);
       assert.equal(journal.get('compute-second').tx_hash,original);
       return {scope:'isolated nearcore and fabricated provider; no public chain or real service',
+        research_loader:loader?{synthetic_meteor_request_bytes:meteorBytes,loader_wasm_bytes:loader.length,
+          compressed_v14_bytes:compressed.length,failed_upgrade_owner_refund_tested:true,real_phone_tested:false}:null,
         three_guarded_legs_and_public_result_storage:true, sandbox_refunds_verified:true,
         original_hash_recovery_without_new_send:true, lost_response_recovered_and_remaining_legs_continued:true,
         independent_delivery_verified:false, public_chain_transactions:false};

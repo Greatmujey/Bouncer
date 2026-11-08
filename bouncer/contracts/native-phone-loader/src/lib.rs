@@ -3,8 +3,9 @@
 //! A freshly created, keyless testnet account initializes its owner in the
 //! same receipt as deploying this small loader. The owner can then provide a
 //! bounded raw-DEFLATE stream and one yocto. The loader accepts ONLY the exact
-//! pinned V9 byte length and SHA-256, and schedules a self-deploy plus `new` in
-//! one promise. A separate owner-only refund method exists if the loader remains
+//! pinned V9 byte length and SHA-256 (or the separately compiled CI-only V14
+//! research pin), and schedules a self-deploy plus `new` in one promise. A
+//! separate owner-only refund method exists if the loader remains
 //! installed. An unknown original, failed promise, uninitialized loader, absent
 //! state or unverified phone/receipt must NEVER authorize an automatic retry.
 //!
@@ -16,8 +17,12 @@ use miniz_oxide::inflate::decompress_to_vec_with_limit;
 
 const OWNER_KEY: &[u8] = b"__bouncer_phone_loader_owner_v1";
 const PENDING_KEY: &[u8] = b"__bouncer_phone_loader_pending_v1";
+#[cfg(not(feature = "v14-research"))]
 const CODE_LEN: usize = 452_675;
 const MAX_COMPRESSED: usize = 200_000;
+#[cfg(feature = "v14-research")]
+include!(env!("BOUNCER_V14_LOADER_PIN_RS"));
+#[cfg(not(feature = "v14-research"))]
 const CODE_SHA256: [u8; 32] = [
     0x83, 0x5f, 0x0b, 0xaa, 0x51, 0xd0, 0x8d, 0xdf, 0x3a, 0xf6, 0x81, 0x2d, 0xf0, 0xca, 0xef, 0xb9,
     0x32, 0x83, 0x48, 0x07, 0x35, 0xa6, 0x3e, 0x3d, 0x38, 0x20, 0x73, 0xe0, 0x4f, 0xba, 0xf8, 0xee,

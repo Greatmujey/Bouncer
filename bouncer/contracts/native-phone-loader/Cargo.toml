@@ -7,6 +7,10 @@ publish = false
 [lib]
 crate-type = ["cdylib"]
 
+[features]
+# CI-only V14 experiment; never selected by the existing V9 loader.
+v14-research = []
+
 [dependencies]
 miniz_oxide = { version = "=0.8.9", default-features = false, features = ["with-alloc"] }
 

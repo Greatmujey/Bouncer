@@ -52,6 +52,19 @@ jobs:
             exit 1
           fi
           cat "$RUNNER_TEMP/fake-provider-build.log"
+      - name: Build pinned V14 phone-loader research artifact
+        working-directory: bouncer
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/v14-loader-target
+          BOUNCER_V14_LOADER_PIN_RS: ${{ runner.temp }}/v14-research-pin.rs
+          RUSTFLAGS: '-C link-arg=-s'
+        run: |
+          node scripts/write-v14-loader-research-pin.mjs contracts/bouncer/target/wasm32-unknown-unknown/release/bouncer.wasm "$BOUNCER_V14_LOADER_PIN_RS"
+          if ! cargo build --locked --manifest-path contracts/native-phone-loader/Cargo.toml --target wasm32-unknown-unknown --release --features v14-research > "$RUNNER_TEMP/v14-loader-build.log" 2>&1; then
+            python3 -c 'import os; s=open(os.environ["RUNNER_TEMP"]+"/v14-loader-build.log").read()[-4500:]; print("::error title=V14 research loader build failed::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
+            exit 1
+          fi
+          cat "$RUNNER_TEMP/v14-loader-build.log"
       - name: Download pinned isolated nearcore
         working-directory: bouncer
         run: |
@@ -84,6 +97,20 @@ jobs:
             exit 1
           fi
           cat "$RUNNER_TEMP/v14-mission-result.log"
+      - name: Exercise research phone loader and full mission on isolated nearcore
+        working-directory: bouncer
+        env:
+          BOUNCER_SANDBOX_BIN: ${{ runner.temp }}/near-sandbox
+          BOUNCER_V14_WASM_PATH: ${{ github.workspace }}/bouncer/contracts/bouncer/target/wasm32-unknown-unknown/release/bouncer.wasm
+          BOUNCER_FAKE_OUTLAYER_WASM_PATH: ${{ github.workspace }}/bouncer/contracts/bouncer/target/wasm32-unknown-unknown/release/bouncer_fake_outlayer.wasm
+          BOUNCER_V14_RESEARCH_LOADER: ${{ runner.temp }}/v14-loader-target/wasm32-unknown-unknown/release/bouncer_native_phone_loader_research.wasm
+        run: |
+          ulimit -Sn 65535
+          if ! node integration/native-mission-v14-sandbox.mjs > "$RUNNER_TEMP/v14-loader-mission-result.log" 2>&1; then
+            python3 -c 'import os; s=open(os.environ["RUNNER_TEMP"]+"/v14-loader-mission-result.log").read()[-4500:]; print("::error title=Isolated V14 loader mission failed::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
+            exit 1
+          fi
+          cat "$RUNNER_TEMP/v14-loader-mission-result.log"
       - uses: actions/upload-artifact@v4
         with:
           name: experimental-v14-testnet-wasm
