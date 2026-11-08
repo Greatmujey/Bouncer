@@ -223,11 +223,14 @@ function providers() {
     rpc: new PaymentRpcProvider(RPC, { receiptTimeoutMs: 120_000, sendTimeoutMs: 120_000 }) };
 }
 /** Repeat only a read of the SAME original hash, never a transaction send. */
-export async function readFinalOriginal(rpc, original, owner) {
+export async function readFinalOriginal(rpc, original, owner, { pause = ms => new Promise(resolve => setTimeout(resolve, ms)) } = {}) {
+  if (!rpc || typeof rpc.txStatusReceipts !== 'function' || typeof original !== 'string' || typeof owner !== 'string' || typeof pause !== 'function') {
+    fail('original-hash read requires a provider, original and owner');
+  }
   let last;
   for (let i = 0; i < 3; i++) {
     try { return await rpc.txStatusReceipts(original, owner, 'FINAL'); }
-    catch (error) { last = error; if (i < 2) await new Promise(resolve => setTimeout(resolve, 500 * 2 ** i)); }
+    catch (error) { last = error; if (i < 2) await pause(500 * 2 ** i); }
   }
   throw last;
 }

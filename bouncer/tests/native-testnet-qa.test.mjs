@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import nearApi from 'near-api-js';
-import { inspectQaSigned, qaPresignedAccount, qaReadOnlyFetch, qaSnapshotAccount, markQaAttempt } from '../scripts/native-testnet-qa.mjs';
+import { inspectQaSigned, qaPresignedAccount, qaReadOnlyFetch, qaSnapshotAccount, readFinalOriginal, markQaAttempt } from '../scripts/native-testnet-qa.mjs';
 
 const { transactions: tx, utils } = nearApi;
 const digest = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
@@ -36,6 +36,15 @@ test('QA retries and serializes only RPC reads, never transaction sends', async 
   assert.throws(() => fetchView('https://rpc.testnet.near.org', request('send_tx')), /only permits JSON-RPC views/);
   assert.throws(() => fetchView('https://rpc.testnet.near.org', { method: 'POST', body: '{"method":"query","params":{"request_type":"send_transaction"}}' }), /only permits JSON-RPC views/);
   assert.equal(calls, 3);
+});
+
+test('receipt recovery only re-reads the identical original, never sends', async () => {
+  const calls = [];
+  const provider = { async txStatusReceipts(...args) { calls.push(args); if (calls.length < 3) throw new Error('unavailable'); return { status: 'FINAL' }; },
+    sendTransactionOnce() { throw new Error('must not send'); } };
+  const result = await readFinalOriginal(provider, 'original-hash', 'qa.testnet', { pause: async () => {} });
+  assert.equal(result.status, 'FINAL');
+  assert.deepEqual(calls, Array.from({ length: 3 }, () => ['original-hash', 'qa.testnet', 'FINAL']));
 });
 
 test('QA signs exactly FINAL snapshot nonce plus one, without the SDK double increment', async () => {
