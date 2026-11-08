@@ -22,10 +22,11 @@ Do not use real funds.
 [`native-mission.example.json`](../examples/native-mission.example.json)
 shows all three kinds in order and a storage goal referencing the first two.
 One storage goal must pin the actual V14 deployed-code hash; multiple storage
-goals must agree on it. Storage preflight checks the reviewed hash and an
-empty vault access-key list, and verifies both the receipt-block code and
-current code/keyless state. This relies on the RPC; a final-block check cannot
-atomically prevent an owner-authorized upgrade after that check.
+goals must agree on it. The mission checks the reviewed hash and an empty
+vault access-key list at FINAL before each leg, and verifies the reported
+execution-block code/keyless state when reconciling every leg. These are trusted
+RPC end-of-block views: they cannot prevent a later owner-authorized upgrade or
+prove ordering within a block.
 
 The programmatic entry point is `runNativeMission({ mission, provider, journal,
 signers, execute, recoverOnly })`. Preview is the default (`execute: false`).

@@ -168,6 +168,24 @@ function rememberResult(item, result, original, deliveries, { newlyPaid = false 
 function guardFresh(deliveries) {
   for (const item of deliveries.values()) if (item.kind === 'oracle') assertOracleFreshForUse(item.delivery);
 }
+// When a mission pins V14 through a storage goal, do not accept compute/API
+// evidence from another contract version. This is a trusted-RPC, end-of-block
+// code/key view, not an atomic guarantee against a same-block upgrade.
+async function assertLegExecutedAtPinnedVault(item, result, provider, pinnedStorage) {
+  if (!pinnedStorage || item.kind === 'storage') return;
+  const hash = result?.independent?.delivery?.tx_hash;
+  if (!isTransactionHash(hash) || typeof provider?.txStatusReceipts !== 'function') throw new Error('mission original receipt unavailable');
+  const chain = await provider.txStatusReceipts(hash, item.goal.owner_account_id, 'FINAL');
+  const parent = chain?.transaction_outcome?.outcome?.status?.SuccessReceiptId;
+  const log = item.kind === 'oracle' ? 'BOUNCER independent native project initiated; full maximum reserved' :
+    'BOUNCER independent compute initiated; full maximum reserved';
+  if (chain?.final_execution_status !== 'FINAL' || chain?.transaction_outcome?.id !== hash || chain?.transaction?.hash !== hash ||
+      !isTransactionHash(parent) || !Array.isArray(chain.receipts_outcome)) throw new Error('mission original receipt unavailable');
+  const receipts = chain.receipts_outcome.filter(row => row.id === parent && row.outcome?.executor_id === item.goal.contract_id &&
+    row.outcome?.logs?.includes(log) && isTransactionHash(row.block_hash));
+  if (receipts.length !== 1) throw new Error('mission vault execution block unavailable');
+  await assertPinnedNativeStorageVault(provider, pinnedStorage, { blockId:receipts[0].block_hash });
+}
 
 /**
  * `signers` is keyed by goal id because random and oracle methods need
@@ -186,6 +204,7 @@ async function runNativeMissionUnlocked({ mission: raw, signers = {}, provider, 
   if ((execute || recoverOnly) && !journal) throw new Error('native mission execution or recovery requires the original exclusive journal');
   if (recoverOnly && Object.keys(signers).length) throw new Error('native mission recovery must not receive signing keys');
   const mission = validateNativeMission(raw);
+  const pinnedStorage = mission.goals.find(item => item.kind === 'storage')?.goal;
   assertJournalScope(journal, mission.contract_id, mission.owner_account_id);
   const state = initialJournal(mission, journal), deliveries = new Map();
   const signerSnapshot = new Map(mission.goals.map(({ goal }) => {
@@ -218,6 +237,9 @@ async function runNativeMissionUnlocked({ mission: raw, signers = {}, provider, 
       throw new Error('native original reconciliation was not retained; stop');
     }
     if (!(execute || recoverOnly) && !isDeepStrictEqual(current, state.entries.get(item.goal.id))) throw new Error('native read-only recovery changed the original');
+    await assertLegExecutedAtPinnedVault(item, result, provider, pinnedStorage);
+    assertSnapshot(mission, journal, state, item.goal.id);
+    if (!isDeepStrictEqual(copy(readNativeJournal(journal, item.goal.id)), current)) throw new Error('native original changed during receipt check');
     rememberResult(item, result, current, deliveries);
     state.entries.set(item.goal.id, current);
   }
@@ -235,7 +257,6 @@ async function runNativeMissionUnlocked({ mission: raw, signers = {}, provider, 
   // storage preflight. Still pin the same keyless V14 vault for every later
   // call; FINAL RPC views are a conservative check, not an atomic guarantee
   // against a subsequent owner-authorized upgrade.
-  const pinnedStorage = mission.goals.find(item => item.kind === 'storage')?.goal;
   if (remaining.length && pinnedStorage) await assertPinnedNativeStorageVault(provider, pinnedStorage, { finality: 'final' });
   // All remaining resource-specific policy/provider/key preflights must pass
   // before the first new signature or payment.
@@ -284,6 +305,9 @@ async function runNativeMissionUnlocked({ mission: raw, signers = {}, provider, 
     if (result?.status !== 'NATIVE_RESOURCE_FULFILLED') throw new Error('new native resource was not independently verified; stop and reconcile');
     const original = copy(readNativeJournal(journal, item.goal.id));
     if (!original || original.status !== 'completed') throw new Error('native result has no completed original journal entry');
+    await assertLegExecutedAtPinnedVault(item, result, provider, pinnedStorage);
+    assertSnapshot(mission, journal, state, item.goal.id);
+    if (!isDeepStrictEqual(copy(readNativeJournal(journal, item.goal.id)), original)) throw new Error('native original changed during receipt check');
     rememberResult(item, result, original, deliveries, { newlyPaid: true });
     state.entries.set(item.goal.id, original);
     newPayments++;

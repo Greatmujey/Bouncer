@@ -30,7 +30,7 @@ const makeMission = () => ({ version: 1, id: 'partial-native', contract_id: vaul
   required_resources: ['compute', 'api'], goals: [{ kind: 'random', goal: structuredClone(randomGoal) }, { kind: 'oracle', goal: structuredClone(oracleGoal) }] });
 const encode = value => Buffer.from(JSON.stringify(value)).toString('base64');
 const event = (name, data) => `EVENT_JSON:${JSON.stringify({ standard: 'near-outlayer', version: '1.0.0', event: name, data: [data] })}`;
-const blockHash = 'B'.repeat(44), requestId = '7'.repeat(44), completeId = '8'.repeat(44), refundId = '9'.repeat(44);
+const blockHash = 'B'.repeat(44), executionBlockHash = 'A'.repeat(44), requestId = '7'.repeat(44), completeId = '8'.repeat(44), refundId = '9'.repeat(44);
 
 function fixture({ stale = false, ambiguous = false, samePolicy = false, storage = false } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bouncer-native-mission-'));
@@ -50,11 +50,11 @@ function fixture({ stale = false, ambiguous = false, samePolicy = false, storage
   }));
   const transactions = new Map(), spent = new Map(), events = [];
   let balance = 1000n, daily = 1000n, perTx = 100n, loseFirst = ambiguous, denyReceipts = false, beforeSend, beforeView, sends = 0;
-  let storedObject = null, storageReserved = false, deployedCode = storageCodeHash, vaultKeys = [];
+  let storedObject = null, storageReserved = false, deployedCode = storageCodeHash, executedCode = null, vaultKeys = [];
   const timestamp = Math.floor(Date.now() / 1000) - (stale ? 1000 : 0);
   const provider = {
     async viewNodeStatus() { return { chain_id: 'testnet' }; },
-    async viewAccount() { return { code_hash: deployedCode }; },
+    async viewAccount(_account, reference) { return { code_hash: reference?.blockId === executionBlockHash ? (executedCode ?? deployedCode) : deployedCode }; },
     async viewAccessKeyList() { return { keys: vaultKeys }; },
     async viewAccessKey(account, key) {
       assert.equal(account, owner);
@@ -125,9 +125,10 @@ function fixture({ stale = false, ambiguous = false, samePolicy = false, storage
       const limits = { max_instructions: program.max_instructions, max_memory_mb: program.max_memory_mb, max_execution_seconds: program.max_execution_seconds };
       const providerArgs = { source: project ? { Project: { project_id: project.project_id, version_key: project.version_key } } : source,
         resource_limits: limits, input_data: input, secrets_ref: null, response_format: 'Json', payer_account_id: owner, params: null };
-      const outcome = (id, executor_id, status, logs = []) => ({ id, block_hash: blockHash, outcome: { executor_id, status, logs } });
+      const outcome = (id, executor_id, status, logs = []) => ({ id, block_hash: executor_id === vault ? executionBlockHash : blockHash, outcome: { executor_id, status, logs } });
       const receipt = (id, predecessor_id, receiver_id, actions) => ({ receipt_id: id, predecessor_id, receiver_id, receipt: { Action: { actions } } });
-      const result = { final_execution_status: 'FINAL', status: { SuccessValue: encode(output) }, transaction_outcome: { id: hash },
+      const result = { final_execution_status: 'FINAL', status: { SuccessValue: encode(output) },
+        transaction_outcome: { id: hash, outcome: { status: { SuccessReceiptId: '6'.repeat(44) } } },
         transaction: { hash, signer_id: owner, receiver_id: vault, public_key: String(signers[goal.id].publicKey),
           actions: [{ FunctionCall: { method_name: action.methodName, deposit: '0', args: encode(args) } }] },
         receipts_outcome: [
@@ -151,7 +152,7 @@ function fixture({ stale = false, ambiguous = false, samePolicy = false, storage
   return { mission, signers, provider, events, invoke, transactions, get journal() { return journal; },
     get sends() { return sends; }, setDaily(value) { daily = BigInt(value); }, setPerTx(value) { perTx = BigInt(value); },
     setBalance(value) { balance = BigInt(value); }, setReceiptFailure(value) { denyReceipts = value; },
-    setCode(value) { deployedCode = value; }, setVaultKeys(value) { vaultKeys = value; },
+    setCode(value) { deployedCode = value; }, setExecutedCode(value) { executedCode = value; }, setVaultKeys(value) { vaultKeys = value; },
     setBeforeView(fn) { beforeView = fn; }, setBeforeSend(fn) { beforeSend = fn; },
     reopen() { journal.close(); journal = new FileJournal(journalPath, vault, owner, { requireExisting: true }); },
     close() { journal.close(); fs.rmSync(dir, { recursive: true, force: true }); } };
@@ -457,4 +458,14 @@ test('mission service can be restarted without any agent keys or auth solely to 
   await assert.rejects(service.issue({missionSha256:hash,ownerPublicKey:'anything'}),/reconcile/);
   await assert.rejects(service.execute({missionSha256:hash,ownerPublicKey:'anything',evidence:{}}),/reconcile/);
   assert.equal(f.sends,3);
+}, {storage:true}));
+
+test('execution-block V14 mismatch stops subsequent legs and cannot be bypassed during recovery', () => withFixture(async f => {
+  f.setExecutedCode(nearApi.utils.serialize.base_encode(Buffer.alloc(32, 43)));
+  await assert.rejects(f.invoke({execute:true}),/code hash or keyless/);
+  assert.equal(f.sends,1); assert.equal(f.journal.get('compute').status,'completed');
+  await assert.rejects(f.invoke({recoverOnly:true,signers:{}}),/code hash or keyless/);
+  assert.equal(f.sends,1); assert.equal(f.journal.get('price'),undefined); assert.equal(f.journal.get('store'),undefined);
+  f.setExecutedCode(null);
+  assert.equal((await f.invoke({execute:true})).status,'FULFILLED'); assert.equal(f.sends,3);
 }, {storage:true}));

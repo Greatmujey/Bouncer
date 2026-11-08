@@ -38,7 +38,7 @@ impl FakeOutlayer {
     }
 
     #[payable]
-    pub fn request_execution(&self, source: Value, resource_limits: Value, input_data: String,
+    pub fn request_execution(&mut self, source: Value, resource_limits: Value, input_data: String,
         secrets_ref: Option<Value>, response_format: String, payer_account_id: AccountId, params: Option<Value>) -> Value {
         assert!(resource_limits.is_object()); assert!(secrets_ref.is_none()); assert!(params.is_none());
         assert_eq!(response_format, "Json");

@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict';
 import { createHash, generateKeyPairSync, verify } from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import nearApi from 'near-api-js';
@@ -10,7 +11,7 @@ import { validateNativeMission } from '../agent/native-mission.mjs';
 import { nativeMissionAction, nativeMissionApprovalMessage } from '../web-src/native-mission-auth.mjs';
 import { nep413Payload } from '../web-src/cli-login.mjs';
 import { WALLET_EXECUTOR_SHA256 } from '../web-src/wallet-executor.mjs';
-import { PUBLIC_WEB_FILES } from './stage-public-web.mjs';
+import { PUBLIC_WEB_FILES, stagePublicWeb } from './stage-public-web.mjs';
 
 const web=fileURLToPath(new URL('../web/',import.meta.url));
 const playwrightPath=process.env.BOUNCER_PLAYWRIGHT_PATH || path.join(process.env.RUNNER_TEMP||'','bouncer-browser/node_modules/playwright-core/index.mjs');
@@ -18,7 +19,7 @@ const {chromium}=await import(pathToFileURL(path.resolve(playwrightPath)));
 const executablePath=process.env.CHROMIUM_PATH || ['/usr/bin/google-chrome','/usr/bin/google-chrome-stable','/usr/bin/chromium','/usr/bin/chromium-browser'].find(fs.existsSync);
 if(!executablePath)throw Error('No Chromium executable found');
 const browser=await chromium.launch({executablePath,args:['--no-sandbox','--disable-gpu'],headless:true});
-const origin='https://bouncer-near.vercel.app',owner='great_mujey.testnet',vault=`native.${owner}`;
+const defaultOrigin='https://bouncer-near.vercel.app',owner='great_mujey.testnet',vault=`native.${owner}`;
 const base58=n=>nearApi.utils.serialize.base_encode(Buffer.alloc(32,n));
 const program={url:'https://example.test/random.wasm',sha256:'a'.repeat(64),build_target:'wasm32-wasip1',max_instructions:10_000_000,max_memory_mb:128,max_execution_seconds:60};
 const route={project:{...ORACLE_TESTNET_PROJECT},route_revision:1,policy_revision:1,payee_revision:1,active:true};
@@ -34,8 +35,13 @@ const sha=x=>createHash('sha256').update(x).digest('hex');
 const review={format:'bouncer-native-mission-review-v1',network:'testnet',mission,mission_sha256:sha(JSON.stringify(mission))};
 const allowed=new Set(PUBLIC_WEB_FILES),types={'.html':'text/html','.css':'text/css','.mjs':'text/javascript','.js':'text/javascript',
   '.json':'application/json','.zip':'application/zip','.svg':'image/svg+xml','.jpg':'image/jpeg','.woff2':'font/woff2','.txt':'text/plain'};
+const staging=fs.mkdtempSync(path.join(os.tmpdir(),'bouncer-mission-ui-'));
 try {
-  for(const {width,mode} of [{width:390,mode:'success'},{width:320,mode:'unknown'},{width:390,mode:'blocked'}]) {
+  for(const {width,mode,origin} of [{width:390,mode:'success',origin:defaultOrigin},
+    {width:320,mode:'unknown',origin:defaultOrigin},{width:390,mode:'blocked',origin:defaultOrigin},
+    {width:390,mode:'success',origin:'https://synthetic-bouncer.netlify.app'}]) {
+    const siteDir=path.join(staging,`site-${fs.readdirSync(staging).length}`);
+    stagePublicWeb(siteDir,web,{walletOrigin:origin,walletConnectProjectId:''});
     const context=await browser.newContext({viewport:{width,height:844},isMobile:true,hasTouch:true,reducedMotion:'reduce'}),page=await context.newPage();
     const errors=[],requests=[];page.on('pageerror',e=>errors.push(e.message));
     const keys=generateKeyPairSync('ed25519'),privatePkcs8=keys.privateKey.export({type:'pkcs8',format:'der'}).toString('base64'),
@@ -52,7 +58,7 @@ try {
         const digest=await crypto.subtle.digest('SHA-256',p),sig=new Uint8Array(await crypto.subtle.sign('Ed25519',key,digest));
         return {accountId:signerId,publicKey:'${publicKey}',signature:btoa(String.fromCharCode(...sig))}}
     });`;
-    const bundle=fs.readFileSync(path.join(web,'wallet.bundle.js'),'utf8'),pinned=WALLET_EXECUTOR_SHA256['meteor-wallet'];
+    const bundle=fs.readFileSync(path.join(siteDir,'wallet.bundle.js'),'utf8'),pinned=WALLET_EXECUTOR_SHA256['meteor-wallet'];
     assert(bundle.includes(pinned));const mockDigest=sha(mock);
     let saved, executes=0, recovers=0, challengeCount=0;
     const json=(route,data,status=200)=>route.fulfill({status,contentType:'application/json',body:JSON.stringify(data),headers:{'cache-control':'no-store'}});
@@ -95,7 +101,7 @@ try {
         return json(route,{error:'unavailable'},404);
       }
       const file=url.pathname.slice(1)||'index.html';if(!allowed.has(file))return route.fulfill({status:404,body:'blocked test route'});
-      const content=file==='wallet.bundle.js'?bundle.replace(pinned,mockDigest):fs.readFileSync(path.join(web,file));
+      const content=file==='wallet.bundle.js'?bundle.replace(pinned,mockDigest):fs.readFileSync(path.join(siteDir,file));
       return route.fulfill({status:200,contentType:types[path.extname(file)],body:content});
     });
     await page.goto(`${origin}/`,{waitUntil:'networkidle'});
@@ -134,4 +140,4 @@ try {
     assert.deepEqual(errors,[]);await context.close();
   }
   console.log('Synthetic mobile mission UI: review, explicit consent, blocked preflight, unknown response and no-key recovery passed.');
-} finally { await browser.close(); }
+} finally { await browser.close(); fs.rmSync(staging,{recursive:true,force:true}); }
