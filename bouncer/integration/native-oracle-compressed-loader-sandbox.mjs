@@ -13,6 +13,7 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 import { pathToFileURL } from 'node:url';
 import nearApi from 'near-api-js';
+import { act_impl_near, validateKnownFirstPartyActionRequest, MAX_ACTION_REQUEST_CANONICAL_JSON_LENGTH } from '@meteorwallet/connect-shared/internal';
 import { buildNativeOracleWalletPlan, NATIVE_ORACLE_DEFAULT_GAS_ALLOWANCE,
   NATIVE_ORACLE_V9_CODE_HASH, NATIVE_ORACLE_V9_SHA256 } from '../agent/native-oracle-wallet-plan.mjs';
 import { SANDBOX_CHAIN_ID, SANDBOX_SHA256, readVerifiedFile, assertSandboxStatus,
@@ -47,14 +48,14 @@ function deploy(compressed, deposit = 1n) {
   return tx.functionCall('loader_deploy', compressed, 240n * TGAS, deposit);
 }
 function syntheticMeteorRequest(loader, compressed) {
-  // Mirrors the public connector-action fields used by Meteor's mobile
-  // adapter. This is a size estimate, not a live SDK/backend/wallet test.
-  return { domain:'near', id:'sign_and_send_transaction', input:{ network:'testnet', signerId:OWNER, receiverId:VAULT,
+  // Exercise the pinned public SDK schema and validator with the exact
+  // compiled loader and compressed V9. This is not a live phone/wallet test.
+  return act_impl_near.action.sign_and_send_transaction.request({network:'testnet', signerId:OWNER, receiverId:VAULT,
     actions:[{type:'CreateAccount',params:{}}, {type:'Transfer',params:{deposit:(54n*ONE/10n).toString()}},
       {type:'DeployContract',params:{code:loader.toString('base64'),codeEncoding:'base64'}},
       {type:'FunctionCall',params:{methodName:'loader_init',args:{},gas:(20n*TGAS).toString(),deposit:'1'}},
       {type:'FunctionCall',params:{methodName:'loader_deploy',args:compressed.toString('base64'),argsEncoding:'base64',
-        gas:(240n*TGAS).toString(),deposit:'1'}}] } };
+        gas:(240n*TGAS).toString(),deposit:'1'}}] }).toJsonObject();
 }
 
 async function main() {
@@ -69,7 +70,11 @@ async function main() {
   const compressed = zlib.deflateRawSync(code, {level:9});
   assert.ok(compressed.length < 200_000);
   assert.deepEqual(zlib.inflateRawSync(compressed), code);
-  const requestBytes = Buffer.byteLength(JSON.stringify(syntheticMeteorRequest(loader, compressed)));
+  const request = syntheticMeteorRequest(loader, compressed);
+  const requestBytes = Buffer.byteLength(JSON.stringify(request));
+  assert.equal(MAX_ACTION_REQUEST_CANONICAL_JSON_LENGTH, 400_000);
+  const meteorValidation = validateKnownFirstPartyActionRequest(request);
+  assert.equal(meteorValidation.ok, true, `Meteor SDK rejected synthetic request: ${meteorValidation.reason}`);
   assert.ok(requestBytes < 380_000, `synthetic action request is too close to Meteor's 400,000-byte cap: ${requestBytes}`);
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'bouncer-phone-loader-sandbox-'));
   const tokenKey = key(), ownerKey = key(), intruderKey = key(), agentKey = key(), providerKey = key();
@@ -145,6 +150,7 @@ async function main() {
       return { scope:'disposable loopback nearcore only; no real Meteor, wallet, provider or delivery',
         loader_bytes:loader.length,compressed_v9_bytes:compressed.length,synthetic_meteor_request_bytes:requestBytes,
         sandbox_wallet_result_json_bytes:walletResultBytes,meteor_mobile_action_limit_bytes:400000,
+        pinned_meteor_sdk_validator_accepted:true,
         loader_sha256:digest(loader).toString('hex'),exact_v9_digest_checked_by_loader:true,
         self_deployment_receipt_and_owner_matched:true,keyless_vault_and_policy_configured:true,agent_cap_enforced:true,
         non_owner_zero_yocto_reinitialization_and_corruption_rejected:true,

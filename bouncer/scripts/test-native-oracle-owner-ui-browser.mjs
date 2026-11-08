@@ -29,9 +29,10 @@ const labels={reserve_native_setup:id=>`Reserve native setup prompt: ${id}`,clai
   record_native_setup_original:id=>`Record native setup original: ${id}`,inspect_native_setup:()=> 'Inspect retained native setup',
   verify_native_setup_completion:()=> 'Verify native setup originals and state',claim_native_oracle_trial:()=> 'Retain original native trial hash'};
 try {
-  for(const {width,unknown,origin} of [
-    {width:390,unknown:false,origin:'https://bouncer-near.vercel.app'},
-    {width:320,unknown:true,origin:'https://4173-synthetic.e2b.app'},
+  for(const {width,unknown,origin,walletId,blocked} of [
+    {width:390,unknown:false,origin:'https://bouncer-near.vercel.app',walletId:'nightly-wallet',blocked:false},
+    {width:320,unknown:true,origin:'https://4173-synthetic.e2b.app',walletId:'nightly-wallet',blocked:false},
+    {width:390,unknown:false,origin:'https://bouncer-near.vercel.app',walletId:'meteor-wallet',blocked:true},
   ]) {
     const context=await browser.newContext({viewport:{width,height:844},isMobile:true,hasTouch:true,reducedMotion:'reduce'}),page=await context.newPage();
     await page.addInitScript(() => Object.defineProperty(navigator,'storage',{value:{persist:async()=>true,persisted:async()=>true},configurable:true}));
@@ -57,7 +58,7 @@ try {
         return {transaction:{hash:${JSON.stringify(hashes)}[index]}}}
     });`;
     const bundle=fs.readFileSync(path.join(web,'wallet.bundle.js'),'utf8'),digest=createHash('sha256').update(mock).digest('hex'),
-      pinned=WALLET_EXECUTOR_SHA256['meteor-wallet'];assert.ok(bundle.includes(pinned));
+      pinned=WALLET_EXECUTOR_SHA256[walletId];assert.ok(bundle.includes(pinned));
     let review=null,identity=null,rows=[],records=[],sequence=0,reserved=false,dropAck=unknown,claims=0,trial=null,sends=0,blockTime=null;
     const json=(route,data,status=200)=>route.fulfill({status,contentType:'application/json',body:JSON.stringify(data),headers:{'cache-control':'no-store'}});
     const common=purpose=>({purpose,owner,ownerPublicKey:publicKey,identity});
@@ -80,7 +81,8 @@ try {
       block_hash:hash(9),block_height:100,block_timestamp_nanosec:String(BigInt(blockTime)*1_000_000n),agent_key_nonce:'77'};}
     await page.route('**/*',async route=>{
       const req=route.request(),url=new URL(req.url());requests.push(`${req.method()} ${url.pathname}`);
-      if(url.pathname.endsWith('meteor-near-connect-latest.js'))return route.fulfill({status:200,contentType:'text/javascript',body:mock});
+      if(url.pathname.endsWith(walletId==='meteor-wallet'?'meteor-near-connect-latest.js':'/repository/nightly.js'))
+        return route.fulfill({status:200,contentType:'text/javascript',body:mock});
       if(url.origin==='https://test.rpc.fastnear.com')return route.abort('failed');
       if(url.origin==='https://rpc.testnet.near.org'){
         const cors={'access-control-allow-origin':origin,'access-control-allow-methods':'POST, OPTIONS',
@@ -160,8 +162,9 @@ try {
       return route.fulfill({status:200,contentType:types[path.extname(file)],body:content});
     });
     await page.goto(`${origin}/`,{waitUntil:'networkidle'});
-    await page.waitForFunction(()=>!document.querySelector('[data-wallet-id="meteor-wallet"]').disabled);
-    await page.locator('.top-connect').click();await page.locator('[data-wallet-id="meteor-wallet"]').click();
+    const walletSelector=`[data-wallet-id="${walletId}"]`;
+    await page.waitForFunction(id=>!document.querySelector(`[data-wallet-id="${id}"]`).disabled,walletId);
+    await page.locator('.top-connect').click();await page.locator(walletSelector).click();
     await page.waitForFunction(()=>document.querySelector('#wallet-status').textContent.includes('great_mujey.testnet'));
     await page.locator('.top-connect').click();await page.locator('#wallet-owner-verify').click();
     try { await page.waitForFunction(()=>document.querySelector('#wallet-account-badge').textContent==='OWNER VERIFIED',null,{timeout:10_000}); }
@@ -173,6 +176,13 @@ try {
     assert.match(await page.locator('#wallet-native-setup-terms').innerText(),/5\.4 test NEAR.*can remain locked/s);
     assert.match(await page.locator('#wallet-native-setup-terms').innerText(),/0\.1 test NEAR per request/);assert.equal(claims,0);
     await page.locator('#wallet-native-setup-reserve').click();
+    if(blocked){
+      await page.waitForFunction(()=>document.querySelector('#wallet-native-setup-status').textContent.includes('too large for the Meteor mobile bridge'));
+      assert.equal(reserved,false);assert.equal(claims,0);assert.equal(sends,0);
+      assert.equal(requests.some(r=>r==='POST /api/native-oracle-setup/reserve-challenge'||r==='POST /api/native-oracle-setup/reserve'),false);
+      assert.equal(await page.locator('#wallet-native-setup-approve').isVisible(),false);
+      assert.deepEqual(errors,[]);await context.close();continue;
+    }
     try { await page.locator('#wallet-native-setup-approve').waitFor({state:'visible',timeout:10_000}); }
     catch(error) { console.error('Synthetic reservation:',await page.locator('#wallet-native-setup-status').textContent(),errors,requests.slice(-15)); throw error; }
     for(let i=0;i<4;i++){
@@ -210,11 +220,11 @@ try {
     // Reopen without persistent device storage: only authenticated read-only
     // recovery of the witnessed original is available, never another send.
     await page.reload({waitUntil:'networkidle'});
-    try { await page.waitForFunction(()=>!document.querySelector('[data-wallet-id="meteor-wallet"]').disabled ||
-      document.querySelector('#wallet-status').textContent.includes('great_mujey.testnet'),null,{timeout:12_000}); }
+    try { await page.waitForFunction(id=>!document.querySelector(`[data-wallet-id="${id}"]`).disabled ||
+      document.querySelector('#wallet-status').textContent.includes('great_mujey.testnet'),walletId,{timeout:12_000}); }
     catch(error) { console.error('Synthetic reconnect:',await page.locator('#wallet-status').textContent(),errors,requests.slice(-12));throw error; }
     if(!(await page.locator('#wallet-status').textContent()).includes(owner)){
-      await page.locator('.top-connect').click();await page.locator('[data-wallet-id="meteor-wallet"]').click();
+      await page.locator('.top-connect').click();await page.locator(walletSelector).click();
       await page.waitForFunction(()=>document.querySelector('#wallet-status').textContent.includes('great_mujey.testnet'));
     }
     await page.locator('.top-connect').click();await page.locator('#wallet-owner-verify').click();
@@ -230,5 +240,5 @@ try {
     assert.equal(sends,1);assert.equal(claims,4);assert.deepEqual(errors,[]);
     await context.close();
   }
-  console.log('Native owner UI: four simulated wallet approvals, one reviewed trial, receipt/refund checks and lost-result recovery passed. No live transaction.');
+  console.log('Native owner UI: synthetic four-stage/trial/recovery and pre-reservation Meteor size block passed. No live transaction.');
 } finally {await browser.close();}

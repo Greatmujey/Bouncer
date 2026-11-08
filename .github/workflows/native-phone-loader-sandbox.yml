@@ -27,6 +27,9 @@ jobs:
         run: |
           set -euo pipefail
           RUSTFLAGS='-C link-arg=-s' cargo build --locked --release --target wasm32-unknown-unknown
+          artifact=target/wasm32-unknown-unknown/release/bouncer_native_phone_loader_research.wasm
+          echo '28b358e4ee4e6c7327dc17c63934a63e4cdad5d424dbfe67a80381cf1027bb7b  '"$artifact" | sha256sum -c -
+          test "$(wc -c < "$artifact")" -eq 28950
       - name: Install test dependencies and retrieve pinned sandbox
         working-directory: bouncer
         run: |
@@ -52,3 +55,10 @@ jobs:
           { echo '## Compressed native phone loader research';
             echo 'Disposable sandbox only. Not a real wallet, independently anchored receipt verifier, public purchase or provider delivery.';
             echo '```json'; cat "$RUNNER_TEMP/phone-loader-result.json"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: Retain the verified research binary
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: native-phone-loader-research
+          path: bouncer/contracts/native-phone-loader/target/wasm32-unknown-unknown/release/bouncer_native_phone_loader_research.wasm
+          if-no-files-found: error
+          retention-days: 7

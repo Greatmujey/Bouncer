@@ -26,6 +26,22 @@ check; no other wallet is thereby declared compatible. The existing two- and
 four-stage setups remain default-off. A smaller/chunked deployment path needs
 its own receipt/recovery review and real-device test before it can be enabled.
 
+A **research-only** raw-DEFLATE loader has now been exercised on disposable
+loopback nearcore ([sandbox run](https://github.com/Greatmujey/Bouncer/actions/runs/42471038276)).
+That run deployed the exact V9 bytes, checked the asynchronous self-deployment
+receipt and owner, configured a keyless vault, enforced a native cap, rejected
+unauthorized and corrupt calls, and exercised rollback and a separate manual
+owner-only refund. The built loader was 28,950 bytes (SHA-256
+`28b358e4ee4e6c7327dc17c63934a63e4cdad5d424dbfe67a80381cf1027bb7b`);
+compressed V9 was 135,476 bytes and the estimated request was 219,827 bytes.
+An offline test of the pinned Meteor SDK validator also rejected a direct V9
+request and accepted a same-sized loader request. These are not real-phone,
+independently anchored original-hash recovery, wallet-approval, public testnet,
+provider fulfillment or security-audit evidence. The loader is not integrated
+or deployed. In particular, an uncertain original must never be retried; an
+asynchronous failure can leave a loader and funds on the child and requires
+verified, explicitly owner-authorized recovery.
+
 ## What is implemented
 
 - An explicitly opt-in, two-approval variant combines creation, configuration
