@@ -7,6 +7,8 @@ import nearApi from 'near-api-js';
 import { buildNativeOracleWalletPlan,NATIVE_ORACLE_DEFAULT_GAS_ALLOWANCE } from '../agent/native-oracle-wallet-plan.mjs';
 import { createNativeOraclePromptWitness } from '../agent/git-native-oracle-prompt-witness.mjs';
 import { createWitnessedNativeOraclePhoneAccount } from '../agent/native-oracle-phone-signer.mjs';
+import { createPresignedWitnessedNativeOracleAccount } from '../agent/presigned-witnessed-native-oracle-account.mjs';
+import { prepareWitnessedNativeOracleTrial } from '../web-src/witnessed-native-oracle-trial.mjs';
 import { recoverWitnessedNativeOracle } from '../agent/recover-witnessed-native-oracle.mjs';
 import { createAuthenticatedNativeOracleTrialClaim, createOwnerAuthorizedNativeTrialWitness } from '../agent/authenticated-native-oracle-trial-claim.mjs';
 import { openNativeOracleDeviceKey } from '../web-src/native-oracle-device-key.mjs';
@@ -242,4 +244,129 @@ test('owner authentication failure stops before the trial claim, phone signing o
     await assert.rejects(run(f,f.makeAccount({witness:authorizedWitness}),journal()));
     assert.equal(f.counts().signatures,0);assert.equal(f.counts().sends,0);assert.equal((await f.witness.inspect(OWNER)).state.phase,'complete');
   }finally{f.device.close()}
+});
+
+// Exercise the actual phone-side witness/sign composition, then hand its
+// signed bytes to the guarded runner. The wallet, peer, RPC and send are all
+// synthetic and no signed bytes are logged or sent to a network.
+async function signedPhoneTrial(f) {
+  const client={verifyCompletion:f.getFreshCompletion,async claimTrial({identity,trial,expectedWitnessHead}){
+    const saved=await f.witness.claimTrial(identity,trial,expectedWitnessHead);
+    return {status:'TRIAL_ORIGINAL_WITNESSED',owner:identity.owner,operation_id:identity.operation_id,review_sha256:identity.review_sha256,
+      ...trial,witness_head:saved.head,independently_witnessed:true,do_not_retry:true,execution_authorized:false,transaction_sent:false};
+  }};
+  const prepared=await prepareWitnessedNativeOracleTrial({client,deviceStore:f.device,identity:f.identity,review:f.review,
+    goalId:f.goal.id,origin:'https://bouncer.example',isTopLevel:true,crypto:webcrypto,isCurrent:()=>true,now:()=>base});
+  return prepared.sign({ownerConfirmed:true});
+}
+function presignedAccount(f,signedResult,overrides={}) {
+  const otherWitness={async inspect(){return {head:(await f.witness.inspect(OWNER)).head,state:null}}};
+  return createPresignedWitnessedNativeOracleAccount({goal:f.goal,review:f.review,identity:f.identity,wasmBytes:wasm,
+    trustedReviewHash:f.review.review_sha256,trustedOwnerPublicKey:f.identity.owner_public_key,
+    signedResult,witness:f.witness,otherWitness,getFreshCompletion:f.getFreshCompletion,now:()=>base,...overrides});
+}
+
+test('phone-witnessed signed bytes reach the guarded runner once and a lost send recovers the same original',async()=>{
+  const f=await fixture(),local=journal();try {
+    const signed=await signedPhoneTrial(f),account=presignedAccount(f,signed);
+    await assert.rejects(run(f,account,local),/unresolved.*do not resend/);
+    assert.equal(local.get(f.goal.id).tx_hash,signed.tx_hash);assert.equal(f.counts().sends,1);
+    assert.equal((await f.witness.inspect(OWNER)).state.trial.original_hash,signed.tx_hash);
+    const recovered=journal();await assert.rejects(recover(f,recovered),/synthetic original not yet found/);
+    assert.equal(recovered.get(f.goal.id).tx_hash,signed.tx_hash);
+    await assert.rejects(run(f,presignedAccount(f,signed),local),/synthetic original not yet found/);
+    assert.equal(f.counts().sends,1);
+  }finally{f.device.close()}
+});
+
+test('tampered signature, hash, reviewed goal or phone-result flags are refused before a send',async()=>{
+  const f=await fixture();try {
+    const signed=await signedPhoneTrial(f),corrupt=Uint8Array.from(signed.signed_transaction);corrupt[corrupt.length-1]^=1;
+    assert.throws(()=>presignedAccount(f,{...signed,signed_transaction:corrupt}));
+    assert.throws(()=>presignedAccount(f,{...signed,tx_hash:hash(80)}));
+    assert.throws(()=>presignedAccount(f,{...signed,witnessed_original_matched:false}));
+    assert.throws(()=>presignedAccount(f,signed,{goal:{...f.goal,amount:'1'}}));
+    assert.equal(f.counts().sends,0);
+  }finally{f.device.close()}
+});
+
+test('changed nonce or witness peer stops the presigned handoff before journaling or sending',async()=>{
+  for(const mode of ['nonce','peer']){
+    const f=await fixture(),local=journal();try {
+      const signed=await signedPhoneTrial(f);
+      if(mode==='nonce')f.setNonce('78');
+      const otherWitness=mode==='peer'?{async inspect(){return {head:'f'.repeat(40),state:null}}}:undefined;
+      const account=presignedAccount(f,signed,otherWitness?{otherWitness}:{});
+      await assert.rejects(run(f,account,local));
+      assert.equal(local.get(f.goal.id),undefined);assert.equal(f.counts().sends,0);
+    }finally{f.device.close()}
+  }
+});
+
+test('a lost witness after journal commit blocks the send and preserves the original',async()=>{
+  const f=await fixture(),local=journal();try {
+    const signed=await signedPhoneTrial(f);let reads=0;
+    const otherWitness={async inspect(){reads++;if(reads>=3)throw Error('synthetic witness outage');
+      return {head:(await f.witness.inspect(OWNER)).head,state:null}}};
+    await assert.rejects(run(f,presignedAccount(f,signed,{otherWitness}),local));
+    assert.equal(local.get(f.goal.id).status,'pending');assert.equal(local.get(f.goal.id).tx_hash,signed.tx_hash);
+    assert.equal(f.counts().sends,0);
+  }finally{f.device.close()}
+});
+
+test('two presigned handoffs sharing one journal cannot send twice',async()=>{
+  const f=await fixture(),local=journal();try {
+    const signed=await signedPhoneTrial(f),first=presignedAccount(f,signed),second=presignedAccount(f,signed);
+    const outcomes=await Promise.allSettled([run(f,first,local),run(f,second,local)]);
+    assert.equal(outcomes.filter(result=>result.status==='rejected').length,2);
+    assert.ok(outcomes.some(result=>/another payment operation/.test(result.reason?.message ?? '')));
+    assert.equal(local.get(f.goal.id).tx_hash,signed.tx_hash);assert.equal(f.counts().sends,1);assert.equal(f.counts().statusReads,0);
+  }finally{f.device.close()}
+});
+
+test('the handoff copies caller bytes and cannot be used to sign an arbitrary action',async()=>{
+  const f=await fixture(),local=journal();try {
+    const signed=await signedPhoneTrial(f),account=presignedAccount(f,signed);
+    await assert.rejects(account.signer.signTransaction({}));
+    signed.signed_transaction.fill(0); // only the adapter's earlier verified copy may be used
+    await assert.rejects(run(f,account,local),/unresolved.*do not resend/);
+    assert.equal(f.counts().sends,1);assert.equal(local.get(f.goal.id).tx_hash,signed.tx_hash);
+    await assert.rejects(account.signer.signTransaction({}));
+  }finally{f.device.close()}
+});
+
+test('the presigned account rejects a different call before the runner can journal it',async()=>{
+  const f=await fixture();try {
+    const signed=await signedPhoneTrial(f),account=presignedAccount(f,signed);
+    const bad=nearApi.transactions.functionCall('execute_outlayer_native_project',
+      {policy_id:f.goal.policy_id,amount:'1',expected_route:f.goal.route},300n*10n**12n,0n);
+    await assert.rejects(account.createTransaction(VAULT,[bad],f.publicKey));
+    await assert.rejects(account.createTransaction(VAULT,[bad],f.publicKey));
+    assert.equal(f.counts().sends,0);
+  }finally{f.device.close()}
+});
+
+test('a nonce change after pending-journal retention blocks the single send',async()=>{
+  const f=await fixture(),local=journal();try {
+    const signed=await signedPhoneTrial(f);let reads=0;
+    const getFreshCompletion=async()=>{const value=await f.getFreshCompletion();if(++reads===2)value.agent_key_nonce='78';return value};
+    await assert.rejects(run(f,presignedAccount(f,signed,{getFreshCompletion}),local));
+    assert.equal(reads,2);assert.equal(local.get(f.goal.id).tx_hash,signed.tx_hash);assert.equal(local.get(f.goal.id).status,'pending');
+    assert.equal(f.counts().sends,0);
+  }finally{f.device.close()}
+});
+
+test('stale or inconsistent completion evidence cannot release the presigned transaction',async()=>{
+  for(const mode of ['stale','originals','head']){
+    const f=await fixture(),local=journal();try {
+      const signed=await signedPhoneTrial(f);
+      const getFreshCompletion=async()=>{const value=await f.getFreshCompletion();
+        if(mode==='originals')value.prior_original_hashes[2]=hash(80);
+        if(mode==='head')value.witness_head='f'.repeat(40);
+        return value};
+      const account=presignedAccount(f,signed,{getFreshCompletion,...(mode==='stale'?{now:()=>base+6000}:{})});
+      await assert.rejects(run(f,account,local));
+      assert.equal(local.get(f.goal.id),undefined);assert.equal(f.counts().sends,0);
+    }finally{f.device.close()}
+  }
 });

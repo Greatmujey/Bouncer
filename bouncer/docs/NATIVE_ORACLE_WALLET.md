@@ -210,8 +210,10 @@ examples were **self-hosted development services**.
   after the runner's local journal write and before its single send. The
   completion supplier does not reserve chain state. A separate phone-side
   composition now obtains an authenticated witness over the opt-in setup API
-  and signs locally; connecting that signature to this runner and an owner
-  interface is a separate step.
+  and signs locally. `presigned-witnessed-native-oracle-account.mjs` can pass
+  those exact signed bytes to the runner after checking the original witness,
+  peer and fresh state; an authenticated transport and owner interface remain
+  separate steps.
   Synthetic tests compare Borsh bytes against the NEAR SDK, verify signatures,
   race two tabs and independent journals, simulate unknown sends, and check a
   fabricated result/refund recovered through the runner. Mobile-sized Chromium
@@ -294,10 +296,27 @@ it. Treat the returned signed bytes as sensitive bearer material: do not log,
 commit, or expose them, and do not send them outside a guarded,
 original-hash-recoverable execution path.
 
-Create the guarded account with the same `goal`, `review`, `identity`, pinned
-WASM bytes, trusted review hash and owner public key used by setup, this
-owner-authorized witness, a fresh authenticated completion supplier, and a
-phone-signature callback. Pass the account to `runOracleGoal`; its
+For a phone that has already returned `SIGNED_NOT_BROADCAST`, create
+`createPresignedWitnessedNativeOracleAccount` with that result, the same
+`goal`, `review`, `identity`, pinned WASM bytes and owner key, both anchored
+witnesses and a trusted authenticated fresh-completion supplier. It copies and
+verifies the exact signed bytes, signature and goal, checks both witness
+namespaces, and verifies the original nonce and four setup hashes against fresh
+completion. Pass it to `runOracleGoal` with the reviewed public key and a
+**shared durable journal**. The runner rechecks the witness and fresh state
+after writing and reading the pending original, then invokes its bounded
+one-shot sender. A lost send response remains pending and is never automatically
+resent. Neither the adapter nor the phone API itself broadcasts or provides a
+transport for signed bytes; any transport must preserve their secrecy, retain
+the exact original, obtain explicit consent, and avoid automatic retries.
+Participating calls sharing the same journal are excluded; independent journals,
+restored backups, bypassing clients and privileged rollback can still defeat
+that coordination.
+
+Alternatively, create the guarded account with the same `goal`, `review`,
+`identity`, pinned WASM bytes, trusted review hash and owner public key used by
+setup, an owner-authorized witness, a fresh authenticated completion supplier,
+and a phone-signature callback. Pass the account to `runOracleGoal`; its
 `requiresWitnessedOriginal` guard performs the pre-send witness readback.
 For receipt-only recovery on another cooperating device or process, call
 `recoverWitnessedNativeOracle` with the same goal/review/identity and trust
@@ -323,11 +342,13 @@ it. The tenth witness record changes the format: upgrade all witness readers and
 checkpoint monitors together; older readers reject it. Authenticated setup
 inspection returns witnessed records, including the trial hash. The new routes
 are disabled unless the experimental setup service is explicitly configured;
-the owner UI, a guarded execution handoff and separate checkpoint deployment
-remain to be integrated. PostgreSQL and Chromium tests use synthetic owner,
-chain and witness data; their local Git/synthetic peer is not an independent
-checkpoint and they are not real-phone tests. No device key is restored by
-copying an original hash; a replacement device needs a separate owner-led
+the owner UI, authenticated signed-byte transport and separate checkpoint
+deployment remain to be integrated. PostgreSQL and Chromium tests use synthetic
+owner, chain and witness data; their local Git/synthetic peer is not an
+independent checkpoint and they are not real-phone tests. The PostgreSQL
+integration exercises the signed-original handoff through the guarded runner
+with a simulated unknown send and receipt-only retry; it sends nothing to NEAR.
+No device key is restored by copying an original hash; a replacement device needs a separate owner-led
 key-revocation and installation procedure.
 
 ## Funding and refunds

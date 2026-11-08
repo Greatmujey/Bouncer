@@ -11,7 +11,7 @@ import nearApi from 'near-api-js';
 import { IDBFactory } from 'fake-indexeddb';
 import { buildNativeOracleWalletPlan, NATIVE_ORACLE_DEFAULT_GAS_ALLOWANCE, NATIVE_ORACLE_V9_CODE_HASH,
   NATIVE_ORACLE_VAULT_FUNDING } from '../agent/native-oracle-wallet-plan.mjs';
-import { ORACLE_TESTNET_PROGRAM, ORACLE_PROJECT_ID, ORACLE_PROJECT_UUID } from '../agent/oracle-outlayer.mjs';
+import { runOracleGoal, ORACLE_TESTNET_PROGRAM, ORACLE_PROJECT_ID, ORACLE_PROJECT_UUID } from '../agent/oracle-outlayer.mjs';
 import { V11_SELECTED_WASM_FEATURES } from '../agent/svalin-setup-preflight.mjs';
 import { NO_LOCAL_CONTRACT_HASH } from '../shared/plain-owner-profile.mjs';
 import { createPostgresNativeOraclePromptFence, initializePostgresNativeOraclePromptFence } from '../agent/postgres-native-oracle-prompt-fence.mjs';
@@ -22,6 +22,7 @@ import { createWitnessedNativeOracleSetup } from '../agent/witnessed-native-orac
 import { createAuthenticatedNativeOracleSetupService } from '../agent/authenticated-native-oracle-setup-service.mjs';
 import { createAuthenticatedNativeOracleTrialClaim } from '../agent/authenticated-native-oracle-trial-claim.mjs';
 import { validateWitnessedNativeOracleTrial } from '../agent/native-oracle-phone-signer.mjs';
+import { createPresignedWitnessedNativeOracleAccount } from '../agent/presigned-witnessed-native-oracle-account.mjs';
 import { createAnchoredSetupWitnessPair } from '../agent/anchored-setup-witness-pair.mjs';
 import { createNativeOracleSetupHttpHandler } from '../agent/native-oracle-setup-http.mjs';
 import { createNativeOracleReviewCatalog } from '../agent/native-oracle-review-catalog.mjs';
@@ -512,7 +513,8 @@ async function syntheticNativePhone({ dropClaim = false, dropTrial = false, unkn
     await initializePostgresNativeOraclePromptFence({pool:db});await initializePostgresWalletPromptAuth({pool:db});
     device=await openNativeOracleDeviceKey({indexedDB:new IDBFactory(),storage:{persisted:async()=>true},crypto:crypto.webcrypto,
       origin:site.origin,isTopLevel:true});
-    const made=await device.create({owner:ownerId,vault}),f=scenario(db,{ownerId,agentPublicKey:made.public_key,blockTimestamp:Date.now()});
+    const made=await device.create({owner:ownerId,vault}),scenarioOptions={ownerId,agentPublicKey:made.public_key,blockTimestamp:Date.now()},
+      f=scenario(db,scenarioOptions);
     const bare=path.join(root,'remote.git'),work=path.join(root,'work'),branch='arena/0e4386ea-near-hub';
     fs.mkdirSync(work);git(root,['init','--bare','--initial-branch',branch,bare]);git(work,['init','--initial-branch',branch]);
     git(work,['config','user.email','synthetic@example.test']);git(work,['config','user.name','Synthetic test']);
@@ -557,7 +559,8 @@ async function syntheticNativePhone({ dropClaim = false, dropTrial = false, unkn
       location:site,crypto:crypto.webcrypto,fetch:fetchImpl,isCurrent:()=>true,isTopLevel:true,
       relay:({work})=>work()}); // synthetic provider is direct; no live relay
     const prepared=await client.createReview({agentPublicKey:made.public_key});assert.deepEqual(prepared.review,f.review);
-    await run({client,device,site,f,taskId:prepared.task_id,witness,anchor,prompts:()=>prompts,signatures:()=>signatures});
+    await run({client,device,site,f,taskId:prepared.task_id,witness,otherWitness,anchor,
+      refreshSyntheticBlock:()=>{scenarioOptions.blockTimestamp=Date.now()},prompts:()=>prompts,signatures:()=>signatures});
   } finally {
     if(server)await new Promise(resolve=>server.close(resolve));device?.close();if(db)await db.end();
     if(created)await admin.query(`DROP DATABASE "${name}"`);await admin.end();fs.rmSync(root,{recursive:true,force:true});
@@ -565,7 +568,7 @@ async function syntheticNativePhone({ dropClaim = false, dropTrial = false, unkn
 }
 
 dbtest('synthetic native phone client traverses authenticated HTTP, paired anchored Git, DB and four fabricated wallet results',async()=>{
-  await syntheticNativePhone({},async({client,device,site,f,taskId,witness,prompts})=>{
+  await syntheticNativePhone({},async({client,device,site,f,taskId,witness,otherWitness,refreshSyntheticBlock,prompts})=>{
     assert.equal(await client.enabled(),true);assert.equal((await client.inspect()).status,'NO_LOCAL_RECORD');
     const reserved=await client.reserve({taskId,review:f.review}),identity=reserved.identity;
     for(let i=0;i<4;i++){
@@ -575,6 +578,9 @@ dbtest('synthetic native phone client traverses authenticated HTTP, paired ancho
         assert.equal(preview.status,'FINAL_NATIVE_SETUP_RECEIPT_MATCH');assert.equal(preview.original_recorded,false)}
       await client.recordOriginal({identity,stageId,originalHash:result.original_hash});f.state.stage=i+1;
     }
+    // Keep a stable synthetic FINAL block for the entire trial while avoiding
+    // setup runtime making its timestamp older than the two-minute limit.
+    refreshSyntheticBlock();
     const result=await client.verifyCompletion({identity});
     assert.equal(result.status,'FOUR_ORIGINALS_AND_STATE_MATCH_NOT_AUTHORIZED');assert.equal(result.execution_authorized,false);
     assert.equal(result.independent_delivery_verified,false);assert.equal((await witness.inspect(f.ownerId)).state.phase,'complete');
@@ -592,6 +598,24 @@ dbtest('synthetic native phone client traverses authenticated HTTP, paired ancho
     const raw=nearApi.transactions.encodeTransaction(tx.transaction),digest=crypto.createHash('sha256').update(raw).digest();
     assert.equal(nearApi.utils.serialize.base_encode(digest),signed.tx_hash);
     assert.equal(nearApi.utils.PublicKey.from(f.review.agent_public_key).verify(digest,Uint8Array.from(tx.signature.ed25519Signature.data)),true);
+    const goal={id:'native-oracle-trial-1',contract_id:f.review.vault,owner_account_id:f.review.owner,policy_id:f.review.policy_id,
+      amount:f.review.per_tx_cap_yocto,route:{project:f.review.project,route_revision:1,policy_revision:1,payee_revision:1,active:true},max_age_seconds:300};
+    const makeAccount=()=>createPresignedWitnessedNativeOracleAccount({goal,review:f.review,identity,wasmBytes:wasm,
+      trustedReviewHash:f.review.review_sha256,trustedOwnerPublicKey:identity.owner_public_key,signedResult:signed,witness,otherWitness,
+      getFreshCompletion:()=>client.verifyCompletion({identity})});
+    let sends=0,receiptReads=0;const rows=new Map(),journal={get:id=>rows.get(id),put:(id,value)=>rows.set(id,structuredClone(value))};
+    const provider={async viewNodeStatus(){return {chain_id:'testnet'}},
+      async viewAccessKey(){return {permission:{FunctionCall:{receiver_id:goal.contract_id,method_names:['execute_outlayer_native_project']}}}},
+      async callFunction(id,method,args){const response=await f.options.preflightProvider.callFunctionRaw(id,method,args,{blockId:BLOCK});
+        return JSON.parse(Buffer.from(response.result).toString('utf8'))},
+      async sendTransactionOnce(value){sends++;const hash=crypto.createHash('sha256').update(nearApi.transactions.encodeTransaction(value.transaction)).digest();
+        assert.equal(nearApi.utils.serialize.base_encode(hash),signed.tx_hash);throw Error('synthetic unknown send result')},
+      async txStatusReceipts(){receiptReads++;throw Error('synthetic original not yet found')}};
+    const execute=account=>runOracleGoal({goal,account,provider,journal,publicKey:nearApi.utils.PublicKey.from(f.review.agent_public_key),execute:true,log:()=>{}});
+    await assert.rejects(execute(makeAccount()),/unresolved.*do not resend/);
+    assert.equal(rows.get(goal.id).tx_hash,signed.tx_hash);assert.equal(rows.get(goal.id).status,'pending');assert.equal(sends,1);
+    await assert.rejects(execute(makeAccount()),/synthetic original not yet found/);
+    assert.equal(sends,1);assert.equal(receiptReads,1);
     await assert.rejects(prepared.sign({ownerConfirmed:true}));assert.equal(prompts(),4);
   });
 });
@@ -621,12 +645,13 @@ dbtest('a lost native wallet result can be previewed and retained by its origina
 });
 
 dbtest('a lost trial-witness response retains the original and never invokes the device signer',async()=>{
-  await syntheticNativePhone({dropTrial:true},async({client,device,site,f,taskId,witness,prompts})=>{
+  await syntheticNativePhone({dropTrial:true},async({client,device,site,f,taskId,witness,refreshSyntheticBlock,prompts})=>{
     const {identity}=await client.reserve({taskId,review:f.review});
     for(let i=0;i<4;i++){
       const stageId=f.review.stages[i].id,result=await client.approveStage({identity,review:f.review,stageId});
       await client.recordOriginal({identity,stageId,originalHash:result.original_hash});f.state.stage=i+1;
     }
+    refreshSyntheticBlock();
     const prepared=await prepareWitnessedNativeOracleTrial({client,deviceStore:device,identity,review:f.review,goalId:'native-oracle-trial-1',
       origin:site.origin,isTopLevel:true,crypto:crypto.webcrypto,isCurrent:()=>true});
     await assert.rejects(prepared.sign({ownerConfirmed:true}),e=>e.code==='NATIVE_SETUP_RESULT_UNKNOWN');
