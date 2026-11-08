@@ -119,5 +119,15 @@ if (invokedDirectly) {
       walletOrigin:process.env.BOUNCER_STATIC_EXPECTED_WALLET_ORIGIN,
       walletConnectProjectId:process.env.BOUNCER_STATIC_WALLETCONNECT_PROJECT_ID || '' });
     console.log(JSON.stringify(result, null, 2));
-  } catch (error) { console.error(`Static preview verification failed: ${error.message}`); process.exitCode = 1; }
+    if (process.env.GITHUB_ACTIONS === 'true') {
+      console.log(`::notice title=Read-only static preview verified::${result.origin} served ${result.files_verified} matching files; wallet blocked on this preview; mission config returned 404. Index SHA-256 ${result.index_sha256}.`);
+    }
+  } catch (error) {
+    console.error(`Static preview verification failed: ${error.message}`);
+    if (process.env.GITHUB_ACTIONS === 'true') {
+      const safe = String(error.message).replaceAll('%','%25').replaceAll('\r','%0D').replaceAll('\n','%0A').slice(0,500);
+      console.log(`::error title=Read-only static preview verification failed::${safe}`);
+    }
+    process.exitCode = 1;
+  }
 }
