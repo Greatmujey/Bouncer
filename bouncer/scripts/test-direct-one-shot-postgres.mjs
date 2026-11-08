@@ -9,9 +9,19 @@ const pool=new pg.Pool({connectionString,max:24});
 const cap='a'.repeat(64),expiredCap='b'.repeat(64),origin='https://8svrp7.csb.app',original='1'.repeat(32),other='2'.repeat(32);
 try{
   await pool.query('CREATE ROLE anon NOLOGIN; CREATE ROLE authenticated NOLOGIN; CREATE ROLE service_role NOLOGIN;');
-  await pool.query(fs.readFileSync(new URL('../infrastructure/direct-test-one-shot.sql',import.meta.url),'utf8'));
+  const current=fs.readFileSync(new URL('../infrastructure/direct-test-one-shot.sql',import.meta.url),'utf8');
+  const old=current.replace(" OR origin = 'https://bouncer-near.vercel.app'",'')
+    .replace("(p_origin !~ '^https://[a-z0-9]{4,20}\\.csb\\.app$' AND p_origin <> 'https://bouncer-near.vercel.app')",
+      "p_origin !~ '^https://[a-z0-9]{4,20}\\.csb\\.app$'");
+  assert.notEqual(old,current);assert.ok(!old.includes('bouncer-near.vercel.app'));
+  await pool.query(old);
   await pool.query(`INSERT INTO bouncer_direct_test.claims (capability_hash,origin,scope,expires_at)
     VALUES ($1,$2,'probe',clock_timestamp()+interval '1 hour'),($3,$2,'probe',clock_timestamp()-interval '1 hour')`,[cap,origin,expiredCap]);
+  // Migrate an existing journal, preserving its already-created rows.
+  await pool.query(fs.readFileSync(new URL('../infrastructure/direct-test-one-shot-vercel-migration.sql',import.meta.url),'utf8'));
+  const publicOrigin='https://bouncer-near.vercel.app',publicCap='c'.repeat(64);
+  await pool.query("INSERT INTO bouncer_direct_test.claims (capability_hash,origin,scope,expires_at) VALUES ($1,$2,'probe',clock_timestamp()+interval '1 hour')",[publicCap,publicOrigin]);
+  await assert.rejects(pool.query("INSERT INTO bouncer_direct_test.claims (capability_hash,origin,scope,expires_at) VALUES ($1,$2,'probe',clock_timestamp()+interval '1 hour')",['d'.repeat(64),'https://other.vercel.app']),e=>e.code==='23514');
   const fn='SELECT public.bouncer_direct_test_v1($1,$2,$3,$4) AS result';
   const call=async(c,o,h=null)=>(await pool.query(fn,[c,origin,o,h])).rows[0].result;
   assert.deepEqual(await call(cap,'read'),{scope:'probe',state:'ready',original_hash:null,claim_acquired:false,expired:false});
@@ -23,7 +33,14 @@ try{
   assert.deepEqual(await call(cap,'retain',other),{error:'unavailable'});
   assert.equal((await call(cap,'read')).original_hash,original);
   const overdue=await call(expiredCap,'claim');assert.equal(overdue.state,'ready');assert.equal(overdue.expired,true);assert.equal(overdue.claim_acquired,false);
-  assert.deepEqual(await call('c'.repeat(64),'claim'),{error:'unavailable'});
+  assert.deepEqual(await call(publicCap,'claim'),{error:'unavailable'}); // Exact origin binding.
+  const publicCall=async(operation,hash=null)=>(await pool.query(fn,[publicCap,publicOrigin,operation,hash])).rows[0].result;
+  assert.equal((await publicCall('read')).state,'ready');
+  const publicWins=await Promise.all(Array.from({length:20},()=>publicCall('claim')));
+  assert.equal(publicWins.filter(x=>x.claim_acquired).length,1);
+  assert.equal((await publicCall('retain',original)).original_hash,original);
+  assert.deepEqual(await publicCall('retain',other),{error:'unavailable'});
+  assert.deepEqual((await pool.query(fn,[publicCap,'https://other.vercel.app','read',null])).rows[0].result,{error:'unavailable'});
   const client=await pool.connect();
   try{
     await client.query('SET ROLE anon');await assert.rejects(client.query(fn,[cap,origin,'read',null]),e=>e.code==='42501');
@@ -32,5 +49,5 @@ try{
     await assert.rejects(client.query('SELECT * FROM bouncer_direct_test.claims'),e=>e.code==='42501');
     await client.query('RESET ROLE');
   }finally{client.release();}
-  console.log('Isolated one-shot PostgreSQL checks passed: one of 20 concurrent claims, expiry, hash immutability, and least privilege. No wallet.');
+  console.log('Isolated migration checks passed: existing rows preserved; exact Vercel origin, one of 20 claims, expiry, immutable hashes and least privilege. No wallet.');
 }finally{await pool.end();}

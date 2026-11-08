@@ -143,8 +143,7 @@ function sharedJournal({dropClaimResponse=false}={}){
   };
   return {fetch,get:()=>({state,saved})};
 }
-async function remoteEnvironment(journal,wallet,indexedDB=new IDBFactory()){
-  const origin='https://abcd1234.csb.app';
+async function remoteEnvironment(journal,wallet,indexedDB=new IDBFactory(),origin='https://abcd1234.csb.app'){
   const fence=createRemoteDirectFence({origin,capability:'a'.repeat(43),fetch:journal.fetch});
   await fence.read();
   return {args:{wallet,origin,isTopLevel:true,indexedDB,storage:{persist:async()=>false,persisted:async()=>false},remoteFence:fence,
@@ -188,4 +187,14 @@ test('an unverified or wrong-origin object cannot enable a temporary wallet host
   assert.throws(()=>createDirectOutlayerTest({...args,origin:'https://other123.csb.app'}));
   assert.throws(()=>createDirectOutlayerTest({...args,isTopLevel:false}));
   assert.equal(calls,0);
+});
+
+test('the public Bouncer origin requires its verified one-shot journal for the direct test',async()=>{
+  const journal=sharedJournal();let calls=0;
+  const wallet={manifest:{id:'meteor-wallet',features:{signAndSendTransaction:true}},async signAndSendTransaction(){calls++;return {transaction:{hash:original}}}};
+  const {args}=await remoteEnvironment(journal,wallet,new IDBFactory(),'https://bouncer-near.vercel.app');
+  assert.throws(()=>createDirectOutlayerTest({...args,remoteFence:null}));
+  assert.throws(()=>createDirectOutlayerTest({...args,origin:'https://bouncer-near.vercel.app.evil.example'}));
+  const flow=createDirectOutlayerTest(args);await flow.review();assert.equal(calls,0);
+  await flow.send();assert.equal(calls,1);assert.equal(journal.get().saved,original);
 });

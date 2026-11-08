@@ -10,12 +10,13 @@ import {fileURLToPath,pathToFileURL} from 'node:url';
 import {encodeBase58} from '../web-src/native-oracle-transaction.mjs';
 import {WALLET_EXECUTOR_SHA256} from '../web-src/wallet-executor.mjs';
 import {DIRECT_VERSION,DIRECT_PROJECT,DIRECT_UUID,DIRECT_DEPOSIT} from '../web-src/direct-outlayer-testnet.mjs';
-const id=process.env.CSB_CANDIDATE_ID,playwright=process.env.BOUNCER_PLAYWRIGHT_PATH;
-if(!/^[a-z0-9]{4,20}$/.test(id||'')||!playwright)throw Error('Candidate ID and Playwright are required');
+import {VERCEL_ORIGIN,serveStagedVercel} from './staged-vercel-test-site.mjs';
+const id=process.env.CSB_CANDIDATE_ID,playwright=process.env.BOUNCER_PLAYWRIGHT_PATH,mode=process.env.BOUNCER_VERCEL_MODE || '';
+if(!playwright || (mode && !['staged','live'].includes(mode)) || (!mode && !/^[a-z0-9]{4,20}$/.test(id||'')))throw Error('A valid candidate or Vercel mode and Playwright are required');
 const {chromium}=await import(pathToFileURL(path.resolve(playwright)));
 const executablePath=['/usr/bin/google-chrome','/usr/bin/google-chrome-stable','/usr/bin/chromium','/usr/bin/chromium-browser'].find(fs.existsSync);
 if(!executablePath)throw Error('Chromium unavailable');
-const origin=`https://${id}.csb.app`,dummy='t'.repeat(43),original=encodeBase58(new Uint8Array(32).fill(7)),block=encodeBase58(new Uint8Array(32).fill(9));
+const origin=mode?VERCEL_ORIGIN:`https://${id}.csb.app`,dummy='t'.repeat(43),original=encodeBase58(new Uint8Array(32).fill(7)),block=encodeBase58(new Uint8Array(32).fill(9));
 const source={WasmUrl:{url:`https://wasmhub.testnet.fastfs.io/fastfs.testnet/${DIRECT_VERSION}.wasm`,hash:DIRECT_VERSION,build_target:'wasm32-wasip2'}};
 const mock=`window.selector.ready({
  async signIn(p){if(p.network!=='testnet'||p.addFunctionCallKey)throw Error('wrong login');return [{accountId:'great_mujey.testnet'}]},
@@ -30,7 +31,7 @@ const mock=`window.selector.ready({
 const bundle=fs.readFileSync(fileURLToPath(new URL('../web/wallet.bundle.js',import.meta.url)),'utf8'),
   pinned=WALLET_EXECUTOR_SHA256['meteor-wallet'],digest=createHash('sha256').update(mock).digest('hex');
 assert.equal(bundle.split(pinned).length,2);
-let phase='ready',retained=null,claims=0,walletCalls=0,externalScripts=0;
+let phase='ready',retained=null,claims=0,walletCalls=0,externalScripts=0,googleScripts=0;
 const report={trust_prompt:false,fragment_lost:false,reopened_same_link:false,csp_blocked:false,top_level:false,
   mocked_meteor_connected:false,read_only_review:false,mock_attempt_once:false,original_retained:false,no_real_transaction:true};
 const browser=await chromium.launch({executablePath,args:['--no-sandbox','--disable-gpu'],headless:true});
@@ -44,10 +45,12 @@ try{
     headers:{'access-control-allow-origin':origin,'access-control-allow-methods':'POST, OPTIONS','access-control-allow-headers':'content-type',...extra}});
   await page.route('**/*',async route=>{
     const req=route.request(),url=new URL(req.url());
-    if(url.origin==='https://codesandbox.io' && /(?:sse-hooks|banner\.|watermark-button\.)/.test(url.pathname)){
+    if((url.origin==='https://codesandbox.io' && /(?:sse-hooks|banner\.|watermark-button\.)/.test(url.pathname)) || url.hostname==='untrusted.invalid'){
       externalScripts++;return route.fulfill({status:200,contentType:'text/javascript',body:'window.__thirdPartyInjectedScriptRan=true;'});
     }
+    if(url.hostname==='accounts.google.com'){googleScripts++;return route.abort();}
     if(url.origin===origin && url.pathname==='/wallet.bundle.js')return route.fulfill({status:200,contentType:'text/javascript',body:bundle.replace(pinned,digest)});
+    if(mode==='staged' && url.origin===origin)return serveStagedVercel(route);
     if(url.hostname==='raw.githubusercontent.com'&&url.pathname.endsWith('/meteor-near-connect-latest.js'))
       return route.fulfill({status:200,contentType:'text/javascript',body:mock,headers:{'access-control-allow-origin':'*'}});
     if(url.origin==='https://itzqbvbpmbnimvpyaige.supabase.co'&&url.pathname==='/functions/v1/bouncer-direct-one-shot'){
@@ -80,7 +83,8 @@ try{
     return route.abort();
   });
   const link=`${origin}/#bouncer-direct=${dummy}`;
-  await page.goto(link,{waitUntil:'domcontentloaded',timeout:60000});
+  const documentResponse=await page.goto(link,{waitUntil:'domcontentloaded',timeout:60000});
+  const headerPolicy=mode ? (await documentResponse?.headerValue('content-security-policy')||'') : '';
   const trust=page.getByText('Yes, proceed to preview',{exact:true});
   if(await trust.count()&&await trust.first().isVisible()){
     report.trust_prompt=true;await trust.first().click();await page.waitForLoadState('domcontentloaded');
@@ -91,17 +95,21 @@ try{
   report.top_level=await page.evaluate(()=>window===window.top);
   const probe=await page.evaluate(async()=>{
     window.__inlineCspProbe=false;const script=document.createElement('script');script.textContent='window.__inlineCspProbe=true';document.head.append(script);
+    const external=document.createElement('script');external.src='https://untrusted.invalid/extra.js';document.head.append(external);
     await new Promise(resolve=>setTimeout(resolve,100));
     return {inlineRan:window.__inlineCspProbe,thirdPartyRan:window.__thirdPartyInjectedScriptRan===true,
       policy:document.querySelector('meta[http-equiv="Content-Security-Policy"]')?.content||''};
   });
-  report.csp_blocked=!probe.inlineRan&&!probe.thirdPartyRan&&probe.policy.includes("script-src 'self'")&&externalScripts===0;
+  const policy=mode?headerPolicy:probe.policy;
+  report.csp_blocked=!probe.inlineRan&&!probe.thirdPartyRan&&policy.includes("script-src 'self'")&&
+    policy.includes("object-src 'none'")&&!policy.includes("'unsafe-inline'")&&externalScripts===0;
   assert.equal(report.top_level,true);assert.equal(report.csp_blocked,true);
   stage='wallet initialization';
   await page.waitForFunction(()=>!document.querySelector('[data-wallet-id="meteor-wallet"]').disabled,null,{timeout:30000});
   stage='synthetic Meteor connect';await page.locator('.top-connect').click();await page.locator('[data-wallet-id="meteor-wallet"]').click();
   await page.waitForFunction(()=>document.querySelector('#wallet-status').textContent.includes('great_mujey.testnet'),null,{timeout:30000});
   report.mocked_meteor_connected=true;assert.equal(claims,0);assert.equal(walletCalls,0);
+  if(mode)assert.equal(googleScripts,0,'Direct-test picker must not automatically load Google');
   stage='direct review';await page.locator('.top-connect').click();await page.locator('#wallet-direct-outlayer-open').waitFor({state:'visible',timeout:15000});
   await page.locator('#wallet-direct-outlayer-open').click();
   await page.locator('#wallet-direct-outlayer-send').waitFor({state:'visible',timeout:20000});

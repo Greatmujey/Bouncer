@@ -914,3 +914,24 @@ test('opening the private link again reloads after the hosting trust page drops 
   browser.win.location.hash='#connect';handler();assert.equal(reloads,0);
   browser.win.location.hash=`#bouncer-direct=${'a'.repeat(43)}`;handler();assert.equal(reloads,1);
 });
+
+test('the public site shows the direct test only after its exact-origin journal responds',async()=>{
+  const browser=fakeBrowser('https://bouncer-near.vercel.app/',{approved:'https://bouncer-near.vercel.app'}),config={account:'great_mujey.testnet'};
+  browser.win.location.hash=`#bouncer-direct=${'a'.repeat(43)}`;
+  browser.win.sessionStorage={setItem(){},getItem(){return null}};
+  const prior=browser.win.fetch;
+  browser.win.fetch=async(url,options)=>String(url).includes('/functions/v1/bouncer-direct-one-shot')
+    ?new Response(JSON.stringify({scope:'direct',state:'ready',original_hash:null,claim_acquired:false,expired:false})):prior(url,options);
+  await initWallet({window:browser.win,document:browser.doc,NearConnector:connectorClass(config)});
+  await browser.options.find(option=>option.dataset.walletId==='meteor-wallet').click();
+  assert.equal(browser.nodes['wallet-direct-outlayer-open'].hidden,false);assert.equal(config.transactionRequests,undefined);
+});
+
+test('opening a private direct link in an existing public-site tab reloads to check it',async()=>{
+  const browser=fakeBrowser('https://bouncer-near.vercel.app/',{approved:'https://bouncer-near.vercel.app'}),config={};let handler,reloads=0;
+  browser.win.location.hash='';browser.win.location.reload=()=>{reloads++};
+  browser.win.addEventListener=(type,fn)=>{if(type==='hashchange')handler=fn};browser.win.sessionStorage={setItem(){},getItem(){return null}};
+  await initWallet({window:browser.win,document:browser.doc,NearConnector:connectorClass(config)});
+  browser.win.location.hash='#connect';handler();assert.equal(reloads,0);
+  browser.win.location.hash=`#bouncer-direct=${'a'.repeat(43)}`;handler();assert.equal(reloads,1);
+});

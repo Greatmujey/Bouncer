@@ -84,7 +84,7 @@ test('public staging requires six wallets, WalletConnect, then Google', t => {
   const { source, dest } = fixture(t), index = path.join(source, 'index.html');
   const original = fs.readFileSync(index, 'utf8');
   for (const altered of [
-    original.replace('google-signin.mjs?v=2', 'old.mjs?v=2'),
+    original.replace('google-signin.mjs?v=3', 'old.mjs?v=3'),
     original.replace(/wallet\.bundle\.js\?v=\d+/, 'old-wallet.js?v=19'),
     original.replace('data-wallet-id="near-cli"', 'data-wallet-id="other"'),
     original.replace('data-wallet-id="ethereum-wallets"', 'data-wallet-id="other"'),
@@ -107,7 +107,11 @@ test('deployment revalidates HTML, permits Google popups, and versions its asset
   }
   const globalHeaders = config.headers.find(rule => rule.source === '/(.*)').headers;
   assert.equal(globalHeaders.find(h => h.key.toLowerCase() === 'cross-origin-opener-policy').value, 'same-origin-allow-popups');
+  const csp=globalHeaders.find(h=>h.key.toLowerCase()==='content-security-policy')?.value || '';
+  assert.match(csp,/script-src 'self' 'nonce-Qm91bmNlclRlc3RuZXQyMDI2' https:\/\/accounts\.google\.com/);
+  assert.match(csp,/object-src 'none'/);assert.match(csp,/base-uri 'none'/);assert.doesNotMatch(csp,/'unsafe-inline'|https:\/\/\*/);
   const html = fs.readFileSync(path.join(realSource, 'index.html'), 'utf8');
+  assert.match(html,/<meta name="bouncer-csp-nonce" content="Qm91bmNlclRlc3RuZXQyMDI2">/);
   for (const file of ['styles.css', 'app.mjs', 'google-signin.mjs', 'wallet.bundle.js']) assert.match(html, new RegExp(`\\./${file.replaceAll('.', '\\.') }\\?v=\\d+`));
 });
 

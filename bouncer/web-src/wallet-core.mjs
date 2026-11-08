@@ -159,8 +159,8 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
       !ethereumInfoPanel || !ethereumContinue || !ethereumBack) return;
 
   const approved = doc.querySelector('meta[name="bouncer-wallet-origin"]')?.content || '';
-  // Optional hosted-preview CSP nonce is passed to NEAR Connect's isolated
-  // wallet iframe; it is not a credential or a wallet authorization.
+  // The public CSP execution marker is passed to NEAR Connect's isolated
+  // wallet iframe; it is not a secret, credential, or wallet authorization.
   const suppliedNonce = doc.querySelector('meta[name="bouncer-csp-nonce"]')?.content || '';
   const cspNonce = /^[A-Za-z0-9+/=]{16,128}$/.test(suppliedNonce) ? suppliedNonce : undefined;
   let isTop = false;
@@ -175,11 +175,11 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
       await candidate.read(); remoteFence = candidate;
     }
   } catch { /* fail closed; no wallet prompt */ }
-  // CodeSandbox's first-visit trust page drops URL fragments. If the user
-  // opens the same private link again in this already-open tab, browsers can
-  // treat it as a hash-only navigation rather than reloading the page. Reload
-  // once so the capability is checked before any wallet connector is created.
-  if (isTop && !remoteFence && /^https:\/\/[a-z0-9]{4,20}\.csb\.app$/.test(win.location.origin)) {
+  // A private link opened in an already-open tab can be a hash-only
+  // navigation, which does not reinitialize this module. Reload once so the
+  // capability is checked before the direct test is enabled. CodeSandbox's
+  // trust screen also requires the same link to be opened again afterward.
+  if (isTop && !remoteFence && /^(?:https:\/\/[a-z0-9]{4,20}\.csb\.app|https:\/\/bouncer-near\.vercel\.app)$/.test(win.location.origin)) {
     win.addEventListener?.('hashchange', () => {
       if (/^#bouncer-direct=[A-Za-z0-9_-]{43}$/.test(win.location.hash || '')) win.location.reload();
     });

@@ -8,7 +8,7 @@ CREATE SCHEMA bouncer_direct_test;
 REVOKE ALL ON SCHEMA bouncer_direct_test FROM PUBLIC, anon, authenticated, service_role;
 CREATE TABLE bouncer_direct_test.claims (
   capability_hash text PRIMARY KEY CHECK (capability_hash ~ '^[0-9a-f]{64}$'),
-  origin text NOT NULL CHECK (origin ~ '^https://[a-z0-9]{4,20}\.csb\.app$'),
+  origin text NOT NULL CHECK (origin ~ '^https://[a-z0-9]{4,20}\.csb\.app$' OR origin = 'https://bouncer-near.vercel.app'),
   scope text NOT NULL CHECK (scope IN ('direct', 'probe')),
   state text NOT NULL DEFAULT 'ready' CHECK (state IN ('ready', 'claimed', 'retained')),
   original_hash text CHECK (original_hash IS NULL OR original_hash ~ '^[1-9A-HJ-NP-Za-km-z]{32,44}$'),
@@ -32,7 +32,7 @@ DECLARE
   won boolean := false;
 BEGIN
   IF p_capability_hash IS NULL OR p_capability_hash !~ '^[0-9a-f]{64}$'
-     OR p_origin IS NULL OR p_origin !~ '^https://[a-z0-9]{4,20}\.csb\.app$'
+     OR p_origin IS NULL OR (p_origin !~ '^https://[a-z0-9]{4,20}\.csb\.app$' AND p_origin <> 'https://bouncer-near.vercel.app')
      OR p_operation IS NULL OR p_operation NOT IN ('read', 'claim', 'retain')
      OR (p_operation <> 'retain' AND p_original_hash IS NOT NULL)
      OR (p_operation = 'retain' AND (p_original_hash IS NULL OR p_original_hash !~ '^[1-9A-HJ-NP-Za-km-z]{32,44}$'))

@@ -5,12 +5,13 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
-const id=process.env.CSB_CANDIDATE_ID,playwright=process.env.BOUNCER_PLAYWRIGHT_PATH;
-if(!/^[a-z0-9]{4,20}$/.test(id||'')||!playwright)throw Error('Candidate ID and Playwright required');
+import {VERCEL_ORIGIN,serveStagedVercel} from './staged-vercel-test-site.mjs';
+const id=process.env.CSB_CANDIDATE_ID,playwright=process.env.BOUNCER_PLAYWRIGHT_PATH,mode=process.env.BOUNCER_VERCEL_MODE||'';
+if(!playwright||(mode&&!['staged','live'].includes(mode))||(!mode&&!/^[a-z0-9]{4,20}$/.test(id||'')))throw Error('A valid candidate or Vercel mode and Playwright required');
 const {chromium}=await import(pathToFileURL(path.resolve(playwright)));
 const executablePath=['/usr/bin/google-chrome','/usr/bin/google-chrome-stable','/usr/bin/chromium','/usr/bin/chromium-browser'].find(fs.existsSync);
 if(!executablePath)throw Error('Chromium unavailable');
-const browser=await chromium.launch({executablePath,args:['--no-sandbox','--disable-gpu'],headless:true}),origin=`https://${id}.csb.app`;
+const browser=await chromium.launch({executablePath,args:['--no-sandbox','--disable-gpu'],headless:true}),origin=mode?VERCEL_ORIGIN:`https://${id}.csb.app`;
 let adapterStatus=0,adapterRequests=0,adapterFailure='',error,stage='open',page;const errors=[],consoleErrors=[];
 const report={top_level:false,real_adapter_fetched:false,real_adapter_integrity_checked_by_app:false,
   wallet_ui_visible:false,mobile_option_ready:false,wallet_handoff_observed:false,handoff_kind:null,no_wallet:true,no_transaction:true};
@@ -35,6 +36,7 @@ try{
       return route.fulfill({status:200,contentType:'application/json',headers:cors,
         body:JSON.stringify({scope:'direct',state:'ready',original_hash:null,claim_acquired:false,expired:false})});
     }
+    if(mode==='staged'&&url.origin===origin)return serveStagedVercel(route);
     if(url.origin===origin||url.hostname==='codesandbox.io'||url.hostname.endsWith('.codesandbox.io')||
        url.hostname==='raw.githubusercontent.com'||url.hostname==='mc.meteorwallet.app')return route.continue();
     return route.abort();
@@ -68,7 +70,7 @@ try{
   const calls=await page.evaluate(()=>window.__bouncerOpenCalls.map(s=>{try{const u=new URL(s);return `${u.protocol}//${u.host}`}catch{return 'invalid'}}));
   report.wallet_handoff_observed=calls.some(s=>s==='https://wallet.meteorwallet.app'||s.startsWith('meteorwallet:')||s.startsWith('meteorwalletdev:'));
   report.handoff_kind=calls.find(s=>s==='https://wallet.meteorwallet.app'||s.startsWith('meteorwallet:')||s.startsWith('meteorwalletdev:'))||null;
-  assert.ok(report.top_level&&report.real_adapter_integrity_checked_by_app&&report.wallet_handoff_observed);
+  assert.ok(report.top_level&&report.real_adapter_integrity_checked_by_app&&report.mobile_option_ready&&report.wallet_handoff_observed);
   await context.close();
 }catch(e){error=`${stage}: ${String(e?.message||'probe failed').slice(0,200)}`;
   try{report.wallet_status=(await page?.locator('#wallet-status').textContent({timeout:1000})||'').slice(0,120)}catch{}

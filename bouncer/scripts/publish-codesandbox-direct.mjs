@@ -24,7 +24,7 @@ function replaceOnce(text,from,to){assert.equal(text.split(from).length,2);retur
 // from executing. The fixed nonce lets the pinned NEAR Connect wallet run in
 // its sandboxed srcdoc iframe. This is a public execution marker, not a secret.
 files['index.html'].content=replaceOnce(files['index.html'].content,'<!doctype html>\n',
-  `<!doctype html>\n<meta http-equiv="Content-Security-Policy" content="script-src 'self' 'nonce-${CSB_NONCE}'; object-src 'none'; base-uri 'none'">\n<meta name="bouncer-csp-nonce" content="${CSB_NONCE}">\n`);
+  `<!doctype html>\n<meta http-equiv="Content-Security-Policy" content="script-src 'self' 'nonce-${CSB_NONCE}'; object-src 'none'; base-uri 'none'">\n`);
 files['styles.css'].content=replaceOnce(files['styles.css'].content,"url('./hero-orbit.jpg?v=4')",`url('${data('hero-orbit.jpg','image/jpeg')}')`);
 files['styles.css'].content=replaceOnce(files['styles.css'].content,"url('./manrope-latin.woff2')",`url('${data('manrope-latin.woff2','font/woff2')}')`);
 files['index.html'].content=replaceOnce(files['index.html'].content,

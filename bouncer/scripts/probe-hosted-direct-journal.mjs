@@ -4,12 +4,13 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
-const id=process.env.CSB_CANDIDATE_ID,playwright=process.env.BOUNCER_PLAYWRIGHT_PATH;
-if(!/^[a-z0-9]{4,20}$/.test(id||'')||!playwright)throw Error('Candidate ID and Playwright required');
+import {VERCEL_ORIGIN} from './staged-vercel-test-site.mjs';
+const id=process.env.CSB_CANDIDATE_ID,playwright=process.env.BOUNCER_PLAYWRIGHT_PATH,vercel=process.env.BOUNCER_VERCEL_JOURNAL==='1';
+if(!playwright||(!vercel&&!/^[a-z0-9]{4,20}$/.test(id||'')))throw Error('A valid candidate or Vercel journal mode and Playwright required');
 const {chromium}=await import(pathToFileURL(path.resolve(playwright)));
 const executablePath=['/usr/bin/google-chrome','/usr/bin/google-chrome-stable','/usr/bin/chromium','/usr/bin/chromium-browser'].find(fs.existsSync);
 if(!executablePath)throw Error('Chromium unavailable');
-const origin=`https://${id}.csb.app`,browser=await chromium.launch({executablePath,args:['--no-sandbox','--disable-gpu'],headless:true});
+const origin=vercel?VERCEL_ORIGIN:`https://${id}.csb.app`,browser=await chromium.launch({executablePath,args:['--no-sandbox','--disable-gpu'],headless:true});
 const report={top_level:false,read:false,claim_once:false,retained:false,no_wallet:true,no_transaction:true};let error;
 try{
   const context=await browser.newContext({viewport:{width:390,height:844},isMobile:true,hasTouch:true});
@@ -18,8 +19,8 @@ try{
   if(await trust.count()&&await trust.first().isVisible()){await trust.first().click();await page.waitForLoadState('domcontentloaded');}
   await page.waitForSelector('#wallet-dialog',{state:'attached',timeout:30000});
   report.top_level=await page.evaluate(()=>window===window.top);
-  const result=await page.evaluate(async()=>{
-    const endpoint='https://itzqbvbpmbnimvpyaige.supabase.co/functions/v1/bouncer-direct-one-shot',capability='q'.repeat(43);
+  const result=await page.evaluate(async vercel=>{
+    const endpoint='https://itzqbvbpmbnimvpyaige.supabase.co/functions/v1/bouncer-direct-one-shot',capability=(vercel?'v':'q').repeat(43);
     const call=async(operation,extra={})=>{
       const response=await fetch(endpoint,{method:'POST',credentials:'omit',cache:'no-store',headers:{'content-type':'application/json'},
         body:JSON.stringify({operation,capability,...extra}),signal:AbortSignal.timeout(20000)});
@@ -27,7 +28,7 @@ try{
     };
     const read=await call('read'),claim=await call('claim'),again=await call('claim'),retain=await call('retain',{original_hash:'1'.repeat(32)});
     return {read,claim,again,retain};
-  });
+  },vercel);
   report.read=result.read.status===200&&result.read.body.scope==='probe'&&result.read.body.state==='ready';
   report.claim_once=result.claim.status===200&&result.claim.body.claim_acquired===true&&
     result.again.status===200&&result.again.body.claim_acquired===false;

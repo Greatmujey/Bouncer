@@ -18,11 +18,15 @@ function handler(overrides={}){
   },...overrides});return {value,calls};
 }
 
-test('test endpoint allows only isolated HTTPS CSB origins and no wallet operations',async()=>{
+test('test endpoint allows isolated CSB hosts and the exact public Bouncer origin only',async()=>{
   const {value,calls}=handler();
   const preflight=await value(request(undefined,{method:'OPTIONS'}));assert.equal(preflight.status,204);
   assert.equal(preflight.headers.get('access-control-allow-origin'),origin);assert.equal(calls.length,0);
-  for(const bad of ['https://evil.example','http://8svrp7.csb.app','https://8svrp7.csb.app.evil.example','null']){
+  const vercel='https://bouncer-near.vercel.app';
+  const allowed=await value(request(undefined,{method:'OPTIONS',origin:vercel}));
+  assert.equal(allowed.status,204);assert.equal(allowed.headers.get('access-control-allow-origin'),vercel);
+  for(const bad of ['https://evil.example','http://8svrp7.csb.app','https://8svrp7.csb.app.evil.example',
+    'https://other.vercel.app','https://bouncer-near.vercel.app.evil.example','http://bouncer-near.vercel.app','null']){
     assert.equal((await value(request(undefined,{origin:bad}))).status,403);
   }
   for(const payload of [{capability,operation:'send'}, {capability,operation:'claim',original_hash:'x'},

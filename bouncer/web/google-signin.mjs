@@ -136,7 +136,16 @@ function openGoogle() {
     if (!authenticated) { ready = false; void prepareButton(); }
   });
 }
-window.addEventListener('bouncer:account-picker-open', openGoogle);
+// A direct-test link carries a one-shot bearer capability. Keep the Google
+// script lazy on that flow; opening the wallet picker must not load a third
+// party script automatically. Google remains available by explicit selection.
+function hasDirectTestCapability() {
+  if (location.origin !== 'https://bouncer-near.vercel.app') return false;
+  if (/^#bouncer-direct=[A-Za-z0-9_-]{43}$/.test(location.hash || '')) return true;
+  try { return /^[A-Za-z0-9_-]{43}$/.test(sessionStorage.getItem('bouncer.direct-outlayer.testnet.capability.v1') || ''); }
+  catch { return false; }
+}
+window.addEventListener('bouncer:account-picker-open', () => { if (!hasDirectTestCapability()) openGoogle(); });
 start.addEventListener('click', openGoogle);
 retry.addEventListener('click', openGoogle);
 signout.addEventListener('click', async () => {
