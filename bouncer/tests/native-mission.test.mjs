@@ -17,18 +17,23 @@ const randomGoal = { id: 'compute', contract_id: vault, owner_account_id: owner,
     build_target: 'wasm32-wasip1', max_instructions: 10_000_000, max_memory_mb: 128, max_execution_seconds: 60 } };
 const oracleGoal = { id: 'price', contract_id: vault, owner_account_id: owner, policy_id: 'api-policy', amount: '100',
   route: { project: { ...ORACLE_TESTNET_PROJECT }, route_revision: 1, policy_revision: 1, payee_revision: 1, active: true }, max_age_seconds: 300 };
+const storageGoal = { id: 'store', contract_id: vault, owner_account_id: owner, policy_id: 'storage-policy', amount: '100',
+  object_id: 'mission-results', value: { from_goal_ids: ['compute', 'price'] },
+  route: { prefix: 'mission-', max_value_bytes: 4096, route_revision: 1, policy_revision: 1, payee_revision: 1, active: true } };
 const makeMission = () => ({ version: 1, id: 'partial-native', contract_id: vault, owner_account_id: owner, max_native_amount: '200',
   required_resources: ['compute', 'api'], goals: [{ kind: 'random', goal: structuredClone(randomGoal) }, { kind: 'oracle', goal: structuredClone(oracleGoal) }] });
 const encode = value => Buffer.from(JSON.stringify(value)).toString('base64');
 const event = (name, data) => `EVENT_JSON:${JSON.stringify({ standard: 'near-outlayer', version: '1.0.0', event: name, data: [data] })}`;
 const blockHash = 'B'.repeat(44), requestId = '7'.repeat(44), completeId = '8'.repeat(44), refundId = '9'.repeat(44);
 
-function fixture({ stale = false, ambiguous = false, samePolicy = false } = {}) {
+function fixture({ stale = false, ambiguous = false, samePolicy = false, storage = false } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bouncer-native-mission-'));
   const journalPath = path.join(dir, 'original.json');
   let journal = new FileJournal(journalPath, vault, owner);
   const mission = makeMission();
   if (samePolicy) mission.goals[1].goal.policy_id = mission.goals[0].goal.policy_id;
+  if (storage) { mission.max_native_amount = '300'; mission.required_resources.push('storage');
+    mission.goals.push({ kind: 'storage', goal: structuredClone(storageGoal) }); }
   const reviewed = structuredClone(mission);
   const keys = Object.fromEntries(mission.goals.map(({ goal }) => [goal.id, nearApi.KeyPair.fromRandom('ed25519')]));
   const signers = Object.fromEntries(mission.goals.map(({ goal }) => {
@@ -39,6 +44,7 @@ function fixture({ stale = false, ambiguous = false, samePolicy = false } = {}) 
   }));
   const transactions = new Map(), spent = new Map(), events = [];
   let balance = 1000n, daily = 1000n, perTx = 100n, loseFirst = ambiguous, denyReceipts = false, beforeSend, beforeView, sends = 0;
+  let storedObject = null, storageReserved = false;
   const timestamp = Math.floor(Date.now() / 1000) - (stale ? 1000 : 0);
   const provider = {
     async viewNodeStatus() { return { chain_id: 'testnet' }; },
@@ -46,18 +52,22 @@ function fixture({ stale = false, ambiguous = false, samePolicy = false } = {}) 
       assert.equal(account, owner);
       const id = Object.keys(signers).find(id => String(signers[id].publicKey) === String(key));
       if (!id) throw new Error('unknown synthetic agent key');
-      return { permission: { FunctionCall: { receiver_id: vault, method_names: [id === 'compute' ? 'execute_outlayer' : 'execute_outlayer_native_project'] } } };
+      const method = id === 'compute' ? 'execute_outlayer' : id === 'store' ? 'execute_native_storage' : 'execute_outlayer_native_project';
+      return { permission: { FunctionCall: { receiver_id: vault, method_names: [method] } } };
     },
     async callFunction(receiver, method, args) {
       events.push(`view:${method}${args?.policy_id ? `:${args.policy_id}` : ''}`);
       if (beforeView) await beforeView({ receiver, method, args });
-      if (method === 'contract_version') return 'bouncer-agent-v9';
+      if (method === 'contract_version') return storage ? 'bouncer-agent-v14-native-storage-testnet' : 'bouncer-agent-v9';
       if (method === 'get_owner') return owner;
       if (method === 'get_policy') return { token: 'native', per_tx_cap: perTx.toString(), daily_cap: daily.toString() };
       if (method === 'daily_spent') return (spent.get(args.policy_id) ?? 0n).toString();
       if (method === 'vault_balance') { assert.deepEqual(args, { token: 'native' }); return balance.toString(); }
       if (method === 'get_outlayer_program') return structuredClone(randomGoal.program);
       if (method === 'get_outlayer_native_project') return structuredClone(reviewed.goals.find(item => item.kind === 'oracle').goal.route);
+      if (method === 'get_native_storage_route') return structuredClone(reviewed.goals.find(item => item.kind === 'storage').goal.route);
+      if (method === 'native_storage_id_reserved') return storageReserved;
+      if (method === 'get_native_storage_object') return structuredClone(storedObject);
       if (method === 'is_agent_key_allowed') return true;
       if (method === 'check') return [true, 'ok'];
       if (method === 'get_project') return { project_id: ORACLE_PROJECT_ID, uuid: ORACLE_PROJECT_UUID, owner: 'zavodil2.testnet' };
@@ -70,7 +80,8 @@ function fixture({ stale = false, ambiguous = false, samePolicy = false } = {}) 
     async sendTransactionOnce(signed, wait) {
       assert.equal(wait, 'FINAL');
       const action = signed.transaction.actions[0].functionCall;
-      const kind = action.methodName === 'execute_outlayer' ? 'random' : 'oracle';
+      const kind = action.methodName === 'execute_outlayer' ? 'random' :
+        action.methodName === 'execute_native_storage' ? 'storage' : 'oracle';
       const goal = reviewed.goals.find(item => item.kind === kind).goal;
       const args = JSON.parse(Buffer.from(action.args).toString());
       const hash = nearApi.utils.serialize.base_encode(crypto.createHash('sha256').update(nearApi.transactions.encodeTransaction(signed.transaction)).digest());
@@ -80,6 +91,20 @@ function fixture({ stale = false, ambiguous = false, samePolicy = false } = {}) 
       if (beforeSend) await beforeSend({ kind, goal, hash });
       sends++; events.push(`send:${goal.id}`);
       spent.set(goal.policy_id, (spent.get(goal.policy_id) ?? 0n) + BigInt(goal.amount)); balance -= BigInt(goal.amount);
+      if (kind === 'storage') {
+        const value = args.value;
+        storedObject = { policy_id: goal.policy_id, object_id: goal.object_id, value,
+          value_sha256: crypto.createHash('sha256').update(value).digest('hex'), value_bytes: Buffer.byteLength(value), stake_yocto: '50' };
+        storageReserved = true;
+        const fc = { method_name: action.methodName, deposit: '0', args: encode(args) };
+        transactions.set(hash, { final_execution_status: 'FINAL', status: { SuccessValue: encode(storedObject) },
+          transaction_outcome: { id: hash, outcome: { status: { SuccessReceiptId: requestId } } },
+          transaction: { hash, signer_id: owner, receiver_id: vault, public_key: String(signers[goal.id].publicKey), actions: [{ FunctionCall: fc }] },
+          receipts_outcome: [{ id: requestId, block_hash: blockHash, outcome: { executor_id: vault,
+            status: { SuccessValue: encode(storedObject) }, logs: ['BOUNCER public native storage written; stake reserved'] } }],
+          receipts: [{ receipt_id: requestId, predecessor_id: owner, receiver_id: vault, receipt: { Action: { actions: [{ FunctionCall: fc }] } } }] });
+        return { transaction_outcome: { id: hash } };
+      }
       const project = kind === 'oracle' ? goal.route.project : null;
       const program = project ? { ...ORACLE_TESTNET_PROGRAM, max_instructions: project.max_instructions,
         max_memory_mb: project.max_memory_mb, max_execution_seconds: project.max_execution_seconds } : goal.program;
@@ -299,3 +324,54 @@ test('a second workflow and standalone native payment cannot overlap the same jo
   } finally { release(); await first.catch(() => {}); }
   assert.equal((await first).stage, 'native-preflight');
 }));
+test('three real guarded runners store verified compute and API results, then recover original hashes without signing', () => withFixture(async f => {
+  const preview = await f.invoke();
+  assert.equal(preview.status, 'READY'); assert.equal(preview.budget.required_yocto, '300'); assert.equal(f.sends, 0);
+  const result = await f.invoke({ execute: true });
+  assert.equal(result.status, 'FULFILLED'); assert.equal(result.new_payments, 3); assert.equal(f.sends, 3);
+  const [compute, oracle, storage] = result.deliveries;
+  const stored = JSON.parse(storage.delivery.result.value);
+  assert.equal(stored.schema, 'bouncer-public-mission-results-v1');
+  assert.deepEqual(stored.resources.map(row => row.goal_id), ['compute', 'price']);
+  assert.equal(stored.resources[0].tx_hash, compute.delivery.tx_hash);
+  assert.deepEqual(stored.resources[0].result, compute.delivery.result);
+  assert.equal(stored.resources[1].tx_hash, oracle.delivery.tx_hash);
+  assert.deepEqual(stored.resources[1].result, oracle.delivery.result);
+  assert.equal(storage.delivery.stake_yocto, '50');
+  f.reopen();
+  const replay = await f.invoke({ recoverOnly: true, signers: {} });
+  assert.equal(replay.status, 'RECOVERED'); assert.equal(replay.new_payments, 0); assert.equal(f.sends, 3);
+  assert.deepEqual(replay.deliveries, result.deliveries);
+}, { storage: true }));
+
+test('storage references are only earlier verified goals and require a bounded public route', () => {
+  const m = makeMission(); m.max_native_amount = '300'; m.required_resources.push('storage');
+  m.goals.push({ kind: 'storage', goal: structuredClone(storageGoal) });
+  assert.deepEqual(validateNativeMission(m).goals[2].goal.value.from_goal_ids, ['compute', 'price']);
+  for (const mutate of [
+    v => { v.goals[2].goal.value.from_goal_ids = ['missing']; },
+    v => { v.goals[2].goal.value.from_goal_ids = ['store']; },
+    v => { v.goals[2].goal.value.from_goal_ids = ['compute', 'compute']; },
+    v => { v.goals[2].goal.value.from_goal_ids = ['price', 'compute', 'price']; },
+    v => { v.goals[2].goal.value.extra = true; },
+    v => { v.goals[2].goal.route.max_value_bytes = 128; },
+    v => { v.goals.reverse(); },
+  ]) { const changed = structuredClone(m); mutate(changed); assert.throws(() => validateNativeMission(changed)); }
+});
+
+test('stale API data prevents the dependent public storage transaction', () => withFixture(async f => {
+  const result = await f.invoke({ execute: true });
+  assert.equal(result.status, 'BLOCKED'); assert.equal(result.stage, 'stale-oracle');
+  assert.equal(f.sends, 2); assert.equal(f.journal.get('store'), undefined);
+}, { storage: true, stale: true }));
+
+test('a lost preceding original prevents dependent storage until original-hash recovery succeeds', () => withFixture(async f => {
+  await assert.rejects(f.invoke({ execute: true }), /unresolved/);
+  assert.equal(f.sends, 1); assert.equal(f.journal.get('store'), undefined);
+  f.setReceiptFailure(true);
+  await assert.rejects(f.invoke({ execute: true }), /unavailable/);
+  assert.equal(f.sends, 1); assert.equal(f.journal.get('store'), undefined);
+  f.setReceiptFailure(false);
+  const result = await f.invoke({ execute: true });
+  assert.equal(result.status, 'FULFILLED'); assert.equal(result.new_payments, 2); assert.equal(f.sends, 3);
+}, { storage: true, ambiguous: true }));

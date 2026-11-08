@@ -15,6 +15,7 @@ import { openConfiguredFileJournal } from './procurement.mjs';
 import { MonotonicAccount, PaymentRpcProvider } from './near-account.mjs';
 import { runOutlayerGoal, recoverOutlayerGoal, validateOutlayerGoal } from './outlayer.mjs';
 import { runOracleGoal, recoverOracleGoal, validateOracleGoal, assertOracleFreshForUse } from './oracle-outlayer.mjs';
+import { runNativeStorageGoal, recoverNativeStorageGoal, validateNativeStorageGoal } from './native-storage.mjs';
 import { runResourceAgent, routedResourceProvider } from './resource-agent.mjs';
 import { startConfiguredProvider } from '../services/resource-provider.mjs';
 import { withExclusiveJournalOperation } from './journal-operation.mjs';
@@ -40,18 +41,21 @@ async function runNativeResourceUnlocked({ outlayer, provider, journal, execute 
   if (journal && (typeof journal.get !== 'function' || typeof journal.put !== 'function')) throw new Error('invalid native resource journal');
   if (execute && !journal) throw new Error('native execution requires the exclusive original-hash journal');
   const kind = outlayer.kind ?? 'random';
-  if (!['random','oracle'].includes(kind)) throw new Error('unsupported independent resource kind');
-  const goal = kind === 'oracle' ? validateOracleGoal(outlayer.goal) : validateOutlayerGoal(outlayer.goal);
+  if (!['random','oracle','storage'].includes(kind)) throw new Error('unsupported native resource kind');
+  const goal = kind === 'oracle' ? validateOracleGoal(outlayer.goal) :
+    kind === 'storage' ? validateNativeStorageGoal(outlayer.goal) : validateOutlayerGoal(outlayer.goal);
   assertJournalScope(journal, goal.contract_id, goal.owner_account_id);
-  const defaultRun = kind === 'oracle' ? runOracleGoal : runOutlayerGoal;
-  const defaultRecover = kind === 'oracle' ? recoverOracleGoal : recoverOutlayerGoal;
+  const defaultRun = kind === 'oracle' ? runOracleGoal : kind === 'storage' ? runNativeStorageGoal : runOutlayerGoal;
+  const defaultRecover = kind === 'oracle' ? recoverOracleGoal : kind === 'storage' ? recoverNativeStorageGoal : recoverOutlayerGoal;
   const run = runners.outlayer ?? defaultRun, recover = runners.recover ?? defaultRecover;
   if (typeof run !== 'function' || typeof recover !== 'function') throw new Error('invalid native resource runner');
   // The private operation scope is passed only to built-in participants, never
   // to injected runners, providers, wallets or arbitrary callbacks.
   const runGuarded = args => run(run === defaultRun && args.journal != null ? { ...args, exclusiveJournalScope: operationScope } : args);
   const recoverGuarded = args => recover(recover === defaultRecover && args.journal != null ? { ...args, exclusiveJournalScope: operationScope } : args);
-  const scope = 'One native testnet resource only; not a full compute, storage and API/data mission.';
+  const scope = kind === 'storage'
+    ? 'One PUBLIC, self-hosted NEAR on-chain object; not an independent storage purchase or permanence proof.'
+    : 'One independent native testnet resource only; not a full compute, storage and API/data mission.';
   const previous = journal ? readNativeJournal(journal, goal.id) : undefined;
   if (previous) {
     const independent = await recoverGuarded({goal,provider,journal,publicKey:outlayer.recoveryPublicKey,update:execute,log});

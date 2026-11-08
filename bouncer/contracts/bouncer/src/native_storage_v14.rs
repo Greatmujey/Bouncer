@@ -169,6 +169,13 @@ impl Bouncer {
         object_from_record(policy_id, object_id, &record).unwrap()
     }
 
+    /// Preflight only: a missing ID does not prove a transaction was never
+    /// sent, and cannot replace the original-hash journal or trusted RPC.
+    pub fn native_storage_id_reserved(&self, policy_id: String, object_id: String) -> bool {
+        require(valid_policy(&policy_id) && valid_name(&object_id, 64), "invalid native storage object");
+        env::storage_has_key(&object_key(&policy_id, &object_id))
+    }
+
     /// Anyone can read this PUBLIC value. A tombstone is returned as None.
     pub fn get_native_storage_object(&self, policy_id: String, object_id: String) -> Option<NativeStorageObject> {
         if !valid_policy(&policy_id) || !valid_name(&object_id, 64) { return None; }

@@ -1,8 +1,8 @@
 /**
- * An explicitly reviewed, partial native-NEAR sequence. It composes the real
- * Bouncer OutLayer runners; it is not a storage adapter, a browser signer or a
- * completed compute/storage/API mission. Preview is the default and payment
- * legs are non-atomic. All journal locking is cooperative/local only.
+ * Explicitly reviewed native-NEAR sequence: OutLayer compute and API data,
+ * plus V14 PUBLIC, self-hosted NEAR protocol storage. Preview is the default;
+ * resource legs are non-atomic. Local journal locking is cooperative only.
+ * This is not proof of independent storage or live/provider fulfillment.
  */
 import crypto from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
@@ -10,6 +10,7 @@ import { isTestnetAccount } from '../shared/account-id.mjs';
 import { isTransactionHash } from '../shared/direct-payment-settlement.mjs';
 import { validateOutlayerGoal } from './outlayer.mjs';
 import { validateOracleGoal, assertOracleFreshForUse } from './oracle-outlayer.mjs';
+import { validateNativeStorageGoal } from './native-storage.mjs';
 import { runNativeResource } from './mixed-mission.mjs';
 import { withExclusiveJournalOperation } from './journal-operation.mjs';
 import { assertJournalScope } from './journal-write.mjs';
@@ -33,7 +34,8 @@ function amount(value, label, { zero = false } = {}) {
   if (n > MAX_U128 || (!zero && n === 0n)) throw new Error(`invalid ${label}`);
   return n;
 }
-const resourceOf = kind => kind === 'random' ? 'compute' : 'api';
+const resourceOf = kind => kind === 'random' ? 'compute' : kind === 'storage' ? 'storage' : 'api';
+const allResources = ['compute', 'storage', 'api'];
 const manifestId = mission => `native-mission:${mission.id}`; // payable goal ids cannot contain ':'
 const fingerprint = mission => crypto.createHash('sha256').update(`bouncer-native-mission-v1\0${JSON.stringify(mission)}`).digest('hex');
 
@@ -47,13 +49,27 @@ export function validateNativeMission(raw) {
       raw.required_resources.some(r => !['compute', 'storage', 'api'].includes(r)) ||
       new Set(raw.required_resources).size !== raw.required_resources.length) throw new Error('invalid required native mission resources');
   if (!Array.isArray(raw.goals) || raw.goals.length < 1 || raw.goals.length > 10) throw new Error('native mission requires 1 to 10 goals');
-  const ids = new Set(); let total = 0n;
+  const ids = new Map(); let total = 0n;
   const goals = raw.goals.map(item => {
-    if (!exact(item, ['kind', 'goal']) || !['random', 'oracle'].includes(item.kind)) throw new Error('unsupported native mission goal');
-    const goal = item.kind === 'oracle' ? validateOracleGoal(item.goal) : validateOutlayerGoal(item.goal);
+    if (!exact(item, ['kind', 'goal']) || !['random', 'oracle', 'storage'].includes(item.kind)) throw new Error('unsupported native mission goal');
+    let goal;
+    if (item.kind === 'storage' && typeof item.goal?.value !== 'string') {
+      const reference = item.goal?.value;
+      if (!exact(reference, ['from_goal_ids']) || !Array.isArray(reference.from_goal_ids) || !reference.from_goal_ids.length ||
+          reference.from_goal_ids.length > 2 || new Set(reference.from_goal_ids).size !== reference.from_goal_ids.length ||
+          reference.from_goal_ids.some(id => typeof id !== 'string' || !['random', 'oracle'].includes(ids.get(id)))) {
+        throw new Error('storage may reference only distinct earlier verified compute or oracle goals');
+      }
+      goal = validateNativeStorageGoal({ ...item.goal, value: 'pending verified results' });
+      if (goal.route.max_value_bytes !== 4096) throw new Error('result storage requires a 4096-byte owner limit');
+      goal.value = { from_goal_ids: [...reference.from_goal_ids] };
+    } else {
+      goal = item.kind === 'oracle' ? validateOracleGoal(item.goal) : item.kind === 'storage'
+        ? validateNativeStorageGoal(item.goal) : validateOutlayerGoal(item.goal);
+    }
     if (goal.contract_id !== raw.contract_id || goal.owner_account_id !== raw.owner_account_id) throw new Error('all native goals must share one reviewed owner and vault');
     if (ids.has(goal.id)) throw new Error('native mission goal ids must be unique');
-    ids.add(goal.id); total += BigInt(goal.amount);
+    ids.set(goal.id, item.kind); total += BigInt(goal.amount);
     if (total > maximum) throw new Error('native goal maximums exceed the owner-reviewed mission maximum');
     return { kind: item.kind, goal };
   });
@@ -119,9 +135,23 @@ function assertSnapshot(mission, journal, state, exceptId) {
     }
   }
 }
+// Deferred data is derived ONLY from prior verified, journal-bound results.
+// The on-chain value is public and includes each source's original hash.
+function materialize(item, deliveries, { allowPending = false } = {}) {
+  if (item.kind !== 'storage' || typeof item.goal.value === 'string') return item;
+  const sources = item.goal.value.from_goal_ids.map(id => deliveries.get(id));
+  if (sources.some(source => !source)) {
+    if (!allowPending) throw new Error('storage dependencies have not been verified; stop');
+    return { kind: 'storage', goal: validateNativeStorageGoal({ ...item.goal, value: 'pending verified results' }) };
+  }
+  const value = JSON.stringify({ schema: 'bouncer-public-mission-results-v1', resources: sources.map(source => ({
+    goal_id: source.goal_id, kind: source.kind, tx_hash: source.delivery.tx_hash, result: source.delivery.result,
+  })) });
+  return { kind: 'storage', goal: validateNativeStorageGoal({ ...item.goal, value }) };
+}
 function rememberResult(item, result, original, deliveries, { newlyPaid = false } = {}) {
   const delivery = result?.independent?.delivery;
-  const goalKey = item.kind === 'oracle' ? 'oracle_goal' : 'outlayer_goal';
+  const goalKey = item.kind === 'oracle' ? 'oracle_goal' : item.kind === 'storage' ? 'storage_goal' : 'outlayer_goal';
   const goalFingerprint = crypto.createHash('sha256').update(JSON.stringify(item.goal)).digest('hex');
   if (!isTransactionHash(delivery?.tx_hash) || original?.tx_hash !== delivery.tx_hash || original?.fingerprint !== goalFingerprint ||
       (original[goalKey] !== undefined && !isDeepStrictEqual(original[goalKey], item.goal)) ||
@@ -167,14 +197,16 @@ async function runNativeMissionUnlocked({ mission: raw, signers = {}, provider, 
     return native(native === runNativeResource && journal ? { ...args, exclusiveJournalScope: scope } : args);
   };
   const available = new Set(mission.goals.map(item => resourceOf(item.kind)));
-  const missing = mission.required_resources.filter(resource => resource === 'storage' || !available.has(resource));
+  const missing = mission.required_resources.filter(resource => !available.has(resource));
+  const incomplete = allResources.filter(resource => !available.has(resource));
   if (!recoverOnly && missing.length) return { status: 'BLOCKED', stage: 'unsupported-resources', missing_resources: missing,
-    new_payments: 0, note: 'A required resource is missing; no native storage purchase route is currently supported.' };
+    new_payments: 0, note: 'A required resource has no supported reviewed goal; nothing was sent.' };
 
   // Every recorded original is checked by its original hash, before any new
   // payment. Read-only previews do not alter pending entries.
-  for (const item of mission.goals) {
-    if (!state.entries.get(item.goal.id)) continue;
+  for (const template of mission.goals) {
+    if (!state.entries.get(template.goal.id)) continue;
+    const item = materialize(template, deliveries);
     const result = await call(item, { execute: execute || recoverOnly });
     assertSnapshot(mission, journal, state, item.goal.id);
     if (result?.status !== 'NATIVE_RESOURCE_REUSED') throw new Error('native original did not reconcile; never resend');
@@ -188,8 +220,9 @@ async function runNativeMissionUnlocked({ mission: raw, signers = {}, provider, 
   }
   const remaining = mission.goals.filter(item => !state.entries.get(item.goal.id));
   if (recoverOnly && deliveries.size === 0) throw new Error('native mission has no original payment to recover');
-  if (recoverOnly) return { status: 'RECOVERED_PARTIAL', new_payments: 0, remaining_goal_ids: remaining.map(item => item.goal.id),
-    missing_resources: missing, deliveries: [...deliveries.values()], note: 'Original hashes only; no signing or new payment.' };
+  if (recoverOnly) return { status: !incomplete.length && !remaining.length ? 'RECOVERED' : 'RECOVERED_PARTIAL',
+    new_payments: 0, remaining_goal_ids: remaining.map(item => item.goal.id), missing_resources: missing,
+    deliveries: [...deliveries.values()], note: 'Original hashes only; no signing or new payment. Storage, when present, is public and self-hosted.' };
 
   if (remaining.length) {
     try { guardFresh(deliveries); }
@@ -197,7 +230,8 @@ async function runNativeMissionUnlocked({ mission: raw, signers = {}, provider, 
   }
   // All remaining resource-specific policy/provider/key preflights must pass
   // before the first new signature or payment.
-  for (const item of remaining) {
+  for (const template of remaining) {
+    const item = materialize(template, deliveries, { allowPending: true });
     const result = await call(item, { execute: false });
     assertSnapshot(mission, journal, state);
     if (result?.status === 'BLOCKED') return { status: 'BLOCKED', stage: 'native-preflight', goal_id: item.goal.id, new_payments: 0 };
@@ -206,8 +240,8 @@ async function runNativeMissionUnlocked({ mission: raw, signers = {}, provider, 
   let budget = await previewNativeMissionBudget({ mission, remaining, provider });
   assertSnapshot(mission, journal, state);
   if (budget.status !== 'READY') return { status: 'BLOCKED', stage: 'budget', budget, new_payments: 0 };
-  if (!execute) return { status: 'READY_PARTIAL', budget, missing_resources: ['storage'], new_payments: 0,
-    note: 'Read-only preview; native random compute and oracle data do not complete storage.' };
+  if (!execute) return { status: incomplete.length ? 'READY_PARTIAL' : 'READY', budget, missing_resources: incomplete, new_payments: 0,
+    note: 'Read-only preview. Storage is PUBLIC, self-hosted NEAR state, not an independent vendor; no live fulfillment is established.' };
 
   if (!state.intent && remaining.length) {
     const intent = { kind: 'native-mission-intent-v1', status: 'pending', fingerprint: fingerprint(mission), mission, created_at: new Date().toISOString() };
@@ -216,7 +250,7 @@ async function runNativeMissionUnlocked({ mission: raw, signers = {}, provider, 
   }
   let newPayments = 0;
   for (let index = 0; index < remaining.length; index++) {
-    const item = remaining[index];
+    const item = materialize(remaining[index], deliveries);
     assertSnapshot(mission, journal, state);
     try { guardFresh(deliveries); }
     catch { return { status: 'BLOCKED', stage: 'stale-oracle', goal_id: item.goal.id, new_payments: newPayments }; }
@@ -243,6 +277,9 @@ async function runNativeMissionUnlocked({ mission: raw, signers = {}, provider, 
     state.entries.set(item.goal.id, original);
     newPayments++;
   }
-  return { status: 'FULFILLED_PARTIAL', new_payments: newPayments, missing_resources: ['storage'], deliveries: [...deliveries.values()],
-    note: 'Independent native random compute and/or oracle data only; no native storage route, browser signing or full multi-resource proof.' };
+  try { guardFresh(deliveries); }
+  catch { return { status: 'BLOCKED', stage: 'stale-oracle', new_payments: newPayments, deliveries: [...deliveries.values()] }; }
+  return { status: incomplete.length ? 'FULFILLED_PARTIAL' : 'FULFILLED', new_payments: newPayments,
+    missing_resources: incomplete, deliveries: [...deliveries.values()],
+    note: 'Native testnet mission; public storage is self-hosted NEAR state, not an independent storage purchase or permanence proof.' };
 }

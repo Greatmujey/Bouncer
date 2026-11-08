@@ -221,7 +221,9 @@ async function runOracleGoalUnlocked({ goal: rawGoal, provider, account, publicK
     provider.callFunction(goal.contract_id, 'contract_version', {}, final), provider.callFunction(goal.contract_id, 'get_owner', {}, final),
     provider.viewAccessKey(goal.owner_account_id, publicKey, final),
   ]);
-  if (version !== 'bouncer-agent-v9' || owner !== goal.owner_account_id) throw new Error('pinned oracle requires Bouncer v9 and the reviewed owner');
+  if (!['bouncer-agent-v9', 'bouncer-agent-v14-native-storage-testnet'].includes(version) || owner !== goal.owner_account_id) {
+    throw new Error('pinned oracle requires supported Bouncer v9/V14 and the reviewed owner');
+  }
   const permission = access?.permission?.FunctionCall;
   if (!permission || permission.receiver_id !== goal.contract_id || !equal(permission.method_names, ['execute_outlayer_native_project'])) {
     throw new Error('agent key must be scoped ONLY to execute_outlayer_native_project on this contract');

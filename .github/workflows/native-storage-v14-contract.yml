@@ -32,6 +32,27 @@ jobs:
         run: |
           cargo build --locked --target wasm32-unknown-unknown --release --no-default-features --features native-storage-v14
           sha256sum target/wasm32-unknown-unknown/release/bouncer.wasm
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+      - name: Install test dependencies
+        working-directory: bouncer
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Download pinned isolated nearcore
+        working-directory: bouncer
+        run: |
+          curl --fail --show-error --silent --location --proto '=https' --tlsv1.2 --max-time 180 --retry 2 --max-filesize 419430400 \
+            'https://s3-us-west-1.amazonaws.com/build.nearprotocol.com/nearcore/Linux-x86_64/2.14.0/near-sandbox.tar.gz' \
+            --output "$RUNNER_TEMP/near-sandbox.tar.gz"
+          python3 scripts/extract-pinned-near-sandbox.py "$RUNNER_TEMP/near-sandbox.tar.gz" "$RUNNER_TEMP/near-sandbox"
+      - name: Exercise contract and original-hash verifier on loopback only
+        working-directory: bouncer
+        env:
+          BOUNCER_SANDBOX_BIN: ${{ runner.temp }}/near-sandbox
+          BOUNCER_V14_WASM_PATH: ${{ github.workspace }}/bouncer/contracts/bouncer/target/wasm32-unknown-unknown/release/bouncer.wasm
+        run: |
+          ulimit -Sn 65535
+          node integration/native-storage-v14-sandbox.mjs
       - uses: actions/upload-artifact@v4
         with:
           name: experimental-v14-testnet-wasm
