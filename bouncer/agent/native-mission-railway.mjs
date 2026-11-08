@@ -23,6 +23,13 @@ export function createRailwayNativeMissionBackend({siteOrigin, backendOrigin, pr
   const secret = validateNativeProxySecret(proxySecret);
   const handle = createNativeMissionHttpHandler({service, siteOrigin:origin});
   const server = http.createServer((req,res) => {
+    // A deliberately information-minimal health probe, not authorization or
+    // proof of RPC, journal durability, wallet control or mission readiness.
+    if ((req.method==='GET'||req.method==='HEAD') && req.url==='/healthz') {
+      res.writeHead(200,{'content-type':'application/json; charset=utf-8','cache-control':'no-store',
+        'x-content-type-options':'nosniff','referrer-policy':'no-referrer'});
+      return res.end(req.method==='HEAD'?undefined:JSON.stringify({service:'bouncer-testnet-native-backend',status:'ONLINE'}));
+    }
     // Only the Vercel proxy knows this secret. Do not trust forwarded host or
     // origin headers by themselves: they can be forged by a direct client.
     if (req.headers.host !== host || req.headers['x-forwarded-proto'] !== 'https' ||

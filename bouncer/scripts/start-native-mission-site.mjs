@@ -61,11 +61,9 @@ export function classifyNativeMissionStartupError(error) {
   return 'CONFIGURATION_OR_RUNTIME';
 }
 
-async function main() {
-  if(process.argv.length===3&&process.argv[2]==='--help'){console.log(USAGE);return}
-  if(process.argv.length!==2)throw new Error('invalid arguments');
-  const {host,port}=resolveNativeMissionListener();
-  const runtime=await configureNativeMissionSite();
+export async function startNativeMissionSite({env=process.env}={}) {
+  const {host,port}=resolveNativeMissionListener(env);
+  const runtime=await configureNativeMissionSite({env});
   try {await new Promise((resolve,reject)=>{runtime.server.once('error',reject);runtime.server.listen(port,host,resolve)});}
   catch(error){await runtime.close();throw error}
   console.log(`Bouncer testnet mission service listening on ${host}:${port} in ${runtime.mode} mode (${runtime.ingress}). HTTPS proxy required.`);
@@ -75,6 +73,12 @@ async function main() {
     void runtime.close().then(()=>{process.exitCode=0},()=>{console.error('Shutdown is uncertain; preserve the original journal and reconcile before restart.');process.exitCode=1});
   };
   process.once('SIGINT',shutdown);process.once('SIGTERM',shutdown);
+  return runtime;
+}
+async function main() {
+  if(process.argv.length===3&&process.argv[2]==='--help'){console.log(USAGE);return}
+  if(process.argv.length!==2)throw new Error('invalid arguments');
+  await startNativeMissionSite();
 }
 if(process.argv[1]&&pathToFileURL(path.resolve(process.argv[1])).href===import.meta.url) {
   main().catch(error=>{console.error(`Bouncer testnet mission site did not start (${classifyNativeMissionStartupError(error)}). Preserve the original journal; no startup transaction was sent.`);process.exitCode=1});

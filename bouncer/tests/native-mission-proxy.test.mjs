@@ -113,6 +113,9 @@ test('Railway ingress rejects direct requests and only exposes the secret-gated 
   const server=createRailwayNativeMissionBackend({siteOrigin:site,backendOrigin:backend,proxySecret:secret,service});await listen(server);
   try {
     const good={host:backendHost,'x-forwarded-proto':'https','x-bouncer-proxy-secret':secret,...marker};
+    const health=await request(server,{path:'/healthz'});
+    assert.equal(health.status,200);assert.deepEqual(JSON.parse(health.body),{service:'bouncer-testnet-native-backend',status:'ONLINE'});
+    assert.equal((await request(server,{path:'/healthz?x=1'})).status,403);
     for(const headers of [{...good,'x-bouncer-proxy-secret':otherSecret},{...good,'x-bouncer-proxy-secret':undefined},
       {...good,host:'wrong.example'},{...good,'x-forwarded-proto':'http'}]) {
       if(headers['x-bouncer-proxy-secret']===undefined)delete headers['x-bouncer-proxy-secret'];

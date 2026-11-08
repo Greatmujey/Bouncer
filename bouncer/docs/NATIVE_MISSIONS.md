@@ -219,8 +219,15 @@ browser-provided destination, follow redirects, sign, or retry. An ambiguous
 execution response must be reconciled by the original hash.
 
 The `bouncer/Dockerfile` builds a persistent Node service with Linux `flock`;
-the Railway project root must be `bouncer`. It creates no mission, vault, keys,
-consent database or journal. Attach a persistent volume to **one instance**;
+the Railway project root must be `bouncer`. Without explicit mission enablement
+it runs a **non-spending standby**: `/` and `/healthz` report `STANDBY`, and
+mission endpoints return 404. No mission, vault, keys, consent database or
+journal is created, and the mission runtime is not loaded. This allows a basic
+HTTPS deployment check without implying readiness. When configured, `/healthz`
+returns `ONLINE` without authentication; it is only process liveness, not proof
+of RPC connectivity, original durability, wallet control or mission readiness.
+Every mission API remains gated by the proxy secret. Attach a persistent
+volume to **one instance**;
 under it, provision an owner-only 0700 directory containing the already
 reviewed mission, its dedicated **original** encrypted journal and its key.
 The journal must retain that mission's intent and no unrelated entries. The
@@ -274,8 +281,11 @@ filesystem. It cannot prevent a second journal, another host, volume loss,
 rollback, a forged mount setting, compromised operator or old snapshot. A
 backup must never be restored as if it were current authority. Keep a separately
 protected record of original hashes and reconcile uncertainty before any new
-approval. Railway and Vercel remain unavailable for this mission until their
-actual service, cost, configuration and deployed behavior are verified.
+approval. Railway says [trial volumes can be deleted 30 days after trial credits
+expire](https://docs.railway.com/pricing/free-trial#data-retention); a trial volume
+must never be the sole copy of originals. Railway and Vercel remain unavailable
+for this mission until their actual service, cost, configuration and deployed
+behavior are verified.
 
 Mobile V14 provisioning is also unresolved. At commit `42255e1`, the CI-built
 WASM was 499,063 bytes; its 665,420-byte base64 code field alone exceeds the
