@@ -43,7 +43,12 @@ jobs:
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}/bouncer/contracts/bouncer/target
           RUSTFLAGS: '-C link-arg=-s'
-        run: cargo build --locked --target wasm32-unknown-unknown --release
+        run: |
+          if ! cargo build --locked --target wasm32-unknown-unknown --release > "$RUNNER_TEMP/fake-provider-build.log" 2>&1; then
+            python3 -c 'import os; s=open(os.environ["RUNNER_TEMP"]+"/fake-provider-build.log").read()[-4500:]; print("::error title=Fake sandbox provider build failed::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
+            exit 1
+          fi
+          cat "$RUNNER_TEMP/fake-provider-build.log"
       - name: Download pinned isolated nearcore
         working-directory: bouncer
         run: |

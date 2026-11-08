@@ -446,3 +446,15 @@ test('browser approval reaches all three actual guarded runners and original-onl
     await assert.rejects(client.approve(review),/UNAVAILABLE/); assert.equal(f.sends,3);
   } finally { await new Promise(resolve=>server.close(resolve)); }
 }, {storage:true}));
+
+test('mission service can be restarted without any agent keys or auth solely to recover originals', () => withFixture(async f => {
+  const completed = await f.invoke({execute:true}); assert.equal(completed.status,'FULFILLED'); assert.equal(f.sends,3);
+  const service = createAuthenticatedNativeMissionService({mission:f.mission,provider:f.provider,journal:f.journal});
+  const hash = service.getReview().mission_sha256;
+  assert.equal((await service.preview({missionSha256:hash})).preview.stage,'recovery-only');
+  assert.equal((await service.originals({missionSha256:hash})).originals.length,3);
+  const recovered = await service.recover({missionSha256:hash}); assert.equal(recovered.status,'RECOVERED'); assert.equal(recovered.new_payments,0);
+  await assert.rejects(service.issue({missionSha256:hash,ownerPublicKey:'anything'}),/reconcile/);
+  await assert.rejects(service.execute({missionSha256:hash,ownerPublicKey:'anything',evidence:{}}),/reconcile/);
+  assert.equal(f.sends,3);
+}, {storage:true}));

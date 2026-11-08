@@ -71,7 +71,10 @@ and non-atomic/no-retry warnings before an explicit NEP-413 owner approval.
 Connecting, entering an account name, or signing the separate identity message
 does not grant spending authority. The explicit approval is an off-chain
 instruction to the configured agent, not an on-chain transaction signed by
-the wallet. The frontend never sends private keys, chosen transactions,
+the wallet. This particular approval currently requires a named testnet owner
+with a current Ed25519 Full Access key and NEP-413 message support; the
+existing EVM-on-NEAR/0x connector is preserved but cannot authorize this route
+yet. The frontend never sends private keys, chosen transactions,
 receiver addresses or mutable goals to the backend. Recovery uses the original
 hashes and no signing keys. Unknown/error results hide the approval button for
 that session and offer receipt-only checking, first displaying any matching
@@ -80,7 +83,10 @@ is not proof that a transaction never happened.
 
 `agent/authenticated-native-mission-service.mjs` composes a fixed manifest,
 server-side scoped agent signers, trusted RPC, `FileJournal` and the existing
-PostgreSQL one-use owner authenticator. `agent/native-mission-http.mjs` provides
+PostgreSQL one-use owner authenticator. If agent keys are unavailable, the
+service can instead be constructed without signers or an authenticator in
+**recovery-only mode**: it can list retained hashes and reconcile receipts,
+but cannot issue approval challenges or execute. `agent/native-mission-http.mjs` provides
 a strict same-origin handler/server factory, **not an automatically enabled
 service**. POST requests are exact-shape and origin-checked. The separate
 `BOUNCER_NATIVE_MISSION_PREVIEW=1` switch on the development web server only
