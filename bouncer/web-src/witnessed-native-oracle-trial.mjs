@@ -10,7 +10,7 @@
  * operated witness/checkpoint remain trust boundaries. Unknown or lost results
  * require original-hash reconciliation, never an automatic replacement.
  */
-import { verifyNativeOracleSetupReview } from './native-oracle-setup-wallet-prompt.mjs';
+import { verifySupportedNativeOracleSetupReview } from './native-oracle-setup-wallet-prompt.mjs';
 import { assertNativeOracleCompletion } from './native-oracle-completion.mjs';
 import { buildNativeOracleTrialBytes, encodeBase58, NATIVE_ORACLE_TRIAL_GAS } from './native-oracle-transaction.mjs';
 
@@ -27,7 +27,7 @@ export async function prepareWitnessedNativeOracleTrial({client,deviceStore,iden
   const identity=structuredClone(rawIdentity),review=structuredClone(rawReview);
   const current=()=>{if(isCurrent()!==true)throw fail()};current();
   const device=await deviceStore.inspect({owner:review?.owner,vault:review?.vault,expected_public_key:review?.agent_public_key});current();
-  const canonical=await verifyNativeOracleSetupReview({review,identity,deviceKey:device,origin,crypto});current();
+  const canonical=await verifySupportedNativeOracleSetupReview({review,identity,deviceKey:device,origin,crypto});current();
   const goal={id:goalId,contract_id:canonical.vault,owner_account_id:canonical.owner,policy_id:canonical.policy_id,
     amount:canonical.per_tx_cap_yocto,route:{project:canonical.project,route_revision:1,policy_revision:1,payee_revision:1,active:true},
     max_age_seconds:300};

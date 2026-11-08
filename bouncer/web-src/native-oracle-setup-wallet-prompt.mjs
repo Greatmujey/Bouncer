@@ -17,8 +17,8 @@
 import { isTestnetAccount } from './wallet-utils.mjs';
 
 const STAGES = ['create_keyless_native_vault', 'configure_native_oracle_policy', 'fund_native_vault', 'install_native_oracle_agent'];
-// Separate opt-in adapter only. The live flow still uses STAGES; this list does
-// not itself enable a wallet prompt or provide an independent prompt fence.
+// Selected only for an explicitly enabled, verified atomic review. This list
+// does not itself enable a wallet prompt or provide an independent fence.
 const ATOMIC_STAGES = ['create_configure_fund_native_vault', 'install_native_oracle_agent'];
 const HEX64 = /^[a-f0-9]{64}$/, HEX32 = /^[a-f0-9]{32}$/, GIT = /^[a-f0-9]{40}$/;
 const B58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
@@ -206,6 +206,17 @@ export async function verifyNativeOracleSetupReview({ review, identity, deviceKe
 /** Atomic equivalent; separately fenced/anchored operation still required. */
 export async function verifyAtomicNativeOracleSetupReview({ review, identity, deviceKey, origin, crypto = globalThis.crypto } = {}) {
   return assertLocalDevice(await verifyAtomicNativeOracleRetainedReview({ review, identity, crypto }), deviceKey, origin);
+}
+/** Choose by the retained format, never by a caller-supplied stage count. */
+export async function verifySupportedNativeOracleRetainedReview(args = {}) {
+  if (args.review?.format === 'bouncer-native-oracle-wallet-review-v1') return verifyNativeOracleRetainedReview(args);
+  if (args.review?.format === 'bouncer-atomic-native-oracle-wallet-review-v1') return verifyAtomicNativeOracleRetainedReview(args);
+  throw fail();
+}
+export async function verifySupportedNativeOracleSetupReview(args = {}) {
+  if (args.review?.format === 'bouncer-native-oracle-wallet-review-v1') return verifyNativeOracleSetupReview(args);
+  if (args.review?.format === 'bouncer-atomic-native-oracle-wallet-review-v1') return verifyAtomicNativeOracleSetupReview(args);
+  throw fail();
 }
 
 function walletActions(stage, code) {

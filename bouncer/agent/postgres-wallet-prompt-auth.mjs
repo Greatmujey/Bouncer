@@ -68,7 +68,8 @@ function actionFields(action) {
   const native = ['reserve_native_setup', 'claim_native_setup_stage', 'record_native_setup_original', 'inspect_native_setup',
     'verify_native_setup_completion', 'claim_native_oracle_trial'];
   if (native.includes(purpose.value)) {
-    const stages = ['create_keyless_native_vault', 'configure_native_oracle_policy', 'fund_native_vault', 'install_native_oracle_agent'];
+    const stages = ['create_keyless_native_vault', 'configure_native_oracle_policy', 'fund_native_vault',
+      'create_configure_fund_native_vault', 'install_native_oracle_agent'];
     const extra = purpose.value === 'inspect_native_setup' ? [] : purpose.value === 'verify_native_setup_completion'
       ? ['operation_id', 'review_sha256'] : purpose.value === 'claim_native_oracle_trial'
       ? ['operation_id','review_sha256','goal_id','goal_sha256','agent_public_key','original_hash','witness_head']
@@ -83,7 +84,7 @@ function actionFields(action) {
     if (purpose.value !== 'inspect_native_setup' && !HEX64.test(action.review_sha256 ?? '')) throw new Error('invalid native reviewed action');
     if (!['inspect_native_setup', 'verify_native_setup_completion', 'claim_native_oracle_trial'].includes(purpose.value) &&
         (!HEX64.test(action.action_commitment_sha256 ?? '') || !stages.includes(action.stage_id) ||
-        (purpose.value === 'reserve_native_setup' && action.stage_id !== stages[0]))) throw new Error('invalid native reviewed action');
+        (purpose.value === 'reserve_native_setup' && !['create_keyless_native_vault','create_configure_fund_native_vault'].includes(action.stage_id)))) throw new Error('invalid native reviewed action');
     if (['claim_native_setup_stage', 'record_native_setup_original', 'verify_native_setup_completion', 'claim_native_oracle_trial'].includes(purpose.value) &&
         !HEX32.test(action.operation_id ?? '')) throw new Error('invalid native prompt operation');
     if (purpose.value === 'record_native_setup_original' && !isTransactionHash(action.original_hash)) throw new Error('invalid native original');

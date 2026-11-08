@@ -32,8 +32,10 @@ const sameCheckpoint = (a, b) => validCheckpoint(a) && validCheckpoint(b) && a.h
 const fail = () => new Error('experimental setup unavailable: preprovisioned schemas and the separately retained current witness head are required');
 
 export async function createExperimentalPhoneSetupRuntime({ pool, siteOrigin, provider, anchor, repo, branch, initialHead,
-  nativeWasmBytes, bufferWasmBytes, enableNative = false, enableBuffer = false, enableNativeTrial = false } = {}) {
+  nativeWasmBytes, bufferWasmBytes, enableNative = false, enableBuffer = false, enableNativeTrial = false,
+  enableNativeAtomic = false } = {}) {
   if (typeof enableNative !== 'boolean' || typeof enableBuffer !== 'boolean' || typeof enableNativeTrial !== 'boolean' ||
+      typeof enableNativeAtomic !== 'boolean' || (enableNativeAtomic && !enableNative) ||
       (enableNativeTrial && (!enableNative || typeof provider?.block !== 'function')) || (!enableNative && !enableBuffer) ||
       !pool || typeof pool.connect !== 'function' || !anchor || typeof anchor.read !== 'function' ||
       typeof anchor.compareAndSet !== 'function') throw fail();
@@ -67,13 +69,14 @@ export async function createExperimentalPhoneSetupRuntime({ pool, siteOrigin, pr
   }
   if (enableNative) {
     const fence = createPostgresNativeOraclePromptFence({ pool, authenticate: auth.authenticate, wasmBytes: nativeWasmBytes,
-      receiptProvider: provider, preflightProvider: provider });
+      receiptProvider: provider, preflightProvider: provider, enableAtomic: enableNativeAtomic });
     const coordinator = createWitnessedNativeOracleSetup({ fence, witness: pair.native, otherWitness: pair.wallet });
-    const catalog = createNativeOracleReviewCatalog({ wasmBytes: nativeWasmBytes });
+    const catalog = createNativeOracleReviewCatalog({ wasmBytes: nativeWasmBytes, enableAtomic: enableNativeAtomic });
     const service = createAuthenticatedNativeOracleSetupService({ auth, fence, witness: pair.native, otherWitness: pair.wallet,
-      coordinator, getRetainedReview: catalog.getRetainedReview, wasmBytes: nativeWasmBytes, receiptProvider: provider, owner: OWNER });
+      coordinator, getRetainedReview: catalog.getRetainedReview, wasmBytes: nativeWasmBytes, receiptProvider: provider, owner: OWNER,
+      enableAtomic: enableNativeAtomic });
     const handler = createNativeOracleSetupHttpHandler({ service, siteOrigin, wasmBytes: nativeWasmBytes,
-      owner: OWNER, createReview: catalog.create, enableTrialSubmission: enableNativeTrial });
+      owner: OWNER, createReview: catalog.create, enableTrialSubmission: enableNativeTrial, enableAtomic: enableNativeAtomic });
     nativeSetupFactory = () => handler;
   }
   return Object.freeze({ setupFactory, nativeSetupFactory, ready_for_real_spending: false,

@@ -310,3 +310,18 @@ dbtest('native setup challenges bind all four exact stages, originals and the on
     { ...trial, witness_head:'g'.repeat(40) },{ ...trial, goal_sha256:'F'.repeat(64) },
   ]) await assert.rejects(auth.issue(bad));
 }));
+
+dbtest('atomic challenge binds its exact first stage and cannot be reused for the agent installation', async () => resources(async (_db, _rpc, auth) => {
+  const f=fixture(),base={format:'bouncer-wallet-prompt-auth-v1',network:'testnet',owner:f.owner,owner_public_key:pk(f.ownerKey)};
+  const reserve={...base,purpose:'reserve_native_setup',review_sha256:'a'.repeat(64),
+    stage_id:'create_configure_fund_native_vault',action_commitment_sha256:'b'.repeat(64)};
+  const claim={...reserve,purpose:'claim_native_setup_stage',operation_id:'c'.repeat(32)};
+  const challenge=await auth.issue(claim),evidence=signed(challenge,f);
+  assert.equal(await auth.authenticate({action:{...claim,stage_id:'install_native_oracle_agent'},evidence}),false);
+  assert.equal(await auth.authenticate({action:claim,evidence}),true);
+  assert.equal(await auth.authenticate({action:claim,evidence}),false);
+  const reservation=await auth.issue(reserve);
+  assert.equal(await auth.authenticate({action:reserve,evidence:signed(reservation,f)}),true);
+  for (const stage_id of ['install_native_oracle_agent','configure_native_oracle_policy','fund_native_vault'])
+    await assert.rejects(auth.issue({...reserve,stage_id}));
+}));

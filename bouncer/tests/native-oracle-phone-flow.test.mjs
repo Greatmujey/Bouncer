@@ -5,6 +5,7 @@ import { webcrypto } from 'node:crypto';
 import { IDBFactory } from 'fake-indexeddb';
 import nearApi from 'near-api-js';
 import { buildNativeOracleWalletPlan,NATIVE_ORACLE_DEFAULT_GAS_ALLOWANCE } from '../agent/native-oracle-wallet-plan.mjs';
+import { buildAtomicNativeOracleWalletPlan } from '../agent/native-oracle-atomic-wallet.mjs';
 import { createNativeOraclePromptWitness } from '../agent/git-native-oracle-prompt-witness.mjs';
 import { openNativeOracleDeviceKey } from '../web-src/native-oracle-device-key.mjs';
 import { createNativeOracleOwnerFlow } from '../web-src/native-oracle-owner-flow.mjs';
@@ -19,15 +20,17 @@ const checks=Object.fromEntries(['plain_owner','exact_owner_key','owner_native_e
   'agent_gas_allowance_estimate','pinned_project_identity_and_native_pricing','exact_agent_key','exact_keyless_vault',
   'native_policy_state','vault_native_balance','onchain_policy_check'].map(k=>[k,true]));
 
-async function fixture({enabled=true,unknownSend=false,wrongNetwork=false}={}) {
+async function fixture({enabled=true,unknownSend=false,wrongNetwork=false,atomic=false}={}) {
   const indexedDB=new IDBFactory();
   const device=await openNativeOracleDeviceKey({indexedDB,storage:{persisted:async()=>true},crypto:webcrypto,
     origin:ORIGIN,isTopLevel:true,now:()=>NOW});
   const key=await device.create({owner:OWNER,vault:VAULT});
   const ownerKey=String(nearApi.KeyPair.fromRandom('ed25519').getPublicKey());
-  const review=buildNativeOracleWalletPlan({wasmBytes:wasm,terms:{owner:OWNER,vault:VAULT,policy_id:'price',agent_public_key:key.public_key,
+  const terms={owner:OWNER,vault:VAULT,policy_id:'price',agent_public_key:key.public_key,
     per_tx_cap_yocto:'100000000000000000000000',daily_cap_yocto:'100000000000000000000000',
-    vault_deposit_yocto:'100000000000000000000000',agent_gas_allowance_yocto:NATIVE_ORACLE_DEFAULT_GAS_ALLOWANCE}}).review;
+    vault_deposit_yocto:'100000000000000000000000',agent_gas_allowance_yocto:NATIVE_ORACLE_DEFAULT_GAS_ALLOWANCE};
+  const review=(atomic?buildAtomicNativeOracleWalletPlan({wasmBytes:wasm,terms,trustedOwnerPublicKey:ownerKey}):
+    buildNativeOracleWalletPlan({wasmBytes:wasm,terms})).review;
   const identity={owner:OWNER,owner_public_key:ownerKey,operation_id:'1'.repeat(32),review_sha256:review.review_sha256,
     stages:review.stages.map(s=>({stage_id:s.id,action_commitment_sha256:s.action_commitment_sha256}))};
   let revision=0,text='';const head=()=>revision.toString(16).padStart(40,'0');
@@ -35,7 +38,7 @@ async function fixture({enabled=true,unknownSend=false,wrongNetwork=false}={}) {
     if(input.expectedHead!==head() || input.expectedText!==text)throw Error('synthetic CAS');text=input.text;revision++;
     return {head:head(),confirmed:true}}}});
   await witness.reserve(identity);
-  for(let i=0;i<4;i++){
+  for(let i=0;i<identity.stages.length;i++){
     const stage=identity.stages[i].stage_id,claim=await witness.assertClaimable(identity,stage);
     await witness.claim(identity,stage,claim);await witness.recordOriginal(identity,stage,hash(i+1));
   }
@@ -48,7 +51,7 @@ async function fixture({enabled=true,unknownSend=false,wrongNetwork=false}={}) {
       tx_hash:originalHash,original_recorded:true,execution_authorized:false}},
     async trialSubmissionEnabled(){return enabled},
     async verifyCompletion(){const snapshot=await witness.inspect(OWNER);return {version:1,network:'testnet',
-      status:'FOUR_ORIGINALS_AND_STATE_MATCH_NOT_AUTHORIZED',stage_id:'verify_native_setup_completion',owner:OWNER,vault:VAULT,
+      status:atomic?'TWO_ORIGINALS_AND_STATE_MATCH_NOT_AUTHORIZED':'FOUR_ORIGINALS_AND_STATE_MATCH_NOT_AUTHORIZED',stage_id:'verify_native_setup_completion',owner:OWNER,vault:VAULT,
       review_sha256:review.review_sha256,independently_witnessed:true,witness_head:snapshot.head,execution_authorized:false,
       signing_authorized:false,transaction_sent:false,owner_approval_obtained:false,wallet_prompt_authorized:false,
       prior_original_hashes:rows.map(r=>r.original_hash),checks,blockers:[],observed_at:new Date(NOW).toISOString(),
@@ -158,5 +161,21 @@ test('without a local key an unfinished setup remains blocked and cannot request
     assert.equal(recovery.getState().phase,'blocked');
     await assert.rejects(recovery.approveStage({ownerConfirmed:true}),e=>e.code==='NATIVE_FLOW_ACTION_NOT_AVAILABLE');
     assert.deepEqual(f.counts(),{sends:0,claims:0});
+  }finally{f.device.close()}
+});
+
+test('two-stage trial is recovered on a second device without the agent key or another send',async()=>{
+  const f=await fixture({atomic:true,unknownSend:true});try {
+    const first=f.makeFlow();await ready(f,first);
+    assert.equal(first.getState().terms.setupStages,2);
+    await first.reviewTrial();await first.runTrial({ownerConfirmed:true});
+    const original=first.getState().originalHash;assert.equal(first.getState().phase,'trial_retained');
+    const recovery=f.makeFlow({async inspect(){return {status:'NO_LOCAL_DEVICE_KEY'}}});
+    await recovery.check();assert.equal(recovery.getState().phase,'trial_retained');
+    assert.equal(recovery.getState().originalHash,original);
+    await assert.rejects(recovery.runTrial({ownerConfirmed:true}),e=>e.code==='NATIVE_FLOW_ACTION_NOT_AVAILABLE');
+    await recovery.checkTrial();assert.equal(recovery.getState().phase,'trial_verified');
+    assert.deepEqual(recovery.getState().delivery,{priceUsd:2.75,chargedNear:'0.01',refundNear:'0.09'});
+    assert.deepEqual(f.counts(),{sends:1,claims:1});
   }finally{f.device.close()}
 });

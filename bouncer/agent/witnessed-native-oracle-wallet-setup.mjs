@@ -1,6 +1,6 @@
 /**
  * Experimental two-system coordinator for four native wallet stages or the
- * reviewed two-stage atomic plan. The live service remains on four stages.
+ * reviewed two-stage atomic plan. Atomic selection remains default-off.
  * PostgreSQL authenticates the exact owner action and verifies all prior
  * original receipt graphs plus a fresh same-block preflight. An independently
  * retained Git CAS witness must acknowledge and re-read the matching claim;

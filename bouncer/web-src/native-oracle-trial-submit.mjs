@@ -13,7 +13,7 @@
  * An RPC acknowledgement is NOT proof of delivery; verify the original receipts.
  */
 import { assertNativeOracleCompletion } from './native-oracle-completion.mjs';
-import { verifyNativeOracleSetupReview } from './native-oracle-setup-wallet-prompt.mjs';
+import { verifySupportedNativeOracleSetupReview } from './native-oracle-setup-wallet-prompt.mjs';
 import { buildNativeOracleTrialBytes, decodeNativeHash32, encodeBase58 } from './native-oracle-transaction.mjs';
 import { retainLocalNativeSubmission } from './native-oracle-local-submission.mjs';
 
@@ -91,9 +91,10 @@ export async function submitWitnessedNativeOracleTrialOnce({ signedResult: rawSi
         signed.attached_deposit_yocto !== '0' || signed.witnessed_original_matched !== true ||
         signed.local_original_retained !== true || signed.do_not_retry !== true || signed.broadcast_authorized !== false ||
         signed.transaction_sent !== false || !/^[a-f0-9]{40}$/.test(signed.witness_head ?? '') ||
-        !Array.isArray(signed.setup_original_hashes) || signed.setup_original_hashes.length !== 4) throw fail();
+        !Array.isArray(signed.setup_original_hashes) ||
+        signed.setup_original_hashes.length !== (review?.format === 'bouncer-atomic-native-oracle-wallet-review-v1' ? 2 : 4)) throw fail();
     const device = await deviceStore.inspect({ owner: review.owner, vault: review.vault, expected_public_key: review.agent_public_key }); current();
-    const canonical = await verifyNativeOracleSetupReview({ review, identity, deviceKey: device, origin, crypto }); current();
+    const canonical = await verifySupportedNativeOracleSetupReview({ review, identity, deviceKey: device, origin, crypto }); current();
     assertNativeOracleCompletion(completion, review, now());
     if (completion.witness_head !== signed.witness_head ||
         JSON.stringify(completion.prior_original_hashes) !== JSON.stringify(signed.setup_original_hashes)) throw fail();

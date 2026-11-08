@@ -11,6 +11,12 @@ examples were **self-hosted development services**.
 
 ## What is implemented
 
+- An explicitly opt-in, two-approval variant combines creation, configuration
+  and funding into one nine-action transaction, followed by restricted agent-key
+  installation. The browser, authenticated service, database fence and Git
+  witness preserve the two original hashes and can still recover the older
+  four-stage format. Tests use synthetic wallets/RPC and an in-memory checkpoint;
+  they do not establish real Meteor/mobile compatibility or a purchase.
 - `agent/native-oracle-wallet-plan.mjs` constructs four **unsigned** testnet
   wallet batches for a named owner, fresh direct-child vault and separate
   Ed25519 agent public key. It pins the repository V9 WASM (452,675 bytes,
@@ -198,6 +204,8 @@ examples were **self-hosted development services**.
   Native-only preview does not require the V12 FT artifact. Both transport
   switches are off by default; trial submission also requires the separate
   `BOUNCER_ENABLE_NATIVE_ORACLE_TESTNET_TRIAL=1` opt-in with native setup.
+  The shorter review additionally requires `BOUNCER_ENABLE_NATIVE_ORACLE_ATOMIC_SETUP=1`;
+  neither option is enabled on the public app by this code.
   This wiring and its disposable DB/local Git
   tests are **not** an independently operated deployment, live phone flow or
   approval to fund a vault. The review catalog is reconstructable across
@@ -449,7 +457,7 @@ a recommendation to expose the current prototype or lock testnet funds.
 ## Before enabling a real phone flow
 
 1. Finish, deploy and independently monitor the per-owner prompt fence and
-   authenticated owner session for these **four** exact stages. Extend the
+   authenticated owner session for the exact reviewed two or four stages. Extend the
    single-database cross-flow hold to an independently anchored, safely
    reconciled handoff/release and establish an operational recovery procedure. Preserve the
    separately anchored review and every original hash across crashes, lost

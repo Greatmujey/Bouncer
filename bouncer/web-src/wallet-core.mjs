@@ -186,10 +186,11 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
       ? `Owner: ${terms.owner}\nKeyless vault: ${terms.vault}\nStorage funding: ${terms.storageNear} test NEAR (can remain locked)\nVault deposit: ${terms.depositNear} test NEAR (not a provider payment)\nLimit: ${terms.capNear} test NEAR per request / ${terms.dailyNear} per rolling day\nAgent gas allowance: up to ${terms.gasAllowanceNear} test NEAR\nProvider: ${terms.payee} · project ${terms.project}\nIf unused funds are refunded, they return to the owner; verify the actual receipts. The full maximum counts against the rolling budget. Gas is extra. Each stage needs a separate wallet approval.`
       : '';
     const descriptions = {
+      create_configure_fund_native_vault: `1 of 2 · Create and configure the keyless vault, transfer ${terms?.storageNear ?? '—'} test NEAR for storage, and deposit ${terms?.depositNear ?? '—'} test NEAR. Storage can remain locked. Four owner-only calls attach 1 yoctoNEAR each; this does not yet pay the provider.`,
       create_keyless_native_vault: `1 of 4 · Create the keyless vault, transfer ${terms?.storageNear ?? '—'} test NEAR for storage and deploy the reviewed contract. Storage can remain locked.`,
       configure_native_oracle_policy: '2 of 4 · Set the spending limits, allowlisted OutLayer project and restricted agent key. The four owner-only calls attach 1 yoctoNEAR each.',
       fund_native_vault: `3 of 4 · Deposit ${terms?.depositNear ?? '—'} test NEAR into the vault. This is not a provider payment.`,
-      install_native_oracle_agent: `4 of 4 · Add the restricted agent key with a gas allowance of ${terms?.gasAllowanceNear ?? '—'} test NEAR. It cannot attach the 1 yoctoNEAR required for owner-only changes.`,
+      install_native_oracle_agent: `${terms?.setupStages === 2 ? '2 of 2' : '4 of 4'} · Add the restricted agent key with a gas allowance of ${terms?.gasAllowanceNear ?? '—'} test NEAR. It cannot attach the 1 yoctoNEAR required for owner-only changes.`,
     };
     if (nativeStage) nativeStage.textContent = state.phase === 'trial_review'
       ? `One OutLayer NEAR/USD price request · maximum ${terms?.capNear ?? '—'} test NEAR from the vault. The full maximum counts toward the rolling daily limit; unused funds return to the owner only if the refund receipt succeeds. Gas is separate. This is a single-source result, not storage delivery or a guarantee of accuracy.`

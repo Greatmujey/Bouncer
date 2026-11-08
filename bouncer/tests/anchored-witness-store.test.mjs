@@ -209,3 +209,24 @@ test('anchored Git retains the trial original across instances and rejects a rew
   await assert.rejects(freshPair.native.inspect(iden.owner),e=>e.code==='WITNESS_UNAVAILABLE');
   assert.equal(anchor.snapshot().head,claim.head);
 }));
+
+test('anchored history accepts two-stage originals and refuses a rewritten atomic original',async()=>repository(async ({work,base,anchor,native})=>{
+  const iden=id('atomic-audit.testnet',true),tx=n=>nearApi.utils.serialize.base_encode(Buffer.alloc(32,n));
+  iden.stages=['create_configure_fund_native_vault','install_native_oracle_agent']
+    .map((stage_id,i)=>({stage_id,action_commitment_sha256:String(i+1).repeat(64)}));
+  await native.reserve(iden);
+  for(let i=0;i<iden.stages.length;i++){
+    const stage=iden.stages[i].stage_id,prior=await native.assertClaimable(iden,stage);
+    await native.claim(iden,stage,prior);await native.recordOriginal(iden,stage,tx(i+1));
+  }
+  const before=anchor.snapshot(),trial={goal_id:'native-oracle-trial-1',goal_sha256:'d'.repeat(64),
+    agent_public_key:key(),original_hash:tx(50)};
+  const saved=await native.claimTrial(iden,trial,before.head);
+  const audit=createGitWitnessRangeAudit({repo:work});assert.equal(await audit(base,saved.head),true);
+  const file=path.join(work,fileFor(iden.owner,'native-oracle-prompt-witness-v1'));
+  fs.writeFileSync(file,fs.readFileSync(file,'utf8').replace(tx(2),tx(3)));
+  const rewritten=commit(work,'Rewrite a synthetic atomic original');
+  await assert.rejects(audit(saved.head,rewritten));
+  await assert.rejects(native.inspect(iden.owner),e=>e.code==='WITNESS_UNAVAILABLE');
+  assert.equal(anchor.snapshot().head,saved.head);
+}));

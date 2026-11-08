@@ -14,18 +14,24 @@ import { isDeepStrictEqual } from 'node:util';
 import nearApi from 'near-api-js';
 import { validateOracleGoal } from './oracle-outlayer.mjs';
 import { verifyNativeOracleWalletReview } from './native-oracle-wallet-evidence.mjs';
+import { verifyAtomicNativeOracleWalletReview } from './native-oracle-atomic-wallet.mjs';
 import { assertNativeOracleCompletion } from '../web-src/native-oracle-completion.mjs';
 import { decodeNativeHash32 } from '../web-src/native-oracle-transaction.mjs';
 
 const {transactions,utils}=nearApi;
 const GAS=300n*10n**12n;
 const fail=()=>new Error('phone signature unavailable or uncertain; retain the original and never retry automatically');
+function verifySupportedReview(args) {
+  if (args.review?.format === 'bouncer-native-oracle-wallet-review-v1') return verifyNativeOracleWalletReview(args);
+  if (args.review?.format === 'bouncer-atomic-native-oracle-wallet-review-v1') return verifyAtomicNativeOracleWalletReview(args);
+  throw fail();
+}
 
 export function createNativeOraclePhoneSigner({review:rawReview,wasmBytes,trustedReviewHash,trustedOwnerPublicKey,requestPhoneSignature}={}) {
   const review=structuredClone(rawReview);
   if(typeof requestPhoneSignature!=='function')throw fail();
   let identity;
-  try{identity=verifyNativeOracleWalletReview({review,wasmBytes,trustedReviewHash,trustedOwnerPublicKey})}catch{throw fail()}
+  try{identity=verifySupportedReview({review,wasmBytes,trustedReviewHash,trustedOwnerPublicKey})}catch{throw fail()}
   const key=utils.PublicKey.from(identity.agent_public_key);
   if(key.keyType!==0)throw fail();
   // Rebuild JSON in the same order as validateOracleGoal and the phone codec;
@@ -119,7 +125,7 @@ export function validateWitnessedNativeOracleTrial({goal:rawGoal,review:rawRevie
   const review=structuredClone(rawReview),identity=structuredClone(rawIdentity);
   let trusted,goal,expected;
   try {
-    trusted=verifyNativeOracleWalletReview({review,wasmBytes,trustedReviewHash,trustedOwnerPublicKey});
+    trusted=verifySupportedReview({review,wasmBytes,trustedReviewHash,trustedOwnerPublicKey});
     const expectedIdentity={owner:review.owner,owner_public_key:trustedOwnerPublicKey,operation_id:identity.operation_id,
       review_sha256:trustedReviewHash,stages:review.stages.map(stage=>({stage_id:stage.id,action_commitment_sha256:stage.action_commitment_sha256}))};
     if(!/^[a-f0-9]{32}$/.test(identity.operation_id??'') || !isDeepStrictEqual(identity,expectedIdentity))throw Error();

@@ -8,12 +8,13 @@
  * a lost claim/result must be reconciled and must NEVER be retried.
  */
 import { signReviewedNativeSetupChallenge } from './native-oracle-setup-auth.mjs';
-import { prepareNativeOracleSetupWalletPrompt } from './native-oracle-setup-wallet-prompt.mjs';
+import { prepareNativeOracleSetupWalletPrompt, prepareAtomicNativeOracleSetupWalletPrompt } from './native-oracle-setup-wallet-prompt.mjs';
 import { withReadOnlyRelay } from './buffer-readiness-preview.mjs';
 
 const OWNER='great_mujey.testnet', PREFIX='/api/native-oracle-setup/', BYTES=452_675;
 const HEADERS={'x-bouncer-preview':'native-oracle-setup-v1'};
 const STAGES=['create_keyless_native_vault','configure_native_oracle_policy','fund_native_vault','install_native_oracle_agent'];
+const ATOMIC_STAGES=['create_configure_fund_native_vault','install_native_oracle_agent'];
 const codes=new Set(['UNAUTHENTICATED','OWNER_FENCED','OWNER_ALREADY_WITNESSED','ALREADY_CLAIMED','WITNESS_NOT_CLAIMABLE',
   'WITNESS_COMMIT_UNKNOWN','WITNESS_MISMATCH','WITNESS_HEAD_CHANGED','CROSS_FLOW_WITNESSED','GLOBAL_FENCE_UNSAFE',
   'GLOBAL_FENCE_LEGACY_RECONCILIATION_REQUIRED','PREFLIGHT_UNAVAILABLE','PREFLIGHT_BLOCKED','PREFLIGHT_STALE',
@@ -79,8 +80,11 @@ export function createNativeOracleSetupClient({wallet,accountId,ownerPublicKey,d
      * local device key. Creating a key or trusting its backup is a separate step. */
     async createReview({agentPublicKey}={}) {
       await device({owner:OWNER,vault:`native.${OWNER}`,agent_public_key:agentPublicKey});
-      const result=await request('review',{agentPublicKey});
-      if(!/^[a-f0-9]{64}$/.test(result?.task_id??'') || result.task_id!==result?.review?.review_sha256 || result?.review?.owner!==OWNER ||
+      const atomic=(await config())?.atomic_review_enabled===true;session();
+      const result=await request('review',atomic?{agentPublicKey,ownerPublicKey}:{agentPublicKey});
+      if(result?.review?.format!==(atomic?'bouncer-atomic-native-oracle-wallet-review-v1':'bouncer-native-oracle-wallet-review-v1') ||
+         (atomic && result.review.owner_public_key!==ownerPublicKey) ||
+         !/^[a-f0-9]{64}$/.test(result?.task_id??'') || result.task_id!==result?.review?.review_sha256 || result?.review?.owner!==OWNER ||
          result.review.vault!==`native.${OWNER}` || result.review.agent_public_key!==agentPublicKey ||
          result.signing_authorized!==false || result.transaction_sent!==false)throw fail('NATIVE_SETUP_UNAVAILABLE');
       await device(result.review);return result;
@@ -95,10 +99,15 @@ export function createNativeOracleSetupClient({wallet,accountId,ownerPublicKey,d
     },
     /** Call only from an explicit owner action after reviewing this exact stage. */
     async approveStage({identity,review,stageId}={}) {
-      session();if(!STAGES.includes(stageId) || identity?.owner_public_key!==ownerPublicKey)throw fail('NATIVE_SETUP_UNAVAILABLE');
-      onProgress(stageId===STAGES[0]?'Verifying the reviewed vault code…':'Preparing the reviewed native testnet action…');
-      const deviceKey=await device(review),wasmBytes=stageId===STAGES[0]?await artifact():undefined;
-      const prompt=await prepareNativeOracleSetupWalletPrompt({wallet,identity,review,deviceKey,stageId,wasmBytes,location,isTopLevel,crypto,now});
+      session();
+      const atomic=review?.format==='bouncer-atomic-native-oracle-wallet-review-v1';
+      if(!atomic && review?.format!=='bouncer-native-oracle-wallet-review-v1')throw fail('NATIVE_SETUP_UNAVAILABLE');
+      const stages=atomic?ATOMIC_STAGES:STAGES;
+      if(!stages.includes(stageId) || identity?.owner_public_key!==ownerPublicKey)throw fail('NATIVE_SETUP_UNAVAILABLE');
+      onProgress(stageId===stages[0]?'Verifying the reviewed vault code…':'Preparing the reviewed native testnet action…');
+      const deviceKey=await device(review),wasmBytes=stageId===stages[0]?await artifact():undefined;
+      const prepare=atomic?prepareAtomicNativeOracleSetupWalletPrompt:prepareNativeOracleSetupWalletPrompt;
+      const prompt=await prepare({wallet,identity,review,deviceKey,stageId,wasmBytes,location,isTopLevel,crypto,now});
       session();const challenge=await request('claim-challenge',{identity,stageId});
       const evidence=await sign({...context('claim_native_setup_stage'),identity,stageId},challenge);
       const claim=await pump(()=>request('claim',{identity,stageId,evidence}));session();

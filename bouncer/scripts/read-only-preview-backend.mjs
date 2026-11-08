@@ -46,7 +46,8 @@ const provider = new ReadOnlyNearReceiptProvider('https://test.rpc.fastnear.com'
 const enableBuffer = process.env.BOUNCER_ENABLE_WITNESSED_TESTNET_SETUP === '1';
 const enableNative = process.env.BOUNCER_ENABLE_NATIVE_ORACLE_TESTNET_SETUP === '1';
 const enableNativeTrial = process.env.BOUNCER_ENABLE_NATIVE_ORACLE_TESTNET_TRIAL === '1';
-if (enableNativeTrial && !enableNative) throw Error('native testnet trial requires the native setup runtime');
+const enableNativeAtomic = process.env.BOUNCER_ENABLE_NATIVE_ORACLE_ATOMIC_SETUP === '1';
+if ((enableNativeTrial || enableNativeAtomic) && !enableNative) throw Error('native testnet trial and atomic setup require the native setup runtime');
 let setupFactory, nativeSetupFactory, setupPool;
 if (enableBuffer || enableNative) {
   const env = process.env, url = env.BOUNCER_TESTNET_SETUP_DATABASE_URL;
@@ -63,7 +64,7 @@ if (enableBuffer || enableNative) {
     setupPool = new pg.Pool({ connectionString:url, max:8, connectionTimeoutMillis:5000 });
     const nativeWasmBytes = enableNative ? fs.readFileSync(new URL('../../bouncer.wasm', import.meta.url)) : undefined;
     const runtime = await createExperimentalPhoneSetupRuntime({ pool:setupPool, siteOrigin, provider, anchor, repo, branch, initialHead,
-      nativeWasmBytes, bufferWasmBytes:wasm ?? undefined, enableNative, enableBuffer, enableNativeTrial });
+      nativeWasmBytes, bufferWasmBytes:wasm ?? undefined, enableNative, enableBuffer, enableNativeTrial, enableNativeAtomic });
     ({ setupFactory, nativeSetupFactory } = runtime);
   } catch {
     if (setupPool) await setupPool.end().catch(() => {});

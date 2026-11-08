@@ -7,7 +7,7 @@
  * read-only receipt verification. The authenticated backend, paired witness,
  * wallet, phone storage and trusted RPC remain independent trust boundaries.
  */
-import { verifyNativeOracleSetupReview, verifyNativeOracleRetainedReview } from './native-oracle-setup-wallet-prompt.mjs';
+import { verifySupportedNativeOracleSetupReview, verifySupportedNativeOracleRetainedReview } from './native-oracle-setup-wallet-prompt.mjs';
 import { decodeNativeHash32 } from './native-oracle-transaction.mjs';
 import { assertNativeOracleCompletion } from './native-oracle-completion.mjs';
 import { prepareWitnessedNativeOracleTrial } from './witnessed-native-oracle-trial.mjs';
@@ -15,9 +15,15 @@ import { probeNativeTestnetRpc, submitWitnessedNativeOracleTrialOnce } from './n
 
 const OWNER = 'great_mujey.testnet';
 const STAGES = ['create_keyless_native_vault', 'configure_native_oracle_policy', 'fund_native_vault', 'install_native_oracle_agent'];
-const VERIFIED_RECEIPTS = new Set(['FINAL_NATIVE_SETUP_RECEIPT_MATCH', 'FINAL_LOCAL_ADD_KEY_OUTCOME_MATCH']);
+const ATOMIC_STAGES = ['create_configure_fund_native_vault', 'install_native_oracle_agent'];
+const VERIFIED_RECEIPTS = new Set(['FINAL_NATIVE_SETUP_RECEIPT_MATCH', 'FINAL_ATOMIC_NATIVE_SETUP_RECEIPT_MATCH', 'FINAL_LOCAL_ADD_KEY_OUTCOME_MATCH']);
 const fail = code => Object.assign(new Error(code), { code });
 const validHash = value => { try { decodeNativeHash32(value); return true; } catch { return false; } };
+function stagesFor(review) {
+  if (review?.format === 'bouncer-native-oracle-wallet-review-v1') return STAGES;
+  if (review?.format === 'bouncer-atomic-native-oracle-wallet-review-v1') return ATOMIC_STAGES;
+  throw fail('NATIVE_REVIEW_INVALID');
+}
 
 export function formatNativeNear(amount) {
   if (typeof amount !== 'string' || !/^(0|[1-9][0-9]*)$/.test(amount)) throw fail('NATIVE_AMOUNT_INVALID');
@@ -29,13 +35,16 @@ function publicTerms(review) {
   return Object.freeze({ owner: review.owner, vault: review.vault, payee: review.payee, project: review.project.project_id,
     storageNear: formatNativeNear(review.vault_storage_funding_yocto), depositNear: formatNativeNear(review.vault_deposit_yocto),
     capNear: formatNativeNear(review.per_tx_cap_yocto), dailyNear: formatNativeNear(review.daily_cap_yocto),
-    gasAllowanceNear: formatNativeNear(review.agent_gas_allowance_yocto), reviewHash: review.review_sha256 });
+    gasAllowanceNear: formatNativeNear(review.agent_gas_allowance_yocto), reviewHash: review.review_sha256,
+    setupStages: stagesFor(review).length });
 }
 
-function matchesReceipt(receipt, stageId, originalHash, recorded) {
-  return receipt && VERIFIED_RECEIPTS.has(receipt.status) && receipt.stage_id === stageId &&
-    receipt.tx_hash === originalHash && receipt.original_recorded === recorded && receipt.execution_authorized === false &&
-    (receipt.status !== 'FINAL_LOCAL_ADD_KEY_OUTCOME_MATCH' || stageId === STAGES[3]);
+function matchesReceipt(receipt, stageId, originalHash, recorded, review) {
+  const expected = review?.format === 'bouncer-atomic-native-oracle-wallet-review-v1' ?
+    'FINAL_ATOMIC_NATIVE_SETUP_RECEIPT_MATCH' : 'FINAL_NATIVE_SETUP_RECEIPT_MATCH';
+  return receipt && VERIFIED_RECEIPTS.has(receipt.status) &&
+    (receipt.status === expected || (receipt.status === 'FINAL_LOCAL_ADD_KEY_OUTCOME_MATCH' && stageId === 'install_native_oracle_agent')) &&
+    receipt.stage_id === stageId && receipt.tx_hash === originalHash && receipt.original_recorded === recorded && receipt.execution_authorized === false;
 }
 
 /** The `interact` hook presents the connected wallet; it must not retry work. */
@@ -73,8 +82,8 @@ export function createNativeOracleOwnerFlow({ client, deviceStore, ownerPublicKe
       review_sha256: candidate?.review_sha256, stages: candidate?.stages?.map(s => ({ stage_id: s.id, action_commitment_sha256: s.action_commitment_sha256 })) };
     if (temporary.owner !== OWNER || candidate?.owner !== OWNER || candidate?.vault !== vault ||
         temporary.owner_public_key !== ownerPublicKey) throw fail('NATIVE_OWNER_KEY_CHANGED');
-    if (local) await verifyNativeOracleSetupReview({ review: candidate, identity: temporary, deviceKey: local, origin, crypto });
-    else await verifyNativeOracleRetainedReview({ review: candidate, identity: temporary, crypto });
+    if (local) await verifySupportedNativeOracleSetupReview({ review: candidate, identity: temporary, deviceKey: local, origin, crypto });
+    else await verifySupportedNativeOracleRetainedReview({ review: candidate, identity: temporary, crypto });
     current();
     return publicTerms(candidate);
   };
@@ -106,7 +115,9 @@ export function createNativeOracleOwnerFlow({ client, deviceStore, ownerPublicKe
       return;
     }
     if (remote.status !== 'WITNESSED' || !remote.identity || !remote.review || !Array.isArray(remote.database_stages) ||
-        !Array.isArray(remote.witnessed_records) || remote.database_stages.length !== STAGES.length) throw fail('NATIVE_RETAINED_STATE_INVALID');
+        !Array.isArray(remote.witnessed_records)) throw fail('NATIVE_RETAINED_STATE_INVALID');
+    const stageOrder = stagesFor(remote.review);
+    if (remote.database_stages.length !== stageOrder.length) throw fail('NATIVE_RETAINED_STATE_INVALID');
     const last = remote.witnessed_records.at(-1);
     let local;
     try { local = await device(remote.review.agent_public_key); }
@@ -122,7 +133,7 @@ export function createNativeOracleOwnerFlow({ client, deviceStore, ownerPublicKe
     let gap = false, next = null, lastOriginal = null;
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
-      if (row?.stage_id !== STAGES[i] || row.action_commitment_sha256 !== remote.identity.stages[i].action_commitment_sha256 ||
+      if (row?.stage_id !== stageOrder[i] || row.action_commitment_sha256 !== remote.identity.stages[i].action_commitment_sha256 ||
           typeof row.claimed !== 'boolean' || !(row.original_hash === null || validHash(row.original_hash)) ||
           (!row.claimed && row.original_hash !== null) || (gap && row.claimed)) throw fail('NATIVE_RETAINED_STATE_INVALID');
       if (!row.claimed || row.original_hash === null) { gap = true; if (!next) next = row; }
@@ -132,7 +143,7 @@ export function createNativeOracleOwnerFlow({ client, deviceStore, ownerPublicKe
     if (new Set(hashes).size !== hashes.length) throw fail('NATIVE_RETAINED_STATE_INVALID');
     review = remote.review; identity = remote.identity; taskId = review.review_sha256; originals = hashes;
     if (last?.event === 'trial_claim') {
-      if (next || hashes.length !== STAGES.length || !validHash(last.original_hash) || hashes.includes(last.original_hash)) throw fail('NATIVE_RETAINED_STATE_INVALID');
+      if (next || hashes.length !== stageOrder.length || !validHash(last.original_hash) || hashes.includes(last.original_hash)) throw fail('NATIVE_RETAINED_STATE_INVALID');
       originalHash = last.original_hash; trialStarted = true; trial = null;
       set({ phase: 'trial_retained', terms, stageId: null, originalHash,
         message: hasLocalKey ? 'This original is retained. Check its receipt; do not request another payment.'
@@ -148,25 +159,25 @@ export function createNativeOracleOwnerFlow({ client, deviceStore, ownerPublicKe
       set({ phase: 'await_receipt', terms, stageId, originalHash,
         message: 'The original hash is retained. Check its FINAL receipt before another stage; do not resend it.' }); return;
     }
-    stageId = STAGES[0]; originalHash = null;
+    stageId = stageOrder[0]; originalHash = null;
     set({ phase: 'stage', terms, stageId, originalHash: null,
       message: 'The setup is reserved. Review this stage and approve it separately in your wallet.' });
   };
   const advance = () => {
-    const index = STAGES.indexOf(stageId);
+    const stageOrder = stagesFor(review), index = stageOrder.indexOf(stageId);
     if (index < 0) throw fail('NATIVE_RETAINED_STATE_INVALID');
-    if (index === STAGES.length - 1) {
+    if (index === stageOrder.length - 1) {
       set({ phase: 'verify_setup', stageId: null, originalHash,
-        message: 'All four original receipts matched. Check the current setup state before any trial; no resource has been purchased yet.' });
+        message: 'All setup receipts matched. Check the current state before any trial; no resource has been purchased yet.' });
     } else {
-      stageId = STAGES[index + 1]; originalHash = null;
+      stageId = stageOrder[index + 1]; originalHash = null;
       set({ phase: 'stage', stageId, originalHash: null,
         message: 'The previous original receipt matched. Review and separately approve the next stage.' });
     }
   };
   const verifyRecorded = async () => {
     const result = await wallet(() => client.previewOriginal({ stageId, originalHash }), 'Check the original testnet receipt. No transaction is requested.');
-    if (!matchesReceipt(result, stageId, originalHash, true)) {
+    if (!matchesReceipt(result, stageId, originalHash, true, review)) {
       set({ phase: 'blocked', message: 'The original did not match a successful FINAL receipt. Do not resend; review its state and effects.' }); return;
     }
     advance();
@@ -191,7 +202,7 @@ export function createNativeOracleOwnerFlow({ client, deviceStore, ownerPublicKe
         if (result?.status !== 'RESERVED_NOT_CLAIMED' || !/^[a-f0-9]{40}$/.test(result.witness_head ?? '') || result.execution_authorized !== false ||
             !result.identity) throw fail('NATIVE_RESERVATION_UNKNOWN');
         const local = await device(review.agent_public_key); await validateReview(review, result.identity, local);
-        identity = result.identity; stageId = STAGES[0]; originalHash = null;
+        identity = result.identity; stageId = stagesFor(review)[0]; originalHash = null;
         set({ phase: 'stage', stageId, originalHash: null,
           message: 'The setup is reserved. Review this stage and approve it separately in your wallet.' }); return snapshot();
       });
@@ -210,7 +221,7 @@ export function createNativeOracleOwnerFlow({ client, deviceStore, ownerPublicKe
         if (recorded?.status !== 'ORIGINAL_RECORDED' || recorded.owner !== OWNER || recorded.operation_id !== identity.operation_id ||
             recorded.stage_id !== stageId || recorded.original_hash !== originalHash || recorded.do_not_retry !== true ||
             recorded.execution_authorized !== false || originals.includes(originalHash)) throw fail('NATIVE_ORIGINAL_RECORD_UNKNOWN');
-        originals[STAGES.indexOf(stageId)] = originalHash;
+        originals[stagesFor(review).indexOf(stageId)] = originalHash;
         set({ phase: 'await_receipt', originalHash, message: 'The original hash is retained. Check its FINAL receipt; do not resend it.' });
         return snapshot();
       });
@@ -223,7 +234,7 @@ export function createNativeOracleOwnerFlow({ client, deviceStore, ownerPublicKe
       }
       return guarded(['recover'], async () => {
         const inspected = await wallet(() => client.previewOriginal({ stageId, originalHash: hash }), 'Check the original hash. No transaction is requested.');
-        if (!matchesReceipt(inspected, stageId, hash, false)) {
+        if (!matchesReceipt(inspected, stageId, hash, false, review)) {
           set({ phase: 'blocked', message: 'That hash is not a matching successful FINAL receipt. Do not resend; check wallet history and recover the original.' }); return snapshot();
         }
         originalHash = hash;
@@ -232,7 +243,7 @@ export function createNativeOracleOwnerFlow({ client, deviceStore, ownerPublicKe
         if (result?.status !== 'ORIGINAL_RECORDED' || result.owner !== OWNER || result.operation_id !== identity.operation_id ||
             result.stage_id !== stageId || result.original_hash !== originalHash || result.do_not_retry !== true ||
             result.execution_authorized !== false || originals.includes(originalHash)) throw fail('NATIVE_ORIGINAL_RECORD_UNKNOWN');
-        originals[STAGES.indexOf(stageId)] = originalHash;
+        originals[stagesFor(review).indexOf(stageId)] = originalHash;
         set({ phase: 'await_receipt', originalHash, message: 'The original is retained. Check its recorded FINAL receipt before proceeding.' });
         return snapshot();
       });
@@ -241,7 +252,7 @@ export function createNativeOracleOwnerFlow({ client, deviceStore, ownerPublicKe
       const result = await wallet(() => client.verifyCompletion({ identity }), 'Check the retained originals and current setup state. No transaction is requested.');
       try {
         assertNativeOracleCompletion(result, review, now(), { maxAgeMs: 120_000 });
-        if (originals.length !== STAGES.length || JSON.stringify(result.prior_original_hashes) !== JSON.stringify(originals)) throw fail('NATIVE_ORIGINALS_CHANGED');
+        if (originals.length !== stagesFor(review).length || JSON.stringify(result.prior_original_hashes) !== JSON.stringify(originals)) throw fail('NATIVE_ORIGINALS_CHANGED');
       } catch {
         set({ phase: 'blocked', message: 'Current setup state did not match. Do not request another transaction; recover the original state.' }); return snapshot();
       }

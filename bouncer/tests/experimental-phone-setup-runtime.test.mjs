@@ -159,3 +159,42 @@ dbtest('phone runtime never creates missing schemas and requires both durable fe
     assert.equal(anchor.writes(),0);
   } finally { await new Promise(resolve=>next.close(resolve)); }
 }));
+
+dbtest('atomic review requires explicit runtime opt-in and the same public owner key after restart', async () => fixture(async ({db,anchor,config}) => {
+  await initializePostgresWalletPromptAuth({pool:db});await initializePostgresWalletPromptFence({pool:db});
+  await initializePostgresNativeOraclePromptFence({pool:db});
+  const before=await counts(db);
+  await assert.rejects(createExperimentalPhoneSetupRuntime({...config,enableNative:false,enableBuffer:true,enableNativeAtomic:true}));
+  await assert.rejects(createExperimentalPhoneSetupRuntime({...config,enableNativeAtomic:'true'}));
+  const runtime=await createExperimentalPhoneSetupRuntime({...config,enableNativeAtomic:true});
+  const server=createReadOnlyPreviewService({bridge,siteOrigin:origin,inspectReadiness:async()=>({}),makeReview:async()=>({}),
+    nativeSetupFactory:runtime.nativeSetupFactory});
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  const base=`http://127.0.0.1:${server.address().port}/api/native-oracle-setup/`;
+  const headers={'x-bouncer-preview':'native-oracle-setup-v1',origin,'content-type':'application/json'};
+  const post=(route,body)=>fetch(base+route,{method:'POST',headers,body:JSON.stringify(body)});
+  try {
+    const status=await (await fetch(base+'config',{headers})).json();
+    assert.equal(status.atomic_review_enabled,true);assert.equal(status.ready_for_real_spending,false);
+    const agentPublicKey=String(nearApi.KeyPair.fromRandom('ed25519').getPublicKey());
+    const ownerPublicKey=String(nearApi.KeyPair.fromRandom('ed25519').getPublicKey());
+    assert.equal((await post('review',{agentPublicKey})).status,400);
+    const response=await post('review',{agentPublicKey,ownerPublicKey}),review=await response.json();
+    assert.equal(response.status,200);assert.equal(review.review.format,'bouncer-atomic-native-oracle-wallet-review-v1');
+    assert.equal(review.review.owner_public_key,ownerPublicKey);assert.equal(review.review.stages.length,2);
+    assert.equal(review.signing_authorized,false);assert.equal(review.transaction_sent,false);
+    const wrong=String(nearApi.KeyPair.fromRandom('ed25519').getPublicKey());
+    assert.equal((await post('reserve-challenge',{taskId:review.task_id,agentPublicKey,ownerPublicKey:wrong})).status,409);
+    assert.deepEqual(await counts(db),before);assert.equal(anchor.writes(),0);
+    const restarted=await createExperimentalPhoneSetupRuntime({...config,enableNativeAtomic:true});
+    const next=createReadOnlyPreviewService({bridge,siteOrigin:origin,inspectReadiness:async()=>({}),makeReview:async()=>({}),
+      nativeSetupFactory:restarted.nativeSetupFactory});
+    await new Promise(resolve=>next.listen(0,'127.0.0.1',resolve));
+    try {
+      const retry=await fetch(`http://127.0.0.1:${next.address().port}/api/native-oracle-setup/reserve-challenge`,{
+        method:'POST',headers,body:JSON.stringify({taskId:review.task_id,agentPublicKey,ownerPublicKey})});
+      assert.equal(retry.status,200);assert.match((await retry.json()).challenge_id,/^[a-f0-9]{32}$/);
+      assert.deepEqual(await counts(db),{...before,challenges:before.challenges+1});assert.equal(anchor.writes(),0);
+    } finally { await new Promise(resolve=>next.close(resolve)); }
+  } finally { await new Promise(resolve=>server.close(resolve)); }
+}));

@@ -20,7 +20,7 @@
  * before any real deployment or spending UI uses this module.
  */
 import { isTestnetAccount } from './wallet-utils.mjs';
-import { verifyNativeOracleSetupReview } from './native-oracle-setup-wallet-prompt.mjs';
+import { verifySupportedNativeOracleSetupReview } from './native-oracle-setup-wallet-prompt.mjs';
 import { buildNativeOracleTrialBytes, appendNativeOracleSignature, encodeBase58 } from './native-oracle-transaction.mjs';
 import { retainLocalNativeOriginal, inspectLocalNativeOriginal } from './native-oracle-local-attempt.mjs';
 import { assertNativeOracleCompletion } from './native-oracle-completion.mjs';
@@ -212,7 +212,7 @@ export async function openNativeOracleDeviceKey({ indexedDB, storage, crypto, or
       input({owner:review?.owner,vault:review?.vault});
       const row=await run(db,'readonly',(store,done)=>{const get=store.get(review.owner);get.onsuccess=()=>done(get.result)});
       const device=await validate(row,review.owner,review.vault,review.agent_public_key);
-      const canonical=await verifyNativeOracleSetupReview({review,identity,deviceKey:device,origin,crypto});
+      const canonical=await verifySupportedNativeOracleSetupReview({review,identity,deviceKey:device,origin,crypto});
       const checkFresh=clock=>{
         // Witnessing the original can take longer than five seconds. Keep the
         // original block/nonce, but demand a new five-second state recheck with

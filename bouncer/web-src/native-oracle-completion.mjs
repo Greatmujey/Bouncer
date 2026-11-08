@@ -13,14 +13,17 @@ const CHECKS=['plain_owner','exact_owner_key','owner_native_estimate','protocol_
 export function assertNativeOracleCompletion(snapshot,review,clock,{maxAgeMs=5000}={}) {
   if (!Number.isSafeInteger(maxAgeMs) || maxAgeMs<1 || maxAgeMs>120_000) throw fail();
   const observed=Date.parse(snapshot?.observed_at);
+  const atomic=review?.format==='bouncer-atomic-native-oracle-wallet-review-v1';
+  if (!atomic && review?.format!=='bouncer-native-oracle-wallet-review-v1') throw fail();
+  const count=atomic?2:4, expectedStatus=atomic?'TWO_ORIGINALS_AND_STATE_MATCH_NOT_AUTHORIZED':'FOUR_ORIGINALS_AND_STATE_MATCH_NOT_AUTHORIZED';
   if (!plain(snapshot) || snapshot.version!==1 || snapshot.network!=='testnet' ||
-      snapshot.status!=='FOUR_ORIGINALS_AND_STATE_MATCH_NOT_AUTHORIZED' || snapshot.stage_id!=='verify_native_setup_completion' ||
+      snapshot.status!==expectedStatus || snapshot.stage_id!=='verify_native_setup_completion' ||
       snapshot.owner!==review?.owner || snapshot.vault!==review?.vault || snapshot.review_sha256!==review?.review_sha256 ||
       snapshot.independently_witnessed!==true || !/^[a-f0-9]{40}$/.test(snapshot.witness_head??'') ||
       snapshot.execution_authorized!==false || snapshot.signing_authorized!==false || snapshot.transaction_sent!==false ||
       snapshot.owner_approval_obtained!==false || snapshot.wallet_prompt_authorized!==false ||
-      !Array.isArray(snapshot.prior_original_hashes) || snapshot.prior_original_hashes.length!==4 ||
-      new Set(snapshot.prior_original_hashes).size!==4 || !plain(snapshot.checks) ||
+      !Array.isArray(snapshot.prior_original_hashes) || snapshot.prior_original_hashes.length!==count ||
+      new Set(snapshot.prior_original_hashes).size!==count || !plain(snapshot.checks) ||
       CHECKS.some(k=>snapshot.checks[k]!==true) || Object.values(snapshot.checks).some(v=>v!==true) ||
       !Array.isArray(snapshot.blockers) || snapshot.blockers.length || !Number.isSafeInteger(clock) || clock<1 ||
       !Number.isSafeInteger(observed) || new Date(observed).toISOString()!==snapshot.observed_at || clock<observed || clock-observed>maxAgeMs ||

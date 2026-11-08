@@ -36,12 +36,14 @@ async function read(req) {
   let total=0;const chunks=[];for await (const chunk of req) { total+=chunk.length;if(total>MAX)throw Error();chunks.push(chunk); }
   return JSON.parse(Buffer.concat(chunks,total).toString('utf8'));
 }
-export function createNativeOracleSetupHttpHandler({service,siteOrigin,wasmBytes,owner,createReview,enableTrialSubmission=false,now=Date.now,bodyTimeoutMs=10_000}={}) {
+export function createNativeOracleSetupHttpHandler({service,siteOrigin,wasmBytes,owner,createReview,enableTrialSubmission=false,
+  enableAtomic=false,now=Date.now,bodyTimeoutMs=10_000}={}) {
   let site;try{site=new URL(siteOrigin)}catch{throw Error('fixed native setup origin required')}
   if(site.protocol!=='https:' || site.origin!==siteOrigin || site.username || site.password || site.pathname!=='/' || site.search || site.hash ||
       site.hostname==='github.io' || site.hostname.endsWith('.github.io') || site.hostname==='madethis.website' || site.hostname.endsWith('.madethis.website') ||
       !service || Object.values(specs).some(([method])=>method!=='createReview' && typeof service[method]!=='function') ||
-      (createReview!==undefined && typeof createReview!=='function') || typeof enableTrialSubmission!=='boolean' || typeof now!=='function' ||
+      (createReview!==undefined && typeof createReview!=='function') || typeof enableTrialSubmission!=='boolean' ||
+      typeof enableAtomic!=='boolean' || typeof now!=='function' ||
       !Number.isSafeInteger(bodyTimeoutMs) || bodyTimeoutMs<10 || bodyTimeoutMs>10_000 || owner!=='great_mujey.testnet' ||
       !(wasmBytes instanceof Uint8Array) || wasmBytes.length!==NATIVE_ORACLE_V9_BYTES ||
       crypto.createHash('sha256').update(wasmBytes).digest('hex')!==NATIVE_ORACLE_V9_SHA256) {
@@ -54,6 +56,7 @@ export function createNativeOracleSetupHttpHandler({service,siteOrigin,wasmBytes
     }
     if(pathname===`${PREFIX}config` && req.method==='GET') return reply(res,200,{enabled:true,network:'testnet',owner,
       ready_for_real_spending:false,review_available:typeof createReview==='function',trial_submission_enabled:enableTrialSubmission,
+      atomic_review_enabled:enableAtomic,
       scope:'Experimental testnet transport; receipt verification is separate. No production-spending readiness is claimed.'});
     if(pathname===`${PREFIX}artifact` && req.method==='GET') {
       res.writeHead(200,{'content-type':'application/wasm','content-length':String(wasm.length),'cache-control':'no-store',
@@ -68,7 +71,7 @@ export function createNativeOracleSetupHttpHandler({service,siteOrigin,wasmBytes
     try {
       const timer=setTimeout(()=>req.destroy(),bodyTimeoutMs);timer.unref?.();let input;
       try{input=await read(req)}finally{clearTimeout(timer)}
-      const [method,fields]=spec;
+      const [method,baseFields]=spec, fields=method==='createReview' && enableAtomic ? ['agentPublicKey','ownerPublicKey'] : baseFields;
       if(!plain(input) || Object.keys(input).length!==fields.length || fields.some(k=>!Object.hasOwn(input,k)))return reply(res,400,{error:'invalid request'});
       return reply(res,200,await (method==='createReview'?createReview(input):service[method](input)));
     } catch(error) {
