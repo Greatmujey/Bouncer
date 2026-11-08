@@ -1740,7 +1740,7 @@ jobs:
     name: Inspect the previous QA failure (read only)
     # Read only: no faucet, wallet, signer or transaction. Fetch the old log
     # privately and expose only its bounded, redacted QA error line.
-    if: github.event_name == 'push' && github.ref == 'refs/heads/arena/0e4386ea-near-hub' && github.event.before == 'b6e4970944ecd5a314ba982a7dcb9a569ccf4e73' && github.run_attempt == '1' && contains(github.event.head_commit.message, '[native-qa-read-only-diagnosis]')
+    if: github.event_name == 'push' && github.ref == 'refs/heads/arena/0e4386ea-near-hub' && github.event.before == '7e3dfafc5389144a3c6559e3777c06a25c07f547' && github.run_attempt == '1' && contains(github.event.head_commit.message, '[native-qa-diagnose-access]')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -1753,7 +1753,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          gh api repos/Greatmujey/Bouncer/actions/jobs/128664415262/logs > "$RUNNER_TEMP/old-qa.log" 2> "$RUNNER_TEMP/log-download.err" || { echo '::error::Previous QA log unavailable.'; exit 1; }
+          if ! gh api repos/Greatmujey/Bouncer/actions/jobs/128664415262/logs > "$RUNNER_TEMP/old-qa.log" 2> "$RUNNER_TEMP/log-download.err"; then
+            node - "$RUNNER_TEMP/log-download.err" <<'NODE'
+          const fs = require('fs'); let text = fs.readFileSync(process.argv[2], 'utf8').replace(/https?:\/\/\S+/g, '[url]').replace(/ed25519:[1-9A-HJ-NP-Za-km-z]+/g, '[key]').slice(0, 400).replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A');
+          console.log('::notice title=Read-only log access::' + text);
+          NODE
+            exit 1
+          fi
           node - "$RUNNER_TEMP/old-qa.log" <<'NODE'
           const fs = require('fs');
           const lines = fs.readFileSync(process.argv[2], 'utf8').split('\n').filter(x => x.includes('QA stopped:'));
