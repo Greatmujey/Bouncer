@@ -188,6 +188,25 @@
     <p class="account-view-warning" id="wallet-account-warning">Unverified account name. No wallet is connected and no spending access was granted.</p>
     <button class="account-entry-primary" id="wallet-owner-verify" type="button" hidden>Verify account in wallet</button>
     <p class="account-view-status" id="wallet-owner-status" role="status" aria-live="polite" hidden></p>
+    <button class="account-entry-primary" id="wallet-native-setup-open" type="button" hidden>Review native NEAR resource setup →</button>
+    <section class="setup-recovery native-setup" id="wallet-native-setup-panel" aria-label="Native NEAR testnet resource setup" hidden>
+      <strong>Experimental native NEAR · testnet only</strong>
+      <p class="account-view-status" id="wallet-native-setup-terms"></p>
+      <p class="account-view-status" id="wallet-native-setup-stage"></p>
+      <p class="account-view-status" id="wallet-native-setup-status" role="status" aria-live="polite"></p>
+      <p class="account-view-status" id="wallet-native-setup-hash" hidden></p>
+      <button class="account-entry-secondary" id="wallet-native-setup-check" type="button" hidden>Check retained setup →</button>
+      <button class="account-entry-secondary" id="wallet-native-setup-device" type="button" hidden>Create phone agent key →</button>
+      <button class="account-entry-secondary" id="wallet-native-setup-reserve" type="button" hidden>Reserve this reviewed setup →</button>
+      <button class="account-entry-primary" id="wallet-native-setup-approve" type="button" hidden>Approve this stage in wallet →</button>
+      <button class="account-entry-secondary" id="wallet-native-setup-receipt" type="button" hidden>Check original receipt →</button>
+      <button class="account-entry-secondary" id="wallet-native-setup-verify" type="button" hidden>Verify current setup →</button>
+      <div id="wallet-native-setup-recover" hidden>
+        <label for="wallet-native-setup-original">Original transaction hash from wallet history</label>
+        <input id="wallet-native-setup-original" type="text" maxlength="50" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Paste the original hash" />
+        <button class="account-entry-secondary" id="wallet-native-setup-recover-original" type="button">Check and retain this original →</button>
+      </div>
+    </section>
     <button class="account-entry-secondary" id="wallet-buffer-readiness" type="button" hidden>Review Buffer testnet setup →</button>
     <p class="account-view-status" id="wallet-buffer-readiness-status" role="status" aria-live="polite" hidden></p>
     <button class="account-entry-primary" id="wallet-buffer-setup-start" type="button" hidden>Prepare staged Buffer vault setup →</button>

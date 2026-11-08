@@ -1,6 +1,7 @@
 /**
- * Experimental phone-side native setup transport. No UI imports this module by
- * default. A separately operated checkpoint, safe custody/recovery and a real
+ * Experimental phone-side native setup transport. The account UI exposes it
+ * only when the disabled-by-default preview backend advertises availability.
+ * A separately operated checkpoint, safe custody/recovery and a real
  * device/wallet test remain prerequisites before live use. This code cannot
  * purchase a resource or broadcast directly. `approveStage` asks the wallet
  * for one exact reviewed transaction only after authenticated one-shot claim;

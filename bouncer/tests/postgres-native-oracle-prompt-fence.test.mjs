@@ -28,6 +28,7 @@ import { createNativeOracleSetupHttpHandler } from '../agent/native-oracle-setup
 import { createNativeOracleReviewCatalog } from '../agent/native-oracle-review-catalog.mjs';
 import { createReadOnlyPreviewService } from '../agent/read-only-preview-service.mjs';
 import { createNativeOracleSetupClient } from '../web-src/native-oracle-setup-client.mjs';
+import { createNativeOracleOwnerFlow } from '../web-src/native-oracle-owner-flow.mjs';
 import { prepareWitnessedNativeOracleTrial } from '../web-src/witnessed-native-oracle-trial.mjs';
 import { openNativeOracleDeviceKey } from '../web-src/native-oracle-device-key.mjs';
 import { createPostgresWalletPromptAuth, initializePostgresWalletPromptAuth } from '../agent/postgres-wallet-prompt-auth.mjs';
@@ -576,7 +577,11 @@ dbtest('synthetic native phone client traverses authenticated HTTP, paired ancho
       assert.equal(result.original_hash,hash(10+i));assert.equal(result.final_execution_verified,false);
       if(i===0){const preview=await client.previewOriginal({stageId,originalHash:result.original_hash});
         assert.equal(preview.status,'FINAL_NATIVE_SETUP_RECEIPT_MATCH');assert.equal(preview.original_recorded,false)}
-      await client.recordOriginal({identity,stageId,originalHash:result.original_hash});f.state.stage=i+1;
+      await client.recordOriginal({identity,stageId,originalHash:result.original_hash});
+      if(i===0){const recorded=await client.previewOriginal({stageId,originalHash:result.original_hash});
+        assert.equal(recorded.status,'FINAL_NATIVE_SETUP_RECEIPT_MATCH');assert.equal(recorded.original_recorded,true);
+        await assert.rejects(client.previewOriginal({stageId,originalHash:hash(99)}));}
+      f.state.stage=i+1;
     }
     // Keep a stable synthetic FINAL block for the entire trial while avoiding
     // setup runtime making its timestamp older than the two-minute limit.
@@ -617,6 +622,31 @@ dbtest('synthetic native phone client traverses authenticated HTTP, paired ancho
     await assert.rejects(execute(makeAccount()),/synthetic original not yet found/);
     assert.equal(sends,1);assert.equal(receiptReads,1);
     await assert.rejects(prepared.sign({ownerConfirmed:true}));assert.equal(prompts(),4);
+  });
+});
+
+dbtest('owner flow traverses authenticated HTTP, disposable DB, anchored Git and four synthetic original receipts',async()=>{
+  await syntheticNativePhone({},async({client,device,site,f,refreshSyntheticBlock,prompts})=>{
+    const flow=createNativeOracleOwnerFlow({client,deviceStore:device,ownerPublicKey:f.ownerKey,origin:site.origin,
+      crypto:crypto.webcrypto,isCurrent:()=>true});
+    await flow.check();assert.equal(flow.getState().phase,'review');
+    await flow.reserve({ownerConfirmed:true});assert.equal(flow.getState().phase,'stage');
+    for(let i=0;i<4;i++){
+      await flow.approveStage({ownerConfirmed:true});assert.equal(flow.getState().phase,'await_receipt');
+      f.state.stage=i+1;await flow.checkReceipt();assert.equal(flow.getState().phase,i===3?'verify_setup':'stage');
+    }
+    refreshSyntheticBlock();await flow.verifySetup();assert.equal(flow.getState().phase,'setup_verified');assert.equal(prompts(),4);
+  });
+});
+
+dbtest('owner flow recovers a synthetic unknown wallet result without requesting another transaction',async()=>{
+  await syntheticNativePhone({unknownWallet:true},async({client,device,site,f,prompts})=>{
+    const flow=createNativeOracleOwnerFlow({client,deviceStore:device,ownerPublicKey:f.ownerKey,origin:site.origin,
+      crypto:crypto.webcrypto,isCurrent:()=>true});
+    await flow.check();await flow.reserve({ownerConfirmed:true});await flow.approveStage({ownerConfirmed:true});
+    assert.equal(flow.getState().phase,'recover');assert.equal(prompts(),1);
+    await flow.check();await flow.recoverOriginal({hash:hash(10),ownerConfirmed:true});f.state.stage=1;
+    await flow.checkReceipt();assert.equal(flow.getState().stageId,'configure_native_oracle_policy');assert.equal(prompts(),1);
   });
 });
 

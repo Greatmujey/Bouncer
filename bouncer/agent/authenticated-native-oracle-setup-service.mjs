@@ -146,15 +146,20 @@ export function createAuthenticatedNativeOracleSetupService({ auth, fence, witne
     async previewOriginal({ ownerPublicKey, stageId, originalHash, evidence } = {}) {
       if (!STAGES.includes(stageId) || !isTransactionHash(originalHash)) throw fail();
       const plan = await fence.inspect({owner,ownerPublicKey,evidence}), remote = await witness.inspect(owner), state = remote.state;
-      if (!journalsMatch(plan,state) || state.phase!=='claimed' || state.identity.stages[state.stage_index].stage_id!==stageId) throw fail();
+      if (!journalsMatch(plan,state)) throw fail();
+      await checkPeer(otherWitness,owner,remote.head);
+      const last=state.records.at(-1), claimed=state.phase==='claimed' && state.identity.stages[state.stage_index].stage_id===stageId;
+      const recorded=['original','complete'].includes(state.phase) && last?.event==='original' &&
+        last.stage_id===stageId && last.original_hash===originalHash;
+      if (!claimed && !recorded) throw fail();
       try {
         if ((await receiptProvider.viewNodeStatus())?.chain_id!=='testnet') throw Error();
         const args = { review:plan.review, wasmBytes:wasm, trustedReviewHash:plan.review_sha256,
           trustedOwnerPublicKey:ownerPublicKey, stageId, trustedOriginalHash:originalHash };
         const attempt = prepareNativeOracleWalletAttempt(args);
         const result = structuredClone(await receiptProvider.txStatusReceipts(originalHash,owner,'FINAL'));
-        return { ...inspectNativeOracleWalletAttempt({...args,attempt,result}), execution_authorized:false, original_recorded:false,
-          scope:'Trusted-RPC original receipt preview only; not a prompt, current state, delivery or authorization.' };
+        return { ...inspectNativeOracleWalletAttempt({...args,attempt,result}), execution_authorized:false, original_recorded:recorded,
+          scope:'Trusted-RPC original receipt preview only; this read does not record a hash, prompt a wallet, prove current state, delivery or authorization.' };
       } catch { throw new WalletWitnessError('RECEIPT_UNKNOWN','original receipt unavailable or mismatched; retain the hash and never resend'); }
     },
     async inspect({ ownerPublicKey, evidence } = {}) {

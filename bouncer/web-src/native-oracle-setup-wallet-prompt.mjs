@@ -4,8 +4,10 @@
  * Before use, a separately authenticated backend must verify prior original
  * receipt graphs and fresh state, commit a one-shot DB claim and obtain an
  * independent acknowledged witness. This module performs no automatic retry,
- * agent signing, RPC call, provider request or purchase, and is NOT connected
- * to the production UI. A wallet response is not FINAL receipt evidence.
+ * agent signing, RPC call, provider request or purchase. The account UI can
+ * use it only when the separately configured experimental preview advertises
+ * its disabled-by-default backend; it is not enabled on production. A wallet
+ * response is not FINAL receipt evidence.
  *
  * A compromised same-origin app, backend or wallet can bypass these checks;
  * a 5-second preflight can still race chain changes while the user approves.

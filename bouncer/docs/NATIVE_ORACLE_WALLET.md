@@ -123,7 +123,7 @@ examples were **self-hosted development services**.
   owner hold still match before returning it. A failed or stale postcheck is a
   stop, not a new claim; it cannot guarantee that chain state stays unchanged
   while the wallet is open. Those server modules do not invoke a transaction-
-  signing wallet; the unconnected browser adapter can do so after a valid claim.
+  signing wallet; the experimental phone setup panel can do so after a valid claim and a separate explicit user action.
 - `postgres-wallet-owner-fence.mjs` now reserves a shared per-owner holder in
   the **same PostgreSQL transaction** as either the native or existing FT
   prompt reservation; both flows must match it before a new claim. Independent
@@ -141,8 +141,8 @@ examples were **self-hosted development services**.
   authenticated coordinator compares those hashes with its separate witness.
   It proves neither local private-key custody nor absence of an in-flight
   request, and does not authorize or establish provider execution.
-- `web-src/native-oracle-setup-wallet-prompt.mjs` is an unconnected one-shot
-  adapter that reconstructs all four reviewed action lists, checks the pinned
+- `web-src/native-oracle-setup-wallet-prompt.mjs` is a one-shot adapter used by
+  the opt-in preview panel. It reconstructs all four reviewed action lists, checks the pinned
   V9 bytes and device-key metadata, and requires a fresh witnessed claim before
   calling a wallet. It also rejects repeated calls in one page; reloads and
   other devices still rely on the durable fence. A synthetic end-to-end test
@@ -169,8 +169,14 @@ examples were **self-hosted development services**.
   `native-oracle-setup-http.mjs` and `web-src/native-oracle-setup-client.mjs`
   now compose the owner-message challenges, retained native review, both setup
   witnesses, device-key check, four one-shot wallet prompts, original-hash
-  preview/recording and completion check. The HTTP bridge is **off by default**
-  and the client is not connected to the hosted wallet UI. A synthetic test
+  preview/recording and completion check. The HTTP bridge is **off by default**.
+  The wallet account panel now exposes an experimental native setup screen only
+  on the approved top-level preview, after wallet control verification and an
+  enabled same-origin backend. It displays storage funding, deposit, caps, gas
+  allowance and four separate stage approvals. Each original is retained and
+  checked at FINAL before another stage; unknown outcomes go to recovery. The
+  screen requests persistent device storage, but does not provide key backup or
+  revocation. It does not authorize or submit a trial. A synthetic test
   exercises that path with real WebCrypto in simulated IndexedDB, throwaway
   signatures, disposable PostgreSQL, a local Git remote, an **in-memory** head
   checkpoint, fabricated RPC receipts and a fake wallet; lost claim responses
@@ -341,9 +347,10 @@ systems, bypassing clients, compromised RPCs and same-origin XSS remain outside
 it. The tenth witness record changes the format: upgrade all witness readers and
 checkpoint monitors together; older readers reject it. Authenticated setup
 inspection returns witnessed records, including the trial hash. The new routes
-are disabled unless the experimental setup service is explicitly configured;
-the owner UI, authenticated signed-byte transport and separate checkpoint
-deployment remain to be integrated. PostgreSQL and Chromium tests use synthetic
+are disabled unless the experimental setup service is explicitly configured.
+The opt-in owner UI covers the four setup stages and original recovery, not the
+trial; authenticated signed-byte transport and separate checkpoint deployment
+remain to be integrated. PostgreSQL and Chromium tests use synthetic
 owner, chain and witness data; their local Git/synthetic peer is not an
 independent checkpoint and they are not real-phone tests. The PostgreSQL
 integration exercises the signed-original handoff through the guarded runner
@@ -426,11 +433,11 @@ a recommendation to expose the current prototype or lock testnet funds.
    and revocation without asking for a wallet seed or private key. Verify the
    wallet can deploy the large artifact and install the restricted key on an
    actual phone; feature flags and converter tests are not enough.
-3. Integrate fresh stage preflights, original-hash receipt closure and retained
-   claims into the owner interface. The owner must review and approve each
-   stage. Check state and original receipts again after each approval and before
-   proceeding. Do not expose an enabled funding/deployment button before these
-   gates and custody recovery are complete.
+3. Independently review and real-device-test the experimental owner interface's
+   fresh preflights, original-hash closure and one-shot claims. The owner must
+   review and separately approve each stage. Check state and original receipts
+   again after each approval and before proceeding. Do not enable the preview
+   backend for funding/deployment before these gates and custody recovery are complete.
 4. Only after setup is verified, perform a separately bounded native oracle
    request, preserve its original signed hash before the one broadcast, and
    verify its actual provider receipt, result and refund. Label the outcome

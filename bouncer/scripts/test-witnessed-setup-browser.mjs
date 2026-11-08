@@ -92,6 +92,7 @@ try {
     await page.waitForFunction(() => document.querySelector('#wallet-status').textContent.includes('great_mujey.testnet'));
     await page.locator('.top-connect').click(); await page.locator('#wallet-owner-verify').click();
     await page.waitForFunction(() => document.querySelector('#wallet-account-badge').textContent === 'OWNER VERIFIED');
+    assert.equal(await page.locator('#wallet-native-setup-open').isHidden(),true); // no native backend advertised
     await page.locator('#wallet-setup-recovery').click();
     await page.waitForFunction(() => /claimed.*Do not repeat.*wallet history/i.test(document.querySelector('#wallet-setup-recovery-status').textContent));
     await page.locator('#wallet-setup-original').fill(hash);

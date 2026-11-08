@@ -7,6 +7,9 @@ import { formatPublicAmount, isNearAccountId, readPublicTestnetAccount } from '.
 import { fetchBufferReadinessPreview } from './buffer-readiness-preview.mjs';
 import { createWitnessedSetupClient } from './witnessed-setup-client.mjs';
 import { createOwnerKeyFallbackFetch } from './read-only-owner-key-fallback.mjs';
+import { openNativeOracleDeviceKey } from './native-oracle-device-key.mjs';
+import { createNativeOracleSetupClient } from './native-oracle-setup-client.mjs';
+import { createNativeOracleOwnerFlow } from './native-oracle-owner-flow.mjs';
 
 // HTTP Date is coarse and can be cached. Only flag a large discrepancy when
 // the response provides a valid Date/Age and the request was reasonably fast.
@@ -94,6 +97,21 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
   const accountRefresh = doc.querySelector('#wallet-account-refresh');
   const ownerVerify = doc.querySelector('#wallet-owner-verify');
   const ownerStatus = doc.querySelector('#wallet-owner-status');
+  const nativeOpen = doc.querySelector('#wallet-native-setup-open');
+  const nativePanel = doc.querySelector('#wallet-native-setup-panel');
+  const nativeTerms = doc.querySelector('#wallet-native-setup-terms');
+  const nativeStage = doc.querySelector('#wallet-native-setup-stage');
+  const nativeStatus = doc.querySelector('#wallet-native-setup-status');
+  const nativeHash = doc.querySelector('#wallet-native-setup-hash');
+  const nativeCheck = doc.querySelector('#wallet-native-setup-check');
+  const nativeDevice = doc.querySelector('#wallet-native-setup-device');
+  const nativeReserve = doc.querySelector('#wallet-native-setup-reserve');
+  const nativeApprove = doc.querySelector('#wallet-native-setup-approve');
+  const nativeReceipt = doc.querySelector('#wallet-native-setup-receipt');
+  const nativeVerify = doc.querySelector('#wallet-native-setup-verify');
+  const nativeRecover = doc.querySelector('#wallet-native-setup-recover');
+  const nativeOriginal = doc.querySelector('#wallet-native-setup-original');
+  const nativeRecoverOriginal = doc.querySelector('#wallet-native-setup-recover-original');
   const bufferReadiness = doc.querySelector('#wallet-buffer-readiness');
   const bufferReadinessStatus = doc.querySelector('#wallet-buffer-readiness-status');
   const bufferSetupStart = doc.querySelector('#wallet-buffer-setup-start');
@@ -127,7 +145,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
   // In-memory proof only, bound to the selected session. It never grants
   // spending access, authenticates a backend, or survives account changes.
   let ownerVerification = null, ownerSessionVersion = 0, setupRecoveryAvailable = false, setupRecoverySelection = null, matchedOriginal = null;
-  let bufferSetupDraft = null;
+  let bufferSetupDraft = null, nativeSetupAvailable = false, nativeFlow = null, nativeSetupOpening = false;
   const bufferSetupStages = ['create_keyless_vault', 'register_vault_circle', 'fund_vault_circle'];
   let bannerTimer;
   const trusted = new Set(WALLET_MANIFEST.wallets);
@@ -150,6 +168,30 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
       `Stage 3 deposits ${formatPublicAmount(fundingAmount, 6)} test USDC into the vault, not to Buffer. ` +
       `The reviewed Buffer product costs ${formatPublicAmount(review.fixed_product_price_atoms, 6)} test USDC and is a separate later payment. ` +
       'Each stage needs its own wallet approval; no order is created here.';
+  }
+  function renderNativeState(state) {
+    if (!state) return;
+    const terms = state.terms;
+    if (nativeTerms) nativeTerms.textContent = terms
+      ? `Owner: ${terms.owner}\nKeyless vault: ${terms.vault}\nStorage funding: ${terms.storageNear} test NEAR (can remain locked)\nVault deposit: ${terms.depositNear} test NEAR (not a provider payment)\nLimit: ${terms.capNear} test NEAR per request / ${terms.dailyNear} per rolling day\nAgent gas allowance: up to ${terms.gasAllowanceNear} test NEAR\nProvider: ${terms.payee} · project ${terms.project}\nIf unused funds are refunded, they return to the owner; verify the actual receipts. The full maximum counts against the rolling budget. Gas is extra. Each stage needs a separate wallet approval.`
+      : '';
+    const descriptions = {
+      create_keyless_native_vault: `1 of 4 · Create the keyless vault, transfer ${terms?.storageNear ?? '—'} test NEAR for storage and deploy the reviewed contract. Storage can remain locked.`,
+      configure_native_oracle_policy: '2 of 4 · Set the spending limits, allowlisted OutLayer project and restricted agent key. The four owner-only calls attach 1 yoctoNEAR each.',
+      fund_native_vault: `3 of 4 · Deposit ${terms?.depositNear ?? '—'} test NEAR into the vault. This is not a provider payment.`,
+      install_native_oracle_agent: `4 of 4 · Add the restricted agent key with a gas allowance of ${terms?.gasAllowanceNear ?? '—'} test NEAR. It cannot attach the 1 yoctoNEAR required for owner-only changes.`,
+    };
+    if (nativeStage) nativeStage.textContent = descriptions[state.stageId] || '';
+    if (nativeStatus) nativeStatus.textContent = state.message || '';
+    if (nativeHash) { nativeHash.hidden = !state.originalHash; nativeHash.textContent = state.originalHash ? `Original transaction: ${state.originalHash}` : ''; }
+    const disabled = busyState || state.busy;
+    const buttons = [[nativeCheck, ['initial','stopped','blocked','recover','await_receipt','verify_setup','trial_retained']],
+      [nativeDevice, ['create_device']], [nativeReserve, ['review']], [nativeApprove, ['stage']],
+      [nativeReceipt, ['await_receipt']], [nativeVerify, ['verify_setup']]];
+    for (const [button, phases] of buttons) if (button) { button.hidden = !phases.includes(state.phase); button.disabled = disabled; }
+    if (nativeRecover) nativeRecover.hidden = state.phase !== 'recover';
+    if (nativeOriginal) nativeOriginal.disabled = disabled;
+    if (nativeRecoverOriginal) nativeRecoverOriginal.disabled = disabled;
   }
   function notify(message, persistent = false) {
     if (!banner) return;
@@ -186,6 +228,10 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
       bufferReadiness.hidden = !(experimentalPreview && ownerVerified && connectedAccount === 'great_mujey.testnet');
       bufferReadiness.disabled = busyState;
     }
+    const nativeEnabled = nativeSetupAvailable && ownerVerified && connectedAccount === 'great_mujey.testnet';
+    if (nativeOpen) { nativeOpen.hidden = !nativeEnabled || Boolean(nativeFlow) || nativeSetupOpening; nativeOpen.disabled = busyState; }
+    if (nativePanel) nativePanel.hidden = !nativeEnabled || (!nativeFlow && !nativeSetupOpening);
+    if (nativeFlow) renderNativeState(nativeFlow.getState());
     const setupEnabled = setupRecoveryAvailable && ownerVerified && connectedAccount === 'great_mujey.testnet';
     if (bufferSetupStart) { bufferSetupStart.hidden = !setupEnabled; bufferSetupStart.disabled = busyState; }
     if (bufferSetupPanel) bufferSetupPanel.hidden = !setupEnabled || !bufferSetupDraft;
@@ -242,6 +288,10 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
   function clearAccountView() {
     accountReadVersion++;
     ownerSessionVersion++; ownerVerification = null; setupRecoveryAvailable = false; setupRecoverySelection = null; matchedOriginal = null; bufferSetupDraft = null;
+    nativeSetupAvailable = false; nativeSetupOpening = false; nativeFlow?.destroy(); nativeFlow = null;
+    if (nativeTerms) nativeTerms.textContent = ''; if (nativeStage) nativeStage.textContent = '';
+    if (nativeStatus) nativeStatus.textContent = ''; if (nativeHash) { nativeHash.hidden = true; nativeHash.textContent = ''; }
+    if (nativeOriginal) nativeOriginal.value = '';
     if (ownerStatus) { ownerStatus.hidden = true; ownerStatus.textContent = ''; }
     if (bufferReadinessStatus) { bufferReadinessStatus.hidden = true; bufferReadinessStatus.textContent = ''; }
     if (bufferSetupTerms) bufferSetupTerms.textContent = '';
@@ -628,6 +678,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
         })]);
       } finally { clearTimeout(timeout); }
       if (!stillCurrent()) return;
+      nativeFlow?.destroy(); nativeFlow = null; nativeSetupOpening = false; nativeSetupAvailable = false;
       ownerVerification = { wallet, accountId: proof.accountId, publicKey: proof.publicKey };
       if (ownerStatus) {
         ownerStatus.hidden = false;
@@ -641,10 +692,22 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
         const client = createWitnessedSetupClient({ wallet, accountId, ownerPublicKey:proof.publicKey,
           location:win.location, crypto:win.crypto, fetch:walletReadFetch, isCurrent:stillCurrent });
         void client.enabled().then(enabled => { if (stillCurrent()) { setupRecoveryAvailable = enabled; renderControls(); } });
+        if (wallet.manifest?.features?.signAndSendTransaction && typeof wallet.signAndSendTransaction === 'function') {
+          const currentProof = ownerVerification;
+          try {
+            const nativeClient = createNativeOracleSetupClient({ wallet, accountId, ownerPublicKey:proof.publicKey,
+              deviceStore:{ async inspect() { throw Error('device key not opened'); } }, location:win.location,
+              crypto:win.crypto, fetch:walletReadFetch, isTopLevel:isTop, isCurrent:() => stillCurrent() && ownerVerification === currentProof });
+            void nativeClient.enabled().then(enabled => {
+              if (stillCurrent() && ownerVerification === currentProof) { nativeSetupAvailable = enabled; renderControls(); }
+            }).catch(() => {});
+          } catch { /* the optional setup must not erase a verified identity */ }
+        }
       }
     } catch (error) {
       if (!stillCurrent()) return;
       ownerVerification = null; setupRecoveryAvailable = false; setupRecoverySelection = null; matchedOriginal = null;
+      nativeSetupAvailable = false; nativeSetupOpening = false; nativeFlow?.destroy(); nativeFlow = null;
       const reason = error?.message || '';
       const message = reason === 'CLI_ED25519_UNAVAILABLE'
         ? 'This browser cannot verify Ed25519 signatures. Try an up-to-date browser.'
@@ -658,6 +721,75 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
       stopWalletPresentation(); busy(false);
       if (stillCurrent()) { renderControls(); hideBanner(); openPicker(opener); }
     }
+  });
+  nativeOpen?.addEventListener('click', async () => {
+    const wallet = selectedWallet, accountId = connectedAccount, version = ownerSessionVersion, proof = ownerVerification;
+    if (busyState || !nativeSetupAvailable || nativeFlow || !connected || accountId !== 'great_mujey.testnet' ||
+        proof?.wallet !== wallet || proof.accountId !== accountId) return;
+    const stillCurrent = () => connected && selectedWallet === wallet && connectedAccount === accountId &&
+      ownerSessionVersion === version && ownerVerification === proof;
+    let store = null, installed = false;
+    nativeSetupOpening = true; busy(true);
+    if (nativeStatus) nativeStatus.textContent = 'Checking persistent browser storage and the retained setup. No transaction is requested.';
+    try {
+      if (typeof win.navigator?.storage?.persist !== 'function') throw Error('PERSISTENT_STORAGE_UNAVAILABLE');
+      // Request on the button gesture; do not silently fall back to evictable storage.
+      const persistRequest = win.navigator.storage.persist();
+      if (!(await persistRequest) && !(await win.navigator.storage.persisted())) throw Error('PERSISTENT_STORAGE_UNAVAILABLE');
+      if (!stillCurrent()) return;
+      store = await openNativeOracleDeviceKey({ origin:win.location.origin, indexedDB:win.indexedDB,
+        crypto:win.crypto, storage:win.navigator.storage, isTopLevel:isTop });
+      if (!stillCurrent()) return;
+      let flow;
+      const currentFlow = () => stillCurrent() && nativeFlow === flow;
+      const client = createNativeOracleSetupClient({ wallet, accountId, ownerPublicKey:proof.publicKey, deviceStore:store,
+        location:win.location, crypto:win.crypto, fetch:walletReadFetch, isTopLevel:isTop, isCurrent:currentFlow });
+      const interact = async (work, message) => {
+        if (!currentFlow()) throw Error('NATIVE_FLOW_SESSION_CHANGED');
+        let stopWalletPresentation = () => {};
+        closePicker(); setStatus(message); notify(message, true);
+        try {
+          if (['near-mobile', 'nightly-wallet', 'ledger'].includes(wallet.manifest.id)) stopWalletPresentation = decorateWalletPopup(wallet.manifest.id);
+          return await work();
+        } finally {
+          stopWalletPresentation();
+          if (currentFlow()) { hideBanner(); openPicker(opener); }
+        }
+      };
+      flow = createNativeOracleOwnerFlow({ client, deviceStore:store, ownerPublicKey:proof.publicKey, origin:win.location.origin,
+        crypto:win.crypto, isCurrent:currentFlow, interact, onChange:state => { if (currentFlow()) renderNativeState(state); } });
+      nativeFlow = flow; installed = true; nativeSetupOpening = false; renderControls();
+      if (!(await client.enabled()) || !currentFlow()) throw Error('NATIVE_SETUP_UNAVAILABLE');
+      await flow.check();
+    } catch {
+      if (stillCurrent() && !installed) {
+        const message = 'Persistent phone storage or native setup is unavailable. No transaction was requested.';
+        if (ownerStatus) { ownerStatus.hidden = false; ownerStatus.textContent = message; }
+        setStatus(message);
+      } else if (stillCurrent() && nativeStatus && nativeFlow?.getState().phase === 'initial') {
+        nativeStatus.textContent = 'Native setup is unavailable. No transaction was requested.';
+      }
+    } finally {
+      if (!installed) { try { store?.close(); } catch {} }
+      nativeSetupOpening = false; busy(false); if (stillCurrent()) renderControls();
+    }
+  });
+  const runNative = async work => {
+    const flow = nativeFlow;
+    if (busyState || !flow) return;
+    busy(true);
+    try { await work(flow); } catch { /* flow remains stopped until original-hash recovery */ }
+    finally { busy(false); }
+  };
+  nativeCheck?.addEventListener('click', () => { void runNative(flow => flow.check()); });
+  nativeDevice?.addEventListener('click', () => { void runNative(flow => flow.createDevice()); });
+  nativeReserve?.addEventListener('click', () => { void runNative(flow => flow.reserve({ownerConfirmed:true})); });
+  nativeApprove?.addEventListener('click', () => { void runNative(flow => flow.approveStage({ownerConfirmed:true})); });
+  nativeReceipt?.addEventListener('click', () => { void runNative(flow => flow.checkReceipt()); });
+  nativeVerify?.addEventListener('click', () => { void runNative(flow => flow.verifySetup()); });
+  nativeRecoverOriginal?.addEventListener('click', () => {
+    const hash = nativeOriginal?.value?.trim() || '';
+    void runNative(flow => flow.recoverOriginal({hash,ownerConfirmed:true}));
   });
   setupRecovery?.addEventListener('click', async () => {
     const wallet = selectedWallet, accountId = connectedAccount, version = ownerSessionVersion, proof = ownerVerification;

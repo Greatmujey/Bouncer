@@ -6,9 +6,10 @@
  * Startup inspection is not proof of an independently operated checkpoint,
  * an unrolled-back database, owner consent, device-key custody, provider
  * delivery or a safe lock release. Native pre-reservation reviews are
- * reconstructed from pinned code and a public key, not independently retained;
- * the native UI is not mounted. Do not use this for real spending or deploy
- * it as a production service without independent review and recovery work.
+ * reconstructed from pinned code and a public key, not independently retained.
+ * A preview-only native setup panel is available when this backend is enabled;
+ * the trial is not mounted. Do not use this for real spending or deploy it as
+ * a production service without independent review and recovery work.
  */
 import { createAnchoredSetupWitnessPair } from './anchored-setup-witness-pair.mjs';
 import { createPostgresWalletPromptAuth, inspectPostgresWalletPromptAuthSchema } from './postgres-wallet-prompt-auth.mjs';
