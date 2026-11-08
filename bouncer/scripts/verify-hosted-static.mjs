@@ -126,7 +126,8 @@ if (invokedDirectly) {
     console.error(`Static preview verification failed: ${error.message}`);
     if (process.env.GITHUB_ACTIONS === 'true') {
       const safe = String(error.message).replaceAll('%','%25').replaceAll('\r','%0D').replaceAll('\n','%0A').slice(0,500);
-      console.log(`::error title=Read-only static preview verification failed::${safe}`);
+      const level = process.env.BOUNCER_STATIC_DIAGNOSTIC_ONLY === '1' ? 'warning' : 'error';
+      console.log(`::${level} title=Read-only static preview verification failed::${safe}`);
     }
     process.exitCode = 1;
   }

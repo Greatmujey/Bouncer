@@ -97,9 +97,15 @@ The operator still needs a dedicated HTTPS host, PostgreSQL challenge store,
 persistent original journal, and an owner-authorized fresh V14 vault with
 policies/allowlists and scoped keys. There is no complete browser provisioning
 flow for that setup yet. A static Netlify or Vercel deployment alone cannot run
-missions. The development server's separate `BOUNCER_NATIVE_MISSION_PREVIEW=1`
-switch only proxies to an already running loopback service and provisions
-nothing.
+missions. A mutable deploy-preview alias can serve different bytes from an
+older immutable deploy, so neither a visible landing page nor a previous
+successful build proves the current preview is safe for wallet approval.
+`scripts/verify-hosted-static.mjs` compares the staged public files, HTML
+security headers, expected wallet origin and absence of the mission API using
+GET requests only. It does not prove a real wallet, backend, or transaction.
+A mismatching preview must not be used for approval. The development server's
+separate `BOUNCER_NATIVE_MISSION_PREVIEW=1` switch only proxies to an already
+running loopback service and provisions nothing.
 
 ### Operator setup for the single-host service
 

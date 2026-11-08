@@ -9,7 +9,7 @@ on:
 permissions:
   contents: read
 jobs:
-  netlify-static-preview-readonly:
+  netlify-last-ready-static-readonly:
     if: contains(github.event.head_commit.message, '[verify-netlify-static]')
     runs-on: ubuntu-24.04
     timeout-minutes: 7
@@ -29,33 +29,46 @@ jobs:
       - name: Test the read-only verifier
         working-directory: bouncer
         run: node --test tests/verify-hosted-static.test.mjs
-      - name: Compare tracked static inputs with the last ready commit
+      # The hosted headers are checked directly below. The Netlify build
+      # command can change without changing the reviewed static assets.
+      - name: Compare tracked static assets with the last ready commit
         working-directory: bouncer
-        run: git diff --quiet 42255e1d18d0690cf20d4039407f6af310733fad HEAD -- web scripts/stage-public-web.mjs ../netlify.toml
-      - name: Observe the public wallet-origin meta without connecting a wallet
-        env:
-          BOUNCER_STATIC_PREVIEW_ORIGIN: https://6af0ad979973bd8b2abf7cba--bouncer-near.netlify.app
+        run: git diff --quiet 42255e1d18d0690cf20d4039407f6af310733fad HEAD -- web scripts/stage-public-web.mjs
+      - name: Fingerprint the public HTML and observe its wallet-origin meta
         run: |
-          node --input-type=module -e '
-            const r = await fetch(process.env.BOUNCER_STATIC_PREVIEW_ORIGIN, {redirect:"manual", signal:AbortSignal.timeout(30000)});
-            if (r.status !== 200 || !r.body) throw Error(`HTTP ${r.status}`);
-            let bytes = 0, parts = [];
-            for await (const part of r.body) { bytes += part.length; if (bytes > 256000) throw Error("HTML too large"); parts.push(part); }
-            const text = Buffer.concat(parts).toString("utf8");
-            const matches = [...text.matchAll(/<meta name="bouncer-wallet-origin" content="(https:\/\/[a-z0-9.-]+)">/g)];
-            const observed = matches.length === 1 ? matches[0][1] : "missing-or-ambiguous";
-            console.log(`::notice title=Observed public wallet origin::${observed}`);
-          '
+          for origin in \
+            https://6af0ad979973bd8b2abf7cba--bouncer-near.netlify.app \
+            https://deploy-preview-18--bouncer-near.netlify.app; do
+            export BOUNCER_STATIC_PREVIEW_ORIGIN="$origin"
+            node --input-type=module -e '
+              import {createHash} from "node:crypto";
+              const r = await fetch(process.env.BOUNCER_STATIC_PREVIEW_ORIGIN, {redirect:"manual", signal:AbortSignal.timeout(30000)});
+              if (r.status !== 200 || !r.body) throw Error(`HTTP ${r.status}`);
+              let bytes = 0, parts = [];
+              for await (const part of r.body) { bytes += part.length; if (bytes > 256000) throw Error("HTML too large"); parts.push(part); }
+              const body = Buffer.concat(parts), text = body.toString("utf8");
+              const matches = [...text.matchAll(/<meta name="bouncer-wallet-origin" content="(https:\/\/[a-z0-9.-]+)">/g)];
+              const observed = matches.length === 1 ? matches[0][1] : "missing-or-ambiguous";
+              const digest = createHash("sha256").update(body).digest("hex");
+              console.log(`::notice title=Public HTML fingerprint::${process.env.BOUNCER_STATIC_PREVIEW_ORIGIN} bytes ${bytes}, SHA-256 ${digest}, wallet origin ${observed}`);
+            '
+          done
       - name: Verify immutable last-ready Netlify preview
         working-directory: bouncer
         env:
           BOUNCER_STATIC_PREVIEW_ORIGIN: https://6af0ad979973bd8b2abf7cba--bouncer-near.netlify.app
         run: node scripts/verify-hosted-static.mjs
-      - name: Verify current Netlify preview alias
+      # The mutable alias is diagnostic only. A mismatch is a warning that
+      # explicitly withholds trust, not a passing wallet or deployment test.
+      - name: Diagnose mutable alias; withhold trust on any mismatch
         working-directory: bouncer
         env:
           BOUNCER_STATIC_PREVIEW_ORIGIN: https://deploy-preview-18--bouncer-near.netlify.app
-        run: node scripts/verify-hosted-static.mjs
+          BOUNCER_STATIC_DIAGNOSTIC_ONLY: '1'
+        run: |
+          if ! node scripts/verify-hosted-static.mjs; then
+            echo '::warning title=Netlify alias not verified::Do not use this mutable preview for wallet approval or treat it as the reviewed deployment.'
+          fi
   nearblocks-form:
     if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[public-route-probe]')
     runs-on: ubuntu-24.04
