@@ -196,6 +196,14 @@ owner key stops before the read message; mismatch, unavailable or uncertain
 responses require reconciliation rather than re-enrollment. The comparison does
 not replace an imported or unlocked recovery export.
 
+The read-only funding review also checks the verified session's specific
+message-signing key at the same FINAL block when a verified wallet is connected.
+A missing, restricted or unrepresentable key is a blocker. This does not prove
+the wallet will use that key for a later transaction or establish backup,
+receipt, latest-head or spending approval. A separate source-only create
+preflight rebuilds the enrolled plan and checks that exact owner key, funding,
+gas and vault absence together; it is not connected to a live wallet prompt.
+
 The source-only temporary-bootstrap original retainer records a returned wallet
 hash in both existing witness copies, or leaves a one-shot claim if the wallet
 result is unknown. A hash later found in wallet history must pass the exact

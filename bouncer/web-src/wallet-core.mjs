@@ -1137,22 +1137,28 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
   bootstrapBudgetRefresh?.addEventListener('click', async () => {
     const account = connected ? connectedAccount : viewedAccount, version = ownerSessionVersion;
     if (busyState || !bootstrapBudgetVisible || !bootstrapBudgetStatus || !bootstrapBudgetResult || account !== 'great_mujey.testnet') return;
+    const proof = connected && ownerVerification?.accountId === account && ownerVerification?.wallet === selectedWallet
+      ? ownerVerification : null;
     const current = () => ownerSessionVersion === version && bootstrapBudgetVisible &&
-      (connected ? connectedAccount : viewedAccount) === account;
+      (connected ? connectedAccount : viewedAccount) === account && (!proof || ownerVerification === proof && selectedWallet === proof.wallet);
     bootstrapBudgetResult.hidden = true; bootstrapBudgetResult.textContent = '';
     bootstrapBudgetStatus.textContent = 'Reading public testnet state and gas. No wallet request is being made.';
     busy(true);
     try {
-      const r = await inspectV14BootstrapBudget({fetch:win.fetch.bind(win),isCurrent:current}); if (!current()) return;
+      const r = await inspectV14BootstrapBudget({fetch:win.fetch.bind(win),isCurrent:current,
+        expectedOwnerPublicKey:proof?.publicKey}); if (!current()) return;
       const b = r.budget, amount = value => formatPublicAmount(value,24,12);
       const reasons={candidate_absent_at_block:'The proposed vault name is already present; do not create it again.',
         owner_has_plain_account_profile:'The owner account has an unexpected contract profile.',
         owner_has_full_access_key:'A current FullAccess owner key was not observed.',
+        reviewed_owner_key_full_access:'The session’s message-signing key is not a current FullAccess key; stop and reconcile the owner key.',
         owner_covers_example_vault_and_create_upfront:'The owner balance does not cover this example plus the estimated create gas.',
         example_covers_storage_and_deploy_upfront:'The example funding does not cover the estimated storage and deployment gas reserve.'};
       bootstrapBudgetResult.textContent = [
         `Snapshot: ${r.observed_at} · final block ${r.block_height}`,
         `Owner available: ${amount(r.owner_available_yocto)} test NEAR`,
+        proof ? `Session’s message-signing key: ${r.checks.reviewed_owner_key_full_access ? 'current FullAccess at this block' : 'not confirmed — stop'}. The wallet may choose a different key for a transaction.`
+          : 'Public view only: no session message-signing key was checked.',
         `Candidate vault: ${r.candidate_presence === 'ABSENT_AT_FINAL_BLOCK' ? 'not present at this block' : 'present — do not create again'}`,
         `Example vault transfer: ${amount(b.proposed_vault_funding_yocto)} test NEAR (not approved)`,
         `Estimated storage funding: ${amount(b.storage_estimate_yocto)} test NEAR, including a 50,000-byte margin and 0.1 test NEAR reserve. Actual locked storage differs.`,

@@ -1,11 +1,15 @@
 /**
  * Browser-only public testnet cost review for the named owner and candidate
  * vault. Every value comes from one fresh FINAL block on a fixed trusted RPC.
+ * If a specific Ed25519 key is supplied, its current FullAccess permission
+ * and representable nonce are checked as well as the account-wide budget.
  * This is not wallet ownership, independent original retention, an approval,
  * a transaction, or a guarantee about future balances, gas or account state.
  */
+import {PublicKey} from '@near-js/crypto';
 import {decodeNativeHash32} from './native-oracle-transaction.mjs';
 import {estimateV14BootstrapBudget} from '../shared/v14-bootstrap-budget.mjs';
+import {pinnedAccessKeyNonce} from '../shared/pinned-access-key-nonce.mjs';
 
 const RPC='https://rpc.testnet.near.org',OWNER='great_mujey.testnet',VAULT=`native.${OWNER}`;
 const EMPTY_CODE='11111111111111111111111111111111',MAX=(1n<<128n)-1n;
@@ -37,8 +41,16 @@ function plain(account,block){
 }
 /** Only an exact structured UNKNOWN_ACCOUNT at the pinned block is treated as
  * absence. An RPC error, timeout or mismatched block stays UNKNOWN. */
-export async function inspectV14BootstrapBudget({fetch:fetchImpl=globalThis.fetch,now=Date.now,isCurrent=()=>true}={}){
+export async function inspectV14BootstrapBudget({fetch:fetchImpl=globalThis.fetch,now=Date.now,isCurrent=()=>true,
+  expectedOwnerPublicKey}={}){
   if(typeof fetchImpl!=='function'||typeof now!=='function'||typeof isCurrent!=='function'||isCurrent()!==true)throw fail();
+  if(expectedOwnerPublicKey!==undefined){
+    try {
+      const key=PublicKey.from(expectedOwnerPublicKey);
+      if(typeof expectedOwnerPublicKey!=='string'||!expectedOwnerPublicKey.startsWith('ed25519:')||
+        key.keyType!==0||key.ed25519Key?.data?.length!==32||String(key)!==expectedOwnerPublicKey)throw fail();
+    }catch{throw fail()}
+  }
   async function rpc(method,params,{presence=false,limit=512_000}={}){
     if(isCurrent()!==true)throw fail();const id='bouncer-v14-bootstrap-budget';
     const response=await fetchImpl(RPC,{method:'POST',mode:'cors',credentials:'omit',redirect:'error',cache:'no-store',
@@ -72,6 +84,11 @@ export async function inspectV14BootstrapBudget({fetch:fetchImpl=globalThis.fetc
       owner_has_full_access_key:keys.keys.some(k=>k.access_key.permission==='FullAccess'),
       owner_covers_example_vault_and_create_upfront:available>=BigInt(budget.create.owner_total_upfront_estimate_yocto),
       example_covers_storage_and_deploy_upfront:budget.funding_covers_estimated_storage_and_deploy_upfront};
+    if(expectedOwnerPublicKey!==undefined){
+      const reviewed=keys.keys.find(k=>k.public_key===expectedOwnerPublicKey);
+      checks.reviewed_owner_key_full_access=reviewed?.access_key?.permission==='FullAccess'&&
+        pinnedAccessKeyNonce(reviewed.access_key.nonce)!==null;
+    }
     const finished=now();if(!Number.isSafeInteger(finished)||finished<started||isCurrent()!==true||fresh(block,finished)!==at)throw fail();
     const blockers=Object.keys(checks).filter(k=>!checks[k]);
     return Object.freeze({status:blockers.length?'BLOCKED_OR_UNKNOWN':'READ_ONLY_REVIEW_NOT_AUTHORIZED',network:'testnet',owner:OWNER,vault:VAULT,

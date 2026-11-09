@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
+import {KeyPair} from '@near-js/crypto';
 import {inspectV14BootstrapBudget} from '../web-src/v14-bootstrap-budget-client.mjs';
 import {encodeBase58} from '../web-src/native-oracle-transaction.mjs';
 
@@ -51,6 +52,27 @@ test('browser obtains one fresh public cost review without signing or sending',a
   assert.equal(r.budget.receipt_purchase_price_yocto_per_gas,'1000000000');
   assert.equal(r.transaction_authorized,false);assert.equal(r.transaction_sent,false);assert.equal(r.independent_recovery_verified,false);
   assert.deepEqual(x.calls.sort(),['status','block','query','query','query','EXPERIMENTAL_protocol_config','gas_price'].sort());
+});
+
+test('a reviewed session key must itself be current FullAccess at the budget block',async()=>{
+  const key=String(KeyPair.fromRandom('ed25519').getPublicKey()),other=String(KeyPair.fromRandom('ed25519').getPublicKey());
+  const x=fixture();x.state.keys=[{public_key:key,access_key:{permission:'FullAccess',nonce:7}}];
+  const ok=await inspectV14BootstrapBudget({fetch:x.fetch,now,expectedOwnerPublicKey:key});
+  assert.equal(ok.status,'READ_ONLY_REVIEW_NOT_AUTHORIZED');assert.equal(ok.checks.reviewed_owner_key_full_access,true);
+  assert.equal(ok.owner_wallet_control_proven,false);assert.equal(ok.independent_recovery_verified,false);
+  assert.equal(ok.transaction_authorized,false);assert.equal(ok.transaction_sent,false);
+  for(const keys of [
+    [{public_key:other,access_key:{permission:'FullAccess',nonce:7}}],
+    [{public_key:other,access_key:{permission:'FullAccess',nonce:7}},{public_key:key,access_key:{permission:{FunctionCall:{}},nonce:7}}],
+    [{public_key:key,access_key:{permission:'FullAccess',nonce:Number.MAX_SAFE_INTEGER}}],
+    [{public_key:key,access_key:{permission:'FullAccess'}}],
+  ]) {
+    const changed=fixture();changed.state.keys=keys;
+    const blocked=await inspectV14BootstrapBudget({fetch:changed.fetch,now,expectedOwnerPublicKey:key});
+    assert.equal(blocked.status,'BLOCKED_OR_UNKNOWN');assert(blocked.blockers.includes('reviewed_owner_key_full_access'));
+  }
+  const invalid=fixture();await assert.rejects(inspectV14BootstrapBudget({fetch:invalid.fetch,now,expectedOwnerPublicKey:'ed25519:fixture'}));
+  assert.equal(invalid.calls.length,0);
 });
 
 test('present vault, insufficient funding and restricted owner are explicit blockers',async()=>{

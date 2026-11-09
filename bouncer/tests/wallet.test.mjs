@@ -328,7 +328,10 @@ test('direct preview review is read-only and one explicit tap invokes only the f
 
 test('vault budget review uses public testnet reads and adds no signature or transaction', async () => {
   const origin='https://bouncer-production-6df1.up.railway.app',browser=fakeBrowser(`${origin}/workspace`,{approved:origin});
-  const config={account:'great_mujey.testnet'},originalFetch=browser.win.fetch,block=encodeBase58(Buffer.alloc(32,17));
+  const config={account:'great_mujey.testnet',signConnectedMessage:true,cliKey:KeyPair.fromRandom('ed25519')},
+    originalFetch=browser.win.fetch,block=encodeBase58(Buffer.alloc(32,17));
+  const sessionKey=String(config.cliKey.getPublicKey()),otherKey=String(KeyPair.fromRandom('ed25519').getPublicKey());
+  let sessionKeyPresent=true;
   const fee={send_sir:100000000,send_not_sir:100000000,execution:100000000};
   const actions={create_account_cost:fee,transfer_cost:fee,add_key_cost:{full_access_cost:fee},deploy_contract_cost:fee,
     deploy_contract_cost_per_byte:fee,function_call_cost:fee,function_call_cost_per_byte:fee,delete_key_cost:fee};
@@ -346,7 +349,8 @@ test('vault budget review uses public testnet reads and adds no signature or tra
       info:{requested_account_id:req.params.account_id,block_hash:block}}}});
     else if(req.method==='query' && req.params.request_type==='view_account')result={block_hash:block,code_hash:'11111111111111111111111111111111',
       amount:String(26n*10n**24n),storage_usage:264};
-    else if(req.method==='query' && req.params.request_type==='view_access_key_list')result={block_hash:block,keys:[{public_key:'fixture',access_key:{permission:'FullAccess'}}]};
+    else if(req.method==='query' && req.params.request_type==='view_access_key_list')result={block_hash:block,
+      keys:[{public_key:sessionKeyPresent?sessionKey:otherKey,access_key:{permission:'FullAccess',nonce:7}}]};
     else throw Error('unexpected request');
     return Response.json({...base,result});
   };
@@ -357,8 +361,13 @@ test('vault budget review uses public testnet reads and adds no signature or tra
   await open.click();await browser.nodes['wallet-bootstrap-budget-refresh'].click();
   assert.equal(reads,7);assert.match(browser.nodes['wallet-bootstrap-budget-result'].textContent,/Example vault transfer: 6 test NEAR \(not approved\)/);
   assert.match(browser.nodes['wallet-bootstrap-budget-result'].textContent,/Deploy gas upfront/);
+  assert.match(browser.nodes['wallet-bootstrap-budget-result'].textContent,/message-signing key: current FullAccess at this block/);
+  assert.match(browser.nodes['wallet-bootstrap-budget-result'].textContent,/wallet may choose a different key/);
   assert.match(browser.nodes['wallet-bootstrap-budget-result'].textContent,/Independent recovery and owner approval are still required/);
   assert.match(browser.nodes['wallet-bootstrap-budget-status'].textContent,/No transaction was authorized or sent/);
+  sessionKeyPresent=false;await browser.nodes['wallet-bootstrap-budget-refresh'].click();
+  assert.match(browser.nodes['wallet-bootstrap-budget-result'].textContent,/BLOCKED:/);
+  assert.match(browser.nodes['wallet-bootstrap-budget-result'].textContent,/message-signing key is not a current FullAccess key/);
   assert.equal(config.messageRequests.length,signaturesBeforeReview);assert.equal(config.transactionRequests,undefined);
   await browser.nodes['wallet-disconnect'].click();assert.equal(open.hidden,true);
 });
