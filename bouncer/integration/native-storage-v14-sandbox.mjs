@@ -78,12 +78,40 @@ async function main() {
         // The verifier's fixed public RPC is replaced ONLY by a loopback-only
         // test adapter. The sandbox chain ID is aliased to testnet after its
         // actual identity was checked; no public-chain request is possible.
+        let observeDeployment=false;const deploymentObservations=[];
+        const describeActions=actions=>Array.isArray(actions)?actions.map(item=>{
+          if(typeof item==='string')return item;
+          if(item?.DeployContract)return {DeployContract:{code_length:item.DeployContract.code?.length,
+            code:item.DeployContract.code?.length<=80?item.DeployContract.code:'<omitted>'}};
+          if(item?.FunctionCall)return {FunctionCall:item.FunctionCall};
+          if(item?.DeleteKey)return {DeleteKey:{key_matches:item.DeleteKey.public_key===pub(bootstrapKey)}};
+          return {types:Object.keys(item??{})};
+        }):null;
         const browserSandboxFetch=async (url,options)=>{
           assert.equal(url,V14_BOOTSTRAP_READ_RPC);
           const request=JSON.parse(options.body);
           assert.ok(['status','EXPERIMENTAL_tx_status','block','query'].includes(request.method));
           const response=await fetch(rpcUrl,options),body=await response.json();
           if(request.method==='status' && body.result)body.result.chain_id='testnet';
+          // Only the disposable sandbox's public result shapes are recorded;
+          // never record signed bytes, recovered secrets or real-owner data.
+          if(observeDeployment&&request.method==='EXPERIMENTAL_tx_status'){
+            const r=body.result,txn=r?.transaction;
+            deploymentObservations.push({type:'transaction',error:body.error,final:r?.final_execution_status,status:r?.status,
+              tx:{signer:txn?.signer_id,receiver:txn?.receiver_id,key_matches:txn?.public_key===pub(bootstrapKey),actions:describeActions(txn?.actions)},
+              tx_outcome:r?.transaction_outcome?.outcome,
+              receipts:r?.receipts?.map(x=>({id:x.receipt_id,predecessor:x.predecessor_id,receiver:x.receiver_id,
+                action:{...x.receipt?.Action,signer_public_key:x.receipt?.Action?.signer_public_key===pub(bootstrapKey)?'<matches>':'<other>',
+                  actions:describeActions(x.receipt?.Action?.actions)}})),
+              outcomes:r?.receipts_outcome?.map(x=>({id:x.id,executor:x.outcome?.executor_id,status:x.outcome?.status,children:x.outcome?.receipt_ids}))});
+          }
+          if(observeDeployment&&request.method==='query'){
+            const r=body.result;
+            deploymentObservations.push({type:request.params.request_type,account:request.params.account_id,method:request.params.method_name,
+              error:body.error,block_hash:r?.block_hash,code_hash:r?.code_hash,amount:r?.amount,locked:r?.locked,storage_usage:r?.storage_usage,
+              keys:r?.keys?.map(x=>({matches:x.public_key===pub(bootstrapKey),permission:x.access_key?.permission,nonce:x.access_key?.nonce})),
+              view:r?.result?Buffer.from(r.result).toString('utf8'):undefined});
+          }
           return Response.json(body,{status:response.status});
         };
         const verifyCreateFinal=await createV14BootstrapCreateVerifier({review:plan.review,compressedV14:compressed,
@@ -127,7 +155,11 @@ async function main() {
           // so rather than constructing evidence that nearcore did not return.
           const verifyDeploymentFinal=await createV14BootstrapDeploymentVerifier({review:plan.review,compressedV14:compressed,
             fetch:browserSandboxFetch,crypto:crypto.webcrypto});
-          const proof=await verifyDeploymentFinal({scope_id:scopeId,review_sha256:plan.review.review_sha256,original_hash:original.transaction_hash});
+          observeDeployment=true;
+          let proof;
+          try {proof=await verifyDeploymentFinal({scope_id:scopeId,review_sha256:plan.review.review_sha256,original_hash:original.transaction_hash})}
+          catch(error){console.error('Disposable sandbox deployment observations:',JSON.stringify(deploymentObservations));throw error}
+          finally{observeDeployment=false}
           assert.equal(proof.status,'DEPLOYMENT_FINAL_AND_KEYLESS_VAULT_VERIFIED');
           assert.equal(proof.pinned_v14_code_verified,true);
           assert.equal(proof.temporary_key_absent,true);

@@ -19,7 +19,7 @@ import {V14_TESTNET_ARTIFACT} from '../shared/v14-testnet-artifact.mjs';
 
 const EMPTY_CODE='11111111111111111111111111111111';
 const HEX=/^[a-f0-9]{64}$/,SCOPE=/^[a-f0-9]{32}$/,MAX=(1n<<128n)-1n;
-const fail=()=>new Error('Bootstrap deployment original or final vault state is unresolved; preserve the original and do not resend');
+const fail=(phase='')=>new Error(`Bootstrap deployment original or final vault state is unresolved${phase?` (${phase})`:''}; preserve the original and do not resend`);
 const object=x=>x!==null&&typeof x==='object'&&!Array.isArray(x);
 const exact=(x,fields)=>object(x)&&Object.keys(x).length===fields.length&&fields.every(k=>Object.hasOwn(x,k));
 const absent=(x,key)=>!Object.hasOwn(x,key)||x[key]===null;
@@ -156,18 +156,24 @@ export async function createV14BootstrapDeploymentVerifier({review:inputReview,c
     const binding={scope_id:inputBinding.scope_id,review_sha256:inputBinding.review_sha256,original_hash:inputBinding.original_hash};
     if(typeof binding.scope_id!=='string'||!SCOPE.test(binding.scope_id)||typeof binding.review_sha256!=='string'||
       !HEX.test(binding.review_sha256)||binding.review_sha256!==review.review_sha256||!hash(binding.original_hash)||isCurrent()!==true)throw fail();
+    let phase='network';
     try {
       const started=now();if(!Number.isSafeInteger(started)||started<1)throw fail();
       if((await rpc('status',[]))?.chain_id!=='testnet')throw fail();
+      phase='original read';
       const result=await rpc('EXPERIMENTAL_tx_status',{tx_hash:binding.original_hash,sender_account_id:review.vault,wait_until:'FINAL'},4_000_000);
+      phase='original outcome';
       const receipt=inspectBootstrapDeploymentReceipt({result,review,originalHash:binding.original_hash});
+      phase='final block';
       const block=await rpc('block',{finality:'final'}),at=freshBlock(block,now());
       const query=(request_type,account_id,extra={})=>rpc('query',{request_type,account_id,block_id:at,...extra});
       const view=method_name=>query('call_function',review.vault,{method_name,args_base64:'e30='});
+      phase='final state read';
       const [owner,ownerKeyView,vault,vaultKeyView,versionView,vaultOwnerView]=await Promise.all([
         query('view_account',review.owner),query('view_access_key_list',review.owner),
         query('view_account',review.vault),query('view_access_key_list',review.vault),view('contract_version'),view('get_owner'),
       ]);
+      phase='final state comparison';
       const ownerKeys=keyList(ownerKeyView,at),vaultKeys=keyList(vaultKeyView,at);
       const ownerKey=ownerKeys.find(k=>k.public_key===review.owner_public_key);
       if(!localAccount(owner,at,EMPTY_CODE)||ownerKey?.access_key?.permission!=='FullAccess'||
@@ -175,12 +181,13 @@ export async function createV14BootstrapDeploymentVerifier({review:inputReview,c
         !localAccount(vault,at,review.vault_near_code_hash)||uint(vault.amount)===null||uint(vault.locked)!==0n||
         !Number.isSafeInteger(vault.storage_usage)||vault.storage_usage<0||vaultKeys.length!==0||
         jsonView(versionView,at)!=='bouncer-agent-v14-native-storage-testnet'||jsonView(vaultOwnerView,at)!==review.owner)throw fail();
+      phase='session freshness';
       const finished=now();if(!Number.isSafeInteger(finished)||finished<started||isCurrent()!==true||freshBlock(block,finished)!==at)throw fail();
       return Object.freeze({status:'DEPLOYMENT_FINAL_AND_KEYLESS_VAULT_VERIFIED',network:'testnet',...binding,
         final_block_hash:at,checked_at_ms:finished,local_root_receipt_body_omitted:receipt.local_root_receipt_body_omitted,
         final_transaction_and_outcome_verified:true,pinned_v14_code_verified:true,owner_verified:true,temporary_key_absent:true,
         all_vault_access_keys_absent:true,independent_recovery_verified:false,latest_history_verified:false,
         wallet_approval_verified:false,transaction_authorized:false,transaction_sent:false});
-    }catch{throw fail()}
+    }catch{throw fail(phase)}
   };
 }
