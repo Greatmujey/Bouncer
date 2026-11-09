@@ -56,6 +56,9 @@ test('real Railway entry starts in standby and exits cleanly without creating st
   const unsafeSetup=spawnSync(process.execPath,[fileURLToPath(new URL('../scripts/start-railway-native.mjs',import.meta.url))],{
     env:{PATH:process.env.PATH,BOUNCER_V14_SETUP_READONLY:'1'},encoding:'utf8',timeout:5000});
   assert.notEqual(unsafeSetup.status,0);assert.match(unsafeSetup.stderr,/did not start/);
+  const noVolume=spawnSync(process.execPath,[fileURLToPath(new URL('../scripts/start-railway-native.mjs',import.meta.url))],{
+    env:{PATH:process.env.PATH,BOUNCER_V14_BOOTSTRAP_RAILWAY_ANCHOR:'1',RAILWAY_VOLUME_MOUNT_PATH:'/not-the-declared-mount'},encoding:'utf8',timeout:5000});
+  assert.notEqual(noVolume.status,0);assert.match(noVolume.stderr,/did not start/);
 });
 
 test('standby exposes only an honest non-spending status, no mission APIs or reflected input',async()=>{

@@ -48,7 +48,9 @@ export function createRailwayNativeStandby({readiness,setupHandler,webHandler,bo
     }
     const get=req.method==='GET'||req.method==='HEAD';
     const status=get && (req.url==='/'||req.url==='/healthz');
-    const diagnostic=get && req.url==='/readiness' && readiness!==undefined;
+    // Fixed cache-busting variants let a non-secret diagnostic be read across
+    // two deployments; arbitrary queries remain unavailable and unreflected.
+    const diagnostic=get && ['/readiness','/readiness?volume-probe=1','/readiness?volume-probe=2'].includes(req.url) && readiness!==undefined;
     req.resume();
     res.writeHead(status||diagnostic?200:404,headers);
     res.end(req.method==='HEAD' ? undefined : JSON.stringify(status?STANDBY_STATUS:diagnostic?readiness.snapshot():{error:'unavailable'}));
@@ -103,9 +105,10 @@ async function main() {
   if(anchorFlag!==undefined&&anchorFlag!==''&&anchorFlag!=='0'&&anchorFlag!=='1')throw new Error('invalid recovery anchor configuration');
   let bootstrapAnchorHandler;
   if(anchorFlag==='1') {
-    // Environment plus a real directory catches common ephemeral-path errors;
-    // neither proves persistence, independence, correct mount or freshness.
-    if(process.env.RAILWAY_VOLUME_MOUNT_PATH!=='/data'||!fs.lstatSync('/data').isDirectory()||fs.lstatSync('/data').isSymbolicLink())
+    // Require both the declared path and an actual writable mount. This still
+    // does not prove persistence, independence, rollback resistance or freshness.
+    const {inspectStandbyMount}=await import('../agent/railway-standby-readiness.mjs');
+    if(process.env.RAILWAY_VOLUME_MOUNT_PATH!=='/data'||inspectStandbyMount()!=='DECLARED_MOUNT_PRESENT')
       throw new Error('declared Railway recovery volume required');
     const [{createV14BootstrapRailwayAnchor},{createV14BootstrapRailwayAnchorHttp}]=await Promise.all([
       import('../agent/v14-bootstrap-railway-anchor.mjs'),import('../agent/v14-bootstrap-railway-anchor-http.mjs')]);
