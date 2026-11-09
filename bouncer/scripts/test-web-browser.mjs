@@ -95,6 +95,67 @@ try {
     await page.close();
   }
 
+  // The layout checks above use reduced motion. Separately check the actual
+  // visual orbit with motion enabled, on desktop and a phone-sized viewport.
+  // Compare positions relative to the orbit so the page entrance and pointer
+  // parallax cannot be mistaken for resource icons moving around the center.
+  for (const [width, height] of [[1440, 900], [390, 844]]) {
+    const mobile = width < 650;
+    const page = await browser.newPage({ viewport: { width, height }, isMobile: mobile, hasTouch: mobile, reducedMotion: 'no-preference' });
+    const errors = [];
+    page.on('pageerror', error => errors.push(error.message));
+    await page.route('**/*', route => route.request().url().startsWith(url) ? route.continue() : route.abort());
+    await page.goto(url, { waitUntil: 'domcontentloaded' });
+    await page.locator('.orbit-carrier').waitFor({ state: 'visible' });
+
+    const offset = () => page.locator('.orbit-node-compute').evaluate(node => {
+      const icon = node.getBoundingClientRect(), orbit = node.closest('.workspace-orbit').getBoundingClientRect();
+      return [icon.x + icon.width / 2 - (orbit.x + orbit.width / 2), icon.y + icon.height / 2 - (orbit.y + orbit.height / 2)];
+    });
+    const waitForMovement = start => page.waitForFunction(([x, y]) => {
+      const node = document.querySelector('.orbit-node-compute');
+      const icon = node.getBoundingClientRect(), orbit = node.closest('.workspace-orbit').getBoundingClientRect();
+      return Math.hypot(icon.x + icon.width / 2 - (orbit.x + orbit.width / 2) - x,
+        icon.y + icon.height / 2 - (orbit.y + orbit.height / 2) - y) > 6;
+    }, start, { timeout: 10_000 });
+
+    assert.equal(await page.evaluate(() => matchMedia('(prefers-reduced-motion: reduce)').matches), false);
+    await waitForMovement(await offset());
+    const orbit = await page.locator('.workspace-orbit').evaluate(root => {
+      const center = root.getBoundingClientRect();
+      const carrier = new DOMMatrix(getComputedStyle(root.querySelector('.orbit-carrier')).transform);
+      const symbol = new DOMMatrix(getComputedStyle(root.querySelector('.orbit-node svg')).transform);
+      const rotation = Math.atan2(carrier.b, carrier.a) + Math.atan2(symbol.b, symbol.a);
+      return {
+        angles: [...root.querySelectorAll('.orbit-node')].map(node => {
+          const box = node.getBoundingClientRect();
+          return Math.atan2(box.y + box.height / 2 - (center.y + center.height / 2), box.x + box.width / 2 - (center.x + center.width / 2));
+        }).sort((a, b) => a - b),
+        symbolRotation: Math.atan2(Math.sin(rotation), Math.cos(rotation)),
+      };
+    });
+    assert.equal(orbit.angles.length, 3);
+    for (const gap of [orbit.angles[1] - orbit.angles[0], orbit.angles[2] - orbit.angles[1], 2 * Math.PI + orbit.angles[0] - orbit.angles[2]]) {
+      assert.ok(Math.abs(gap - 2 * Math.PI / 3) < .08, 'moving resource icons should stay evenly spaced');
+    }
+    assert.ok(Math.abs(orbit.symbolRotation) < .05, 'resource symbols should stay upright while orbiting');
+    await page.locator('[data-workspace-resource="storage"]').click();
+    assert.equal(await page.locator('[data-workspace-visual]').getAttribute('data-resource'), 'storage');
+
+    // Respect the browser/OS preference, including a change while the page is open.
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await page.waitForFunction(() => ['.orbit-carrier', '.orbit-ring-outer', '.orbit-ring-inner', '.orbit-center>span', '.orbit-node svg']
+      .every(selector => getComputedStyle(document.querySelector(selector)).animationName === 'none'));
+    const stopped = await offset();
+    await page.waitForTimeout(400);
+    const still = await offset();
+    assert.ok(Math.hypot(still[0] - stopped[0], still[1] - stopped[1]) < .5, 'reduced motion should stop the orbit');
+    await page.emulateMedia({ reducedMotion: 'no-preference' });
+    await waitForMovement(await offset());
+    assert.deepEqual(errors, []);
+    await page.close();
+  }
+
   // The browser receives an altered digest in a test-only copy of the bundle;
   // the shipped digest and curated executor remain untouched. This runs the
   // real connector and sandbox bridge with a deliberately fake Meteor wallet.
