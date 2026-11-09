@@ -299,13 +299,17 @@ jobs:
           done
 
   compact-v14-size:
-    # One read-only build experiment; no wallet, signer, RPC or deployment.
+    # Public code-size experiment; no wallet, signer, RPC or deployment.
     if: github.event_name == 'workflow_dispatch' && inputs.measure_compact_v14 == true && inputs.run_v14_readiness != true && inputs.export_public_artifacts != true
+    permissions:
+      contents: write # Export a public candidate blob only if the size fits.
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
       CARGO_BUILD_JOBS: 2
-      RUSTFLAGS: '-C link-arg=-s'
+      # Preserve function names temporarily for wasm-snip; the final optimizer
+      # strips them. No candidate is authorized or deployed by this job.
+      CARGO_PROFILE_RELEASE_STRIP: 'none'
       CARGO_PROFILE_RELEASE_LTO: 'fat'
       CARGO_PROFILE_RELEASE_OPT_LEVEL: 'z'
     steps:
@@ -340,3 +344,26 @@ jobs:
             console.log(`::notice title=Compact V14 mobile size::${JSON.stringify(result)}`);
           }
           NODE
+      - name: Measure a panic-snipped candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          cargo install wasm-snip --version 0.4.0 --locked --root "$RUNNER_TEMP/wasm-snip"
+          "$RUNNER_TEMP/wasm-snip/bin/wasm-snip" "$RUNNER_TEMP/v14-compact.wasm" --snip-rust-panicking-code -o "$RUNNER_TEMP/v14-snipped.wasm"
+          node "$RUNNER_TEMP/binaryen/node_modules/binaryen/bin/wasm-opt" "$RUNNER_TEMP/v14-snipped.wasm" -Oz --all-features --strip-debug --strip-producers -o "$RUNNER_TEMP/v14-snipped-opt.wasm"
+          node --input-type=module - "$RUNNER_TEMP/v14-snipped-opt.wasm" <<'NODE'
+          import fs from 'node:fs';import crypto from 'node:crypto';
+          const data=fs.readFileSync(process.argv[2]);
+          if(!data.subarray(0,8).equals(Buffer.from([0,97,115,109,1,0,0,0])))throw Error('invalid WASM');
+          console.log('::notice title=Snipped V14 mobile size::'+JSON.stringify({wasm_bytes:data.length,
+            base64_bytes:4*Math.ceil(data.length/3),sha256:crypto.createHash('sha256').update(data).digest('hex'),
+            raw_field_fits:4*Math.ceil(data.length/3)<400000,
+            limitations:'Panic paths changed; size alone does not establish correctness, wallet compatibility, or deployment approval.'}));
+          NODE
+          bytes=$(wc -c < "$RUNNER_TEMP/v14-snipped-opt.wasm" | tr -d ' ')
+          if [ "$bytes" -lt 295000 ]; then
+            node -e 'const fs=require("fs");fs.writeFileSync(process.argv[2],JSON.stringify({content:fs.readFileSync(process.argv[1]).toString("base64"),encoding:"base64"}));' "$RUNNER_TEMP/v14-snipped-opt.wasm" "$RUNNER_TEMP/snipped-blob.json"
+            blob=$(gh api --method POST "repos/$GITHUB_REPOSITORY/git/blobs" --input "$RUNNER_TEMP/snipped-blob.json" --jq .sha)
+            echo "::notice title=Unreviewed public snipped V14 candidate::$blob"
+          fi
