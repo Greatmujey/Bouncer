@@ -72,6 +72,11 @@ async function main() {
   if(check!==undefined && check!=='' && check!=='0' && check!=='1')throw new Error('invalid standby diagnostics configuration');
   const anchorFlag=process.env.BOUNCER_V14_BOOTSTRAP_RAILWAY_ANCHOR;
   if(anchorFlag!==undefined&&anchorFlag!==''&&anchorFlag!=='0'&&anchorFlag!=='1')throw new Error('invalid recovery anchor configuration');
+  // Initialization may already have been attempted. Keep both initialization
+  // and appends off across every browser until that history is reconciled.
+  // This is deliberately not an environment switch; reads and local exports
+  // remain available, and no existing file or marker is removed.
+  const anchorWritesEnabled=false;
   let readiness,setupHandler;
   if(check==='1') {
     const [{createStandbyReadiness,inspectStandbyMount},{isRailwayRecoveryProbeTarget,runRailwayRecoveryVolumeProbe}]=await Promise.all([
@@ -85,7 +90,7 @@ async function main() {
         ? runRailwayRecoveryVolumeProbe({root:'/data',phase:'after-redeploy',mode:'observe-only'})
         : {phase:'after-redeploy',status:'MOUNT_NOT_CONFIRMED',fingerprint:null,transaction_authorized:false};
     }
-    readiness=createStandbyReadiness({recoveryVolumeProbe,recoveryAnchorEnabled:anchorFlag==='1'});
+    readiness=createStandbyReadiness({recoveryVolumeProbe,recoveryAnchorEnabled:anchorFlag==='1',recoveryAnchorWritesEnabled:anchorWritesEnabled});
   }
   const setup=process.env.BOUNCER_V14_SETUP_READONLY;
   if(setup!==undefined&&setup!==''&&setup!=='0'&&setup!=='1')throw new Error('invalid read-only setup configuration');
@@ -114,7 +119,7 @@ async function main() {
       import('../agent/v14-bootstrap-railway-anchor.mjs'),import('../agent/v14-bootstrap-railway-anchor-http.mjs')]);
     const compressedV14=new Uint8Array(fs.readFileSync(new URL('../web/artifacts/v14-research.deflate',import.meta.url)));
     const anchor=createV14BootstrapRailwayAnchor({volumePath:'/data',compressedV14});
-    bootstrapAnchorHandler=createV14BootstrapRailwayAnchorHttp({anchor});
+    bootstrapAnchorHandler=createV14BootstrapRailwayAnchorHttp({anchor,allowWrites:anchorWritesEnabled});
   }
   const port=railwayNativePort(),server=createRailwayNativeStandby({readiness,setupHandler,webHandler,bootstrapAnchorHandler});
   await new Promise((resolve,reject)=>server.listen(port,'0.0.0.0',resolve).once('error',reject));

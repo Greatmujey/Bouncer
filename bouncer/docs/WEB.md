@@ -228,21 +228,29 @@ simulated gate and disposable wallet; this is not evidence to open the live
 gate. Estimates cannot guarantee future network charges and the wallet may
 choose a different signing key.
 
-A separately hosted Railway-volume recovery anchor is implemented but **off by
-default and not initialized**. It can retain the same owner-attested encrypted
-kit and append-only original history with a different capability derived in
-the browser from the temporary key; it never receives the passphrase, the
-Supabase capability or a wallet key. Fresh owner-message verification can read
-its encrypted backup without already having the temporary key. An exclusive,
-fsynced write marker fences overlapping processes; an interrupted write leaves
-a stop marker for manual reconciliation, never automatic repair. Local-volume
-and HTTP tests are synthetic. When explicitly enabled, the workspace offers a
-save of the existing checkpoint and an owner-message restore from Railway; it
-does not re-enroll the Supabase checkpoint. The controls are hidden while the
-route is off. Railway volume durability, a real restore and an independently
-retained latest head still need verification; two matching service copies are
-not proof against rollback, a compromised operator or a shared failure.
-Enabling this recovery route would not enable transactions or missions.
+A Railway-volume recovery anchor is implemented with the route **off by
+default**; the state of any particular deployment cannot be inferred from that
+default. It can retain the same owner-attested encrypted kit and append-only
+original history with a separate capability derived in the browser from the
+temporary key; it never receives the passphrase, the Supabase capability or a
+wallet key. Fresh owner-message verification can read an existing encrypted
+backup without already having the temporary key. An exclusive, fsynced write
+marker fences overlapping processes; an interrupted write leaves a stop marker
+for manual reconciliation, never automatic repair.
+
+The hosted standby now **rejects initialization and append requests** because a
+previous initialization may have been attempted; there is no environment switch
+to reopen writes. It does not remove or reset records. Owner-message and
+capability-authenticated reads remain available when the route is enabled, and
+the workspace still supports local recovery-file exports; the Railway save
+button is absent. A failed restore is not proof of absence. The read-only
+`recovery_anchor_writes_enabled` diagnostic describes this code configuration,
+not independent verification of the volume or its history. Tests of local volumes
+and HTTP are synthetic. Railway durability, a real independent restore and an
+independently retained latest head still require verification; two matching
+service copies do not prove freshness against rollback, a compromised operator
+or a shared failure. Enabling the recovery route does not enable transactions
+or missions.
 
 A narrowly scoped diagnostic on the existing Railway standby service checks the
 `/data` volume using a separate non-secret random marker, never a checkpoint or

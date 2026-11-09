@@ -209,11 +209,10 @@
       </div>
       <div id="wallet-bootstrap-anchor-panel" hidden>
         <strong>Separate encrypted recovery copy on Railway</strong>
-        <p class="account-view-status">This is separate from downloading the recovery file above. Saving it writes the existing checkpoint to Railway; restoring it is read-only. Neither creates a vault or transaction, and a second provider does not prove the latest history.</p>
+        <p class="account-view-status">This is separate from downloading the recovery file above. Creating and updating Railway copies is paused while an earlier save is uncertain. Restoring is read-only; it does not create a vault or transaction, and a second provider does not prove the latest history.</p>
         <p class="account-view-status"><strong>If you already tried to save to Railway, or are not sure, do not save again.</strong> A failed restore does not prove the copy is absent; keep your existing backups and stop to reconcile.</p>
         <label for="wallet-bootstrap-anchor-passphrase">Recovery passphrase — not your wallet seed</label>
         <input id="wallet-bootstrap-anchor-passphrase" type="password" minlength="16" maxlength="1024" autocomplete="off" autocapitalize="off" spellcheck="false">
-        <button class="account-entry-secondary" id="wallet-bootstrap-anchor-save" type="button" hidden>Save encrypted copy to Railway →</button>
         <button class="account-entry-secondary" id="wallet-bootstrap-anchor-restore" type="button">Restore from Railway copy →</button>
         <p class="account-view-status" id="wallet-bootstrap-anchor-status" role="status" aria-live="polite"></p>
       </div>

@@ -39,9 +39,11 @@ export function inspectStandbyMount({ env = process.env, filesystem = fs, mountI
 
 /** Fixed public destinations, no user-supplied URL, no signing, no retry and
  * no request-triggered network work. `fetchImpl` is injected for tests only. */
-export function createStandbyReadiness({ env = process.env, filesystem = fs, fetchImpl = globalThis.fetch, recoveryVolumeProbe, recoveryAnchorEnabled } = {}) {
+export function createStandbyReadiness({ env = process.env, filesystem = fs, fetchImpl = globalThis.fetch, recoveryVolumeProbe, recoveryAnchorEnabled, recoveryAnchorWritesEnabled } = {}) {
   if (typeof fetchImpl !== 'function') throw new Error('read-only standby fetch unavailable');
-  if (recoveryAnchorEnabled !== undefined && typeof recoveryAnchorEnabled !== 'boolean') throw new Error('invalid recovery route diagnostic');
+  if ((recoveryAnchorEnabled !== undefined && typeof recoveryAnchorEnabled !== 'boolean') ||
+      (recoveryAnchorWritesEnabled !== undefined && typeof recoveryAnchorWritesEnabled !== 'boolean') ||
+      (recoveryAnchorWritesEnabled === true && recoveryAnchorEnabled !== true)) throw new Error('invalid recovery route diagnostic');
   let probe;
   if (recoveryVolumeProbe !== undefined) {
     const p=recoveryVolumeProbe,keys=['phase','status','fingerprint','transaction_authorized'];
@@ -57,6 +59,7 @@ export function createStandbyReadiness({ env = process.env, filesystem = fs, fet
   const snapshot = () => ({ service: 'bouncer-testnet-native-backend', status: 'STANDBY',
     mission_enabled: false, transactions_enabled: false, checks: { ...checks }, checked_at: checkedAt,
     ...(recoveryAnchorEnabled !== undefined ? {recovery_anchor_enabled:recoveryAnchorEnabled} : {}),
+    ...(recoveryAnchorWritesEnabled !== undefined ? {recovery_anchor_writes_enabled:recoveryAnchorWritesEnabled} : {}),
     ...(probe ? {recovery_volume_probe:{...probe}} : {}),
     scope:probe ? `${scope} The isolated volume diagnostic contains only a non-secret test marker; it does not read or alter recovery records.` : scope });
   async function rpc() {

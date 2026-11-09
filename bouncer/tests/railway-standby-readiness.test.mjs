@@ -56,6 +56,19 @@ test('one startup-only inspection uses fixed read-only methods and pins the actu
   assert.doesNotMatch(JSON.stringify(result),/\/data|private synthetic failure|[A-Za-z0-9]{43,}/);
 });
 
+test('recovery diagnostic reports the independent write switch without authorizing anything',()=>{
+  const {fetchImpl}=fakeFetch();
+  const readiness=createStandbyReadiness({env:{},fetchImpl,recoveryAnchorEnabled:true,recoveryAnchorWritesEnabled:false});
+  assert.equal(readiness.snapshot().recovery_anchor_enabled,true);
+  assert.equal(readiness.snapshot().recovery_anchor_writes_enabled,false);
+  assert.equal(readiness.snapshot().transactions_enabled,false);
+  for(const options of [
+    {recoveryAnchorEnabled:false,recoveryAnchorWritesEnabled:true},
+    {recoveryAnchorWritesEnabled:true},
+    {recoveryAnchorEnabled:true,recoveryAnchorWritesEnabled:'false'},
+  ]) assert.throws(()=>createStandbyReadiness({env:{},fetchImpl,...options}));
+});
+
 test('wrong network, changed pins, fetch errors and disabled TLS never become readiness success',async()=>{
   for(const [options,expected] of [
     [{chain:'mainnet'},{testnet_rpc:'WRONG_NETWORK',pinned_oracle_registry:'SKIPPED',market_wasm:'SHA256_MATCH'}],

@@ -209,8 +209,31 @@ test('Railway route is off by default and denies untrusted origins and cookies b
   }finally{await server.close();x.cleanup()}
 });
 
+test('the default HTTP adapter pauses initialization and appends but preserves reads',async()=>{
+  const x=await fixture(),anchor=x.open(),handler=createV14BootstrapRailwayAnchorHttp({anchor,now});
+  const server=await testServer(handler);
+  const post=body=>server.request({method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
+  try {
+    assert.throws(()=>createV14BootstrapRailwayAnchorHttp({anchor,allowWrites:'true'}));
+    const init=await post({operation:'initialize',...x.input});
+    assert.equal(init.status,503);assert.deepEqual(await init.json(),{error:'unavailable'});
+    assert.deepEqual(fs.readdirSync(x.dir),[],'a denied initialization must not create any directory or marker');
+    // Seed an unrelated disposable fixture directly; production does not use this path.
+    await anchor.initialize(x.input);
+    const record=JSON.stringify({format:'bouncer-v14-original-event-v1',seq:1,previous_sha256:zero,type:'create_claim',
+      data:{scope_id:scopeId,review_sha256:x.plan.review.review_sha256,tx_hash:null}});
+    const append=await post({operation:'append',scope_id:scopeId,capability:x.credentials.capability,
+      expected_revision:0,expected_head_sha256:zero,record});
+    assert.equal(append.status,503);assert.deepEqual(await append.json(),{error:'unavailable'});
+    const read=await post({operation:'read',scope_id:scopeId,capability:x.credentials.capability});
+    assert.equal(read.status,200);assert.deepEqual(await read.json(),empty);
+    assert.deepEqual(await anchor.read({capability:x.credentials.capability}),empty);
+    assert.deepEqual(fs.readdirSync(path.join(x.dir,'v14-bootstrap-anchor-v1')),['metadata.json']);
+  }finally{await server.close();x.cleanup()}
+});
+
 test('browser client and independent volume round-trip an encrypted kit and append without transactions',async()=>{
-  const x=await fixture();const anchor=x.open(),handler=createV14BootstrapRailwayAnchorHttp({anchor,fetch:async()=>{throw Error('not used')},now});
+  const x=await fixture();const anchor=x.open(),handler=createV14BootstrapRailwayAnchorHttp({anchor,fetch:async()=>{throw Error('not used')},now,allowWrites:true});
   const server=await testServer(handler),remote=remoteStore();
   try {
     const location={origin:site,host:new URL(site).host};let calls=0,marked=0;
@@ -233,7 +256,7 @@ test('browser client and independent volume round-trip an encrypted kit and appe
 });
 
 test('an initialization acknowledgement lost after the write cannot be retried on the client',async()=>{
-  const x=await fixture();const anchor=x.open(),handler=createV14BootstrapRailwayAnchorHttp({anchor,fetch:async()=>{throw Error('not used')},now});
+  const x=await fixture();const anchor=x.open(),handler=createV14BootstrapRailwayAnchorHttp({anchor,fetch:async()=>{throw Error('not used')},now,allowWrites:true});
   const server=await testServer(handler),remote=remoteStore();
   try {
     const location={origin:site,host:new URL(site).host};let attempts=0,markers=0;
@@ -292,7 +315,7 @@ test('existing online recovery can add a distinct encrypted anchor without re-en
     const result=req.method==='status'?{chain_id:'testnet'}:req.method==='block'
       ?{header:{hash:block,height:100,timestamp_nanosec:String(BigInt(now())*1_000_000n)}}:{block_hash:block,permission:'FullAccess'};
     return Response.json({id:req.id,jsonrpc:'2.0',result});
-  },now}));
+  },now,allowWrites:true}));
   try {
     let signatures=0,transactions=0,enrollments=0,markers=0,ownerRestores=0,primaryOnline=true;
     const wallet={async signMessage({message,nonce,recipient}){

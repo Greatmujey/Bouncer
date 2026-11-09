@@ -8,6 +8,7 @@ import {baseEncode} from '@near-js/utils';
 import {createV14BootstrapCandidate} from '../web-src/v14-bootstrap-candidate.mjs';
 import {prepareBootstrapEnrollment} from '../web-src/v14-bootstrap-checkpoint.mjs';
 import {openV14BootstrapRecoveryKit} from '../web-src/v14-bootstrap-recovery-kit.mjs';
+import {deriveBootstrapAnchorCredentials} from '../shared/v14-bootstrap-anchor-auth.mjs';
 import {V14_BOOTSTRAP_ENDPOINT} from '../web-src/v14-bootstrap-remote-store.mjs';
 import {V14_RAILWAY_ANCHOR_ENDPOINT} from '../web-src/v14-bootstrap-railway-store.mjs';
 import {createV14BootstrapRailwayAnchor} from '../agent/v14-bootstrap-railway-anchor.mjs';
@@ -46,9 +47,18 @@ try {
     const opened=await openV14BootstrapRecoveryKit({kit,passphrase,crypto:webcrypto,
       expected:{owner,vault,ownerPublicKey:publicKey,temporaryPublicKey:candidate.temporary_public_key,
         reviewSha256:candidate.review_sha256,scopeId:kit.scope_id}});
-    let tempSecret,primaryCapability;
-    await opened.useSecrets(({temporaryKey,checkpointCapability})=>{tempSecret=String(temporaryKey);primaryCapability=checkpointCapability});opened.dispose();
+    let tempSecret,primaryCapability,anchorCredentials;
+    await opened.useSecrets(async({temporaryKey,checkpointCapability})=>{
+      tempSecret=String(temporaryKey);primaryCapability=checkpointCapability;
+      anchorCredentials=await deriveBootstrapAnchorCredentials({temporaryKey,scopeId:kit.scope_id,reviewSha256:candidate.review_sha256,crypto:webcrypto});
+    });opened.dispose();
+    // Preload a disposable fixture directly. The hosted HTTP route and UI do
+    // not allow initialization while the real prior attempt is uncertain.
     const anchor=createV14BootstrapRailwayAnchor({volumePath:volume,compressedV14,crypto:webcrypto});
+    await anchor.initialize({scope_id:kit.scope_id,review_sha256:candidate.review_sha256,
+      capability:anchorCredentials.capability,initialization_signature:anchorCredentials.initialization_signature,
+      review_text:draft.review_text,sealed_kit:draft.sealed_kit,owner_attestation});
+    const markerFile=path.join(volume,'v14-bootstrap-anchor-v1','metadata.json'),beforeMetadata=fs.readFileSync(markerFile);
     const block=baseEncode(Buffer.alloc(32,17)),rpc=async(url,options)=>{
       const req=JSON.parse(options.body);let result;
       if(req.method==='status')result={chain_id:'testnet'};
@@ -119,24 +129,32 @@ try {
     await page.waitForFunction(()=>document.querySelector('#wallet-account-badge').textContent==='OWNER VERIFIED',null,{timeout:15_000});
     await page.evaluate(()=>{location.hash='#guardrails'});await page.locator('#wallet-bootstrap-recovery-open').click();
     await page.locator('#wallet-bootstrap-anchor-panel').waitFor({state:'visible'});
+    assert.equal(await page.locator('#wallet-bootstrap-anchor-save').count(),0,'no live initialization button');
     await page.waitForFunction(()=>!document.querySelector('#wallet-bootstrap-recovery-read').disabled);
     await page.locator('#wallet-bootstrap-recovery-read').click();
-    await page.locator('#wallet-bootstrap-anchor-save').waitFor({state:'visible'});
-    await page.locator('#wallet-bootstrap-anchor-passphrase').fill('incorrect recovery passphrase');
-    await page.locator('#wallet-bootstrap-anchor-save').click();
-    await page.waitForFunction(()=>document.querySelector('#wallet-bootstrap-anchor-status').textContent.includes('not requested'));
-    assert.equal(fs.readdirSync(volume).length,0);
-    await page.locator('#wallet-bootstrap-anchor-passphrase').fill(passphrase);
-    await page.locator('#wallet-bootstrap-anchor-save').click();
-    await page.waitForFunction(()=>document.querySelector('#wallet-bootstrap-anchor-status').textContent.includes('Encrypted copy saved'),null,{timeout:15_000});
-    assert(await page.locator('#wallet-bootstrap-anchor-save').isDisabled());
-    assert.deepEqual(operations,['primary:recover','primary:read','anchor:initialize']);
+    await page.waitForFunction(()=>document.querySelector('#wallet-bootstrap-recovery-status').textContent.includes('Online recovery'));
+    await page.locator('#wallet-bootstrap-recovery-passphrase').fill(passphrase);
+    await page.locator('#wallet-bootstrap-recovery-unlock').click();
+    await page.waitForFunction(()=>document.querySelector('#wallet-bootstrap-recovery-status').textContent.includes('unlocked locally'));
+    const [download]=await Promise.all([page.waitForEvent('download'),page.locator('#wallet-bootstrap-recovery-export').click()]);
+    assert.equal(download.suggestedFilename(),'bouncer-testnet-encrypted-setup-recovery.json');
+    const recoveryBytes=fs.readFileSync(await download.path());
     primaryOnline=false;
+    // The saved recovery export can be re-imported and MAC-verified without
+    // contacting the original provider. It is not proof of a latest head.
+    await page.locator('#wallet-bootstrap-recovery-file').setInputFiles({name:'recovery.json',mimeType:'application/json',buffer:recoveryBytes});
+    await page.locator('#wallet-bootstrap-recovery-import').click();
+    await page.waitForFunction(()=>document.querySelector('#wallet-bootstrap-recovery-status').textContent.includes('Local encrypted file'));
+    await page.locator('#wallet-bootstrap-recovery-passphrase').fill(passphrase);
+    await page.locator('#wallet-bootstrap-recovery-unlock').click();
+    await page.waitForFunction(()=>document.querySelector('#wallet-bootstrap-recovery-status').textContent.includes('file integrity matched'));
+    assert.equal(await page.locator('#wallet-bootstrap-recovery-export').isDisabled(),false);
     await page.locator('#wallet-bootstrap-anchor-passphrase').fill(passphrase);
     await page.locator('#wallet-bootstrap-anchor-restore').click();
     await page.waitForFunction(()=>document.querySelector('#wallet-bootstrap-anchor-status').textContent.includes('unlocked on this device'),null,{timeout:15_000});
     assert.equal(await page.locator('#wallet-bootstrap-recovery-export').isDisabled(),false);
-    assert.deepEqual(operations,['primary:recover','primary:read','anchor:initialize','anchor:recover_owner','anchor:read']);
+    assert.deepEqual(operations,['primary:recover','anchor:recover_owner','anchor:read']);
+    assert.deepEqual(fs.readFileSync(markerFile),beforeMetadata,'read-only restores do not alter the anchor');
     assert.equal(signatures,3);assert.equal(transactions,0);assert.deepEqual(errors,[]);
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,'no horizontal overflow');
     console.log(`Synthetic independent recovery: ${width}px passed (no transaction, no primary restore request)`);

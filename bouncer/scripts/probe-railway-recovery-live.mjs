@@ -26,17 +26,17 @@ export async function probeRailwayRecovery({fetch:fetchImpl=globalThis.fetch}={}
   }
   const denied=await request(anchor,{method:'OPTIONS',headers:{origin:deniedOrigin,'access-control-request-method':'POST'}});
   if(denied.status!==403||denied.headers.has('access-control-allow-origin'))throw fail();
-  const response=await request(`${site}/readiness?volume-probe=6`,{method:'GET'});
+  const response=await request(`${site}/readiness?volume-probe=8`,{method:'GET'});
   if(response.status!==200)throw fail();
   const content=await response.text();if(content.length>8192)throw fail();
   let state;try{state=JSON.parse(content)}catch{throw fail()}
   if(state.service!=='bouncer-testnet-native-backend'||state.status!=='STANDBY'||
     state.mission_enabled!==false||state.transactions_enabled!==false||state.recovery_anchor_enabled!==true||
-    state.checks?.volume!=='DECLARED_MOUNT_PRESENT'||state.recovery_volume_probe?.phase!=='after-redeploy'||
+    state.recovery_anchor_writes_enabled!==false||state.checks?.volume!=='DECLARED_MOUNT_PRESENT'||state.recovery_volume_probe?.phase!=='after-redeploy'||
     state.recovery_volume_probe?.status!=='OBSERVED'||state.recovery_volume_probe?.fingerprint!==fingerprint||
     state.recovery_volume_probe?.transaction_authorized!==false)throw fail();
   return Object.freeze({recovery_route_reachable:true,railway_origin_allowed:true,vercel_origin_allowed:true,
-    untrusted_origin_denied:true,volume_mount_observed:true,transactions_enabled:false,mission_enabled:false,
+    untrusted_origin_denied:true,volume_mount_observed:true,recovery_writes_enabled:false,transactions_enabled:false,mission_enabled:false,
     encrypted_backup_checked:false,independent_restore_verified:false,latest_head_verified:false});
 }
 if(process.argv[1]&&pathToFileURL(path.resolve(process.argv[1])).href===import.meta.url) {

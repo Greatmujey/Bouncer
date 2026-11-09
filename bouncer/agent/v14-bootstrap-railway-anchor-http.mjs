@@ -1,5 +1,7 @@
 /** Default-off HTTP adapter for the independent Railway recovery anchor.
  * Narrow fixed origins, bounded JSON, no key custody or transaction routes.
+ * Writes are separately disabled unless explicitly opted in by the caller;
+ * the hosted standby does not opt in while initialization is uncertain.
  * An HTTP failure after a write is uncertain and must not be retried. */
 import {V14_BOOTSTRAP_ORIGINS} from '../shared/v14-bootstrap-protocol.mjs';
 
@@ -12,9 +14,9 @@ async function body(req){
   for await(const part of req){size+=part.length;if(size>48_000)throw Error();chunks.push(part)}
   return JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(Buffer.concat(chunks,size)));
 }
-export function createV14BootstrapRailwayAnchorHttp({anchor,fetch:fetchImpl=globalThis.fetch,now=Date.now}={}) {
+export function createV14BootstrapRailwayAnchorHttp({anchor,fetch:fetchImpl=globalThis.fetch,now=Date.now,allowWrites=false}={}) {
   if(!anchor||['initialize','read','append','recoverByOwner'].some(name=>typeof anchor[name]!=='function')||
-    typeof fetchImpl!=='function'||typeof now!=='function')throw Error('invalid recovery anchor');
+    typeof fetchImpl!=='function'||typeof now!=='function'||typeof allowWrites!=='boolean')throw Error('invalid recovery anchor');
   let active=0;
   return async function handle(req,res){
     const origin=req.headers.origin||'',allowed=V14_BOOTSTRAP_ORIGINS.includes(origin);
@@ -34,13 +36,13 @@ export function createV14BootstrapRailwayAnchorHttp({anchor,fetch:fetchImpl=glob
       try{data=await body(req)}finally{clearTimeout(timer)}
       let result;
       if(data?.operation==='initialize'){
-        if(!exact(data,['operation','scope_id','review_sha256','capability','initialization_signature','review_text','sealed_kit','owner_attestation']))throw Error();
+        if(!allowWrites||!exact(data,['operation','scope_id','review_sha256','capability','initialization_signature','review_text','sealed_kit','owner_attestation']))throw Error();
         const {operation,...input}=data;result=await anchor.initialize(input);
       }else if(data?.operation==='read'){
         if(!exact(data,['operation','scope_id','capability']))throw Error();
         result=await anchor.read({scope_id:data.scope_id,capability:data.capability});
       }else if(data?.operation==='append'){
-        if(!exact(data,['operation','scope_id','capability','expected_revision','expected_head_sha256','record']))throw Error();
+        if(!allowWrites||!exact(data,['operation','scope_id','capability','expected_revision','expected_head_sha256','record']))throw Error();
         const {operation,...input}=data;result=await anchor.append(input);
       }else if(data?.operation==='recover_owner'){
         if(!exact(data,['operation','terms','nonce_base64','signature_base64']))throw Error();
