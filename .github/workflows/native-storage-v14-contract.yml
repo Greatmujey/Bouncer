@@ -12,6 +12,11 @@ on:
         required: false
         default: false
         type: boolean
+      export_public_artifacts:
+        description: 'Build and export public research WASM blobs (no deployment)'
+        required: false
+        default: false
+        type: boolean
       owner:
         description: 'Named testnet owner (public account ID)'
         required: false
@@ -26,7 +31,7 @@ permissions:
 
 jobs:
   contract:
-    if: github.event_name != 'workflow_dispatch' || inputs.run_v14_readiness != true
+    if: github.event_name != 'workflow_dispatch' || (inputs.run_v14_readiness != true && inputs.export_public_artifacts != true)
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -142,7 +147,7 @@ jobs:
           retention-days: 7
 
   railway-image:
-    if: github.event_name != 'workflow_dispatch' || inputs.run_v14_readiness != true
+    if: github.event_name != 'workflow_dispatch' || (inputs.run_v14_readiness != true && inputs.export_public_artifacts != true)
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -178,7 +183,7 @@ jobs:
           echo 'Standby and enabled-but-unconfigured modes verified without network access.'
 
   browser:
-    if: github.event_name != 'workflow_dispatch' || inputs.run_v14_readiness != true
+    if: github.event_name != 'workflow_dispatch' || (inputs.run_v14_readiness != true && inputs.export_public_artifacts != true)
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -211,7 +216,7 @@ jobs:
           cat "$RUNNER_TEMP/v14-browser-result.log"
 
   public-preflight:
-    if: github.event_name == 'workflow_dispatch' && inputs.run_v14_readiness == true
+    if: github.event_name == 'workflow_dispatch' && inputs.run_v14_readiness == true && inputs.export_public_artifacts != true
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     defaults:
@@ -232,3 +237,53 @@ jobs:
           BOUNCER_OWNER: ${{ inputs.owner }}
           BOUNCER_CANDIDATE_VAULT: ${{ inputs.candidate_vault }}
         run: node scripts/inspect-v14-readiness.mjs "$BOUNCER_OWNER" "$BOUNCER_CANDIDATE_VAULT"
+
+  public-artifact-export:
+    # Separate manual public-code export; it signs and deploys nothing.
+    if: github.event_name == 'workflow_dispatch' && inputs.export_public_artifacts == true && inputs.run_v14_readiness != true
+    permissions:
+      contents: write # create unreferenced Git blobs containing public WASM only
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      CARGO_BUILD_JOBS: 2
+      RUSTFLAGS: '-C link-arg=-s'
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: 1.99.1
+          targets: wasm32-unknown-unknown
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+      - name: Build exact V14 and its research loader
+        working-directory: bouncer
+        env:
+          BOUNCER_V14_LOADER_PIN_RS: ${{ runner.temp }}/v14-research-pin.rs
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          cargo build --locked --manifest-path contracts/bouncer/Cargo.toml --target wasm32-unknown-unknown --release --no-default-features --features native-storage-v14
+          V14=contracts/bouncer/target/wasm32-unknown-unknown/release/bouncer.wasm
+          test "$(sha256sum "$V14" | cut -d' ' -f1)" = '28dcba2d3a4dde6e48c2dc728f264f14f7af47c83a95e829f07127bd33c699f8'
+          node scripts/write-v14-loader-research-pin.mjs "$V14" "$BOUNCER_V14_LOADER_PIN_RS"
+          CARGO_TARGET_DIR="$RUNNER_TEMP/v14-loader-target" cargo build --locked --manifest-path integration/v14-phone-loader/Cargo.toml --target wasm32-unknown-unknown --release
+      - name: Publish public Git blobs with SHA-256 and size
+        working-directory: bouncer
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          cp contracts/bouncer/target/wasm32-unknown-unknown/release/bouncer.wasm "$RUNNER_TEMP/v14.wasm"
+          cp "$RUNNER_TEMP/v14-loader-target/wasm32-unknown-unknown/release/bouncer_v14_phone_loader_research.wasm" "$RUNNER_TEMP/loader.wasm"
+          node -e 'const fs=require("fs"),z=require("zlib");fs.writeFileSync(process.argv[2],z.deflateRawSync(fs.readFileSync(process.argv[1]),{level:9}));' "$RUNNER_TEMP/v14.wasm" "$RUNNER_TEMP/v14.deflate"
+          for name in v14.wasm loader.wasm v14.deflate; do
+            file="$RUNNER_TEMP/$name"
+            node -e 'const fs=require("fs");fs.writeFileSync(process.argv[2],JSON.stringify({content:fs.readFileSync(process.argv[1]).toString("base64"),encoding:"base64"}));' "$file" "$RUNNER_TEMP/blob.json"
+            blob=$(gh api --method POST "repos/$GITHUB_REPOSITORY/git/blobs" --input "$RUNNER_TEMP/blob.json" --jq .sha)
+            sha256=$(sha256sum "$file" | cut -d' ' -f1)
+            bytes=$(wc -c < "$file" | tr -d ' ')
+            echo "::notice title=Public artifact $name::$blob $sha256 $bytes"
+          done
