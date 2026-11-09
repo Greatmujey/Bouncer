@@ -9,6 +9,8 @@ test('a temporary-origin capability survives route changes in the same tab, but 
   assert.equal(directTestCapability({origin,hash:`#bouncer-direct=${capability}`},storage),capability);
   assert.equal(directTestCapability({origin,hash:'#connect'},storage),capability);
   assert.equal(directTestCapability({origin:'https://bouncer-near.vercel.app',hash:`#bouncer-direct=${capability}`},storage),capability);
+  assert.equal(directTestCapability({origin:'https://bouncer-production-6df1.up.railway.app',hash:`#bouncer-direct=${capability}`},storage),capability);
+  assert.equal(directTestCapability({origin:'https://other.up.railway.app',hash:`#bouncer-direct=${capability}`},storage),'');
   assert.equal(directTestCapability({origin:'https://other.vercel.app',hash:`#bouncer-direct=${capability}`},storage),'');
   assert.equal(directTestCapability({origin:'https://evil.example',hash:`#bouncer-direct=${capability}`},storage),'');
   assert.equal(directTestCapability({origin,hash:'#bouncer-direct=short'},storage),'');
@@ -27,8 +29,11 @@ test('only a successful exact-scope response verifies a privately held fence',as
 test('wrong origins, malformed server replies, scope and hashes fail closed',async()=>{
   assert.throws(()=>createRemoteDirectFence({origin:'https://bad.example',capability,fetch(){}}));
   assert.throws(()=>createRemoteDirectFence({origin:'https://other.vercel.app',capability,fetch(){}}));
-  const allowed=createRemoteDirectFence({origin:'https://bouncer-near.vercel.app',capability,fetch:async()=>new Response(JSON.stringify(ok))});
-  await allowed.read();assert.equal(isVerifiedRemoteDirectFence(allowed,'https://bouncer-near.vercel.app'),true);
+  for(const allowedOrigin of ['https://bouncer-near.vercel.app','https://bouncer-production-6df1.up.railway.app']) {
+    const allowed=createRemoteDirectFence({origin:allowedOrigin,capability,fetch:async()=>new Response(JSON.stringify(ok))});
+    await allowed.read();assert.equal(isVerifiedRemoteDirectFence(allowed,allowedOrigin),true);
+  }
+  assert.throws(()=>createRemoteDirectFence({origin:'https://other.up.railway.app',capability,fetch(){}}));
   assert.throws(()=>createRemoteDirectFence({origin,capability:'short',fetch(){}}));
   for(const result of [
     {...ok,scope:'probe'},{...ok,extra:true},{...ok,original_hash:'invalid'},

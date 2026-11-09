@@ -2,7 +2,7 @@
 // capability is held in this module's closure and sent only to the fixed HTTPS
 // endpoint. The server is not a wallet, signer, policy, or proof of delivery.
 const ENDPOINT='https://itzqbvbpmbnimvpyaige.supabase.co/functions/v1/bouncer-direct-one-shot';
-const ORIGIN=/^(?:https:\/\/[a-z0-9]{4,20}\.csb\.app|https:\/\/bouncer-near\.vercel\.app)$/;
+const ORIGIN=/^(?:https:\/\/[a-z0-9]{4,20}\.csb\.app|https:\/\/bouncer-near\.vercel\.app|https:\/\/bouncer-production-6df1\.up\.railway\.app)$/;
 const CAPABILITY=/^[A-Za-z0-9_-]{43}$/;
 const HASH=/^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 const SESSION_KEY='bouncer.direct-outlayer.testnet.capability.v1';

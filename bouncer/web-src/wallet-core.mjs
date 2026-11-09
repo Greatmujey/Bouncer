@@ -202,7 +202,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
   // navigation, which does not reinitialize this module. Reload once so the
   // capability is checked before the direct test is enabled. CodeSandbox's
   // trust screen also requires the same link to be opened again afterward.
-  if (isTop && !remoteFence && /^(?:https:\/\/[a-z0-9]{4,20}\.csb\.app|https:\/\/bouncer-near\.vercel\.app)$/.test(win.location.origin)) {
+  if (isTop && !remoteFence && /^(?:https:\/\/[a-z0-9]{4,20}\.csb\.app|https:\/\/bouncer-near\.vercel\.app|https:\/\/bouncer-production-6df1\.up\.railway\.app)$/.test(win.location.origin)) {
     win.addEventListener?.('hashchange', () => {
       if (/^#bouncer-direct=[A-Za-z0-9_-]{43}$/.test(win.location.hash || '')) win.location.reload();
     });
