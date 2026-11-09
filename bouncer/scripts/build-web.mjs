@@ -5,6 +5,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = fileURLToPath(new URL('../', import.meta.url));
+// Lazy, non-executable public research bytes for local-only preparation.
+// The browser bounds the JSON response and checks its digest before decoding
+// the pinned plan; no downloaded script is executed as the artifact.
+const artifact=fs.readFileSync(path.join(here,'web/artifacts/v14-research.deflate'));
+fs.writeFileSync(path.join(here,'web/v14-bootstrap-artifact-v1.json'),
+  JSON.stringify({format:'bouncer-v14-compressed-artifact-v1',base64:artifact.toString('base64')}));
 // Fixed Vercel functions preserve same-origin API paths. The read-only V14
 // setup routes have a separate off-by-default flag; none bundles a secret,
 // key, backend address or authorization to send.

@@ -77,6 +77,6 @@ test('Netlify config invokes the replacement helper and the CLI handles an exist
   const env={...process.env,NETLIFY:'true',URL:opts.walletOrigin};
   delete env.BOUNCER_WALLET_ORIGIN; delete env.BOUNCER_WALLETCONNECT_PROJECT_ID;
   const output=execFileSync(process.execPath,[path.join(root,'scripts','stage-netlify-public-web.mjs')],{cwd:os.tmpdir(),env,encoding:'utf8'});
-  assert.match(output,/Replaced Netlify dist with 18 reviewed public website files/);
+  assert.match(output,/Replaced Netlify dist with 19 reviewed public website files/);
   checkOutput(root,dist);
 });

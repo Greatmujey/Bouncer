@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 export const PUBLIC_WEB_FILES = Object.freeze([
   'index.html', 'styles.css', 'favicon.svg', 'hero-orbit.jpg',
   'manrope-latin.woff2', 'manrope-OFL.txt', 'evidence.mjs',
-  'app.mjs', 'tour.mjs', 'google-signin.mjs', 'wallet.bundle.js',
+  'app.mjs', 'tour.mjs', 'google-signin.mjs', 'wallet.bundle.js', 'v14-bootstrap-artifact-v1.json',
   'intear-wallet.executor.js', 'intear-wallet-source.zip',
   'ethereum-wallet.executor.js', 'ethereum-wallet-NOTICE.txt',
   'walletconnect.bundle.js', 'walletconnect-config.json', 'walletconnect-NOTICES.txt',

@@ -25,11 +25,14 @@ test('Railway hosts only the public workspace at its exact dedicated host; backe
     assert.equal((await request(server,'/workspace',{headers:{host:'attacker.example'}})).status,421);
     assert.equal((await request(server,'/workspace',{headers:{host,'x-forwarded-proto':'http'}})).status,421);
     assert.equal((await request(server,'/workspace',{method:'POST',headers:{host}})).status,405);
-    for(const asset of ['/styles.css?v=17','/wallet.bundle.js?v=33','/app.mjs?v=7'])
+    for(const asset of ['/styles.css?v=18','/wallet.bundle.js?v=38','/app.mjs?v=7'])
       assert.equal((await request(server,asset,{headers:{host}})).status,200);
+    const artifact=await request(server,'/v14-bootstrap-artifact-v1.json',{headers:{host}});
+    assert.equal(artifact.status,200);assert.match(artifact.headers['content-type'],/^application\/json/);
+    assert.equal(JSON.parse(artifact.body).format,'bouncer-v14-compressed-artifact-v1');
     const health=await request(server,'/healthz',{headers:{host}});
     assert.deepEqual(JSON.parse(health.body),STANDBY_STATUS);
-    for(const hidden of ['/api/native-mission/config','/api/native-mission/execute','/.env','/artifacts/v14-research-loader.wasm'])
+    for(const hidden of ['/api/native-mission/config','/api/native-mission/execute','/.env','/artifacts/v14-research-loader.wasm','/artifacts/v14-research.deflate'])
       assert.equal((await request(server,hidden,{headers:{host}})).status,404);
   } finally {await new Promise(resolve=>server.close(resolve))}
 });

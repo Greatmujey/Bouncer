@@ -1,9 +1,9 @@
 /**
  * Encrypted recovery for a TEMPORARY new-vault FullAccess key, kept separate
  * from the existing restricted-agent kit. Nothing here opens a wallet, stores
- * a kit remotely, signs a transaction or authorizes deployment. Not wired to
- * the live site: remote retention, freshness and a real-phone restore are
- * still required before the setup path can be enabled.
+ * a kit remotely, signs a transaction or authorizes deployment. The browser
+ * may use it for local-only candidate preparation. Remote retention, freshness
+ * and a real-phone restore are still required before setup can be enabled.
  *
  * The passphrase is local to the browser and must not be a wallet seed phrase.
  * A leaked kit permits offline passphrase guessing. A lost passphrase or kit

@@ -15,6 +15,8 @@ import { prepareV14Recovery, signV14Recovery } from './v14-checkpoint-recovery.m
 import { createV14CheckpointRecoveryClient } from './v14-checkpoint-recovery-client.mjs';
 import { createBootstrapRecoveryReadClient } from './v14-bootstrap-recovery-read.mjs';
 import { inspectV14BootstrapBudget } from './v14-bootstrap-budget-client.mjs';
+import { createV14BootstrapCandidate, verifyV14BootstrapCandidate } from './v14-bootstrap-candidate.mjs';
+import { V14_EXAMPLE_VAULT_FUNDING_YOCTO } from '../shared/v14-bootstrap-budget.mjs';
 import { V14_BOOTSTRAP_ORIGINS } from '../shared/v14-bootstrap-protocol.mjs';
 import { V14_ENROLLMENT_SITE } from './v14-checkpoint-enrollment.mjs';
 import { createDirectOutlayerTest, directOutlayerOriginAllowed } from './direct-outlayer-testnet.mjs';
@@ -67,7 +69,7 @@ export function nativeSetupOriginAllowed(location, isTopLevel) {
  * public view, not a signer. Mobile and CLI use off-chain login messages;
  * executors are sandboxed and the picker is our own accessible dialog.
  */
-export async function initWallet({ window: win, document: doc, NearConnector, SandboxWallet, loadWalletConnect, walletConnectStartTimeoutMs = 50_000 }) {
+export async function initWallet({ window: win, document: doc, NearConnector, SandboxWallet, loadWalletConnect, loadBootstrapArtifact, walletConnectStartTimeoutMs = 50_000 }) {
   const dialog = doc.querySelector('#wallet-dialog');
   const closeButton = doc.querySelector('#wallet-close');
   const optionsBox = doc.querySelector('#wallet-options');
@@ -119,6 +121,22 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
   const bootstrapBudgetRefresh = doc.querySelector('#wallet-bootstrap-budget-refresh');
   const bootstrapBudgetStatus = doc.querySelector('#wallet-bootstrap-budget-status');
   const bootstrapBudgetResult = doc.querySelector('#wallet-bootstrap-budget-result');
+  const candidateOpen = doc.querySelector('#wallet-bootstrap-candidate-open');
+  const candidatePanel = doc.querySelector('#wallet-bootstrap-candidate-panel');
+  const candidatePassphrase = doc.querySelector('#wallet-bootstrap-candidate-passphrase');
+  const candidateConfirm = doc.querySelector('#wallet-bootstrap-candidate-confirm');
+  const candidateCreate = doc.querySelector('#wallet-bootstrap-candidate-create');
+  const candidateStatus = doc.querySelector('#wallet-bootstrap-candidate-status');
+  const candidateSaved = doc.querySelector('#wallet-bootstrap-candidate-saved');
+  const candidateId = doc.querySelector('#wallet-bootstrap-candidate-id');
+  const candidateDetails = doc.querySelector('#wallet-bootstrap-candidate-details');
+  const candidateCopy = doc.querySelector('#wallet-bootstrap-candidate-copy');
+  const candidateDownload = doc.querySelector('#wallet-bootstrap-candidate-download');
+  const candidateFile = doc.querySelector('#wallet-bootstrap-candidate-file');
+  const candidateExpected = doc.querySelector('#wallet-bootstrap-candidate-expected');
+  const candidateUnlock = doc.querySelector('#wallet-bootstrap-candidate-unlock');
+  const candidateVerify = doc.querySelector('#wallet-bootstrap-candidate-verify');
+  const candidateCheckStatus = doc.querySelector('#wallet-bootstrap-candidate-check-status');
   const v14RecoveryOpen = doc.querySelector('#wallet-v14-recovery-open');
   const v14RecoveryPanel = doc.querySelector('#wallet-v14-recovery-panel');
   const v14RecoveryVault = doc.querySelector('#wallet-v14-recovery-vault');
@@ -239,7 +257,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
   let bufferSetupDraft = null, nativeSetupAvailable = false, nativeFlow = null, nativeSetupOpening = false, directFlow = null;
   let v14RecoveryClient = null, v14RecoveryVisible = false;
   let bootstrapRecoveryClient = null, bootstrapRecoveryReady = false, bootstrapRecoveryVisible = false, bootstrapRecoveryUnlocked = false;
-  let bootstrapBudgetVisible = false;
+  let bootstrapBudgetVisible = false, candidateVisible = false, candidate = null;
   let missionFlow = null, missionReview = null, missionReady = false, missionStarted = false;
   const bufferSetupStages = ['create_keyless_vault', 'register_vault_circle', 'fund_vault_circle'];
   let bannerTimer;
@@ -346,6 +364,15 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     if (bootstrapBudgetOpen) { bootstrapBudgetOpen.hidden = !budgetEligible || bootstrapBudgetVisible; bootstrapBudgetOpen.disabled = busyState; }
     if (bootstrapBudgetPanel) bootstrapBudgetPanel.hidden = !budgetEligible || !bootstrapBudgetVisible;
     if (bootstrapBudgetRefresh) bootstrapBudgetRefresh.disabled = busyState;
+    const candidateEligible = ownerVerified && connectedAccount === 'great_mujey.testnet' && isTop &&
+      V14_BOOTSTRAP_ORIGINS.includes(win.location.origin) && typeof loadBootstrapArtifact === 'function';
+    if (candidateOpen) { candidateOpen.hidden = !candidateEligible || candidateVisible; candidateOpen.disabled = busyState; }
+    if (candidatePanel) candidatePanel.hidden = !candidateEligible || !candidateVisible;
+    if (candidateSaved) candidateSaved.hidden = !candidate;
+    if (candidateCreate) candidateCreate.disabled = busyState || Boolean(candidate);
+    for (const control of [candidatePassphrase,candidateConfirm]) if (control) control.disabled = busyState || Boolean(candidate);
+    for (const control of [candidateCopy,candidateDownload]) if (control) control.disabled = busyState || !candidate;
+    for (const control of [candidateFile,candidateExpected,candidateUnlock,candidateVerify]) if (control) control.disabled = busyState;
     const v14RecoveryEnabled = ownerVerified && isTop && win.location.origin === V14_ENROLLMENT_SITE && Boolean(v14RecoveryClient);
     if (v14RecoveryOpen) { v14RecoveryOpen.hidden = !v14RecoveryEnabled || v14RecoveryVisible; v14RecoveryOpen.disabled = busyState; }
     if (v14RecoveryPanel) v14RecoveryPanel.hidden = !v14RecoveryEnabled || !v14RecoveryVisible;
@@ -449,6 +476,12 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     if (v14RecoveryReviewText) v14RecoveryReviewText.textContent = '';
     if (v14RecoveryOriginals) { v14RecoveryOriginals.replaceChildren(); v14RecoveryOriginals.hidden = true; }
   }
+  function clearBootstrapCandidate() {
+    candidateVisible = false; candidate = null;
+    for (const input of [candidatePassphrase,candidateConfirm,candidateFile,candidateExpected,candidateUnlock]) if (input) input.value = '';
+    for (const item of [candidateStatus,candidateId,candidateDetails,candidateCheckStatus]) if (item) item.textContent = '';
+    if (candidateSaved) candidateSaved.hidden = true;
+  }
   function clearBootstrapRecovery() {
     bootstrapRecoveryClient?.destroy(); bootstrapRecoveryClient = null;
     bootstrapRecoveryReady = false; bootstrapRecoveryVisible = false; bootstrapRecoveryUnlocked = false;
@@ -505,7 +538,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     missionFlow = null; missionReview = null; missionReady = false; missionStarted = false;
     v14RecoveryClient = null; v14RecoveryVisible = false;
     if (v14RecoveryVault) v14RecoveryVault.value = '';
-    clearV14RecoveryDisplay(); clearBootstrapRecovery();
+    clearV14RecoveryDisplay(); clearBootstrapRecovery(); clearBootstrapCandidate();
     bootstrapBudgetVisible = false;
     if (bootstrapBudgetStatus) bootstrapBudgetStatus.textContent = '';
     if (bootstrapBudgetResult) { bootstrapBudgetResult.textContent = ''; bootstrapBudgetResult.hidden = true; }
@@ -882,6 +915,111 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
       }
     } finally { stopWalletPresentation(); busy(false); if (stillCurrent()) { renderControls(); hideBanner(); openPicker(opener); } }
   });
+  // This is deliberately local-only preparation, not enrollment or a wallet
+  // transaction path. The file has no original hashes or freshness proof.
+  candidateOpen?.addEventListener('click', () => {
+    const proof = ownerVerification;
+    if (busyState || !connected || !proof || proof.wallet !== selectedWallet || proof.accountId !== 'great_mujey.testnet' ||
+        !isTop || !V14_BOOTSTRAP_ORIGINS.includes(win.location.origin) || typeof loadBootstrapArtifact !== 'function') return;
+    candidateVisible = true;
+    if (candidateStatus) candidateStatus.textContent = 'Prepare or check a local file. This does not enroll or authorize a transaction.';
+    renderControls();
+  });
+  candidateCreate?.addEventListener('click', async () => {
+    const proof = ownerVerification, version = ownerSessionVersion;
+    if (busyState || candidate || !candidateVisible || !candidatePassphrase || !candidateConfirm || !candidateStatus ||
+        !connected || !proof || proof.wallet !== selectedWallet || proof.accountId !== 'great_mujey.testnet') return;
+    const current = () => connected && selectedWallet === proof.wallet && connectedAccount === proof.accountId &&
+      ownerVerification === proof && ownerSessionVersion === version && candidateVisible;
+    let passphrase = candidatePassphrase.value, confirmation = candidateConfirm.value;
+    candidatePassphrase.value = ''; candidateConfirm.value = '';
+    if (passphrase !== confirmation || passphrase.length < 16 || !/\S/.test(passphrase)) {
+      candidateStatus.textContent = 'Passphrases must match and contain at least 16 characters. Do not use your wallet seed.';
+      passphrase = ''; confirmation = ''; return;
+    }
+    confirmation = '';
+    candidateStatus.textContent = 'Preparing the pinned plan and encrypting the file on this device. No wallet prompt is being made.';
+    busy(true);
+    try {
+      const compressedV14 = await loadBootstrapArtifact(); if (!current()) return;
+      const result = await createV14BootstrapCandidate({owner:proof.accountId,ownerPublicKey:proof.publicKey,
+        vault:`native.${proof.accountId}`,vaultFundingYocto:V14_EXAMPLE_VAULT_FUNDING_YOCTO,compressedV14,passphrase,crypto:win.crypto});
+      if (!current()) return;
+      candidate = result;
+      if (candidateId) candidateId.textContent = result.fingerprint;
+      if (candidateDetails) candidateDetails.textContent = [
+        `Owner: ${result.owner}`, `Owner public key: ${result.owner_public_key}`, `Proposed vault: ${result.vault}`,
+        `Temporary vault public key: ${result.temporary_public_key}`, `Example funding: 6 test NEAR (not approved)`,
+        `V14 WASM SHA-256: ${result.vault_wasm_sha256}`, `Unsigned plan SHA-256: ${result.review_sha256}`,
+      ].join('\n\n');
+      if (candidateCheckStatus) candidateCheckStatus.textContent = '';
+      candidateStatus.textContent = 'Local preparation created. Record the ID separately, save the encrypted file, then reopen and check it. No enrollment or transaction was performed.';
+    } catch {
+      if (current()) candidateStatus.textContent = 'Could not prepare the encrypted file. No enrollment or transaction was performed; do not guess or repeat an uncertain setup.';
+    } finally { passphrase = ''; busy(false); if (current()) renderControls(); }
+  });
+  candidateCopy?.addEventListener('click', async () => {
+    const saved = candidate, proof = ownerVerification;
+    if (busyState || !saved || !candidateVisible || !candidateStatus) return;
+    try {
+      await win.navigator.clipboard.writeText(saved.fingerprint);
+      if (candidate === saved && ownerVerification === proof) candidateStatus.textContent = 'Backup ID copied. Record it separately from the encrypted file; copying it does not prove a separate backup.';
+    } catch {
+      if (candidate === saved && ownerVerification === proof) candidateStatus.textContent = 'Could not copy the ID automatically. Record the displayed ID separately.';
+    }
+  });
+  candidateDownload?.addEventListener('click', () => {
+    if (busyState || !candidate || !candidateVisible || !candidateStatus) return;
+    let url;
+    try {
+      url = win.URL.createObjectURL(new win.Blob([candidate.text],{type:'application/json'}));
+      const link = doc.createElement('a'); link.href = url; link.download = 'bouncer-testnet-setup-preparation.json';
+      doc.body.append(link); link.click(); link.remove();
+      candidateStatus.textContent = 'Download started. Confirm the encrypted file is saved separately; this does not prove another backup or authorize a transaction.';
+      const timer = setTimeout(() => win.URL.revokeObjectURL(url),60_000); timer?.unref?.();
+    } catch {
+      if (url) win.URL.revokeObjectURL(url);
+      candidateStatus.textContent = 'Could not save the file. Keep any existing copies and do not start an uncertain setup again.';
+    }
+  });
+  for (const control of [candidateFile,candidateExpected,candidateUnlock]) {
+    control?.addEventListener(control === candidateFile ? 'change' : 'input', () => {
+      if (candidateCheckStatus) candidateCheckStatus.textContent = '';
+    });
+  }
+  candidateVerify?.addEventListener('click', async () => {
+    const proof = ownerVerification, version = ownerSessionVersion, file = candidateFile?.files?.[0];
+    if (busyState || !candidateVisible || !candidateExpected || !candidateUnlock || !candidateCheckStatus ||
+        !connected || !proof || proof.wallet !== selectedWallet || proof.accountId !== 'great_mujey.testnet') return;
+    const current = () => connected && selectedWallet === proof.wallet && connectedAccount === proof.accountId &&
+      ownerVerification === proof && ownerSessionVersion === version && candidateVisible;
+    const expectedFingerprint = candidateExpected.value.trim().toLowerCase();
+    let passphrase = candidateUnlock.value; candidateUnlock.value = '';
+    candidateCheckStatus.textContent = '';
+    if (!file || !Number.isFinite(file.size) || file.size < 1 || file.size > 30_000 ||
+        !/^[a-f0-9]{64}$/.test(expectedFingerprint) || passphrase.length < 16) {
+      candidateCheckStatus.textContent = 'Choose the saved preparation file and enter its separately recorded 64-character ID and passphrase.';
+      passphrase = ''; return;
+    }
+    candidateCheckStatus.textContent = 'Checking the saved file and passphrase on this device. No wallet request is being made.';
+    busy(true);
+    try {
+      const [text,compressedV14] = await Promise.all([file.text(),loadBootstrapArtifact()]); if (!current()) return;
+      const result = await verifyV14BootstrapCandidate({text,expectedFingerprint,owner:proof.accountId,
+        vault:`native.${proof.accountId}`,vaultFundingYocto:V14_EXAMPLE_VAULT_FUNDING_YOCTO,
+        currentOwnerPublicKey:proof.publicKey,compressedV14,passphrase,crypto:win.crypto});
+      if (!current()) return;
+      const keyWarning = result.owner_key_matches_current ? 'The recorded owner key matches this verified session.' :
+        'WARNING: the recorded owner key differs from this verified session. Stop and reconcile the key change before setup.';
+      candidateCheckStatus.textContent = `File matches the recorded ID, passphrase and pinned plan. ${keyWarning} ` +
+        'This file contains no transaction originals; it does not prove another backup, a latest head, on-chain state, enrollment or transaction approval.';
+    } catch {
+      if (current()) candidateCheckStatus.textContent = 'Could not verify that file, ID, passphrase and pinned plan. Keep existing copies; do not repeat an uncertain transaction.';
+    } finally {
+      passphrase = ''; if (candidateFile) candidateFile.value = '';
+      busy(false); if (current()) renderControls();
+    }
+  });
   bootstrapBudgetOpen?.addEventListener('click', () => {
     if (busyState || !bootstrapBudgetStatus) return;
     const account = connected ? connectedAccount : viewedAccount;
@@ -946,7 +1084,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
       nativeFlow?.destroy(); nativeFlow = null; nativeSetupOpening = false; nativeSetupAvailable = false;
       missionFlow = null; missionReview = null; missionReady = false; missionStarted = false;
       v14RecoveryClient = null; v14RecoveryVisible = false;
-      clearV14RecoveryDisplay(); clearBootstrapRecovery();
+      clearV14RecoveryDisplay(); clearBootstrapRecovery(); clearBootstrapCandidate();
       if (missionConsent) missionConsent.checked = false;
       if (missionDetails) { missionDetails.hidden = true; missionDetails.open = false; }
       if (missionManifest) missionManifest.textContent = '';
@@ -1007,7 +1145,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     } catch (error) {
       if (!stillCurrent()) return;
       ownerVerification = null; setupRecoveryAvailable = false; setupRecoverySelection = null; matchedOriginal = null;
-      v14RecoveryClient = null; v14RecoveryVisible = false; clearBootstrapRecovery();
+      v14RecoveryClient = null; v14RecoveryVisible = false; clearBootstrapRecovery(); clearBootstrapCandidate();
       nativeSetupAvailable = false; nativeSetupOpening = false; nativeFlow?.destroy(); nativeFlow = null;
       const reason = error?.message || '';
       const message = reason === 'CLI_ED25519_UNAVAILABLE'

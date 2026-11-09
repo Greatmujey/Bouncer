@@ -1,7 +1,8 @@
 /**
  * Construct the testnet-only, temporary-key V14 bootstrap that avoids sending
  * the full WASM through a mobile wallet. This module creates no keys, opens no
- * wallet, signs nothing, sends nothing, and is not wired to the live UI.
+ * wallet, signs nothing and sends nothing. It may build a local preparation
+ * review, but no live wallet transaction is wired to it.
  *
  * An owner first creates/funds a NEW child vault and adds a temporary FullAccess
  * key there. That key signs deployment + initialization + its own deletion as

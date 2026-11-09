@@ -50,7 +50,7 @@ jobs:
           python3 scripts/build-intear-source.py
           ./node_modules/.bin/esbuild web-src/vendor/intear/web/src/js/near-selector.js --bundle --format=esm --target=es2020 --minify --define:__NEARCONNECT__=true --outfile="$RUNNER_TEMP/intear-rebuilt.js"
           cmp web/intear-wallet.executor.js "$RUNNER_TEMP/intear-rebuilt.js"
-          git diff --exit-code -- web/wallet.bundle.js web/walletconnect.bundle.js web/walletconnect-NOTICES.txt web/api/wc-relay.mjs web/intear-wallet-source.zip web/ethereum-wallet.executor.js web/ethereum-wallet-NOTICE.txt
+          git diff --exit-code -- web/wallet.bundle.js web/v14-bootstrap-artifact-v1.json web/walletconnect.bundle.js web/walletconnect-NOTICES.txt web/api/wc-relay.mjs web/intear-wallet-source.zip web/ethereum-wallet.executor.js web/ethereum-wallet-NOTICE.txt
       - name: Test onboarding, wallet picker and Google identity UI
         env:
           BOUNCER_PLAYWRIGHT_PATH: ${{ runner.temp }}/bouncer-browser/node_modules/playwright-core/index.mjs

@@ -140,9 +140,27 @@ Ledger device, Google login or transaction is tested. `google-session.test.mjs`
 uses locally generated RSA keys to test signatures, claims, nonce, CSRF,
 expiry, restoration, sign-out and key rotation.
 
-`stage-public-web.mjs` publishes only the 18 allowlisted website files. Vercel
-separately detects the Google and WalletConnect functions and six fixed-action
-mission proxy functions under `web/api/native-mission/`; none is a static source
+When this revision is deployed, after verifying `great_mujey.testnet`, the
+Vercel and Railway workspaces can prepare an encrypted **local setup candidate** for the illustrative 6 test
+NEAR vault funding. The browser generates a vault-only temporary key and a
+checkpoint capability, encrypts them with a separate passphrase, and lets the
+user save/re-import the file with a separately recorded SHA-256 backup ID.
+It lazily fetches the public, non-executable `v14-bootstrap-artifact-v1.json`
+and checks both compressed and inflated artifact hashes; this is not an audit. Preparation
+and checking request no additional signature, enrollment or transaction. The
+file contains no original transaction history and is not an owner-attested
+recovery export. Verifying it does not establish that a separate backup exists,
+that any history is latest, or that the vault/account is absent on-chain. A
+mismatched owner key is reported and requires manual reconciliation. Never
+repeat an uncertain setup. If installed later, the temporary key can control
+the vault until its deletion is final; a lost passphrase/file can strand funds,
+and a compromised browser can steal unlocked secrets. This feature is not a
+live setup transaction path or proof of a real-phone recovery.
+
+`stage-public-web.mjs` publishes only the 19 allowlisted website files,
+including that public, lazily loaded artifact. Vercel separately detects the
+Google and WalletConnect functions and fixed-action mission/read-only setup
+proxy functions under `web/api/native-mission/`; none is a static source
 file. The mission proxies are disabled unless explicitly configured, and do not
 provide a backend or authorize spending by themselves. The experimental
 Vercel/Railway split and its unverified hosting limits are described in

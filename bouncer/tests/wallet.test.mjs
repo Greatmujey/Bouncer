@@ -71,6 +71,10 @@ function fakeBrowser(url, { top = true, storageFails = false, approved = '' } = 
     'wallet-account-entry', 'wallet-account-form', 'wallet-account-id', 'wallet-account-error', 'wallet-account-back', 'wallet-cli-verify',
     'wallet-account-view', 'wallet-account-name', 'wallet-account-badge', 'wallet-account-warning', 'wallet-account-near', 'wallet-account-usdc', 'wallet-account-balance-status', 'wallet-account-use-wallet', 'wallet-account-refresh', 'wallet-owner-verify', 'wallet-owner-status',
     'wallet-bootstrap-budget-open', 'wallet-bootstrap-budget-panel', 'wallet-bootstrap-budget-refresh', 'wallet-bootstrap-budget-status', 'wallet-bootstrap-budget-result',
+    'wallet-bootstrap-candidate-open', 'wallet-bootstrap-candidate-panel', 'wallet-bootstrap-candidate-passphrase', 'wallet-bootstrap-candidate-confirm',
+    'wallet-bootstrap-candidate-create', 'wallet-bootstrap-candidate-status', 'wallet-bootstrap-candidate-saved', 'wallet-bootstrap-candidate-id', 'wallet-bootstrap-candidate-details',
+    'wallet-bootstrap-candidate-copy', 'wallet-bootstrap-candidate-download', 'wallet-bootstrap-candidate-file', 'wallet-bootstrap-candidate-expected',
+    'wallet-bootstrap-candidate-unlock', 'wallet-bootstrap-candidate-verify', 'wallet-bootstrap-candidate-check-status',
     'wallet-bootstrap-recovery-open', 'wallet-bootstrap-recovery-panel', 'wallet-bootstrap-recovery-read', 'wallet-bootstrap-recovery-file',
     'wallet-bootstrap-recovery-import', 'wallet-bootstrap-recovery-status', 'wallet-bootstrap-recovery-originals', 'wallet-bootstrap-recovery-backup',
     'wallet-bootstrap-recovery-export', 'wallet-bootstrap-recovery-passphrase', 'wallet-bootstrap-recovery-unlock',
@@ -371,6 +375,78 @@ test('connected phone-wallet accounts can verify a fresh identity message withou
     assert.equal(browser.nodes['wallet-owner-status'].hidden, true);
     assert.equal(browser.nodes['wallet-owner-status'].textContent, '');
   }
+});
+
+test('local preparation saves and rechecks an encrypted candidate without an additional signature or transaction', async () => {
+  const origin='https://bouncer-production-6df1.up.railway.app';
+  const browser=fakeBrowser(`${origin}/workspace`,{approved:origin});
+  const config={account:'great_mujey.testnet',signConnectedMessage:true,cliKey:KeyPair.fromRandom('ed25519')};
+  const bytes=new Uint8Array(fs.readFileSync(new URL('../web/artifacts/v14-research.deflate',import.meta.url)));
+  let downloaded;
+  browser.win.Blob=Blob;browser.win.URL={createObjectURL(blob){downloaded=blob;return 'blob:synthetic'},revokeObjectURL(){}};
+  browser.doc.body.append=()=>{};
+  await initWallet({window:browser.win,document:browser.doc,NearConnector:connectorClass(config),loadBootstrapArtifact:async()=>bytes.slice()});
+  const n=browser.nodes;assert.equal(n['wallet-bootstrap-candidate-open'].hidden,true);
+  await n['wallet-connect'].click();await browser.options[0].click();
+  assert.equal(n['wallet-bootstrap-candidate-open'].hidden,true);
+  await n['wallet-owner-verify'].click();await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(n['wallet-bootstrap-candidate-open'].hidden,false);
+  await n['wallet-bootstrap-candidate-open'].click();
+  const passphrase='synthetic only long recovery passphrase';
+  n['wallet-bootstrap-candidate-passphrase'].value=passphrase;
+  n['wallet-bootstrap-candidate-confirm'].value='different passphrase';
+  await n['wallet-bootstrap-candidate-create'].click();
+  assert.match(n['wallet-bootstrap-candidate-status'].textContent,/must match/);
+  assert.equal(n['wallet-bootstrap-candidate-passphrase'].value,'');
+  assert.equal(n['wallet-bootstrap-candidate-confirm'].value,'');
+  n['wallet-bootstrap-candidate-passphrase'].value=passphrase;n['wallet-bootstrap-candidate-confirm'].value=passphrase;
+  await n['wallet-bootstrap-candidate-create'].click();
+  assert.match(n['wallet-bootstrap-candidate-status'].textContent,/no enrollment or transaction/i);
+  assert.equal(n['wallet-bootstrap-candidate-create'].disabled,true);
+  assert.equal(n['wallet-bootstrap-candidate-saved'].hidden,false);
+  const id=n['wallet-bootstrap-candidate-id'].textContent;assert.match(id,/^[a-f0-9]{64}$/);
+  assert.match(n['wallet-bootstrap-candidate-details'].textContent,/Temporary vault public key: ed25519:.*Example funding: 6 test NEAR \(not approved\)/s);
+  assert.equal(n['wallet-bootstrap-candidate-details'].textContent.includes(passphrase),false);
+  await n['wallet-bootstrap-candidate-copy'].click();assert.equal(browser.win.clipboard,id);
+  await n['wallet-bootstrap-candidate-download'].click();
+  assert.match(n['wallet-bootstrap-candidate-status'].textContent,/download started.*does not prove/i);
+  const text=await downloaded.text();assert.equal(text.includes(passphrase),false);
+  const file={size:Buffer.byteLength(text),text:async()=>text};
+  n['wallet-bootstrap-candidate-file'].files=[file];n['wallet-bootstrap-candidate-expected'].value=id;
+  n['wallet-bootstrap-candidate-unlock'].value=passphrase;
+  await n['wallet-bootstrap-candidate-verify'].click();
+  assert.match(n['wallet-bootstrap-candidate-check-status'].textContent,/matches the recorded ID.*no transaction originals.*latest head/i);
+  assert.equal(n['wallet-bootstrap-candidate-unlock'].value,'');
+  n['wallet-bootstrap-candidate-unlock'].value='wrong synthetic passphrase';
+  await n['wallet-bootstrap-candidate-verify'].click();
+  assert.match(n['wallet-bootstrap-candidate-check-status'].textContent,/could not verify/i);
+  assert.doesNotMatch(n['wallet-bootstrap-candidate-check-status'].textContent,/matches the recorded ID/i);
+  assert.equal(config.messageRequests.length,1);assert.equal(config.transactionRequests,undefined);
+  await n['wallet-disconnect'].click();
+  assert.equal(n['wallet-bootstrap-candidate-open'].hidden,true);
+  assert.equal(n['wallet-bootstrap-candidate-id'].textContent,'');
+  assert.equal(n['wallet-bootstrap-candidate-check-status'].textContent,'');
+});
+
+test('late local preparation cannot repopulate a signed-out owner session', async () => {
+  const origin='https://bouncer-near.vercel.app',browser=fakeBrowser(`${origin}/`,{approved:origin});
+  const config={account:'great_mujey.testnet',signConnectedMessage:true,cliKey:KeyPair.fromRandom('ed25519')};
+  const bytes=new Uint8Array(fs.readFileSync(new URL('../web/artifacts/v14-research.deflate',import.meta.url)));
+  let resolveArtifact;
+  const artifact=new Promise(resolve=>{resolveArtifact=resolve});
+  await initWallet({window:browser.win,document:browser.doc,NearConnector:connectorClass(config),loadBootstrapArtifact:()=>artifact});
+  const n=browser.nodes;await n['wallet-connect'].click();await browser.options[0].click();
+  await n['wallet-owner-verify'].click();await n['wallet-bootstrap-candidate-open'].click();
+  n['wallet-bootstrap-candidate-passphrase'].value='synthetic only long passphrase';
+  n['wallet-bootstrap-candidate-confirm'].value='synthetic only long passphrase';
+  const pending=n['wallet-bootstrap-candidate-create'].click();
+  config.instance.events['wallet:signOut']();resolveArtifact(bytes);await pending;
+  assert.equal(n['wallet-bootstrap-candidate-open'].hidden,true);
+  assert.equal(n['wallet-bootstrap-candidate-saved'].hidden,true);
+  assert.equal(n['wallet-bootstrap-candidate-id'].textContent,'');
+  assert.equal(n['wallet-bootstrap-candidate-status'].textContent,'');
+  assert.equal(n['wallet-bootstrap-candidate-passphrase'].value,'');
+  assert.equal(config.messageRequests.length,1);assert.equal(config.transactionRequests,undefined);
 });
 
 test('Railway owner can open offline recovery while online recovery is disabled without an extra signature', async () => {

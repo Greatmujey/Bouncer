@@ -1,5 +1,6 @@
 import { NearConnector, SandboxWallet } from '@hot-labs/near-connect';
 import { initWallet } from './wallet-core.mjs';
+import { loadV14BootstrapArtifact } from './v14-bootstrap-artifact-client.mjs';
 
 // The connector is only constructed on an approved, isolated origin. The
 // separately licensed WalletConnect SDK is lazy-loaded after explicit choice.
@@ -24,4 +25,7 @@ function loadWalletConnect({ signal } = {}) {
   signal?.addEventListener('abort', abort, { once: true });
   return pending.finally(() => signal?.removeEventListener('abort', abort));
 }
-void initWallet({ window, document, NearConnector, SandboxWallet, loadWalletConnect });
+// The public artifact is fetched as bounded, hash-checked data; no separate
+// downloaded script is executed and no credential is sent with the request.
+const loadBootstrapArtifact = () => loadV14BootstrapArtifact({fetch:window.fetch.bind(window),crypto:window.crypto});
+void initWallet({ window, document, NearConnector, SandboxWallet, loadWalletConnect, loadBootstrapArtifact });

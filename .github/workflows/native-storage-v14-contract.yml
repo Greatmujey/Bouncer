@@ -219,7 +219,7 @@ jobs:
           npm ci --ignore-scripts --no-audit --no-fund
           npm ci --prefix walletconnect --ignore-scripts --no-audit --no-fund
           npm run build:web
-          git diff --exit-code -- web/wallet.bundle.js web/api/native-mission
+          git diff --exit-code -- web/wallet.bundle.js web/v14-bootstrap-artifact-v1.json web/api/native-mission
           npm install --prefix "$RUNNER_TEMP/bouncer-browser" --no-save --no-audit --no-fund playwright@1.64.1
           node "$RUNNER_TEMP/bouncer-browser/node_modules/playwright/cli.js" install chromium
           CHROMIUM_PATH="$(node -e "console.log(require('$RUNNER_TEMP/bouncer-browser/node_modules/playwright-core').chromium.executablePath())")"
