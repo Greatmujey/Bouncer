@@ -242,6 +242,10 @@ linuxFlockTest('Railway recovery-only startup needs its original volume and cann
     assert.equal(challenge.status,409);assert.ok(!methods.includes('send_tx'));
     await runtime.close();runtime=null;
     const fence=acquireRailwayNativeJournalFence({journalFile:f.journalFile,mode:'execute'});fence.close();
+    // A recovery-start marker is not an independent checkpoint. Hosted
+    // execution stays blocked even if the operator flips the mode manually.
+    await assert.rejects(configureNativeMissionSite({env:{...env,BOUNCER_NATIVE_MISSION_MODE:'execute'}}),/independent V14 original checkpoint/);
+    assert.ok(!methods.includes('send_tx'));
   } finally {if(runtime)await runtime.close();await close(rpc);f.clean()}
 });
 

@@ -165,8 +165,17 @@ export async function configureNativeMissionSite({env=process.env}={}) {
   if((await provider.viewNodeStatus())?.chain_id!=='testnet')throw new Error('testnet RPC is required');
   let journal,pool,server,key,hostFence;
   try {
-    if(ingress==='railway-proxy') hostFence=acquireRailwayNativeJournalFence({journalFile:env.BOUNCER_NATIVE_MISSION_JOURNAL_FILE,
-      mode:env.BOUNCER_NATIVE_MISSION_MODE});
+    if(ingress==='railway-proxy') {
+      hostFence=acquireRailwayNativeJournalFence({journalFile:env.BOUNCER_NATIVE_MISSION_JOURNAL_FILE,
+        mode:env.BOUNCER_NATIVE_MISSION_MODE});
+      // A completed recovery-start marker alone does not protect against a
+      // restored/second volume. The research checkpoint is not wired into the
+      // runners or browser setup yet; never let a configuration toggle bypass
+      // the missing independent original fence on the hosted backend.
+      if(env.BOUNCER_NATIVE_MISSION_MODE==='execute') {
+        throw new Error('hosted execution remains disabled until the independent V14 original checkpoint is fully wired and recovery-tested');
+      }
+    }
     key=readFileJournalKeyFile(env.BOUNCER_FILE_JOURNAL_KEY_FILE);
     journal=new FileJournal(env.BOUNCER_NATIVE_MISSION_JOURNAL_FILE,mission.contract_id,mission.owner_account_id,
       {encryptionKey:key,keyFile:env.BOUNCER_FILE_JOURNAL_KEY_FILE,requireExisting:true});

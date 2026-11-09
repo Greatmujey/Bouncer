@@ -257,14 +257,14 @@ Only after the backend is checked, the Vercel project can deliberately set
 backend origin and proxy secret. Store the secret in provider secret settings,
 never in Git, the browser or chat. The secret is only a network gate: it does
 not authorize the owner, and a compromised host can bypass it. Recovery needs
-no agent keys or database. Execution startup is blocked until the recovery-only
-service has returned its original-journal check; this creates a
-`.recovery-started` marker, which is **not** proof that no transaction occurred
-or that receipts were verified. Execution must remain disabled until the
-separately reviewed vault, restricted keys, PostgreSQL one-use owner
-authentication and original-hash recording are ready. A fresh owner signature
-remains required for each market leg. Enabling or deploying is not itself
-permission to spend.
+no agent keys or database. The recovery-only service's original-journal check
+creates a `.recovery-started` marker, which is **not** proof that no transaction
+occurred or that receipts were verified. Railway execution is explicitly
+blocked even after this marker until the independent original checkpoint is
+wired into setup and every mission leg and recovery-tested. The separately
+reviewed vault, restricted keys and PostgreSQL one-use owner authentication
+are also required. A fresh owner signature remains required for each market
+leg. Enabling or deploying is not itself permission to spend.
 
 For the Railway mode the runtime holds an exclusive kernel lock on a persistent
 `.host-fence` beside the journal and checks that a second open cannot take it.
@@ -285,7 +285,19 @@ filesystem. It cannot prevent a second journal, another host, volume loss,
 rollback, a forged mount setting, compromised operator or old snapshot. A
 backup must never be restored as if it were current authority. Keep a separately
 protected record of original hashes and reconcile uncertainty before any new
-approval. Railway says [trial volumes can be deleted 30 days after trial credits
+approval. A research-only two-copy checkpoint is now implemented in
+`agent/v14-original-witness.mjs`: it binds the reviewed setup and mission,
+provides one-shot methods for recording wallet claims and original hashes,
+and stops if copies differ. Its encrypted local `FileJournal` adapter and
+separate Supabase compare-and-append schema/Edge adapter are tested with
+synthetic data. The Edge handler is default-off and exposes no browser
+provisioning. **This checkpoint is not yet provisioned for the owner, wired into
+wallet prompts or mission sends, or verified against a real receipt.** It retains
+the public review, hashes and commitments, not the journal encryption key or
+agent keys; those still require separate durable recovery. An administrator
+able to roll back both copies can defeat it. Never infer independent durability
+from two adapter names or silently recreate a missing copy. Railway says
+[trial volumes can be deleted 30 days after trial credits
 expire](https://docs.railway.com/pricing/free-trial#data-retention); a trial volume
 must never be the sole copy of originals. Railway and Vercel remain unavailable
 for this mission until their actual service, cost, configuration and deployed
