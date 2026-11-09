@@ -30,6 +30,10 @@ const exact = (value, keys) => plain(value) && Object.keys(value).length === key
 const digest = value => crypto.createHash('sha256').update(value, 'utf8').digest('hex');
 const uncertain = () => new Error('V14 original checkpoint is uncertain or copies differ; stop and reconcile the original, never retry a prompt or send');
 const copy = value => structuredClone(value);
+const originalWitnesses = new WeakSet();
+// An in-process type guard only. It does not prove store independence,
+// durability, receipt verification or protection against dual rollback.
+export function isV14OriginalWitness(value) { return originalWitnesses.has(value); }
 
 function containsSecretField(value,depth=0) {
   if (depth>32) return true;
@@ -203,7 +207,9 @@ export function createV14OriginalWitness({ binding:rawBinding,localStore,indepen
     } finally { busy=false; }
   }
   const requireReserved = state => { if (!state.reserved) throw new Error('reviewed setup has not been reserved in both stores'); };
-  return Object.freeze({
+  const witness=Object.freeze({
+    // Public-only immutable reviewed binding, returned as a detached copy.
+    binding:()=>copy(binding),
     inspect:async () => (await readBoth()).state,
     reserve:() => mutate('reserve', state => {
       if (state.reserved) return null;
@@ -254,4 +260,6 @@ export function createV14OriginalWitness({ binding:rawBinding,localStore,indepen
       return {goal_id:goalId,tx_hash:result.tx_hash,final_block_hash:result.final_block_hash};
     }),
   });
+  originalWitnesses.add(witness);
+  return witness;
 }

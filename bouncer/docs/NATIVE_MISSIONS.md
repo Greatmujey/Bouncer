@@ -301,10 +301,21 @@ FINAL block. Recovery can read the existing public history even if the
 checkpoint capability is lost; it cannot rotate that capability or recreate a
 journal. The optional read-only wallet panel stays hidden unless its separate
 Edge endpoint is explicitly enabled. Enrollment is not wired into the wallet UI.
-**This checkpoint is not yet provisioned for the owner, wired into wallet
-prompts or mission sends, or verified against a real receipt.** It retains the public review, hashes and commitments, not the
-journal encryption key or agent keys; those still require separate durable
-recovery. `web-src/v14-secret-recovery-kit.mjs` provides an experimental,
+Research-only mission hooks can now connect the native runners to this witness:
+`beforeOriginalBroadcast` is called after the local pending hash is recorded
+but before the single broadcast, and `afterOriginalVerified` runs before a
+later goal can begin. The V14 adapters bind owner, vault, reviewed mission
+hash, goal kind and original fingerprint; they stop on a missing or mismatched
+acknowledgement. Recovery may verify the same retained original without
+signing or sending again. The runner rechecks its local journal and freshness
+after asynchronous callbacks. The hooks are optional for legacy callers: a
+callback or its acknowledgement is **not** proof that storage is independent,
+durable, authenticated, or that its receipt verifier is honest. Tests use a
+simulated independent store and synthetic or isolated-sandbox receipts only.
+**These hooks are not enabled in the live mission service, and the checkpoint
+is not provisioned for the owner or verified against a real testnet receipt.**
+It retains the public review, hashes and commitments, not the journal encryption
+key or agent keys; those still require separate durable recovery. `web-src/v14-secret-recovery-kit.mjs` provides an experimental,
 passphrase-encrypted *key kit* for the capability, distinct journal encryption
 keys and only the three reviewed agent keys; it rejects the reviewed owner
 signing key but cannot by itself prove another key is not FullAccess. Never

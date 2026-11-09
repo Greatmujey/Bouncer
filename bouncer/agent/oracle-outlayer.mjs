@@ -27,6 +27,7 @@ import { withExclusiveJournalOperation } from './journal-operation.mjs';
 import { assertJournalScope } from './journal-write.mjs';
 import { readNativeJournal, writeConfirmedNativeJournal, assertNativeJournalUnchanged } from './synchronous-native-journal.mjs';
 import { validateNativeBroadcastGuard, checkNativeBroadcastGuard } from './native-broadcast-guard.mjs';
+import {validateNativeOriginalCheckpoint,retainNativeOriginalBeforeBroadcast} from './native-original-checkpoint.mjs';
 import { ORACLE_TESTNET_HASH as HASH, ORACLE_TESTNET_PROGRAM, ORACLE_PROJECT_ID, ORACLE_PROJECT_UUID,
   assertOracleProjectRegistry } from './oracle-testnet-registry.mjs';
 export { ORACLE_TESTNET_PROGRAM, ORACLE_PROJECT_ID, ORACLE_PROJECT_UUID, assertOracleProjectRegistry } from './oracle-testnet-registry.mjs';
@@ -182,8 +183,9 @@ async function recoverOracleGoalUnlocked({ goal: rawGoal, provider, journal, pub
 }
 
 /** Dry-run or sign one exact-input request after on-chain policy preflight. */
-async function runOracleGoalUnlocked({ goal: rawGoal, provider, account, publicKey, journal, execute = false, log = console.log, beforeBroadcast }) {
+async function runOracleGoalUnlocked({ goal: rawGoal, provider, account, publicKey, journal, execute = false, log = console.log, beforeBroadcast, beforeOriginalBroadcast }) {
   validateNativeBroadcastGuard(beforeBroadcast);
+  validateNativeOriginalCheckpoint(beforeOriginalBroadcast);
   if (journal?.sharedDirectV3 === true) throw new Error('shared buyer journal does not coordinate oracle payments');
   const goal = validateOracleGoal(rawGoal);
   assertJournalScope(journal, goal.contract_id, goal.owner_account_id);
@@ -239,6 +241,8 @@ async function runOracleGoalUnlocked({ goal: rawGoal, provider, account, publicK
       throw new Error('witnessed native original changed or is uncertain; stop and reconcile');
     }
   }
+  if(beforeOriginalBroadcast) await retainNativeOriginalBeforeBroadcast(beforeOriginalBroadcast,
+    {goalId:goal.id,kind:'oracle',txHash,fingerprint:fp,owner:goal.owner_account_id,vault:goal.contract_id});
   try {
     // Freshness and the original journal are rechecked after signing, fsync
     // and any witnessed-original verification, immediately before submission.

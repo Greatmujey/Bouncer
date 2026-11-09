@@ -24,6 +24,10 @@ import { prepareV14PhoneAttempt, inspectV14PhoneAttempt } from '../agent/native-
 import { inspectV14PhoneSetupCompletion } from '../agent/native-v14-phone-completion.mjs';
 import { createV14SetupRpcVerifier } from '../agent/v14-setup-rpc-verifier.mjs';
 import { createV14OriginalWitness,deriveV14OriginalBinding,V14_WITNESS_GENESIS } from '../agent/v14-original-witness.mjs';
+import { createV14MissionOriginalCheckpoint,createV14MissionOriginalVerifier } from '../agent/v14-mission-original-checkpoint.mjs';
+import { verifyOutlayerResult } from '../agent/outlayer.mjs';
+import { verifyOracleResult } from '../agent/oracle-outlayer.mjs';
+import { verifyNativeStorageResult } from '../agent/native-storage.mjs';
 import { createV14FileWitnessStore } from '../agent/v14-file-witness-store.mjs';
 import { ReadOnlyNearReceiptProvider } from '../agent/read-only-near-receipts.mjs';
 import { ORACLE_TESTNET_PROJECT } from '../agent/oracle-outlayer.mjs';
@@ -163,8 +167,24 @@ async function main() {
           if(result?.chain_id!==SANDBOX_CHAIN_ID||result.protocol_version!==88)throw new Error('unexpected sandbox protocol');
           return {...result,chain_id:'testnet'};
         };
+        // Test-only reinspection of the exact original against this disposable
+        // node and the locally journaled materialized goal. This is NOT a
+        // reviewed production verifier or independent provider evidence.
+        const verifySandboxMission=async({goalId,kind,txHash})=>{
+          const entry=journal?.get(goalId);
+          assert.equal(entry?.status,'completed');assert.equal(entry.tx_hash,txHash);
+          assert.equal(entry.agent_public_key,pub(keys[goalId]));
+          const receipt=await rpc.txStatusReceipts(txHash,OWNER,'FINAL');
+          const verified=kind==='oracle'?await verifyOracleResult(entry.oracle_goal,receipt,entry.agent_public_key,rpc):
+            kind==='storage'?await verifyNativeStorageResult(entry.storage_goal,receipt,entry.agent_public_key,rpc):
+              verifyOutlayerResult(entry.outlayer_goal,receipt,entry.agent_public_key);
+          assert.equal(verified.tx_hash,txHash);
+          const finalBlock=await rpc.block({finality:'final'});
+          return {tx_hash:txHash,final_block_hash:finalBlock.header.hash};
+        };
         setupWitness=createV14OriginalWitness({binding,localStore:setupLocal,independentStore:setupRemote,
-          verifySetupReceipt:createV14SetupRpcVerifier({planInputs:phonePlanAnchors,provider:setupRead})});
+          verifySetupReceipt:createV14SetupRpcVerifier({planInputs:phonePlanAnchors,provider:setupRead}),
+          verifyMissionReceipt:verifySandboxMission});
         await setupWitness.reserve();
       }
       const claimSetup=async index=>{
@@ -284,16 +304,35 @@ async function main() {
       journal=new FileJournal(path.join(dir,'mission-originals.json'),VAULT,OWNER);
       const run=(mission,opts={})=>runNativeMission({mission,provider:rpc,journal,log:()=>{},...opts});
       const mission=make();
+      const missionHooks=setupWitness?{beforeOriginalBroadcast:createV14MissionOriginalCheckpoint({witness:setupWitness}),
+        afterOriginalVerified:createV14MissionOriginalVerifier({witness:setupWitness})}:{};
       assert.equal((await run(mission,{signers:signers()})).status,'READY');assert.equal(rpc.transportCalls,0);
-      const completed=await run(mission,{signers:signers(),execute:true});
-      assert.equal(completed.status,'FULFILLED');assert.equal(completed.new_payments,3);assert.equal(rpc.transportCalls,3);
+      // Lose the response only after the first real local submission. The
+      // witnessed original must be verified by hash without a replacement.
+      rpc.loseNextAcknowledgementForTest();
+      await assert.rejects(run(mission,{signers:signers(),execute:true,...missionHooks}),/unresolved/);
+      const firstOriginal=journal.get('price').tx_hash;assert.equal(rpc.transportCalls,1);
+      if(setupWitness) assert.equal((await setupWitness.inspect()).pending?.tx_hash,firstOriginal);
+      const firstRecovery=await run(mission,{signers:{},recoverOnly:true,...(setupWitness?{afterOriginalVerified:missionHooks.afterOriginalVerified}:{})});
+      assert.equal(firstRecovery.status,'RECOVERED_PARTIAL');assert.equal(firstRecovery.deliveries[0].delivery.tx_hash,firstOriginal);
+      assert.equal(rpc.transportCalls,1);
+      const completed=await run(mission,{signers:signers(),execute:true,...missionHooks});
+      assert.equal(completed.status,'FULFILLED');assert.equal(completed.new_payments,2);assert.equal(rpc.transportCalls,3);
+      if(setupWitness) {
+        const witnessed=await setupWitness.inspect();
+        assert.deepEqual(witnessed.mission.map(item=>item.tx_hash),completed.deliveries.map(item=>item.delivery.tx_hash));
+        assert.equal(witnessed.pending,null);assert.equal(witnessed.next_mission_goal,null);
+        assert.deepEqual(await setupLocal.read(),await setupRemote.read());
+      }
       const saved=JSON.parse(completed.deliveries[2].delivery.result.value);
       assert.deepEqual(saved.resources.map(x=>x.goal_id),['price','compute']);
       assert.equal(saved.resources[1].result.value_usd_micros,27_500_000);
       assert.equal(journal.get('compute').outlayer_goal.input.oracle_tx_hash,completed.deliveries[0].delivery.tx_hash);
       assert.deepEqual(saved.resources.map(x=>x.tx_hash),completed.deliveries.slice(0,2).map(x=>x.delivery.tx_hash));
       for(const delivery of completed.deliveries.slice(0,2)) assert.equal(delivery.delivery.refunded_to_owner_yocto,String(N/100n));
-      const recovered=await run(mission,{signers:{},recoverOnly:true});assert.equal(recovered.status,'RECOVERED');assert.equal(rpc.transportCalls,3);
+      const recovered=await run(mission,{signers:{},recoverOnly:true,
+        ...(setupWitness?{afterOriginalVerified:missionHooks.afterOriginalVerified}:{})});
+      assert.equal(recovered.status,'RECOVERED');assert.equal(rpc.transportCalls,3);
       assert.deepEqual(recovered.deliveries.map(x=>x.delivery.tx_hash),completed.deliveries.map(x=>x.delivery.tx_hash));
       // Simulate losing the response AFTER the real first sandbox submission.
       const second=make('-second');activeIds={compute:'compute-second',price:'price-second',store:'store-second'};
@@ -342,6 +381,7 @@ async function main() {
           compressed_v14_bytes:compressed.length,all_unsigned_plan_stages_executed_only_in_sandbox:true,
           sandbox_original_receipt_proofs:setupProofs,sandbox_completion_snapshot:completion?.status,
           encrypted_local_and_simulated_second_checkpoint_reconciled:true,
+          mission_originals_retained_before_submit_and_verified_after_local_final_receipts:true,
           staged_receipt_and_fresh_state_verifier_exercised:true,independent_durable_store_tested:false,
           failed_upgrade_owner_refund_tested:true,real_phone_tested:false}:null,
         dependent_price_calculation_and_public_result_storage:true, fake_provider_did_not_run_wasi:true, sandbox_refunds_verified:true,

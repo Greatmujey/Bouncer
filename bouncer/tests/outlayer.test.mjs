@@ -284,3 +284,19 @@ test('simultaneous native requests on one journal cannot sign or broadcast twice
   assert.equal((await first).status,'FULFILLED');assert.equal(f.sends(),1);
   assert.equal((await run(f,{execute:true})).status,'REUSED');assert.equal(f.sends(),1);
 });
+
+test('independent compute original is retained before the only synthetic broadcast',async()=>{
+  const f=fixture();let checkpoints=0;
+  const result=await run(f,{execute:true,beforeOriginalBroadcast:async original=>{
+    checkpoints++;assert.equal(f.sends(),0);assert.equal(original.goal_id,goal.id);assert.equal(original.kind,'random');
+    assert.equal(original.tx_hash,hash);assert.equal(original.fingerprint,f.journal.get(goal.id).fingerprint);
+    return {status:'V14_MISSION_ORIGINAL_RETAINED',goal_id:original.goal_id,tx_hash:original.tx_hash};
+  }});
+  assert.equal(result.status,'FULFILLED');assert.equal(checkpoints,1);assert.equal(f.sends(),1);
+  const failed=fixture();await assert.rejects(run(failed,{execute:true,beforeOriginalBroadcast:async()=>{throw Error('lost acknowledgement')}}),/no broadcast was attempted/);
+  assert.equal(failed.sends(),0);assert.equal(failed.journal.get(goal.id).tx_hash,hash);
+  // The synthetic RPC returns a fabricated receipt even without a send. The
+  // runner still performs recovery only and never invokes the checkpoint again.
+  const recovered=await run(failed,{execute:true,beforeOriginalBroadcast:async()=>{throw Error('must not repeat')}});
+  assert.equal(recovered.status,'REUSED');assert.equal(failed.sends(),0);
+});

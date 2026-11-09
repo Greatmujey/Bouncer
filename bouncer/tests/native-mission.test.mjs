@@ -17,9 +17,16 @@ import { createNativeMissionHttpServer } from '../agent/native-mission-http.mjs'
 import { nativeMissionApprovalMessage } from '../web-src/native-mission-auth.mjs';
 import { createNativeMissionClient } from '../web-src/native-mission-client.mjs';
 import { nep413Payload } from '../web-src/cli-login.mjs';
+import { buildV14PhoneResearchPlan } from '../agent/native-v14-phone-plan.mjs';
+import { createV14OriginalWitness, deriveV14OriginalBinding, V14_WITNESS_GENESIS } from '../agent/v14-original-witness.mjs';
+import { createV14MissionOriginalCheckpoint, createV14MissionOriginalVerifier } from '../agent/v14-mission-original-checkpoint.mjs';
+import { fixture as phoneFixture, scope as witnessScope } from './v14-witness-fixture.mjs';
 
 const owner = 'owner.testnet', vault = 'bouncer.testnet';
 const storageCodeHash = nearApi.utils.serialize.base_encode(Buffer.alloc(32, 42));
+// For integrated witness tests only, use the same synthetic Wasm as the phone plan.
+const phoneArtifacts = phoneFixture().inputs;
+const witnessCodeHash = phoneArtifacts.mission.goals.find(item => item.kind === 'storage').goal.contract_code_hash;
 const randomGoal = { id: 'compute', contract_id: vault, owner_account_id: owner, policy_id: 'compute-policy', amount: '100',
   input: { min: 1, max: 100 }, program: { url: 'https://example.test/random.wasm', sha256: 'a'.repeat(64),
     build_target: 'wasm32-wasip1', max_instructions: 10_000_000, max_memory_mb: 128, max_execution_seconds: 60 } };
@@ -34,19 +41,25 @@ const encode = value => Buffer.from(JSON.stringify(value)).toString('base64');
 const event = (name, data) => `EVENT_JSON:${JSON.stringify({ standard: 'near-outlayer', version: '1.0.0', event: name, data: [data] })}`;
 const blockHash = 'B'.repeat(44), executionBlockHash = 'A'.repeat(44), requestId = '7'.repeat(44), completeId = '8'.repeat(44), refundId = '9'.repeat(44);
 
-function fixture({ stale = false, ambiguous = false, ambiguousGoal = null, samePolicy = false, storage = false, market = false, badMarketOutput = false } = {}) {
+function fixture({ stale = false, ambiguous = false, ambiguousGoal = null, samePolicy = false, storage = false, market = false, badMarketOutput = false, withWitness = false } = {}) {
+  const vault = withWitness ? `native.${owner}` : 'bouncer.testnet';
+  const storageCodeHash = withWitness ? witnessCodeHash : nearApi.utils.serialize.base_encode(Buffer.alloc(32, 42));
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bouncer-native-mission-'));
   const journalPath = path.join(dir, 'original.json');
   let journal = new FileJournal(journalPath, vault, owner);
   const mission = makeMission();
+  mission.contract_id=vault;
+  for (const {goal} of mission.goals) goal.contract_id=vault;
   if (samePolicy) mission.goals[1].goal.policy_id = mission.goals[0].goal.policy_id;
   if (market) {
     mission.goals[0] = { kind:'market', goal:{ ...structuredClone(randomGoal), input:{from_goal_id:'price',quantity:10},
       program:structuredClone(MARKET_SUMMARY_PROGRAM) } };
+    mission.goals[0].goal.contract_id=vault;
     mission.goals.reverse();
   }
   if (storage) { mission.max_native_amount = '300'; mission.required_resources.push('storage');
     const goal = structuredClone(storageGoal);
+    goal.contract_id=vault;goal.contract_code_hash=storageCodeHash;
     if (market) goal.value.from_goal_ids = ['price','compute'];
     mission.goals.push({ kind: 'storage', goal }); }
   const reviewed = structuredClone(mission);
@@ -169,6 +182,47 @@ function fixture({ stale = false, ambiguous = false, ambiguousGoal = null, sameP
     close() { journal.close(); fs.rmSync(dir, { recursive: true, force: true }); } };
 }
 async function withFixture(fn, options) { const f = fixture(options); try { await fn(f); } finally { f.close(); } }
+
+// These stores and receipt checks are synthetic. They test coordination, not
+// independent retention, durability, owner consent, or actual provider delivery.
+function checkpointMemoryStore() {
+  let snapshot={revision:0,head_sha256:V14_WITNESS_GENESIS,events:[]},loseNext=false;
+  return {
+    read:async()=>structuredClone(snapshot),
+    append:async({expected_revision,expected_head_sha256,record})=>{
+      if(snapshot.revision!==expected_revision||snapshot.head_sha256!==expected_head_sha256)throw new Error('synthetic CAS conflict');
+      snapshot={revision:snapshot.revision+1,head_sha256:crypto.createHash('sha256').update(record).digest('hex'),events:[...snapshot.events,record]};
+      if(loseNext){loseNext=false;throw new Error('synthetic acknowledgement lost after commit');}
+      return structuredClone(snapshot);
+    },
+    loseNext:()=>{loseNext=true;},
+  };
+}
+const syntheticHash=n=>nearApi.utils.serialize.base_encode(Buffer.alloc(32,n));
+async function missionCheckpoint(f,{verifyMissionReceipt}={}) {
+  const inputs={...phoneArtifacts,mission:f.mission,agentPublicKeys:Object.fromEntries(
+    Object.entries(f.signers).map(([id,signer])=>[id,String(signer.publicKey)]))};
+  const review=buildV14PhoneResearchPlan(inputs).review;
+  const binding=deriveV14OriginalBinding({scopeId:witnessScope,...inputs,review,trustedReviewSha256:review.review_sha256});
+  const local=checkpointMemoryStore(),independent=checkpointMemoryStore();
+  const syntheticSetupReceipt=async({txHash})=>({tx_hash:txHash,final_block_hash:syntheticHash(250)});
+  const syntheticMissionReceipt=async({txHash})=>{
+    const receipt=await f.provider.txStatusReceipts(txHash,owner,'FINAL');
+    if(receipt.final_execution_status!=='FINAL'||receipt.transaction.hash!==txHash)throw new Error('synthetic receipt not final');
+    return {tx_hash:txHash,final_block_hash:blockHash};
+  };
+  const witness=createV14OriginalWitness({binding,localStore:local,independentStore:independent,
+    verifySetupReceipt:syntheticSetupReceipt,verifyMissionReceipt:verifyMissionReceipt===null?undefined:verifyMissionReceipt??syntheticMissionReceipt});
+  await witness.reserve();
+  for(let i=0;i<binding.stages.length;i++) {
+    const stageId=binding.stages[i].id;
+    await witness.claimWalletStage(stageId);
+    await witness.retainWalletOriginal({stageId,txHash:syntheticHash(i+1)});
+    await witness.verifyWalletOriginal({stageId,proof:{synthetic:true}});
+  }
+  return {binding,witness,local,independent,hooks:{beforeOriginalBroadcast:createV14MissionOriginalCheckpoint({witness}),
+    afterOriginalVerified:createV14MissionOriginalVerifier({witness})}};
+}
 
 test('strict native manifest binds one owner, unique goals, required types and the aggregate maximum', () => {
   const m = makeMission(); const validated = validateNativeMission(m);
@@ -652,3 +706,126 @@ test('a model-proposed bounded market goal enters the guarded V14 runner in an o
   assert.equal(computed.deliveries[1].delivery.result.value_usd_micros,33000000);
   assert.equal((await call('store')).status,'FULFILLED');assert.equal(f.sends,3);
 }, {market:true,storage:true}));
+
+// End-to-end coordinator checks, with synthetic stores, wallet setup and receipts.
+for (const market of [false,true]) test(`V14 witness fences every synthetic ${market?'market':'random'} mission original before its only broadcast`, () => withFixture(async f => {
+  const c=await missionCheckpoint(f),sent=[];
+  f.setBeforeSend(async({kind,goal,hash})=>{
+    const state=await c.witness.inspect();
+    assert.equal(state.pending?.type,'mission');assert.equal(state.pending.goal_id,goal.id);
+    assert.equal(state.pending.kind,kind);assert.equal(state.pending.tx_hash,hash);
+    assert.equal(f.journal.get(goal.id).tx_hash,hash);
+    assert.deepEqual(state.mission.map(x=>x.goal_id),sent);
+    sent.push(goal.id);
+  });
+  const result=await f.invoke({execute:true,...c.hooks});
+  assert.equal(result.status,'FULFILLED');assert.equal(result.new_payments,3);assert.equal(f.sends,3);
+  const state=await c.witness.inspect();
+  assert.equal(state.pending,null);assert.equal(state.next_mission_goal,null);assert.equal(state.revision,25);
+  assert.deepEqual(state.mission.map(x=>x.goal_id),market?['price','compute','store']:['compute','price','store']);
+  assert.deepEqual(state.mission.map(x=>x.kind),market?['oracle','market','storage']:['random','oracle','storage']);
+  for(const row of state.mission) {
+    assert.equal(row.tx_hash,f.journal.get(row.goal_id).tx_hash);
+    assert.equal(row.fingerprint,f.journal.get(row.goal_id).fingerprint);
+  }
+  assert.deepEqual(await c.local.read(),await c.independent.read());
+  if(market) assert.equal(result.deliveries[1].delivery.result.value_usd_micros,27_500_000);
+  f.reopen();
+  const replay=await f.invoke({recoverOnly:true,signers:{},afterOriginalVerified:c.hooks.afterOriginalVerified});
+  assert.equal(replay.status,'RECOVERED');assert.equal(replay.new_payments,0);assert.equal(f.sends,3);
+  assert.equal((await c.witness.inspect()).revision,25);
+}, {storage:true,market,withWitness:true}));
+
+test('checkpoint hooks are paired for execute and a no-op or mismatched acknowledgement sends nothing', async()=>{
+  for(const mode of ['unpaired','noop','mismatch']) await withFixture(async f=>{
+    const c=await missionCheckpoint(f);
+    let hooks;
+    if(mode==='unpaired') hooks={beforeOriginalBroadcast:c.hooks.beforeOriginalBroadcast};
+    if(mode==='noop') hooks={beforeOriginalBroadcast:async()=>{},afterOriginalVerified:c.hooks.afterOriginalVerified};
+    if(mode==='mismatch') hooks={beforeOriginalBroadcast:async input=>({status:'V14_MISSION_ORIGINAL_RETAINED',
+      goal_id:input.goal_id,tx_hash:syntheticHash(99)}),afterOriginalVerified:c.hooks.afterOriginalVerified};
+    await assert.rejects(f.invoke({execute:true,...hooks}),mode==='unpaired'?/both native original checkpoint hooks/:/independent original checkpoint is uncertain/);
+    assert.equal(f.sends,0);
+    assert.equal((await c.witness.inspect()).pending,null);
+    if(mode!=='unpaired') assert.equal(f.journal.get('compute').status,'pending');
+  },{storage:true,withWitness:true});
+});
+
+test('V14 checkpoint binds owner, vault, reviewed mission digest and goal kind',()=>withFixture(async f=>{
+  const c=await missionCheckpoint(f),before=c.hooks.beforeOriginalBroadcast;
+  const input={goal_id:'compute',kind:'random',tx_hash:syntheticHash(80),fingerprint:'a'.repeat(64),
+    owner,vault:`native.${owner}`,mission_sha256:c.binding.mission_sha256};
+  for(const changes of [{owner:'other.testnet'},{vault:'other.testnet'},{mission_sha256:'f'.repeat(64)},
+    {kind:'market'},{goal_id:'price'},{unexpected:true}]) await assert.rejects(before({...input,...changes}),/uncertain/);
+  assert.equal((await c.witness.inspect()).pending,null);assert.equal(f.sends,0);
+  // Even the real adapter cannot accept a different mission that happens to
+  // reuse the same account, goal ID and kind.
+  f.mission.goals[0].goal.input.max=99;
+  await assert.rejects(f.invoke({execute:true,...c.hooks}),/independent original checkpoint is uncertain/);
+  assert.equal(f.sends,0);assert.equal((await c.witness.inspect()).pending,null);
+},{storage:true,withWitness:true}));
+
+test('lost independent checkpoint acknowledgement quarantines the original before any send',()=>withFixture(async f=>{
+  const c=await missionCheckpoint(f);c.independent.loseNext();
+  await assert.rejects(f.invoke({execute:true,...c.hooks}),/independent original checkpoint is uncertain/);
+  assert.equal(f.sends,0);assert.equal(f.journal.get('compute').status,'pending');
+  assert.equal((await c.independent.read()).revision,20);assert.equal((await c.local.read()).revision,19);
+  await assert.rejects(c.witness.inspect(),/uncertain/);
+  await assert.rejects(f.invoke({execute:true,...c.hooks}),/unresolved|receipts unavailable/);
+  assert.equal(f.sends,0);
+},{storage:true,withWitness:true}));
+
+test('local journal changes during asynchronous checkpoint or verification block the next send',async()=>{
+  for(const phase of ['before','after']) await withFixture(async f=>{
+    const c=await missionCheckpoint(f),hooks={...c.hooks};
+    if(phase==='before') hooks.beforeOriginalBroadcast=async input=>{
+      const ack=await c.hooks.beforeOriginalBroadcast(input);
+      f.journal.put(input.goal_id,{...f.journal.get(input.goal_id),tx_hash:syntheticHash(99)});
+      return ack;
+    };
+    if(phase==='after') hooks.afterOriginalVerified=async input=>{
+      const ack=await c.hooks.afterOriginalVerified(input);
+      f.journal.put(input.goal_id,{...f.journal.get(input.goal_id),fingerprint:'f'.repeat(64)});
+      return ack;
+    };
+    await assert.rejects(f.invoke({execute:true,...hooks}),/original.*changed|pending.*changed|journal.*changed|original.*differs|original journal is uncertain/);
+    assert.equal(f.sends,phase==='before'?0:1);assert.equal(f.journal.get('price'),undefined);
+  },{storage:true,withWitness:true});
+});
+
+test('missing independent FINAL verifier blocks advancement; recovery verifies the original without resending',()=>withFixture(async f=>{
+  const c=await missionCheckpoint(f,{verifyMissionReceipt:null});
+  await assert.rejects(f.invoke({execute:true,...c.hooks}),/independent original verification is uncertain/);
+  assert.equal(f.sends,1);assert.equal(f.journal.get('compute').status,'completed');
+  assert.equal((await c.witness.inspect()).pending?.tx_hash,f.journal.get('compute').tx_hash);
+  assert.deepEqual((await c.witness.inspect()).mission,[]);assert.equal(f.journal.get('price'),undefined);
+  f.reopen();
+  await assert.rejects(f.invoke({recoverOnly:true,signers:{},afterOriginalVerified:c.hooks.afterOriginalVerified}),/independent original verification is uncertain/);
+  const recovered=createV14OriginalWitness({binding:c.binding,localStore:c.local,independentStore:c.independent,
+    verifyMissionReceipt:async({txHash})=>{
+      const receipt=await f.provider.txStatusReceipts(txHash,owner,'FINAL');
+      assert.equal(receipt.final_execution_status,'FINAL');assert.equal(receipt.transaction.hash,txHash);
+      return {tx_hash:txHash,final_block_hash:blockHash};
+    }});
+  const after=createV14MissionOriginalVerifier({witness:recovered});
+  const replay=await f.invoke({recoverOnly:true,signers:{},afterOriginalVerified:after});
+  assert.equal(replay.status,'RECOVERED_PARTIAL');assert.equal(replay.new_payments,0);assert.equal(f.sends,1);
+  assert.equal((await recovered.inspect()).mission[0].tx_hash,f.journal.get('compute').tx_hash);
+  assert.equal((await recovered.inspect()).next_mission_goal,'price');
+},{storage:true,withWitness:true}));
+
+test('ambiguous synthetic submission recovers only the retained original and waits for FINAL before advancing',()=>withFixture(async f=>{
+  const c=await missionCheckpoint(f);
+  await assert.rejects(f.invoke({execute:true,...c.hooks}),/unresolved/);
+  const original=f.journal.get('compute').tx_hash;
+  assert.equal(f.sends,1);assert.equal((await c.witness.inspect()).pending?.tx_hash,original);
+  f.setReceiptFailure(true);
+  await assert.rejects(f.invoke({recoverOnly:true,signers:{},afterOriginalVerified:c.hooks.afterOriginalVerified}),/receipts unavailable/);
+  assert.equal(f.sends,1);assert.deepEqual((await c.witness.inspect()).mission,[]);
+  f.setReceiptFailure(false);f.reopen();
+  const result=await f.invoke({recoverOnly:true,signers:{},afterOriginalVerified:c.hooks.afterOriginalVerified});
+  assert.equal(result.status,'RECOVERED_PARTIAL');assert.equal(result.new_payments,0);assert.equal(f.sends,1);
+  const state=await c.witness.inspect();
+  assert.equal(state.pending,null);assert.equal(state.mission[0].tx_hash,original);assert.equal(state.next_mission_goal,'price');
+  assert.equal(f.journal.get('price'),undefined);
+},{storage:true,withWitness:true,ambiguous:true}));

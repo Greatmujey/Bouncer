@@ -21,6 +21,7 @@ import { withExclusiveJournalOperation } from './journal-operation.mjs';
 import { assertJournalScope } from './journal-write.mjs';
 import { readNativeJournal, writeConfirmedNativeJournal, assertNativeJournalUnchanged } from './synchronous-native-journal.mjs';
 import { validateNativeBroadcastGuard, checkNativeBroadcastGuard } from './native-broadcast-guard.mjs';
+import {validateNativeOriginalCheckpoint,retainNativeOriginalBeforeBroadcast} from './native-original-checkpoint.mjs';
 import { MARKET_SUMMARY_SHA256, validateMarketInput, verifyMarketOutput } from './market-summary.mjs';
 
 const { KeyPair, KeyPairSigner } = nearApi;
@@ -248,8 +249,9 @@ async function recoverOutlayerGoalUnlocked({ goal: rawGoal, provider, journal, p
 }
 
 /** Preflight, one guarded send, and chain-based recovery without resending. */
-async function runOutlayerGoalUnlocked({ goal: rawGoal, provider, account, publicKey, journal, execute = false, log = console.log, beforeBroadcast }) {
+async function runOutlayerGoalUnlocked({ goal: rawGoal, provider, account, publicKey, journal, execute = false, log = console.log, beforeBroadcast, beforeOriginalBroadcast }) {
   validateNativeBroadcastGuard(beforeBroadcast);
+  validateNativeOriginalCheckpoint(beforeOriginalBroadcast);
   if (journal?.sharedDirectV3 === true) throw new Error('shared buyer journal does not coordinate OutLayer payments');
   const goal = validateOutlayerGoal(rawGoal);
   assertJournalScope(journal, goal.contract_id, goal.owner_account_id);
@@ -294,6 +296,9 @@ async function runOutlayerGoalUnlocked({ goal: rawGoal, provider, account, publi
   const pending = { fingerprint, status: 'pending', outlayer_goal: goal, agent_public_key: String(publicKey),
     tx_hash: txHash, started_at: new Date().toISOString() };
   writeConfirmedNativeJournal(journal, goal.id, pending, null);
+  if(beforeOriginalBroadcast) await retainNativeOriginalBeforeBroadcast(beforeOriginalBroadcast,{goalId:goal.id,
+    kind:Object.hasOwn(goal.input,'price_usd_micros')?'market':'random',txHash,fingerprint,
+    owner:goal.owner_account_id,vault:goal.contract_id});
   try {
     // Recheck after the durable write as well. If freshness expired during
     // signing/fsync, retain the pending original and do not broadcast.

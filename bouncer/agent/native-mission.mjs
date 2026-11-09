@@ -16,6 +16,7 @@ import { runNativeResource } from './mixed-mission.mjs';
 import { withExclusiveJournalOperation } from './journal-operation.mjs';
 import { assertJournalScope } from './journal-write.mjs';
 import { readNativeJournal, writeConfirmedNativeJournal } from './synchronous-native-journal.mjs';
+import {validateNativeOriginalCheckpoint,verifyNativeOriginalCheckpoint} from './native-original-checkpoint.mjs';
 
 const MAX_U128 = (1n << 128n) - 1n;
 const plain = value => value !== null && typeof value === 'object' && !Array.isArray(value) &&
@@ -222,7 +223,11 @@ export async function runNativeMission(options = {}) {
   return withExclusiveJournalOperation(options?.journal, scope => runNativeMissionUnlocked(options, scope), options?.exclusiveJournalScope);
 }
 async function runNativeMissionUnlocked({ mission: raw, signers = {}, provider, journal, execute = false, recoverOnly = false,
-  checkpointGoalId, log = console.log, runners = {} }, scope) {
+  checkpointGoalId, beforeOriginalBroadcast, afterOriginalVerified, log = console.log, runners = {} }, scope) {
+  validateNativeOriginalCheckpoint(beforeOriginalBroadcast);validateNativeOriginalCheckpoint(afterOriginalVerified);
+  // Execution requires the pair: retaining without checking a receipt cannot
+  // safely advance to a later goal. Recovery receives only the verifier.
+  if(execute && (beforeOriginalBroadcast===undefined)!==(afterOriginalVerified===undefined))throw new Error('both native original checkpoint hooks are required');
   if (typeof execute !== 'boolean' || typeof recoverOnly !== 'boolean' || (execute && recoverOnly) || typeof log !== 'function' ||
       !provider || !plain(signers) || !plain(runners) || (checkpointGoalId !== undefined &&
         (!execute || typeof checkpointGoalId !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(checkpointGoalId)))) {
@@ -233,6 +238,9 @@ async function runNativeMissionUnlocked({ mission: raw, signers = {}, provider, 
   if ((execute || recoverOnly) && !journal) throw new Error('native mission execution or recovery requires the original exclusive journal');
   if (recoverOnly && Object.keys(signers).length) throw new Error('native mission recovery must not receive signing keys');
   const mission = validateNativeMission(raw);
+  const missionSha256=crypto.createHash('sha256').update(JSON.stringify(mission)).digest('hex');
+  const beforeForMission=beforeOriginalBroadcast ? input=>beforeOriginalBroadcast(Object.freeze({...input,mission_sha256:missionSha256})) : undefined;
+  const afterForMission=afterOriginalVerified ? input=>afterOriginalVerified(Object.freeze({...input,mission_sha256:missionSha256})) : undefined;
   const pinnedStorage = mission.goals.find(item => item.kind === 'storage')?.goal;
   assertJournalScope(journal, mission.contract_id, mission.owner_account_id);
   const state = initialJournal(mission, journal), deliveries = new Map();
@@ -269,6 +277,12 @@ async function runNativeMissionUnlocked({ mission: raw, signers = {}, provider, 
     await assertLegExecutedAtPinnedVault(item, result, provider, pinnedStorage);
     assertSnapshot(mission, journal, state, item.goal.id);
     if (!isDeepStrictEqual(copy(readNativeJournal(journal, item.goal.id)), current)) throw new Error('native original changed during receipt check');
+    if(afterOriginalVerified && (execute || recoverOnly)) {
+      await verifyNativeOriginalCheckpoint(afterForMission,{goalId:item.goal.id,kind:item.kind,txHash:current.tx_hash,
+        fingerprint:current.fingerprint,owner:mission.owner_account_id,vault:mission.contract_id});
+      assertSnapshot(mission,journal,state,item.goal.id);
+      if(!isDeepStrictEqual(copy(readNativeJournal(journal,item.goal.id)),current))throw new Error('native original changed during independent verification');
+    }
     rememberResult(item, result, current, deliveries);
     state.entries.set(item.goal.id, current);
   }
@@ -326,7 +340,7 @@ async function runNativeMissionUnlocked({ mission: raw, signers = {}, provider, 
     catch { return { status: 'BLOCKED', stage: 'stale-oracle', goal_id: item.goal.id, new_payments: newPayments }; }
     if (pinnedStorage) await assertPinnedNativeStorageVault(provider, pinnedStorage, { finality: 'final' });
     assertSnapshot(mission, journal, state);
-    const result = await call(item, { execute: true, beforeBroadcast: () => {
+    const result = await call(item, { execute: true, ...(beforeForMission ? {beforeOriginalBroadcast:beforeForMission} : {}), beforeBroadcast: () => {
       guardFresh(deliveries);
       assertSnapshot(mission, journal, state, item.goal.id);
     } });
@@ -341,6 +355,12 @@ async function runNativeMissionUnlocked({ mission: raw, signers = {}, provider, 
     await assertLegExecutedAtPinnedVault(item, result, provider, pinnedStorage);
     assertSnapshot(mission, journal, state, item.goal.id);
     if (!isDeepStrictEqual(copy(readNativeJournal(journal, item.goal.id)), original)) throw new Error('native original changed during receipt check');
+    if(afterOriginalVerified) {
+      await verifyNativeOriginalCheckpoint(afterForMission,{goalId:item.goal.id,kind:item.kind,txHash:original.tx_hash,
+        fingerprint:original.fingerprint,owner:mission.owner_account_id,vault:mission.contract_id});
+      assertSnapshot(mission,journal,state,item.goal.id);
+      if(!isDeepStrictEqual(copy(readNativeJournal(journal,item.goal.id)),original))throw new Error('native original changed during independent verification');
+    }
     rememberResult(item, result, original, deliveries, { newlyPaid: true });
     state.entries.set(item.goal.id, original);
     newPayments++;

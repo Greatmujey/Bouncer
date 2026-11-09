@@ -13,6 +13,7 @@ import { withExclusiveJournalOperation } from './journal-operation.mjs';
 import { assertJournalScope } from './journal-write.mjs';
 import { readNativeJournal, writeConfirmedNativeJournal, assertNativeJournalUnchanged } from './synchronous-native-journal.mjs';
 import { validateNativeBroadcastGuard, checkNativeBroadcastGuard } from './native-broadcast-guard.mjs';
+import {validateNativeOriginalCheckpoint,retainNativeOriginalBeforeBroadcast} from './native-original-checkpoint.mjs';
 
 const VERSION = 'bouncer-agent-v14-native-storage-testnet';
 const GAS = 100n * 10n ** 12n;
@@ -154,8 +155,9 @@ async function recoverUnlocked({ goal: raw, provider, journal, publicKey, update
   return { status: 'REUSED', delivery };
 }
 
-async function runUnlocked({ goal: raw, provider, account, publicKey, journal, execute = false, log = console.log, beforeBroadcast }) {
+async function runUnlocked({ goal: raw, provider, account, publicKey, journal, execute = false, log = console.log, beforeBroadcast, beforeOriginalBroadcast }) {
   validateNativeBroadcastGuard(beforeBroadcast);
+  validateNativeOriginalCheckpoint(beforeOriginalBroadcast);
   if (journal?.sharedDirectV3 === true) throw new Error('shared buyer journal does not coordinate native storage');
   const goal = validateNativeStorageGoal(raw);
   assertJournalScope(journal, goal.contract_id, goal.owner_account_id);
@@ -198,6 +200,8 @@ async function runUnlocked({ goal: raw, provider, account, publicKey, journal, e
   const pending = { fingerprint: fingerprint(goal), status: 'pending', storage_goal: goal, agent_public_key: String(publicKey),
     tx_hash: txHash, started_at: new Date().toISOString() };
   writeConfirmedNativeJournal(journal, goal.id, pending, null);
+  if(beforeOriginalBroadcast) await retainNativeOriginalBeforeBroadcast(beforeOriginalBroadcast,
+    {goalId:goal.id,kind:'storage',txHash,fingerprint:pending.fingerprint,owner:goal.owner_account_id,vault:goal.contract_id});
   try {
     checkNativeBroadcastGuard(beforeBroadcast);
     assertNativeJournalUnchanged(journal, goal.id, pending);

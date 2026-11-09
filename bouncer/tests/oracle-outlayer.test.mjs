@@ -396,3 +396,15 @@ test('an async acknowledgement after writing the original remains recovery-only'
   f.journal.put=put;f.provider.txStatusReceipts=async()=>{throw Error('synthetic original unavailable')};
   await assert.rejects(run(f,{execute:true}),/synthetic original unavailable/);assert.equal(f.sends(),0);
 });
+
+test('independent oracle original is retained before the only synthetic broadcast',async()=>{
+  const f=fixture();let checkpoints=0;
+  const result=await run(f,{execute:true,beforeOriginalBroadcast:async original=>{
+    checkpoints++;assert.equal(f.sends(),0);assert.equal(original.goal_id,goal.id);assert.equal(original.kind,'oracle');
+    assert.equal(original.tx_hash,hash);assert.equal(original.fingerprint,f.journal.get(goal.id).fingerprint);
+    return {status:'V14_MISSION_ORIGINAL_RETAINED',goal_id:original.goal_id,tx_hash:original.tx_hash};
+  }});
+  assert.equal(result.status,'FULFILLED');assert.equal(checkpoints,1);assert.equal(f.sends(),1);
+  const failed=fixture();await assert.rejects(run(failed,{execute:true,beforeOriginalBroadcast:async()=>null}),/no broadcast was attempted/);
+  assert.equal(failed.sends(),0);assert.equal(failed.journal.get(goal.id).tx_hash,hash);
+});
