@@ -1,0 +1,53 @@
+name: Export pinned public V14 phone artifacts
+
+# Manual, public build only: no wallet, keys, payments, deployment or signing.
+# The Git blob API is used because the ordinary Actions artifact download is
+# unavailable in some restricted environments. These blobs contain public code.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CARGO_BUILD_JOBS: 2
+      EXPECTED_V14_SHA256: 28dcba2d3a4dde6e48c2dc728f264f14f7af47c83a95e829f07127bd33c699f8
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.99.1
+          targets: wasm32-unknown-unknown
+      - name: Build and verify the identified V14
+        working-directory: bouncer
+        run: |
+          cargo build --locked --manifest-path contracts/bouncer/Cargo.toml --target wasm32-unknown-unknown --release --features native-storage-v14
+          V14=contracts/bouncer/target/wasm32-unknown-unknown/release/bouncer.wasm
+          test "$(sha256sum "$V14" | cut -d' ' -f1)" = "$EXPECTED_V14_SHA256"
+          printf 'pub const EXPECTED_V14_SHA256: [u8; 32] = [' > integration/v14-phone-loader/src/pin.rs
+          printf '%s' "$EXPECTED_V14_SHA256" | sed -E 's/(..)/0x\1,/g' >> integration/v14-phone-loader/src/pin.rs
+          printf '];\n' >> integration/v14-phone-loader/src/pin.rs
+          cargo build --locked --manifest-path integration/v14-phone-loader/Cargo.toml --target wasm32-unknown-unknown --release
+      - name: Publish three public Git blobs and their hashes
+        working-directory: bouncer
+        run: |
+          set -eu
+          cp contracts/bouncer/target/wasm32-unknown-unknown/release/bouncer.wasm "$RUNNER_TEMP/v14.wasm"
+          cp integration/v14-phone-loader/target/wasm32-unknown-unknown/release/bouncer_v14_phone_loader.wasm "$RUNNER_TEMP/loader.wasm"
+          node -e 'const fs=require("fs"),z=require("zlib");fs.writeFileSync(process.argv[2],z.deflateRawSync(fs.readFileSync(process.argv[1]),{level:9}));' "$RUNNER_TEMP/v14.wasm" "$RUNNER_TEMP/v14.deflate"
+          for name in v14.wasm loader.wasm v14.deflate; do
+            file="$RUNNER_TEMP/$name"
+            # --input avoids shell argument-size limits on the base64 payload.
+            node -e 'const fs=require("fs");fs.writeFileSync(process.argv[2],JSON.stringify({content:fs.readFileSync(process.argv[1]).toString("base64"),encoding:"base64"}));' "$file" "$RUNNER_TEMP/blob.json"
+            blob=$(gh api --method POST "repos/$GITHUB_REPOSITORY/git/blobs" --input "$RUNNER_TEMP/blob.json" --jq .sha)
+            sha256=$(sha256sum "$file" | cut -d' ' -f1)
+            bytes=$(wc -c < "$file" | tr -d ' ')
+            echo "::notice title=Public artifact $name::$blob $sha256 $bytes"
+          done

@@ -20,11 +20,15 @@ const compiled=await build({stdin:{contents:[
   "export * from './web-src/v14-browser-witness-store.mjs';",
   "export * from './web-src/v14-browser-original-witness.mjs';",
   "export * from './web-src/v14-browser-independent-store.mjs';",
+  "export * from './web-src/v14-phone-wallet-plan.mjs';",
+  "export * from './web-src/v14-phone-wallet-prompt.mjs';",
 ].join('\n'),resolveDir:process.cwd(),sourcefile:'synthetic-browser-original-entry.mjs'},bundle:true,format:'iife',
   globalName:'BouncerSyntheticOriginal',platform:'browser',target:'es2020',write:false});
-const {review,binding}=fixture(),key='a'.repeat(64),capability='b'.repeat(64),originalHash=nearApi.utils.serialize.base_encode(Buffer.alloc(32,33));
-const input={review,scope,owner,vault,key,capability,originalHash,stageId:binding.stages[0].id};
-const digest=value=>createHash('sha256').update(value,'utf8').digest('hex');
+const {review,binding,inputs}=fixture(),key='a'.repeat(64),capability='b'.repeat(64),originalHash=nearApi.utils.serialize.base_encode(Buffer.alloc(32,33));
+const digest=value=>createHash('sha256').update(value).digest('hex');
+const input={review,scope,owner,vault,key,capability,originalHash,blockHash:nearApi.utils.serialize.base_encode(Buffer.alloc(32,90)),stageId:binding.stages[0].id,
+  loaderBase64:Buffer.from(inputs.loaderWasm).toString('base64'),compressedBase64:Buffer.from(inputs.compressed).toString('base64'),
+  trustedArtifacts:{...inputs.trustedArtifacts,compressed_sha256:digest(inputs.compressed)}};
 const origin='https://bouncer-near.vercel.app';
 const browser=await chromium.launch({executablePath,args:['--no-sandbox','--disable-gpu'],headless:true});
 async function initialize(page,brandNew) {
@@ -70,18 +74,46 @@ try {
       unexpected.push(url);return route.abort('failed');
     });
     await page.goto(`${origin}/`);await page.addScriptTag({content:compiled.outputFiles[0].text});
+    const plan=await page.evaluate(async input=>{
+      const bytes=value=>Uint8Array.from(atob(value),char=>char.charCodeAt(0));
+      const checked=await window.BouncerSyntheticOriginal.verifyV14BrowserPhonePlan({review:input.review,
+        trustedReviewSha256:input.review.review_sha256,trustedArtifacts:input.trustedArtifacts,
+        loaderBytes:bytes(input.loaderBase64),compressedBytes:bytes(input.compressedBase64)});
+      return {commitments:checked.stages.map(stage=>stage.action_commitment_sha256),authorized:checked.wallet_prompt_authorized};
+    },input);
+    assert.deepEqual(plan,{commitments:review.stages.map(stage=>stage.action_commitment_sha256),authorized:false});
     assert.deepEqual(await initialize(page,true),{secure:true,indexedDB:true});
     const first=await page.evaluate(async input=>{
-      await window.syntheticWitness.reserve();await window.syntheticWitness.claimWalletStage(input.stageId);
+      await window.syntheticWitness.reserve();let walletCalls=0,preflights=0;
+      const wallet={manifest:{features:{signAndSendTransaction:true}},async signAndSendTransaction(request){
+        walletCalls++;const state=await window.syntheticWitness.inspect();
+        if(state.pending?.stage_id!==input.stageId||request.network!=='testnet')throw Error('claim missing');
+        throw Error('synthetic wallet closed without a result');
+      }};
+      const verifyPreflight=async({stageId,prior})=>{
+        preflights++;const stage=input.review.stages.find(item=>item.id===stageId);
+        return {status:'V14_SETUP_PREFLIGHT_MATCH',network:'testnet',owner:input.owner,vault:input.vault,stage_id:stageId,
+          review_sha256:input.review.review_sha256,action_commitment_sha256:stage.action_commitment_sha256,
+          prior_original_hashes:prior.map(item=>item.tx_hash),final_block_hash:input.blockHash,checked_at_ms:Date.now(),
+          wallet_transaction_authorized:false,transaction_sent:false};
+      };
+      const bytes=value=>Uint8Array.from(atob(value),char=>char.charCodeAt(0));
+      const prompt=await window.BouncerSyntheticOriginal.prepareV14PhoneWalletPrompt({review:input.review,
+        trustedReviewSha256:input.review.review_sha256,trustedArtifacts:input.trustedArtifacts,
+        loaderBytes:bytes(input.loaderBase64),compressedBytes:bytes(input.compressedBase64),scopeId:input.scope,stageId:input.stageId,
+        witness:window.syntheticWitness,wallet,verifyPreflight,location:window.location,isTopLevel:true,isCurrent:()=>true});
+      const result=await prompt.invoke();
       const record=await new Promise((resolve,reject)=>{
         const request=indexedDB.open('bouncer-v14-browser-witness-v1',1);
         request.onsuccess=()=>{const db=request.result,tx=db.transaction('originals','readonly'),get=tx.objectStore('originals').get(input.scope);
           get.onsuccess=()=>{resolve(get.result);db.close()};get.onerror=()=>reject(Error('read failed'))};request.onerror=()=>reject(Error('open failed'));
       });
       const encoded=JSON.stringify(record);
-      return {revision:record.revision,encrypted:!encoded.includes(input.review.review_sha256)&&!encoded.includes(input.key)&&!encoded.includes('wallet_claim')};
+      return {revision:record.revision,encrypted:!encoded.includes(input.review.review_sha256)&&!encoded.includes(input.key)&&!encoded.includes('wallet_claim'),
+        walletCalls,preflights,walletResult:result.status};
     },input);
-    assert.deepEqual(first,{revision:2,encrypted:true});assert.equal(remote.revision,2);
+    assert.deepEqual(first,{revision:2,encrypted:true,walletCalls:1,preflights:2,walletResult:'WALLET_RESULT_UNKNOWN'});
+    assert.equal(remote.revision,2);
     // Navigation/reload preserves the encrypted local record, not a new scope.
     await page.reload();await page.addScriptTag({content:compiled.outputFiles[0].text});await initialize(page,false);
     const restored=await page.evaluate(async input=>{

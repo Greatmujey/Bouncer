@@ -21,6 +21,9 @@ const exact = (value, fields) => value !== null && typeof value === 'object' && 
   Object.keys(value).length === fields.length && fields.every(field => Object.hasOwn(value,field));
 const fail = () => new Error('V14 original checkpoint copies differ or are uncertain; stop and reconcile, never repeat a wallet prompt');
 const copy = value => structuredClone(value);
+const browserWitnesses = new WeakSet();
+/** In-realm guard only; a compromised page or substituted stores remain trusted. */
+export const isV14BrowserOriginalWitness = value => browserWitnesses.has(value);
 async function sha(crypto, value) {
   return [...new Uint8Array(await crypto.subtle.digest('SHA-256',text.encode(value)))].map(x=>x.toString(16).padStart(2,'0')).join('');
 }
@@ -93,7 +96,7 @@ export async function createV14BrowserOriginalWitness({review:rawReview,trustedR
       } catch { failed=true; throw fail(); }
     } finally { busy=false; }
   }
-  return Object.freeze({
+  const result=Object.freeze({
     inspect:async()=> (await readBoth()).state,
     reserve:()=>mutate('reserve',(_state,prior)=>prior.revision===0?binding:null),
     claimWalletStage:stageId=>mutate('wallet_claim',state=>{
@@ -113,4 +116,6 @@ export async function createV14BrowserOriginalWitness({review:rawReview,trustedR
       return {stage_id:stageId,tx_hash:checked.tx_hash,final_block_hash:checked.final_block_hash};
     }),
   });
+  browserWitnesses.add(result);
+  return result;
 }

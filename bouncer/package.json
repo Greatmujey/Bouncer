@@ -72,6 +72,7 @@
     "@walletconnect/relay-auth": "1.1.0",
     "@walletconnect/sign-client": "2.26.0",
     "express": "5.2.1",
+    "fflate": "0.8.2",
     "near-api-js": "6.5.1",
     "pg": "8.23.1",
     "qrcode": "1.5.4",
