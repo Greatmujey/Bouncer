@@ -690,6 +690,23 @@ test('phone recovery reads and unlocks a synthetic encrypted kit without a trans
   assert.equal(browser.nodes['wallet-bootstrap-recovery-export'].disabled,true);
   assert.match(browser.nodes['wallet-bootstrap-recovery-status'].textContent,/choose a bouncer encrypted/i);
   assert.equal(config.messageRequests.length,5,'offline imports and unlocks do not open the wallet');
+  // An authenticated revision-zero file can have no hashes even when a send
+  // happened elsewhere. Keep the warning visible and never infer non-execution.
+  const emptyBody={...body,revision:0,head_sha256:'0'.repeat(64),events:[]};
+  const emptyMac=createHmac('sha256',Buffer.from(capability,'hex')).update(`bouncer-v14-bootstrap-export-v1\0${JSON.stringify(emptyBody)}`).digest('hex');
+  const emptyLocal=JSON.stringify({...emptyBody,history_hmac_sha256:emptyMac});
+  browser.nodes['wallet-bootstrap-recovery-file'].files=[{size:Buffer.byteLength(emptyLocal),text:async()=>emptyLocal}];
+  await browser.nodes['wallet-bootstrap-recovery-import'].click();
+  assert.equal(browser.nodes['wallet-bootstrap-recovery-originals'].hidden,true);
+  browser.nodes['wallet-bootstrap-recovery-passphrase'].value=passphrase;
+  await browser.nodes['wallet-bootstrap-recovery-unlock'].click();
+  const emptyOriginals=browser.nodes['wallet-bootstrap-recovery-originals'];
+  assert.equal(emptyOriginals.hidden,false,'missing hashes must not hide the recovery warning');
+  assert.equal(emptyOriginals.children.length,1,'no transaction links may be invented');
+  assert.match(emptyOriginals.children[0].textContent,/File integrity matched.*no create or deployment transaction hashes.*does not prove whether a transaction happened.*do not repeat.*latest-head and receipt verification/i);
+  assert.equal(emptyOriginals.children[0].attributes.role,'status');
+  assert.equal(config.messageRequests.length,5,'local no-hash recovery must not request a signature');
+  assert.equal(config.transactionRequests,undefined);
   browser.nodes['wallet-bootstrap-match-passphrase'].value=passphrase;
   await browser.nodes['wallet-disconnect'].click();
   assert.equal(browser.nodes['wallet-bootstrap-match-passphrase'].value,'');

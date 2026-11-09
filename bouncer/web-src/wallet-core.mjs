@@ -598,12 +598,21 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     bootstrapRecoveryOriginals.replaceChildren();
     const prefix = history.history_authentication_verified ? 'File integrity matched' : 'Unverified online history';
     const originals = [{label:'Create original',hash:history.create_original},{label:'Deployment original',hash:history.deploy_original}];
-    for (const item of originals.filter(item => item.hash)) {
+    const retained = originals.filter(item => item.hash);
+    for (const item of retained) {
       const link = doc.createElement('a'); link.href = `https://testnet.nearblocks.io/txns/${item.hash}`;
       link.target = '_blank'; link.rel = 'noopener noreferrer'; link.textContent = `${prefix} · ${item.label}: ${item.hash}`;
       bootstrapRecoveryOriginals.append(link);
     }
-    bootstrapRecoveryOriginals.hidden = !bootstrapRecoveryOriginals.childElementCount;
+    const note = doc.createElement('p'); note.className = 'account-view-status';
+    note.setAttribute('role','status'); note.setAttribute('aria-live','polite');
+    note.textContent = retained.length === 0
+      ? `${prefix}. This recovery file contains no create or deployment transaction hashes. That does not prove whether a transaction happened. Keep this file and all other copies; do not repeat an uncertain transaction. Use the read-only online checkpoint check below; latest-head and receipt verification are still required.`
+      : retained.length < originals.length
+        ? `${prefix}. One create or deployment transaction hash is not recorded in this recovery file. Its absence does not prove whether a transaction happened. Do not repeat an uncertain transaction; latest-head and receipt verification are still required.`
+        : `${prefix}. These are recorded hashes only; latest-head and on-chain receipt verification are still required. Never repeat an uncertain transaction.`;
+    bootstrapRecoveryOriginals.append(note);
+    bootstrapRecoveryOriginals.hidden = false;
   }
   function renderMissionReceipts(deliveries) {
     if (!missionReceipts) return;
