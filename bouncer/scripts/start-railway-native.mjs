@@ -27,10 +27,12 @@ export function railwayNativePort(env=process.env) {
 /** No input is trusted or reflected. No wallet, journal, agent keys or mission
  * runtime is loaded in standby. Optional diagnostics are public reads only,
  * never invoked by a request, and do not establish mission readiness. */
-export function createRailwayNativeStandby({readiness,setupHandler}={}) {
+export function createRailwayNativeStandby({readiness,setupHandler,webHandler}={}) {
   if(readiness!==undefined && typeof readiness?.snapshot!=='function')throw new Error('invalid standby diagnostics');
   if(setupHandler!==undefined && typeof setupHandler!=='function')throw new Error('invalid read-only setup handler');
+  if(webHandler!==undefined && typeof webHandler!=='function')throw new Error('invalid public website handler');
   const server=http.createServer((req,res)=>{
+    if(webHandler && webHandler(req,res))return;
     if(setupHandler && (req.url==='/api/native-mission/v14-preflight'||req.url==='/api/native-mission/v14-receipt'||
         req.url==='/api/native-mission/v14-completed-history')) {
       void setupHandler(req,res).catch(()=>{if(!res.headersSent)res.writeHead(503,headers);res.end(JSON.stringify({error:'unavailable'}))});
@@ -74,9 +76,14 @@ async function main() {
     setupHandler=createV14SetupReadHttpHandler({service,siteOrigin:process.env.BOUNCER_WALLET_ORIGIN,
       backendOrigin:process.env.BOUNCER_NATIVE_MISSION_BACKEND_ORIGIN,proxySecret:process.env.BOUNCER_NATIVE_MISSION_PROXY_SECRET});
   }
-  const port=railwayNativePort(),server=createRailwayNativeStandby({readiness,setupHandler});
+  // The existing Railway service is a temporary static testnet website as
+  // well as a standby backend. The exact hosted origin is fixed in the
+  // handler; this does not enable any backend transaction or mission route.
+  const {createRailwayStandbyWeb}=await import('../agent/railway-standby-web.mjs');
+  const webHandler=createRailwayStandbyWeb();
+  const port=railwayNativePort(),server=createRailwayNativeStandby({readiness,setupHandler,webHandler});
   await new Promise((resolve,reject)=>server.listen(port,'0.0.0.0',resolve).once('error',reject));
-  console.log(`Bouncer testnet backend in STANDBY on port ${port}; no mission, wallet or transactions are enabled.${setupHandler?' Read-only setup verification is enabled.':''}`);
+  console.log(`Bouncer testnet backend in STANDBY on port ${port}; static workspace available, no backend transactions or missions enabled.${setupHandler?' Read-only setup verification is enabled.':''}`);
   if(readiness)void readiness.start().catch(()=>{});
   let stopping=false;
   const shutdown=()=>{if(stopping)return;stopping=true;server.close(error=>{if(error)process.exitCode=1});server.closeIdleConnections?.()};

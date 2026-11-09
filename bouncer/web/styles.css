@@ -183,3 +183,7 @@ body.wallet-dialog-open{overflow:hidden}
 .native-mission-manifest{max-height:220px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;background:#101f16;border:1px solid #3c5543;border-radius:8px;padding:10px;color:#d8edce;font-size:10px;line-height:1.5}
 .native-mission-receipts{display:grid;gap:5px;margin-top:10px}.native-mission-receipts a{color:#b8ef9e;font-size:11px;overflow-wrap:anywhere}
 .native-mission-consent{display:flex;align-items:flex-start;gap:8px;margin-top:12px;color:#e3efdf;font-size:11px;line-height:1.5}.native-mission-consent input{margin-top:2px;flex:none}
+
+/* Only injected on the temporary Railway testnet workspace. */
+.railway-standby-banner{margin:0 0 20px;padding:12px 15px;border:1px solid #cddd9d;border-radius:12px;background:#f5f9e9;color:#314216;font-size:.8rem;line-height:1.55}
+.railway-standby-banner strong{color:#1a2a10}
