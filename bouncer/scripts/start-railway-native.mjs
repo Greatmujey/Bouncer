@@ -31,7 +31,8 @@ export function createRailwayNativeStandby({readiness,setupHandler}={}) {
   if(readiness!==undefined && typeof readiness?.snapshot!=='function')throw new Error('invalid standby diagnostics');
   if(setupHandler!==undefined && typeof setupHandler!=='function')throw new Error('invalid read-only setup handler');
   const server=http.createServer((req,res)=>{
-    if(setupHandler && (req.url==='/api/native-mission/v14-preflight'||req.url==='/api/native-mission/v14-receipt')) {
+    if(setupHandler && (req.url==='/api/native-mission/v14-preflight'||req.url==='/api/native-mission/v14-receipt'||
+        req.url==='/api/native-mission/v14-completed-history')) {
       void setupHandler(req,res).catch(()=>{if(!res.headersSent)res.writeHead(503,headers);res.end(JSON.stringify({error:'unavailable'}))});
       return;
     }

@@ -7,10 +7,10 @@
 import { isIP } from 'node:net';
 import { readBoundedBytes } from '../shared/bounded-json.mjs';
 
-export const NATIVE_PROXY_ACTIONS = Object.freeze(['config','preview','challenge','execute','originals','recover','v14-preflight','v14-receipt']);
+export const NATIVE_PROXY_ACTIONS = Object.freeze(['config','preview','challenge','execute','originals','recover','v14-preflight','v14-receipt','v14-completed-history']);
 export const DEFAULT_WALLET_ORIGIN = 'https://bouncer-near.vercel.app';
-const MAX_BODY = 8192, MAX_SETUP_BODY = 24_000, MAX_RESPONSE = 131072;
-const setupAction = action => action==='v14-preflight'||action==='v14-receipt';
+const MAX_BODY = 8192, MAX_SETUP_BODY = 24_000, MAX_HISTORY_BODY = 48_000, MAX_RESPONSE = 131072;
+const setupAction = action => ['v14-preflight','v14-receipt','v14-completed-history'].includes(action);
 const noStore = { 'content-type':'application/json; charset=utf-8', 'cache-control':'no-store',
   'x-content-type-options':'nosniff', 'referrer-policy':'no-referrer' };
 const exactRoute = action => `/api/native-mission/${action}`;
@@ -99,7 +99,7 @@ export function createVercelNativeMissionProxy({ action, env = process.env, fetc
       return reply(res, 403, {error:'unavailable'});
     }
     let bytes;
-    try { if (!config) bytes = await requestBody(req,setupAction(action)?MAX_SETUP_BODY:MAX_BODY); }
+    try { if (!config) bytes = await requestBody(req,action==='v14-completed-history'?MAX_HISTORY_BODY:setupAction(action)?MAX_SETUP_BODY:MAX_BODY); }
     catch { return reply(res, 400, {error:'unavailable',do_not_retry:true}); }
     try {
       // Neither cookies nor arbitrary client headers are forwarded. TLS and a

@@ -16,7 +16,7 @@ import {V14_PHONE_RESEARCH_ARTIFACTS as pins,V14_PHONE_RESEARCH_SIZES as sizes} 
 import {V14_TESTNET_ARTIFACT} from '../shared/v14-testnet-artifact.mjs';
 import {ReadOnlyNearReceiptProvider} from './read-only-near-receipts.mjs';
 import {V14_SETUP_TESTNET_RPC,createV14SetupRpcVerifier} from './v14-setup-rpc-verifier.mjs';
-import {createV14SetupStagePreflight} from './v14-setup-stage-preflight.mjs';
+import {createV14SetupStagePreflight,createV14CompletedSetupHistoryVerifier} from './v14-setup-stage-preflight.mjs';
 import {verifyV14PhoneResearchPlan} from './native-v14-phone-plan.mjs';
 import {deriveV14OriginalBinding} from './v14-original-witness.mjs';
 
@@ -70,6 +70,23 @@ export function createV14SetupReadService({provider,now=Date.now}={}) {
         const {inputs,binding}=planFor(request.review,request.scopeId);
         const verify=createV14SetupRpcVerifier({planInputs:inputs,provider,now});
         return await verify({binding,stageId:request.stageId,txHash:request.txHash});
+      }catch{throw fail()}
+    },
+    // The only input is public checkpoint history. Its embedded review is
+    // reconstructed against the pinned artifacts but is NOT treated as an
+    // independently trusted latest head or as owner authorization.
+    async completedHistory(request) {
+      try {
+        if(!exact(request,['scopeId','history']))throw fail();
+        const history=structuredClone(request.history);
+        if(!history||typeof history!=='object'||Array.isArray(history)||
+            Buffer.byteLength(JSON.stringify(history),'utf8')>45_000||!Array.isArray(history.events)||
+            typeof history.events[0]!=='string')throw fail();
+        const first=JSON.parse(history.events[0]);
+        if(first?.type!=='reserve')throw fail();
+        const {inputs}=planFor(first?.data?.public_review,request.scopeId);
+        const verify=createV14CompletedSetupHistoryVerifier({planInputs:inputs,provider,now});
+        return await verify({scopeId:request.scopeId,history,trustedRevision:history.revision,trustedHeadSha256:history.head_sha256});
       }catch{throw fail()}
     },
   });

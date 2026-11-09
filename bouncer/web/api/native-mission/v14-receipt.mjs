@@ -29,12 +29,13 @@ async function readBoundedBytes(response, { maxBytes = 64 * 1024, label = "HTTP"
 }
 
 // agent/native-mission-proxy.mjs
-var NATIVE_PROXY_ACTIONS = Object.freeze(["config", "preview", "challenge", "execute", "originals", "recover", "v14-preflight", "v14-receipt"]);
+var NATIVE_PROXY_ACTIONS = Object.freeze(["config", "preview", "challenge", "execute", "originals", "recover", "v14-preflight", "v14-receipt", "v14-completed-history"]);
 var DEFAULT_WALLET_ORIGIN = "https://bouncer-near.vercel.app";
 var MAX_BODY = 8192;
 var MAX_SETUP_BODY = 24e3;
+var MAX_HISTORY_BODY = 48e3;
 var MAX_RESPONSE = 131072;
-var setupAction = (action) => action === "v14-preflight" || action === "v14-receipt";
+var setupAction = (action) => ["v14-preflight", "v14-receipt", "v14-completed-history"].includes(action);
 var noStore = {
   "content-type": "application/json; charset=utf-8",
   "cache-control": "no-store",
@@ -127,7 +128,7 @@ function createVercelNativeMissionProxy({ action, env = process.env, fetchImpl =
     }
     let bytes;
     try {
-      if (!config) bytes = await requestBody(req, setupAction(action) ? MAX_SETUP_BODY : MAX_BODY);
+      if (!config) bytes = await requestBody(req, action === "v14-completed-history" ? MAX_HISTORY_BODY : setupAction(action) ? MAX_SETUP_BODY : MAX_BODY);
     } catch {
       return reply(res, 400, { error: "unavailable", do_not_retry: true });
     }

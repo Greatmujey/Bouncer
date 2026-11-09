@@ -11,20 +11,22 @@ function reply(res,status,value) {res.writeHead(status,headers);res.end(JSON.str
 function matches(actual,expected) {
   return typeof actual==='string'&&/^[a-f0-9]{64}$/.test(actual)&&timingSafeEqual(Buffer.from(actual,'hex'),Buffer.from(expected,'hex'));
 }
-async function body(req) {
-  if(req.headers['content-length']&&(!/^\d+$/.test(req.headers['content-length'])||Number(req.headers['content-length'])>24_000))throw Error();
+async function body(req,limit) {
+  if(req.headers['content-length']&&(!/^\d+$/.test(req.headers['content-length'])||Number(req.headers['content-length'])>limit))throw Error();
   const chunks=[];let total=0;const timer=setTimeout(()=>req.destroy(),10_000);timer.unref?.();
-  try {for await(const chunk of req){total+=chunk.length;if(total>24_000)throw Error();chunks.push(chunk)}} finally {clearTimeout(timer)}
+  try {for await(const chunk of req){total+=chunk.length;if(total>limit)throw Error();chunks.push(chunk)}} finally {clearTimeout(timer)}
   if(!total)throw Error();return JSON.parse(Buffer.concat(chunks,total).toString('utf8'));
 }
 
 export function createV14SetupReadHttpHandler({service,siteOrigin,backendOrigin,proxySecret,now=Date.now}={}) {
   const origin=validateNativeProxySiteOrigin(siteOrigin),host=new URL(validateRailwayNativeBackend(backendOrigin)).host,
     secret=validateNativeProxySecret(proxySecret);
-  if(origin!==V14_ENROLLMENT_SITE||!service||typeof service.preflight!=='function'||typeof service.receipt!=='function'||typeof now!=='function')throw Error('invalid V14 read-only setup ingress');
+  if(origin!==V14_ENROLLMENT_SITE||!service||typeof service.preflight!=='function'||typeof service.receipt!=='function'||
+      typeof service.completedHistory!=='function'||typeof now!=='function')throw Error('invalid V14 read-only setup ingress');
   let active=0,count=0,windowStart=now();
   return async (req,res)=>{
-    const route=req.url==='/api/native-mission/v14-preflight'?'preflight':req.url==='/api/native-mission/v14-receipt'?'receipt':null;
+    const route=req.url==='/api/native-mission/v14-preflight'?'preflight':req.url==='/api/native-mission/v14-receipt'?'receipt':
+      req.url==='/api/native-mission/v14-completed-history'?'completedHistory':null;
     if(!route||req.method!=='POST'){req.resume();return reply(res,404,{error:'unavailable'})}
     if(req.headers.host!==host||req.headers['x-forwarded-proto']!=='https'||req.headers.origin!==origin||
         req.headers['x-bouncer-native-mission']!=='v1'||!matches(req.headers['x-bouncer-proxy-secret'],secret)||
@@ -34,7 +36,9 @@ export function createV14SetupReadHttpHandler({service,siteOrigin,backendOrigin,
     if(active>=2||count>=40){req.resume();return reply(res,429,{error:'unavailable'})}
     active++;count++;
     try {
-      const value=await body(req),fields=route==='preflight'?['review','scopeId','stageId','prior']:['review','scopeId','stageId','txHash'];
+      const value=await body(req,route==='completedHistory'?48_000:24_000),
+        fields=route==='preflight'?['review','scopeId','stageId','prior']:
+          route==='receipt'?['review','scopeId','stageId','txHash']:['scopeId','history'];
       if(!exact(value,fields))return reply(res,400,{error:'unavailable'});
       return reply(res,200,await service[route](value));
     }catch{return reply(res,409,{error:'V14_SETUP_UNAVAILABLE',do_not_retry:true})}

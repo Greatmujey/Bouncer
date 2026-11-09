@@ -293,8 +293,12 @@ separate Supabase compare-and-append schema/Edge adapter are tested with
 synthetic data. `agent/v14-setup-rpc-verifier.mjs` can check each separately
 retained setup original through the fixed read-only testnet RPC, then validate
 cumulative policy, funding and key state at one fresh FINAL block before the
-witness records verification. This is tested with synthetic receipts/state and
-still trusts the RPC; it is not yet integrated into wallet prompts. Research-only
+witness records verification. A separate completed-setup history verifier can
+re-read all six retained originals and current state before a possible backend
+handoff; it cannot prove that a caller-supplied witness head is fresh and does
+not restore a journal or authorize a mission. These checks use synthetic
+receipts/state in tests, still trust the RPC and are not integrated into live
+wallet prompts. Research-only
 owner enrollment and recovery helpers verify a
 short-lived NEP-413 message and a current testnet FullAccess key at a fresh
 FINAL block. Recovery can read the existing public history even if the
@@ -319,9 +323,13 @@ key or agent keys; those still require separate durable recovery. Research-only
 `agent/v14-mission-journal-backup.mjs` now coordinates an authenticated encrypted
 mission-journal snapshot before each witness original and again before each
 verified-result advance. A new append-only SQL design binds each ciphertext to
-the current original-stream head; its fixed-origin server transport is off by
-default and is not deployed. The SQL and adapters have only synthetic and
-isolated-database tests. Recovery inspection requires a **separately retained
+the current original-stream head. The empty schema is installed in the separate
+checkpoint project, and its fixed-origin Edge endpoint is deployed with the
+backup-enable flag absent. No owner scope or backup is provisioned; the SQL
+and adapters have passed synthetic and disposable PostgreSQL 17.11 tests. The
+updated isolated nearcore rehearsal also passed, using simulated checkpoint and
+receipt stores rather than the deployed service.
+Recovery inspection requires a **separately retained
 latest witness head** and the original journal key; it can write a separate,
 non-overwriting recovery copy, but it does not verify receipts, replace the
 active journal, fence another host or authorize execution. It also quarantines
@@ -347,14 +355,16 @@ The experimental phone prompt adapter reconstructs all six action commitments
 and requires that claim plus fresh preflight callbacks before calling a wallet.
 A read-only preflight implementation checks each retained prior original and
 fresh cumulative state at the pinned testnet RPC; synthetic integration covers
-all six stages. A separately default-off, secret-gated Railway/Vercel route and
-same-origin browser client exist in source; they are not deployed, enabled or
-connected to the live UI. The browser checkpoint bridge is also default-off
+all six stages. Separately default-off, secret-gated Railway/Vercel read routes
+and a same-origin browser client also cover the completed-history recheck;
+they are not deployed, enabled or connected to the live UI. The history route
+accepts only public checkpoint data, not capabilities, passwords or keys.
+The browser checkpoint bridge is also default-off
 and not deployed. A missing,
 evicted, rolled-back or mismatched copy stops the flow rather than silently
 creating a replacement. Synthetic desktop and phone-sized Chromium tests do
 not prove a physical phone, wallet, or browser-storage durability. Live
-wallet/UI wiring, secure Railway handoff, durable mission-journal backup and
+wallet/UI wiring, secure Railway handoff, live mission-journal backup and
 restoration remain unfinished. The separate read-only setup flags must not be interpreted as
 mission execution or loader enablement; neither is active on the deployed
 services. Public research binaries in `web/artifacts/` match the hashes in

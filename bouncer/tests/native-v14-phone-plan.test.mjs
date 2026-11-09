@@ -13,7 +13,7 @@ import { syntheticV14MeteorRequest } from '../integration/v14-synthetic-meteor.m
 import { validateKnownFirstPartyActionRequest } from '@meteorwallet/connect-shared/internal';
 import { inspectV14PhoneSetupCompletion } from '../agent/native-v14-phone-completion.mjs';
 import { createV14SetupRpcVerifier } from '../agent/v14-setup-rpc-verifier.mjs';
-import { createV14SetupStagePreflight } from '../agent/v14-setup-stage-preflight.mjs';
+import { createV14SetupStagePreflight,createV14CompletedSetupHistoryVerifier } from '../agent/v14-setup-stage-preflight.mjs';
 import { createV14SetupReadService } from '../agent/v14-setup-read-service.mjs';
 import { V14_PHONE_RESEARCH_ARTIFACTS } from '../shared/v14-phone-research-artifacts.mjs';
 import { V14_TESTNET_ARTIFACT } from '../shared/v14-testnet-artifact.mjs';
@@ -403,6 +403,41 @@ test('setup verification fails closed on a forged receipt, stale/mixed state, ch
   assert.throws(()=>createV14SetupRpcVerifier({planInputs:f.inputs,provider:otherRpc,now:f.now}),/unresolved/);
 });
 
+test('completed setup history rechecks all original receipts and current state without authorizing a handoff or mission',async()=>{
+  const f=rpcVerifierFixture({market:true}),local=witnessMemoryStore(),independent=witnessMemoryStore();
+  const witness=createV14OriginalWitness({binding:f.binding,localStore:local,independentStore:independent,verifySetupReceipt:f.verify});
+  await witness.reserve();
+  for(let i=0;i<6;i++) {
+    f.setStage(i);const stageId=f.review.stages[i].id;
+    await witness.claimWalletStage(stageId);await witness.retainWalletOriginal({stageId,txHash:f.prior[i].trustedOriginalHash});
+    await witness.verifyWalletOriginal({stageId});
+  }
+  const history=await witness.history(),verify=createV14CompletedSetupHistoryVerifier({planInputs:f.inputs,provider:f.provider,now:f.now});
+  const args={scopeId:f.binding.scope_id,history,trustedRevision:history.revision,trustedHeadSha256:history.head_sha256};
+  f.setStage(5);f.calls.length=0;
+  const result=await verify(args);
+  assert.equal(result.status,'V14_COMPLETED_SETUP_HISTORY_MATCH');assert.equal(result.final_block_hash,hash(9));
+  assert.deepEqual(result.original_hashes,f.prior.map(item=>item.trustedOriginalHash));
+  assert.deepEqual(f.calls.map(item=>item.txHash),result.original_hashes);
+  assert.ok(f.calls.every(item=>item.finality==='FINAL'));
+  assert.equal(result.independent_freshness_proven,false);assert.equal(result.journal_restored,false);
+  assert.equal(result.transaction_authorized,false);
+  f.calls.length=0;
+  await assert.rejects(verify({...args,trustedHeadSha256:'f'.repeat(64)}),/unavailable or inconsistent/);
+  const altered=structuredClone(history);altered.events[1]=altered.events[1].replace('wallet_claim','wallet_original');
+  await assert.rejects(verify({...args,history:altered}),/unavailable or inconsistent/);
+  assert.equal(f.calls.length,0);
+  const original=f.provider.txStatusReceipts;f.provider.txStatusReceipts=async(tx,signer,finality)=>{
+    const result=await original(tx,signer,finality);if(tx===f.prior[0].trustedOriginalHash)result.final_execution_status='EXECUTED';return result};
+  await assert.rejects(verify(args),/unavailable or inconsistent/);f.provider.txStatusReceipts=original;
+  f.state.ownerKeys.keys[1].access_key.permission='FullAccess';
+  await assert.rejects(verify(args),/unavailable or inconsistent/);
+  f.setStage(5);
+  await witness.retainMissionOriginal({goalId:f.binding.goals[0].id,kind:f.binding.goals[0].kind,txHash:hash(70),fingerprint:'a'.repeat(64)});
+  const later=await witness.history();
+  await assert.rejects(verify({...args,history:later,trustedRevision:later.revision,trustedHeadSha256:later.head_sha256}),/unavailable or inconsistent/);
+});
+
 // Synthetic public RPC only. A matching result is never owner authorization.
 test('fresh stage preflight checks every earlier original and the latest cumulative state',async()=>{
   const f=rpcVerifierFixture(),preflight=createV14SetupStagePreflight({planInputs:f.inputs,provider:f.provider,now:f.now});
@@ -507,4 +542,19 @@ test('read-only setup service pins the public artifacts and verifies an exact re
   await assert.rejects(service.preflight({...request,review:changed}),/unavailable/);
   await assert.rejects(service.receipt({review:f.review,scopeId,stageId,txHash:hash(99)}),/unavailable/);
   await assert.rejects(service.preflight({...request,private_key:'not allowed'}),/unavailable/);
+  const local=witnessMemoryStore(),independent=witnessMemoryStore();
+  const witness=createV14OriginalWitness({binding:f.binding,localStore:local,independentStore:independent,verifySetupReceipt:f.verify});
+  await witness.reserve();
+  for(let i=0;i<6;i++) {
+    f.setStage(i);const id=f.review.stages[i].id;
+    await witness.claimWalletStage(id);await witness.retainWalletOriginal({stageId:id,txHash:f.prior[i].trustedOriginalHash});
+    await witness.verifyWalletOriginal({stageId:id});
+  }
+  const history=await witness.history();f.setStage(5);
+  const completed=await service.completedHistory({scopeId,history});
+  assert.equal(completed.status,'V14_COMPLETED_SETUP_HISTORY_MATCH');assert.equal(completed.transaction_authorized,false);
+  assert.equal(completed.independent_freshness_proven,false);assert.equal(completed.journal_restored,false);
+  await assert.rejects(service.completedHistory({scopeId,history,private_key:'not allowed'}),/unavailable/);
+  const malformed=structuredClone(history);malformed.events[0]='{}';
+  await assert.rejects(service.completedHistory({scopeId,history:malformed}),/unavailable/);
 });

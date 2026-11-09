@@ -98,6 +98,9 @@ export async function createV14BrowserOriginalWitness({review:rawReview,trustedR
   }
   const result=Object.freeze({
     inspect:async()=> (await readBoth()).state,
+    // Public event history only; no capability, journal key or agent key.
+    // Matching copies do not prove that both stores are current or durable.
+    history:async()=>copy((await readBoth()).snapshot),
     reserve:()=>mutate('reserve',(_state,prior)=>prior.revision===0?binding:null),
     claimWalletStage:stageId=>mutate('wallet_claim',state=>{
       const stage=binding.stages.find(item=>item.id===stageId);

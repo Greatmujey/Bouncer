@@ -5,10 +5,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = fileURLToPath(new URL('../', import.meta.url));
-// Fixed Vercel functions preserve same-origin API paths. The two read-only
-// V14 setup routes have a separate off-by-default flag; none bundles a secret,
+// Fixed Vercel functions preserve same-origin API paths. The read-only V14
+// setup routes have a separate off-by-default flag; none bundles a secret,
 // key, backend address or authorization to send.
-for (const action of ['config','preview','challenge','execute','originals','recover','v14-preflight','v14-receipt']) {
+for (const action of ['config','preview','challenge','execute','originals','recover','v14-preflight','v14-receipt','v14-completed-history']) {
   await build({absWorkingDir:here, entryPoints:['web-src/native-mission-proxy-entry.mjs'],
     outfile:`web/api/native-mission/${action}.mjs`, bundle:true, format:'esm', platform:'node', target:['node22'],
     define:{__BOUNCER_NATIVE_MISSION_ACTION__:JSON.stringify(action)}, legalComments:'inline',
