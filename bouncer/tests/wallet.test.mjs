@@ -414,13 +414,19 @@ test('phone recovery reads and unlocks a synthetic encrypted kit without a trans
   const digest=createHash('sha256').update(nep413Payload({message:draft.message,nonce:draft.nonce,recipient:draft.recipient})).digest();
   const attestation=JSON.stringify({terms:draft.terms,nonce_base64:Buffer.from(draft.nonce).toString('base64'),
     signature_base64:Buffer.from(config.cliKey.sign(digest).signature).toString('base64')});
+  const original=encodeBase58(Buffer.alloc(32,23)),events=[];let head='0'.repeat(64);
+  for(const [index,type] of ['create_claim','create_original'].entries()) {
+    const event=JSON.stringify({format:'bouncer-v14-original-event-v1',seq:index+1,previous_sha256:head,type,
+      data:{scope_id:scopeId,review_sha256:plan.review.review_sha256,tx_hash:index?original:null}});
+    events.push(event);head=createHash('sha256').update(event).digest('hex');
+  }
   const originalFetch=browser.win.fetch;
   browser.win.fetch=async(url,options={})=>{
     if(String(url).includes('/functions/v1/bouncer-v14-bootstrap-checkpoint')) {
       if(options.method==='OPTIONS')return new Response(null,{status:204});
       const request=JSON.parse(options.body);assert.equal(request.operation,'recover');
       return Response.json({status:'EXISTING_RECOVERY_ONLY',scope_id:scopeId,review_text:draft.review_text,sealed_kit:draft.sealed_kit,
-        owner_attestation:attestation,revision:0,head_sha256:'0'.repeat(64),events:[],
+        owner_attestation:attestation,revision:2,head_sha256:head,events,
         transaction_authorized:false,latest_head_independently_verified:false});
     }
     return originalFetch(url,options);
@@ -432,13 +438,15 @@ test('phone recovery reads and unlocks a synthetic encrypted kit without a trans
   await open.click();await browser.nodes['wallet-bootstrap-recovery-read'].click();
   assert.equal(config.messageRequests.length,2);assert.equal(config.transactionRequests,undefined);
   assert.equal(browser.nodes['wallet-bootstrap-recovery-backup'].hidden,false);
+  assert.equal(browser.nodes['wallet-bootstrap-recovery-originals'].hidden,true,'originals are hidden before unlock');
   assert.match(browser.nodes['wallet-bootstrap-recovery-status'].textContent,/not independently re-verified/);
   browser.nodes['wallet-bootstrap-recovery-passphrase'].value=passphrase;
   await browser.nodes['wallet-bootstrap-recovery-unlock'].click();
   assert.equal(browser.nodes['wallet-bootstrap-recovery-passphrase'].value,'');
   assert.match(browser.nodes['wallet-bootstrap-recovery-status'].textContent,/unlocked locally.*no transaction is authorized/i);
+  assert.match(browser.nodes['wallet-bootstrap-recovery-originals'].children[0].textContent,/Unverified online history/);
   const body={format:'bouncer-v14-bootstrap-recovery-export-v1',network:'testnet',owner,vault,scope_id:scopeId,
-    review_text:draft.review_text,sealed_kit:draft.sealed_kit,owner_attestation:attestation,revision:0,head_sha256:'0'.repeat(64),events:[],
+    review_text:draft.review_text,sealed_kit:draft.sealed_kit,owner_attestation:attestation,revision:2,head_sha256:head,events,
     latest_head_independently_verified:false,transaction_authorized:false};
   const mac=createHmac('sha256',Buffer.from(capability,'hex')).update(`bouncer-v14-bootstrap-export-v1\0${JSON.stringify(body)}`).digest('hex');
   const local=JSON.stringify({...body,history_hmac_sha256:mac});
@@ -446,9 +454,19 @@ test('phone recovery reads and unlocks a synthetic encrypted kit without a trans
   await browser.nodes['wallet-bootstrap-recovery-import'].click();
   assert.match(browser.nodes['wallet-bootstrap-recovery-status'].textContent,/local encrypted file/i);
   assert.equal(browser.nodes['wallet-bootstrap-recovery-export'].disabled,true);
+  assert.equal(browser.nodes['wallet-bootstrap-recovery-originals'].hidden,true);
   browser.nodes['wallet-bootstrap-recovery-passphrase'].value=passphrase;
   await browser.nodes['wallet-bootstrap-recovery-unlock'].click();
   assert.equal(browser.nodes['wallet-bootstrap-recovery-export'].disabled,false);
+  assert.match(browser.nodes['wallet-bootstrap-recovery-originals'].children[0].textContent,/File integrity matched/);
+  browser.nodes['wallet-bootstrap-recovery-passphrase'].value='wrong synthetic passphrase';
+  await browser.nodes['wallet-bootstrap-recovery-unlock'].click();
+  assert.equal(browser.nodes['wallet-bootstrap-recovery-export'].disabled,true);
+  assert.equal(browser.nodes['wallet-bootstrap-recovery-originals'].hidden,true);
+  browser.nodes['wallet-bootstrap-recovery-file'].files=[];
+  await browser.nodes['wallet-bootstrap-recovery-import'].click();
+  assert.equal(browser.nodes['wallet-bootstrap-recovery-export'].disabled,true);
+  assert.match(browser.nodes['wallet-bootstrap-recovery-status'].textContent,/choose a bouncer encrypted/i);
   assert.equal(config.messageRequests.length,2,'offline import does not open the wallet');
   await browser.nodes['wallet-disconnect'].click();
   assert.equal(browser.nodes['wallet-bootstrap-recovery-backup'].hidden,true);

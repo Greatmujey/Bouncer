@@ -1,6 +1,6 @@
 // Desktop and mobile browser tests, synthetic wallet/backend/RPC only. No live send.
 import assert from 'node:assert/strict';
-import { createHash, generateKeyPairSync, verify } from 'node:crypto';
+import { createHash, createHmac, generateKeyPairSync, sign, verify, webcrypto } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -11,6 +11,9 @@ import { MARKET_SUMMARY_PROGRAM } from '../agent/market-summary.mjs';
 import { validateNativeMission } from '../agent/native-mission.mjs';
 import { nativeMissionAction, nativeMissionApprovalMessage } from '../web-src/native-mission-auth.mjs';
 import { nep413Payload } from '../web-src/cli-login.mjs';
+import { buildV14TemporaryBootstrapPlan } from '../web-src/v14-bootstrap-plan.mjs';
+import { sealV14BootstrapRecoveryKit } from '../web-src/v14-bootstrap-recovery-kit.mjs';
+import { prepareBootstrapEnrollment } from '../web-src/v14-bootstrap-checkpoint.mjs';
 import { WALLET_EXECUTOR_SHA256 } from '../web-src/wallet-executor.mjs';
 import { PUBLIC_WEB_FILES, stagePublicWeb } from './stage-public-web.mjs';
 
@@ -63,6 +66,7 @@ try {
       async signIn(p){if(p.network!=='testnet'||p.addFunctionCallKey)throw Error();return [{accountId:'${owner}'}]},
       async signOut(){},async getAccounts(){return [{accountId:'${owner}'}]},
       async signMessage({network,signerId,message,nonce,recipient}){
+        window.__bouncerSyntheticSignCount=(window.__bouncerSyntheticSignCount||0)+1;
         if(network!=='testnet'||signerId!=='${owner}')throw Error();
         const e=new TextEncoder(),m=e.encode(message),r=e.encode(recipient),p=new Uint8Array(4+4+m.length+32+4+r.length+1),v=new DataView(p.buffer);
         let i=0;v.setUint32(i,0x80000000+413,true);i+=4;v.setUint32(i,m.length,true);i+=4;p.set(m,i);i+=m.length;
@@ -171,6 +175,51 @@ try {
       await page.locator('#wallet-bootstrap-recovery-import').click();
       await page.waitForFunction(()=>document.querySelector('#wallet-bootstrap-recovery-status').textContent.includes('file is invalid'));
       assert.equal(await page.locator('#wallet-bootstrap-recovery-backup').isVisible(),false);
+      // A disposable fixture exercises the real encrypted file and DOM in a
+      // phone-sized Chromium context. None of these keys exist on testnet.
+      const temp=nearApi.KeyPair.fromRandom('ed25519'),scopeId='ab'.repeat(16),capability='cd'.repeat(32),passphrase='fixture-only long passphrase';
+      const compressed=new Uint8Array(fs.readFileSync(path.join(web,'artifacts/v14-research.deflate')));
+      const plan=await buildV14TemporaryBootstrapPlan({owner,ownerPublicKey:publicKey,vault,temporaryPublicKey:String(temp.getPublicKey()),
+        vaultFundingYocto:String(6n*10n**24n),compressedV14:compressed,crypto:webcrypto});
+      const kit=await sealV14BootstrapRecoveryKit({review:plan.review,temporaryKey:temp,scopeId,checkpointCapability:capability,passphrase,crypto:webcrypto});
+      const draft=await prepareBootstrapEnrollment({review:plan.review,kit,passphrase,compressedV14:compressed,site:origin,crypto:webcrypto});
+      const digest=createHash('sha256').update(nep413Payload({message:draft.message,nonce:draft.nonce,recipient:draft.recipient})).digest();
+      const attestation=JSON.stringify({terms:draft.terms,nonce_base64:Buffer.from(draft.nonce).toString('base64'),
+        signature_base64:sign(null,digest,keys.privateKey).toString('base64')});
+      let head='0'.repeat(64);const events=[];
+      for(const [index,type] of ['create_claim','create_original'].entries()) {
+        const event=JSON.stringify({format:'bouncer-v14-original-event-v1',seq:index+1,previous_sha256:head,type,
+          data:{scope_id:scopeId,review_sha256:plan.review.review_sha256,tx_hash:index?base58(51):null}});
+        events.push(event);head=sha(event);
+      }
+      const body={format:'bouncer-v14-bootstrap-recovery-export-v1',network:'testnet',owner,vault,scope_id:scopeId,
+        review_text:draft.review_text,sealed_kit:draft.sealed_kit,owner_attestation:attestation,revision:2,head_sha256:head,events,
+        latest_head_independently_verified:false,transaction_authorized:false};
+      const mac=createHmac('sha256',Buffer.from(capability,'hex')).update(`bouncer-v14-bootstrap-export-v1\0${JSON.stringify(body)}`).digest('hex');
+      const recovery=JSON.stringify({...body,history_hmac_sha256:mac});
+      for(const secret of [String(temp),capability,passphrase])assert(!recovery.includes(secret));
+      const signatureCount=async()=> (await Promise.all(page.frames().map(f=>f.evaluate(()=>window.__bouncerSyntheticSignCount||0).catch(()=>0)))).reduce((a,b)=>a+b,0);
+      const sigs=await signatureCount(),networkBefore=requests.length;
+      await page.locator('#wallet-bootstrap-recovery-file').setInputFiles({name:'synthetic.json',mimeType:'application/json',buffer:Buffer.from(recovery)});
+      await page.locator('#wallet-bootstrap-recovery-import').click();
+      assert.equal(await page.locator('#wallet-bootstrap-recovery-originals').isVisible(),false);
+      assert.equal(await page.locator('#wallet-bootstrap-recovery-export').isDisabled(),true);
+      await page.locator('#wallet-bootstrap-recovery-passphrase').fill(passphrase);
+      await page.locator('#wallet-bootstrap-recovery-unlock').click();
+      await page.waitForFunction(()=>document.querySelector('#wallet-bootstrap-recovery-status').textContent.includes('file integrity matched'));
+      assert.match(await page.locator('#wallet-bootstrap-recovery-originals a').first().innerText(),/File integrity matched.*Create original/);
+      assert.equal(await page.locator('#wallet-bootstrap-recovery-export').isDisabled(),false);
+      const forged=JSON.parse(recovery),event=JSON.parse(forged.events[1]);event.data.tx_hash=base58(52);
+      forged.events[1]=JSON.stringify(event);forged.head_sha256=sha(forged.events[1]);
+      await page.locator('#wallet-bootstrap-recovery-file').setInputFiles({name:'forged.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(forged))});
+      await page.locator('#wallet-bootstrap-recovery-import').click();
+      assert.equal(await page.locator('#wallet-bootstrap-recovery-originals').isVisible(),false);
+      await page.locator('#wallet-bootstrap-recovery-passphrase').fill(passphrase);
+      await page.locator('#wallet-bootstrap-recovery-unlock').click();
+      await page.waitForFunction(()=>document.querySelector('#wallet-bootstrap-recovery-status').textContent.includes('Could not unlock or verify'));
+      assert.equal(await page.locator('#wallet-bootstrap-recovery-originals').isVisible(),false);
+      assert.equal(await page.locator('#wallet-bootstrap-recovery-export').isDisabled(),true);
+      assert.equal(await signatureCount(),sigs);assert.equal(requests.length,networkBefore,'offline import made no network calls');
       assert.equal(executes,0);assert.equal(challengeCount,0);
     }
     await page.locator('#wallet-native-mission-open').waitFor({state:'visible'});await page.locator('#wallet-native-mission-open').click();

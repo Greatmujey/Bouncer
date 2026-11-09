@@ -458,21 +458,29 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     if (bootstrapRecoveryPassphrase) bootstrapRecoveryPassphrase.value = '';
     if (bootstrapRecoveryFile) bootstrapRecoveryFile.value = '';
   }
-  function showBootstrapHistory(history,source) {
+  function discardBootstrapHistoryDisplay() {
     bootstrapRecoveryUnlocked = false;
-    if (bootstrapRecoveryOriginals) {
-      bootstrapRecoveryOriginals.replaceChildren();
-      const originals = [{label:'Create original',hash:history.create_original},{label:'Deployment original',hash:history.deploy_original}];
-      for (const item of originals.filter(item => item.hash)) {
-        const link = doc.createElement('a'); link.href = `https://testnet.nearblocks.io/txns/${item.hash}`;
-        link.target = '_blank'; link.rel = 'noopener noreferrer'; link.textContent = `${item.label}: ${item.hash}`;
-        bootstrapRecoveryOriginals.append(link);
-      }
-      bootstrapRecoveryOriginals.hidden = !bootstrapRecoveryOriginals.childElementCount;
-    }
+    if (bootstrapRecoveryOriginals) { bootstrapRecoveryOriginals.replaceChildren(); bootstrapRecoveryOriginals.hidden = true; }
+    if (bootstrapRecoveryBackup) bootstrapRecoveryBackup.hidden = true;
+    if (bootstrapRecoveryPassphrase) bootstrapRecoveryPassphrase.value = '';
+  }
+  function showBootstrapHistory(history,source) {
+    discardBootstrapHistoryDisplay();
     if (bootstrapRecoveryBackup) bootstrapRecoveryBackup.hidden = false;
-    if (bootstrapRecoveryStatus) bootstrapRecoveryStatus.textContent = `${source}: ${history.revision} recorded events. Enter the recovery passphrase to check the file and save a separate encrypted copy. ` +
+    if (bootstrapRecoveryStatus) bootstrapRecoveryStatus.textContent = `${source}: ${history.revision} claimed events. Enter the recovery passphrase before displaying originals or saving a separate encrypted copy. ` +
       'The latest head and on-chain receipts are not independently re-verified; never repeat an uncertain transaction.';
+  }
+  function showBootstrapOriginals(history) {
+    if (!bootstrapRecoveryOriginals) return;
+    bootstrapRecoveryOriginals.replaceChildren();
+    const prefix = history.history_authentication_verified ? 'File integrity matched' : 'Unverified online history';
+    const originals = [{label:'Create original',hash:history.create_original},{label:'Deployment original',hash:history.deploy_original}];
+    for (const item of originals.filter(item => item.hash)) {
+      const link = doc.createElement('a'); link.href = `https://testnet.nearblocks.io/txns/${item.hash}`;
+      link.target = '_blank'; link.rel = 'noopener noreferrer'; link.textContent = `${prefix} · ${item.label}: ${item.hash}`;
+      bootstrapRecoveryOriginals.append(link);
+    }
+    bootstrapRecoveryOriginals.hidden = !bootstrapRecoveryOriginals.childElementCount;
   }
   function renderMissionReceipts(deliveries) {
     if (!missionReceipts) return;
@@ -1095,7 +1103,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
         !connected || !isTop || proof?.wallet !== wallet || proof.accountId !== accountId) return;
     const current = () => connected && selectedWallet === wallet && connectedAccount === accountId &&
       ownerSessionVersion === version && ownerVerification === proof && bootstrapRecoveryClient === client;
-    if (bootstrapRecoveryPassphrase) bootstrapRecoveryPassphrase.value = '';
+    discardBootstrapHistoryDisplay(); client.forget();
     busy(true); closePicker();
     setStatus('Approve the read-only recovery message in your wallet. No transaction is requested.');
     notify('Approve the read-only recovery message. No transaction is requested.', true);
@@ -1118,9 +1126,10 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
   bootstrapRecoveryImport?.addEventListener('click', async () => {
     const client = bootstrapRecoveryClient, proof = ownerVerification, file = bootstrapRecoveryFile?.files?.[0];
     if (busyState || !client || !bootstrapRecoveryVisible || !bootstrapRecoveryStatus) return;
+    discardBootstrapHistoryDisplay(); client.forget();
     if (!file || !Number.isSafeInteger(file.size) || file.size < 1 || file.size > 128_000 || typeof file.text !== 'function') {
       bootstrapRecoveryStatus.textContent = 'Choose a Bouncer encrypted recovery JSON file under 128 KB. No wallet request was made.';
-      return;
+      renderControls(); return;
     }
     const current = () => bootstrapRecoveryClient === client && ownerVerification === proof;
     busy(true);
@@ -1155,13 +1164,17 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     if (busyState || !client || !bootstrapRecoveryVisible || !bootstrapRecoveryPassphrase || !bootstrapRecoveryStatus) return;
     const current = () => bootstrapRecoveryClient === client && ownerVerification === proof;
     const passphrase = bootstrapRecoveryPassphrase.value; bootstrapRecoveryPassphrase.value = '';
+    bootstrapRecoveryUnlocked = false;
+    if (bootstrapRecoveryOriginals) { bootstrapRecoveryOriginals.replaceChildren(); bootstrapRecoveryOriginals.hidden = true; }
     busy(true);
     try {
-      await client.verifyPassphrase(passphrase); if (!current()) return;
-      bootstrapRecoveryUnlocked = true;
-      bootstrapRecoveryStatus.textContent = 'The encrypted kit unlocked locally; an integrity-protected file is ready to save. Latest-head and receipt checks are still required; no transaction is authorized.';
+      const history = await client.verifyPassphrase(passphrase); if (!current()) return;
+      bootstrapRecoveryUnlocked = true; showBootstrapOriginals(history);
+      bootstrapRecoveryStatus.textContent = history.history_authentication_verified
+        ? 'The encrypted kit unlocked locally and file integrity matched. Latest-head and receipt checks are still required; no transaction is authorized.'
+        : 'The encrypted kit unlocked locally. Online history is not independently authenticated; an integrity-protected copy is ready to save. Latest-head and receipt checks are still required; no transaction is authorized.';
     } catch {
-      if (current()) bootstrapRecoveryStatus.textContent = 'Could not unlock the kit. Check its recovery passphrase; never enter a wallet seed phrase.';
+      if (current()) bootstrapRecoveryStatus.textContent = 'Could not unlock or verify this file. Check the recovery passphrase and keep existing copies; never enter a wallet seed phrase.';
     } finally { busy(false); if (current()) renderControls(); }
   });
   missionConsent?.addEventListener('change', () => renderControls());

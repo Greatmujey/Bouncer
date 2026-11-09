@@ -46,14 +46,17 @@ export function createBootstrapRecoveryReadClient({wallet,owner,ownerPublicKey,l
     const state=await inspectBootstrapOriginals({snapshot:{revision:result.revision,head_sha256:result.head_sha256,events:result.events},
       scopeId:result.scope_id,reviewSha256:att.terms.review_sha256,crypto});current();
     if(expectedMac!==null&&!HEX.test(expectedMac))throw fail();
-    recovered={result:structuredClone(result),terms:{...att.terms},expectedMac,verifiedMac:null};
-    return Object.freeze({revision:state.revision,head_sha256:state.head_sha256,create_original:state.create_original,
-      deploy_original:state.deploy_original,next_event:state.next_event,transaction_authorized:false,
+    recovered={result:structuredClone(result),terms:{...att.terms},state:{...state},expectedMac,verifiedMac:null};
+    // An unkeyed chain can be forged. Never present its claimed originals as
+    // verified before the encrypted copy's MAC has been checked locally.
+    return Object.freeze({revision:state.revision,head_sha256:state.head_sha256,create_original:null,
+      deploy_original:null,next_event:null,transaction_authorized:false,
       latest_head_independently_verified:false,history_authentication_verified:false});
   }
   return Object.freeze({
     enabled,
     async read() {return run(async()=>{
+      recovered=null; // a failed new read must not leave an older export active
       // Check before requesting an owner signature. An unavailable endpoint is
       // not evidence that no earlier checkpoint or transaction exists.
       if(!await enabled())throw fail();current();
@@ -65,6 +68,7 @@ export function createBootstrapRecoveryReadClient({wallet,owner,ownerPublicKey,l
     /** Import only the owner's signed encrypted export. Works when the remote
      * service is off or unreachable; does not prove this is the latest copy. */
     async importEncrypted(text) {return run(async()=>{
+      recovered=null; // malformed replacement must not expose a previous copy
       if(typeof text!=='string'||new TextEncoder().encode(text).length>128_000)throw fail();
       let file;try{file=JSON.parse(text)}catch{throw fail()}
       if(!exact(file,['format','network','owner','vault','scope_id','review_text','sealed_kit','owner_attestation',
@@ -76,7 +80,8 @@ export function createBootstrapRecoveryReadClient({wallet,owner,ownerPublicKey,l
         transaction_authorized:false,latest_head_independently_verified:false},file.history_hmac_sha256);
     })},
     async verifyPassphrase(passphrase) {return run(async()=>{
-      if(!recovered)throw fail();const {result,terms}=recovered;
+      if(!recovered)throw fail();const {result,terms,state,expectedMac}=recovered;
+      recovered.verifiedMac=null;
       const kit=JSON.parse(result.sealed_kit);
       const opened=await openV14BootstrapRecoveryKit({kit,passphrase,crypto,expected:{owner:terms.owner,vault:terms.vault,
         ownerPublicKey:terms.owner_public_key,temporaryPublicKey:terms.temporary_public_key,
@@ -90,11 +95,14 @@ export function createBootstrapRecoveryReadClient({wallet,owner,ownerPublicKey,l
             return [...new Uint8Array(await crypto.subtle.sign('HMAC',key,input))].map(n=>n.toString(16).padStart(2,'0')).join('');
           }finally{keyBytes.fill(0)}
         });
-        current();if(recovered.expectedMac!==null&&recovered.expectedMac!==mac)throw fail();
+        current();if(expectedMac!==null&&expectedMac!==mac)throw fail();
         recovered.verifiedMac=mac;
       }finally{opened.dispose()}
-      return Object.freeze({status:'KIT_UNLOCKED_LOCALLY_NOT_AUTHORIZED',transaction_authorized:false,
-        history_authentication_verified:true,latest_head_independently_verified:false});
+      // Online history arrived without an existing MAC. Creating one now makes
+      // a protected export, but does not authenticate what the service sent.
+      return Object.freeze({status:'KIT_UNLOCKED_LOCALLY_NOT_AUTHORIZED',revision:state.revision,head_sha256:state.head_sha256,
+        create_original:state.create_original,deploy_original:state.deploy_original,transaction_authorized:false,
+        history_authentication_verified:expectedMac!==null,latest_head_independently_verified:false});
     })},
     /** Export ciphertext and authenticated public history only. A valid MAC
      * detects changes by those without the kit capability; it cannot prove the
@@ -103,6 +111,7 @@ export function createBootstrapRecoveryReadClient({wallet,owner,ownerPublicKey,l
       current();if(!recovered||busy||!HEX.test(recovered.verifiedMac??''))throw fail();
       return JSON.stringify({...exportBody(recovered.result),history_hmac_sha256:recovered.verifiedMac});
     },
+    forget(){current();if(busy)throw fail();recovered=null;},
     destroy(){disposed=true;recovered=null;},
   });
 }

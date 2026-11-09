@@ -103,6 +103,47 @@ test('a lost remote acknowledgement stops and does not permit a second prompt',a
   local.close();
 });
 
+test('offline recovery hides originals until the file MAC matches, rejects forged chains, and clears stale sessions',async()=>{
+  const {plan,draft,attestation}=await fixture(),original=encodeBase58(crypto.randomBytes(32));
+  let head='0'.repeat(64);
+  const events=[];
+  for(const [index,type] of ['create_claim','create_original'].entries()) {
+    const event=JSON.stringify({format:'bouncer-v14-original-event-v1',seq:index+1,previous_sha256:head,type,
+      data:{scope_id:scopeId,review_sha256:plan.review.review_sha256,tx_hash:index?original:null}});
+    events.push(event);head=await bootstrapSha256(webcrypto,event);
+  }
+  const body={format:'bouncer-v14-bootstrap-recovery-export-v1',network:'testnet',owner:originOwner,vault,scope_id:scopeId,
+    review_text:draft.review_text,sealed_kit:draft.sealed_kit,owner_attestation:attestation,revision:2,head_sha256:head,events,
+    latest_head_independently_verified:false,transaction_authorized:false};
+  const mac=crypto.createHmac('sha256',Buffer.from(capability,'hex')).update(`bouncer-v14-bootstrap-export-v1\0${JSON.stringify(body)}`).digest('hex');
+  const exported=JSON.stringify({...body,history_hmac_sha256:mac});
+  const location={origin:site,host:new URL(site).host};let network=0,signatures=0,valid=true;
+  const client=createBootstrapRecoveryReadClient({wallet:{async signMessage(){signatures++;throw Error('offline')}},
+    owner:originOwner,ownerPublicKey:String(owner.getPublicKey()),location,isTopLevel:true,crypto:webcrypto,now,isCurrent:()=>valid,
+    fetch:async()=>{network++;throw Error('offline')}});
+  const imported=await client.importEncrypted(exported);
+  assert.equal(imported.create_original,null);assert.equal(imported.history_authentication_verified,false);
+  assert.throws(()=>client.exportEncrypted());
+  await assert.rejects(client.verifyPassphrase('incorrect fixture passphrase'));assert.throws(()=>client.exportEncrypted());
+  const opened=await client.verifyPassphrase(passphrase);
+  assert.equal(opened.create_original,original);assert.equal(opened.history_authentication_verified,true);
+  assert.equal(opened.latest_head_independently_verified,false);assert.equal(opened.transaction_authorized,false);
+  const saved=client.exportEncrypted();
+  for(const secret of [String(temporary),capability,passphrase])assert(!saved.includes(secret));
+  await assert.rejects(client.verifyPassphrase('incorrect fixture passphrase'));assert.throws(()=>client.exportEncrypted());
+  await client.verifyPassphrase(passphrase);
+  await assert.rejects(client.importEncrypted('{invalid'));assert.throws(()=>client.exportEncrypted());
+  const altered=JSON.parse(exported),event=JSON.parse(altered.events[1]);
+  event.data.tx_hash=encodeBase58(crypto.randomBytes(32));altered.events[1]=JSON.stringify(event);
+  altered.head_sha256=await bootstrapSha256(webcrypto,altered.events[1]); // plausible, fully recomputed unkeyed chain
+  const unverified=await client.importEncrypted(JSON.stringify(altered));
+  assert.equal(unverified.create_original,null);assert.throws(()=>client.exportEncrypted());
+  await assert.rejects(client.verifyPassphrase(passphrase));assert.throws(()=>client.exportEncrypted());
+  await client.importEncrypted(exported);
+  const pending=client.verifyPassphrase(passphrase);valid=false;await assert.rejects(pending);assert.throws(()=>client.exportEncrypted());
+  assert.equal(network,0);assert.equal(signatures,0);client.destroy();
+});
+
 // PGlite is installed separately only for disposable schema tests; the
 // standard suite does not require or download it.
 if(process.env.BOUNCER_PGLITE_MODULE) {
@@ -211,11 +252,13 @@ if(process.env.BOUNCER_PGLITE_MODULE) {
       const client=createBootstrapRecoveryReadClient({wallet,owner:originOwner,ownerPublicKey:String(owner.getPublicKey()),
         location,isTopLevel:true,crypto:webcrypto,fetch:combinedFetch,now});
       assert.equal(await client.enabled(),true);
-      const view=await client.read();assert.equal(view.create_original,original);assert.equal(view.transaction_authorized,false);
+      const view=await client.read();assert.equal(view.create_original,null);assert.equal(view.transaction_authorized,false);
       assert.equal(view.latest_head_independently_verified,false);
       assert.throws(()=>client.exportEncrypted());
       await assert.rejects(client.verifyPassphrase('wrong fixture passphrase'));
-      assert.equal((await client.verifyPassphrase(passphrase)).status,'KIT_UNLOCKED_LOCALLY_NOT_AUTHORIZED');
+      const unlocked=await client.verifyPassphrase(passphrase);
+      assert.equal(unlocked.status,'KIT_UNLOCKED_LOCALLY_NOT_AUTHORIZED');assert.equal(unlocked.create_original,original);
+      assert.equal(unlocked.history_authentication_verified,false,'an online hash chain has no previous MAC to check');
       const exported=client.exportEncrypted();assert.equal(exported.includes(String(temporary)),false);
       assert.equal(exported.includes(capability),false);assert.equal(exported.includes(passphrase),false);
       client.destroy();assert.throws(()=>client.exportEncrypted());
@@ -224,8 +267,10 @@ if(process.env.BOUNCER_PGLITE_MODULE) {
         owner:originOwner,ownerPublicKey:String(owner.getPublicKey()),location,isTopLevel:true,crypto:webcrypto,now,
         fetch:async()=>{offlineNetworkCalls++;throw Error('offline')}});
       const offlineView=await offline.importEncrypted(exported);
-      assert.equal(offlineView.create_original,original);assert.equal(offlineView.latest_head_independently_verified,false);
-      assert.equal((await offline.verifyPassphrase(passphrase)).transaction_authorized,false);
+      assert.equal(offlineView.create_original,null);assert.equal(offlineView.latest_head_independently_verified,false);
+      const checked=await offline.verifyPassphrase(passphrase);
+      assert.equal(checked.transaction_authorized,false);assert.equal(checked.create_original,original);
+      assert.equal(checked.history_authentication_verified,true);
       assert.equal(offlineNetworkCalls,0);assert.equal(offlineSignatures,0);
       const altered=JSON.parse(exported);altered.head_sha256='1'.repeat(64);
       await assert.rejects(offline.importEncrypted(JSON.stringify(altered)));
