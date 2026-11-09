@@ -293,6 +293,38 @@ test('read-only receipt verifier checks each retained original and cumulative fr
   }
 });
 
+test('setup verifier uses the bounded JSON-RPC receipt and pinned-view transport',async()=>{
+  const f=rpcVerifierFixture({market:true}),requests=[];
+  let stageIndex=0;
+  const provider=new ReadOnlyNearReceiptProvider('https://test.rpc.fastnear.com/',{fetchImpl:async(url,options)=>{
+    assert.equal(url,'https://test.rpc.fastnear.com/');assert.equal(options.redirect,'error');
+    const request=JSON.parse(options.body);requests.push(request);
+    let result;
+    if(request.method==='status')result={chain_id:'testnet'};
+    else if(request.method==='EXPERIMENTAL_tx_status') {
+      assert.deepEqual(request.params,{tx_hash:f.prior[stageIndex].trustedOriginalHash,sender_account_id:owner,wait_until:'FINAL'});
+      result=f.prior[stageIndex].result;
+    } else if(request.method==='block')result=await f.provider.viewBlock(request.params);
+    else if(request.method==='EXPERIMENTAL_protocol_config')result=await f.provider.experimental_protocolConfig({blockId:request.params.block_id});
+    else if(request.method==='query'&&request.params.request_type==='call_function') {
+      const p=request.params,args=JSON.parse(Buffer.from(p.args_base64,'base64').toString('utf8'));
+      result=await f.provider.callFunctionRaw(p.account_id,p.method_name,args,{blockId:p.block_id});
+    } else if(request.method==='query')result=await f.provider.query(request.params);
+    else throw new Error(`unexpected RPC ${request.method}`);
+    return new Response(JSON.stringify({jsonrpc:'2.0',id:request.id,result}),{status:200});
+  }});
+  const verify=createV14SetupRpcVerifier({planInputs:f.inputs,provider,now:f.now});
+  for(stageIndex=0;stageIndex<6;stageIndex++) {
+    f.setStage(stageIndex);
+    const txHash=f.prior[stageIndex].trustedOriginalHash,stageId=f.review.stages[stageIndex].id;
+    assert.deepEqual(await verify({binding:f.binding,stageId,txHash}),{tx_hash:txHash,final_block_hash:hash(9)});
+  }
+  assert.equal(requests.filter(request=>request.method==='EXPERIMENTAL_tx_status').length,6);
+  assert.ok(requests.filter(request=>request.method==='query').every(request=>request.params.block_id===hash(9)));
+  assert.deepEqual([...new Set(requests.map(request=>request.method))].sort(),
+    ['EXPERIMENTAL_protocol_config','EXPERIMENTAL_tx_status','block','query','status'].sort());
+});
+
 test('the two-copy witness advances only after the RPC verifier checks its retained synthetic original',async()=>{
   const f=rpcVerifierFixture(),local=witnessMemoryStore(),independent=witnessMemoryStore();
   const witness=createV14OriginalWitness({binding:f.binding,localStore:local,independentStore:independent,verifySetupReceipt:f.verify});

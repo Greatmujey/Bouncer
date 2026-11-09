@@ -29,7 +29,7 @@ import { ReadOnlyNearReceiptProvider } from '../agent/read-only-near-receipts.mj
 import { ORACLE_TESTNET_PROJECT } from '../agent/oracle-outlayer.mjs';
 import { MARKET_SUMMARY_PROGRAM } from '../agent/market-summary.mjs';
 import { SandboxSetupRpc, withSandboxOnlyFetch } from './v11-sandbox-setup-rpc.mjs';
-import { SANDBOX_SHA256, readVerifiedFile, assertSandboxStatus, requireFinalSuccess } from './v11-sandbox-support.mjs';
+import { SANDBOX_CHAIN_ID, SANDBOX_SHA256, readVerifiedFile, assertSandboxStatus, requireFinalSuccess } from './v11-sandbox-support.mjs';
 import { startSandbox, stopSandboxChild } from './v11-nearcore-sandbox.mjs';
 
 const {transactions:tx}=nearApi, N=10n**24n, T=10n**12n;
@@ -147,14 +147,22 @@ async function main() {
         finally {encryptionKey.fill(0)}
         setupLocal=createV14FileWitnessStore({journal:setupJournal,owner:OWNER,vault:VAULT,scopeId,initializeBrandNew:true});
         setupRemote=sandboxWitnessStore();
-        // Production is pinned to public testnet. For this test ONLY, methods
-        // delegate to the isolated nearcore adapter, whose chain-id alias is
-        // accepted only after checking the real sandbox identity. The global
-        // fetch fence rejects everything except this sandbox's loopback URL.
-        const sandboxRead=new SandboxSetupRpc(rpcUrl);
-        const setupRead=new ReadOnlyNearReceiptProvider('https://test.rpc.fastnear.com/',{fetchImpl:()=>{throw new Error('unexpected remote RPC')}});
-        for(const method of ['viewNodeStatus','viewBlock','query','callFunctionRaw','experimental_protocolConfig','txStatusReceipts'])
-          setupRead[method]=sandboxRead[method].bind(sandboxRead);
+        // Production remains pinned to public testnet. For this isolated test
+        // ONLY, the real bounded read/receipt transport is redirected to the
+        // loopback sandbox. Only the chain-id fields are aliased, and only
+        // after checking the sandbox's actual identity and protocol version.
+        // The enclosing fetch fence rejects every other network destination.
+        const setupRead=new ReadOnlyNearReceiptProvider('https://test.rpc.fastnear.com/',{fetchImpl:(url,options)=>{
+          if(url!=='https://test.rpc.fastnear.com/')throw new Error('unexpected test transport URL');
+          return globalThis.fetch(rpcUrl,options);
+        }});
+        const status=setupRead.viewNodeStatus.bind(setupRead),protocol=setupRead.experimental_protocolConfig.bind(setupRead);
+        setupRead.viewNodeStatus=async()=>{const result=await status();assertSandboxStatus(result);return {...result,chain_id:'testnet'}};
+        setupRead.experimental_protocolConfig=async reference=>{
+          const result=await protocol(reference);
+          if(result?.chain_id!==SANDBOX_CHAIN_ID||result.protocol_version!==88)throw new Error('unexpected sandbox protocol');
+          return {...result,chain_id:'testnet'};
+        };
         setupWitness=createV14OriginalWitness({binding,localStore:setupLocal,independentStore:setupRemote,
           verifySetupReceipt:createV14SetupRpcVerifier({planInputs:phonePlanAnchors,provider:setupRead})});
         await setupWitness.reserve();
