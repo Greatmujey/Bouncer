@@ -310,11 +310,14 @@ keys and only the three reviewed agent keys; it rejects the reviewed owner
 signing key but cannot by itself prove another key is not FullAccess. Never
 supply a wallet key. The cryptographic helper performs no network or file I/O.
 A key kit is **not** a journal backup or proof of the latest head. Separate
-research-only helpers, default-off Edge handlers and an unapplied SQL migration
-can bind one encrypted kit and its owner-signed enrollment to a new checkpoint,
-then retrieve the ciphertext with current-owner authentication. They are not
-provisioned, enabled or wired into the UI; secure Railway handoff, durable
-journal backup and restoration remain unfinished. An administrator able to
+research-only helpers and default-off Edge handlers can bind one encrypted kit
+and its owner-signed enrollment to a new checkpoint, then retrieve the
+ciphertext with current-owner authentication. The V2 schema is installed in
+the separate checkpoint database after disposable PostgreSQL 17.11 tests; its
+function bodies and restricted grants were checked against the reviewed source.
+No V2 Edge handlers are deployed or enabled, and no owner scope or kit exists.
+This is not wired into the UI; secure Railway handoff, durable journal backup
+and restoration remain unfinished. An administrator able to
 roll back both copies can defeat it. Never infer independent durability from
 two adapter names or silently recreate a
 missing copy. Railway says
