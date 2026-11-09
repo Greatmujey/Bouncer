@@ -14,6 +14,8 @@ import { runNativeStorageGoal, recoverNativeStorageGoal } from '../agent/native-
 import { SandboxSetupRpc, withSandboxOnlyFetch } from './v11-sandbox-setup-rpc.mjs';
 import { SANDBOX_SHA256, readVerifiedFile, assertSandboxStatus, requireFinalSuccess } from './v11-sandbox-support.mjs';
 import { startSandbox, stopSandboxChild } from './v11-nearcore-sandbox.mjs';
+import { syntheticV14MeteorRequest } from './v14-synthetic-meteor.mjs';
+import { validateKnownFirstPartyActionRequest, MAX_ACTION_REQUEST_CANONICAL_JSON_LENGTH } from '@meteorwallet/connect-shared/internal';
 
 const { transactions: tx } = nearApi, N = 10n ** 24n, T = 10n ** 12n;
 const OWNER = 'buyer.testnet', VAULT = `store.${OWNER}`;
@@ -32,6 +34,10 @@ async function main() {
   assert.ok(wasm.length > 100_000 && wasm.length < 2_000_000 && wasm.subarray(0, 4).equals(Buffer.from([0, 97, 115, 109])));
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bouncer-v14-storage-'));
   const rootSeed = nearApi.KeyPair.fromRandom('ed25519'), ownerKey = nearApi.KeyPair.fromRandom('ed25519'), agentKey = nearApi.KeyPair.fromRandom('ed25519');
+  const temporaryBootstrap = process.env.BOUNCER_SANDBOX_TEMP_BOOTSTRAP === '1';
+  // Disposable sandbox key only. This branch does not authorize or create a
+  // key on testnet, and contains no browser custody or independent recovery.
+  const bootstrapKey = temporaryBootstrap ? nearApi.KeyPair.fromRandom('ed25519') : null;
   let sandbox, journal;
   try {
     sandbox = await startSandbox(binary, dir, pub(rootSeed));
@@ -42,9 +48,32 @@ async function main() {
       const send = (signer, receiverId, actions) => signer.signAndSendTransaction({ receiverId, actions, waitUntil: 'FINAL', throwOnFailure: false });
       const must = async (signer, receiver, actions, label) => { const result = await send(signer, receiver, actions); requireFinalSuccess(result, label); return result; };
       await must(root, OWNER, [tx.createAccount(), tx.transfer(100n * N), tx.addKey(ownerKey.getPublicKey(), tx.fullAccessKey())], 'create local owner');
-      await must(owner, VAULT, [tx.createAccount(), tx.transfer(20n * N), tx.deployContract(wasm), call('new', { owner: OWNER })], 'deploy local V14');
+      if (temporaryBootstrap) {
+        // Only the small first batch goes through Meteor. The large deployment
+        // is signed by the temporary *vault* key, then deletes that same key
+        // in the same receipt. A lost/deleted key before this point can strand
+        // funds; this test does not implement custody or recovery.
+        const create = [tx.createAccount(), tx.transfer(20n * N), tx.addKey(bootstrapKey.getPublicKey(), tx.fullAccessKey())];
+        const mobileRequest = syntheticV14MeteorRequest({signerId:OWNER,receiverId:VAULT,actions:create});
+        const valid = validateKnownFirstPartyActionRequest(mobileRequest);
+        assert.equal(MAX_ACTION_REQUEST_CANONICAL_JSON_LENGTH,400_000);
+        assert.equal(valid.ok,true,valid.reason);
+        assert.ok(Buffer.byteLength(JSON.stringify(mobileRequest)) < 4_000);
+        await must(owner, VAULT, create, 'create local bootstrap vault');
+        const before = await provider.viewAccessKeyList(VAULT, { finality: 'final' });
+        assert.equal(before.keys.length, 1);
+        assert.equal(before.keys[0].public_key, pub(bootstrapKey));
+        assert.equal(before.keys[0].access_key.permission, 'FullAccess');
+        const bootstrap = account(VAULT, provider, bootstrapKey);
+        await must(bootstrap, VAULT, [tx.deployContract(wasm), call('new', { owner: OWNER }),
+          tx.deleteKey(bootstrapKey.getPublicKey())], 'deploy V14 and delete local bootstrap key');
+        assert.deepEqual((await provider.viewAccessKeyList(VAULT, { finality: 'final' })).keys, []);
+      } else {
+        await must(owner, VAULT, [tx.createAccount(), tx.transfer(20n * N), tx.deployContract(wasm), call('new', { owner: OWNER })], 'deploy local V14');
+      }
       const view = (method, args = {}) => provider.callFunction(VAULT, method, args, { finality: 'final' });
       assert.equal(await view('contract_version'), 'bouncer-agent-v14-native-storage-testnet');
+      assert.equal(await view('get_owner'), OWNER);
       await must(owner, VAULT, [call('set_policy', { policy_id: 'store', token: 'native', per_tx_cap: String(N / 10n), daily_cap: String(N / 5n) }, 1n)], 'policy');
       await must(owner, VAULT, [call('allow_payee', { policy_id: 'store', payee: VAULT }, 1n)], 'vault allowlist');
       await must(owner, VAULT, [call('set_native_storage_route', { policy_id: 'store', prefix: 'mission-', max_value_bytes: 4096 }, 1n)], 'storage route');
@@ -93,6 +122,9 @@ async function main() {
       await assert.rejects(recoverNativeStorageGoal({ goal, provider: rpc, journal, log: () => {} }), /differs/);
       assert.equal(rpc.transportCalls, 1);
       return { scope: 'isolated nearcore, disposable keys and local WASM only', v14_deployed_locally: true,
+        temporary_vault_bootstrap_tested: temporaryBootstrap,
+        ...(temporaryBootstrap ? {small_meteor_request_synthetic:true, bootstrap_key_deleted_on_chain:true,
+          actual_wallet_tested:false, independent_recovery_tested:false} : {}),
         scoped_agent_storage_and_receipt_verified: true, original_hash_reused_without_resend: true,
         zero_yocto_owner_guard_rejected: true, over_cap_and_duplicate_rejected: true,
         release_credited_freed_stake_and_retained_tombstone: true, public_chain_transactions: false };

@@ -27,6 +27,11 @@ on:
         required: false
         default: false
         type: boolean
+      probe_v14_bootstrap:
+        description: 'Rehearse a temporary vault key on isolated nearcore only'
+        required: false
+        default: false
+        type: boolean
       owner:
         description: 'Named testnet owner (public account ID)'
         required: false
@@ -41,7 +46,7 @@ permissions:
 
 jobs:
   contract:
-    if: github.event_name != 'workflow_dispatch' || (inputs.run_v14_readiness != true && inputs.export_public_artifacts != true && inputs.measure_compact_v14 != true && inputs.probe_railway_workspace != true)
+    if: github.event_name != 'workflow_dispatch' || (inputs.run_v14_readiness != true && inputs.export_public_artifacts != true && inputs.measure_compact_v14 != true && inputs.probe_railway_workspace != true && inputs.probe_v14_bootstrap != true)
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -157,7 +162,7 @@ jobs:
           retention-days: 7
 
   railway-image:
-    if: github.event_name != 'workflow_dispatch' || (inputs.run_v14_readiness != true && inputs.export_public_artifacts != true && inputs.measure_compact_v14 != true && inputs.probe_railway_workspace != true)
+    if: github.event_name != 'workflow_dispatch' || (inputs.run_v14_readiness != true && inputs.export_public_artifacts != true && inputs.measure_compact_v14 != true && inputs.probe_railway_workspace != true && inputs.probe_v14_bootstrap != true)
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -193,7 +198,7 @@ jobs:
           echo 'Standby and enabled-but-unconfigured modes verified without network access.'
 
   browser:
-    if: github.event_name != 'workflow_dispatch' || (inputs.run_v14_readiness != true && inputs.export_public_artifacts != true && inputs.measure_compact_v14 != true && inputs.probe_railway_workspace != true)
+    if: github.event_name != 'workflow_dispatch' || (inputs.run_v14_readiness != true && inputs.export_public_artifacts != true && inputs.measure_compact_v14 != true && inputs.probe_railway_workspace != true && inputs.probe_v14_bootstrap != true)
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -392,3 +397,49 @@ jobs:
         env:
           BOUNCER_PLAYWRIGHT_PATH: ${{ runner.temp }}/bouncer-browser/node_modules/playwright-core/index.mjs
         run: node scripts/probe-railway-workspace.mjs
+
+  temporary-vault-bootstrap-sandbox:
+    # No public network, real wallet, live key, loader or testnet transaction.
+    if: github.event_name == 'workflow_dispatch' && inputs.probe_v14_bootstrap == true && inputs.run_v14_readiness != true && inputs.export_public_artifacts != true && inputs.measure_compact_v14 != true && inputs.probe_railway_workspace != true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+      - name: Install isolated test dependencies
+        working-directory: bouncer
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Recover and verify the already-pinned V14 artifact
+        working-directory: bouncer
+        run: |
+          node --input-type=module - "$RUNNER_TEMP/v14.wasm" <<'NODE'
+          import fs from 'node:fs';import crypto from 'node:crypto';import zlib from 'node:zlib';
+          import {V14_TESTNET_ARTIFACT as expected} from './shared/v14-testnet-artifact.mjs';
+          const bytes=zlib.inflateRawSync(fs.readFileSync('web/artifacts/v14-research.deflate'),{maxOutputLength:expected.bytes});
+          if(bytes.length!==expected.bytes||crypto.createHash('sha256').update(bytes).digest('hex')!==expected.sha256)throw Error('V14 artifact mismatch');
+          fs.writeFileSync(process.argv[2],bytes,{flag:'wx'});
+          NODE
+      - name: Download the pinned isolated nearcore binary
+        working-directory: bouncer
+        run: |
+          curl --fail --show-error --silent --location --proto '=https' --tlsv1.2 --max-time 180 --retry 2 --max-filesize 419430400 \
+            'https://s3-us-west-1.amazonaws.com/build.nearprotocol.com/nearcore/Linux-x86_64/2.14.0/near-sandbox.tar.gz' \
+            --output "$RUNNER_TEMP/near-sandbox.tar.gz"
+          python3 scripts/extract-pinned-near-sandbox.py "$RUNNER_TEMP/near-sandbox.tar.gz" "$RUNNER_TEMP/near-sandbox"
+      - name: Rehearse the short wallet batch, deploy, deletion and guarded storage
+        working-directory: bouncer
+        env:
+          BOUNCER_SANDBOX_BIN: ${{ runner.temp }}/near-sandbox
+          BOUNCER_V14_WASM_PATH: ${{ runner.temp }}/v14.wasm
+          BOUNCER_SANDBOX_TEMP_BOOTSTRAP: '1'
+        run: |
+          ulimit -Sn 65535
+          if ! node integration/native-storage-v14-sandbox.mjs > "$RUNNER_TEMP/bootstrap-result.log" 2>&1; then
+            python3 -c 'import os; s=open(os.environ["RUNNER_TEMP"]+"/bootstrap-result.log").read()[-4500:]; print("::error title=Isolated temporary-key rehearsal failed::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
+            exit 1
+          fi
+          python3 -c 'import os,json; d=json.load(open(os.environ["RUNNER_TEMP"]+"/bootstrap-result.log")); print("::notice title=Temporary vault key isolated rehearsal::"+json.dumps(d,separators=(",",":")))'
