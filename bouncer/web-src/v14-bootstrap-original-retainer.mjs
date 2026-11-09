@@ -19,6 +19,12 @@ import {isV14BootstrapCreateVerifier} from './v14-bootstrap-create-verifier.mjs'
 import {decodeNativeHash32,encodeBase58} from './native-oracle-transaction.mjs';
 
 const MAX_BYTES=1_000_000;
+const retainers=new WeakMap();
+// In-realm identity only; it does not establish storage independence or freshness.
+export const isBootstrapOriginalRetainer=(value,witness,reviewSha256)=>{
+  const binding=retainers.get(value);
+  return Boolean(binding&&binding.witness===witness&&binding.review_sha256===reviewSha256);
+};
 const fail=()=>new Error('Bootstrap original could not be safely retained; stop and reconcile without another wallet prompt or send');
 const object=x=>x!==null&&typeof x==='object'&&!Array.isArray(x);
 const exact=(x,keys)=>object(x)&&Object.keys(x).length===keys.length&&keys.every(k=>Object.hasOwn(x,k));
@@ -41,7 +47,7 @@ export async function createBootstrapOriginalRetainer({review:inputReview,compre
   async function run(fn){if(busy)throw fail();busy=true;try{return await fn()}finally{busy=false}}
   const result=(status,originalHash)=>Object.freeze({status,original_hash:originalHash,do_not_retry:true,
     final_execution_verified:false,independent_recovery_verified:false,transaction_authorized:false,transaction_sent_by_this_operation:false});
-  return Object.freeze({
+  const retainer=Object.freeze({
     /** Call once after a pre-claimed wallet prompt returns. A malformed, lost,
      * cancelled or conflicting response is UNKNOWN, not evidence of failure.
      * Even when the wallet/session changed, try to preserve a returned hash. */
@@ -110,4 +116,6 @@ export async function createBootstrapOriginalRetainer({review:inputReview,compre
       }
     })},
   });
+  retainers.set(retainer,{witness,review_sha256:review.review_sha256});
+  return retainer;
 }

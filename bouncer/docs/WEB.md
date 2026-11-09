@@ -214,6 +214,17 @@ retaining the hash in both copies. These source-only pieces are not wired to
 the live wallet; neither matching copies nor a hash proves an independent backup
 or a latest head.
 
+The new one-shot create coordinator joins the reviewed actions and cost
+snapshot, fresh exact-key preflights, two-copy claim, one wallet call and
+original retention. It stops if prices increase beyond the reviewed estimates,
+the account or session changes, or either claim is uncertain. A lost wallet
+response stays claimed and is recovered by the original, never another prompt.
+Its public entry point **always blocks invocation**: a real independent restore
+and latest-head gate is not implemented. An explicitly isolated sandbox uses a
+simulated gate and disposable wallet; this is not evidence to open the live
+gate. Estimates cannot guarantee future network charges and the wallet may
+choose a different signing key.
+
 The source-only temporary-bootstrap completion verifier can check a separately
 retained deployment original against its exact reviewed actions, a FINAL
 outcome, and one fresh block's V14 code, contract owner and keyless vault state.

@@ -20,12 +20,19 @@ import { createV14BootstrapCreateVerifier, V14_BOOTSTRAP_READ_RPC } from '../web
 import { createV14BootstrapDeploymentVerifier } from '../web-src/v14-bootstrap-deployment-verifier.mjs';
 import { createBootstrapTwoCopyWitness } from '../web-src/v14-bootstrap-originals.mjs';
 import { createBootstrapOriginalRetainer } from '../web-src/v14-bootstrap-original-retainer.mjs';
+import { createV14BootstrapCreatePreflight } from '../web-src/v14-bootstrap-create-preflight.mjs';
+import { prepareIsolatedBootstrapCreateOnce } from './v14-bootstrap-create-once-rehearsal.mjs';
 import { bootstrapSha256 } from '../shared/v14-bootstrap-protocol.mjs';
 import { sealV14BootstrapRecoveryKit, openV14BootstrapRecoveryKit } from '../web-src/v14-bootstrap-recovery-kit.mjs';
 import { validateKnownFirstPartyActionRequest, MAX_ACTION_REQUEST_CANONICAL_JSON_LENGTH } from '@meteorwallet/connect-shared/internal';
 
 const { transactions: tx } = nearApi, N = 10n ** 24n, T = 10n ** 12n;
-const OWNER = 'buyer.testnet', VAULT = `store.${OWNER}`;
+// The temporary-bootstrap preflight is intentionally pinned to the named
+// owner and child. These names exist ONLY on this disposable loopback chain;
+// there is no connection to the corresponding public testnet accounts.
+const temporaryBootstrap = process.env.BOUNCER_SANDBOX_TEMP_BOOTSTRAP === '1';
+const OWNER = temporaryBootstrap ? 'great_mujey.testnet' : 'buyer.testnet';
+const VAULT = temporaryBootstrap ? `native.${OWNER}` : `store.${OWNER}`;
 const pub = pair => String(pair.getPublicKey());
 const call = (method, args = {}, deposit = 0n, gas = 30n * T) => tx.functionCall(method, args, gas, deposit);
 const account = (id, provider, pair) => new nearApi.Account(id, provider, new nearApi.KeyPairSigner(pair));
@@ -41,7 +48,6 @@ async function main() {
   assert.ok(wasm.length > 100_000 && wasm.length < 2_000_000 && wasm.subarray(0, 4).equals(Buffer.from([0, 97, 115, 109])));
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bouncer-v14-storage-'));
   const rootSeed = nearApi.KeyPair.fromRandom('ed25519'), ownerKey = nearApi.KeyPair.fromRandom('ed25519'), agentKey = nearApi.KeyPair.fromRandom('ed25519');
-  const temporaryBootstrap = process.env.BOUNCER_SANDBOX_TEMP_BOOTSTRAP === '1';
   // Disposable sandbox key only. This branch does not authorize or create a
   // key on testnet, and contains no browser custody or independent recovery.
   const bootstrapKey = temporaryBootstrap ? nearApi.KeyPair.fromRandom('ed25519') : null;
@@ -91,9 +97,12 @@ async function main() {
         const browserSandboxFetch=async (url,options)=>{
           assert.equal(url,V14_BOOTSTRAP_READ_RPC);
           const request=JSON.parse(options.body);
-          assert.ok(['status','EXPERIMENTAL_tx_status','block','query'].includes(request.method));
+          assert.ok(['status','EXPERIMENTAL_tx_status','block','query','EXPERIMENTAL_protocol_config','gas_price'].includes(request.method));
           const response=await fetch(rpcUrl,options),body=await response.json();
-          if(request.method==='status' && body.result)body.result.chain_id='testnet';
+          // Alias only the already-checked isolated chain's identity. All
+          // balances, costs, blocks, account state and receipts are real
+          // sandbox responses; no public-chain fetch is allowed here.
+          if(['status','EXPERIMENTAL_protocol_config'].includes(request.method) && body.result)body.result.chain_id='testnet';
           // Only the disposable sandbox's public result shapes are recorded;
           // never record signed bytes, recovered secrets or real-owner data.
           if(observeDeployment&&request.method==='EXPERIMENTAL_tx_status'){
@@ -128,13 +137,27 @@ async function main() {
           localStore:local,remoteStore:simulatedIndependent,verifyCreateFinal,crypto:crypto.webcrypto});
         const retainer=await createBootstrapOriginalRetainer({review:plan.review,compressedV14:compressed,
           witness,verifyCreateFinal,crypto:crypto.webcrypto});
-        await witness.claimCreate();
-        const created=await must(owner,VAULT,plan.createActions,'create local bootstrap vault');
-        // Simulate a wallet sending but losing its response. The existing
-        // claim must remain; recover the synthetic hash from test-only wallet
-        // history and verify the actual FINAL sandbox receipt before retaining.
-        assert.equal((await retainer.retainWalletResult(undefined)).status,'WALLET_RESULT_UNKNOWN');
-        assert.equal((await local.read()).revision,1);
+        const preflight=await createV14BootstrapCreatePreflight({review:plan.review,compressedV14:compressed,
+          fetch:browserSandboxFetch,crypto:crypto.webcrypto});
+        let created,walletCalls=0;
+        // This wallet and recovery gate are isolated simulations. The adapter
+        // checks the exact browser request before translating it to the actual
+        // sandbox transaction; the public entry point remains fail-closed.
+        const wallet={manifest:{features:{signAndSendTransaction:true}},async signAndSendTransaction(request){
+          walletCalls++;assert.deepEqual(request,plan.walletRequest);
+          assert.equal((await local.read()).revision,1);assert.deepEqual(await local.read(),await simulatedIndependent.read());
+          created=await must(owner,VAULT,plan.createActions,'create local bootstrap vault');
+          return undefined; // transaction succeeded but the wallet response is lost
+        }};
+        const prompt=await prepareIsolatedBootstrapCreateOnce({review:plan.review,compressedV14:compressed,
+          witness,retainer,preflight,wallet,location:{origin:'https://bouncer-production-6df1.up.railway.app',
+            host:'bouncer-production-6df1.up.railway.app'},isTopLevel:true,isCurrent:()=>true,crypto:crypto.webcrypto});
+        const response=await prompt.invoke({approved:true,reviewedTermsSha256:prompt.terms_sha256});
+        // The claim remains after a lost response. Recover the disposable hash
+        // from synthetic wallet history and verify the real sandbox receipt.
+        assert.equal(response.status,'WALLET_RESULT_UNKNOWN');assert.equal(response.do_not_retry,true);
+        assert.equal(walletCalls,1);assert.ok(created);assert.equal((await local.read()).revision,1);
+        await assert.rejects(prompt.invoke({approved:true,reviewedTermsSha256:prompt.terms_sha256}));
         const recoveredOriginal=await retainer.recoverCreateFromWalletHistory(created.transaction_outcome.id);
         assert.equal(recoveredOriginal.status,'RECOVERED_CREATE_ORIGINAL_RETAINED');
         assert.equal(recoveredOriginal.final_execution_verified,true);
@@ -237,7 +260,8 @@ async function main() {
       assert.equal(rpc.transportCalls, 1);
       return { scope: 'isolated nearcore, disposable keys and local WASM only', v14_deployed_locally: true,
         temporary_vault_bootstrap_tested: temporaryBootstrap,
-        ...(temporaryBootstrap ? {small_meteor_request_synthetic:true, create_original_and_fresh_state_verified_on_sandbox:true,
+        ...(temporaryBootstrap ? {small_meteor_request_synthetic:true, one_shot_create_driver_exercised_on_sandbox:true,
+          exact_plan_and_budget_checked_on_sandbox:true, create_original_and_fresh_state_verified_on_sandbox:true,
           lost_wallet_result_reconciled_without_reprompt:true, deployment_original_retained_before_sandbox_send:true,
           deployment_original_and_keyless_state_verified_on_sandbox:true, bootstrap_key_deleted_on_chain:true, two_original_copies_simulated:true,
           actual_wallet_tested:false, independent_recovery_tested:false} : {}),
