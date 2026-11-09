@@ -244,6 +244,14 @@ retained latest head still need verification; two matching service copies are
 not proof against rollback, a compromised operator or a shared failure.
 Enabling this recovery route would not enable transactions or missions.
 
+A narrowly scoped diagnostic on the existing Railway standby service checks the
+`/data` volume using a separate non-secret random marker, never a checkpoint or
+wallet key. Its first deployment creates and fsyncs the marker; the follow-up
+is observation-only and must not recreate a missing marker. A matching public
+fingerprint across those deployments shows only that this small marker survived
+that restart. It does not prove crash durability, backup restore, operator
+independence, an untampered latest head or permission to transact.
+
 The source-only temporary-bootstrap completion verifier can check a separately
 retained deployment original against its exact reviewed actions, a FINAL
 outcome, and one fresh block's V14 code, contract owner and keyless vault state.

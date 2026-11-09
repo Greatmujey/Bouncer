@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /** Railway container entry. Without explicit enablement it serves a public,
- * non-spending standby; it creates no state and never imports the mission
- * runtime. An independently configured recovery anchor never initializes on
- * startup and has no transaction route. Optional fixed public read-only checks
- * run once on startup. A configured mission still starts recovery-first. */
+ * non-spending standby and never imports the mission runtime. A narrowly
+ * targeted persistence diagnostic may write one non-secret marker, never a
+ * recovery record. An independently configured anchor never initializes on
+ * startup and has no transaction route. A configured mission starts recovery-first. */
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -28,8 +28,8 @@ export function railwayNativePort(env=process.env) {
 }
 /** No input is trusted or reflected. Default standby loads no wallet, journal,
  * agent keys or mission runtime. The optional recovery anchor stores no key
- * or transaction handler. Diagnostics are public reads only, never invoked by
- * a request, and do not establish mission readiness. */
+ * or transaction handler. Requests only read cached diagnostics; an optional
+ * isolated startup marker does not establish mission or recovery readiness. */
 export function createRailwayNativeStandby({readiness,setupHandler,webHandler,bootstrapAnchorHandler}={}) {
   if(readiness!==undefined && typeof readiness?.snapshot!=='function')throw new Error('invalid standby diagnostics');
   if(setupHandler!==undefined && typeof setupHandler!=='function')throw new Error('invalid read-only setup handler');
@@ -70,8 +70,18 @@ async function main() {
   if(check!==undefined && check!=='' && check!=='0' && check!=='1')throw new Error('invalid standby diagnostics configuration');
   let readiness,setupHandler;
   if(check==='1') {
-    const {createStandbyReadiness}=await import('../agent/railway-standby-readiness.mjs');
-    readiness=createStandbyReadiness();
+    const [{createStandbyReadiness,inspectStandbyMount},{isRailwayRecoveryProbeTarget,runRailwayRecoveryVolumeProbe}]=await Promise.all([
+      import('../agent/railway-standby-readiness.mjs'),import('../agent/railway-recovery-volume-probe.mjs')]);
+    let recoveryVolumeProbe;
+    if(isRailwayRecoveryProbeTarget()) {
+      // This is a non-secret disposable diagnostic, not the real checkpoint.
+      // Only the exact named Railway project, service, environment and mounted
+      // /data are eligible. The next deployment switches to read-only mode.
+      recoveryVolumeProbe=inspectStandbyMount()==='DECLARED_MOUNT_PRESENT'
+        ? runRailwayRecoveryVolumeProbe({root:'/data',phase:'initial',mode:'create-once'})
+        : {phase:'initial',status:'MOUNT_NOT_CONFIRMED',fingerprint:null,transaction_authorized:false};
+    }
+    readiness=createStandbyReadiness({recoveryVolumeProbe});
   }
   const setup=process.env.BOUNCER_V14_SETUP_READONLY;
   if(setup!==undefined&&setup!==''&&setup!=='0'&&setup!=='1')throw new Error('invalid read-only setup configuration');

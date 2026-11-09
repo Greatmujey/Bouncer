@@ -39,13 +39,24 @@ export function inspectStandbyMount({ env = process.env, filesystem = fs, mountI
 
 /** Fixed public destinations, no user-supplied URL, no signing, no retry and
  * no request-triggered network work. `fetchImpl` is injected for tests only. */
-export function createStandbyReadiness({ env = process.env, filesystem = fs, fetchImpl = globalThis.fetch } = {}) {
+export function createStandbyReadiness({ env = process.env, filesystem = fs, fetchImpl = globalThis.fetch, recoveryVolumeProbe } = {}) {
   if (typeof fetchImpl !== 'function') throw new Error('read-only standby fetch unavailable');
+  let probe;
+  if (recoveryVolumeProbe !== undefined) {
+    const p=recoveryVolumeProbe,keys=['phase','status','fingerprint','transaction_authorized'];
+    if (!p || typeof p!=='object' || Array.isArray(p) || Object.keys(p).length!==keys.length || !keys.every(k=>Object.hasOwn(p,k)) ||
+        !['initial','after-redeploy'].includes(p.phase) || !['CREATED','OBSERVED','MISSING','LOCKED','UNAVAILABLE','MOUNT_NOT_CONFIRMED'].includes(p.status) ||
+        p.transaction_authorized!==false || (['CREATED','OBSERVED'].includes(p.status) ? !/^[a-f0-9]{64}$/.test(p.fingerprint??'') : p.fingerprint!==null))
+      throw new Error('invalid public volume diagnostic');
+    probe=Object.freeze({...p});
+  }
   const checks = { volume: inspectStandbyMount({ env, filesystem }), testnet_rpc: 'PENDING',
     pinned_oracle_registry: 'PENDING', market_wasm: 'PENDING' };
   let started, checkedAt = null;
   const snapshot = () => ({ service: 'bouncer-testnet-native-backend', status: 'STANDBY',
-    mission_enabled: false, transactions_enabled: false, checks: { ...checks }, checked_at: checkedAt, scope });
+    mission_enabled: false, transactions_enabled: false, checks: { ...checks }, checked_at: checkedAt,
+    ...(probe ? {recovery_volume_probe:{...probe}} : {}),
+    scope:probe ? `${scope} The isolated volume diagnostic contains only a non-secret test marker; it does not read or alter recovery records.` : scope });
   async function rpc() {
     if (env.NODE_TLS_REJECT_UNAUTHORIZED === '0') {
       checks.testnet_rpc = 'UNAVAILABLE'; checks.pinned_oracle_registry = 'SKIPPED'; return;
