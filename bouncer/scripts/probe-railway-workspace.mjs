@@ -33,9 +33,10 @@ try {
     const req=route.request(),url=req.url(),method=req.method();
     if(['GET','HEAD','OPTIONS'].includes(method))return route.continue();
     if(method==='POST'&&url===endpoint) {
-      try {const body=req.postDataJSON();if(body.capability==='r'.repeat(43)&&['read','claim','retain'].includes(body.operation))return route.continue()}catch{}
+      try {const body=req.postDataJSON();if(body.capability==='s'.repeat(43)&&['read','claim','retain'].includes(body.operation))return route.continue()}catch{}
     }
-    if(method==='POST'&&url===rpc) {
+    // Chromium canonicalizes the origin-only RPC URL to a trailing slash.
+    if(method==='POST'&&url===`${rpc}/`) {
       try {if(req.postDataJSON()?.method==='status')return route.continue()}catch{}
     }
     return route.abort();
@@ -48,9 +49,9 @@ try {
   report.standby_notice=await page.getByText('Temporary Railway testnet site.',{exact:false}).count()===1;
   assert.ok(report.top_level&&report.workspace&&report.standby_notice);
 
-  stage='dummy one-shot journal and testnet RPC';
-  const result=await page.evaluate(async({endpoint,rpc})=>{
-    const capability='r'.repeat(43);
+  stage='dummy one-shot journal';
+  const result=await page.evaluate(async endpoint=>{
+    const capability='s'.repeat(43);
     const call=async(operation,extra={})=>{
       const response=await fetch(endpoint,{method:'POST',credentials:'omit',cache:'no-store',headers:{'content-type':'application/json'},
         body:JSON.stringify({operation,capability,...extra}),signal:AbortSignal.timeout(20000)});
@@ -58,15 +59,21 @@ try {
     };
     const read=await call('read');const claim=await call('claim');const again=await call('claim');
     const retain=await call('retain',{original_hash:'1'.repeat(32)});
-    const response=await fetch(rpc,{method:'POST',headers:{'content-type':'application/json'},
-      body:JSON.stringify({jsonrpc:'2.0',id:'railway-cors',method:'status',params:[]}),signal:AbortSignal.timeout(20000)});
-    return {read,claim,again,retain,rpc:{status:response.status,body:await response.json()}};
-  },{endpoint,rpc});
+    return {read,claim,again,retain};
+  },endpoint);
   report.journal_read=result.read.status===200&&result.read.body.scope==='probe'&&result.read.body.state==='ready';
   report.journal_one_claim=result.claim.status===200&&result.claim.body.claim_acquired===true&&result.again.status===200&&result.again.body.claim_acquired===false;
   report.dummy_original_retained=result.retain.status===200&&result.retain.body.state==='retained'&&result.retain.body.original_hash==='1'.repeat(32);
-  report.rpc_cors=result.rpc.status===200&&result.rpc.body.id==='railway-cors'&&result.rpc.body.result?.chain_id==='testnet';
-  assert.ok(report.journal_read&&report.journal_one_claim&&report.dummy_original_retained&&report.rpc_cors);
+  assert.ok(report.journal_read&&report.journal_one_claim&&report.dummy_original_retained);
+
+  stage='testnet RPC';
+  const rpcResult=await page.evaluate(async rpc=>{
+    const response=await fetch(rpc,{method:'POST',headers:{'content-type':'application/json'},
+      body:JSON.stringify({jsonrpc:'2.0',id:'railway-cors',method:'status',params:[]}),signal:AbortSignal.timeout(20000)});
+    return {status:response.status,body:await response.json()};
+  },rpc);
+  report.rpc_cors=rpcResult.status===200&&rpcResult.body.id==='railway-cors'&&rpcResult.body.result?.chain_id==='testnet';
+  assert.ok(report.rpc_cors);
 
   stage='Meteor adapter';
   await page.waitForFunction(()=>!document.querySelector('[data-wallet-id="meteor-wallet"]').disabled,null,{timeout:30000});
