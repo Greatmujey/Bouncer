@@ -15,6 +15,8 @@ import { SandboxSetupRpc, withSandboxOnlyFetch } from './v11-sandbox-setup-rpc.m
 import { SANDBOX_SHA256, readVerifiedFile, assertSandboxStatus, requireFinalSuccess } from './v11-sandbox-support.mjs';
 import { startSandbox, stopSandboxChild } from './v11-nearcore-sandbox.mjs';
 import { syntheticV14MeteorRequest } from './v14-synthetic-meteor.mjs';
+import { buildV14TemporaryBootstrapPlan, signV14TemporaryBootstrapDeployment } from '../web-src/v14-bootstrap-plan.mjs';
+import { sealV14BootstrapRecoveryKit, openV14BootstrapRecoveryKit } from '../web-src/v14-bootstrap-recovery-kit.mjs';
 import { validateKnownFirstPartyActionRequest, MAX_ACTION_REQUEST_CANONICAL_JSON_LENGTH } from '@meteorwallet/connect-shared/internal';
 
 const { transactions: tx } = nearApi, N = 10n ** 24n, T = 10n ** 12n;
@@ -49,25 +51,48 @@ async function main() {
       const must = async (signer, receiver, actions, label) => { const result = await send(signer, receiver, actions); requireFinalSuccess(result, label); return result; };
       await must(root, OWNER, [tx.createAccount(), tx.transfer(100n * N), tx.addKey(ownerKey.getPublicKey(), tx.fullAccessKey())], 'create local owner');
       if (temporaryBootstrap) {
-        // Only the small first batch goes through Meteor. The large deployment
-        // is signed by the temporary *vault* key, then deletes that same key
-        // in the same receipt. A lost/deleted key before this point can strand
-        // funds; this test does not implement custody or recovery.
-        const create = [tx.createAccount(), tx.transfer(20n * N), tx.addKey(bootstrapKey.getPublicKey(), tx.fullAccessKey())];
-        const mobileRequest = syntheticV14MeteorRequest({signerId:OWNER,receiverId:VAULT,actions:create});
-        const valid = validateKnownFirstPartyActionRequest(mobileRequest);
+        // Exercise the actual browser-safe plan, not a separately handwritten
+        // batch. All keys, passphrases and witnesses here are disposable. The
+        // serialized kit is a simulated independent copy, NOT a real cloud
+        // backup, phone restore, live wallet, or authorization for testnet.
+        const compressed=new Uint8Array(fs.readFileSync(new URL('../web/artifacts/v14-research.deflate',import.meta.url)));
+        const plan=await buildV14TemporaryBootstrapPlan({owner:OWNER,ownerPublicKey:pub(ownerKey),vault:VAULT,
+          temporaryPublicKey:pub(bootstrapKey),vaultFundingYocto:String(6n*N),compressedV14:compressed,crypto:crypto.webcrypto});
+        assert.deepEqual(Buffer.from(plan.deploymentActions[0].deployContract.code),wasm);
+        const scopeId=crypto.randomBytes(16).toString('hex'),capability=crypto.randomBytes(32).toString('hex');
+        const passphrase='disposable sandbox recovery only';
+        const sealed=await sealV14BootstrapRecoveryKit({review:plan.review,temporaryKey:bootstrapKey,scopeId,
+          checkpointCapability:capability,passphrase,crypto:crypto.webcrypto});
+        const recovered=await openV14BootstrapRecoveryKit({kit:JSON.parse(JSON.stringify(sealed)),passphrase,crypto:crypto.webcrypto,
+          expected:{owner:OWNER,vault:VAULT,ownerPublicKey:pub(ownerKey),temporaryPublicKey:pub(bootstrapKey),
+            reviewSha256:plan.review.review_sha256,scopeId}});
+        const mobileRequest=syntheticV14MeteorRequest({signerId:OWNER,receiverId:VAULT,actions:plan.createActions});
+        const valid=validateKnownFirstPartyActionRequest(mobileRequest);
         assert.equal(MAX_ACTION_REQUEST_CANONICAL_JSON_LENGTH,400_000);
         assert.equal(valid.ok,true,valid.reason);
-        assert.ok(Buffer.byteLength(JSON.stringify(mobileRequest)) < 4_000);
-        await must(owner, VAULT, create, 'create local bootstrap vault');
-        const before = await provider.viewAccessKeyList(VAULT, { finality: 'final' });
-        assert.equal(before.keys.length, 1);
-        assert.equal(before.keys[0].public_key, pub(bootstrapKey));
-        assert.equal(before.keys[0].access_key.permission, 'FullAccess');
-        const bootstrap = account(VAULT, provider, bootstrapKey);
-        await must(bootstrap, VAULT, [tx.deployContract(wasm), call('new', { owner: OWNER }),
-          tx.deleteKey(bootstrapKey.getPublicKey())], 'deploy V14 and delete local bootstrap key');
-        assert.deepEqual((await provider.viewAccessKeyList(VAULT, { finality: 'final' })).keys, []);
+        assert.ok(Buffer.byteLength(JSON.stringify(mobileRequest))<4_000);
+        await must(owner,VAULT,plan.createActions,'create local bootstrap vault');
+        const before=await provider.viewAccessKeyList(VAULT,{finality:'final'});
+        assert.equal(before.keys.length,1);
+        assert.equal(before.keys[0].public_key,pub(bootstrapKey));
+        assert.equal(before.keys[0].access_key.permission,'FullAccess');
+        await recovered.useSecrets(async ({temporaryKey,checkpointCapability})=>{
+          assert.equal(checkpointCapability,capability);
+          const block=await provider.viewBlock({finality:'final'});
+          const access=await provider.viewAccessKey(VAULT,pub(temporaryKey),{finality:'final'});
+          const original=await signV14TemporaryBootstrapDeployment({review:plan.review,expectedReviewSha256:plan.review.review_sha256,
+            compressedV14:compressed,temporaryKey,nonce:String(BigInt(access.nonce)+1n),blockHash:block.header.hash,crypto:crypto.webcrypto});
+          // Test-only simulated two-copy witnesses. The real remote checkpoint,
+          // its freshness and phone recovery have NOT been enabled or proven.
+          const localOriginal={tx_hash:original.transaction_hash},simulatedIndependent=JSON.parse(JSON.stringify(localOriginal));
+          assert.equal(localOriginal.tx_hash,simulatedIndependent.tx_hash);
+          const decoded=tx.SignedTransaction.decode(original.signed_bytes);
+          const result=await provider.sendTransactionUntil(decoded,'FINAL');
+          requireFinalSuccess(result,'deploy V14 and delete recovered local bootstrap key');
+          assert.equal(result.transaction_outcome.id,localOriginal.tx_hash);
+        });
+        recovered.dispose();
+        assert.deepEqual((await provider.viewAccessKeyList(VAULT,{finality:'final'})).keys,[]);
       } else {
         await must(owner, VAULT, [tx.createAccount(), tx.transfer(20n * N), tx.deployContract(wasm), call('new', { owner: OWNER })], 'deploy local V14');
       }
