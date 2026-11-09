@@ -196,6 +196,16 @@ owner key stops before the read message; mismatch, unavailable or uncertain
 responses require reconciliation rather than re-enrollment. The comparison does
 not replace an imported or unlocked recovery export.
 
+The source-only temporary-bootstrap original retainer records a returned wallet
+hash in both existing witness copies, or leaves a one-shot claim if the wallet
+result is unknown. A hash later found in wallet history must pass the exact
+FINAL create receipt and fresh temporary-key check before being retained; it
+never opens or repeats the wallet. For the later locally signed deployment it
+checks the exact pinned actions, transaction hash and signature before
+retaining the hash in both copies. These source-only pieces are not wired to
+the live wallet; neither matching copies nor a hash proves an independent backup
+or a latest head.
+
 The source-only temporary-bootstrap completion verifier can check a separately
 retained deployment original against its exact reviewed actions, a FINAL
 outcome, and one fresh block's V14 code, contract owner and keyless vault state.

@@ -6,6 +6,7 @@ import {KeyPair} from '@near-js/crypto';
 import {buildV14TemporaryBootstrapPlan} from '../web-src/v14-bootstrap-plan.mjs';
 import {createV14BootstrapCreateVerifier,inspectBootstrapCreateReceipt,V14_BOOTSTRAP_READ_RPC} from '../web-src/v14-bootstrap-create-verifier.mjs';
 import {createBootstrapTwoCopyWitness} from '../web-src/v14-bootstrap-originals.mjs';
+import {createBootstrapOriginalRetainer} from '../web-src/v14-bootstrap-original-retainer.mjs';
 import {bootstrapSha256} from '../shared/v14-bootstrap-protocol.mjs';
 import {encodeBase58} from '../web-src/native-oracle-transaction.mjs';
 
@@ -89,6 +90,21 @@ test('the two-copy witness refuses a deployment claim until the real verifier ch
   await witness.claimCreate();await witness.retainCreateOriginal(f.original);
   assert.equal((await witness.claimDeployment()).next_event,'deploy_original');
   assert.equal((await local.read()).revision,3);assert.deepEqual(await local.read(),await remote.read());
+});
+
+test('a lost wallet response can be reconciled only by verifying and retaining the exact wallet-history original',async()=>{
+  const f=await fixture(),local=memoryStore(),remote=memoryStore(),verify=await f.verifier();
+  const witness=createBootstrapTwoCopyWitness({scopeId:scope,reviewSha256:f.review.review_sha256,
+    localStore:local,remoteStore:remote,verifyCreateFinal:verify,crypto:webcrypto,now});
+  const retainer=await createBootstrapOriginalRetainer({review:f.review,compressedV14:compressed,witness,verifyCreateFinal:verify,crypto:webcrypto});
+  await witness.claimCreate();
+  assert.equal((await retainer.retainWalletResult(undefined)).status,'WALLET_RESULT_UNKNOWN');
+  assert.equal((await local.read()).revision,1);
+  const recovered=await retainer.recoverCreateFromWalletHistory(f.original);
+  assert.equal(recovered.status,'RECOVERED_CREATE_ORIGINAL_RETAINED');assert.equal(recovered.final_execution_verified,true);
+  assert.equal(recovered.transaction_authorized,false);assert.deepEqual(await local.read(),await remote.read());
+  assert.equal((await witness.claimDeployment()).next_event,'deploy_original');
+  assert.equal((await local.read()).revision,3);
 });
 
 test('wrong, failed, incomplete, changed or unlinked create receipts fail closed',async()=>{

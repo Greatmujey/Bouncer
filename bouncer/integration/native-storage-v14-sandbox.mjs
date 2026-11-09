@@ -19,6 +19,7 @@ import { buildV14TemporaryBootstrapPlan, signV14TemporaryBootstrapDeployment } f
 import { createV14BootstrapCreateVerifier, V14_BOOTSTRAP_READ_RPC } from '../web-src/v14-bootstrap-create-verifier.mjs';
 import { createV14BootstrapDeploymentVerifier } from '../web-src/v14-bootstrap-deployment-verifier.mjs';
 import { createBootstrapTwoCopyWitness } from '../web-src/v14-bootstrap-originals.mjs';
+import { createBootstrapOriginalRetainer } from '../web-src/v14-bootstrap-original-retainer.mjs';
 import { bootstrapSha256 } from '../shared/v14-bootstrap-protocol.mjs';
 import { sealV14BootstrapRecoveryKit, openV14BootstrapRecoveryKit } from '../web-src/v14-bootstrap-recovery-kit.mjs';
 import { validateKnownFirstPartyActionRequest, MAX_ACTION_REQUEST_CANONICAL_JSON_LENGTH } from '@meteorwallet/connect-shared/internal';
@@ -125,9 +126,19 @@ async function main() {
         const local=simulatedCopy(),simulatedIndependent=simulatedCopy();
         const witness=createBootstrapTwoCopyWitness({scopeId,reviewSha256:plan.review.review_sha256,
           localStore:local,remoteStore:simulatedIndependent,verifyCreateFinal,crypto:crypto.webcrypto});
+        const retainer=await createBootstrapOriginalRetainer({review:plan.review,compressedV14:compressed,
+          witness,verifyCreateFinal,crypto:crypto.webcrypto});
         await witness.claimCreate();
         const created=await must(owner,VAULT,plan.createActions,'create local bootstrap vault');
-        await witness.retainCreateOriginal(created.transaction_outcome.id);
+        // Simulate a wallet sending but losing its response. The existing
+        // claim must remain; recover the synthetic hash from test-only wallet
+        // history and verify the actual FINAL sandbox receipt before retaining.
+        assert.equal((await retainer.retainWalletResult(undefined)).status,'WALLET_RESULT_UNKNOWN');
+        assert.equal((await local.read()).revision,1);
+        const recoveredOriginal=await retainer.recoverCreateFromWalletHistory(created.transaction_outcome.id);
+        assert.equal(recoveredOriginal.status,'RECOVERED_CREATE_ORIGINAL_RETAINED');
+        assert.equal(recoveredOriginal.final_execution_verified,true);
+        assert.deepEqual(await local.read(),await simulatedIndependent.read());
         const before=await provider.viewAccessKeyList(VAULT,{finality:'final'});
         assert.equal(before.keys.length,1);
         assert.equal(before.keys[0].public_key,pub(bootstrapKey));
@@ -142,8 +153,11 @@ async function main() {
           const original=await signV14TemporaryBootstrapDeployment({review:plan.review,expectedReviewSha256:plan.review.review_sha256,
             compressedV14:compressed,temporaryKey,nonce:String(BigInt(access.nonce)+1n),blockHash:block.header.hash,crypto:crypto.webcrypto});
           // Both copies are test-only memory stores, not independent cloud or
-          // phone recovery. Retain the exact signed hash before the only send.
-          await witness.retainDeploymentOriginal(original.transaction_hash);
+          // phone recovery. Verify the signed transaction's exact bytes and
+          // retain its hash in both copies before the only sandbox send.
+          const held=await retainer.retainSignedDeployment(original);
+          assert.equal(held.status,'DEPLOYMENT_ORIGINAL_RETAINED');
+          assert.equal(held.original_hash,original.transaction_hash);
           assert.deepEqual(await local.read(),await simulatedIndependent.read());
           const decoded=tx.SignedTransaction.decode(original.signed_bytes);
           const result=await provider.sendTransactionUntil(decoded,'FINAL');
@@ -224,6 +238,7 @@ async function main() {
       return { scope: 'isolated nearcore, disposable keys and local WASM only', v14_deployed_locally: true,
         temporary_vault_bootstrap_tested: temporaryBootstrap,
         ...(temporaryBootstrap ? {small_meteor_request_synthetic:true, create_original_and_fresh_state_verified_on_sandbox:true,
+          lost_wallet_result_reconciled_without_reprompt:true, deployment_original_retained_before_sandbox_send:true,
           deployment_original_and_keyless_state_verified_on_sandbox:true, bootstrap_key_deleted_on_chain:true, two_original_copies_simulated:true,
           actual_wallet_tested:false, independent_recovery_tested:false} : {}),
         scoped_agent_storage_and_receipt_verified: true, original_hash_reused_without_resend: true,

@@ -35,7 +35,8 @@ async function fixture(){
 }
 function memoryRemote(initial={revision:0,head_sha256:'0'.repeat(64),events:[]}) {
   let snapshot=structuredClone(initial),lose=false;
-  return {loseNext:()=>{lose=true},read:async()=>structuredClone(snapshot),append:async({expected_revision,expected_head_sha256,record})=>{
+  return {loseNext:()=>{lose=true},replaceForTest:value=>{snapshot=structuredClone(value)},
+    read:async()=>structuredClone(snapshot),append:async({expected_revision,expected_head_sha256,record})=>{
     if(snapshot.revision!==expected_revision||snapshot.head_sha256!==expected_head_sha256)throw Error('CAS failed');
     snapshot={revision:expected_revision+1,head_sha256:await bootstrapSha256(webcrypto,record),events:[...snapshot.events,record]};
     if(lose){lose=false;throw Error('lost response after commit')}
@@ -90,6 +91,28 @@ test('encrypted browser and separate remote CAS must agree before each original 
   const last=await w.retainDeploymentOriginal(deployHash);assert.equal(last.deploy_original,deployHash);assert.equal(last.next_event,null);
   await assert.rejects(w.claimCreate());
   local.close();
+});
+
+test('a changed two-copy history during receipt verification cannot advance on the old proof',async()=>{
+  const {plan}=await fixture(),reviewSha256=plan.review.review_sha256,local=memoryRemote(),remote=memoryRemote();
+  const createHash=encodeBase58(crypto.randomBytes(32)),otherHash=encodeBase58(crypto.randomBytes(32));
+  const verifyCreateFinal=async binding=>{
+    const prior=await local.read(),changed=JSON.parse(prior.events[1]);changed.data.tx_hash=otherHash;
+    const line=JSON.stringify(changed),replacement={revision:2,head_sha256:await bootstrapSha256(webcrypto,line),
+      events:[prior.events[0],line]};
+    // Simulate both stores being replaced or rolled back to a different valid
+    // chain while verification is in flight. This is not a freshness proof.
+    local.replaceForTest(replacement);remote.replaceForTest(replacement);
+    return {status:'CREATE_FINAL_AND_VAULT_KEY_VERIFIED',network:'testnet',...binding,
+      final_block_hash:encodeBase58(crypto.randomBytes(32)),checked_at_ms:Date.now(),final_execution_verified:true,
+      temporary_full_access_key_present:true,transaction_sent:false};
+  };
+  const witness=createBootstrapTwoCopyWitness({scopeId,reviewSha256,localStore:local,remoteStore:remote,
+    verifyCreateFinal,crypto:webcrypto});
+  await witness.claimCreate();await witness.retainCreateOriginal(createHash);
+  await assert.rejects(witness.claimDeployment());
+  assert.equal((await local.read()).revision,2);assert.deepEqual(await local.read(),await remote.read());
+  await assert.rejects(witness.claimDeployment());
 });
 
 test('a lost remote acknowledgement stops and does not permit a second prompt',async()=>{

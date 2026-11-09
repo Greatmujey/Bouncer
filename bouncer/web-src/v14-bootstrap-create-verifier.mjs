@@ -10,6 +10,10 @@ import {decodeNativeHash32} from './native-oracle-transaction.mjs';
 import {pinnedAccessKeyNonce} from '../shared/pinned-access-key-nonce.mjs';
 
 export const V14_BOOTSTRAP_READ_RPC='https://rpc.testnet.near.org';
+const verifiers=new WeakMap();
+// In-realm type/binding check only: the injected fetch and RPC are still trusted.
+export const isV14BootstrapCreateVerifier=(value,reviewSha256)=>verifiers.has(value)&&
+  (reviewSha256===undefined||verifiers.get(value)===reviewSha256);
 const EMPTY_CODE='11111111111111111111111111111111';
 const HEX=/^[a-f0-9]{64}$/,SCOPE=/^[a-f0-9]{32}$/,MAX=(1n<<128n)-1n;
 const fail=()=>new Error('Bootstrap create original or fresh vault state is unresolved; stop and do not repeat a wallet prompt or send');
@@ -123,7 +127,7 @@ export async function createV14BootstrapCreateVerifier({review:inputReview,compr
     if(isCurrent()!==true||!response.ok||body?.jsonrpc!=='2.0'||body.id!==id||body.error||!Object.hasOwn(body,'result'))throw fail();
     return body.result;
   }
-  return async function verifyCreateFinal({scope_id,review_sha256,original_hash}={}) {
+  const verifyCreateFinal=async function({scope_id,review_sha256,original_hash}={}) {
     try {
       if(!SCOPE.test(scope_id??'')||!HEX.test(review_sha256??'')||review_sha256!==review.review_sha256||
         !hash(original_hash)||isCurrent()!==true)throw fail();
@@ -149,4 +153,5 @@ export async function createV14BootstrapCreateVerifier({review:inputReview,compr
         final_block_hash:at,checked_at_ms:finished,final_execution_verified:true,temporary_full_access_key_present:true,transaction_sent:false});
     }catch{throw fail()}
   };
+  verifiers.set(verifyCreateFinal,review.review_sha256);return verifyCreateFinal;
 }
