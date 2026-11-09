@@ -37,6 +37,9 @@ try {
     page.on('request', req => { if (!['GET', 'HEAD'].includes(req.method())) writes.push(`${req.method()} ${new URL(req.url()).pathname}`); });
     await page.route('**/api/google-session**', route => route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'Google sign-in is not configured.' }) }));
     await page.goto(url, { waitUntil: 'networkidle' });
+    try {
+      await page.waitForFunction(() => document.title === 'Bouncer — A workspace for autonomous agents', null, { timeout: 10_000 });
+    } catch (error) { console.error('Workspace initialization errors:', errors); throw error; }
     assert.equal(await page.title(), 'Bouncer — A workspace for autonomous agents');
     assert.equal(await page.locator('#welcome-tour').evaluate(el => el.open), false);
     assert.equal(await page.locator('[data-route-view="workspace"]').isVisible(), true);
