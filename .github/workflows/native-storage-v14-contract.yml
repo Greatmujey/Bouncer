@@ -132,11 +132,12 @@ jobs:
             'https://s3-us-west-1.amazonaws.com/build.nearprotocol.com/nearcore/Linux-x86_64/2.14.0/near-sandbox.tar.gz' \
             --output "$RUNNER_TEMP/near-sandbox.tar.gz"
           python3 scripts/extract-pinned-near-sandbox.py "$RUNNER_TEMP/near-sandbox.tar.gz" "$RUNNER_TEMP/near-sandbox"
-      - name: Exercise contract and original-hash verifier on loopback only
+      - name: Exercise temporary bootstrap, original-hash verifiers and storage on loopback only
         working-directory: bouncer
         env:
           BOUNCER_SANDBOX_BIN: ${{ runner.temp }}/near-sandbox
           BOUNCER_V14_WASM_PATH: ${{ github.workspace }}/bouncer/contracts/bouncer/target/wasm32-unknown-unknown/release/bouncer.wasm
+          BOUNCER_SANDBOX_TEMP_BOOTSTRAP: '1'
         run: |
           ulimit -Sn 65535
           if ! node integration/native-storage-v14-sandbox.mjs > "$RUNNER_TEMP/v14-sandbox-result.log" 2>&1; then

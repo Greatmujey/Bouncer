@@ -17,6 +17,7 @@ import { startSandbox, stopSandboxChild } from './v11-nearcore-sandbox.mjs';
 import { syntheticV14MeteorRequest } from './v14-synthetic-meteor.mjs';
 import { buildV14TemporaryBootstrapPlan, signV14TemporaryBootstrapDeployment } from '../web-src/v14-bootstrap-plan.mjs';
 import { createV14BootstrapCreateVerifier, V14_BOOTSTRAP_READ_RPC } from '../web-src/v14-bootstrap-create-verifier.mjs';
+import { createV14BootstrapDeploymentVerifier } from '../web-src/v14-bootstrap-deployment-verifier.mjs';
 import { createBootstrapTwoCopyWitness } from '../web-src/v14-bootstrap-originals.mjs';
 import { bootstrapSha256 } from '../shared/v14-bootstrap-protocol.mjs';
 import { sealV14BootstrapRecoveryKit, openV14BootstrapRecoveryKit } from '../web-src/v14-bootstrap-recovery-kit.mjs';
@@ -120,6 +121,18 @@ async function main() {
           const result=await provider.sendTransactionUntil(decoded,'FINAL');
           requireFinalSuccess(result,'deploy V14 and delete recovered local bootstrap key');
           assert.equal(result.transaction_outcome.id,original.transaction_hash);
+          // Re-read this exact retained sandbox original and the final code,
+          // contract owner and key list through the browser verifier. A local
+          // transaction can omit its root receipt body; the verifier must say
+          // so rather than constructing evidence that nearcore did not return.
+          const verifyDeploymentFinal=await createV14BootstrapDeploymentVerifier({review:plan.review,compressedV14:compressed,
+            fetch:browserSandboxFetch,crypto:crypto.webcrypto});
+          const proof=await verifyDeploymentFinal({scope_id:scopeId,review_sha256:plan.review.review_sha256,original_hash:original.transaction_hash});
+          assert.equal(proof.status,'DEPLOYMENT_FINAL_AND_KEYLESS_VAULT_VERIFIED');
+          assert.equal(proof.pinned_v14_code_verified,true);
+          assert.equal(proof.temporary_key_absent,true);
+          assert.equal(proof.all_vault_access_keys_absent,true);
+          assert.equal(proof.independent_recovery_verified,false);
         });
         recovered.dispose();
         assert.deepEqual((await provider.viewAccessKeyList(VAULT,{finality:'final'})).keys,[]);
@@ -179,7 +192,7 @@ async function main() {
       return { scope: 'isolated nearcore, disposable keys and local WASM only', v14_deployed_locally: true,
         temporary_vault_bootstrap_tested: temporaryBootstrap,
         ...(temporaryBootstrap ? {small_meteor_request_synthetic:true, create_original_and_fresh_state_verified_on_sandbox:true,
-          bootstrap_key_deleted_on_chain:true, two_original_copies_simulated:true,
+          deployment_original_and_keyless_state_verified_on_sandbox:true, bootstrap_key_deleted_on_chain:true, two_original_copies_simulated:true,
           actual_wallet_tested:false, independent_recovery_tested:false} : {}),
         scoped_agent_storage_and_receipt_verified: true, original_hash_reused_without_resend: true,
         zero_yocto_owner_guard_rejected: true, over_cap_and_duplicate_rejected: true,

@@ -196,6 +196,15 @@ owner key stops before the read message; mismatch, unavailable or uncertain
 responses require reconciliation rather than re-enrollment. The comparison does
 not replace an imported or unlocked recovery export.
 
+The source-only temporary-bootstrap completion verifier can check a separately
+retained deployment original against its exact reviewed actions, a FINAL
+outcome, and one fresh block's V14 code, contract owner and keyless vault state.
+If nearcore omits a self-transaction's local root receipt body, the result says
+so; it never invents that body. It trusts the RPC and does not prove independent
+original retention, latest history, consent, or that no other transaction is in
+flight. It does not sign, broadcast or authorize a transaction and is not wired
+into the live workspace. Actual setup and real-device recovery remain unverified.
+
 Recovery also permits a user to import and locally MAC-check a saved encrypted
 recovery export, then compare that exact snapshot with an owner-signed online
 read. The comparison reports a match, a file ahead of the service, claimed
