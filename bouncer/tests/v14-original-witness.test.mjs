@@ -2,42 +2,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
-import zlib from 'node:zlib';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import nearApi from 'near-api-js';
-import { ORACLE_TESTNET_PROJECT } from '../agent/oracle-outlayer.mjs';
 import { buildV14PhoneResearchPlan } from '../agent/native-v14-phone-plan.mjs';
 import { createV14OriginalWitness,deriveV14OriginalBinding,inspectV14OriginalSnapshot,V14_WITNESS_GENESIS } from '../agent/v14-original-witness.mjs';
 import { createV14FileWitnessStore } from '../agent/v14-file-witness-store.mjs';
 import { FileJournal } from '../agent/procurement.mjs';
+import { inspectV14PublicHistory } from '../web-src/v14-checkpoint-history.mjs';
+import {fixture,scope,owner,vault} from './v14-witness-fixture.mjs';
 
 const sha=bytes=>crypto.createHash('sha256').update(bytes).digest('hex');
-const key=()=>String(nearApi.KeyPair.fromRandom('ed25519').getPublicKey());
 const hash=n=>nearApi.utils.serialize.base_encode(Buffer.alloc(32,n));
-const scope='3'.repeat(32),owner='owner.testnet',vault=`native.${owner}`;
-function fixture() {
-  const wasm=Buffer.concat([Buffer.from([0,97,115,109,1,0,0,0]),Buffer.from('bouncer-agent-v14-native-storage-testnet synthetic')]);
-  const loader=Buffer.concat([Buffer.from([0,97,115,109,1,0,0,0]),Buffer.from('synthetic loader')]);
-  const codeHash=nearApi.utils.serialize.base_encode(crypto.createHash('sha256').update(wasm).digest());
-  const mission={version:1,id:'witness-test',contract_id:vault,owner_account_id:owner,max_native_amount:'300',
-    required_resources:['compute','api','storage'],goals:[
-      {kind:'random',goal:{id:'compute',contract_id:vault,owner_account_id:owner,policy_id:'compute',amount:'100',input:{min:1,max:100},
-        program:{url:'https://example.test/random.wasm',sha256:'a'.repeat(64),build_target:'wasm32-wasip1',max_instructions:10000000,max_memory_mb:128,max_execution_seconds:60}}},
-      {kind:'oracle',goal:{id:'price',contract_id:vault,owner_account_id:owner,policy_id:'price',amount:'100',
-        route:{project:{...ORACLE_TESTNET_PROJECT},route_revision:1,policy_revision:1,payee_revision:1,active:true},max_age_seconds:300}},
-      {kind:'storage',goal:{id:'store',contract_id:vault,owner_account_id:owner,contract_code_hash:codeHash,policy_id:'store',amount:'100',
-        object_id:'mission-results',value:{from_goal_ids:['compute','price']},route:{prefix:'mission-',max_value_bytes:4096,
-          route_revision:1,policy_revision:1,payee_revision:1,active:true}}},
-    ]};
-  const inputs={mission,ownerPublicKey:key(),agentPublicKeys:{compute:key(),price:key(),store:key()},
-    gasAllowances:{compute:'500',price:'500',store:'500'},dailyCaps:{compute:'500',price:'500',store:'500'},
-    vaultStorageFundingYocto:'600',nativeDepositYocto:'300',vaultWasm:wasm,loaderWasm:loader,compressed:zlib.deflateRawSync(wasm),
-    trustedArtifacts:{vault_sha256:sha(wasm),loader_sha256:sha(loader)}};
-  const review=buildV14PhoneResearchPlan(inputs).review;
-  return {inputs,review,binding:deriveV14OriginalBinding({scopeId:scope,...inputs,review,trustedReviewSha256:review.review_sha256})};
-}
 function memoryStore() {
   let snapshot={revision:0,head_sha256:V14_WITNESS_GENESIS,events:[]},failAfterAppend=false;
   return {
@@ -98,6 +75,12 @@ test('independent and local copies retain six wallet claims/originals, then thre
   assert.deepEqual(state.mission.map(x=>x.tx_hash),[30,31,32].map(hash));
   assert.deepEqual(await s.local.read(),await s.remote.read());
   assert.ok(!(await s.remote.read()).events.join('').includes('private_key'));
+  const browser=await inspectV14PublicHistory({snapshot:{status:'EXISTING_CHECKPOINT',scope_id:scope,...await s.remote.read()},
+    owner,vault,crypto:crypto.webcrypto});
+  assert.deepEqual(browser.setup.map(x=>x.tx_hash),state.setup.map(x=>x.tx_hash));
+  assert.deepEqual(browser.mission.map(x=>x.tx_hash),state.mission.map(x=>x.tx_hash));
+  assert.equal(browser.receipts_verified,false);assert.equal(browser.latest_head_independently_verified,false);
+  assert.equal(browser.wallet_transaction_authorized,false);
 });
 
 test('a lost wallet response leaves a one-shot claim; neither another prompt nor a later stage is authorized',async()=>{
@@ -151,6 +134,8 @@ test('malformed, reordered, truncated and substituted histories fail even if bot
   const good=await s.local.read();
   const changed=structuredClone(good);changed.events[1]=changed.events[1].replace('wallet_claim','wallet_verified');changed.head_sha256=sha(changed.events[1]);
   assert.throws(()=>inspectV14OriginalSnapshot(changed,s.binding),/uncertain/);
+  await assert.rejects(inspectV14PublicHistory({snapshot:{status:'EXISTING_CHECKPOINT',scope_id:scope,...changed},
+    owner,vault,crypto:crypto.webcrypto}),/invalid or uncertain/);
   assert.throws(()=>inspectV14OriginalSnapshot({...good,events:[good.events[1],good.events[0]],head_sha256:sha(good.events[0])},s.binding),/uncertain/);
   assert.throws(()=>inspectV14OriginalSnapshot({...good,revision:1,events:good.events.slice(0,1)},s.binding),/uncertain/);
   assert.throws(()=>inspectV14OriginalSnapshot(good,{...s.binding,review_sha256:'f'.repeat(64)}),/invalid|uncertain/);

@@ -16,14 +16,14 @@ import { isDeepStrictEqual } from 'node:util';
 import nearApi from 'near-api-js';
 import { validateNativeMission } from './native-mission.mjs';
 import { isDirectTestnetChild } from './native-oracle-wallet-plan.mjs';
+import { V14_PHONE_RESEARCH_STAGE_IDS } from '../shared/v14-phone-stages.mjs';
+export { V14_PHONE_RESEARCH_STAGE_IDS } from '../shared/v14-phone-stages.mjs';
 
 const T = 10n ** 12n, MAX_U128 = (1n << 128n) - 1n, MAX_AGENT_GAS_ALLOWANCE = 10n ** 24n;
 const MARKER = Buffer.from('bouncer-agent-v14-native-storage-testnet');
 const MAGIC = Buffer.from([0,97,115,109,1,0,0,0]);
 const DOMAIN = Buffer.from('bouncer-research-v14-phone-batch-v1\0');
 const DUMMY_KEY = nearApi.utils.PublicKey.from('ed25519:11111111111111111111111111111111');
-export const V14_PHONE_RESEARCH_STAGE_IDS = Object.freeze(['create_v14_research_vault','configure_compute','configure_api','configure_storage',
-  'fund_native_vault','install_restricted_agents']);
 const STAGE_IDS = V14_PHONE_RESEARCH_STAGE_IDS;
 const plain = x => x && typeof x === 'object' && !Array.isArray(x) && [Object.prototype,null].includes(Object.getPrototypeOf(x));
 const exact = (x, keys) => plain(x) && Object.keys(x).length === keys.length && keys.every(k => Object.hasOwn(x,k));

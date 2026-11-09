@@ -290,13 +290,18 @@ approval. A research-only two-copy checkpoint is now implemented in
 provides one-shot methods for recording wallet claims and original hashes,
 and stops if copies differ. Its encrypted local `FileJournal` adapter and
 separate Supabase compare-and-append schema/Edge adapter are tested with
-synthetic data. The Edge handler is default-off and exposes no browser
-provisioning. **This checkpoint is not yet provisioned for the owner, wired into
-wallet prompts or mission sends, or verified against a real receipt.** It retains
-the public review, hashes and commitments, not the journal encryption key or
-agent keys; those still require separate durable recovery. An administrator
-able to roll back both copies can defeat it. Never infer independent durability
-from two adapter names or silently recreate a missing copy. Railway says
+synthetic data. Research-only owner enrollment and recovery helpers verify a
+short-lived NEP-413 message and a current testnet FullAccess key at a fresh
+FINAL block. Recovery can read the existing public history even if the
+checkpoint capability is lost; it cannot rotate that capability or recreate a
+journal. The browser and Edge endpoints remain default-off and are not wired
+into the wallet UI. **This checkpoint is not yet provisioned for the owner,
+wired into wallet prompts or mission sends, or verified against a real
+receipt.** It retains the public review, hashes and commitments, not the
+journal encryption key or agent keys; those still require separate durable
+recovery. An administrator able to roll back both copies can defeat it. Never
+infer independent durability from two adapter names or silently recreate a
+missing copy. Railway says
 [trial volumes can be deleted 30 days after trial credits
 expire](https://docs.railway.com/pricing/free-trial#data-retention); a trial volume
 must never be the sole copy of originals. Railway and Vercel remain unavailable
