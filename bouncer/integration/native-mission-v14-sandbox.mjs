@@ -22,6 +22,10 @@ import { nep413Payload } from '../web-src/cli-login.mjs';
 import { buildV14PhoneResearchPlan, verifyV14PhoneResearchPlan, v14PhoneBatchCommitment } from '../agent/native-v14-phone-plan.mjs';
 import { prepareV14PhoneAttempt, inspectV14PhoneAttempt } from '../agent/native-v14-phone-receipts.mjs';
 import { inspectV14PhoneSetupCompletion } from '../agent/native-v14-phone-completion.mjs';
+import { createV14SetupRpcVerifier } from '../agent/v14-setup-rpc-verifier.mjs';
+import { createV14OriginalWitness,deriveV14OriginalBinding,V14_WITNESS_GENESIS } from '../agent/v14-original-witness.mjs';
+import { createV14FileWitnessStore } from '../agent/v14-file-witness-store.mjs';
+import { ReadOnlyNearReceiptProvider } from '../agent/read-only-near-receipts.mjs';
 import { ORACLE_TESTNET_PROJECT } from '../agent/oracle-outlayer.mjs';
 import { MARKET_SUMMARY_PROGRAM } from '../agent/market-summary.mjs';
 import { SandboxSetupRpc, withSandboxOnlyFetch } from './v11-sandbox-setup-rpc.mjs';
@@ -36,6 +40,16 @@ const account=(id,provider,key)=>new nearApi.Account(id,provider,new nearApi.Key
 const call=(method,args={},deposit=0n,gas=30n*T)=>tx.functionCall(method,args,gas,deposit);
 const program=MARKET_SUMMARY_PROGRAM; // The local fake reports arithmetic; it never fetches this program.
 const sha=bytes=>crypto.createHash('sha256').update(bytes).digest();
+// A synthetic second store checks the protocol in isolation. It is NOT an
+// independent durable provider, and its in-memory state is discarded afterward.
+function sandboxWitnessStore() {
+  let snapshot={revision:0,head_sha256:V14_WITNESS_GENESIS,events:[]};
+  return {read:async()=>structuredClone(snapshot),append:async({expected_revision,expected_head_sha256,record})=>{
+    assert.equal(expected_revision,snapshot.revision);assert.equal(expected_head_sha256,snapshot.head_sha256);
+    snapshot={revision:snapshot.revision+1,head_sha256:sha(record).toString('hex'),events:[...snapshot.events,record]};
+    return structuredClone(snapshot);
+  }};
+}
 const createLoader=(loader,funding=20n*N)=>[tx.createAccount(),tx.transfer(funding),tx.deployContract(loader),call('loader_init',{},1n,20n*T)];
 const deployCompressed=(compressed,deposit=1n)=>call('loader_deploy',compressed,deposit,240n*T);
 function failed(result,label) { assert.equal(result?.final_execution_status,'FINAL',`${label}: not FINAL`); assert.ok(result?.status?.Failure,`${label}: expected failure`); }
@@ -115,7 +129,7 @@ async function main() {
     assert.equal(MAX_ACTION_REQUEST_CANONICAL_JSON_LENGTH,400_000); assert.equal(valid.ok,true,valid.reason);
     assert.ok(meteorBytes<380_000,`synthetic Meteor action request too large: ${meteorBytes}`);
   }
-  let sandbox,journal;
+  let sandbox,journal,setupJournal;
   try {
     sandbox=await startSandbox(binary,dir,pub(rootSeed)); const {provider,rpcUrl}=sandbox;
     const report=await withSandboxOnlyFetch(rpcUrl,async()=>{
@@ -124,8 +138,36 @@ async function main() {
       const send=(signer,receiverId,actions)=>signer.signAndSendTransaction({receiverId,actions,waitUntil:'FINAL',throwOnFailure:false});
       const must=async(signer,receiver,actions,label)=>{const r=await send(signer,receiver,actions);requireFinalSuccess(r,label);return r;};
       const setupProofs=[],setupPrior=[];
+      let setupWitness,setupLocal,setupRemote;
+      if(phonePlan) {
+        const scopeId=crypto.randomBytes(16).toString('hex');
+        const binding=deriveV14OriginalBinding({...phonePlanAnchors,scopeId});
+        const encryptionKey=crypto.randomBytes(32);
+        try {setupJournal=new FileJournal(path.join(dir,'setup-witness.json'),VAULT,OWNER,{encryptionKey});}
+        finally {encryptionKey.fill(0)}
+        setupLocal=createV14FileWitnessStore({journal:setupJournal,owner:OWNER,vault:VAULT,scopeId,initializeBrandNew:true});
+        setupRemote=sandboxWitnessStore();
+        // Production is pinned to public testnet. For this test ONLY, methods
+        // delegate to the isolated nearcore adapter, whose chain-id alias is
+        // accepted only after checking the real sandbox identity. The global
+        // fetch fence rejects everything except this sandbox's loopback URL.
+        const sandboxRead=new SandboxSetupRpc(rpcUrl);
+        const setupRead=new ReadOnlyNearReceiptProvider('https://test.rpc.fastnear.com/',{fetchImpl:()=>{throw new Error('unexpected remote RPC')}});
+        for(const method of ['viewNodeStatus','viewBlock','query','callFunctionRaw','experimental_protocolConfig','txStatusReceipts'])
+          setupRead[method]=sandboxRead[method].bind(sandboxRead);
+        setupWitness=createV14OriginalWitness({binding,localStore:setupLocal,independentStore:setupRemote,
+          verifySetupReceipt:createV14SetupRpcVerifier({planInputs:phonePlanAnchors,provider:setupRead})});
+        await setupWitness.reserve();
+      }
+      const claimSetup=async index=>{
+        const stageId=phonePlan.batches[index].id;
+        await setupWitness.claimWalletStage(stageId);
+        await assert.rejects(setupWitness.claimWalletStage(stageId),/never prompt again/);
+      };
       const inspectSetup=async(index,sent)=>{
         const stage=phonePlan.batches[index],trustedOriginalHash=sent.transaction_outcome.id;
+        await setupWitness.retainWalletOriginal({stageId:stage.id,txHash:trustedOriginalHash});
+        await setupWitness.verifyWalletOriginal({stageId:stage.id});
         const attempt=prepareV14PhoneAttempt({...phonePlanAnchors,stageId:stage.id,trustedOriginalHash});
         const result=await provider.txStatusReceipts(trustedOriginalHash,OWNER,'FINAL');
         const proof=inspectV14PhoneAttempt({...phonePlanAnchors,trustedOriginalHash,attempt,result});
@@ -166,6 +208,7 @@ async function main() {
         const afterRefund=BigInt((await provider.viewAccount(OWNER,{finality:'final'})).amount);
         assert.ok(afterRefund>beforeRefund+N/2n,'failed-upgrade loader funding did not return to sandbox owner');
         assert.equal(v14PhoneBatchCommitment(phonePlan.batches[0]),phonePlan.review.stages[0].action_commitment_sha256);
+        await claimSetup(0);
         const sent=await must(owner,VAULT,phonePlan.batches[0].actions,'compressed V14 research self-deploy');
         await inspectSetup(0,sent);
         const receipt=await provider.txStatusReceipts(sent.transaction_outcome.id,OWNER,'FINAL');
@@ -186,6 +229,7 @@ async function main() {
         for (let i=1;i<phonePlan.batches.length;i++) {
           const stage=phonePlan.batches[i];
           assert.equal(v14PhoneBatchCommitment(stage),phonePlan.review.stages[i].action_commitment_sha256);
+          await claimSetup(i);
           const sent=await must(owner,stage.receiverId,stage.actions,stage.id);
           await inspectSetup(i,sent);
         }
@@ -221,6 +265,11 @@ async function main() {
         completion=await inspectV14PhoneSetupCompletion({...phonePlanAnchors,prior:setupPrior,provider:new SandboxSetupRpc(rpcUrl)});
         assert.equal(completion.status,'ORIGINALS_AND_SETUP_SNAPSHOT_MATCH_NOT_AUTHORIZED',JSON.stringify(completion.blockers));
         assert.equal(completion.wallet_prompt_authorized,false);
+        const witnessState=await setupWitness.inspect();
+        assert.equal(witnessState.setup.length,6);assert.equal(witnessState.pending,null);assert.equal(witnessState.next_setup_stage,null);
+        assert.deepEqual(witnessState.setup.map(item=>item.tx_hash),setupPrior.map(item=>item.trustedOriginalHash));
+        assert.deepEqual(await setupLocal.read(),await setupRemote.read());
+        assert.ok(!fs.readFileSync(path.join(dir,'setup-witness.json'),'utf8').includes(phonePlan.review.review_sha256));
       }
       const make=(suffix='')=>makeMission(codeHash,priceRoute,storageRoute,suffix);
       const signers=(suffix='')=>Object.fromEntries(Object.entries(keys).map(([id,k])=>[`${id}${suffix}`,{account:account(OWNER,rpc,k),publicKey:k.getPublicKey()}]));
@@ -284,6 +333,8 @@ async function main() {
         research_loader:loader?{synthetic_meteor_request_bytes:meteorBytes,loader_wasm_bytes:loader.length,
           compressed_v14_bytes:compressed.length,all_unsigned_plan_stages_executed_only_in_sandbox:true,
           sandbox_original_receipt_proofs:setupProofs,sandbox_completion_snapshot:completion?.status,
+          encrypted_local_and_simulated_second_checkpoint_reconciled:true,
+          staged_receipt_and_fresh_state_verifier_exercised:true,independent_durable_store_tested:false,
           failed_upgrade_owner_refund_tested:true,real_phone_tested:false}:null,
         dependent_price_calculation_and_public_result_storage:true, fake_provider_did_not_run_wasi:true, sandbox_refunds_verified:true,
         original_hash_recovery_without_new_send:true, lost_response_recovered_and_remaining_legs_continued:true,
@@ -292,6 +343,6 @@ async function main() {
     });
     console.log(JSON.stringify(report,null,2));
     if (loader && process.env.GITHUB_ACTIONS==='true') console.log(`::notice title=V14 research phone loader::Synthetic Meteor request ${meteorBytes} bytes; loader ${loader.length} bytes; compressed V14 ${compressed.length} bytes. Isolated chain and fake provider only; not a real phone, wallet approval or live fulfillment.`);
-  } finally {journal?.close();if(sandbox)await stopSandboxChild(sandbox.child);fs.rmSync(dir,{recursive:true,force:true});}
+  } finally {journal?.close();setupJournal?.close();if(sandbox)await stopSandboxChild(sandbox.child);fs.rmSync(dir,{recursive:true,force:true});}
 }
 main().catch(error=>{console.error('Isolated native mission FAILED:',error?.stack??String(error));process.exitCode=1;});
