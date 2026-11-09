@@ -19,13 +19,14 @@ test('Railway hosts only the public workspace at its exact dedicated host; backe
     assert.equal(page.status,200);assert.match(page.headers['content-type'],/^text\/html/);
     assert.match(page.body,/Temporary Railway testnet site/);
     assert.ok(page.body.includes(`name="bouncer-wallet-origin" content="${RAILWAY_WEB_ORIGIN}"`));
-    assert.match(page.body,/Vault setup and Bouncer missions are not enabled/);
+    assert.match(page.body,/Vault deployment and Bouncer missions are not enabled/);
+    assert.match(page.body,/Encrypted setup recovery is available when configured/);
     assert.equal(page.headers['x-content-type-options'],'nosniff');
     assert.match(page.headers['content-security-policy'],/object-src 'none'/);
     assert.equal((await request(server,'/workspace',{headers:{host:'attacker.example'}})).status,421);
     assert.equal((await request(server,'/workspace',{headers:{host,'x-forwarded-proto':'http'}})).status,421);
     assert.equal((await request(server,'/workspace',{method:'POST',headers:{host}})).status,405);
-    for(const asset of ['/styles.css?v=18','/wallet.bundle.js?v=40','/app.mjs?v=7'])
+    for(const asset of ['/styles.css?v=19','/wallet.bundle.js?v=41','/app.mjs?v=7'])
       assert.equal((await request(server,asset,{headers:{host}})).status,200);
     const artifact=await request(server,'/v14-bootstrap-artifact-v1.json',{headers:{host}});
     assert.equal(artifact.status,200);assert.match(artifact.headers['content-type'],/^application\/json/);

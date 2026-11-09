@@ -37,13 +37,13 @@ class FakeSandboxWallet {
   async signMessage(params) {
     this.config.messageRequests ??= [];
     this.config.messageRequests.push(params);
-    if (this.config.fail) throw new Error('cancelled');
+    if (this.config.fail || this.config.messageFail) throw new Error('cancelled');
     if (this.config.messageWait) await this.config.messageWait;
     if (this.config.signConnectedMessage) {
       const pair = this.config.cliKey || KeyPair.fromRandom('ed25519');
       const hash = createHash('sha256').update(nep413Payload(params)).digest();
       const publicKey = pair.getPublicKey().toString();
-      return { accountId: this.config.account || 'alice.testnet', publicKey,
+      return { accountId: this.config.account || (this.manifest.id === 'near-mobile' ? 'mobile.testnet' : 'alice.testnet'), publicKey,
         signature: Buffer.from(pair.sign(hash).signature).toString('base64') };
     }
     return this.config.messageResult || { accountId: 'mobile.testnet', publicKey: 'ed25519:public', signature: 'test-signature' };
@@ -69,7 +69,7 @@ class Element {
 function fakeBrowser(url, { top = true, storageFails = false, approved = '' } = {}) {
   const ids = ['wallet-connect', 'wallet-disconnect', 'wallet-status', 'wallet-open-site', 'wallet-dialog', 'wallet-close', 'wallet-options', 'wallet-dialog-status', 'wallet-title-text', 'wallet-dialog-description', 'wallet-banner', 'wallet-safety',
     'wallet-account-entry', 'wallet-account-form', 'wallet-account-id', 'wallet-account-error', 'wallet-account-back', 'wallet-cli-verify',
-    'wallet-account-view', 'wallet-account-name', 'wallet-account-badge', 'wallet-account-warning', 'wallet-account-near', 'wallet-account-usdc', 'wallet-account-balance-status', 'wallet-account-use-wallet', 'wallet-account-refresh', 'wallet-owner-verify', 'wallet-owner-status',
+    'wallet-account-view', 'wallet-account-name', 'wallet-account-badge', 'wallet-account-warning', 'wallet-account-near', 'wallet-account-usdc', 'wallet-account-balance-status', 'wallet-account-use-wallet', 'wallet-account-refresh', 'wallet-owner-verify', 'wallet-owner-status', 'workspace-vault-wallet-state', 'workspace-resource-wallet-state',
     'wallet-bootstrap-budget-open', 'wallet-bootstrap-budget-panel', 'wallet-bootstrap-budget-refresh', 'wallet-bootstrap-budget-status', 'wallet-bootstrap-budget-result',
     'wallet-bootstrap-candidate-open', 'wallet-bootstrap-candidate-panel', 'wallet-bootstrap-candidate-passphrase', 'wallet-bootstrap-candidate-confirm',
     'wallet-bootstrap-candidate-create', 'wallet-bootstrap-candidate-status', 'wallet-bootstrap-candidate-saved', 'wallet-bootstrap-candidate-id', 'wallet-bootstrap-candidate-details',
@@ -119,7 +119,11 @@ function connectorClass(config = {}) {
       this.db = {}; this.whenManifestLoaded = Promise.resolve();
     }
     on(event, fn) { this.events[event] = fn; }
-    async getConnectedWallet() { throw new Error('not connected'); }
+    async getConnectedWallet() {
+      if (config.restoreWallet) return {wallet:this.wallets.find(w => w.manifest.id === config.restoreWallet),
+        accounts:[{accountId:config.account || 'alice.testnet'}]};
+      throw new Error('not connected');
+    }
     async connect(input) {
       config.input = input;
       if (config.browser) config.dialogWasOpen = config.browser.nodes['wallet-dialog'].open;
@@ -219,8 +223,8 @@ test('shared guest, GitHub Pages and embedded preview never instantiate the wall
   }
 });
 
-test('connects and disconnects a wallet-reported account without requesting a key or signature', async () => {
-  const browser = fakeBrowser('http://127.0.0.1:4173/'), config = { browser };
+test('explicit connection requests only a fresh identity signature and disconnect clears the session', async () => {
+  const browser = fakeBrowser('http://127.0.0.1:4173/'), config = { browser, signConnectedMessage:true };
   await initWallet({ window: browser.win, document: browser.doc, NearConnector: connectorClass(config) });
   assert.equal(config.options.network, 'testnet');
   assert.equal(config.options.features.testnet, true);
@@ -240,14 +244,17 @@ test('connects and disconnects a wallet-reported account without requesting a ke
   await browser.options[0].click();
   assert.deepEqual(config.input, { walletId: 'meteor-wallet' });
   assert.equal(config.dialogWasOpen, false, 'wallet iframe is not blocked behind our dialog');
-  assert.match(browser.nodes['wallet-status'].textContent, /Connected: alice\.testnet \(wallet-reported\)/);
+  assert.match(browser.nodes['wallet-status'].textContent, /Verified testnet wallet control for alice\.testnet/);
+  assert.equal(config.messageRequests.length,1);
+  assert.equal(config.transactionRequests,undefined);
+  assert.equal(browser.nodes['wallet-owner-verify'].hidden,true);
   assert.equal(browser.nodes['wallet-options'].hidden, true);
   assert.equal(browser.nodes['wallet-disconnect'].hidden, false);
   assert.deepEqual(browser.labels.map(node => node.textContent), ['Connected', 'Connected', 'Connected']);
   assert.ok(browser.openers.every(button => button.dataset.walletState === 'connected'));
   assert.ok(browser.openers.every(button => button.attributes['aria-label'] === 'Connected: alice.testnet. Manage accounts'));
   assert.equal(browser.nodes['wallet-title-text'].textContent, 'Wallet connected');
-  assert.match(browser.nodes['wallet-dialog-description'].textContent, /connected/);
+  assert.match(browser.nodes['wallet-dialog-description'].textContent, /identity is verified/);
   await browser.nodes['wallet-connect'].click();
   await browser.nodes['wallet-disconnect'].click();
   assert.equal(config.disconnected, 'meteor-wallet');
@@ -318,7 +325,7 @@ test('direct preview review is read-only and one explicit tap invokes only the f
   assert.equal(config.transactionRequests.length,1);
 });
 
-test('vault budget review uses public testnet reads and never signs or sends', async () => {
+test('vault budget review uses public testnet reads and adds no signature or transaction', async () => {
   const origin='https://bouncer-production-6df1.up.railway.app',browser=fakeBrowser(`${origin}/workspace`,{approved:origin});
   const config={account:'great_mujey.testnet'},originalFetch=browser.win.fetch,block=encodeBase58(Buffer.alloc(32,17));
   const fee={send_sir:100000000,send_not_sir:100000000,execution:100000000};
@@ -345,37 +352,39 @@ test('vault budget review uses public testnet reads and never signs or sends', a
   await initWallet({window:browser.win,document:browser.doc,NearConnector:connectorClass(config)});
   await browser.nodes['wallet-connect'].click();await browser.options[0].click();
   const open=browser.nodes['wallet-bootstrap-budget-open'];assert.equal(open.hidden,false);
+  const signaturesBeforeReview = config.messageRequests.length;
   await open.click();await browser.nodes['wallet-bootstrap-budget-refresh'].click();
   assert.equal(reads,7);assert.match(browser.nodes['wallet-bootstrap-budget-result'].textContent,/Example vault transfer: 6 test NEAR \(not approved\)/);
   assert.match(browser.nodes['wallet-bootstrap-budget-result'].textContent,/Deploy gas upfront/);
   assert.match(browser.nodes['wallet-bootstrap-budget-result'].textContent,/Independent recovery and owner approval are still required/);
   assert.match(browser.nodes['wallet-bootstrap-budget-status'].textContent,/No transaction was authorized or sent/);
-  assert.equal(config.messageRequests,undefined);assert.equal(config.transactionRequests,undefined);
+  assert.equal(config.messageRequests.length,signaturesBeforeReview);assert.equal(config.transactionRequests,undefined);
   await browser.nodes['wallet-disconnect'].click();assert.equal(open.hidden,true);
 });
 
-test('connected phone-wallet accounts can verify a fresh identity message without approving spending', async () => {
+test('explicit phone-wallet connections automatically verify identity, hide retry and never approve spending', async () => {
   for (const id of ['meteor-wallet', 'intear-wallet', 'nightly-wallet', 'ledger']) {
     const browser = fakeBrowser('http://127.0.0.1:4173/'), config = { account: 'great_mujey.testnet', signConnectedMessage: true };
     await initWallet({ window: browser.win, document: browser.doc, NearConnector: connectorClass(config) });
     await browser.nodes['wallet-connect'].click();
     await browser.options.find(option => option.dataset.walletId === id).click();
-    assert.equal(browser.nodes['wallet-owner-verify'].hidden, false);
-    assert.equal(browser.nodes['wallet-account-badge'].textContent, 'CONNECTED');
-    assert.equal(config.messageRequests, undefined, 'connecting alone does not sign a message');
-    await browser.nodes['wallet-connect'].click();
-    await browser.nodes['wallet-owner-verify'].click();
-    assert.equal(config.messageRequests.length, 1);
+    assert.equal(config.messageRequests.length, 1, 'explicit connection starts one identity message');
     assert.equal(config.messageRequests[0].signerId, 'great_mujey.testnet');
     assert.equal(config.messageRequests[0].network, 'testnet');
+    assert.match(config.messageRequests[0].message, /does not approve a transaction/);
+    assert.equal(config.transactionRequests, undefined);
     assert.equal(browser.nodes['wallet-account-badge'].textContent, 'OWNER VERIFIED');
+    assert.equal(browser.nodes['wallet-owner-verify'].hidden, true);
     assert.match(browser.nodes['wallet-account-warning'].textContent, /does not approve transactions.*spending access/);
     assert.match(browser.nodes['wallet-owner-status'].textContent, /not spending permission/);
-    assert.equal(browser.nodes['wallet-dialog'].open, true);
+    assert.match(browser.nodes['workspace-vault-wallet-state'].textContent, /Identity verified for great_mujey\.testnet/);
+    assert.equal(browser.nodes['wallet-dialog'].open, false, 'success returns to the workspace');
+    await browser.nodes['wallet-connect'].click();
     await browser.nodes['wallet-disconnect'].click();
     assert.equal(browser.nodes['wallet-owner-verify'].hidden, true);
     assert.equal(browser.nodes['wallet-owner-status'].hidden, true);
     assert.equal(browser.nodes['wallet-owner-status'].textContent, '');
+    assert.match(browser.nodes['workspace-resource-wallet-state'].textContent, /Connect a supported testnet wallet/);
   }
 });
 
@@ -390,8 +399,7 @@ test('local preparation saves and rechecks an encrypted candidate without an add
   await initWallet({window:browser.win,document:browser.doc,NearConnector:connectorClass(config),loadBootstrapArtifact:async()=>bytes.slice()});
   const n=browser.nodes;assert.equal(n['wallet-bootstrap-candidate-open'].hidden,true);
   await n['wallet-connect'].click();await browser.options[0].click();
-  assert.equal(n['wallet-bootstrap-candidate-open'].hidden,true);
-  await n['wallet-owner-verify'].click();await new Promise(resolve=>setImmediate(resolve));
+  await new Promise(resolve=>setImmediate(resolve));
   assert.equal(n['wallet-bootstrap-candidate-open'].hidden,false);
   await n['wallet-bootstrap-candidate-open'].click();
   assert.equal(n['wallet-bootstrap-candidate-enrollment'].hidden,true, 'offline checkpoint must not offer enrollment');
@@ -477,6 +485,9 @@ test('saved candidate enrollment is identity-only and stops on success, lost res
     await n['wallet-owner-verify'].click();await new Promise(resolve=>setImmediate(resolve));
     await n['wallet-bootstrap-candidate-open'].click();
     assert.equal(n['wallet-bootstrap-candidate-enroll'].disabled,true);
+    assert.equal(n['wallet-bootstrap-candidate-create'].disabled,true,'do not generate a replacement after a same-browser attempt');
+    assert.equal(n['wallet-bootstrap-candidate-verify'].disabled,false,'checking the existing saved file remains available');
+    assert.match(n['wallet-bootstrap-candidate-status'].textContent,/recover the existing checkpoint.*do not create a new candidate/i);
     assert.match(n['wallet-bootstrap-candidate-enroll-status'].textContent,/attempted on this browser.*recover/i);
     assert.equal(posts,expectedPosts);assert.equal(config.transactionRequests,undefined);
   }
@@ -536,8 +547,6 @@ test('Railway owner can open offline recovery while online recovery is disabled 
   };
   await initWallet({window:browser.win,document:browser.doc,NearConnector:connectorClass(config)});
   await browser.nodes['wallet-connect'].click();await browser.options[0].click();
-  assert.equal(browser.nodes['wallet-bootstrap-recovery-open'].hidden,true);
-  await browser.nodes['wallet-owner-verify'].click();
   await new Promise(resolve=>setImmediate(resolve));
   const recovery=browser.nodes['wallet-bootstrap-recovery-open'];
   assert.equal(recovery.hidden,false);assert.equal(recovery.disabled,false);
@@ -697,7 +706,7 @@ test('phone recovery checks and records a matching original without submitting a
   assert.match(browser.nodes['wallet-setup-recovery-status'].textContent,/reconciled at FINAL.*next setup stage/i);
   assert.equal(browser.nodes['wallet-buffer-setup-approve'].hidden,false);
   assert.equal(browser.nodes['wallet-setup-recovery-form'].hidden,true);
-  assert.equal(browser.nodes['wallet-dialog'].open,true);
+  assert.equal(browser.nodes['wallet-dialog'].open,false, 'workspace recovery must not reopen the wallet picker');
   assert.equal(config.messageRequests.length,5);
   assert.match(config.messageRequests[0].message,/does not approve a transaction/);
   assert.ok(config.messageRequests.slice(1).every(p=>/not a transaction/.test(p.message)));
@@ -741,25 +750,30 @@ test('Buffer setup review is backend-gated and remains read-only until the owner
   assert.ok(!calls.some(([url])=>/wallet-setup\/(reserve|claim|broadcast)$/.test(url)));
 });
 
-test('NEAR Mobile owner verification targets the connected account and performs no transaction', async () => {
+test('NEAR Mobile reuses its verified login; a retry targets the connected account', async () => {
   const browser = fakeBrowser('http://127.0.0.1:4173/'), config = { account: 'great_mujey.testnet', signConnectedMessage: true };
   await initWallet({ window: browser.win, document: browser.doc, NearConnector: connectorClass(config) });
+  browser.win.cliKeyPermission = { FunctionCall: {} };
   await browser.options.find(option => option.dataset.walletId === 'near-mobile').click();
-  assert.equal(config.messageRequests.length, 1, 'the connection uses a message only');
+  assert.equal(config.messageRequests.length, 1, 'the connection uses one message only');
+  assert.equal(browser.nodes['wallet-account-badge'].textContent, 'CONNECTED');
+  assert.equal(browser.nodes['wallet-owner-verify'].hidden, false);
+  assert.match(browser.nodes['wallet-owner-status'].textContent, /not a current testnet Full Access key/);
+  browser.win.cliKeyPermission = 'FullAccess';
   await browser.nodes['wallet-owner-verify'].click();
   assert.equal(config.messageRequests.length, 2);
   assert.equal(config.messageRequests[1].signerId, 'great_mujey.testnet');
   assert.equal(config.messageRequests[1].accountId, 'great_mujey.testnet', 'pinned Mobile adapter requires its accountId option');
   assert.equal(browser.nodes['wallet-account-badge'].textContent, 'OWNER VERIFIED');
-  assert.match(browser.nodes['wallet-account-warning'].textContent, /does not approve transactions.*spending access/);
+  assert.equal(browser.nodes['wallet-owner-verify'].hidden, true);
+  assert.equal(config.transactionRequests, undefined);
 });
 
 test('a restricted key or a late wallet result cannot mark the connected account as verified', async () => {
   const browser = fakeBrowser('http://127.0.0.1:4173/'), config = { signConnectedMessage: true };
+  browser.win.cliKeyPermission = { FunctionCall: {} };
   await initWallet({ window: browser.win, document: browser.doc, NearConnector: connectorClass(config) });
   await browser.options[0].click();
-  browser.win.cliKeyPermission = { FunctionCall: {} };
-  await browser.nodes['wallet-owner-verify'].click();
   assert.equal(browser.nodes['wallet-account-badge'].textContent, 'CONNECTED');
   assert.match(browser.nodes['wallet-owner-status'].textContent, /not a current testnet Full Access key/);
   browser.win.cliKeyPermission = 'FullAccess';
@@ -772,6 +786,64 @@ test('a restricted key or a late wallet result cannot mark the connected account
   assert.equal(browser.nodes['wallet-owner-verify'].hidden, true);
   assert.equal(browser.nodes['wallet-owner-status'].textContent, '');
   assert.equal(browser.nodes['wallet-dialog'].open, false);
+  assert.equal(config.transactionRequests, undefined);
+});
+
+test('cancelled identity verification stays connected and offers a fresh, no-transaction retry', async () => {
+  const browser = fakeBrowser('http://127.0.0.1:4173/'), config = {signConnectedMessage:true,messageFail:true};
+  await initWallet({window:browser.win,document:browser.doc,NearConnector:connectorClass(config)});
+  await browser.nodes['wallet-connect'].click();await browser.options[0].click();
+  assert.equal(config.messageRequests.length,1);
+  assert.equal(browser.nodes['wallet-account-badge'].textContent,'CONNECTED');
+  assert.equal(browser.nodes['wallet-owner-verify'].hidden,false);
+  assert.equal(browser.nodes['wallet-dialog'].open,true);
+  assert.match(browser.nodes['wallet-owner-status'].textContent,/cancelled|could not be verified/i);
+  assert.match(browser.nodes['workspace-vault-wallet-state'].textContent,/identity is not verified.*retry/i);
+  config.messageFail=false;
+  await browser.nodes['wallet-owner-verify'].click();
+  assert.equal(config.messageRequests.length,2);
+  assert.notDeepEqual([...config.messageRequests[0].nonce],[...config.messageRequests[1].nonce]);
+  assert.equal(browser.nodes['wallet-account-badge'].textContent,'OWNER VERIFIED');
+  assert.equal(browser.nodes['wallet-owner-verify'].hidden,true);
+  assert.equal(config.transactionRequests,undefined);
+});
+
+test('a late automatic identity result cannot verify a signed-out or changed account', async () => {
+  for (const changedAccount of [null,'bob.testnet']) {
+    const browser = fakeBrowser('http://127.0.0.1:4173/'), config = {signConnectedMessage:true};
+    let release;
+    config.messageWait = new Promise(resolve => {release=resolve;});
+    await initWallet({window:browser.win,document:browser.doc,NearConnector:connectorClass(config)});
+    const pending = browser.options[0].click();
+    await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(config.messageRequests.length,1);
+    if (changedAccount) {
+      const wallet=config.instance.wallets.find(item=>item.manifest.id==='meteor-wallet');
+      config.instance.events['wallet:signIn']({wallet,accounts:[{accountId:changedAccount}]});
+    } else config.instance.events['wallet:signOut']();
+    release();await pending;
+    assert.notEqual(browser.nodes['wallet-account-badge'].textContent,'OWNER VERIFIED');
+    assert.equal(browser.nodes['wallet-dialog'].open,false);
+    if (changedAccount) {
+      assert.equal(browser.nodes['wallet-account-name'].textContent,changedAccount);
+      assert.equal(browser.nodes['wallet-owner-verify'].hidden,false);
+    } else assert.equal(browser.nodes['wallet-account-view'].hidden,true);
+    assert.equal(config.transactionRequests,undefined);
+  }
+});
+
+test('restoring an earlier connection never automatically opens a wallet signature', async () => {
+  const browser = fakeBrowser('http://127.0.0.1:4173/'), config = {restoreWallet:'meteor-wallet',signConnectedMessage:true};
+  browser.data.set('bouncer:near-connect:selected-wallet','meteor-wallet');
+  await initWallet({window:browser.win,document:browser.doc,NearConnector:connectorClass(config)});
+  assert.equal(config.messageRequests,undefined);
+  assert.equal(browser.nodes['wallet-account-badge'].textContent,'CONNECTED');
+  assert.equal(browser.nodes['wallet-owner-verify'].hidden,false);
+  await browser.nodes['wallet-connect'].click();await browser.nodes['wallet-owner-verify'].click();
+  assert.equal(config.messageRequests.length,1);
+  assert.equal(browser.nodes['wallet-account-badge'].textContent,'OWNER VERIFIED');
+  assert.equal(browser.nodes['wallet-owner-verify'].hidden,true);
+  assert.equal(config.transactionRequests,undefined);
 });
 
 test('a connected wallet can load its own public balance without requesting a transaction', async () => {
@@ -809,15 +881,17 @@ test('a connected wallet can load its own public balance without requesting a tr
   assert.equal(browser.nodes['wallet-account-usdc'].textContent, '—');
 });
 
-test('all four wallet-reported choices connect on testnet and disconnect independently', async () => {
+test('all four NEAR wallet choices connect, verify and disconnect independently on testnet', async () => {
   for (const id of ['meteor-wallet', 'intear-wallet', 'nightly-wallet', 'ledger']) {
-    const browser = fakeBrowser('http://127.0.0.1:4173/'), config = {};
+    const browser = fakeBrowser('http://127.0.0.1:4173/'), config = {signConnectedMessage:true};
     await initWallet({ window: browser.win, document: browser.doc, NearConnector: connectorClass(config) });
     await browser.nodes['wallet-connect'].click();
     await browser.options.find(option => option.dataset.walletId === id).click();
     assert.deepEqual(config.input, { walletId: id });
     assert.equal(config.options.network, 'testnet');
-    assert.match(browser.nodes['wallet-status'].textContent, /wallet-reported/);
+    assert.match(browser.nodes['wallet-status'].textContent, /Verified testnet wallet control/);
+    assert.equal(config.messageRequests.length,1);
+    assert.equal(config.transactionRequests,undefined);
     await browser.nodes['wallet-disconnect'].click();
     assert.equal(config.disconnected, id);
     assert.match(browser.nodes['wallet-status'].textContent, /disconnected/i);
@@ -979,7 +1053,11 @@ test('optional CLI verification requires a fresh off-chain signature and current
   assert.equal(config.cliParams.addFunctionCallKey, undefined);
   assert.equal(config.cliParams.messageParams.nonce.length, 32);
   assert.match(config.cliParams.messageParams.message, /does not approve a transaction/);
-  assert.match(browser.nodes['wallet-status'].textContent, /Connected: cli\.testnet \(CLI login verified against testnet\)/);
+  assert.match(browser.nodes['wallet-status'].textContent, /Verified testnet wallet control for cli\.testnet/);
+  assert.equal(browser.nodes['wallet-account-badge'].textContent,'OWNER VERIFIED');
+  assert.equal(browser.nodes['wallet-owner-verify'].hidden,true);
+  assert.equal(config.messageRequests,undefined, 'the verified CLI login is reused without another signature');
+  assert.equal(config.transactionRequests,undefined);
   assert.equal(browser.nodes['wallet-disconnect'].hidden, false);
   assert.ok(browser.openers.every(button => button.dataset.walletState === 'connected'));
   await browser.nodes['wallet-disconnect'].click();
@@ -1016,11 +1094,11 @@ test('a legacy manually entered CLI account is not restored or accepted as verif
 
 test('the dedicated Vercel origin can connect; implicit IDs use the fixed testnet network', async () => {
   for (const account of ['greatmujey.testnet', 'a'.repeat(64)]) {
-    const browser = fakeBrowser('https://bouncer-near.vercel.app/', { approved: 'https://bouncer-near.vercel.app' }), config = { account };
+    const browser = fakeBrowser('https://bouncer-near.vercel.app/', { approved: 'https://bouncer-near.vercel.app' }), config = { account, signConnectedMessage:true };
     await initWallet({ window: browser.win, document: browser.doc, NearConnector: connectorClass(config) });
     await browser.nodes['wallet-connect'].click();
     await browser.options[0].click();
-    assert.match(browser.nodes['wallet-status'].textContent, new RegExp(`^Connected: ${account}`));
+    assert.match(browser.nodes['wallet-status'].textContent, new RegExp(`^Verified testnet wallet control for ${account}`));
     assert.equal(config.options.network, 'testnet');
   }
 });
@@ -1035,12 +1113,12 @@ test('wallet errors and named mainnet accounts fail closed; blocked browser stor
     assert.equal(browser.nodes['wallet-dialog'].open, true, 'the picker reopens after failure');
     assert.doesNotMatch(browser.nodes['wallet-status'].textContent, /^Connected:/);
   }
-  const browser = fakeBrowser('http://127.0.0.1:4173/', { storageFails: true }), config = {};
+  const browser = fakeBrowser('http://127.0.0.1:4173/', { storageFails: true }), config = {signConnectedMessage:true};
   await initWallet({ window: browser.win, document: browser.doc, NearConnector: connectorClass(config) });
   assert.equal(browser.nodes['wallet-connect'].disabled, false);
   await browser.nodes['wallet-connect'].click();
   await browser.options[0].click();
-  assert.match(browser.nodes['wallet-status'].textContent, /Connected: alice\.testnet/);
+  assert.match(browser.nodes['wallet-status'].textContent, /Verified testnet wallet control for alice\.testnet/);
   assert.equal(browser.nodes['wallet-disconnect'].hidden, false);
   await browser.nodes['wallet-disconnect'].click();
   assert.match(browser.nodes['wallet-status'].textContent, /disconnected/i);
@@ -1072,7 +1150,7 @@ test('picker opens from every entry point, returns focus, and only accepts curat
 
 test('NEAR Mobile uses fresh off-chain testnet messages and never signs in or deletes a key', async () => {
   const browser = fakeBrowser('https://bouncer-near.vercel.app/', { approved: 'https://bouncer-near.vercel.app' });
-  const config = { browser };
+  const config = { browser, signConnectedMessage:true };
   await initWallet({ window: browser.win, document: browser.doc, NearConnector: connectorClass(config) });
   const mobile = browser.options.find(option => option.dataset.walletId === 'near-mobile');
   for (let index = 0; index < 2; index++) {
@@ -1084,7 +1162,10 @@ test('NEAR Mobile uses fresh off-chain testnet messages and never signs in or de
     assert.equal(params.recipient, 'bouncer-near.vercel.app');
     assert.equal(params.nonce.length, 32);
     assert.match(params.message, /login message does not approve a transaction, transfer funds, or add an access key/i);
-    assert.match(browser.nodes['wallet-status'].textContent, /Connected: mobile\.testnet/);
+    assert.match(browser.nodes['wallet-status'].textContent, /Verified testnet wallet control for mobile\.testnet/);
+    assert.equal(browser.nodes['wallet-owner-verify'].hidden,true);
+    assert.equal(config.messageRequests.length,index+1,'the signed login was reused without a second prompt');
+    assert.equal(config.transactionRequests,undefined);
     assert.equal(browser.data.get('bouncer:near-connect:selected-wallet'), undefined, 'Mobile session is not persisted');
     await browser.nodes['wallet-connect'].click();
     await browser.nodes['wallet-disconnect'].click();
@@ -1092,6 +1173,18 @@ test('NEAR Mobile uses fresh off-chain testnet messages and never signs in or de
     assert.match(browser.nodes['wallet-status'].textContent, /disconnected/i);
   }
   assert.notDeepEqual([...config.messageRequests[0].nonce], [...config.messageRequests[1].nonce]);
+});
+
+test('NEAR Mobile login is not reused as proof when its signature is invalid', async () => {
+  const browser=fakeBrowser('http://127.0.0.1:4173/');
+  const config={messageResult:{accountId:'mobile.testnet',publicKey:'ed25519:invalid',signature:'invalid'}};
+  await initWallet({window:browser.win,document:browser.doc,NearConnector:connectorClass(config)});
+  await browser.options.find(option=>option.dataset.walletId==='near-mobile').click();
+  assert.equal(config.messageRequests.length,1,'a failed check must not automatically prompt a second time');
+  assert.equal(browser.nodes['wallet-account-badge'].textContent,'CONNECTED');
+  assert.equal(browser.nodes['wallet-owner-verify'].hidden,false);
+  assert.match(browser.nodes['wallet-owner-status'].textContent,/could not be verified/i);
+  assert.equal(config.transactionRequests,undefined);
 });
 
 test('NEAR Mobile rejects missing signed data and named mainnet accounts', async () => {
@@ -1152,7 +1245,7 @@ test('Intear fails clearly on browsers without native Ed25519 support', async ()
 
 test('Mobile sign-in events cannot bypass the verified message-only path', async () => {
   const browser = fakeBrowser('https://bouncer-near.vercel.app/', { approved: 'https://bouncer-near.vercel.app' });
-  const config = {};
+  const config = {signConnectedMessage:true};
   await initWallet({ window: browser.win, document: browser.doc, NearConnector: connectorClass(config) });
   const wallet = config.instance.wallets.find(item => item.manifest.id === 'near-mobile');
   config.instance.events['wallet:signIn']({ wallet, accounts: [{ accountId: 'mobile.testnet' }] });
@@ -1160,7 +1253,7 @@ test('Mobile sign-in events cannot bypass the verified message-only path', async
   assert.equal(browser.nodes['wallet-disconnect'].hidden, true);
   await browser.nodes['wallet-connect'].click();
   await browser.options.find(option => option.dataset.walletId === 'near-mobile').click();
-  assert.match(browser.nodes['wallet-status'].textContent, /Connected: mobile\.testnet \(NEAR Mobile login verified against testnet\)/);
+  assert.match(browser.nodes['wallet-status'].textContent, /Verified testnet wallet control for mobile\.testnet/);
   assert.ok(browser.openers.every(button => button.dataset.walletState === 'connected'));
 });
 

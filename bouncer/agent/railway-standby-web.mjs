@@ -17,7 +17,7 @@ const TYPES = {'.html':'text/html; charset=utf-8', '.css':'text/css; charset=utf
   '.json':'application/json; charset=utf-8', '.svg':'image/svg+xml', '.jpg':'image/jpeg',
   '.woff2':'font/woff2', '.txt':'text/plain; charset=utf-8', '.zip':'application/zip'};
 const CSP = "script-src 'self' 'nonce-Qm91bmNlclRlc3RuZXQyMDI2' https://accounts.google.com; object-src 'none'; base-uri 'none'";
-const BANNER = '<aside class="railway-standby-banner" role="note"><strong>Temporary Railway testnet site.</strong> Vault setup and Bouncer missions are not enabled here yet. A separately reviewed direct provider test, if available, bypasses Bouncer.</aside>';
+const BANNER = '<aside class="railway-standby-banner" role="note"><strong>Temporary Railway testnet site.</strong> Vault deployment and Bouncer missions are not enabled here yet. Encrypted setup recovery is available when configured. A separately reviewed direct provider test, if available, bypasses Bouncer.</aside>';
 
 export function createRailwayStandbyWeb({webSource=DEFAULT_SOURCE}={}) {
   validatePublicWeb(webSource);

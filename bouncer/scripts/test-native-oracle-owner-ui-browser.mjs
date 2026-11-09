@@ -180,11 +180,13 @@ try {
     const walletSelector=`[data-wallet-id="${walletId}"]`;
     await page.waitForFunction(id=>!document.querySelector(`[data-wallet-id="${id}"]`).disabled,walletId);
     await page.locator('.top-connect').click();await page.locator(walletSelector).click();
-    await page.waitForFunction(()=>document.querySelector('#wallet-status').textContent.includes('great_mujey.testnet'));
-    await page.locator('.top-connect').click();await page.locator('#wallet-owner-verify').click();
     try { await page.waitForFunction(()=>document.querySelector('#wallet-account-badge').textContent==='OWNER VERIFIED',null,{timeout:10_000}); }
     catch (error) { console.error('Synthetic owner verification:',await page.locator('#wallet-owner-status').textContent(),
       await page.locator('#wallet-status').textContent(),errors,requests.slice(-12)); throw error; }
+    assert.equal(await page.locator('#wallet-dialog').evaluate(el=>el.open),false);
+    await page.evaluate(()=>{location.hash='#guardrails';});
+    await page.locator('#vault-tools-title').waitFor({state:'visible'});
+    await page.locator('[data-route-view="guardrails"] .workspace-advanced > summary').click();
     await page.locator('#wallet-native-setup-open').waitFor({state:'visible'});await page.locator('#wallet-native-setup-open').click();
     await page.locator('#wallet-native-setup-device').waitFor({state:'visible'});assert.equal(claims,0);
     await page.locator('#wallet-native-setup-device').click();await page.locator('#wallet-native-setup-reserve').waitFor({state:'visible'});
@@ -246,11 +248,17 @@ try {
     catch(error) { console.error('Synthetic reconnect:',await page.locator('#wallet-status').textContent(),errors,requests.slice(-12));throw error; }
     if(!(await page.locator('#wallet-status').textContent()).includes(owner)){
       await page.locator('.top-connect').click();await page.locator(walletSelector).click();
-      await page.waitForFunction(()=>document.querySelector('#wallet-status').textContent.includes('great_mujey.testnet'));
+      await page.waitForFunction(()=>document.querySelector('#wallet-account-badge').textContent==='OWNER VERIFIED');
+    } else {
+      // Restoring a previously connected wallet never auto-prompts.
+      assert.equal(await page.locator('#wallet-account-badge').textContent(),'CONNECTED');
+      await page.locator('.top-connect').click();await page.locator('#wallet-owner-verify').click();
+      await page.waitForFunction(()=>document.querySelector('#wallet-account-badge').textContent==='OWNER VERIFIED');
+      await page.locator('#wallet-close').click();
     }
-    await page.locator('.top-connect').click();await page.locator('#wallet-owner-verify').click();
-    await page.waitForFunction(()=>document.querySelector('#wallet-account-badge').textContent==='OWNER VERIFIED');
     await page.evaluate(()=>Object.defineProperty(navigator,'storage',{value:{persist:async()=>false,persisted:async()=>false},configurable:true}));
+    await page.locator('#vault-tools-title').waitFor({state:'visible'});
+    await page.locator('[data-route-view="guardrails"] .workspace-advanced > summary').click();
     await page.locator('#wallet-native-setup-open').waitFor({state:'visible'});await page.locator('#wallet-native-setup-open').click();
     await page.locator('#wallet-native-trial-check').waitFor({state:'visible'});
     assert.match(await page.locator('#wallet-native-setup-status').innerText(),/phone key is unavailable/i);

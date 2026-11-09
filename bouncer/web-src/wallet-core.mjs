@@ -121,6 +121,8 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
   const accountRefresh = doc.querySelector('#wallet-account-refresh');
   const ownerVerify = doc.querySelector('#wallet-owner-verify');
   const ownerStatus = doc.querySelector('#wallet-owner-status');
+  const workspaceVaultWalletState = doc.querySelector('#workspace-vault-wallet-state');
+  const workspaceResourceWalletState = doc.querySelector('#workspace-resource-wallet-state');
   const bootstrapBudgetOpen = doc.querySelector('#wallet-bootstrap-budget-open');
   const bootstrapBudgetPanel = doc.querySelector('#wallet-bootstrap-budget-panel');
   const bootstrapBudgetRefresh = doc.querySelector('#wallet-bootstrap-budget-refresh');
@@ -365,15 +367,25 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     accountEntryPanel.hidden = !accountEntry;
     accountViewPanel.hidden = !viewing && !connected;
     const ownerVerified = connected && ownerVerification?.wallet === selectedWallet && ownerVerification?.accountId === connectedAccount;
+    const canVerifyOwner = connected && selectedWallet?.manifest?.features?.signMessage && isTestnetAccount(connectedAccount);
+    const workspaceWalletMessage = ownerVerified
+      ? `Identity verified for ${connectedAccount} in this session. No spending has been approved.`
+      : canVerifyOwner ? `Connected as ${connectedAccount}; identity is not verified yet. If the wallet prompt was cancelled or blocked, open the wallet and retry.`
+        : connected ? 'This connection cannot sign the required NEAR identity message. Connect a supported NEAR testnet wallet to use owner-restricted tools.'
+          : viewing ? `Viewing ${viewedAccount} only. Connect a supported testnet wallet to use owner-restricted tools.`
+            : 'Connect a supported testnet wallet to use owner-restricted tools. The identity message does not approve spending.';
+    for (const node of [workspaceVaultWalletState, workspaceResourceWalletState]) {
+      if (node && node.textContent !== workspaceWalletMessage) node.textContent = workspaceWalletMessage;
+    }
     accountBadge.textContent = ownerVerified ? 'OWNER VERIFIED' : connected ? 'CONNECTED' : 'VIEW ONLY';
     accountWarning.textContent = ownerVerified
       ? 'Your wallet signed an off-chain message and its Full Access key was checked on testnet. This does not approve transactions, create a vault, or grant spending access.'
       : connected ? 'Public balances for the connected testnet account. Connecting alone does not grant Bouncer spending access.'
         : 'Unverified account name. No wallet is connected and no spending access was granted.';
     if (ownerVerify) {
-      ownerVerify.hidden = !connected || !selectedWallet?.manifest?.features?.signMessage || !isTestnetAccount(connectedAccount);
+      ownerVerify.hidden = ownerVerified || !connected || !selectedWallet?.manifest?.features?.signMessage || !isTestnetAccount(connectedAccount);
       ownerVerify.disabled = busyState;
-      ownerVerify.textContent = ownerVerified ? 'Verify account again' : 'Verify account in wallet';
+      ownerVerify.textContent = 'Retry identity verification in wallet';
     }
     const budgetEligible = isTop && V14_BOOTSTRAP_ORIGINS.includes(win.location.origin) &&
       (connected ? connectedAccount : viewedAccount) === 'great_mujey.testnet';
@@ -382,14 +394,17 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     if (bootstrapBudgetRefresh) bootstrapBudgetRefresh.disabled = busyState;
     const candidateEligible = ownerVerified && connectedAccount === 'great_mujey.testnet' && isTop &&
       V14_BOOTSTRAP_ORIGINS.includes(win.location.origin) && typeof loadBootstrapArtifact === 'function';
+    const enrollmentMarker = candidateEnrollmentMarkerState();
     if (candidateOpen) { candidateOpen.hidden = !candidateEligible || candidateVisible; candidateOpen.disabled = busyState; }
     if (candidatePanel) candidatePanel.hidden = !candidateEligible || !candidateVisible;
     if (candidateSaved) candidateSaved.hidden = !candidate;
-    if (candidateCreate) candidateCreate.disabled = busyState || Boolean(candidate);
-    for (const control of [candidatePassphrase,candidateConfirm]) if (control) control.disabled = busyState || Boolean(candidate);
+    // A prior attempt in this browser must not be replaced by a newly generated
+    // key. Saved-file verification and recovery remain available; this marker
+    // is local only and cannot detect attempts from another device or origin.
+    if (candidateCreate) candidateCreate.disabled = busyState || Boolean(candidate) || enrollmentMarker === 'attempted';
+    for (const control of [candidatePassphrase,candidateConfirm]) if (control) control.disabled = busyState || Boolean(candidate) || enrollmentMarker === 'attempted';
     for (const control of [candidateCopy,candidateDownload]) if (control) control.disabled = busyState || !candidate;
     for (const control of [candidateFile,candidateExpected,candidateUnlock,candidateVerify]) if (control) control.disabled = busyState;
-    const enrollmentMarker = candidateEnrollmentMarkerState();
     if (candidateEnrollment) candidateEnrollment.hidden = !candidateEligible || !candidateVisible || !bootstrapRecoveryReady;
     if (candidateEnroll) candidateEnroll.disabled = busyState || enrollmentMarker !== 'clear';
     if (candidateEnrollStatus && candidateEnrollment && !candidateEnrollment.hidden && !candidateEnrollStatus.textContent) {
@@ -483,12 +498,14 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     if (walletTitle) walletTitle.textContent = connected ? 'Wallet connected' : wcPairing ? 'Connect your wallet'
       : accountEntry ? 'Enter an account' : ethereumInfo ? 'Before you connect' : viewing ? 'Account view' : 'Connect an account';
     if (walletDescription) walletDescription.textContent = connected
-      ? 'Your testnet wallet is connected. Google sign-in is separate.'
+      ? ownerVerified ? 'Your wallet identity is verified for this session. Vault and mission tools are in the workspace.'
+        : canVerifyOwner ? 'Your wallet is connected. Verify its identity to use owner-restricted workspace tools.'
+          : 'This connection cannot sign the required NEAR identity message. Owner-restricted tools are unavailable.'
       : wcPairing ? 'Scan with a NEAR testnet wallet, or open it. Approve and return here.'
         : accountEntry ? 'Choose an account without a terminal. This does not connect a wallet.'
           : ethereumInfo ? 'Please review this wallet’s setup before continuing.'
             : viewing ? 'This public view cannot sign, pay, or prove ownership.'
-              : 'Choose a testnet wallet or continue with Google. Connecting does not grant spending access.';
+              : 'Choose a testnet wallet or continue with Google. Supported wallets will request a no-spend identity message after connecting.';
     openers.forEach(button => {
       button.disabled = busyState;
       button.dataset.walletState = connected ? 'connected' : viewing ? 'view-only' : 'disconnected';
@@ -647,7 +664,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     prepareConnectedBalance(id);
     setWalletLabels('Connected');
     const evidence = verifiedBy === 'near-cli' ? 'CLI login verified against testnet'
-      : verifiedBy === 'near-mobile' ? 'NEAR Mobile login verified against testnet' : 'wallet-reported';
+      : verifiedBy === 'near-mobile' ? 'NEAR Mobile account returned' : 'wallet-reported';
     setStatus(`Connected: ${id} (${evidence}). No vault or spending access is granted.`);
     renderControls();
     return true;
@@ -678,6 +695,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     button.addEventListener('click', () => openPicker(button));
   }
   closeButton.addEventListener('click', closePicker);
+  for (const link of doc.querySelectorAll('[data-wallet-workspace-link]')) link.addEventListener('click', closePicker);
   dialog.addEventListener('cancel', event => { event.preventDefault(); closePicker(); });
   dialog.addEventListener('keydown', event => {
     if (event.key !== 'Tab') return;
@@ -902,7 +920,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
         draft.stopped = true;
         if (bufferSetupStatus) bufferSetupStatus.textContent = 'Reservation may have committed without acknowledgement. Stop and use setup recovery; do not reserve or approve again.';
       }
-    } finally { stopWalletPresentation(); busy(false); if (stillCurrent()) { renderControls(); hideBanner(); openPicker(opener); } }
+    } finally { stopWalletPresentation(); busy(false); if (stillCurrent()) { renderControls(); hideBanner(); } }
   });
   bufferSetupApprove?.addEventListener('click', async () => {
     const wallet = selectedWallet, accountId = connectedAccount, version = ownerSessionVersion, proof = ownerVerification, draft = bufferSetupDraft;
@@ -942,7 +960,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
         draft.stopped = true;
         if (bufferSetupStatus) bufferSetupStatus.textContent = 'This stage may have executed or been recorded without a verified result. Stop and use setup recovery; never approve it again.';
       }
-    } finally { stopWalletPresentation(); busy(false); if (stillCurrent()) { renderControls(); hideBanner(); openPicker(opener); } }
+    } finally { stopWalletPresentation(); busy(false); if (stillCurrent()) { renderControls(); hideBanner(); } }
   });
   // This is deliberately local-only preparation, not enrollment or a wallet
   // transaction path. The file has no original hashes or freshness proof.
@@ -951,12 +969,14 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     if (busyState || !connected || !proof || proof.wallet !== selectedWallet || proof.accountId !== 'great_mujey.testnet' ||
         !isTop || !V14_BOOTSTRAP_ORIGINS.includes(win.location.origin) || typeof loadBootstrapArtifact !== 'function') return;
     candidateVisible = true;
-    if (candidateStatus) candidateStatus.textContent = 'Prepare or check a local file. This does not enroll or authorize a transaction.';
+    if (candidateStatus) candidateStatus.textContent = candidateEnrollmentMarkerState() === 'attempted'
+      ? 'This browser already attempted enrollment. Recover the existing checkpoint or check your saved file below; do not create a new candidate.'
+      : 'Prepare or check a local file. This does not enroll or authorize a transaction.';
     renderControls();
   });
   candidateCreate?.addEventListener('click', async () => {
     const proof = ownerVerification, version = ownerSessionVersion;
-    if (busyState || candidate || !candidateVisible || !candidatePassphrase || !candidateConfirm || !candidateStatus ||
+    if (busyState || candidate || candidateEnrollmentMarkerState() === 'attempted' || !candidateVisible || !candidatePassphrase || !candidateConfirm || !candidateStatus ||
         !connected || !proof || proof.wallet !== selectedWallet || proof.accountId !== 'great_mujey.testnet') return;
     const current = () => connected && selectedWallet === proof.wallet && connectedAccount === proof.accountId &&
       ownerVerification === proof && ownerSessionVersion === version && candidateVisible;
@@ -1132,9 +1152,92 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
       if (current()) bootstrapBudgetStatus.textContent = 'Could not obtain a fresh testnet review. Do not guess the balance or approve a transaction.';
     } finally { busy(false); if (current()) renderControls(); }
   });
-  ownerVerify?.addEventListener('click', async () => {
+  function applyOwnerVerification({wallet, accountId, version, proof}) {
+    const stillCurrent = () => connected && connectedAccount === accountId && selectedWallet === wallet && ownerSessionVersion === version;
+    if (!stillCurrent()) return false;
+    nativeFlow?.destroy(); nativeFlow = null; nativeSetupOpening = false; nativeSetupAvailable = false;
+    missionFlow = null; missionReview = null; missionReady = false; missionStarted = false;
+    v14RecoveryClient = null; v14RecoveryVisible = false;
+    clearV14RecoveryDisplay(); clearBootstrapRecovery(); clearBootstrapCandidate();
+    if (missionConsent) missionConsent.checked = false;
+    if (missionDetails) { missionDetails.hidden = true; missionDetails.open = false; }
+    if (missionManifest) missionManifest.textContent = '';
+    ownerVerification = { wallet, accountId: proof.accountId, publicKey: proof.publicKey };
+    if (ownerStatus) {
+      ownerStatus.hidden = false;
+      ownerStatus.textContent = 'Identity verified for this session. This is not spending permission.';
+    }
+    setStatus(`Verified testnet wallet control for ${accountId}. No vault or spending access is granted.`);
+    // The independent read-only history UI is hidden unless its exact-origin
+    // endpoint explicitly advertises readiness. Checking is never a prompt.
+    if (isTop && win.location.origin === V14_ENROLLMENT_SITE) {
+      const currentProof = ownerVerification;
+      const current = () => stillCurrent() && ownerVerification === currentProof;
+      try {
+        const client = createV14CheckpointRecoveryClient({location:win.location,crypto:win.crypto,fetch:walletReadFetch,isCurrent:current});
+        void client.enabled().then(enabled => {
+          if (current() && enabled) { v14RecoveryClient = client; renderControls(); }
+        }).catch(() => {});
+      } catch { /* optional history must not erase the verified identity */ }
+    }
+    // The encrypted temporary-key kit can be recovered only through an
+    // owner-signed read. Its endpoint is default-off; availability checks
+    // never open a wallet or enable transactions.
+    if (isTop && accountId === 'great_mujey.testnet' && V14_BOOTSTRAP_ORIGINS.includes(win.location.origin)) {
+      const currentProof = ownerVerification;
+      const current = () => stillCurrent() && ownerVerification === currentProof;
+      try {
+        const client = createBootstrapRecoveryReadClient({wallet,owner:accountId,ownerPublicKey:proof.publicKey,
+          location:win.location,isTopLevel:isTop,crypto:win.crypto,fetch:walletReadFetch,isCurrent:current});
+        bootstrapRecoveryClient = client;
+        void client.enabled().then(enabled => {
+          if (current() && bootstrapRecoveryClient === client) { bootstrapRecoveryReady = enabled; renderControls(); }
+        }).catch(() => {});
+      } catch { /* optional recovery must not erase verified identity */ }
+    }
+    // Recovery is deliberately optional and only becomes visible when the
+    // experimental same-origin backend explicitly advertises it. This never
+    // opens a transaction or turns on purchasing.
+    if (nativeSetupOriginAllowed(win.location, isTop) && accountId === 'great_mujey.testnet') {
+      if (/^4173-[a-z0-9-]+\.e2b\.app$/i.test(win.location.hostname)) {
+        const client = createWitnessedSetupClient({ wallet, accountId, ownerPublicKey:proof.publicKey,
+          location:win.location, crypto:win.crypto, fetch:walletReadFetch, isCurrent:stillCurrent });
+        void client.enabled().then(enabled => { if (stillCurrent()) { setupRecoveryAvailable = enabled; renderControls(); } });
+      }
+      if (wallet.manifest?.features?.signAndSendTransaction && typeof wallet.signAndSendTransaction === 'function') {
+        const currentProof = ownerVerification;
+        try {
+          const nativeClient = createNativeOracleSetupClient({ wallet, accountId, ownerPublicKey:proof.publicKey,
+            deviceStore:{ async inspect() { throw Error('device key not opened'); } }, location:win.location,
+            crypto:win.crypto, fetch:walletReadFetch, isTopLevel:isTop, isCurrent:() => stillCurrent() && ownerVerification === currentProof });
+          void nativeClient.enabled().then(enabled => {
+            if (stillCurrent() && ownerVerification === currentProof) { nativeSetupAvailable = enabled; renderControls(); }
+          }).catch(() => {});
+        } catch { /* the optional setup must not erase a verified identity */ }
+      }
+    }
+    return true;
+  }
+
+  function failOwnerVerification(error) {
+    ownerVerification = null; setupRecoveryAvailable = false; setupRecoverySelection = null; matchedOriginal = null;
+    v14RecoveryClient = null; v14RecoveryVisible = false; clearBootstrapRecovery(); clearBootstrapCandidate();
+    nativeSetupAvailable = false; nativeSetupOpening = false; nativeFlow?.destroy(); nativeFlow = null;
+    const reason = error?.message || '';
+    const message = reason === 'CLI_ED25519_UNAVAILABLE'
+      ? 'This browser cannot verify Ed25519 signatures. Try an up-to-date browser.'
+      : reason === 'WALLET_OWNER_TIMEOUT' ? 'The wallet identity request timed out.'
+      : reason === 'CLI_RPC_UNAVAILABLE' ? 'Could not check the signing key on testnet. Check your connection and try again.'
+        : reason === 'CLI_KEY_NOT_FULL_ACCESS' ? 'The signing key is not a current testnet Full Access key.'
+          : 'Identity verification was cancelled or the signed message could not be verified.';
+    if (ownerStatus) { ownerStatus.hidden = false; ownerStatus.textContent = `${message} No spending access was granted.`; }
+    setStatus(`${message} No spending access was granted.`);
+  }
+
+  async function verifyOwner({automatic = false} = {}) {
     const wallet = selectedWallet, accountId = connectedAccount, version = ownerSessionVersion;
-    if (busyState || !connected || !wallet?.manifest?.features?.signMessage || !isTestnetAccount(accountId)) return;
+    if (busyState || !connected || !wallet?.manifest?.features?.signMessage || !isTestnetAccount(accountId) ||
+        (ownerVerification?.wallet === wallet && ownerVerification?.accountId === accountId)) return;
     const stillCurrent = () => connected && selectedWallet === wallet && connectedAccount === accountId && ownerSessionVersion === version;
     let stopWalletPresentation = () => {};
     busy(true); closePicker();
@@ -1152,86 +1255,20 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
         })]);
       } finally { clearTimeout(timeout); }
       if (!stillCurrent()) return;
-      nativeFlow?.destroy(); nativeFlow = null; nativeSetupOpening = false; nativeSetupAvailable = false;
-      missionFlow = null; missionReview = null; missionReady = false; missionStarted = false;
-      v14RecoveryClient = null; v14RecoveryVisible = false;
-      clearV14RecoveryDisplay(); clearBootstrapRecovery(); clearBootstrapCandidate();
-      if (missionConsent) missionConsent.checked = false;
-      if (missionDetails) { missionDetails.hidden = true; missionDetails.open = false; }
-      if (missionManifest) missionManifest.textContent = '';
-      ownerVerification = { wallet, accountId: proof.accountId, publicKey: proof.publicKey };
-      if (ownerStatus) {
-        ownerStatus.hidden = false;
-        ownerStatus.textContent = 'Identity verified for this session. This is not spending permission.';
-      }
-      setStatus(`Verified testnet wallet control for ${accountId}. No vault or spending access is granted.`);
-      // The independent read-only history UI is hidden unless its exact-origin
-      // endpoint explicitly advertises readiness. Checking is never a prompt.
-      if (isTop && win.location.origin === V14_ENROLLMENT_SITE) {
-        const currentProof = ownerVerification;
-        const current = () => stillCurrent() && ownerVerification === currentProof;
-        try {
-          const client = createV14CheckpointRecoveryClient({location:win.location,crypto:win.crypto,fetch:walletReadFetch,isCurrent:current});
-          void client.enabled().then(enabled => {
-            if (current() && enabled) { v14RecoveryClient = client; renderControls(); }
-          }).catch(() => {});
-        } catch { /* optional history must not erase the verified identity */ }
-      }
-      // The encrypted temporary-key kit can be recovered only through an
-      // owner-signed read. Its endpoint is default-off; availability checks
-      // never open a wallet or enable transactions.
-      if (isTop && accountId === 'great_mujey.testnet' && V14_BOOTSTRAP_ORIGINS.includes(win.location.origin)) {
-        const currentProof = ownerVerification;
-        const current = () => stillCurrent() && ownerVerification === currentProof;
-        try {
-          const client = createBootstrapRecoveryReadClient({wallet,owner:accountId,ownerPublicKey:proof.publicKey,
-            location:win.location,isTopLevel:isTop,crypto:win.crypto,fetch:walletReadFetch,isCurrent:current});
-          bootstrapRecoveryClient = client;
-          void client.enabled().then(enabled => {
-            if (current() && bootstrapRecoveryClient === client) { bootstrapRecoveryReady = enabled; renderControls(); }
-          }).catch(() => {});
-        } catch { /* optional recovery must not erase verified identity */ }
-      }
-      // Recovery is deliberately optional and only becomes visible when the
-      // experimental same-origin backend explicitly advertises it. This never
-      // opens a transaction or turns on purchasing.
-      if (nativeSetupOriginAllowed(win.location, isTop) && accountId === 'great_mujey.testnet') {
-        if (/^4173-[a-z0-9-]+\.e2b\.app$/i.test(win.location.hostname)) {
-          const client = createWitnessedSetupClient({ wallet, accountId, ownerPublicKey:proof.publicKey,
-            location:win.location, crypto:win.crypto, fetch:walletReadFetch, isCurrent:stillCurrent });
-          void client.enabled().then(enabled => { if (stillCurrent()) { setupRecoveryAvailable = enabled; renderControls(); } });
-        }
-        if (wallet.manifest?.features?.signAndSendTransaction && typeof wallet.signAndSendTransaction === 'function') {
-          const currentProof = ownerVerification;
-          try {
-            const nativeClient = createNativeOracleSetupClient({ wallet, accountId, ownerPublicKey:proof.publicKey,
-              deviceStore:{ async inspect() { throw Error('device key not opened'); } }, location:win.location,
-              crypto:win.crypto, fetch:walletReadFetch, isTopLevel:isTop, isCurrent:() => stillCurrent() && ownerVerification === currentProof });
-            void nativeClient.enabled().then(enabled => {
-              if (stillCurrent() && ownerVerification === currentProof) { nativeSetupAvailable = enabled; renderControls(); }
-            }).catch(() => {});
-          } catch { /* the optional setup must not erase a verified identity */ }
-        }
-      }
+      applyOwnerVerification({wallet, accountId, version, proof});
     } catch (error) {
       if (!stillCurrent()) return;
-      ownerVerification = null; setupRecoveryAvailable = false; setupRecoverySelection = null; matchedOriginal = null;
-      v14RecoveryClient = null; v14RecoveryVisible = false; clearBootstrapRecovery(); clearBootstrapCandidate();
-      nativeSetupAvailable = false; nativeSetupOpening = false; nativeFlow?.destroy(); nativeFlow = null;
-      const reason = error?.message || '';
-      const message = reason === 'CLI_ED25519_UNAVAILABLE'
-        ? 'This browser cannot verify Ed25519 signatures. Try an up-to-date browser.'
-        : reason === 'WALLET_OWNER_TIMEOUT' ? 'The wallet identity request timed out.'
-        : reason === 'CLI_RPC_UNAVAILABLE' ? 'Could not check the signing key on testnet. Check your connection and try again.'
-          : reason === 'CLI_KEY_NOT_FULL_ACCESS' ? 'The signing key is not a current testnet Full Access key.'
-            : 'Identity verification was cancelled or the signed message could not be verified.';
-      if (ownerStatus) { ownerStatus.hidden = false; ownerStatus.textContent = `${message} No spending access was granted.`; }
-      setStatus(`${message} No spending access was granted.`);
+      failOwnerVerification(error);
     } finally {
       stopWalletPresentation(); busy(false);
-      if (stillCurrent()) { renderControls(); hideBanner(); openPicker(opener); }
+      if (stillCurrent()) {
+        renderControls(); hideBanner();
+        if (!automatic || !ownerVerification) openPicker(opener);
+        else notify('Wallet verified. Open Guardrails for vault setup and recovery.');
+      }
     }
-  });
+  }
+  ownerVerify?.addEventListener('click', () => verifyOwner());
   v14RecoveryOpen?.addEventListener('click', () => {
     if (busyState || !v14RecoveryClient || !ownerVerification || !v14RecoveryVault || !v14RecoveryStatus) return;
     v14RecoveryVisible = true;
@@ -1294,7 +1331,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
       if (current()) v14RecoveryStatus.textContent = 'History is unavailable or the message was not verified. Absence is not proven; do not resend uncertain originals.';
     } finally {
       clearTimeout(timeout); stopWalletPresentation(); busy(false);
-      if (current()) { renderControls(); hideBanner(); openPicker(opener); }
+      if (current()) { renderControls(); hideBanner(); }
     }
   });
   bootstrapRecoveryOpen?.addEventListener('click', () => {
@@ -1333,7 +1370,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
       if (current()) bootstrapRecoveryStatus.textContent = 'Recovery is unavailable or the signature was not verified. Absence is not proven; do not repeat uncertain transactions.';
     } finally {
       clearTimeout(timeout); stopWalletPresentation(); busy(false);
-      if (current()) { renderControls(); hideBanner(); openPicker(opener); }
+      if (current()) { renderControls(); hideBanner(); }
     }
   });
   bootstrapRecoveryFile?.addEventListener('change', () => {
@@ -1434,7 +1471,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
       if (current()) bootstrapRecoveryCompareStatus.textContent = 'Could not compare this file with the service. Keep your existing copies; absence and latest history are not proven. No transaction was requested.';
     } finally {
       clearTimeout(timeout); stopWalletPresentation(); busy(false);
-      if (current()) { renderControls(); hideBanner(); openPicker(opener); }
+      if (current()) { renderControls(); hideBanner(); }
     }
   });
   missionConsent?.addEventListener('change', () => renderControls());
@@ -1513,7 +1550,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
       if (current()) missionStatus.textContent = 'Approval or result is uncertain. Do not approve again; check the original receipts below.';
     } finally {
       stopWalletPresentation(); busy(false);
-      if (current()) { renderControls(); hideBanner(); openPicker(opener); }
+      if (current()) { renderControls(); hideBanner(); }
     }
   });
   missionRecover?.addEventListener('click', async () => {
@@ -1573,7 +1610,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     try { await work(flow); } catch { /* never repeat a wallet request; receipt reads may be checked again */ }
     finally {
       busy(false);
-      if (stillCurrent()) { renderControls(); if (presentWallet) { hideBanner(); openPicker(opener); } }
+      if (stillCurrent()) { renderControls(); if (presentWallet) hideBanner(); }
     }
   };
   directReview?.addEventListener('click', () => { void runDirect(flow => flow.review()); });
@@ -1622,7 +1659,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
           return await work();
         } finally {
           stopWalletPresentation();
-          if (currentFlow()) { hideBanner(); openPicker(opener); }
+          if (currentFlow()) hideBanner();
         }
       };
       flow = createNativeOracleOwnerFlow({ client, deviceStore:store, ownerPublicKey:proof.publicKey, origin:win.location.origin,
@@ -1727,7 +1764,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
       }
     } finally {
       clearTimeout(timeout); stopWalletPresentation(); busy(false);
-      if (stillCurrent()) { renderControls(); hideBanner(); openPicker(opener); }
+      if (stillCurrent()) { renderControls(); hideBanner(); }
     }
   });
   setupOriginal?.addEventListener('input', () => { matchedOriginal = null; renderControls(); });
@@ -1765,7 +1802,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
       if (stillCurrent() && setupRecoveryStatus) setupRecoveryStatus.textContent = 'The original could not be verified yet. Keep the hash and do not retry the wallet transaction.';
     } finally {
       clearTimeout(timeout); stopWalletPresentation(); busy(false);
-      if (stillCurrent()) { renderControls(); hideBanner(); openPicker(opener); }
+      if (stillCurrent()) { renderControls(); hideBanner(); }
     }
   });
   setupRecordOriginal?.addEventListener('click', async () => {
@@ -1817,7 +1854,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
       }
     } finally {
       clearTimeout(timeout); stopWalletPresentation(); busy(false);
-      if (sameSession()) { renderControls(); hideBanner(); openPicker(opener); }
+      if (sameSession()) { renderControls(); hideBanner(); }
     }
   });
   // Verified CLI login remains available as an explicit, optional path.
@@ -2059,7 +2096,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
       // The NEAR Connect executor uses its own iframe overlay. A native dialog
       // is in the top layer, so close ours before opening the wallet UI.
       closePicker();
-      let reopen = false, stopWalletPresentation = () => {};
+      let reopen = false, verifyAfterConnection = false, loginVerification = null, stopWalletPresentation = () => {};
       try {
         trimUntrustedWallets();
         if (mobile) {
@@ -2071,14 +2108,21 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
           const wallet = connector.wallets.find(candidate => candidate.manifest.id === walletId);
           if (!wallet || !win.crypto?.getRandomValues) throw new Error('NEAR Mobile unavailable');
           const nonce = win.crypto.getRandomValues(new Uint8Array(32));
-          const result = await wallet.signMessage({
-            network: 'testnet', nonce,
-            recipient: win.location.host,
-            message: `Connect to Bouncer on NEAR testnet.\n\nThis login message does not approve a transaction, transfer funds, or add an access key.\n\nSite: ${win.location.origin}`,
-          });
+          const recipient = win.location.host;
+          const message = `Connect to Bouncer on NEAR testnet.\n\nThis login message does not approve a transaction, transfer funds, or add an access key.\n\nSite: ${win.location.origin}`;
+          const result = await wallet.signMessage({network:'testnet', nonce:new Uint8Array(nonce), recipient, message});
           if (!result?.signature || !result?.publicKey) throw new Error('No signed login message returned');
           if (!isTestnetAccount(result.accountId)) throw new Error('MOBILE_TESTNET_REQUIRED');
-          acceptAccounts(wallet, [{ accountId: result.accountId }], 'near-mobile');
+          if (acceptAccounts(wallet, [{ accountId: result.accountId }], 'near-mobile')) {
+            const version = ownerSessionVersion;
+            // Reuse the fresh login only after Bouncer independently verifies
+            // both its signature and the current testnet FullAccess key.
+            try {
+              await verifyCliLogin({account:{accountId:result.accountId,publicKey:result.publicKey,signedMessage:result},
+                message,nonce,recipient,crypto:win.crypto,fetch:walletReadFetch});
+              loginVerification = {wallet,accountId:result.accountId,version,proof:{accountId:result.accountId,publicKey:result.publicKey}};
+            } catch (error) { loginVerification = {wallet,accountId:result.accountId,version,error}; }
+          }
         } else if (cli) {
           // CLI's ordinary signIn accepts any typed name. Ask for a fresh,
           // off-chain NEP-413 signature instead, with no AddKey parameters.
@@ -2089,10 +2133,13 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
           const nonce = win.crypto.getRandomValues(new Uint8Array(32));
           const recipient = win.location.host;
           const message = `Connect to Bouncer on NEAR testnet.\n\nThis login message does not approve a transaction, transfer funds, or add an access key.\n\nSite: ${win.location.origin}`;
-          const accounts = await wallet.signInAndSignMessage({ network: 'testnet', messageParams: { message, nonce, recipient } });
+          const accounts = await wallet.signInAndSignMessage({ network: 'testnet', messageParams: { message, nonce:new Uint8Array(nonce), recipient } });
           const account = accounts?.[0];
           await verifyCliLogin({ account, message, nonce, recipient, crypto: win.crypto, fetch: walletReadFetch });
-          acceptAccounts(wallet, [account], 'near-cli');
+          if (acceptAccounts(wallet, [account], 'near-cli')) {
+            loginVerification = {wallet,accountId:account.accountId,version:ownerSessionVersion,
+              proof:{accountId:account.accountId,publicKey:account.publicKey}};
+          }
         } else {
           if (walletId === 'nightly-wallet' || walletId === 'ledger') stopWalletPresentation = decorateWalletPopup(walletId);
           if (walletId === 'intear-wallet') {
@@ -2110,7 +2157,10 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
           await storage.remove('selected-wallet');
           if (!/did not return a verified testnet account/.test(status.textContent)) showDisconnected('No valid testnet account was returned.');
           reopen = true;
-        } else notify(`Connected: ${connectedAccount}. No spending access was granted.`);
+        } else {
+          notify(`Connected: ${connectedAccount}. No spending access was granted.`);
+          verifyAfterConnection = Boolean(selectedWallet?.manifest?.features?.signMessage && isTestnetAccount(connectedAccount));
+        }
       } catch (error) {
         await storage.remove('selected-wallet');
         const reason = typeof error === 'string' ? error : error?.message || '';
@@ -2142,6 +2192,16 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
         busy(false);
         if (reopen) { hideBanner(); openPicker(opener); }
       }
+      if (loginVerification) {
+        const {wallet, accountId, version, proof, error} = loginVerification;
+        if (connected && selectedWallet === wallet && connectedAccount === accountId && ownerSessionVersion === version) {
+          if (error) {
+            failOwnerVerification(error); renderControls(); hideBanner(); openPicker(opener);
+          } else if (applyOwnerVerification({wallet,accountId,version,proof})) {
+            renderControls(); hideBanner(); notify('Wallet verified. Open Guardrails for vault setup and recovery.');
+          }
+        }
+      } else if (verifyAfterConnection) await verifyOwner({automatic:true});
   }
   for (const button of options) {
     button.addEventListener('click', async () => {

@@ -188,3 +188,15 @@ body.wallet-dialog-open{overflow:hidden}
 /* Only injected on the temporary Railway testnet workspace. */
 .railway-standby-banner{margin:0 0 20px;padding:12px 15px;border:1px solid #cddd9d;border-radius:12px;background:#f5f9e9;color:#314216;font-size:.8rem;line-height:1.55}
 .railway-standby-banner strong{color:#1a2a10}
+
+/* Owner actions live in the workspace, not in the wallet picker. */
+.workspace-tools{margin:24px 0 36px;padding:28px;border:1px solid #315342;border-radius:19px;background:linear-gradient(125deg,#102b1d,#173b29);color:#eef9e8;box-shadow:0 14px 36px #123b2012}
+.workspace-tools-header{display:flex;justify-content:space-between;align-items:flex-start;gap:24px;padding-bottom:22px;border-bottom:1px solid #41614a}
+.workspace-tools .section-kicker{color:#a8d3a5}.workspace-tools-header h2{margin:8px 0;font-size:25px;letter-spacing:-1px;line-height:1.2}.workspace-tools-header h2 span{color:#bcf082}.workspace-tools-header p{max-width:690px;color:#c8ddc7;font-size:12px;line-height:1.65}
+.workspace-wallet-button{flex:none;min-height:44px;border-color:#719879;background:#ffffff0b;color:#f3fff0}.workspace-wallet-button:hover{background:#ffffff1a}
+.workspace-tool-content{max-width:860px}.workspace-tool-heading{display:flex;gap:14px;align-items:flex-start;margin-top:22px}.workspace-tool-heading>span{display:grid;place-items:center;flex:none;width:32px;height:32px;border-radius:10px;background:#c4ed8522;color:#c4ef91;font-size:10px;font-weight:800}.workspace-tool-heading h3{font-size:14px;letter-spacing:-.2px}.workspace-tool-heading p{margin-top:5px;color:#b8d0b8;font-size:11px;line-height:1.65}
+.workspace-tools .account-entry-primary,.workspace-tools .account-entry-secondary{min-height:44px;text-align:left}.workspace-tools .account-entry-secondary:hover{border-color:#a4d293;background:#ffffff09}.workspace-tools .setup-recovery{padding:16px}.workspace-tools .native-mission-consent input{width:auto;padding:0}
+.workspace-advanced{margin-top:18px;padding-top:16px;border-top:1px solid #41614a}.workspace-advanced>summary{display:flex;flex-wrap:wrap;justify-content:space-between;gap:6px;cursor:pointer;color:#eaf8e6;font-size:12px;font-weight:800;line-height:1.5}.workspace-advanced>summary span{color:#a7c6a6;font-size:10px;font-weight:700}.workspace-advanced[open]>summary{color:#c6f293}
+@media(max-width:700px){.workspace-tools{padding:20px;margin:18px 0 28px}.workspace-tools-header{flex-direction:column;gap:14px}.workspace-tools-header h2{font-size:22px}.workspace-wallet-button{width:100%}.workspace-tools .setup-recovery{padding:13px}}
+.wallet-workspace-links{display:flex;flex-wrap:wrap;gap:10px 18px;margin-top:14px}.wallet-workspace-links a{color:#c3f190;font-size:11px;font-weight:800}.wallet-workspace-links a:hover{text-decoration:underline}
+.workspace-advanced>summary::before{content:'+';display:inline-grid;place-items:center;flex:none;width:22px;height:22px;margin-right:2px;border:1px solid #6e9675;border-radius:7px;color:#c4ef91;font-size:15px;font-weight:600;line-height:1}.workspace-advanced[open]>summary::before{content:'−'}.workspace-advanced>summary span{margin-left:auto}

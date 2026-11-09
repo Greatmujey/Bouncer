@@ -14,7 +14,7 @@
   <title>Bouncer — The resource layer for agents</title>
   <link rel="icon" type="image/svg+xml" href="./favicon.svg?v=3">
   <link rel="preload" href="./manrope-latin.woff2" as="font" type="font/woff2" crossorigin>
-  <link rel="stylesheet" href="./styles.css?v=18">
+  <link rel="stylesheet" href="./styles.css?v=19">
 </head>
 <body>
   <svg class="svg-defs" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
@@ -98,13 +98,60 @@
           <div class="signal-strip"><div><span class="signal-kicker">THE IDEA IN MOTION</span><strong>From intent to resource.</strong></div><div class="signal-steps" aria-label="The intended flow: agent request, policy check, resource"><span><i>01</i> Agent request</span><span class="signal-connector" aria-hidden="true"></span><span><i>02</i> Policy check</span><span class="signal-connector" aria-hidden="true"></span><span><i>03</i> Resource</span></div><a href="#how-it-works">How it works <svg><use href="#i-arrow"/></svg></a></div>
           <section class="launch-section" aria-labelledby="launch-title"><div class="section-heading"><div><div class="section-kicker">YOUR NEXT MOVE</div><h2 id="launch-title">Make your next move<span>.</span></h2><p>One workspace. A whole lot of possibility.</p></div><span class="launch-index">01 — 03</span></div>
             <div class="launch-grid">
-              <a class="launch-card launch-resources" href="#capabilities"><span class="launch-card-top"><span class="launch-card-icon"><svg><use href="#i-cpu"/></svg></span><span class="launch-card-arrow"><svg><use href="#i-arrow"/></svg></span></span><span class="launch-label">01 / EXPLORE</span><strong>Resources</strong><small>Compute, storage &amp; data for the task ahead.</small><span class="launch-tag">GO TO RESOURCES ↗</span></a>
-              <a class="launch-card launch-guard" href="#guardrails"><span class="launch-card-top"><span class="launch-card-icon"><svg><use href="#i-shield"/></svg></span><span class="launch-card-arrow"><svg><use href="#i-arrow"/></svg></span></span><span class="launch-label">02 / STAY IN CONTROL</span><strong>Guardrails</strong><small>See the owner rules that set the boundaries.</small><span class="launch-tag">EXPLORE THE GUARD ↗</span></a>
+              <a class="launch-card launch-resources" href="#capabilities"><span class="launch-card-top"><span class="launch-card-icon"><svg><use href="#i-cpu"/></svg></span><span class="launch-card-arrow"><svg><use href="#i-arrow"/></svg></span></span><span class="launch-label">01 / EXPLORE</span><strong>Resources</strong><small>Review missions for compute, storage &amp; data.</small><span class="launch-tag">GO TO RESOURCES ↗</span></a>
+              <a class="launch-card launch-guard" href="#guardrails"><span class="launch-card-top"><span class="launch-card-icon"><svg><use href="#i-shield"/></svg></span><span class="launch-card-arrow"><svg><use href="#i-arrow"/></svg></span></span><span class="launch-label">02 / STAY IN CONTROL</span><strong>Guardrails</strong><small>Set up or recover a vault, and review the owner rules.</small><span class="launch-tag">EXPLORE THE GUARD ↗</span></a>
               <a class="launch-card launch-proof" href="#proof"><span class="launch-card-top"><span class="launch-card-icon"><svg><use href="#i-activity"/></svg></span><span class="launch-card-arrow"><svg><use href="#i-arrow"/></svg></span></span><span class="launch-label">03 / VERIFY</span><strong>On-chain proof</strong><small>Follow the real testnet transactions.</small><span class="launch-tag">VIEW THE EVIDENCE ↗</span></a>
             </div>
           </section>
         </div>
         <div class="route-view" data-route-view="resources" aria-label="Resources"><header class="route-header"><div><div class="section-kicker"><span class="kicker-dot"></span> 01 / RESOURCE HUB</div><h1>Go beyond the prompt<span>.</span></h1><p>Compute, storage and data: three resource types, one owner-controlled framework.</p></div><span class="route-tag">THREE RESOURCE TYPES</span></header>
+
+<section class="workspace-tools" aria-labelledby="resource-tools-title">
+  <div class="workspace-tools-header">
+    <div><div class="section-kicker"><span class="kicker-dot"></span> YOUR RESOURCES · TESTNET</div>
+      <h2 id="resource-tools-title">Mission workspace<span>.</span></h2>
+      <p id="workspace-resource-wallet-state" role="status" aria-live="polite">Connect a testnet wallet to review owner-restricted mission tools.</p>
+    </div>
+    <button class="button workspace-wallet-button" type="button" data-wallet-open>Connect or manage wallet <svg><use href="#i-wallet"/></svg></button>
+  </div>
+  <div class="workspace-tool-content">
+    <div class="workspace-tool-heading"><span>01</span><div><h3>Guarded mission</h3><p>Review compute, API data and public storage together. Availability depends on the backend; connecting never runs a mission or approves spending.</p></div></div>
+    <button class="account-entry-primary" id="wallet-native-mission-open" type="button" hidden>Review a guarded testnet mission →</button>
+    <section class="setup-recovery native-setup" id="wallet-native-mission-panel" aria-label="Guarded native testnet mission" hidden>
+      <strong>Compute + data + public storage</strong>
+      <p class="account-view-status">The Bouncer vault enforces the reviewed caps and allowlist. Storage is public NEAR contract state, not an independent storage provider; results and original hashes may be public. Never put secrets in storage.</p>
+      <p class="account-view-status">Your wallet signs an approval for the displayed mission or single step, authorizing the configured server's restricted agent keys. OutLayer fetches public API data; public NEAR storage locks protocol stake. Gas is extra; steps cannot be rolled back together. If any result is unknown, do not approve again—check the original receipts. The server and RPC must be trusted.</p>
+      <p class="account-view-status" id="wallet-native-mission-summary"></p>
+      <details id="wallet-native-mission-details" hidden><summary>Review the complete mission and limits</summary><pre id="wallet-native-mission-manifest" class="native-mission-manifest"></pre></details>
+      <p class="account-view-status" id="wallet-native-mission-status" role="status" aria-live="polite"></p>
+      <div id="wallet-native-mission-receipts" class="native-mission-receipts" aria-label="Verified testnet transaction links" hidden></div>
+      <label id="wallet-native-mission-consent-label" class="native-mission-consent" hidden><input id="wallet-native-mission-consent" type="checkbox"> I reviewed the full mission, maximum and public storage. I approve the action shown above.</label>
+      <button class="account-entry-primary" id="wallet-native-mission-approve" type="button" hidden>Approve the reviewed action in my wallet →</button>
+      <button class="account-entry-secondary" id="wallet-native-mission-recover" type="button" hidden>Check original receipts only →</button>
+    </section>
+    <details class="workspace-advanced">
+      <summary>Direct provider test &amp; receipt tools <span>Advanced · bypasses Bouncer</span></summary>
+      <p class="account-view-status">A direct provider test is separate from a guarded mission. Never repeat a completed or uncertain original; inspect its retained receipt instead.</p>
+    <button class="account-entry-primary" id="wallet-direct-outlayer-open" type="button" hidden>Review one direct OutLayer test →</button>
+    <section class="setup-recovery native-setup" id="wallet-direct-outlayer-panel" aria-label="One direct OutLayer testnet purchase" hidden>
+      <strong>One direct OutLayer test · testnet only</strong>
+      <p class="account-view-status">From great_mujey.testnet to outlayer.testnet. One NEAR/USD price lookup from Coinbase using the pinned zavodil2.testnet/price-oracle project. The maximum deposit is 0.1 test NEAR; network gas is extra. OutLayer may refund unused funds to your wallet; the receipt must confirm this.</p>
+      <p class="account-view-status">This direct provider test bypasses Bouncer’s firewall, policies and agent. It does not prove the autonomous agent works. One-shot records can be lost or altered. If a wallet result is unknown, do not approve the transaction again.</p>
+      <p class="account-view-status" id="wallet-direct-outlayer-status" role="status" aria-live="polite"></p>
+      <p class="account-view-status" id="wallet-direct-outlayer-hash" hidden></p>
+      <p class="account-view-status" id="wallet-direct-outlayer-result" hidden></p>
+      <button class="account-entry-secondary" id="wallet-direct-outlayer-review" type="button" hidden>Check the testnet review →</button>
+      <button class="account-entry-primary" id="wallet-direct-outlayer-send" type="button" hidden>Approve one direct test in Meteor →</button>
+      <button class="account-entry-secondary" id="wallet-direct-outlayer-check" type="button" hidden>Check the original receipt →</button>
+      <div id="wallet-direct-outlayer-recover" hidden>
+        <label for="wallet-direct-outlayer-original">Original transaction hash from Meteor history</label>
+        <input id="wallet-direct-outlayer-original" type="text" maxlength="50" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Paste the original hash" />
+        <button class="account-entry-secondary" id="wallet-direct-outlayer-recover-original" type="button">Check this original only →</button>
+      </div>
+    </section>
+    </details>
+  </div>
+</section>
 <section class="section" id="capabilities" aria-labelledby="capabilities-title">
           <div class="section-heading"><div><div class="section-kicker">THE BIG PICTURE</div><h2 id="capabilities-title">One agent. More possibilities<span>.</span></h2><p>Three kinds of resources, one set of rules. Explore recorded testnet evidence and what remains in development.</p></div><a class="heading-link" href="#how-it-works">How it works <svg><use href="#i-arrow"/></svg></a></div>
           <div class="capability-grid">
@@ -116,6 +163,139 @@
 <section class="section" id="run-story" aria-labelledby="story-heading"><div class="section-heading"><div><div class="section-kicker">EARLIER MULTI-TOKEN RUN</div><h2 id="story-heading">A closer look at the journey<span>.</span></h2><p>Explore three historical requests and their recorded testnet payments.</p></div></div><div class="story-shell"><div class="story-tabs" role="tablist" aria-label="Choose a recorded resource request"><button id="story-tab-compute" class="story-tab active" type="button" role="tab" aria-selected="true" aria-controls="story-panel" data-story-tab="compute"><svg><use href="#i-cpu"/></svg> Compute</button><button id="story-tab-storage" class="story-tab" type="button" role="tab" aria-selected="false" aria-controls="story-panel" data-story-tab="storage" tabindex="-1"><svg><use href="#i-storage"/></svg> Storage</button><button id="story-tab-api" class="story-tab" type="button" role="tab" aria-selected="false" aria-controls="story-panel" data-story-tab="api" tabindex="-1"><svg><use href="#i-api"/></svg> API</button></div><div class="story-content" id="story-panel" role="tabpanel" aria-labelledby="story-tab-compute" tabindex="0"><div class="story-top"><div><span class="section-kicker">RECORDED REQUEST</span><h3 id="story-title">Compute a hash</h3></div><span class="proof-tag">TESTNET</span></div><div class="story-rows"><div><span>01</span><section><strong>What was requested</strong><p id="story-request">Run 1,000 rounds of SHA-256 on “near-hub compute job”.</p></section></div><div><span>02</span><section><strong>What Bouncer paid</strong><p id="story-payment">0.1 wNEAR on NEAR testnet, within the owner’s rules.</p></section></div><div><span>03</span><section><strong>What was delivered</strong><p id="story-result">SHA-256 result: ad9458759e0093580ac1f7aa669deb8447571a5531691b53972ca1789b4e690c</p></section></div></div><div class="story-footer"><p>Delivery was checked using a self-hosted development provider.</p><a id="story-transaction" href="https://testnet.nearblocks.io/txns/6VELBm5bCbTF2jv88q2R4omrSJkvj8Ytr4aqa1FCtdTv" target="_blank" rel="noopener noreferrer">View payment proof ↗</a></div></div></div><p class="section-note">These are historical results, not a live demo. Storage and API credits are newly created testnet tokens; services are self-hosted development examples, not commercial vendors.</p></section>
 <section class="section recorded-section" id="resources"><div class="section-heading"><div><div class="section-kicker">THE DETAILS</div><h2>The payments behind the results<span>.</span></h2><p>Recorded policies and payments from the earlier three-token run.</p></div><button class="button refresh-button" id="refresh-balances" type="button"><svg><use href="#i-refresh"/></svg> Check these vaults</button></div><div id="rpc-status" class="rpc-status" role="status" aria-live="polite">Vault figures are from the recorded run, not live balances.</div><div class="resource-grid" id="resource-grid"></div></section></div>
         <div class="route-view" data-route-view="guardrails" aria-label="Guardrails"><header class="route-header"><div><div class="section-kicker"><span class="kicker-dot"></span> 02 / YOUR BOUNDARIES</div><h1>Autonomy, with a boundary<span>.</span></h1><p>The agent gets room to work. You keep the final say over its spending rules.</p></div><span class="route-tag">OWNER CONTROL</span></header>
+<section class="workspace-tools" aria-labelledby="vault-tools-title">
+  <div class="workspace-tools-header">
+    <div><div class="section-kicker"><span class="kicker-dot"></span> YOUR VAULT · TESTNET</div>
+      <h2 id="vault-tools-title">Vault setup &amp; recovery<span>.</span></h2>
+      <p id="workspace-vault-wallet-state" role="status" aria-live="polite">Connect a testnet wallet to use owner-restricted recovery and setup tools.</p>
+    </div>
+    <button class="button workspace-wallet-button" type="button" data-wallet-open>Connect or manage wallet <svg><use href="#i-wallet"/></svg></button>
+  </div>
+  <div class="workspace-tool-content">
+    <div class="workspace-tool-heading"><span>01</span><div><h3>Recover an existing setup</h3><p>Already saved or enrolled a setup? Recover it first. Do not create or enroll another candidate, and never repeat an uncertain transaction.</p></div></div>
+    <button class="account-entry-secondary" id="wallet-bootstrap-recovery-open" type="button" hidden>Recover encrypted vault setup →</button>
+    <section class="setup-recovery native-setup" id="wallet-bootstrap-recovery-panel" aria-label="Encrypted vault setup recovery" hidden>
+      <strong>Recover the encrypted setup copy</strong>
+      <p class="account-view-status">A wallet message reads an existing encrypted recovery kit and original transaction hashes. It does not create a vault, send a transaction or grant spending access. If a result is unknown, do not approve it again.</p>
+      <p class="account-view-status">Save the encrypted file somewhere separate and keep its recovery passphrase safe. A leaked file can be guessed offline; a lost file or passphrase may strand funds. Never enter your wallet seed phrase or private key here.</p>
+      <button class="account-entry-secondary" id="wallet-bootstrap-recovery-read" type="button">Sign a read-only online recovery message →</button>
+      <label for="wallet-bootstrap-recovery-file">Or choose an existing encrypted recovery file</label>
+      <input id="wallet-bootstrap-recovery-file" type="file" accept="application/json,.json">
+      <button class="account-entry-secondary" id="wallet-bootstrap-recovery-import" type="button">Read encrypted file on this device →</button>
+      <p class="account-view-status" id="wallet-bootstrap-recovery-status" role="status" aria-live="polite"></p>
+      <div id="wallet-bootstrap-recovery-originals" class="native-mission-receipts" aria-label="Retained setup originals" hidden></div>
+      <div id="wallet-bootstrap-recovery-backup" hidden>
+        <button class="account-entry-secondary" id="wallet-bootstrap-recovery-export" type="button" disabled>Save encrypted recovery file →</button>
+        <label for="wallet-bootstrap-recovery-passphrase">Unlock before saving. Recovery kit passphrase — not your wallet seed</label>
+        <input id="wallet-bootstrap-recovery-passphrase" type="password" minlength="16" maxlength="1024" autocomplete="off" autocapitalize="off" spellcheck="false">
+        <button class="account-entry-secondary" id="wallet-bootstrap-recovery-unlock" type="button">Check passphrase on this device →</button>
+        <p class="account-view-status">After unlocking a saved recovery file, you can compare it with the online checkpoint using another identity message. A match does not prove the file is separately stored or that either copy is the latest.</p>
+        <button class="account-entry-secondary" id="wallet-bootstrap-recovery-compare" type="button" hidden disabled>Compare saved file with online checkpoint →</button>
+        <p class="account-view-status" id="wallet-bootstrap-recovery-compare-status" role="status" aria-live="polite"></p>
+      </div>
+    </section>
+    <button class="account-entry-secondary" id="wallet-v14-recovery-open" type="button" hidden>Read V14 setup history →</button>
+    <section class="setup-recovery native-setup" id="wallet-v14-recovery-panel" aria-label="Read-only V14 checkpoint history" hidden>
+      <strong>Recover history, not another deployment</strong>
+      <p class="account-view-status">A wallet message reads the public setup review and original transaction hashes. It does not approve a transaction, recover keys, or grant spending access.</p>
+      <label for="wallet-v14-recovery-vault">Testnet vault account</label>
+      <input id="wallet-v14-recovery-vault" type="text" maxlength="64" autocomplete="off" spellcheck="false">
+      <button class="account-entry-secondary" id="wallet-v14-recovery-read" type="button">Sign to read history →</button>
+      <p class="account-view-status" id="wallet-v14-recovery-status" role="status" aria-live="polite"></p>
+      <details id="wallet-v14-recovery-review" hidden><summary>View the recorded public review</summary><pre id="wallet-v14-recovery-review-text" class="native-mission-manifest"></pre></details>
+      <div id="wallet-v14-recovery-originals" class="native-mission-receipts" aria-label="Recorded testnet originals" hidden></div>
+    </section>
+    <button class="account-entry-secondary" id="wallet-setup-recovery" type="button" hidden>Check setup recovery →</button>
+    <p class="account-view-status" id="wallet-setup-recovery-status" role="status" aria-live="polite" hidden></p>
+    <div class="setup-recovery" id="wallet-setup-recovery-form" hidden>
+      <label for="wallet-setup-original">Original transaction hash from wallet history</label>
+      <input id="wallet-setup-original" type="text" maxlength="50" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Paste the original hash" />
+      <button class="account-entry-secondary" id="wallet-setup-check-original" type="button">Check original on testnet →</button>
+      <button class="account-entry-primary" id="wallet-setup-record-original" type="button" hidden>Record this original →</button>
+    </div>
+    <details class="workspace-advanced">
+      <summary>Review or prepare a new setup <span>Only if no setup already exists</span></summary>
+      <p class="account-view-status">Preparation and the funding review are not deployment approval. An existing encrypted checkpoint should be recovered instead of replaced.</p>
+    <button class="account-entry-secondary" id="wallet-bootstrap-budget-open" type="button" hidden>Review proposed testnet vault →</button>
+    <section class="setup-recovery native-setup" id="wallet-bootstrap-budget-panel" aria-label="Proposed testnet vault review" hidden>
+      <strong>Proposed V14 vault · review only</strong>
+      <p class="account-view-status">Stage 1: your wallet would create native.great_mujey.testnet, transfer the reviewed test NEAR, and add a temporary FullAccess key to that new vault. Stage 2: the temporary vault key would deploy and initialize V14, then delete itself. No transaction is requested here.</p>
+      <p class="account-view-status">Until deletion is final, that key can move all vault funds or change the vault. Interrupted setup can leave it active; losing the recovery key may strand funds. The V14 artifact is unaudited. Independent recovery and receipt checks must be proven before any wallet transaction.</p>
+      <p class="account-view-status">After setup, owner policy changes use the 1-yocto guard; agent keys are restricted. Mission caps and payments need separate review. Storage locks test NEAR; gas is additional or paid from the funded vault as shown below.</p>
+      <button class="account-entry-secondary" id="wallet-bootstrap-budget-refresh" type="button">Check current funding and gas →</button>
+      <p class="account-view-status" id="wallet-bootstrap-budget-status" role="status" aria-live="polite"></p>
+      <pre class="native-mission-manifest" id="wallet-bootstrap-budget-result" hidden></pre>
+    </section>
+    <button class="account-entry-secondary" id="wallet-bootstrap-candidate-open" type="button" hidden>Prepare an encrypted setup file →</button>
+    <section class="setup-recovery native-setup" id="wallet-bootstrap-candidate-panel" aria-label="Local encrypted setup preparation" hidden>
+      <strong>Prepare a local setup file — no transaction</strong>
+      <p class="account-view-status">For the proposed native.great_mujey.testnet vault and the example 6 test NEAR transfer, this creates a temporary vault key and encrypts it on this device. The key and passphrase are not sent to a backend or wallet; the browser loads a pinned public artifact. No vault is created or enrolled, and no spending is approved.</p>
+      <p class="account-view-status">If that key is later installed, it can control the vault until deleted. A stolen file permits offline passphrase guessing; losing the file or passphrase could strand funds. Use a long, unique passphrase, never your wallet seed or private key. A compromised browser can steal unlocked secrets.</p>
+      <p class="account-view-status">This preparation file contains <strong>no transaction originals</strong>. It is not a signed recovery backup, proof of an independent copy or the latest history. If an earlier setup may already have been sent, recover its original instead of starting again.</p>
+      <label for="wallet-bootstrap-candidate-passphrase">New local recovery passphrase — at least 16 characters, not your wallet seed</label>
+      <input id="wallet-bootstrap-candidate-passphrase" type="password" minlength="16" maxlength="1024" autocomplete="off" autocapitalize="off" spellcheck="false">
+      <label for="wallet-bootstrap-candidate-confirm">Confirm the same passphrase</label>
+      <input id="wallet-bootstrap-candidate-confirm" type="password" minlength="16" maxlength="1024" autocomplete="off" autocapitalize="off" spellcheck="false">
+      <button class="account-entry-secondary" id="wallet-bootstrap-candidate-create" type="button">Create encrypted file on this device →</button>
+      <p class="account-view-status" id="wallet-bootstrap-candidate-status" role="status" aria-live="polite"></p>
+      <div id="wallet-bootstrap-candidate-saved" hidden>
+        <p class="account-view-status">Record this backup ID somewhere separate from the file, then save the encrypted file in a safe place. You will need the ID and passphrase to check the file on another device.</p>
+        <pre class="native-mission-manifest" id="wallet-bootstrap-candidate-id"></pre>
+        <details><summary>View public key and plan pins</summary><pre class="native-mission-manifest" id="wallet-bootstrap-candidate-details"></pre></details>
+        <button class="account-entry-secondary" id="wallet-bootstrap-candidate-copy" type="button">Copy backup ID →</button>
+        <button class="account-entry-secondary" id="wallet-bootstrap-candidate-download" type="button">Save encrypted setup file →</button>
+      </div>
+      <label for="wallet-bootstrap-candidate-file">Check a saved preparation file on this device</label>
+      <input id="wallet-bootstrap-candidate-file" type="file" accept="application/json,.json">
+      <label for="wallet-bootstrap-candidate-expected">Backup ID recorded separately</label>
+      <input id="wallet-bootstrap-candidate-expected" type="text" minlength="64" maxlength="64" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="64-character backup ID">
+      <label for="wallet-bootstrap-candidate-unlock">Recovery passphrase — not your wallet seed</label>
+      <input id="wallet-bootstrap-candidate-unlock" type="password" minlength="16" maxlength="1024" autocomplete="off" autocapitalize="off" spellcheck="false">
+      <button class="account-entry-secondary" id="wallet-bootstrap-candidate-verify" type="button">Check saved file locally →</button>
+      <p class="account-view-status" id="wallet-bootstrap-candidate-check-status" role="status" aria-live="polite"></p>
+      <div id="wallet-bootstrap-candidate-enrollment" hidden>
+        <strong>Save the encrypted file to the recovery checkpoint</strong>
+        <p class="account-view-status">First save a separate copy of your file and backup ID. Then choose that file and enter its ID and passphrase above. This asks your wallet to sign an identity message and sends the encrypted kit and public review to the checkpoint; it does not send your passphrase or request a transaction.</p>
+        <p class="account-view-status">A service acknowledgement is not a verified restore or proof of the latest transaction history. If the result is uncertain, recover the existing checkpoint instead of enrolling again.</p>
+        <button class="account-entry-secondary" id="wallet-bootstrap-candidate-enroll" type="button">Sign message and save encrypted copy →</button>
+        <p class="account-view-status" id="wallet-bootstrap-candidate-enroll-status" role="status" aria-live="polite"></p>
+      </div>
+    </section>
+    <button class="account-entry-primary" id="wallet-native-setup-open" type="button" hidden>Review native NEAR resource setup →</button>
+    <section class="setup-recovery native-setup" id="wallet-native-setup-panel" aria-label="Native NEAR testnet resource setup" hidden>
+      <strong>Experimental native NEAR · testnet only</strong>
+      <p class="account-view-status" id="wallet-native-setup-terms"></p>
+      <p class="account-view-status" id="wallet-native-setup-stage"></p>
+      <p class="account-view-status" id="wallet-native-setup-status" role="status" aria-live="polite"></p>
+      <p class="account-view-status" id="wallet-native-setup-hash" hidden></p>
+      <button class="account-entry-secondary" id="wallet-native-setup-check" type="button" hidden>Check retained setup →</button>
+      <button class="account-entry-secondary" id="wallet-native-setup-device" type="button" hidden>Create phone agent key →</button>
+      <button class="account-entry-secondary" id="wallet-native-setup-reserve" type="button" hidden>Reserve this reviewed setup →</button>
+      <button class="account-entry-primary" id="wallet-native-setup-approve" type="button" hidden>Approve this stage in wallet →</button>
+      <button class="account-entry-secondary" id="wallet-native-setup-receipt" type="button" hidden>Check original receipt →</button>
+      <button class="account-entry-secondary" id="wallet-native-setup-verify" type="button" hidden>Verify current setup →</button>
+      <button class="account-entry-secondary" id="wallet-native-trial-review" type="button" hidden>Review the resource request →</button>
+      <button class="account-entry-primary" id="wallet-native-trial-send" type="button" hidden>Authorize one testnet resource request →</button>
+      <button class="account-entry-secondary" id="wallet-native-trial-check" type="button" hidden>Check resource receipt and refund →</button>
+      <div id="wallet-native-setup-recover" hidden>
+        <label for="wallet-native-setup-original">Original transaction hash from wallet history</label>
+        <input id="wallet-native-setup-original" type="text" maxlength="50" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Paste the original hash" />
+        <button class="account-entry-secondary" id="wallet-native-setup-recover-original" type="button">Check and retain this original →</button>
+      </div>
+    </section>
+    <button class="account-entry-secondary" id="wallet-buffer-readiness" type="button" hidden>Review Buffer testnet setup →</button>
+    <p class="account-view-status" id="wallet-buffer-readiness-status" role="status" aria-live="polite" hidden></p>
+    <button class="account-entry-primary" id="wallet-buffer-setup-start" type="button" hidden>Prepare staged Buffer vault setup →</button>
+    <section class="setup-recovery" id="wallet-buffer-setup-panel" aria-label="Reviewed Buffer testnet setup" hidden>
+      <p class="account-view-status" id="wallet-buffer-setup-terms"></p>
+      <button class="account-entry-secondary" id="wallet-buffer-setup-reserve" type="button" hidden>Reserve this witnessed setup →</button>
+      <button class="account-entry-primary" id="wallet-buffer-setup-approve" type="button" hidden>Approve next wallet transaction →</button>
+      <p class="account-view-status" id="wallet-buffer-setup-status" role="status" aria-live="polite"></p>
+    </section>
+    </details>
+  </div>
+</section>
+
 <section class="section guardrail-section" id="guardrails" aria-labelledby="guardrails-title">
           <div class="guardrail-intro"><div><div class="section-kicker light-kicker">CONTROL, BUILT IN</div><h2 id="guardrails-title">Autonomy needs<br><em>boundaries.</em></h2><p>Your agent can ask to spend. The on-chain policy decides what’s allowed.</p><a class="dark-link" href="https://testnet.nearblocks.io/txns/Fegksi5b8KmqnHN3fHaH1Ak9vyLFA2JjgoqL5UAtjpu2" target="_blank" rel="noopener noreferrer">See the guard in action <svg><use href="#i-external"/></svg></a></div><span class="big-shield"><svg><use href="#i-shield"/></svg></span></div>
           <div class="guardrail-items"><div><span>01</span><h3>Owner-only changes</h3><p>Policy changes require exactly 1 yoctoNEAR. A restricted function-call key can’t attach it.</p></div><div><span>02</span><h3>Spending limits</h3><p>Per-transaction caps and rolling budgets put a ceiling on what an agent can spend.</p></div><div><span>03</span><h3>Approved destinations</h3><p>Policies can limit the tokens and payees the agent is allowed to use.</p></div></div>
@@ -136,9 +316,9 @@
 <details class="history-details track-detail"><summary><span><span class="section-kicker">ONE FOCUS · AI SECURITY &amp; DEFENSE</span><strong>A resource agent with boundaries</strong><small>What is tested and what remains before the live mission.</small></span><span class="history-plus" aria-hidden="true">+</span></summary><div class="track-grid"><article class="track-card"><h3>Owner authority</h3><p>A historical testnet policy change without the required 1 yocto was rejected.</p></article><article class="track-card"><h3>Bounded resources</h3><p>Scoped keys and spending policies are tested. A real guarded data, compute and storage mission is still in development.</p></article><article class="track-card"><h3>Recovery &amp; proof</h3><p>Independent transaction retention and recovery across real devices are not yet proven. The prototype is not independently audited.</p></article></div></details></div>
         <div class="route-view" data-route-view="connect" aria-label="Wallet and AI"><header class="route-header"><div><div class="section-kicker"><span class="kicker-dot"></span> 04 / YOUR CONNECTION</div><h1>You’re in the driver’s seat<span>.</span></h1><p>Connect a testnet wallet, use Google sign-in, or bring an AI assistant into your workflow.</p></div><span class="route-tag">YOUR ACCOUNT · YOUR RULES</span></header>
 <section class="section access-section" id="connect" aria-labelledby="access-title">
-          <div class="section-heading"><div><div class="section-kicker">YOUR WORKSPACE</div><h2 id="access-title">One place to get started<span>.</span></h2><p>Choose a wallet or Google sign-in, or explore Bouncer with a compatible AI assistant.</p></div></div>
+          <div class="section-heading"><div><div class="section-kicker">YOUR WORKSPACE</div><h2 id="access-title">One place to get started<span>.</span></h2><p>Connect a wallet and verify its identity, or explore Bouncer with a compatible AI assistant.</p></div></div>
           <div class="access-grid">
-            <article class="access-card account-card"><div class="access-card-head"><span class="access-icon account-icon"><svg><use href="#i-wallet"/></svg></span><span class="access-pill"><span class="status-dot"></span> NEAR TESTNET</span></div><h3>Connect your account</h3><p class="access-copy">Choose a testnet wallet or sign in with Google. Connecting does not create a Bouncer vault or grant agent spending access. Ethereum wallet setup may require an approved testnet transaction.</p>
+            <article class="access-card account-card"><div class="access-card-head"><span class="access-icon account-icon"><svg><use href="#i-wallet"/></svg></span><span class="access-pill"><span class="status-dot"></span> NEAR TESTNET</span></div><h3>Connect your account</h3><p class="access-copy">Choose a testnet wallet or sign in with Google. After an explicit wallet connection, Bouncer asks supported wallets to sign a no-spend identity message. This does not create a Bouncer vault or grant agent spending access. Ethereum wallet setup may require an approved testnet transaction.</p>
               <div class="wallet-actions"><button id="wallet-connect" class="button wallet-button" type="button" data-wallet-open><span data-wallet-label>Connect wallet</span> <svg><use href="#i-arrow"/></svg></button></div>
               <p id="wallet-status" class="connection-status" role="status" aria-live="polite">Getting your wallet options ready…</p><p class="security-note"><svg><use href="#i-lock"/></svg> Never enter a seed phrase or private key into Bouncer.</p>
             </article>
@@ -188,154 +368,9 @@
   <section class="account-view" id="wallet-account-view" aria-label="Public testnet account" hidden>
     <div class="account-view-head"><div><small>PUBLIC TESTNET ACCOUNT</small><strong id="wallet-account-name"></strong></div><span id="wallet-account-badge">VIEW ONLY</span></div>
     <p class="account-view-warning" id="wallet-account-warning">Unverified account name. No wallet is connected and no spending access was granted.</p>
-    <button class="account-entry-primary" id="wallet-owner-verify" type="button" hidden>Verify account in wallet</button>
+    <button class="account-entry-primary" id="wallet-owner-verify" type="button" hidden>Retry identity verification in wallet</button>
     <p class="account-view-status" id="wallet-owner-status" role="status" aria-live="polite" hidden></p>
-    <button class="account-entry-secondary" id="wallet-bootstrap-budget-open" type="button" hidden>Review proposed testnet vault →</button>
-    <section class="setup-recovery native-setup" id="wallet-bootstrap-budget-panel" aria-label="Proposed testnet vault review" hidden>
-      <strong>Proposed V14 vault · review only</strong>
-      <p class="account-view-status">Stage 1: your wallet would create native.great_mujey.testnet, transfer the reviewed test NEAR, and add a temporary FullAccess key to that new vault. Stage 2: the temporary vault key would deploy and initialize V14, then delete itself. No transaction is requested here.</p>
-      <p class="account-view-status">Until deletion is final, that key can move all vault funds or change the vault. Interrupted setup can leave it active; losing the recovery key may strand funds. The V14 artifact is unaudited. Independent recovery and receipt checks must be proven before any wallet transaction.</p>
-      <p class="account-view-status">After setup, owner policy changes use the 1-yocto guard; agent keys are restricted. Mission caps and payments need separate review. Storage locks test NEAR; gas is additional or paid from the funded vault as shown below.</p>
-      <button class="account-entry-secondary" id="wallet-bootstrap-budget-refresh" type="button">Check current funding and gas →</button>
-      <p class="account-view-status" id="wallet-bootstrap-budget-status" role="status" aria-live="polite"></p>
-      <pre class="native-mission-manifest" id="wallet-bootstrap-budget-result" hidden></pre>
-    </section>
-    <button class="account-entry-secondary" id="wallet-bootstrap-candidate-open" type="button" hidden>Prepare an encrypted setup file →</button>
-    <section class="setup-recovery native-setup" id="wallet-bootstrap-candidate-panel" aria-label="Local encrypted setup preparation" hidden>
-      <strong>Prepare a local setup file — no transaction</strong>
-      <p class="account-view-status">For the proposed native.great_mujey.testnet vault and the example 6 test NEAR transfer, this creates a temporary vault key and encrypts it on this device. The key and passphrase are not sent to a backend or wallet; the browser loads a pinned public artifact. No vault is created or enrolled, and no spending is approved.</p>
-      <p class="account-view-status">If that key is later installed, it can control the vault until deleted. A stolen file permits offline passphrase guessing; losing the file or passphrase could strand funds. Use a long, unique passphrase, never your wallet seed or private key. A compromised browser can steal unlocked secrets.</p>
-      <p class="account-view-status">This preparation file contains <strong>no transaction originals</strong>. It is not a signed recovery backup, proof of an independent copy or the latest history. If an earlier setup may already have been sent, recover its original instead of starting again.</p>
-      <label for="wallet-bootstrap-candidate-passphrase">New local recovery passphrase — at least 16 characters, not your wallet seed</label>
-      <input id="wallet-bootstrap-candidate-passphrase" type="password" minlength="16" maxlength="1024" autocomplete="off" autocapitalize="off" spellcheck="false">
-      <label for="wallet-bootstrap-candidate-confirm">Confirm the same passphrase</label>
-      <input id="wallet-bootstrap-candidate-confirm" type="password" minlength="16" maxlength="1024" autocomplete="off" autocapitalize="off" spellcheck="false">
-      <button class="account-entry-secondary" id="wallet-bootstrap-candidate-create" type="button">Create encrypted file on this device →</button>
-      <p class="account-view-status" id="wallet-bootstrap-candidate-status" role="status" aria-live="polite"></p>
-      <div id="wallet-bootstrap-candidate-saved" hidden>
-        <p class="account-view-status">Record this backup ID somewhere separate from the file, then save the encrypted file in a safe place. You will need the ID and passphrase to check the file on another device.</p>
-        <pre class="native-mission-manifest" id="wallet-bootstrap-candidate-id"></pre>
-        <details><summary>View public key and plan pins</summary><pre class="native-mission-manifest" id="wallet-bootstrap-candidate-details"></pre></details>
-        <button class="account-entry-secondary" id="wallet-bootstrap-candidate-copy" type="button">Copy backup ID →</button>
-        <button class="account-entry-secondary" id="wallet-bootstrap-candidate-download" type="button">Save encrypted setup file →</button>
-      </div>
-      <label for="wallet-bootstrap-candidate-file">Check a saved preparation file on this device</label>
-      <input id="wallet-bootstrap-candidate-file" type="file" accept="application/json,.json">
-      <label for="wallet-bootstrap-candidate-expected">Backup ID recorded separately</label>
-      <input id="wallet-bootstrap-candidate-expected" type="text" minlength="64" maxlength="64" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="64-character backup ID">
-      <label for="wallet-bootstrap-candidate-unlock">Recovery passphrase — not your wallet seed</label>
-      <input id="wallet-bootstrap-candidate-unlock" type="password" minlength="16" maxlength="1024" autocomplete="off" autocapitalize="off" spellcheck="false">
-      <button class="account-entry-secondary" id="wallet-bootstrap-candidate-verify" type="button">Check saved file locally →</button>
-      <p class="account-view-status" id="wallet-bootstrap-candidate-check-status" role="status" aria-live="polite"></p>
-      <div id="wallet-bootstrap-candidate-enrollment" hidden>
-        <strong>Save the encrypted file to the recovery checkpoint</strong>
-        <p class="account-view-status">First save a separate copy of your file and backup ID. Then choose that file and enter its ID and passphrase above. This asks your wallet to sign an identity message and sends the encrypted kit and public review to the checkpoint; it does not send your passphrase or request a transaction.</p>
-        <p class="account-view-status">A service acknowledgement is not a verified restore or proof of the latest transaction history. If the result is uncertain, recover the existing checkpoint instead of enrolling again.</p>
-        <button class="account-entry-secondary" id="wallet-bootstrap-candidate-enroll" type="button">Sign message and save encrypted copy →</button>
-        <p class="account-view-status" id="wallet-bootstrap-candidate-enroll-status" role="status" aria-live="polite"></p>
-      </div>
-    </section>
-    <button class="account-entry-secondary" id="wallet-v14-recovery-open" type="button" hidden>Read V14 setup history →</button>
-    <section class="setup-recovery native-setup" id="wallet-v14-recovery-panel" aria-label="Read-only V14 checkpoint history" hidden>
-      <strong>Recover history, not another deployment</strong>
-      <p class="account-view-status">A wallet message reads the public setup review and original transaction hashes. It does not approve a transaction, recover keys, or grant spending access.</p>
-      <label for="wallet-v14-recovery-vault">Testnet vault account</label>
-      <input id="wallet-v14-recovery-vault" type="text" maxlength="64" autocomplete="off" spellcheck="false">
-      <button class="account-entry-secondary" id="wallet-v14-recovery-read" type="button">Sign to read history →</button>
-      <p class="account-view-status" id="wallet-v14-recovery-status" role="status" aria-live="polite"></p>
-      <details id="wallet-v14-recovery-review" hidden><summary>View the recorded public review</summary><pre id="wallet-v14-recovery-review-text" class="native-mission-manifest"></pre></details>
-      <div id="wallet-v14-recovery-originals" class="native-mission-receipts" aria-label="Recorded testnet originals" hidden></div>
-    </section>
-    <button class="account-entry-secondary" id="wallet-bootstrap-recovery-open" type="button" hidden>Recover encrypted vault setup →</button>
-    <section class="setup-recovery native-setup" id="wallet-bootstrap-recovery-panel" aria-label="Encrypted vault setup recovery" hidden>
-      <strong>Recover the encrypted setup copy</strong>
-      <p class="account-view-status">A wallet message reads an existing encrypted recovery kit and original transaction hashes. It does not create a vault, send a transaction or grant spending access. If a result is unknown, do not approve it again.</p>
-      <p class="account-view-status">Save the encrypted file somewhere separate and keep its recovery passphrase safe. A leaked file can be guessed offline; a lost file or passphrase may strand funds. Never enter your wallet seed phrase or private key here.</p>
-      <button class="account-entry-secondary" id="wallet-bootstrap-recovery-read" type="button">Sign a read-only online recovery message →</button>
-      <label for="wallet-bootstrap-recovery-file">Or choose an existing encrypted recovery file</label>
-      <input id="wallet-bootstrap-recovery-file" type="file" accept="application/json,.json">
-      <button class="account-entry-secondary" id="wallet-bootstrap-recovery-import" type="button">Read encrypted file on this device →</button>
-      <p class="account-view-status" id="wallet-bootstrap-recovery-status" role="status" aria-live="polite"></p>
-      <div id="wallet-bootstrap-recovery-originals" class="native-mission-receipts" aria-label="Retained setup originals" hidden></div>
-      <div id="wallet-bootstrap-recovery-backup" hidden>
-        <button class="account-entry-secondary" id="wallet-bootstrap-recovery-export" type="button" disabled>Save encrypted recovery file →</button>
-        <label for="wallet-bootstrap-recovery-passphrase">Unlock before saving. Recovery kit passphrase — not your wallet seed</label>
-        <input id="wallet-bootstrap-recovery-passphrase" type="password" minlength="16" maxlength="1024" autocomplete="off" autocapitalize="off" spellcheck="false">
-        <button class="account-entry-secondary" id="wallet-bootstrap-recovery-unlock" type="button">Check passphrase on this device →</button>
-        <p class="account-view-status">After unlocking a saved recovery file, you can compare it with the online checkpoint using another identity message. A match does not prove the file is separately stored or that either copy is the latest.</p>
-        <button class="account-entry-secondary" id="wallet-bootstrap-recovery-compare" type="button" hidden disabled>Compare saved file with online checkpoint →</button>
-        <p class="account-view-status" id="wallet-bootstrap-recovery-compare-status" role="status" aria-live="polite"></p>
-      </div>
-    </section>
-    <button class="account-entry-primary" id="wallet-native-mission-open" type="button" hidden>Review a guarded testnet mission →</button>
-    <section class="setup-recovery native-setup" id="wallet-native-mission-panel" aria-label="Guarded native testnet mission" hidden>
-      <strong>Compute + data + public storage</strong>
-      <p class="account-view-status">The Bouncer vault enforces the reviewed caps and allowlist. Storage is public NEAR contract state, not an independent storage provider; results and original hashes may be public. Never put secrets in storage.</p>
-      <p class="account-view-status">Your wallet signs an approval for the displayed mission or single step, authorizing the configured server's restricted agent keys. OutLayer fetches public API data; public NEAR storage locks protocol stake. Gas is extra; steps cannot be rolled back together. If any result is unknown, do not approve again—check the original receipts. The server and RPC must be trusted.</p>
-      <p class="account-view-status" id="wallet-native-mission-summary"></p>
-      <details id="wallet-native-mission-details" hidden><summary>Review the complete mission and limits</summary><pre id="wallet-native-mission-manifest" class="native-mission-manifest"></pre></details>
-      <p class="account-view-status" id="wallet-native-mission-status" role="status" aria-live="polite"></p>
-      <div id="wallet-native-mission-receipts" class="native-mission-receipts" aria-label="Verified testnet transaction links" hidden></div>
-      <label id="wallet-native-mission-consent-label" class="native-mission-consent" hidden><input id="wallet-native-mission-consent" type="checkbox"> I reviewed the full mission, maximum and public storage. I approve the action shown above.</label>
-      <button class="account-entry-primary" id="wallet-native-mission-approve" type="button" hidden>Approve the reviewed action in my wallet →</button>
-      <button class="account-entry-secondary" id="wallet-native-mission-recover" type="button" hidden>Check original receipts only →</button>
-    </section>
-    <button class="account-entry-primary" id="wallet-direct-outlayer-open" type="button" hidden>Review one direct OutLayer test →</button>
-    <section class="setup-recovery native-setup" id="wallet-direct-outlayer-panel" aria-label="One direct OutLayer testnet purchase" hidden>
-      <strong>One direct OutLayer test · testnet only</strong>
-      <p class="account-view-status">From great_mujey.testnet to outlayer.testnet. One NEAR/USD price lookup from Coinbase using the pinned zavodil2.testnet/price-oracle project. The maximum deposit is 0.1 test NEAR; network gas is extra. OutLayer may refund unused funds to your wallet; the receipt must confirm this.</p>
-      <p class="account-view-status">This direct provider test bypasses Bouncer’s firewall, policies and agent. It does not prove the autonomous agent works. One-shot records can be lost or altered. If a wallet result is unknown, do not approve the transaction again.</p>
-      <p class="account-view-status" id="wallet-direct-outlayer-status" role="status" aria-live="polite"></p>
-      <p class="account-view-status" id="wallet-direct-outlayer-hash" hidden></p>
-      <p class="account-view-status" id="wallet-direct-outlayer-result" hidden></p>
-      <button class="account-entry-secondary" id="wallet-direct-outlayer-review" type="button" hidden>Check the testnet review →</button>
-      <button class="account-entry-primary" id="wallet-direct-outlayer-send" type="button" hidden>Approve one direct test in Meteor →</button>
-      <button class="account-entry-secondary" id="wallet-direct-outlayer-check" type="button" hidden>Check the original receipt →</button>
-      <div id="wallet-direct-outlayer-recover" hidden>
-        <label for="wallet-direct-outlayer-original">Original transaction hash from Meteor history</label>
-        <input id="wallet-direct-outlayer-original" type="text" maxlength="50" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Paste the original hash" />
-        <button class="account-entry-secondary" id="wallet-direct-outlayer-recover-original" type="button">Check this original only →</button>
-      </div>
-    </section>
-    <button class="account-entry-primary" id="wallet-native-setup-open" type="button" hidden>Review native NEAR resource setup →</button>
-    <section class="setup-recovery native-setup" id="wallet-native-setup-panel" aria-label="Native NEAR testnet resource setup" hidden>
-      <strong>Experimental native NEAR · testnet only</strong>
-      <p class="account-view-status" id="wallet-native-setup-terms"></p>
-      <p class="account-view-status" id="wallet-native-setup-stage"></p>
-      <p class="account-view-status" id="wallet-native-setup-status" role="status" aria-live="polite"></p>
-      <p class="account-view-status" id="wallet-native-setup-hash" hidden></p>
-      <button class="account-entry-secondary" id="wallet-native-setup-check" type="button" hidden>Check retained setup →</button>
-      <button class="account-entry-secondary" id="wallet-native-setup-device" type="button" hidden>Create phone agent key →</button>
-      <button class="account-entry-secondary" id="wallet-native-setup-reserve" type="button" hidden>Reserve this reviewed setup →</button>
-      <button class="account-entry-primary" id="wallet-native-setup-approve" type="button" hidden>Approve this stage in wallet →</button>
-      <button class="account-entry-secondary" id="wallet-native-setup-receipt" type="button" hidden>Check original receipt →</button>
-      <button class="account-entry-secondary" id="wallet-native-setup-verify" type="button" hidden>Verify current setup →</button>
-      <button class="account-entry-secondary" id="wallet-native-trial-review" type="button" hidden>Review the resource request →</button>
-      <button class="account-entry-primary" id="wallet-native-trial-send" type="button" hidden>Authorize one testnet resource request →</button>
-      <button class="account-entry-secondary" id="wallet-native-trial-check" type="button" hidden>Check resource receipt and refund →</button>
-      <div id="wallet-native-setup-recover" hidden>
-        <label for="wallet-native-setup-original">Original transaction hash from wallet history</label>
-        <input id="wallet-native-setup-original" type="text" maxlength="50" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Paste the original hash" />
-        <button class="account-entry-secondary" id="wallet-native-setup-recover-original" type="button">Check and retain this original →</button>
-      </div>
-    </section>
-    <button class="account-entry-secondary" id="wallet-buffer-readiness" type="button" hidden>Review Buffer testnet setup →</button>
-    <p class="account-view-status" id="wallet-buffer-readiness-status" role="status" aria-live="polite" hidden></p>
-    <button class="account-entry-primary" id="wallet-buffer-setup-start" type="button" hidden>Prepare staged Buffer vault setup →</button>
-    <section class="setup-recovery" id="wallet-buffer-setup-panel" aria-label="Reviewed Buffer testnet setup" hidden>
-      <p class="account-view-status" id="wallet-buffer-setup-terms"></p>
-      <button class="account-entry-secondary" id="wallet-buffer-setup-reserve" type="button" hidden>Reserve this witnessed setup →</button>
-      <button class="account-entry-primary" id="wallet-buffer-setup-approve" type="button" hidden>Approve next wallet transaction →</button>
-      <p class="account-view-status" id="wallet-buffer-setup-status" role="status" aria-live="polite"></p>
-    </section>
-    <button class="account-entry-secondary" id="wallet-setup-recovery" type="button" hidden>Check setup recovery →</button>
-    <p class="account-view-status" id="wallet-setup-recovery-status" role="status" aria-live="polite" hidden></p>
-    <div class="setup-recovery" id="wallet-setup-recovery-form" hidden>
-      <label for="wallet-setup-original">Original transaction hash from wallet history</label>
-      <input id="wallet-setup-original" type="text" maxlength="50" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Paste the original hash" />
-      <button class="account-entry-secondary" id="wallet-setup-check-original" type="button">Check original on testnet →</button>
-      <button class="account-entry-primary" id="wallet-setup-record-original" type="button" hidden>Record this original →</button>
-    </div>
+    <nav class="wallet-workspace-links" aria-label="Workspace tools"><a href="#guardrails" data-wallet-workspace-link>Vault &amp; recovery ↗</a><a href="#capabilities" data-wallet-workspace-link>Resource missions ↗</a></nav>
     <dl class="account-view-balances"><div><dt>Account NEAR*</dt><dd id="wallet-account-near">—</dd></div><div><dt>Circle test USDC</dt><dd id="wallet-account-usdc">—</dd></div></dl>
     <p id="wallet-account-balance-status" class="account-view-status" role="status" aria-live="polite"></p>
     <p class="account-view-footnote">*NEAR may include funds reserved for storage; staked NEAR is not included. These are public balances, not a spendable quote.</p>
@@ -386,7 +421,7 @@
   </dialog>
   <dialog class="tour-dialog" id="welcome-tour" aria-labelledby="tour-title" aria-describedby="tour-description"><div class="tour-topline"><span class="brand-mark" aria-hidden="true"><svg viewBox="16 17 300 300"><use href="#i-bouncer"/></svg></span><span class="tour-count" id="tour-count">STEP 1 OF 4</span><button type="button" class="tour-close" id="tour-skip" aria-label="Close the tour">×</button></div><div class="tour-progress" aria-hidden="true"><span></span><span></span><span></span><span></span></div><div class="tour-copy" aria-live="polite"><div class="section-kicker" id="tour-kicker">WELCOME TO BOUNCER</div><h2 id="tour-title">Meet your resource agent.</h2><p id="tour-description">Bouncer helps an agent get compute, storage and API services while your on-chain rules guard its spending.</p><div class="tour-callout" id="tour-callout">Bouncer is a testnet prototype, not an open marketplace.</div></div><div class="tour-actions"><button class="button tour-back" type="button" id="tour-back" disabled>Back</button><button class="button tour-next" type="button" id="tour-next">Next →</button></div></dialog>
   <script type="module" src="./app.mjs?v=7"></script>
-  <script type="module" src="./wallet.bundle.js?v=40"></script>
+  <script type="module" src="./wallet.bundle.js?v=41"></script>
   <script type="module" src="./google-signin.mjs?v=3"></script>
 </body>
 </html>

@@ -104,9 +104,10 @@ try {
     await page.goto(`${origin}/`,{waitUntil:'networkidle'});
     await page.waitForFunction(()=>!document.querySelector('[data-wallet-id="meteor-wallet"]').disabled);
     await page.locator('.top-connect').click();await page.locator('[data-wallet-id="meteor-wallet"]').click();
-    await page.waitForFunction(id=>document.querySelector('#wallet-status').textContent.includes(id),owner);
-    await page.locator('.top-connect').click();await page.locator('#wallet-owner-verify').click();
     await page.waitForFunction(()=>document.querySelector('#wallet-account-badge').textContent==='OWNER VERIFIED',null,{timeout:10_000});
+    assert.equal(await page.locator('#wallet-dialog').evaluate(el=>el.open),false);
+    await page.evaluate(()=>{location.hash='#guardrails';});
+    await page.locator('#vault-tools-title').waitFor({state:'visible'});
     let readyTimer;
     try { await Promise.race([readyRequest,new Promise((_,reject)=>{readyTimer=setTimeout(()=>reject(Error('read-only readiness not requested')),10_000);})]); }
     finally { clearTimeout(readyTimer); }

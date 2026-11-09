@@ -45,7 +45,10 @@ try {
   await page.locator('#wallet-account-id').fill(owner);await page.locator('#wallet-account-submit').click();
   await page.waitForFunction(()=>document.querySelector('#wallet-status').textContent.includes('Viewing great_mujey.testnet'));
   report.public_account_view=true;
-  await page.locator('.top-connect').click();await page.locator('#wallet-bootstrap-budget-open').click();
+  await page.evaluate(()=>{location.hash='#guardrails';});
+  await page.locator('#vault-tools-title').waitFor({state:'visible'});
+  await page.locator('[data-route-view="guardrails"] .workspace-advanced > summary').click();
+  await page.locator('#wallet-bootstrap-budget-open').click();
   stage='public budget read';
   await page.locator('#wallet-bootstrap-budget-refresh').click();
   await page.waitForFunction(()=>{

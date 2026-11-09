@@ -15,19 +15,29 @@ account**. Site updates reach production only after review and deployment.
 
 Wallet sessions are restricted to approved dedicated, top-level origins, with
 GitHub Pages and shared guest origins blocked. The curated executors are
-sandboxed and their pinned bytes are SHA-256 verified before use. NEAR Mobile
-and CLI use fresh, off-chain login messages checked against testnet; other
-named wallets initially report an account without independently proving control.
-For named accounts on adapters that support NEP-413 message signing, the optional
-**Verify account in wallet** button requests a fresh off-chain signature and
-checks its public key for Full Access using a read-only final testnet RPC query.
-It verifies control only for the current browser session; it is not server
+sandboxed and their pinned bytes are SHA-256 verified before use. Immediately
+following an explicit connection, named testnet wallets that support NEP-413
+are asked for an off-chain identity signature. The browser verifies it and
+checks the public key for Full Access using a read-only final testnet RPC query.
+NEAR Mobile and CLI already sign a fresh login message; it is reused only after
+that same signature and key check, avoiding a second prompt. If verification is
+cancelled, blocked or unavailable, the wallet remains connected but unverified
+and the picker offers a retry. The button disappears after success. A restored
+session never triggers an unsolicited signature; the user can verify it from the
+picker. Verification lasts only for that browser session; it is not server
 identity, transaction approval, a vault, or agent spending authority. Account
 entry and WalletConnect are view/account-only; the Ethereum adapter does not
 support this message verification and its own onboarding may request an approved
 testnet setup transaction. Wallet extensions, provider availability and
 real-device sign-in still need end-to-end testing; unit and mocked-browser tests
 are not live logins. Never enter a seed phrase into Bouncer.
+
+Vault review, setup and encrypted recovery live in **Guardrails**; mission and
+direct-provider controls live in **Resources**. Their existing origin, owner,
+readiness and explicit-action gates remain. Connecting or verifying does not
+run a mission or enroll a recovery checkpoint. For any existing or uncertain
+setup, recover the retained copy and original instead of preparing or enrolling
+another candidate.
 
 WalletConnect requests only `near_getAccounts` on `near:testnet` and rejects
 broader permissions. Pairing keys remain in the browser; a limited fallback
@@ -165,9 +175,11 @@ keys. The owner message check reads the owner's current testnet key, but it
 never requests a NEAR transaction. Before the POST it requires a
 persistent same-origin browser stop marker; a lost or malformed acknowledgement
 stops further attempts in that browser and must be reconciled by recovery, not
-by re-enrolling. This marker is not a cross-tab lock and does not coordinate
-other browsers or devices. An acknowledgement is not proof of a separate restore,
-latest original history, vault state or final receipts, and does not authorize setup.
+by re-enrolling. When that marker exists, generating a replacement candidate
+is also disabled in that browser, but checking the saved file remains available.
+This marker is not a cross-tab lock and does not coordinate other browsers or
+devices. An acknowledgement is not proof of a separate restore, latest original
+history, vault state or final receipts, and does not authorize setup.
 The endpoint is default-off in code; it was separately enabled for a
 recovery-only real-owner test. Enabling it alone does not establish enrollment,
 an independent restore or transaction readiness.

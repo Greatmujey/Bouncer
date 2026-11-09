@@ -203,12 +203,19 @@ try {
     await page.goto(`${origin}/`,{waitUntil:'networkidle'});
     await page.waitForFunction(()=>!document.querySelector('[data-wallet-id="meteor-wallet"]').disabled);
     await page.locator('.top-connect').click();await page.locator('[data-wallet-id="meteor-wallet"]').click();
-    await page.waitForFunction(()=>document.querySelector('#wallet-status').textContent.includes('great_mujey.testnet'));
-    await page.locator('.top-connect').click();await page.locator('#wallet-owner-verify').click();
     try { await page.waitForFunction(()=>document.querySelector('#wallet-account-badge').textContent==='OWNER VERIFIED',null,{timeout:10_000}); }
     catch(error){console.error('Synthetic owner verification:',await page.locator('#wallet-owner-status').textContent(),errors,requests.slice(-12));throw error;}
     await page.waitForFunction(()=>window.__bouncerSyntheticSignatures===1);
+    assert.equal(await page.locator('#wallet-owner-verify').isVisible(),false);
+    assert.equal(await page.locator('#wallet-dialog').evaluate(el=>el.open),false);
+    assert.equal(executes,0);assert.equal(challengeCount,0);assert.equal(checkpointPosts,0);
     const signatureCount=()=>page.evaluate(()=>window.__bouncerSyntheticSignatures);
+    await page.evaluate(()=>{location.hash='#guardrails';});
+    await page.locator('#vault-tools-title').waitFor({state:'visible'});
+    assert.match(await page.locator('#workspace-vault-wallet-state').innerText(),/identity verified/i);
+    if (mode==='recovery-empty' || ['candidate-read','candidate-read-rotated','candidate-enroll-lost'].includes(mode)) {
+      await page.locator('[data-route-view="guardrails"] .workspace-advanced > summary').click();
+    }
     if(width===390 && mode==='recovery-empty') {
       // Real browser download + import on a phone-sized viewport, using a
       // synthetic wallet only. Neither operation prompts or sends anything.
@@ -376,6 +383,9 @@ try {
       assert.equal(await page.locator('#wallet-bootstrap-recovery-compare-status').innerText(),'');
       assert.equal(executes,0);assert.equal(challengeCount,0);
     }
+    await page.evaluate(()=>{location.hash='#capabilities';});
+    await page.locator('#resource-tools-title').waitFor({state:'visible'});
+    assert.match(await page.locator('#workspace-resource-wallet-state').innerText(),/identity verified/i);
     await page.locator('#wallet-native-mission-open').waitFor({state:'visible'});await page.locator('#wallet-native-mission-open').click();
     await page.waitForFunction(()=>document.querySelector('#wallet-native-mission-details') && !document.querySelector('#wallet-native-mission-details').hidden);
     assert.match(await page.locator('#wallet-native-mission-panel').innerText(),/public NEAR contract state/i);
