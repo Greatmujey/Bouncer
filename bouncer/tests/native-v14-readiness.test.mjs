@@ -74,11 +74,18 @@ test('V14 public preflight calculates an explicit unapproved storage estimate an
 test('existing, unconfirmed, low-funding, changed policy and incompatible public views remain blockers',async()=>{
   for(const [opts,key] of [[{exists:true},'candidate_vault_absent_at_block'],[{unknown:true},'candidate_vault_absent_at_block'],
     [{lowNear:true},'available_covers_example_storage_and_cap_before_gas'],[{ownerCode:true},'owner_has_plain_account_profile'],
-    [{restricted:true},'owner_has_a_full_access_key'],[{featureOff:true},'selected_protocol_features'],[{changedProject:true},'pinned_oracle_registry'],
-    [{noFees:true},'bootstrap_gas_estimate_available']]) {
+    [{restricted:true},'owner_has_a_full_access_key'],[{featureOff:true},'selected_protocol_features'],[{changedProject:true},'pinned_oracle_registry']]) {
     const r=await inspectV14Readiness(fixture(opts));assert.equal(r.checks[key],false);assert(r.blockers.includes(key));
     if(opts.unknown)assert.equal(r.candidate_presence,'UNKNOWN');
   }
+});
+
+test('unavailable temporary-key estimate does not change the separate research-loader readiness',async()=>{
+  const r=await inspectV14Readiness(fixture({noFees:true}));
+  assert.equal(r.status,'READ_ONLY_CHECKS_PASSED_NOT_AUTHORIZED');
+  assert.equal(r.bootstrap_budget,null);assert.equal(r.bootstrap_budget_status,'BLOCKED_OR_UNKNOWN');
+  assert(r.bootstrap_budget_blockers.includes('bootstrap_gas_estimate_available'));
+  assert.equal(r.transaction_sent,false);
 });
 
 test('gas estimate uses action-specific send and receipt prices without treating 30 Tgas as the whole fee',()=>{

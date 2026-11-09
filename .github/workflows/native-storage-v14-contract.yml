@@ -32,6 +32,11 @@ on:
         required: false
         default: false
         type: boolean
+      probe_v14_budget:
+        description: 'Check live phone-sized public vault cost review without a wallet or transaction'
+        required: false
+        default: false
+        type: boolean
       owner:
         description: 'Named testnet owner (public account ID)'
         required: false
@@ -46,7 +51,7 @@ permissions:
 
 jobs:
   contract:
-    if: github.event_name != 'workflow_dispatch' || (inputs.run_v14_readiness != true && inputs.export_public_artifacts != true && inputs.measure_compact_v14 != true && inputs.probe_railway_workspace != true && inputs.probe_v14_bootstrap != true)
+    if: github.event_name != 'workflow_dispatch' || (inputs.run_v14_readiness != true && inputs.export_public_artifacts != true && inputs.measure_compact_v14 != true && inputs.probe_railway_workspace != true && inputs.probe_v14_bootstrap != true && inputs.probe_v14_budget != true)
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -162,7 +167,7 @@ jobs:
           retention-days: 7
 
   railway-image:
-    if: github.event_name != 'workflow_dispatch' || (inputs.run_v14_readiness != true && inputs.export_public_artifacts != true && inputs.measure_compact_v14 != true && inputs.probe_railway_workspace != true && inputs.probe_v14_bootstrap != true)
+    if: github.event_name != 'workflow_dispatch' || (inputs.run_v14_readiness != true && inputs.export_public_artifacts != true && inputs.measure_compact_v14 != true && inputs.probe_railway_workspace != true && inputs.probe_v14_bootstrap != true && inputs.probe_v14_budget != true)
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -198,7 +203,7 @@ jobs:
           echo 'Standby and enabled-but-unconfigured modes verified without network access.'
 
   browser:
-    if: github.event_name != 'workflow_dispatch' || (inputs.run_v14_readiness != true && inputs.export_public_artifacts != true && inputs.measure_compact_v14 != true && inputs.probe_railway_workspace != true && inputs.probe_v14_bootstrap != true)
+    if: github.event_name != 'workflow_dispatch' || (inputs.run_v14_readiness != true && inputs.export_public_artifacts != true && inputs.measure_compact_v14 != true && inputs.probe_railway_workspace != true && inputs.probe_v14_bootstrap != true && inputs.probe_v14_budget != true)
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -397,6 +402,26 @@ jobs:
         env:
           BOUNCER_PLAYWRIGHT_PATH: ${{ runner.temp }}/bouncer-browser/node_modules/playwright-core/index.mjs
         run: node scripts/probe-railway-workspace.mjs
+
+  v14-budget-live-probe:
+    # Public views on the hosted site only; no wallet, key, journal or transaction.
+    if: github.event_name == 'workflow_dispatch' && inputs.probe_v14_budget == true && inputs.run_v14_readiness != true && inputs.export_public_artifacts != true && inputs.measure_compact_v14 != true && inputs.probe_railway_workspace != true && inputs.probe_v14_bootstrap != true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+      - name: Install browser test library
+        run: npm install --prefix "$RUNNER_TEMP/bouncer-browser" --no-save --no-audit --no-fund playwright-core@1.64.1
+      - name: Check the live public testnet budget review
+        working-directory: bouncer
+        env:
+          BOUNCER_PLAYWRIGHT_PATH: ${{ runner.temp }}/bouncer-browser/node_modules/playwright-core/index.mjs
+        run: node scripts/probe-v14-budget-live.mjs
 
   temporary-vault-bootstrap-sandbox:
     # No public network, real wallet, live key, loader or testnet transaction.

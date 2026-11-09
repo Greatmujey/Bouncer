@@ -70,11 +70,14 @@ export async function inspectV14Readiness({ owner, vault, provider, now = Date.n
     outlayer_contract_present: outlayer.code_hash !== '11111111111111111111111111111111',
     pinned_oracle_registry: oracleTestnetRegistryMatches(project,version,pricing),
     available_covers_example_storage_and_cap_before_gas: available >= storageEstimate + EXAMPLE_MISSION_MAX,
-    bootstrap_gas_estimate_available: bootstrapBudget!==null,
-    available_covers_example_vault_and_create_upfront: bootstrapBudget!==null &&
-      available>=BigInt(bootstrapBudget.create.owner_total_upfront_estimate_yocto),
-    example_funding_covers_estimated_storage_and_deploy_upfront: bootstrapBudget?.funding_covers_estimated_storage_and_deploy_upfront===true,
   };
+  // These checks apply only to the temporary-key 6-NEAR example. They must not
+  // alter the separate research-loader plan's existing general readiness.
+  const bootstrapBudgetChecks={bootstrap_gas_estimate_available:bootstrapBudget!==null,
+    available_covers_example_vault_and_create_upfront:bootstrapBudget!==null &&
+      available>=BigInt(bootstrapBudget.create.owner_total_upfront_estimate_yocto),
+    example_funding_covers_estimated_storage_and_deploy_upfront:bootstrapBudget?.funding_covers_estimated_storage_and_deploy_upfront===true};
+  const bootstrapBudgetBlockers=Object.keys(bootstrapBudgetChecks).filter(name=>!bootstrapBudgetChecks[name]);
   const finished = now();
   if (!Number.isSafeInteger(finished) || finished < started) throw new Error('local clock moved backwards');
   assertFreshFinalBlock(block, finished);
@@ -85,7 +88,9 @@ export async function inspectV14Readiness({ owner, vault, provider, now = Date.n
     artifact:{...V14_TESTNET_ARTIFACT}, storage_amount_per_byte_yocto:cost, estimated_owner_available_yocto:available.toString(),
     storage_margin_bytes:Number(MARGIN_BYTES), storage_reserve_yocto:(ONE/10n).toString(),
     estimated_vault_storage_funding_yocto:storageEstimate.toString(), illustrative_mission_max_yocto:EXAMPLE_MISSION_MAX.toString(),
-    gas_price_yocto_per_gas:gas.gas_price, bootstrap_budget:bootstrapBudget, checks, blockers,
+    gas_price_yocto_per_gas:gas.gas_price, bootstrap_budget:bootstrapBudget,
+    bootstrap_budget_status:bootstrapBudgetBlockers.length?'BLOCKED_OR_UNKNOWN':'SNAPSHOT_ESTIMATE_NOT_AUTHORIZED',
+    bootstrap_budget_checks:bootstrapBudgetChecks, bootstrap_budget_blockers:bootstrapBudgetBlockers, checks, blockers,
     wallet_control_proven:false, wallet_approval_obtained:false, transaction_sent:false, provider_execution_requested:false,
     independent_original_backup_verified:false, vault_deployed_by_this_check:false,
     scope:'Trusted-RPC single FINAL snapshot; proposed name and amounts are examples only, not approved funding or a quote. Gas is additional. Storage estimates, artifact identity and RPC views do not prove deployment, independent recovery, wallet support or provider execution.' };
