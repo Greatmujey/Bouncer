@@ -48,9 +48,9 @@ export function createRailwayNativeStandby({readiness,setupHandler,webHandler,bo
     }
     const get=req.method==='GET'||req.method==='HEAD';
     const status=get && (req.url==='/'||req.url==='/healthz');
-    // Fixed cache-busting variants let a non-secret diagnostic be read across
-    // two deployments; arbitrary queries remain unavailable and unreflected.
-    const diagnostic=get && ['/readiness','/readiness?volume-probe=1','/readiness?volume-probe=2','/readiness?volume-probe=3'].includes(req.url) && readiness!==undefined;
+    // Bounded numeric cache-busters let the same non-secret snapshot be read
+    // across deploys. No supplied query is used or reflected in the response.
+    const diagnostic=get && (req.url==='/readiness'||/^\/readiness\?volume-probe=\d{1,6}$/.test(req.url)) && readiness!==undefined;
     req.resume();
     res.writeHead(status||diagnostic?200:404,headers);
     res.end(req.method==='HEAD' ? undefined : JSON.stringify(status?STANDBY_STATUS:diagnostic?readiness.snapshot():{error:'unavailable'}));
@@ -70,6 +70,8 @@ async function main() {
   }
   const check=process.env.BOUNCER_STANDBY_READINESS;
   if(check!==undefined && check!=='' && check!=='0' && check!=='1')throw new Error('invalid standby diagnostics configuration');
+  const anchorFlag=process.env.BOUNCER_V14_BOOTSTRAP_RAILWAY_ANCHOR;
+  if(anchorFlag!==undefined&&anchorFlag!==''&&anchorFlag!=='0'&&anchorFlag!=='1')throw new Error('invalid recovery anchor configuration');
   let readiness,setupHandler;
   if(check==='1') {
     const [{createStandbyReadiness,inspectStandbyMount},{isRailwayRecoveryProbeTarget,runRailwayRecoveryVolumeProbe}]=await Promise.all([
@@ -83,7 +85,7 @@ async function main() {
         ? runRailwayRecoveryVolumeProbe({root:'/data',phase:'after-redeploy',mode:'observe-only'})
         : {phase:'after-redeploy',status:'MOUNT_NOT_CONFIRMED',fingerprint:null,transaction_authorized:false};
     }
-    readiness=createStandbyReadiness({recoveryVolumeProbe});
+    readiness=createStandbyReadiness({recoveryVolumeProbe,recoveryAnchorEnabled:anchorFlag==='1'});
   }
   const setup=process.env.BOUNCER_V14_SETUP_READONLY;
   if(setup!==undefined&&setup!==''&&setup!=='0'&&setup!=='1')throw new Error('invalid read-only setup configuration');
@@ -101,8 +103,6 @@ async function main() {
   // handler; this does not enable any backend transaction or mission route.
   const {createRailwayStandbyWeb}=await import('../agent/railway-standby-web.mjs');
   const webHandler=createRailwayStandbyWeb();
-  const anchorFlag=process.env.BOUNCER_V14_BOOTSTRAP_RAILWAY_ANCHOR;
-  if(anchorFlag!==undefined&&anchorFlag!==''&&anchorFlag!=='0'&&anchorFlag!=='1')throw new Error('invalid recovery anchor configuration');
   let bootstrapAnchorHandler;
   if(anchorFlag==='1') {
     // Require both the declared path and an actual writable mount. This still

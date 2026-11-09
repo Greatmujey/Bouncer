@@ -252,8 +252,10 @@ fingerprint across those deployments shows only that this small marker survived
 that restart. It does not prove crash durability, backup restore, operator
 independence, an untampered latest head or permission to transact. The live
 standby at commit `9de5d75` reported `OBSERVED` with public test-marker
-fingerprint `ddedbee9176926e6a7adcb3e4d10376663920a77eff8338b02f675432bce7b81`;
-a follow-up must report the same fingerprint from the observation-only phase.
+fingerprint `ddedbee9176926e6a7adcb3e4d10376663920a77eff8338b02f675432bce7b81`.
+After deploying `791215f`, the observation-only phase reported the same
+fingerprint and no transaction authorization. This is a real small-marker
+restart check, not a real encrypted-kit restore or a latest-head proof.
 
 The source-only temporary-bootstrap completion verifier can check a separately
 retained deployment original against its exact reviewed actions, a FINAL

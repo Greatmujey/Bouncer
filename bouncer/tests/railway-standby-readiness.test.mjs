@@ -81,11 +81,12 @@ test('public diagnostic reads are cached and cannot invoke a mission or trigger 
       const r=await fetch(`${base}/readiness`);assert.equal(r.status,200);assert.equal(r.headers.get('cache-control'),'no-store');
       const data=await r.json();assert.equal(data.status,'STANDBY');assert.equal(data.transactions_enabled,false);
     }
-    for(const query of ['?volume-probe=1','?volume-probe=2','?volume-probe=3']) {
+    for(const query of ['?volume-probe=1','?volume-probe=3','?volume-probe=123456']) {
       const r=await fetch(`${base}/readiness${query}`);assert.equal(r.status,200);assert.equal((await r.json()).transactions_enabled,false);
     }
     assert.equal((await fetch(`${base}/readiness`,{method:'POST'})).status,404);
-    assert.equal((await fetch(`${base}/readiness?x=1`)).status,404);
+    for(const query of ['?x=1','?volume-probe=1234567','?volume-probe=1&x=2','?volume-probe=abc'])
+      assert.equal((await fetch(`${base}/readiness${query}`)).status,404);
     assert.equal((await fetch(`${base}/api/native-mission/execute`,{method:'POST'})).status,404);
     assert.equal(calls.length,count);
   } finally {await new Promise((resolve,reject)=>server.close(error=>error?reject(error):resolve()))}

@@ -1,5 +1,5 @@
 /** Browser client for an independent Railway encrypted-kit/original anchor.
- * Not wired to the public workspace or enabled by default. The service has a
+ * Recovery-only workspace controls are hidden while the route is off. The service has a
  * separate capability derived locally from the temporary key, never the
  * Supabase capability or passphrase. Equal copies still cannot prove a latest
  * head or protect against simultaneous rollback/compromise. Never recreate an

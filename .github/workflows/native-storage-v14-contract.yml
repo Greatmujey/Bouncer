@@ -191,6 +191,7 @@ jobs:
             assert.equal(body.status,"STANDBY");assert.equal(body.mission_enabled,false);assert.equal(body.transactions_enabled,false);
             const diagnostic=await fetch("http://127.0.0.1:8080/readiness");assert.equal(diagnostic.status,200);
             const checks=await diagnostic.json();assert.equal(checks.status,"STANDBY");assert.equal(checks.transactions_enabled,false);
+            assert.equal(checks.recovery_anchor_enabled,false);
             assert.equal((await fetch("http://127.0.0.1:8080/api/native-mission/config")).status,404);
           '
           docker rm --force "$container" >/dev/null
@@ -206,6 +207,9 @@ jobs:
             let response;const deadline=Date.now()+5000;
             while(!response && Date.now()<deadline){try{response=await request()}catch{await delay(100)}}
             assert.equal(response?.statusCode,204);assert.equal(response.headers["access-control-allow-origin"],"https://bouncer-production-6df1.up.railway.app");
+            const diagnostic=await fetch("http://127.0.0.1:8080/readiness");const state=await diagnostic.json();
+            assert.equal(state.recovery_anchor_enabled,true);assert.equal(state.transactions_enabled,false);
+            assert.equal((await fetch("http://127.0.0.1:8080/api/native-mission/config")).status,404);
             assert.deepEqual(fs.readdirSync("/data"),[]);response.resume();
           '
           set +e

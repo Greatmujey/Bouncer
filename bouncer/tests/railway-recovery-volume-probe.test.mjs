@@ -71,5 +71,10 @@ test('diagnostic only adds public status and never enables transactions or expos
     assert.match(response.scope,/does not read or alter recovery records/);
     const copy=response.recovery_volume_probe;copy.status='forged';assert.equal(readiness.snapshot().recovery_volume_probe.status,'CREATED');
     assert.throws(()=>createStandbyReadiness({recoveryVolumeProbe:{...probe,transaction_authorized:true}}));
+    for(const enabled of [true,false]) {
+      const checked=createStandbyReadiness({env:{},recoveryAnchorEnabled:enabled,fetchImpl:async()=>{throw Error('not called')}}).snapshot();
+      assert.equal(checked.recovery_anchor_enabled,enabled);assert.equal(checked.transactions_enabled,false);
+    }
+    assert.throws(()=>createStandbyReadiness({recoveryAnchorEnabled:'1'}));
   }finally{x.cleanup()}
 });
