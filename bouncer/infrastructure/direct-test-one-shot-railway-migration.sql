@@ -4,7 +4,7 @@
 BEGIN;
 ALTER TABLE bouncer_direct_test.claims DROP CONSTRAINT claims_origin_check;
 ALTER TABLE bouncer_direct_test.claims ADD CONSTRAINT claims_origin_check CHECK (
-  origin ~ '^https://[a-z0-9]{4,20}\.csb\.app$' OR origin = 'https://bouncer-near.vercel.app' OR origin = 'https://bouncer-production-6df1.up.railway.app'
+  origin ~ '^https://[a-z0-9]{4,20}[.]csb[.]app$' OR origin = 'https://bouncer-near.vercel.app' OR origin = 'https://bouncer-production-6df1.up.railway.app'
 );
 CREATE OR REPLACE FUNCTION public.bouncer_direct_test_v1(p_capability_hash text, p_origin text, p_operation text, p_original_hash text DEFAULT NULL)
 RETURNS jsonb
@@ -15,7 +15,7 @@ DECLARE
   won boolean := false;
 BEGIN
   IF p_capability_hash IS NULL OR p_capability_hash !~ '^[0-9a-f]{64}$'
-     OR p_origin IS NULL OR (p_origin !~ '^https://[a-z0-9]{4,20}\.csb\.app$' AND p_origin <> 'https://bouncer-near.vercel.app' AND p_origin <> 'https://bouncer-production-6df1.up.railway.app')
+     OR p_origin IS NULL OR (p_origin !~ '^https://[a-z0-9]{4,20}[.]csb[.]app$' AND p_origin <> 'https://bouncer-near.vercel.app' AND p_origin <> 'https://bouncer-production-6df1.up.railway.app')
      OR p_operation IS NULL OR p_operation NOT IN ('read', 'claim', 'retain')
      OR (p_operation <> 'retain' AND p_original_hash IS NOT NULL)
      OR (p_operation = 'retain' AND (p_original_hash IS NULL OR p_original_hash !~ '^[1-9A-HJ-NP-Za-km-z]{32,44}$'))

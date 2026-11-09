@@ -22,6 +22,11 @@ on:
         required: false
         default: false
         type: boolean
+      probe_railway_workspace:
+        description: 'Check live Railway website and a dummy journal row (no wallet or transactions)'
+        required: false
+        default: false
+        type: boolean
       owner:
         description: 'Named testnet owner (public account ID)'
         required: false
@@ -36,7 +41,7 @@ permissions:
 
 jobs:
   contract:
-    if: github.event_name != 'workflow_dispatch' || (inputs.run_v14_readiness != true && inputs.export_public_artifacts != true && inputs.measure_compact_v14 != true)
+    if: github.event_name != 'workflow_dispatch' || (inputs.run_v14_readiness != true && inputs.export_public_artifacts != true && inputs.measure_compact_v14 != true && inputs.probe_railway_workspace != true)
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -152,7 +157,7 @@ jobs:
           retention-days: 7
 
   railway-image:
-    if: github.event_name != 'workflow_dispatch' || (inputs.run_v14_readiness != true && inputs.export_public_artifacts != true && inputs.measure_compact_v14 != true)
+    if: github.event_name != 'workflow_dispatch' || (inputs.run_v14_readiness != true && inputs.export_public_artifacts != true && inputs.measure_compact_v14 != true && inputs.probe_railway_workspace != true)
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -188,7 +193,7 @@ jobs:
           echo 'Standby and enabled-but-unconfigured modes verified without network access.'
 
   browser:
-    if: github.event_name != 'workflow_dispatch' || (inputs.run_v14_readiness != true && inputs.export_public_artifacts != true && inputs.measure_compact_v14 != true)
+    if: github.event_name != 'workflow_dispatch' || (inputs.run_v14_readiness != true && inputs.export_public_artifacts != true && inputs.measure_compact_v14 != true && inputs.probe_railway_workspace != true)
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -367,3 +372,23 @@ jobs:
             blob=$(gh api --method POST "repos/$GITHUB_REPOSITORY/git/blobs" --input "$RUNNER_TEMP/snipped-blob.json" --jq .sha)
             echo "::notice title=Unreviewed public snipped V14 candidate::$blob"
           fi
+
+  railway-workspace-live-probe:
+    # The dummy database scope is not the direct-test scope and cannot send.
+    if: github.event_name == 'workflow_dispatch' && inputs.probe_railway_workspace == true && inputs.run_v14_readiness != true && inputs.export_public_artifacts != true && inputs.measure_compact_v14 != true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+      - name: Install browser test library
+        run: npm install --prefix "$RUNNER_TEMP/bouncer-browser" --no-save --no-audit --no-fund playwright-core@1.64.1
+      - name: Test Railway, dummy journal, testnet RPC, and Meteor handoff
+        working-directory: bouncer
+        env:
+          BOUNCER_PLAYWRIGHT_PATH: ${{ runner.temp }}/bouncer-browser/node_modules/playwright-core/index.mjs
+        run: node scripts/probe-railway-workspace.mjs
