@@ -85,6 +85,9 @@ dbtest('owner enrollment binds one immutable scope and exact public review witho
   assert.deepEqual(await enroll(db),{status:'ALREADY_ENROLLED',scope_id:scope,revision:0,head_sha256:zero});
   assert.deepEqual(await enroll(db,scope,owner,vault,'f'.repeat(64)),{error:'unavailable'});
   assert.deepEqual(await enroll(db,'2'.repeat(32)),{error:'unavailable'}); // same owner/vault cannot get a replacement scope
+  const otherOwnerKey='ed25519:11111111111111111111111111111112';
+  assert.deepEqual(await enroll(db,'3'.repeat(32),owner,vault,capHash,otherOwnerKey),{error:'unavailable'});
+  assert.deepEqual(await enroll(db,scope,owner,vault,capHash,otherOwnerKey),{error:'unavailable'});
   assert.deepEqual(await enroll(db,scope,owner,vault,capHash,pub,'f'.repeat(64)),{error:'unavailable'});
   const bad=event(1,zero,'reserve',{scope_id:scope,owner,vault,review_sha256:'f'.repeat(64),
     public_review:{owner_public_key:pub,review_sha256:'f'.repeat(64)}});
@@ -99,7 +102,7 @@ dbtest('owner enrollment binds one immutable scope and exact public review witho
   assert.deepEqual(await enroll(db),{status:'ALREADY_ENROLLED',scope_id:scope,revision:1,head_sha256:sha(first)});
   await assert.rejects(db.query("UPDATE bouncer_v14_originals_v1.streams SET review_sha256=$1,revision=revision+1,head_sha256=$2",['f'.repeat(64),'e'.repeat(64)]));
   const other='other.testnet',otherVault='native.other.testnet';
-  const races=await Promise.all(['3','4'].map(x=>enroll(db,x.repeat(32),other,otherVault)));
+  const races=await Promise.all(['4','5'].map((x,i)=>enroll(db,x.repeat(32),other,otherVault,capHash,i?otherOwnerKey:pub)));
   assert.equal(races.filter(x=>x.status==='ENROLLED').length,1);assert.equal(races.filter(x=>x.error==='unavailable').length,1);
   const client=await db.connect();try {
     await client.query('SET ROLE anon');

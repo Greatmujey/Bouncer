@@ -21,10 +21,10 @@ function history() {
   const line=JSON.stringify({format:'bouncer-v14-original-event-v1',seq:1,previous_sha256:zero,type:'reserve',data:binding});
   return {status:'EXISTING_CHECKPOINT',scope_id:scope,revision:1,head_sha256:sha(line),events:[line]};
 }
-async function signed() {
-  const d=prepareV14Recovery({owner,ownerPublicKey:publicKey,vault,crypto:webcrypto,now:()=>now});
+async function signed(signingPair=pair) {
+  const d=prepareV14Recovery({owner,ownerPublicKey:String(signingPair.getPublicKey()),vault,crypto:webcrypto,now:()=>now});
   const digest=createHash('sha256').update(nep413Payload({message:d.message,nonce:d.nonce,recipient:d.recipient})).digest();
-  return {draft:d,submission:{terms:d.terms,nonce_base64:Buffer.from(d.nonce).toString('base64'),signature_base64:Buffer.from(pair.sign(digest).signature).toString('base64')}};
+  return {draft:d,submission:{terms:d.terms,nonce_base64:Buffer.from(d.nonce).toString('base64'),signature_base64:Buffer.from(signingPair.sign(digest).signature).toString('base64')}};
 }
 function upstream(result=history()) {
   const calls=[];return {calls,fetch:async(url,options)=>{
@@ -60,6 +60,16 @@ test('signed owner can read independently retained history without the lost capa
   assert.deepEqual(u.calls.at(-1).data,{p_owner_id:owner,p_vault_id:vault});
 });
 
+test('a different current FullAccess key of the same owner can read, but cannot change, the retained history',async()=>{
+  const currentKey=nearApi.KeyPair.fromRandom('ed25519');
+  const {submission}=await signed(currentKey),u=upstream(),handler=createV14RecoveryHandler({getEnv:env(),fetch:u.fetch,crypto:webcrypto,now:()=>now});
+  assert.notEqual(submission.terms.owner_public_key,publicKey);
+  const response=await handler(req(submission));assert.equal(response.status,200);
+  const value=await response.json();assert.equal(value.scope_id,scope);assert.equal(value.wallet_transaction_authorized,false);
+  assert.equal(u.calls.find(x=>x.data.method==='query').data.params.public_key,submission.terms.owner_public_key);
+  assert.deepEqual(u.calls.at(-1).data,{p_owner_id:owner,p_vault_id:vault});
+});
+
 test('empty recovery is not proof of non-execution; disabled or foreign origin stays closed',async()=>{
   const {submission}=await signed(),u=upstream({status:'EXISTING_CHECKPOINT',scope_id:scope,revision:0,head_sha256:zero,events:[]});
   const off=createV14RecoveryHandler({getEnv:env(false),fetch:u.fetch,crypto:webcrypto,now:()=>now});
@@ -78,6 +88,17 @@ test('corrupt history, wrong owner, forged signatures and wrong head cannot be r
   }
   const u=upstream(),handler=createV14RecoveryHandler({getEnv:env(),fetch:u.fetch,crypto:webcrypto,now:()=>now});
   assert.equal((await handler(req({...submission,signature_base64:Buffer.alloc(64).toString('base64')}))).status,503);assert.equal(u.calls.length,0);
+});
+
+test('read-only readiness is default-off, exact-origin and never asks for a wallet or database',async()=>{
+  const u=upstream(),location={origin:V14_ENROLLMENT_SITE,host:V14_ENROLLMENT_RECIPIENT};
+  let handler=createV14RecoveryHandler({getEnv:env(false),fetch:u.fetch,crypto:webcrypto,now:()=>now}),calls=0;
+  const fetch=async(url,options)=>{calls++;return handler(new Request(url,{...options,headers:{origin:V14_ENROLLMENT_SITE}}));};
+  const client=createV14CheckpointRecoveryClient({location,crypto:webcrypto,fetch,now:()=>now});
+  assert.equal(await client.enabled(),false);assert.equal(calls,1);assert.equal(u.calls.length,0);
+  handler=createV14RecoveryHandler({getEnv:env(),fetch:u.fetch,crypto:webcrypto,now:()=>now});
+  assert.equal(await client.enabled(),true);assert.equal(calls,2);assert.equal(u.calls.length,0);
+  assert.equal((await handler(new Request('https://checkpoint.example.test/recover',{headers:{origin:'https://evil.example'}}))).status,403);
 });
 
 test('phone-friendly recovery client checks returned history and never automatically retries',async()=>{

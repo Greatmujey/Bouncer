@@ -294,10 +294,10 @@ synthetic data. Research-only owner enrollment and recovery helpers verify a
 short-lived NEP-413 message and a current testnet FullAccess key at a fresh
 FINAL block. Recovery can read the existing public history even if the
 checkpoint capability is lost; it cannot rotate that capability or recreate a
-journal. The browser and Edge endpoints remain default-off and are not wired
-into the wallet UI. **This checkpoint is not yet provisioned for the owner,
-wired into wallet prompts or mission sends, or verified against a real
-receipt.** It retains the public review, hashes and commitments, not the
+journal. The optional read-only wallet panel stays hidden unless its separate
+Edge endpoint is explicitly enabled. Enrollment is not wired into the wallet UI.
+**This checkpoint is not yet provisioned for the owner, wired into wallet
+prompts or mission sends, or verified against a real receipt.** It retains the public review, hashes and commitments, not the
 journal encryption key or agent keys; those still require separate durable
 recovery. An administrator able to roll back both copies can defeat it. Never
 infer independent durability from two adapter names or silently recreate a

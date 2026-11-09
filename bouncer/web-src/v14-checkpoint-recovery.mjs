@@ -2,7 +2,8 @@
 // signature can ask the independent checkpoint for its existing public review
 // and original hashes, even if the random checkpoint capability is lost. This
 // does not rotate a capability, recreate a journal, prompt a transaction, or
-// authorize a replacement. No UI uses this helper yet.
+// authorize a replacement. The optional wallet UI remains hidden until the
+// separately hosted read-only endpoint is explicitly enabled.
 import {verifyCliLogin} from './cli-login.mjs';
 import {isV14CheckpointAccountPair,V14_ENROLLMENT_SITE,V14_ENROLLMENT_RECIPIENT,V14_ENROLLMENT_LIFETIME_MS} from './v14-checkpoint-enrollment.mjs';
 

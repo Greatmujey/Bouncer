@@ -11,6 +11,9 @@ import { openNativeOracleDeviceKey } from './native-oracle-device-key.mjs';
 import { createNativeOracleSetupClient } from './native-oracle-setup-client.mjs';
 import { createNativeOracleOwnerFlow } from './native-oracle-owner-flow.mjs';
 import { createNativeMissionClient } from './native-mission-client.mjs';
+import { prepareV14Recovery, signV14Recovery } from './v14-checkpoint-recovery.mjs';
+import { createV14CheckpointRecoveryClient } from './v14-checkpoint-recovery-client.mjs';
+import { V14_ENROLLMENT_SITE } from './v14-checkpoint-enrollment.mjs';
 import { createDirectOutlayerTest, directOutlayerOriginAllowed } from './direct-outlayer-testnet.mjs';
 import { createRemoteDirectFence, directTestCapability } from './direct-test-remote-fence.mjs';
 
@@ -108,6 +111,14 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
   const accountRefresh = doc.querySelector('#wallet-account-refresh');
   const ownerVerify = doc.querySelector('#wallet-owner-verify');
   const ownerStatus = doc.querySelector('#wallet-owner-status');
+  const v14RecoveryOpen = doc.querySelector('#wallet-v14-recovery-open');
+  const v14RecoveryPanel = doc.querySelector('#wallet-v14-recovery-panel');
+  const v14RecoveryVault = doc.querySelector('#wallet-v14-recovery-vault');
+  const v14RecoveryRead = doc.querySelector('#wallet-v14-recovery-read');
+  const v14RecoveryStatus = doc.querySelector('#wallet-v14-recovery-status');
+  const v14RecoveryReview = doc.querySelector('#wallet-v14-recovery-review');
+  const v14RecoveryReviewText = doc.querySelector('#wallet-v14-recovery-review-text');
+  const v14RecoveryOriginals = doc.querySelector('#wallet-v14-recovery-originals');
   const directOpen = doc.querySelector('#wallet-direct-outlayer-open');
   const directPanel = doc.querySelector('#wallet-direct-outlayer-panel');
   const directStatus = doc.querySelector('#wallet-direct-outlayer-status');
@@ -207,6 +218,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
   // spending access, authenticates a backend, or survives account changes.
   let ownerVerification = null, ownerSessionVersion = 0, setupRecoveryAvailable = false, setupRecoverySelection = null, matchedOriginal = null;
   let bufferSetupDraft = null, nativeSetupAvailable = false, nativeFlow = null, nativeSetupOpening = false, directFlow = null;
+  let v14RecoveryClient = null, v14RecoveryVisible = false;
   let missionFlow = null, missionReview = null, missionReady = false, missionStarted = false;
   const bufferSetupStages = ['create_keyless_vault', 'register_vault_circle', 'fund_vault_circle'];
   let bannerTimer;
@@ -308,6 +320,11 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
       ownerVerify.disabled = busyState;
       ownerVerify.textContent = ownerVerified ? 'Verify account again' : 'Verify account in wallet';
     }
+    const v14RecoveryEnabled = ownerVerified && isTop && win.location.origin === V14_ENROLLMENT_SITE && Boolean(v14RecoveryClient);
+    if (v14RecoveryOpen) { v14RecoveryOpen.hidden = !v14RecoveryEnabled || v14RecoveryVisible; v14RecoveryOpen.disabled = busyState; }
+    if (v14RecoveryPanel) v14RecoveryPanel.hidden = !v14RecoveryEnabled || !v14RecoveryVisible;
+    if (v14RecoveryRead) v14RecoveryRead.disabled = busyState;
+    if (v14RecoveryVault) v14RecoveryVault.disabled = busyState;
     if (missionOpen) { missionOpen.hidden = !ownerVerified || Boolean(missionFlow); missionOpen.disabled = busyState; }
     if (missionPanel) missionPanel.hidden = !ownerVerified || !missionFlow;
     if (missionConsentLabel) missionConsentLabel.hidden = !missionReview || !missionReady || missionStarted;
@@ -387,6 +404,12 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     });
   }
   function busy(value) { busyState = value; renderControls(); }
+  function clearV14RecoveryDisplay() {
+    if (v14RecoveryStatus) v14RecoveryStatus.textContent = '';
+    if (v14RecoveryReview) { v14RecoveryReview.hidden = true; v14RecoveryReview.open = false; }
+    if (v14RecoveryReviewText) v14RecoveryReviewText.textContent = '';
+    if (v14RecoveryOriginals) { v14RecoveryOriginals.replaceChildren(); v14RecoveryOriginals.hidden = true; }
+  }
   function renderMissionReceipts(deliveries) {
     if (!missionReceipts) return;
     missionReceipts.replaceChildren();
@@ -408,6 +431,9 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     nativeSetupAvailable = false; nativeSetupOpening = false; nativeFlow?.destroy(); nativeFlow = null;
     directFlow?.destroy(); directFlow = null;
     missionFlow = null; missionReview = null; missionReady = false; missionStarted = false;
+    v14RecoveryClient = null; v14RecoveryVisible = false;
+    if (v14RecoveryVault) v14RecoveryVault.value = '';
+    clearV14RecoveryDisplay();
     if (missionConsent) missionConsent.checked = false;
     if (missionSummary) missionSummary.textContent = ''; if (missionStatus) missionStatus.textContent = '';
     if (missionManifest) missionManifest.textContent = ''; if (missionDetails) { missionDetails.hidden = true; missionDetails.open = false; }
@@ -803,6 +829,8 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
       if (!stillCurrent()) return;
       nativeFlow?.destroy(); nativeFlow = null; nativeSetupOpening = false; nativeSetupAvailable = false;
       missionFlow = null; missionReview = null; missionReady = false; missionStarted = false;
+      v14RecoveryClient = null; v14RecoveryVisible = false;
+      clearV14RecoveryDisplay();
       if (missionConsent) missionConsent.checked = false;
       if (missionDetails) { missionDetails.hidden = true; missionDetails.open = false; }
       if (missionManifest) missionManifest.textContent = '';
@@ -812,6 +840,18 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
         ownerStatus.textContent = 'Identity verified for this session. This is not spending permission.';
       }
       setStatus(`Verified testnet wallet control for ${accountId}. No vault or spending access is granted.`);
+      // The independent read-only history UI is hidden unless its exact-origin
+      // endpoint explicitly advertises readiness. Checking is never a prompt.
+      if (isTop && win.location.origin === V14_ENROLLMENT_SITE) {
+        const currentProof = ownerVerification;
+        const current = () => stillCurrent() && ownerVerification === currentProof;
+        try {
+          const client = createV14CheckpointRecoveryClient({location:win.location,crypto:win.crypto,fetch:walletReadFetch,isCurrent:current});
+          void client.enabled().then(enabled => {
+            if (current() && enabled) { v14RecoveryClient = client; renderControls(); }
+          }).catch(() => {});
+        } catch { /* optional history must not erase the verified identity */ }
+      }
       // Recovery is deliberately optional and only becomes visible when the
       // experimental same-origin backend explicitly advertises it. This never
       // opens a transaction or turns on purchasing.
@@ -836,6 +876,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     } catch (error) {
       if (!stillCurrent()) return;
       ownerVerification = null; setupRecoveryAvailable = false; setupRecoverySelection = null; matchedOriginal = null;
+      v14RecoveryClient = null; v14RecoveryVisible = false;
       nativeSetupAvailable = false; nativeSetupOpening = false; nativeFlow?.destroy(); nativeFlow = null;
       const reason = error?.message || '';
       const message = reason === 'CLI_ED25519_UNAVAILABLE'
@@ -849,6 +890,71 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     } finally {
       stopWalletPresentation(); busy(false);
       if (stillCurrent()) { renderControls(); hideBanner(); openPicker(opener); }
+    }
+  });
+  v14RecoveryOpen?.addEventListener('click', () => {
+    if (busyState || !v14RecoveryClient || !ownerVerification || !v14RecoveryVault || !v14RecoveryStatus) return;
+    v14RecoveryVisible = true;
+    v14RecoveryVault.value = `native.${connectedAccount}`;
+    clearV14RecoveryDisplay();
+    v14RecoveryStatus.textContent = 'Enter the vault account and sign a read-only message to inspect the retained history.';
+    renderControls();
+  });
+  v14RecoveryRead?.addEventListener('click', async () => {
+    const client = v14RecoveryClient, proof = ownerVerification, wallet = selectedWallet,
+      accountId = connectedAccount, version = ownerSessionVersion;
+    if (busyState || !client || !v14RecoveryVisible || !v14RecoveryVault || !v14RecoveryStatus ||
+        !connected || !isTop || proof?.wallet !== wallet || proof.accountId !== accountId) return;
+    const current = () => connected && selectedWallet === wallet && connectedAccount === accountId &&
+      ownerSessionVersion === version && ownerVerification === proof && v14RecoveryClient === client;
+    let draft;
+    try {
+      draft = prepareV14Recovery({owner:accountId,ownerPublicKey:proof.publicKey,vault:v14RecoveryVault.value.trim(),crypto:win.crypto});
+    } catch {
+      v14RecoveryStatus.textContent = 'Enter a direct testnet vault subaccount of the connected owner. No wallet request was made.';
+      return;
+    }
+    clearV14RecoveryDisplay();
+    busy(true); closePicker();
+    setStatus('Approve the read-only history message in your wallet. No transaction is requested.');
+    notify('Approve the read-only history message. No transaction is requested.', true);
+    let stopWalletPresentation = () => {}, timeout;
+    try {
+      if (['near-mobile', 'nightly-wallet', 'ledger'].includes(wallet.manifest.id)) stopWalletPresentation = decorateWalletPopup(wallet.manifest.id);
+      const signing = signV14Recovery({draft,wallet,location:win.location,crypto:win.crypto,fetch:walletReadFetch});
+      const submission = await Promise.race([signing,new Promise((_,reject) => {
+        timeout = setTimeout(() => reject(new Error('V14_RECOVERY_TIMEOUT')),90_000);
+      })]);
+      clearTimeout(timeout); if (!current()) return;
+      const history = await client.read(submission);
+      if (!current()) return;
+      if (v14RecoveryReview && v14RecoveryReviewText && history.review) {
+        v14RecoveryReviewText.textContent = JSON.stringify(history.review, null, 2);
+        v14RecoveryReview.hidden = false;
+      }
+      if (v14RecoveryOriginals) {
+        v14RecoveryOriginals.replaceChildren();
+        const recorded = [...history.setup.map(item => ({label:`Setup ${item.stage_id}`,hash:item.tx_hash})),
+          ...history.mission.map(item => ({label:`Mission ${item.goal_id}`,hash:item.tx_hash})),
+          ...(history.pending?.tx_hash ? [{label:`Pending ${history.pending.stage_id || history.pending.goal_id}`,hash:history.pending.tx_hash}] : [])];
+        for (const item of recorded) {
+          const link = doc.createElement('a'); link.href = `https://testnet.nearblocks.io/txns/${item.hash}`;
+          link.target = '_blank'; link.rel = 'noopener noreferrer'; link.textContent = `${item.label}: ${item.hash}`;
+          v14RecoveryOriginals.append(link);
+        }
+        v14RecoveryOriginals.hidden = !v14RecoveryOriginals.childElementCount;
+      }
+      const pending = history.pending
+        ? history.pending.tx_hash ? 'An original is pending verification. ' : 'A wallet prompt is recorded without an original hash. '
+        : '';
+      v14RecoveryStatus.textContent = `Read ${history.revision} retained events. ${pending}` +
+        'Receipt status and the latest checkpoint have not been independently re-verified. Missing history does not prove non-execution; never resend an uncertain original.';
+      setStatus('Read-only history returned. No transaction was requested.');
+    } catch {
+      if (current()) v14RecoveryStatus.textContent = 'History is unavailable or the message was not verified. Absence is not proven; do not resend uncertain originals.';
+    } finally {
+      clearTimeout(timeout); stopWalletPresentation(); busy(false);
+      if (current()) { renderControls(); hideBanner(); openPicker(opener); }
     }
   });
   missionConsent?.addEventListener('change', () => renderControls());

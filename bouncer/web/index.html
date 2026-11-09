@@ -189,6 +189,17 @@
     <p class="account-view-warning" id="wallet-account-warning">Unverified account name. No wallet is connected and no spending access was granted.</p>
     <button class="account-entry-primary" id="wallet-owner-verify" type="button" hidden>Verify account in wallet</button>
     <p class="account-view-status" id="wallet-owner-status" role="status" aria-live="polite" hidden></p>
+    <button class="account-entry-secondary" id="wallet-v14-recovery-open" type="button" hidden>Read V14 setup history →</button>
+    <section class="setup-recovery native-setup" id="wallet-v14-recovery-panel" aria-label="Read-only V14 checkpoint history" hidden>
+      <strong>Recover history, not another deployment</strong>
+      <p class="account-view-status">A wallet message reads the public setup review and original transaction hashes. It does not approve a transaction, recover keys, or grant spending access.</p>
+      <label for="wallet-v14-recovery-vault">Testnet vault account</label>
+      <input id="wallet-v14-recovery-vault" type="text" maxlength="64" autocomplete="off" spellcheck="false">
+      <button class="account-entry-secondary" id="wallet-v14-recovery-read" type="button">Sign to read history →</button>
+      <p class="account-view-status" id="wallet-v14-recovery-status" role="status" aria-live="polite"></p>
+      <details id="wallet-v14-recovery-review" hidden><summary>View the recorded public review</summary><pre id="wallet-v14-recovery-review-text" class="native-mission-manifest"></pre></details>
+      <div id="wallet-v14-recovery-originals" class="native-mission-receipts" aria-label="Recorded testnet originals" hidden></div>
+    </section>
     <button class="account-entry-primary" id="wallet-native-mission-open" type="button" hidden>Review a guarded testnet mission →</button>
     <section class="setup-recovery native-setup" id="wallet-native-mission-panel" aria-label="Guarded native testnet mission" hidden>
       <strong>Compute + data + public storage</strong>

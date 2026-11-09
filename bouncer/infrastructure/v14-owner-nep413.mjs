@@ -49,7 +49,9 @@ export async function verifyFreshV14Owner({owner,ownerPublicKey,message,recipien
       headers:{'content-type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:'bouncer-v14-enrollment',method,params}),
       signal:AbortSignal.timeout(12_000)});
     if(!response.ok)throw Error();
-    const result=JSON.parse(await boundedV14Text(response.body,16_384));
+    // A full block includes chunk headers and may legitimately be larger than
+    // a single access-key view. Both limits remain bounded before JSON parse.
+    const result=JSON.parse(await boundedV14Text(response.body,method==='block'?512_000:32_768));
     if(result?.jsonrpc!=='2.0' || result.id!=='bouncer-v14-enrollment' || result.error || !result.result)throw Error();
     return result.result;
   }

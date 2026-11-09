@@ -22,6 +22,17 @@ export function createV14CheckpointRecoveryClient({location,crypto=globalThis.cr
      typeof fetchImpl!=='function' || typeof isCurrent!=='function' || typeof now!=='function')throw fail();
   const current=()=>{if(!isCurrent())throw fail();};
   return Object.freeze({
+    async enabled() {
+      try {
+        current();
+        const response=await fetchImpl(V14_CHECKPOINT_RECOVERY_ENDPOINT,{method:'GET',mode:'cors',credentials:'omit',redirect:'error',
+          cache:'no-store',referrerPolicy:'no-referrer',signal:AbortSignal.timeout(8_000)});
+        current();if(!response.ok)return false;
+        const result=JSON.parse(await boundedText(response.body,1024));
+        return exact(result,['status','wallet_transaction_authorized']) && result.status==='V14_READ_ONLY_RECOVERY_READY' &&
+          result.wallet_transaction_authorized===false;
+      }catch{return false;}
+    },
     async read(submission) {
       current();
       if(!exact(submission,['terms','nonce_base64','signature_base64']) ||

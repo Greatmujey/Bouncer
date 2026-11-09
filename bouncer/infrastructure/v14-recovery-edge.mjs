@@ -12,12 +12,14 @@ export function createV14RecoveryHandler({getEnv,fetch:fetchImpl,crypto,now=Date
   return async request=>{
     const origin=request.headers.get('origin') || '';
     const headers={'cache-control':'no-store','content-type':'application/json; charset=utf-8','x-content-type-options':'nosniff',
-      'access-control-allow-origin':V14_ENROLLMENT_SITE,'access-control-allow-methods':'POST, OPTIONS',
+      'access-control-allow-origin':V14_ENROLLMENT_SITE,'access-control-allow-methods':'GET, POST, OPTIONS',
       'access-control-allow-headers':'content-type',vary:'Origin'};
     const respond=(status,data)=>new Response(JSON.stringify(data),{status,headers});
     if(getEnv('BOUNCER_V14_RECOVERY_ENABLE')!=='1')return respond(503,{error:'unavailable'});
     if(origin!==V14_ENROLLMENT_SITE)return respond(403,{error:'unavailable'});
     if(request.method==='OPTIONS')return new Response(null,{status:204,headers});
+    // Advertise only the read-only feature, without signing or creating a scope.
+    if(request.method==='GET')return respond(200,{status:'V14_READ_ONLY_RECOVERY_READY',wallet_transaction_authorized:false});
     if(request.method!=='POST')return respond(405,{error:'unavailable'});
     try {
       const declared=request.headers.get('content-length');
