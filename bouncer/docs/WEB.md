@@ -35,6 +35,27 @@ may relay encrypted messages through Bouncer's server. Pairing QR codes contain
 sensitive information: do not publish or reuse a photographed code. Cancel and
 generate a fresh one if it has been shared.
 
+## Vercel deployment policy
+
+`web/vercel.json` and `testnet-relay/vercel.json` set
+`git.deploymentEnabled` to `false`. On branches containing those files,
+Git pushes should not automatically create production or preview deployments
+for either project. The intent is to use Vercel only for a deliberately chosen,
+reviewed release, not for every commit. CLI/API/dashboard deployments and deploy
+hooks are separate triggers and must not be launched automatically; neither
+this setting nor repository tests restricts another Vercel account holder.
+
+This is **branch-scoped source configuration**, not a dashboard-wide switch:
+`main` or an older branch without the change can still trigger deployments.
+Do not claim account-wide protection until the configuration is merged to the
+relevant branches or the owner disconnects the Git integration in both Vercel
+project settings. Disconnecting affects Git-sourced releases; choose a tested
+manual upload/reconnect process first. Other projects share the team's quota.
+Don't use an Ignored Build Step as a quota guard: Vercel can count canceled
+builds. Keep the live site unchanged until a deliberate deployment is approved
+and the quota is available; an older live site does not prove new deployments
+are currently allowed.
+
 ## Configure Google Identity Services
 
 The public Google OAuth client ID supplied by the owner is configured as

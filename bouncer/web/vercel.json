@@ -1,5 +1,5 @@
 {
-  "git": { "deploymentEnabled": { "arena/25a7aaf6-near-hub": false, "arena/6d538ba2-near-hub": false, "arena/82d80f6e-near-hub": false } },
+  "git": { "deploymentEnabled": false },
   "headers": [
     {
       "source": "/",

@@ -113,8 +113,9 @@ test('public staging requires six wallets, WalletConnect, then Google', t => {
 
 test('deployment revalidates HTML, permits Google popups, and versions its assets', () => {
   const config = JSON.parse(fs.readFileSync(path.join(realSource, 'vercel.json'), 'utf8'));
-  assert.equal(config.git?.deploymentEnabled?.['arena/6d538ba2-near-hub'], false);
-  assert.equal(config.git?.deploymentEnabled?.['arena/82d80f6e-near-hub'], false);
+  assert.equal(config.git?.deploymentEnabled, false, 'the website must not automatically deploy any branch containing this configuration');
+  const relay = JSON.parse(fs.readFileSync(new URL('../testnet-relay/vercel.json', import.meta.url), 'utf8'));
+  assert.equal(relay.git?.deploymentEnabled, false, 'the relay must not automatically deploy any branch containing this configuration');
   for (const source of ['/', '/index.html']) {
     const headers = config.headers.find(rule => rule.source === source)?.headers || [];
     assert.match(headers.find(header => header.key.toLowerCase() === 'cache-control')?.value || '', /no-cache.*must-revalidate/);
@@ -131,7 +132,7 @@ test('deployment revalidates HTML, permits Google popups, and versions its asset
 
 test('Google, WalletConnect and disabled-by-default mission proxies are server functions, never public static files', async () => {
   assert.deepEqual(fs.readdirSync(path.join(realSource, 'api')).sort(), ['google-session.mjs', 'native-mission', 'wc-relay.mjs']);
-  const actions=['challenge','config','execute','originals','preview','recover','v14-preflight','v14-receipt'];
+  const actions=['challenge','config','execute','originals','preview','recover','v14-completed-history','v14-preflight','v14-receipt'];
   assert.deepEqual(fs.readdirSync(path.join(realSource,'api/native-mission')).sort(),actions.map(action=>`${action}.mjs`));
   for (const file of ['api/google-session.mjs','api/wc-relay.mjs',...actions.map(action=>`api/native-mission/${action}.mjs`)]) {
     assert.ok(!PUBLIC_WEB_FILES.includes(file));

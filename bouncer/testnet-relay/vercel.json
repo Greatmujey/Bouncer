@@ -1,7 +1,5 @@
 {
   "git": {
-    "deploymentEnabled": {
-      "arena/82d80f6e-near-hub": false
-    }
+    "deploymentEnabled": false
   }
 }
