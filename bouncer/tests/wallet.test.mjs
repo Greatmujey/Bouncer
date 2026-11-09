@@ -1,9 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createHash, webcrypto } from 'node:crypto';
+import { createHash, createHmac, webcrypto } from 'node:crypto';
 import { KeyPair } from '@near-js/crypto';
 import { IDBFactory } from 'fake-indexeddb';
 import { nep413Payload } from '../web-src/cli-login.mjs';
+import { buildV14TemporaryBootstrapPlan } from '../web-src/v14-bootstrap-plan.mjs';
+import { sealV14BootstrapRecoveryKit } from '../web-src/v14-bootstrap-recovery-kit.mjs';
+import { prepareBootstrapEnrollment } from '../web-src/v14-bootstrap-checkpoint.mjs';
 import { setupAuthAction } from '../web-src/witnessed-setup-auth.mjs';
 import fs from 'node:fs';
 import { initWallet as bootWallet, walletOriginAllowed, nativeSetupOriginAllowed } from '../web-src/wallet-core.mjs';
@@ -48,8 +51,12 @@ class FakeSandboxWallet {
 }
 const initWallet = params => bootWallet({ ...params, SandboxWallet: FakeSandboxWallet });
 class Element {
-  constructor(dataset = {}) { this.listeners = {}; this.dataset = dataset; this.hidden = false; this.disabled = false; this.textContent = ''; this.open = false; this.attributes = {}; this.focused = false; }
+  constructor(dataset = {}) { this.listeners = {}; this.dataset = dataset; this.hidden = false; this.disabled = false; this.textContent = ''; this.open = false; this.attributes = {}; this.focused = false; this.children = []; }
   addEventListener(event, callback) { this.listeners[event] = callback; }
+  replaceChildren(...children) { this.children = children; }
+  append(...children) { this.children.push(...children); }
+  get childElementCount() { return this.children.length; }
+  remove() {}
   setAttribute(name, value) { this.attributes[name] = value; }
   removeAttribute(name) { delete this.attributes[name]; }
   getContext() { return { clearRect: () => { this.renderedCanvas = null; }, drawImage: canvas => { this.renderedCanvas = canvas; } }; }
@@ -63,6 +70,9 @@ function fakeBrowser(url, { top = true, storageFails = false, approved = '' } = 
   const ids = ['wallet-connect', 'wallet-disconnect', 'wallet-status', 'wallet-open-site', 'wallet-dialog', 'wallet-close', 'wallet-options', 'wallet-dialog-status', 'wallet-title-text', 'wallet-dialog-description', 'wallet-banner', 'wallet-safety',
     'wallet-account-entry', 'wallet-account-form', 'wallet-account-id', 'wallet-account-error', 'wallet-account-back', 'wallet-cli-verify',
     'wallet-account-view', 'wallet-account-name', 'wallet-account-badge', 'wallet-account-warning', 'wallet-account-near', 'wallet-account-usdc', 'wallet-account-balance-status', 'wallet-account-use-wallet', 'wallet-account-refresh', 'wallet-owner-verify', 'wallet-owner-status',
+    'wallet-bootstrap-recovery-open', 'wallet-bootstrap-recovery-panel', 'wallet-bootstrap-recovery-read', 'wallet-bootstrap-recovery-file',
+    'wallet-bootstrap-recovery-import', 'wallet-bootstrap-recovery-status', 'wallet-bootstrap-recovery-originals', 'wallet-bootstrap-recovery-backup',
+    'wallet-bootstrap-recovery-export', 'wallet-bootstrap-recovery-passphrase', 'wallet-bootstrap-recovery-unlock',
     'wallet-direct-outlayer-open', 'wallet-direct-outlayer-panel', 'wallet-direct-outlayer-status', 'wallet-direct-outlayer-hash',
     'wallet-direct-outlayer-result', 'wallet-direct-outlayer-review', 'wallet-direct-outlayer-send', 'wallet-direct-outlayer-check',
     'wallet-direct-outlayer-recover', 'wallet-direct-outlayer-original', 'wallet-direct-outlayer-recover-original',
@@ -324,6 +334,88 @@ test('connected phone-wallet accounts can verify a fresh identity message withou
     assert.equal(browser.nodes['wallet-owner-status'].hidden, true);
     assert.equal(browser.nodes['wallet-owner-status'].textContent, '');
   }
+});
+
+test('Railway owner can open offline recovery while online recovery is disabled without an extra signature', async () => {
+  const origin = 'https://bouncer-production-6df1.up.railway.app';
+  const browser = fakeBrowser(`${origin}/workspace`, {approved:origin});
+  const config = {account:'great_mujey.testnet',signConnectedMessage:true,cliKey:KeyPair.fromRandom('ed25519')};
+  const originalFetch = browser.win.fetch;
+  browser.win.fetch = async (url,options={}) => {
+    if (String(url).includes('/functions/v1/bouncer-v14-bootstrap-checkpoint')) {
+      assert.equal(options.method,'OPTIONS');return new Response('{"error":"unavailable"}',{status:503});
+    }
+    return originalFetch(url,options);
+  };
+  await initWallet({window:browser.win,document:browser.doc,NearConnector:connectorClass(config)});
+  await browser.nodes['wallet-connect'].click();await browser.options[0].click();
+  assert.equal(browser.nodes['wallet-bootstrap-recovery-open'].hidden,true);
+  await browser.nodes['wallet-owner-verify'].click();
+  await new Promise(resolve=>setImmediate(resolve));
+  const recovery=browser.nodes['wallet-bootstrap-recovery-open'];
+  assert.equal(recovery.hidden,false);assert.equal(recovery.disabled,false);
+  await recovery.click();
+  assert.match(browser.nodes['wallet-bootstrap-recovery-status'].textContent,/online recovery is not enabled/i);
+  assert.equal(browser.nodes['wallet-bootstrap-recovery-read'].disabled,true);
+  assert.equal(browser.nodes['wallet-bootstrap-recovery-import'].disabled,false);
+  await browser.nodes['wallet-bootstrap-recovery-read'].click();assert.equal(config.messageRequests.length,1);
+  assert.equal(config.transactionRequests,undefined);
+  await browser.nodes['wallet-disconnect'].click();
+  assert.equal(recovery.hidden,true);
+});
+
+test('phone recovery reads and unlocks a synthetic encrypted kit without a transaction', async () => {
+  const origin='https://bouncer-production-6df1.up.railway.app', owner='great_mujey.testnet', vault=`native.${owner}`;
+  const browser=fakeBrowser(`${origin}/workspace`,{approved:origin});
+  const config={account:owner,signConnectedMessage:true,cliKey:KeyPair.fromRandom('ed25519')};
+  const temporary=KeyPair.fromRandom('ed25519'),scopeId='ab'.repeat(16),capability='cd'.repeat(32),passphrase='synthetic recovery passphrase';
+  const compressed=new Uint8Array(fs.readFileSync(new URL('../web/artifacts/v14-research.deflate',import.meta.url)));
+  const plan=await buildV14TemporaryBootstrapPlan({owner,ownerPublicKey:String(config.cliKey.getPublicKey()),vault,
+    temporaryPublicKey:String(temporary.getPublicKey()),vaultFundingYocto:String(6n*10n**24n),compressedV14:compressed,crypto:webcrypto});
+  const kit=await sealV14BootstrapRecoveryKit({review:plan.review,temporaryKey:temporary,scopeId,checkpointCapability:capability,passphrase,crypto:webcrypto});
+  const draft=await prepareBootstrapEnrollment({review:plan.review,kit,passphrase,compressedV14:compressed,site:origin,crypto:webcrypto});
+  const digest=createHash('sha256').update(nep413Payload({message:draft.message,nonce:draft.nonce,recipient:draft.recipient})).digest();
+  const attestation=JSON.stringify({terms:draft.terms,nonce_base64:Buffer.from(draft.nonce).toString('base64'),
+    signature_base64:Buffer.from(config.cliKey.sign(digest).signature).toString('base64')});
+  const originalFetch=browser.win.fetch;
+  browser.win.fetch=async(url,options={})=>{
+    if(String(url).includes('/functions/v1/bouncer-v14-bootstrap-checkpoint')) {
+      if(options.method==='OPTIONS')return new Response(null,{status:204});
+      const request=JSON.parse(options.body);assert.equal(request.operation,'recover');
+      return Response.json({status:'EXISTING_RECOVERY_ONLY',scope_id:scopeId,review_text:draft.review_text,sealed_kit:draft.sealed_kit,
+        owner_attestation:attestation,revision:0,head_sha256:'0'.repeat(64),events:[],
+        transaction_authorized:false,latest_head_independently_verified:false});
+    }
+    return originalFetch(url,options);
+  };
+  await initWallet({window:browser.win,document:browser.doc,NearConnector:connectorClass(config)});
+  await browser.nodes['wallet-connect'].click();await browser.options[0].click();
+  await browser.nodes['wallet-owner-verify'].click();await new Promise(resolve=>setImmediate(resolve));
+  const open=browser.nodes['wallet-bootstrap-recovery-open'];assert.equal(open.disabled,false);
+  await open.click();await browser.nodes['wallet-bootstrap-recovery-read'].click();
+  assert.equal(config.messageRequests.length,2);assert.equal(config.transactionRequests,undefined);
+  assert.equal(browser.nodes['wallet-bootstrap-recovery-backup'].hidden,false);
+  assert.match(browser.nodes['wallet-bootstrap-recovery-status'].textContent,/not independently re-verified/);
+  browser.nodes['wallet-bootstrap-recovery-passphrase'].value=passphrase;
+  await browser.nodes['wallet-bootstrap-recovery-unlock'].click();
+  assert.equal(browser.nodes['wallet-bootstrap-recovery-passphrase'].value,'');
+  assert.match(browser.nodes['wallet-bootstrap-recovery-status'].textContent,/unlocked locally.*no transaction is authorized/i);
+  const body={format:'bouncer-v14-bootstrap-recovery-export-v1',network:'testnet',owner,vault,scope_id:scopeId,
+    review_text:draft.review_text,sealed_kit:draft.sealed_kit,owner_attestation:attestation,revision:0,head_sha256:'0'.repeat(64),events:[],
+    latest_head_independently_verified:false,transaction_authorized:false};
+  const mac=createHmac('sha256',Buffer.from(capability,'hex')).update(`bouncer-v14-bootstrap-export-v1\0${JSON.stringify(body)}`).digest('hex');
+  const local=JSON.stringify({...body,history_hmac_sha256:mac});
+  browser.nodes['wallet-bootstrap-recovery-file'].files=[{size:Buffer.byteLength(local),text:async()=>local}];
+  await browser.nodes['wallet-bootstrap-recovery-import'].click();
+  assert.match(browser.nodes['wallet-bootstrap-recovery-status'].textContent,/local encrypted file/i);
+  assert.equal(browser.nodes['wallet-bootstrap-recovery-export'].disabled,true);
+  browser.nodes['wallet-bootstrap-recovery-passphrase'].value=passphrase;
+  await browser.nodes['wallet-bootstrap-recovery-unlock'].click();
+  assert.equal(browser.nodes['wallet-bootstrap-recovery-export'].disabled,false);
+  assert.equal(config.messageRequests.length,2,'offline import does not open the wallet');
+  await browser.nodes['wallet-disconnect'].click();
+  assert.equal(browser.nodes['wallet-bootstrap-recovery-backup'].hidden,true);
+  assert.equal(config.transactionRequests,undefined);
 });
 
 test('phone recovery checks and records a matching original without submitting a transaction', async () => {

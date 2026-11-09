@@ -134,6 +134,19 @@ try {
     await page.locator('.top-connect').click();await page.locator('#wallet-owner-verify').click();
     try { await page.waitForFunction(()=>document.querySelector('#wallet-account-badge').textContent==='OWNER VERIFIED',null,{timeout:10_000}); }
     catch(error){console.error('Synthetic owner verification:',await page.locator('#wallet-owner-status').textContent(),errors,requests.slice(-12));throw error;}
+    if(width===390 && mode==='recovery-empty') {
+      // The checkpoint endpoint is deliberately unreachable in this browser
+      // rehearsal. Offline recovery can still be opened and a malformed file
+      // is rejected without another wallet signature or any transaction.
+      await page.locator('#wallet-bootstrap-recovery-open').click();
+      assert.equal(await page.locator('#wallet-bootstrap-recovery-read').isDisabled(),true);
+      assert.match(await page.locator('#wallet-bootstrap-recovery-status').innerText(),/online recovery is not enabled/i);
+      await page.locator('#wallet-bootstrap-recovery-file').setInputFiles({name:'invalid.json',mimeType:'application/json',buffer:Buffer.from('{}')});
+      await page.locator('#wallet-bootstrap-recovery-import').click();
+      await page.waitForFunction(()=>document.querySelector('#wallet-bootstrap-recovery-status').textContent.includes('file is invalid'));
+      assert.equal(await page.locator('#wallet-bootstrap-recovery-backup').isVisible(),false);
+      assert.equal(executes,0);assert.equal(challengeCount,0);
+    }
     await page.locator('#wallet-native-mission-open').waitFor({state:'visible'});await page.locator('#wallet-native-mission-open').click();
     await page.waitForFunction(()=>document.querySelector('#wallet-native-mission-details') && !document.querySelector('#wallet-native-mission-details').hidden);
     assert.match(await page.locator('#wallet-native-mission-panel').innerText(),/public NEAR contract state/i);

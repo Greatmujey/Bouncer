@@ -13,6 +13,8 @@ import { createNativeOracleOwnerFlow } from './native-oracle-owner-flow.mjs';
 import { createNativeMissionClient } from './native-mission-client.mjs';
 import { prepareV14Recovery, signV14Recovery } from './v14-checkpoint-recovery.mjs';
 import { createV14CheckpointRecoveryClient } from './v14-checkpoint-recovery-client.mjs';
+import { createBootstrapRecoveryReadClient } from './v14-bootstrap-recovery-read.mjs';
+import { V14_BOOTSTRAP_ORIGINS } from '../shared/v14-bootstrap-protocol.mjs';
 import { V14_ENROLLMENT_SITE } from './v14-checkpoint-enrollment.mjs';
 import { createDirectOutlayerTest, directOutlayerOriginAllowed } from './direct-outlayer-testnet.mjs';
 import { createRemoteDirectFence, directTestCapability } from './direct-test-remote-fence.mjs';
@@ -119,6 +121,17 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
   const v14RecoveryReview = doc.querySelector('#wallet-v14-recovery-review');
   const v14RecoveryReviewText = doc.querySelector('#wallet-v14-recovery-review-text');
   const v14RecoveryOriginals = doc.querySelector('#wallet-v14-recovery-originals');
+  const bootstrapRecoveryOpen = doc.querySelector('#wallet-bootstrap-recovery-open');
+  const bootstrapRecoveryPanel = doc.querySelector('#wallet-bootstrap-recovery-panel');
+  const bootstrapRecoveryRead = doc.querySelector('#wallet-bootstrap-recovery-read');
+  const bootstrapRecoveryFile = doc.querySelector('#wallet-bootstrap-recovery-file');
+  const bootstrapRecoveryImport = doc.querySelector('#wallet-bootstrap-recovery-import');
+  const bootstrapRecoveryStatus = doc.querySelector('#wallet-bootstrap-recovery-status');
+  const bootstrapRecoveryOriginals = doc.querySelector('#wallet-bootstrap-recovery-originals');
+  const bootstrapRecoveryBackup = doc.querySelector('#wallet-bootstrap-recovery-backup');
+  const bootstrapRecoveryExport = doc.querySelector('#wallet-bootstrap-recovery-export');
+  const bootstrapRecoveryPassphrase = doc.querySelector('#wallet-bootstrap-recovery-passphrase');
+  const bootstrapRecoveryUnlock = doc.querySelector('#wallet-bootstrap-recovery-unlock');
   const directOpen = doc.querySelector('#wallet-direct-outlayer-open');
   const directPanel = doc.querySelector('#wallet-direct-outlayer-panel');
   const directStatus = doc.querySelector('#wallet-direct-outlayer-status');
@@ -219,6 +232,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
   let ownerVerification = null, ownerSessionVersion = 0, setupRecoveryAvailable = false, setupRecoverySelection = null, matchedOriginal = null;
   let bufferSetupDraft = null, nativeSetupAvailable = false, nativeFlow = null, nativeSetupOpening = false, directFlow = null;
   let v14RecoveryClient = null, v14RecoveryVisible = false;
+  let bootstrapRecoveryClient = null, bootstrapRecoveryReady = false, bootstrapRecoveryVisible = false, bootstrapRecoveryUnlocked = false;
   let missionFlow = null, missionReview = null, missionReady = false, missionStarted = false;
   const bufferSetupStages = ['create_keyless_vault', 'register_vault_circle', 'fund_vault_circle'];
   let bannerTimer;
@@ -325,6 +339,19 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     if (v14RecoveryPanel) v14RecoveryPanel.hidden = !v14RecoveryEnabled || !v14RecoveryVisible;
     if (v14RecoveryRead) v14RecoveryRead.disabled = busyState;
     if (v14RecoveryVault) v14RecoveryVault.disabled = busyState;
+    const bootstrapEligible = ownerVerified && connectedAccount === 'great_mujey.testnet' && isTop &&
+      V14_BOOTSTRAP_ORIGINS.includes(win.location.origin) && Boolean(bootstrapRecoveryClient);
+    if (bootstrapRecoveryOpen) {
+      bootstrapRecoveryOpen.hidden = !bootstrapEligible || bootstrapRecoveryVisible;
+      bootstrapRecoveryOpen.disabled = busyState;
+      bootstrapRecoveryOpen.textContent = 'Recover encrypted vault setup →';
+    }
+    if (bootstrapRecoveryPanel) bootstrapRecoveryPanel.hidden = !bootstrapEligible || !bootstrapRecoveryVisible;
+    if (bootstrapRecoveryRead) bootstrapRecoveryRead.disabled = busyState || !bootstrapRecoveryReady;
+    if (bootstrapRecoveryExport) bootstrapRecoveryExport.disabled = busyState || !bootstrapRecoveryUnlocked;
+    for (const control of [bootstrapRecoveryFile,bootstrapRecoveryImport,bootstrapRecoveryPassphrase,bootstrapRecoveryUnlock]) {
+      if (control) control.disabled = busyState;
+    }
     if (missionOpen) { missionOpen.hidden = !ownerVerified || Boolean(missionFlow); missionOpen.disabled = busyState; }
     if (missionPanel) missionPanel.hidden = !ownerVerified || !missionFlow;
     if (missionConsentLabel) missionConsentLabel.hidden = !missionReview || !missionReady || missionStarted;
@@ -410,6 +437,31 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     if (v14RecoveryReviewText) v14RecoveryReviewText.textContent = '';
     if (v14RecoveryOriginals) { v14RecoveryOriginals.replaceChildren(); v14RecoveryOriginals.hidden = true; }
   }
+  function clearBootstrapRecovery() {
+    bootstrapRecoveryClient?.destroy(); bootstrapRecoveryClient = null;
+    bootstrapRecoveryReady = false; bootstrapRecoveryVisible = false; bootstrapRecoveryUnlocked = false;
+    if (bootstrapRecoveryStatus) bootstrapRecoveryStatus.textContent = '';
+    if (bootstrapRecoveryOriginals) { bootstrapRecoveryOriginals.replaceChildren(); bootstrapRecoveryOriginals.hidden = true; }
+    if (bootstrapRecoveryBackup) bootstrapRecoveryBackup.hidden = true;
+    if (bootstrapRecoveryPassphrase) bootstrapRecoveryPassphrase.value = '';
+    if (bootstrapRecoveryFile) bootstrapRecoveryFile.value = '';
+  }
+  function showBootstrapHistory(history,source) {
+    bootstrapRecoveryUnlocked = false;
+    if (bootstrapRecoveryOriginals) {
+      bootstrapRecoveryOriginals.replaceChildren();
+      const originals = [{label:'Create original',hash:history.create_original},{label:'Deployment original',hash:history.deploy_original}];
+      for (const item of originals.filter(item => item.hash)) {
+        const link = doc.createElement('a'); link.href = `https://testnet.nearblocks.io/txns/${item.hash}`;
+        link.target = '_blank'; link.rel = 'noopener noreferrer'; link.textContent = `${item.label}: ${item.hash}`;
+        bootstrapRecoveryOriginals.append(link);
+      }
+      bootstrapRecoveryOriginals.hidden = !bootstrapRecoveryOriginals.childElementCount;
+    }
+    if (bootstrapRecoveryBackup) bootstrapRecoveryBackup.hidden = false;
+    if (bootstrapRecoveryStatus) bootstrapRecoveryStatus.textContent = `${source}: ${history.revision} recorded events. Enter the recovery passphrase to check the file and save a separate encrypted copy. ` +
+      'The latest head and on-chain receipts are not independently re-verified; never repeat an uncertain transaction.';
+  }
   function renderMissionReceipts(deliveries) {
     if (!missionReceipts) return;
     missionReceipts.replaceChildren();
@@ -433,7 +485,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     missionFlow = null; missionReview = null; missionReady = false; missionStarted = false;
     v14RecoveryClient = null; v14RecoveryVisible = false;
     if (v14RecoveryVault) v14RecoveryVault.value = '';
-    clearV14RecoveryDisplay();
+    clearV14RecoveryDisplay(); clearBootstrapRecovery();
     if (missionConsent) missionConsent.checked = false;
     if (missionSummary) missionSummary.textContent = ''; if (missionStatus) missionStatus.textContent = '';
     if (missionManifest) missionManifest.textContent = ''; if (missionDetails) { missionDetails.hidden = true; missionDetails.open = false; }
@@ -830,7 +882,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
       nativeFlow?.destroy(); nativeFlow = null; nativeSetupOpening = false; nativeSetupAvailable = false;
       missionFlow = null; missionReview = null; missionReady = false; missionStarted = false;
       v14RecoveryClient = null; v14RecoveryVisible = false;
-      clearV14RecoveryDisplay();
+      clearV14RecoveryDisplay(); clearBootstrapRecovery();
       if (missionConsent) missionConsent.checked = false;
       if (missionDetails) { missionDetails.hidden = true; missionDetails.open = false; }
       if (missionManifest) missionManifest.textContent = '';
@@ -851,6 +903,21 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
             if (current() && enabled) { v14RecoveryClient = client; renderControls(); }
           }).catch(() => {});
         } catch { /* optional history must not erase the verified identity */ }
+      }
+      // The encrypted temporary-key kit can be recovered only through an
+      // owner-signed read. Its endpoint is default-off; availability checks
+      // never open a wallet or enable transactions.
+      if (isTop && accountId === 'great_mujey.testnet' && V14_BOOTSTRAP_ORIGINS.includes(win.location.origin)) {
+        const currentProof = ownerVerification;
+        const current = () => stillCurrent() && ownerVerification === currentProof;
+        try {
+          const client = createBootstrapRecoveryReadClient({wallet,owner:accountId,ownerPublicKey:proof.publicKey,
+            location:win.location,isTopLevel:isTop,crypto:win.crypto,fetch:walletReadFetch,isCurrent:current});
+          bootstrapRecoveryClient = client;
+          void client.enabled().then(enabled => {
+            if (current() && bootstrapRecoveryClient === client) { bootstrapRecoveryReady = enabled; renderControls(); }
+          }).catch(() => {});
+        } catch { /* optional recovery must not erase verified identity */ }
       }
       // Recovery is deliberately optional and only becomes visible when the
       // experimental same-origin backend explicitly advertises it. This never
@@ -876,7 +943,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     } catch (error) {
       if (!stillCurrent()) return;
       ownerVerification = null; setupRecoveryAvailable = false; setupRecoverySelection = null; matchedOriginal = null;
-      v14RecoveryClient = null; v14RecoveryVisible = false;
+      v14RecoveryClient = null; v14RecoveryVisible = false; clearBootstrapRecovery();
       nativeSetupAvailable = false; nativeSetupOpening = false; nativeFlow?.destroy(); nativeFlow = null;
       const reason = error?.message || '';
       const message = reason === 'CLI_ED25519_UNAVAILABLE'
@@ -956,6 +1023,90 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
       clearTimeout(timeout); stopWalletPresentation(); busy(false);
       if (current()) { renderControls(); hideBanner(); openPicker(opener); }
     }
+  });
+  bootstrapRecoveryOpen?.addEventListener('click', () => {
+    if (busyState || !bootstrapRecoveryClient || !bootstrapRecoveryStatus) return;
+    bootstrapRecoveryVisible = true;
+    bootstrapRecoveryStatus.textContent = bootstrapRecoveryReady
+      ? 'Read-only recovery for native.great_mujey.testnet. No transaction will be requested.'
+      : 'Online recovery is not enabled. You can read an existing encrypted file on this device; no transaction will be requested.';
+    renderControls();
+  });
+  bootstrapRecoveryRead?.addEventListener('click', async () => {
+    const client = bootstrapRecoveryClient, proof = ownerVerification, wallet = selectedWallet,
+      accountId = connectedAccount, version = ownerSessionVersion;
+    if (busyState || !client || !bootstrapRecoveryReady || !bootstrapRecoveryVisible || !bootstrapRecoveryStatus ||
+        !connected || !isTop || proof?.wallet !== wallet || proof.accountId !== accountId) return;
+    const current = () => connected && selectedWallet === wallet && connectedAccount === accountId &&
+      ownerSessionVersion === version && ownerVerification === proof && bootstrapRecoveryClient === client;
+    if (bootstrapRecoveryPassphrase) bootstrapRecoveryPassphrase.value = '';
+    busy(true); closePicker();
+    setStatus('Approve the read-only recovery message in your wallet. No transaction is requested.');
+    notify('Approve the read-only recovery message. No transaction is requested.', true);
+    let stopWalletPresentation = () => {}, timeout;
+    try {
+      if (['near-mobile','nightly-wallet','ledger'].includes(wallet.manifest.id)) stopWalletPresentation = decorateWalletPopup(wallet.manifest.id);
+      const history = await Promise.race([client.read(),new Promise((_,reject) => {
+        timeout = setTimeout(() => reject(new Error('BOOTSTRAP_RECOVERY_TIMEOUT')),90_000);
+      })]);
+      if (!current()) return;
+      showBootstrapHistory(history,'Online recovery');
+      setStatus('Encrypted recovery read completed. No transaction was requested.');
+    } catch {
+      if (current()) bootstrapRecoveryStatus.textContent = 'Recovery is unavailable or the signature was not verified. Absence is not proven; do not repeat uncertain transactions.';
+    } finally {
+      clearTimeout(timeout); stopWalletPresentation(); busy(false);
+      if (current()) { renderControls(); hideBanner(); openPicker(opener); }
+    }
+  });
+  bootstrapRecoveryImport?.addEventListener('click', async () => {
+    const client = bootstrapRecoveryClient, proof = ownerVerification, file = bootstrapRecoveryFile?.files?.[0];
+    if (busyState || !client || !bootstrapRecoveryVisible || !bootstrapRecoveryStatus) return;
+    if (!file || !Number.isSafeInteger(file.size) || file.size < 1 || file.size > 128_000 || typeof file.text !== 'function') {
+      bootstrapRecoveryStatus.textContent = 'Choose a Bouncer encrypted recovery JSON file under 128 KB. No wallet request was made.';
+      return;
+    }
+    const current = () => bootstrapRecoveryClient === client && ownerVerification === proof;
+    busy(true);
+    try {
+      const history = await client.importEncrypted(await file.text()); if (!current()) return;
+      showBootstrapHistory(history,'Local encrypted file');
+      setStatus('Encrypted recovery file read on this device. No transaction was requested.');
+    } catch {
+      if (current()) bootstrapRecoveryStatus.textContent = 'The file is invalid or does not match the signed checkpoint. Keep your existing copies and never repeat uncertain transactions.';
+    } finally {
+      if (bootstrapRecoveryFile) bootstrapRecoveryFile.value = '';
+      busy(false); if (current()) renderControls();
+    }
+  });
+  bootstrapRecoveryExport?.addEventListener('click', () => {
+    if (busyState || !bootstrapRecoveryClient || !bootstrapRecoveryVisible || !bootstrapRecoveryUnlocked || !bootstrapRecoveryStatus) return;
+    let url;
+    try {
+      const json = bootstrapRecoveryClient.exportEncrypted();
+      url = win.URL.createObjectURL(new win.Blob([json],{type:'application/json'}));
+      const link = doc.createElement('a'); link.href = url; link.download = 'bouncer-testnet-encrypted-setup-recovery.json';
+      doc.body.append(link); link.click(); link.remove();
+      bootstrapRecoveryStatus.textContent = 'Download started. Confirm it is saved separately; downloading does not verify the latest head or authorize a transaction.';
+      setTimeout(() => win.URL.revokeObjectURL(url),60_000);
+    } catch {
+      if (url) win.URL.revokeObjectURL(url);
+      bootstrapRecoveryStatus.textContent = 'Could not save the encrypted file. Do not discard existing recovery copies.';
+    }
+  });
+  bootstrapRecoveryUnlock?.addEventListener('click', async () => {
+    const client = bootstrapRecoveryClient, proof = ownerVerification;
+    if (busyState || !client || !bootstrapRecoveryVisible || !bootstrapRecoveryPassphrase || !bootstrapRecoveryStatus) return;
+    const current = () => bootstrapRecoveryClient === client && ownerVerification === proof;
+    const passphrase = bootstrapRecoveryPassphrase.value; bootstrapRecoveryPassphrase.value = '';
+    busy(true);
+    try {
+      await client.verifyPassphrase(passphrase); if (!current()) return;
+      bootstrapRecoveryUnlocked = true;
+      bootstrapRecoveryStatus.textContent = 'The encrypted kit unlocked locally; an integrity-protected file is ready to save. Latest-head and receipt checks are still required; no transaction is authorized.';
+    } catch {
+      if (current()) bootstrapRecoveryStatus.textContent = 'Could not unlock the kit. Check its recovery passphrase; never enter a wallet seed phrase.';
+    } finally { busy(false); if (current()) renderControls(); }
   });
   missionConsent?.addEventListener('change', () => renderControls());
   missionDetails?.addEventListener('toggle', () => renderControls());

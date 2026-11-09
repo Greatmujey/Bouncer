@@ -11,6 +11,7 @@ import {prepareBootstrapEnrollment,signBootstrapEnrollment,prepareBootstrapRecov
 import {bootstrapLocalJournalKey,createBootstrapTwoCopyWitness,inspectBootstrapOriginals} from '../web-src/v14-bootstrap-originals.mjs';
 import {enrollBootstrapCheckpoint,createBootstrapRemoteStore,recoverBootstrapCheckpoint} from '../web-src/v14-bootstrap-remote-store.mjs';
 import {openV14BootstrapRecoveryKit} from '../web-src/v14-bootstrap-recovery-kit.mjs';
+import {createBootstrapRecoveryReadClient} from '../web-src/v14-bootstrap-recovery-read.mjs';
 import {createV14BootstrapCheckpointHandler} from '../infrastructure/v14-bootstrap-checkpoint-edge.mjs';
 import {createV14BrowserWitnessStore} from '../web-src/v14-browser-witness-store.mjs';
 import {nep413Payload} from '../web-src/cli-login.mjs';
@@ -48,6 +49,15 @@ test('checkpoint is default-off and rejects other origins before touching a back
   assert.equal((await off(request(site))).status,503);
   const on=createV14BootstrapCheckpointHandler({getEnv:key=>key==='BOUNCER_V14_BOOTSTRAP_ENABLE'?'1':undefined,fetch,crypto:webcrypto,now});
   assert.equal((await on(request('https://evil.invalid'))).status,403);assert.equal(calls,0);
+});
+
+test('recovery-only client makes no wallet request when the independent endpoint is disabled',async()=>{
+  let signatures=0;
+  const client=createBootstrapRecoveryReadClient({wallet:{async signMessage(){signatures++;throw Error('must not sign')}},
+    owner:originOwner,ownerPublicKey:String(owner.getPublicKey()),location:{origin:site,host:new URL(site).host},isTopLevel:true,
+    crypto:webcrypto,now,fetch:async()=>new Response('{"error":"unavailable"}',{status:503})});
+  assert.equal(await client.enabled(),false);await assert.rejects(client.read());assert.equal(signatures,0);
+  assert.throws(()=>client.exportEncrypted());client.destroy();
 });
 
 test('off-chain enrollment binds the pinned review, temporary key and encrypted kit without deploying',async()=>{
@@ -196,6 +206,33 @@ if(process.env.BOUNCER_PGLITE_MODULE) {
       await opened.useSecrets(({temporaryKey,checkpointCapability})=>{
         assert.equal(String(temporaryKey.getPublicKey()),String(temporary.getPublicKey()));assert.equal(checkpointCapability,capability);
       });opened.dispose();
+      const combinedFetch=(url,opts)=>String(url).startsWith('https://jiouaqwxkvlkmvyumzwc.supabase.co/functions/')
+        ? browserFetch(url,opts):backendFetch(url,opts);
+      const client=createBootstrapRecoveryReadClient({wallet,owner:originOwner,ownerPublicKey:String(owner.getPublicKey()),
+        location,isTopLevel:true,crypto:webcrypto,fetch:combinedFetch,now});
+      assert.equal(await client.enabled(),true);
+      const view=await client.read();assert.equal(view.create_original,original);assert.equal(view.transaction_authorized,false);
+      assert.equal(view.latest_head_independently_verified,false);
+      assert.throws(()=>client.exportEncrypted());
+      await assert.rejects(client.verifyPassphrase('wrong fixture passphrase'));
+      assert.equal((await client.verifyPassphrase(passphrase)).status,'KIT_UNLOCKED_LOCALLY_NOT_AUTHORIZED');
+      const exported=client.exportEncrypted();assert.equal(exported.includes(String(temporary)),false);
+      assert.equal(exported.includes(capability),false);assert.equal(exported.includes(passphrase),false);
+      client.destroy();assert.throws(()=>client.exportEncrypted());
+      let offlineNetworkCalls=0,offlineSignatures=0;
+      const offline=createBootstrapRecoveryReadClient({wallet:{async signMessage(){offlineSignatures++;throw Error('offline')}},
+        owner:originOwner,ownerPublicKey:String(owner.getPublicKey()),location,isTopLevel:true,crypto:webcrypto,now,
+        fetch:async()=>{offlineNetworkCalls++;throw Error('offline')}});
+      const offlineView=await offline.importEncrypted(exported);
+      assert.equal(offlineView.create_original,original);assert.equal(offlineView.latest_head_independently_verified,false);
+      assert.equal((await offline.verifyPassphrase(passphrase)).transaction_authorized,false);
+      assert.equal(offlineNetworkCalls,0);assert.equal(offlineSignatures,0);
+      const altered=JSON.parse(exported);altered.head_sha256='1'.repeat(64);
+      await assert.rejects(offline.importEncrypted(JSON.stringify(altered)));
+      const badMac=JSON.parse(exported);badMac.history_hmac_sha256='1'.repeat(64);
+      await offline.importEncrypted(JSON.stringify(badMac));assert.throws(()=>offline.exportEncrypted());
+      await assert.rejects(offline.verifyPassphrase(passphrase));
+      offline.destroy();
       permission={FunctionCall:{receiver_id:vault,method_names:[]}};
       await assert.rejects(recoverBootstrapCheckpoint({signed:recoverySigned,location,crypto:webcrypto,fetch:browserFetch,now}));
       assert.equal(seenCapabilityInDb,false);local.close();
