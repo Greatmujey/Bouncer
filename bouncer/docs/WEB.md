@@ -167,8 +167,10 @@ persistent same-origin browser stop marker; a lost or malformed acknowledgement
 stops further attempts in that browser and must be reconciled by recovery, not
 by re-enrolling. This marker is not a cross-tab lock and does not coordinate
 other browsers or devices. An acknowledgement is not proof of a separate restore,
-latest original history, vault state or final receipts, and does not authorize setup. The
-endpoint remains disabled for the real owner until separately reviewed.
+latest original history, vault state or final receipts, and does not authorize setup.
+The endpoint is default-off in code; it was separately enabled for a
+recovery-only real-owner test. Enabling it alone does not establish enrollment,
+an independent restore or transaction readiness.
 
 Recovery also permits a user to import and locally MAC-check a saved encrypted
 recovery export, then compare that exact snapshot with an owner-signed online
