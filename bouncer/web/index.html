@@ -208,9 +208,11 @@
         <p class="account-view-status" id="wallet-bootstrap-recovery-compare-status" role="status" aria-live="polite"></p>
       </div>
       <div id="wallet-bootstrap-anchor-panel" hidden>
-        <strong>Separate encrypted recovery copy on Railway</strong>
-        <p class="account-view-status">This is separate from downloading the recovery file above. Creating and updating Railway copies is paused while an earlier save is uncertain. Restoring is read-only; it does not create a vault or transaction, and a second provider does not prove the latest history.</p>
-        <p class="account-view-status"><strong>If you already tried to save to Railway, or are not sure, do not save again.</strong> A failed restore does not prove the copy is absent; keep your existing backups and stop to reconcile.</p>
+        <strong>Railway recovery copy</strong>
+        <p class="account-view-status">This is separate from downloading the recovery file above. Creating and updating Railway copies is paused while an earlier save is uncertain. Railway also serves this workspace. No copy here proves the latest history.</p>
+        <p class="account-view-status"><strong>If you already tried to save to Railway, or are not sure, do not save again.</strong> A failed restore does not prove the copy is absent; keep your existing backups.</p>
+        <p class="account-view-status">Check the current Railway volume with a read-only wallet message. No passphrase or transaction is needed. A missing record does not prove an earlier save never happened.</p>
+        <button class="account-entry-secondary" id="wallet-bootstrap-anchor-inspect" type="button">Check Railway copy status →</button>
         <label for="wallet-bootstrap-anchor-passphrase">Recovery passphrase — not your wallet seed</label>
         <input id="wallet-bootstrap-anchor-passphrase" type="password" minlength="16" maxlength="1024" autocomplete="off" autocapitalize="off" spellcheck="false">
         <button class="account-entry-secondary" id="wallet-bootstrap-anchor-restore" type="button">Restore from Railway copy →</button>
@@ -444,7 +446,7 @@
   </dialog>
   <dialog class="tour-dialog" id="welcome-tour" aria-labelledby="tour-title" aria-describedby="tour-description"><div class="tour-topline"><span class="brand-mark" aria-hidden="true"><svg viewBox="16 17 300 300"><use href="#i-bouncer"/></svg></span><span class="tour-count" id="tour-count">STEP 1 OF 4</span><button type="button" class="tour-close" id="tour-skip" aria-label="Close the tour">×</button></div><div class="tour-progress" aria-hidden="true"><span></span><span></span><span></span><span></span></div><div class="tour-copy" aria-live="polite"><div class="section-kicker" id="tour-kicker">WELCOME TO BOUNCER</div><h2 id="tour-title">Meet your resource agent.</h2><p id="tour-description">Bouncer helps an agent get compute, storage and API services while your on-chain rules guard its spending.</p><div class="tour-callout" id="tour-callout">Bouncer is a testnet prototype, not an open marketplace.</div></div><div class="tour-actions"><button class="button tour-back" type="button" id="tour-back" disabled>Back</button><button class="button tour-next" type="button" id="tour-next">Next →</button></div></dialog>
   <script type="module" src="./app.mjs?v=7"></script>
-  <script type="module" src="./wallet.bundle.js?v=44"></script>
+  <script type="module" src="./wallet.bundle.js?v=45"></script>
   <script type="module" src="./google-signin.mjs?v=3"></script>
 </body>
 </html>

@@ -118,7 +118,8 @@ async function main() {
     const [{createV14BootstrapRailwayAnchor},{createV14BootstrapRailwayAnchorHttp}]=await Promise.all([
       import('../agent/v14-bootstrap-railway-anchor.mjs'),import('../agent/v14-bootstrap-railway-anchor-http.mjs')]);
     const compressedV14=new Uint8Array(fs.readFileSync(new URL('../web/artifacts/v14-research.deflate',import.meta.url)));
-    const anchor=createV14BootstrapRailwayAnchor({volumePath:'/data',compressedV14});
+    const anchor=createV14BootstrapRailwayAnchor({volumePath:'/data',compressedV14,
+      currentMountVerified:()=>process.env.RAILWAY_VOLUME_MOUNT_PATH==='/data'&&inspectStandbyMount()==='DECLARED_MOUNT_PRESENT'});
     bootstrapAnchorHandler=createV14BootstrapRailwayAnchorHttp({anchor,allowWrites:anchorWritesEnabled});
   }
   const port=railwayNativePort(),server=createRailwayNativeStandby({readiness,setupHandler,webHandler,bootstrapAnchorHandler});

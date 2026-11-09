@@ -5,7 +5,8 @@
  * No key, capability, or passphrase is returned from this interface. */
 import {prepareBootstrapRecovery,signBootstrapRecovery} from './v14-bootstrap-checkpoint.mjs';
 import {V14_BOOTSTRAP_ENDPOINT,recoverBootstrapCheckpoint,createBootstrapRemoteStore} from './v14-bootstrap-remote-store.mjs';
-import {V14_RAILWAY_ANCHOR_ENDPOINT,createV14BootstrapRailwayStore,recoverV14BootstrapRailwayAnchor} from './v14-bootstrap-railway-store.mjs';
+import {V14_RAILWAY_ANCHOR_ENDPOINT,createV14BootstrapRailwayStore,recoverV14BootstrapRailwayAnchor,
+  inspectV14BootstrapRailwayAnchor} from './v14-bootstrap-railway-store.mjs';
 import {V14_BOOTSTRAP_ORIGINS,verifyBootstrapAttestation,verifyBootstrapEnrollmentContents} from '../shared/v14-bootstrap-protocol.mjs';
 import {inspectBootstrapOriginals} from './v14-bootstrap-originals.mjs';
 import {openV14BootstrapRecoveryKit} from './v14-bootstrap-recovery-kit.mjs';
@@ -128,6 +129,19 @@ export function createBootstrapRecoveryReadClient({wallet,owner,ownerPublicKey,l
         transaction_authorized:false,latest_head_independently_verified:false},file.history_hmac_sha256,'file');
     })},
     async verifyPassphrase(passphrase) {return run(()=>unlockRetained(passphrase))},
+    /** Read only a coarse current-mount state; retain any already-unlocked
+     * local file and never initialize, repair or treat absence as permission. */
+    async inspectIndependentAnchor({onWalletPrompt=()=>{},stillSelected=()=>true}={}) {return run(async()=>{
+      if(typeof onWalletPrompt!=='function'||typeof stillSelected!=='function'||stillSelected()!==true||
+        !await anchorEnabled()||stillSelected()!==true)throw fail();
+      const check=()=>{current();if(stillSelected()!==true)throw fail()};
+      onWalletPrompt();check();
+      const draft=prepareBootstrapRecovery({owner,ownerPublicKey,vault:VAULT,site:location.origin,crypto,now});
+      const signed=await signBootstrapRecovery({draft,wallet,location,crypto,fetch:fetchImpl,now});check();
+      const result=await inspectV14BootstrapRailwayAnchor({signed,location,isTopLevel,fetch:fetchImpl,
+        isCurrent:()=>!disposed&&isCurrent()===true&&stillSelected()===true});
+      check();return result;
+    })},
     /** Restore from the separate service without contacting the original
      * checkpoint. The wallet signs a fresh message only; the passphrase and
      * unlocked key remain local. No returned history is claimed as latest. */

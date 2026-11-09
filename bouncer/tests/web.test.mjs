@@ -226,6 +226,8 @@ test('recovery screen distinguishes the two file types and warns before an uncer
   assert.match(panel, /Creating and updating Railway copies is paused/i);
   assert.doesNotMatch(panel, /id="wallet-bootstrap-anchor-save"/);
   assert.match(panel, /A failed restore does not prove the copy is absent/i);
+  assert.match(panel, /No passphrase or transaction is needed/i);
+  assert.match(panel, /A missing record does not prove an earlier save never happened/i);
   const position = id => {
     const pattern = `id="${id}"`;
     assert.equal(panel.split(pattern).length, 2, `${id} must occur once`);
@@ -235,6 +237,7 @@ test('recovery screen distinguishes the two file types and warns before an uncer
   assert.ok(position('wallet-bootstrap-recovery-passphrase') < position('wallet-bootstrap-recovery-unlock'));
   assert.ok(position('wallet-bootstrap-recovery-unlock') < position('wallet-bootstrap-recovery-export'));
   assert.ok(position('wallet-bootstrap-recovery-export') < position('wallet-bootstrap-anchor-panel'));
+  assert.ok(position('wallet-bootstrap-anchor-inspect') < position('wallet-bootstrap-anchor-passphrase'));
 });
 
 test('proof page distinguishes historical independent native lookup from self-hosted resource examples', () => {

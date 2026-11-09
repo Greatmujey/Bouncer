@@ -102,7 +102,7 @@ jobs:
           sha256sum market-summary.wasm
       - name: Test dependent market and WASI safety checks
         working-directory: bouncer
-        run: node --test tests/market-summary-wasi.test.mjs tests/native-mission-planner.test.mjs tests/native-mission.test.mjs tests/native-v14-phone-plan.test.mjs
+        run: node --test tests/market-summary-wasi.test.mjs tests/native-mission-planner.test.mjs tests/planned-native-mission-service.test.mjs tests/native-mission-browser-service.test.mjs tests/native-mission.test.mjs tests/native-v14-phone-plan.test.mjs
       - name: Measure V14 mobile wallet payload lower bound
         working-directory: bouncer
         run: node scripts/inspect-v14-mobile-artifact.mjs contracts/bouncer/target/wasm32-unknown-unknown/release/bouncer.wasm

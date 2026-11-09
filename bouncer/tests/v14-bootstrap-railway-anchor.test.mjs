@@ -12,7 +12,8 @@ import {bootstrapSha256} from '../shared/v14-bootstrap-protocol.mjs';
 import {deriveBootstrapAnchorCredentials,verifyBootstrapAnchorInitialization} from '../shared/v14-bootstrap-anchor-auth.mjs';
 import {createV14BootstrapRailwayAnchor} from '../agent/v14-bootstrap-railway-anchor.mjs';
 import {createV14BootstrapRailwayAnchorHttp,V14_RAILWAY_ANCHOR_PATH} from '../agent/v14-bootstrap-railway-anchor-http.mjs';
-import {createV14BootstrapRailwayStore,recoverV14BootstrapRailwayAnchor,V14_RAILWAY_ANCHOR_ENDPOINT} from '../web-src/v14-bootstrap-railway-store.mjs';
+import {createV14BootstrapRailwayStore,recoverV14BootstrapRailwayAnchor,inspectV14BootstrapRailwayAnchor,
+  V14_RAILWAY_ANCHOR_ENDPOINT} from '../web-src/v14-bootstrap-railway-store.mjs';
 import {createBootstrapRecoveryReadClient} from '../web-src/v14-bootstrap-recovery-read.mjs';
 import {V14_BOOTSTRAP_ENDPOINT} from '../web-src/v14-bootstrap-remote-store.mjs';
 import {createRailwayNativeStandby} from '../scripts/start-railway-native.mjs';
@@ -38,7 +39,8 @@ async function fixture(){
   const input={scope_id:scopeId,review_sha256:plan.review.review_sha256,capability:credentials.capability,
     initialization_signature:credentials.initialization_signature,review_text:draft.review_text,sealed_kit:draft.sealed_kit,owner_attestation:attestation};
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'bouncer-anchor-fixture-'));
-  const open=()=>createV14BootstrapRailwayAnchor({volumePath:dir,compressedV14:compressed,crypto:webcrypto});
+  const open=(options={})=>createV14BootstrapRailwayAnchor({volumePath:dir,compressedV14:compressed,crypto:webcrypto,
+    currentMountVerified:()=>true,...options}); // synthetic temp directory, not a real mount assertion
   return {owner,temporary,plan,kit,draft,attestation,credentials,input,dir,open,cleanup:()=>fs.rmSync(dir,{recursive:true,force:true})};
 }
 const empty={revision:0,head_sha256:zero,events:[]};
@@ -50,6 +52,63 @@ function remoteStore(){let snapshot=structuredClone(empty);return {
     snapshot={revision:expected_revision+1,head_sha256:head,events:[...snapshot.events,record]};return structuredClone(snapshot);
   }};}
 const hash=()=>encodeBase58(crypto.randomBytes(32));
+function signedRecovery(x){
+  const draft=prepareBootstrapRecovery({owner:ownerId,ownerPublicKey:String(x.owner.getPublicKey()),vault,site,crypto:webcrypto,now});
+  const digest=crypto.createHash('sha256').update(nep413Payload({message:draft.message,nonce:draft.nonce,recipient:draft.recipient})).digest();
+  return {terms:draft.terms,nonce_base64:Buffer.from(draft.nonce).toString('base64'),
+    signature_base64:Buffer.from(x.owner.sign(digest).signature).toString('base64')};
+}
+function ownerRpc(x){
+  const state={permission:'FullAccess',network:'testnet',calls:[]},block=hash();
+  const fetch=async(url,options)=>{
+    assert.equal(url,'https://test.rpc.fastnear.com');const req=JSON.parse(options.body);state.calls.push(req.method);
+    let result;
+    if(req.method==='status')result={chain_id:state.network};
+    else if(req.method==='block')result={header:{hash:block,height:100,timestamp_nanosec:String(BigInt(now())*1_000_000n)}};
+    else if(req.method==='query'){
+      assert.equal(req.params.account_id,ownerId);assert.equal(req.params.public_key,String(x.owner.getPublicKey()));
+      assert.equal(req.params.block_id,block);result={block_hash:block,permission:state.permission};
+    }else throw Error('no transaction RPC allowed');
+    return Response.json({jsonrpc:'2.0',id:req.id,result});
+  };
+  return {state,fetch};
+}
+
+test('owner-only current-mount inspection never writes or infers prior absence',async()=>{
+  const x=await fixture();let mountChecks=0;
+  const anchor=x.open({currentMountVerified:()=>{mountChecks++;return true}}),signed=signedRecovery(x),rpc=ownerRpc(x);
+  const inspect=(extra={})=>anchor.inspectByOwner({signed,origin:site,fetch:rpc.fetch,now,...extra});
+  const flags={latest_head_independently_verified:false,independent_restore_verified:false,prior_absence_verified:false,transaction_authorized:false};
+  try {
+    await assert.rejects(inspect({signed:{...signed,signature_base64:'A'.repeat(86)+'=='}}));
+    assert.equal(mountChecks,0,'a bad signature cannot inspect the filesystem');assert.deepEqual(rpc.state.calls,[]);
+    rpc.state.permission={FunctionCall:{}};await assert.rejects(inspect());assert.equal(mountChecks,0);
+    rpc.state.permission='FullAccess';rpc.state.network='mainnet';await assert.rejects(inspect());assert.equal(mountChecks,0);
+    rpc.state.network='testnet';await assert.rejects(inspect({origin:'https://evil.invalid'}));assert.equal(mountChecks,0);
+    await assert.rejects(inspect({now:()=>now()+181_000}));assert.equal(mountChecks,0);
+    assert.deepEqual(await inspect(),{status:'NO_RECORD_ON_CURRENT_MOUNT',...flags});
+    assert.deepEqual(fs.readdirSync(x.dir),[],'missing check creates nothing');
+    let mountReads=0;
+    const disappearing=x.open({currentMountVerified:()=>++mountReads===1});
+    assert.deepEqual(await disappearing.inspectByOwner({signed,origin:site,fetch:rpc.fetch,now}),
+      {status:'CURRENT_MOUNT_UNAVAILABLE',...flags},'a disappearing mount is never reported as missing');
+    const unspecified=createV14BootstrapRailwayAnchor({volumePath:x.dir,compressedV14:compressed,crypto:webcrypto});
+    assert.deepEqual(await unspecified.inspectByOwner({signed,origin:site,fetch:rpc.fetch,now}),
+      {status:'CURRENT_MOUNT_UNAVAILABLE',...flags},'mount verification must be explicitly supplied');
+    // This initialization and the crash lock below are synthetic test fixtures only.
+    await anchor.initialize(x.input);
+    const dir=path.join(x.dir,'v14-bootstrap-anchor-v1'),meta=path.join(dir,'metadata.json'),before=fs.readFileSync(meta);
+    assert.deepEqual(await inspect(),{status:'RECORD_VERIFIED_ON_CURRENT_MOUNT',...flags});
+    assert.deepEqual(fs.readdirSync(dir),['metadata.json']);assert.deepEqual(fs.readFileSync(meta),before);
+    const lock=path.join(dir,'write.lock');fs.writeFileSync(lock,'test lock');
+    assert.deepEqual(await inspect(),{status:'CURRENT_MOUNT_UNAVAILABLE',...flags});
+    assert.deepEqual(fs.readFileSync(meta),before);assert.equal(fs.readFileSync(lock,'utf8'),'test lock');
+    assert.deepEqual(await x.open({currentMountVerified:()=>false}).inspectByOwner({signed,origin:site,fetch:rpc.fetch,now}),
+      {status:'CURRENT_MOUNT_UNAVAILABLE',...flags});
+    assert.deepEqual(fs.readFileSync(meta),before);assert.equal(fs.readFileSync(lock,'utf8'),'test lock');
+    assert.ok(rpc.state.calls.every(method=>['status','block','query'].includes(method)));
+  }finally{x.cleanup()}
+});
 
 test('independent capability is deterministic, domain-separated, and requires the temporary private key',async()=>{
   const x=await fixture();try{
@@ -232,6 +291,40 @@ test('the default HTTP adapter pauses initialization and appends but preserves r
   }finally{await server.close();x.cleanup()}
 });
 
+test('HTTP and browser status check expose only coarse authenticated state with writes paused',async()=>{
+  const x=await fixture(),anchor=x.open(),signed=signedRecovery(x),rpc=ownerRpc(x);
+  const server=await testServer(createV14BootstrapRailwayAnchorHttp({anchor,fetch:rpc.fetch,now}));
+  const location={origin:site,host:new URL(site).host},operations=[];
+  const fetch=async(url,options)=>{
+    assert.equal(url,V14_RAILWAY_ANCHOR_ENDPOINT);assert.equal(options.credentials,'omit');
+    const raw=options.body,data=JSON.parse(raw);operations.push(data.operation);
+    for(const secret of [String(x.temporary),x.credentials.capability,remoteCapability,passphrase,x.draft.sealed_kit])
+      assert.equal(raw.includes(secret),false);
+    return server.request(options);
+  };
+  try {
+    const missing=await inspectV14BootstrapRailwayAnchor({signed,location,isTopLevel:true,fetch});
+    assert.equal(missing.status,'NO_RECORD_ON_CURRENT_MOUNT');assert.equal(missing.prior_absence_verified,false);
+    assert.equal(missing.transaction_authorized,false);assert.deepEqual(fs.readdirSync(x.dir),[]);
+    await anchor.initialize(x.input); // disposable fixture only
+    const present=await inspectV14BootstrapRailwayAnchor({signed,location,isTopLevel:true,fetch});
+    assert.equal(present.status,'RECORD_VERIFIED_ON_CURRENT_MOUNT');assert.equal(present.independent_restore_verified,false);
+    assert.equal(present.latest_head_independently_verified,false);assert.deepEqual(operations,['inspect_owner','inspect_owner']);
+    const unauthorized=await server.request({method:'POST',headers:{'content-type':'application/json'},
+      body:JSON.stringify({operation:'inspect_owner',...signed,signature_base64:'A'.repeat(86)+'=='})});
+    assert.equal(unauthorized.status,503);assert.deepEqual(await unauthorized.json(),{error:'unavailable'});
+    const extras=await server.request({method:'POST',headers:{'content-type':'application/json'},
+      body:JSON.stringify({operation:'inspect_owner',...signed,passphrase})});
+    assert.equal(extras.status,503);
+    await assert.rejects(inspectV14BootstrapRailwayAnchor({signed,location,isTopLevel:false,fetch}));
+    await assert.rejects(inspectV14BootstrapRailwayAnchor({signed,location,isTopLevel:true,
+      fetch:async()=>Response.json({...present,prior_absence_verified:true})}));
+    await assert.rejects(inspectV14BootstrapRailwayAnchor({signed,location,isTopLevel:true,
+      fetch:async()=>Response.json({...present,sealed_kit:'unexpected'})}));
+    assert.deepEqual(fs.readdirSync(path.join(x.dir,'v14-bootstrap-anchor-v1')),['metadata.json']);
+  }finally{await server.close();x.cleanup()}
+});
+
 test('browser client and independent volume round-trip an encrypted kit and append without transactions',async()=>{
   const x=await fixture();const anchor=x.open(),handler=createV14BootstrapRailwayAnchorHttp({anchor,fetch:async()=>{throw Error('not used')},now,allowWrites:true});
   const server=await testServer(handler),remote=remoteStore();
@@ -344,12 +437,18 @@ test('existing online recovery can add a distinct encrypted anchor without re-en
     const client=createBootstrapRecoveryReadClient({wallet,owner:ownerId,ownerPublicKey:String(x.owner.getPublicKey()),
       location:{origin:site,host:new URL(site).host},isTopLevel:true,fetch,crypto:webcrypto,now});
     assert.equal(await client.anchorEnabled(),true);assert.equal((await client.read()).revision,0);
+    await client.verifyPassphrase(passphrase);const exportBefore=client.exportEncrypted();
+    const status=await client.inspectIndependentAnchor();
+    assert.equal(status.status,'NO_RECORD_ON_CURRENT_MOUNT');assert.equal(status.prior_absence_verified,false);
+    assert.equal(client.exportEncrypted(),exportBefore,'status inspection must not discard an already unlocked export');
+    await assert.rejects(client.inspectIndependentAnchor({stillSelected:()=>false}));
+    assert.equal(client.exportEncrypted(),exportBefore,'a canceled inspection also preserves the unlocked export');
     const marker=async()=>{markers++;return true};
     await assert.rejects(client.saveIndependentAnchor({passphrase:'incorrect recovery passphrase',compressedV14:compressed,markBeforeInitialize:marker}));
     assert.equal(markers,0);assert.equal(fs.readdirSync(x.dir).length,0);
     const copied=await client.saveIndependentAnchor({passphrase,compressedV14:compressed,markBeforeInitialize:marker});
     assert.equal(copied.status,'INDEPENDENT_ANCHOR_CREATED');assert.equal(copied.independent_restore_verified,false);
-    assert.equal(markers,1);assert.equal(signatures,1);assert.equal(transactions,0);assert.equal(enrollments,0);
+    assert.equal(markers,1);assert.equal(signatures,2);assert.equal(transactions,0);assert.equal(enrollments,0);
     assert.equal((await anchor.recover({capability:x.credentials.capability})).sealed_kit,x.draft.sealed_kit);
     client.destroy();primaryOnline=false;
     const separate=createBootstrapRecoveryReadClient({wallet,owner:ownerId,ownerPublicKey:String(x.owner.getPublicKey()),
@@ -358,7 +457,7 @@ test('existing online recovery can add a distinct encrypted anchor without re-en
     assert.equal(restored.status,'KIT_UNLOCKED_LOCALLY_NOT_AUTHORIZED');assert.equal(restored.revision,0);
     assert.equal(restored.latest_head_independently_verified,false);assert.equal(restored.history_authentication_verified,false);
     assert.equal(JSON.parse(separate.exportEncrypted()).sealed_kit,x.draft.sealed_kit);
-    assert.equal(signatures,2);assert.equal(transactions,0);assert.equal(enrollments,0);assert.equal(ownerRestores,1);separate.destroy();
+    assert.equal(signatures,3);assert.equal(transactions,0);assert.equal(enrollments,0);assert.equal(ownerRestores,1);separate.destroy();
     let selected=true;const staleWallet={...wallet,async signMessage(args){const response=await wallet.signMessage(args);selected=false;return response}};
     const stale=createBootstrapRecoveryReadClient({wallet:staleWallet,owner:ownerId,ownerPublicKey:String(x.owner.getPublicKey()),
       location:{origin:site,host:new URL(site).host},isTopLevel:true,fetch,crypto:webcrypto,now});

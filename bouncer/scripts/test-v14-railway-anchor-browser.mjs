@@ -54,7 +54,8 @@ try {
     });opened.dispose();
     // Preload a disposable fixture directly. The hosted HTTP route and UI do
     // not allow initialization while the real prior attempt is uncertain.
-    const anchor=createV14BootstrapRailwayAnchor({volumePath:volume,compressedV14,crypto:webcrypto});
+    const anchor=createV14BootstrapRailwayAnchor({volumePath:volume,compressedV14,crypto:webcrypto,
+      currentMountVerified:()=>true}); // synthetic directory only
     await anchor.initialize({scope_id:kit.scope_id,review_sha256:candidate.review_sha256,
       capability:anchorCredentials.capability,initialization_signature:anchorCredentials.initialization_signature,
       review_text:draft.review_text,sealed_kit:draft.sealed_kit,owner_attestation});
@@ -110,10 +111,10 @@ try {
         const raw=req.postData(),data=JSON.parse(raw),{operation,...input}=data;operations.push(`anchor:${operation}`);
         for(const secret of [candidate.text,candidate.fingerprint,passphrase,tempSecret,primaryCapability])assert(!raw.includes(secret));
         let result;
-        if(operation==='initialize')result=await anchor.initialize(input);
-        else if(operation==='read')result=await anchor.read({scope_id:data.scope_id,capability:data.capability});
+        if(operation==='read')result=await anchor.read({scope_id:data.scope_id,capability:data.capability});
         else if(operation==='recover_owner')result=await anchor.recoverByOwner({signed:input,origin,fetch:rpc,now:Date.now});
-        else throw Error('unexpected anchor operation');
+        else if(operation==='inspect_owner')result=await anchor.inspectByOwner({signed:input,origin,fetch:rpc,now:Date.now});
+        else throw Error('unexpected anchor operation; writes are paused');
         return route.fulfill({status:200,headers:cors,contentType:'application/json',body:JSON.stringify(result)});
       }
       if(url.origin!==origin)return route.abort('failed');
@@ -149,13 +150,17 @@ try {
     await page.locator('#wallet-bootstrap-recovery-unlock').click();
     await page.waitForFunction(()=>document.querySelector('#wallet-bootstrap-recovery-status').textContent.includes('file integrity matched'));
     assert.equal(await page.locator('#wallet-bootstrap-recovery-export').isDisabled(),false);
+    await page.locator('#wallet-bootstrap-anchor-inspect').click();
+    await page.waitForFunction(()=>document.querySelector('#wallet-bootstrap-anchor-status').textContent.includes('signed, structurally valid encrypted record'),null,{timeout:15_000});
+    assert.equal(await page.locator('#wallet-bootstrap-recovery-export').isDisabled(),false,'inspection preserves the unlocked file');
+    assert.equal(await page.locator('#wallet-bootstrap-anchor-passphrase').inputValue(),'','inspection does not ask for a passphrase');
     await page.locator('#wallet-bootstrap-anchor-passphrase').fill(passphrase);
     await page.locator('#wallet-bootstrap-anchor-restore').click();
     await page.waitForFunction(()=>document.querySelector('#wallet-bootstrap-anchor-status').textContent.includes('unlocked on this device'),null,{timeout:15_000});
     assert.equal(await page.locator('#wallet-bootstrap-recovery-export').isDisabled(),false);
-    assert.deepEqual(operations,['primary:recover','anchor:recover_owner','anchor:read']);
-    assert.deepEqual(fs.readFileSync(markerFile),beforeMetadata,'read-only restores do not alter the anchor');
-    assert.equal(signatures,3);assert.equal(transactions,0);assert.deepEqual(errors,[]);
+    assert.deepEqual(operations,['primary:recover','anchor:inspect_owner','anchor:recover_owner','anchor:read']);
+    assert.deepEqual(fs.readFileSync(markerFile),beforeMetadata,'read-only checks and restores do not alter the anchor');
+    assert.equal(signatures,4);assert.equal(transactions,0);assert.deepEqual(errors,[]);
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,'no horizontal overflow');
     console.log(`Synthetic independent recovery: ${width}px passed (no transaction, no primary restore request)`);
     await context.close();

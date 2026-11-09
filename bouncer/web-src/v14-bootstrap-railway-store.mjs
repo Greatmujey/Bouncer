@@ -85,6 +85,19 @@ export async function createV14BootstrapRailwayStore({location,isTopLevel,scopeI
     destroy(){disposed=true;credentials=null;},
   });
 }
+/** Coarse, owner-authenticated current-mount observation. It neither reads a
+ * kit into the browser nor permits initialization. Even a missing result is
+ * not evidence that no earlier save or original transaction existed. */
+export async function inspectV14BootstrapRailwayAnchor({signed,location,isTopLevel,
+  fetch:fetchImpl=globalThis.fetch,isCurrent=()=>true}={}) {
+  if(!exact(signed,['terms','nonce_base64','signature_base64'])||typeof fetchImpl!=='function'||typeof isCurrent!=='function')throw fail();
+  const result=await post({location,isTopLevel,fetchImpl,isCurrent,body:{operation:'inspect_owner',...structuredClone(signed)}});
+  if(!exact(result,['status','latest_head_independently_verified','independent_restore_verified','prior_absence_verified','transaction_authorized'])||
+    !['RECORD_VERIFIED_ON_CURRENT_MOUNT','NO_RECORD_ON_CURRENT_MOUNT','CURRENT_MOUNT_UNAVAILABLE'].includes(result.status)||
+    result.latest_head_independently_verified!==false||result.independent_restore_verified!==false||
+    result.prior_absence_verified!==false||result.transaction_authorized!==false)throw fail();
+  return Object.freeze({...result});
+}
 /** A fresh owner-signed, non-transaction message can retrieve the encrypted
  * kit if the first service or saved file is unavailable. Original hashes are
  * withheld until the kit is unlocked and a capability-authenticated second

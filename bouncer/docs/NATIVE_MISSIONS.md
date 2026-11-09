@@ -93,10 +93,18 @@ review; it never chooses the vault, account, policy, payee, program, amount,
 public-storage ID or key. The catalog and proposal are validated before the
 normal runner can use them; there is no fake fallback. Model output can still
 misinterpret an objective and must be reviewed. The objective is sent to the
-chosen model endpoint, which may retain it: never include secrets. Current tests
-use mocked model responses. This planner is **not yet connected to the hosted
-UI**, and it does not authorize or autonomously spend. A live model-backed
-mission remains unproven.
+chosen model endpoint, which may retain it: never include secrets. The new
+`agent/planned-native-mission-service.mjs` can bind one bounded proposal to the
+existing hash-checked browser review and approval service (per-leg for the
+market task), after an explicit model-request approval and validation of both
+catalog templates and
+restricted-signer configuration. This boolean is a caller-side guard, not proof
+of informed consent, a billing limit or an independent original checkpoint.
+The UI test uses a fake model, runner and wallet; the isolated nearcore rehearsal
+uses a fake model and provider. Neither is a real model or provider delivery.
+Hosted startup still uses a fixed manifest and does **not** enable this planner
+or mission execution. A live model-backed mission and review-once autonomy
+remain unproven.
 
 ## Optional browser review and service
 

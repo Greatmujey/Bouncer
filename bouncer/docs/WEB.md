@@ -243,10 +243,16 @@ previous initialization may have been attempted; there is no environment switch
 to reopen writes. It does not remove or reset records. Owner-message and
 capability-authenticated reads remain available when the route is enabled, and
 the workspace still supports local recovery-file exports; the Railway save
-button is absent. A failed restore is not proof of absence. The read-only
-`recovery_anchor_writes_enabled` diagnostic describes this code configuration,
-not independent verification of the volume or its history. Tests of local volumes
-and HTTP are synthetic. Railway durability, a real independent restore and an
+button is absent. A failed restore is not proof of absence. When the recovery
+route is enabled, **Check Railway copy status** uses a fresh owner-signed,
+non-transaction message to return only a coarse current-volume observation:
+verified record, no record on the current mount, or unavailable/locked. It does
+not return the encrypted kit, use a passphrase, write anything, remove locks, or
+authorize a save. Even a missing current record cannot establish that an earlier
+save did not happen. This status does not prove a successful restore, independent
+administration or the latest head. The read-only `recovery_anchor_writes_enabled`
+diagnostic describes this code configuration, not independent verification of
+the volume or its history. Tests of local volumes and HTTP are synthetic. Railway durability, a real independent restore and an
 independently retained latest head still require verification; two matching
 service copies do not prove freshness against rollback, a compromised operator
 or a shared failure. Enabling the recovery route does not enable transactions

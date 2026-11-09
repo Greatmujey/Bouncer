@@ -47,9 +47,10 @@ function validRoot(root){
  * owner-signed candidate. Absence or a genesis snapshot never proves that no
  * prior initialization or transaction existed. No automatic initialization is
  * performed on read, restart, failure, restore or append. */
-export function createV14BootstrapRailwayAnchor({volumePath,compressedV14:inputCompressed,crypto=globalThis.crypto}={}) {
+export function createV14BootstrapRailwayAnchor({volumePath,compressedV14:inputCompressed,crypto=globalThis.crypto,
+  currentMountVerified=()=>false}={}) {
   let root;try{root=validRoot(volumePath)}catch{throw fail()}
-  if(!(inputCompressed instanceof Uint8Array)||!crypto?.subtle)throw fail();
+  if(!(inputCompressed instanceof Uint8Array)||!crypto?.subtle||typeof currentMountVerified!=='function')throw fail();
   const compressedV14=new Uint8Array(inputCompressed),dir=path.join(root,DIR),metaFile=path.join(dir,'metadata.json'),lockFile=path.join(dir,'write.lock');
   function directory(){
     const stat=fs.lstatSync(dir);if(!stat.isDirectory()||stat.isSymbolicLink()||fs.realpathSync(dir)!==dir)throw fail();
@@ -109,6 +110,19 @@ export function createV14BootstrapRailwayAnchor({volumePath,compressedV14:inputC
     return {scope_id:meta.scope_id,review_sha256:meta.review_sha256,review_text:meta.review_text,sealed_kit:meta.sealed_kit,
       owner_attestation:meta.owner_attestation,...history,latest_head_independently_verified:false,transaction_authorized:false};
   }
+  async function verifiedOwner({signed:input,origin,fetch:fetchImpl=globalThis.fetch,now=Date.now}={}) {
+    const signed=structuredClone(input);
+    if(!exact(signed,['terms','nonce_base64','signature_base64'])||typeof fetchImpl!=='function'||typeof now!=='function')throw fail();
+    const terms=validateBootstrapRecoveryTerms(signed.terms,{now:now()});
+    if(terms.owner!==OWNER||terms.vault!==VAULT||terms.site!==origin)throw fail();
+    await verifyFreshV14Owner({owner:OWNER,ownerPublicKey:terms.owner_public_key,message:bootstrapRecoveryMessage(terms),
+      recipient:new URL(origin).host,nonceBase64:signed.nonce_base64,signatureBase64:signed.signature_base64,
+      fetch:fetchImpl,crypto,now});
+    validateBootstrapRecoveryTerms(terms,{now:now()});return {terms,now};
+  }
+  // A missing directory is reported only as a current-mount observation, not
+  // evidence of prior absence, durability, latest history or permission to write.
+  function mountAvailable(){try{return currentMountVerified()===true&&validRoot(root)===root}catch{return false}}
   return Object.freeze({
     /** Does not accept wallet secrets, passphrases or the Supabase capability.
      * A valid historical owner attestation and a domain-separated temporary
@@ -150,17 +164,31 @@ export function createV14BootstrapRailwayAnchor({volumePath,compressedV14:inputC
     /** Recover ciphertext without already possessing the temporary key. The
      * message must be freshly signed by a current owner FullAccess key and
      * checked against trusted FINAL RPC state; this is a read, not approval. */
-    async recoverByOwner({signed:input,origin,fetch:fetchImpl=globalThis.fetch,now=Date.now}={}) {try{
-      const signed=structuredClone(input);
-      if(!exact(signed,['terms','nonce_base64','signature_base64'])||typeof fetchImpl!=='function'||typeof now!=='function')throw fail();
-      const terms=validateBootstrapRecoveryTerms(signed.terms,{now:now()});
-      if(terms.owner!==OWNER||terms.vault!==VAULT||terms.site!==origin)throw fail();
-      await verifyFreshV14Owner({owner:OWNER,ownerPublicKey:terms.owner_public_key,message:bootstrapRecoveryMessage(terms),
-        recipient:new URL(origin).host,nonceBase64:signed.nonce_base64,signatureBase64:signed.signature_base64,
-        fetch:fetchImpl,crypto,now});
-      validateBootstrapRecoveryTerms(terms,{now:now()});
+    async recoverByOwner(input={}) {try{
+      const {terms,now}=await verifiedOwner(input);
       requireUnlocked();const {meta}=await verifiedMeta();const history=await snapshot(meta);requireUnlocked();
       validateBootstrapRecoveryTerms(terms,{now:now()});return recovery(meta,history);
+    }catch{throw fail()}},
+    /** A fresh current owner signature is checked BEFORE inspecting storage.
+     * Never write, repair, return ciphertext, or report an absent/locked path as
+     * permission to initialize. Status refers only to this current mount. */
+    async inspectByOwner(input={}) {try{
+      const {terms,now}=await verifiedOwner(input);
+      let status='CURRENT_MOUNT_UNAVAILABLE';
+      if(mountAvailable()) {
+        let exists=false;
+        try {fs.lstatSync(dir);exists=true}
+        catch(error){if(error?.code==='ENOENT'&&mountAvailable())status='NO_RECORD_ON_CURRENT_MOUNT'}
+        if(exists) {
+          try {
+            requireUnlocked();const {meta}=await verifiedMeta();await snapshot(meta);requireUnlocked();
+            if(mountAvailable())status='RECORD_VERIFIED_ON_CURRENT_MOUNT';
+          }catch{/* a lock, malformed record or I/O error stays unavailable */}
+        }
+      }
+      validateBootstrapRecoveryTerms(terms,{now:now()});
+      return {status,latest_head_independently_verified:false,independent_restore_verified:false,
+        prior_absence_verified:false,transaction_authorized:false};
     }catch{throw fail()}},
     async append({capability,scope_id,expected_revision,expected_head_sha256,record}={}) {try{
       if(!Number.isSafeInteger(expected_revision)||expected_revision<0||expected_revision>3||!HEX.test(expected_head_sha256??'')||

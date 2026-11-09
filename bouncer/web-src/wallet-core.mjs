@@ -177,6 +177,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
   const bootstrapAnchorPanel = doc.querySelector('#wallet-bootstrap-anchor-panel');
   const bootstrapAnchorPassphrase = doc.querySelector('#wallet-bootstrap-anchor-passphrase');
   const bootstrapAnchorSave = doc.querySelector('#wallet-bootstrap-anchor-save');
+  const bootstrapAnchorInspect = doc.querySelector('#wallet-bootstrap-anchor-inspect');
   const bootstrapAnchorRestore = doc.querySelector('#wallet-bootstrap-anchor-restore');
   const bootstrapAnchorStatus = doc.querySelector('#wallet-bootstrap-anchor-status');
   const directOpen = doc.querySelector('#wallet-direct-outlayer-open');
@@ -461,6 +462,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
       bootstrapAnchorSave.hidden = !bootstrapOnlineGenesis;
       bootstrapAnchorSave.disabled = busyState || anchorMarker !== 'clear' || typeof loadBootstrapArtifact !== 'function';
     }
+    if (bootstrapAnchorInspect) bootstrapAnchorInspect.disabled = busyState;
     if (bootstrapAnchorRestore) bootstrapAnchorRestore.disabled = busyState || typeof loadBootstrapArtifact !== 'function';
     if (bootstrapAnchorPassphrase) bootstrapAnchorPassphrase.disabled = busyState;
     if (bootstrapAnchorStatus && !bootstrapAnchorStatus.textContent && anchorMarker !== 'clear') bootstrapAnchorStatus.textContent =
@@ -1488,6 +1490,40 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
         ? 'The copy was not requested. Check the recovery passphrase and connection; keep your existing copies.'
         : 'A save may have completed. Do not save a replacement; use Restore from Railway and keep existing copies.';
     } finally { passphrase = ''; busy(false); if (current()) renderControls(); }
+  });
+  bootstrapAnchorInspect?.addEventListener('click', async () => {
+    const client = bootstrapRecoveryClient, proof = ownerVerification, wallet = selectedWallet,
+      accountId = connectedAccount, version = ownerSessionVersion;
+    if (busyState || !client || !bootstrapAnchorReady || !bootstrapRecoveryVisible || !bootstrapAnchorStatus ||
+        !connected || !isTop || proof?.wallet !== wallet || proof.accountId !== accountId) return;
+    const current = () => connected && selectedWallet === wallet && connectedAccount === accountId &&
+      ownerSessionVersion === version && ownerVerification === proof && bootstrapRecoveryClient === client;
+    bootstrapAnchorStatus.textContent = 'Preparing the read-only status check…';
+    let stopWalletPresentation = () => {}, timeout, active = true; busy(true); closePicker();
+    try {
+      const operation = client.inspectIndependentAnchor({stillSelected:() => active && current(),onWalletPrompt:() => {
+        if (!current() || !active) return;
+        bootstrapAnchorStatus.textContent = 'Approve the read-only recovery message in your wallet. No transaction is requested.';
+        setStatus('Approve the read-only recovery message. No transaction is requested.');
+        notify('Approve the read-only recovery message. No transaction is requested.', true);
+        if (['near-mobile','nightly-wallet','ledger'].includes(wallet.manifest.id)) stopWalletPresentation = decorateWalletPopup(wallet.manifest.id);
+      }});
+      const result = await Promise.race([operation,new Promise((_,reject) => {
+        timeout = setTimeout(() => reject(new Error('BOOTSTRAP_ANCHOR_INSPECT_TIMEOUT')),90_000);
+      })]);
+      if (!current() || !active) return;
+      bootstrapAnchorStatus.textContent = result.status === 'RECORD_VERIFIED_ON_CURRENT_MOUNT'
+        ? 'A signed, structurally valid encrypted record is on the current Railway volume. Your passphrase and the latest history are not verified by this check. Writes remain paused.'
+        : result.status === 'NO_RECORD_ON_CURRENT_MOUNT'
+          ? 'No record was found on the current Railway volume. This does not rule out an earlier save or rollback. Keep your existing file; do not save again.'
+          : 'The Railway copy is locked, incomplete, or unavailable. This does not establish whether an earlier save happened. Keep all existing copies; writes remain paused.';
+      setStatus('Railway status checked. No transaction was requested.');
+    } catch {
+      if (current() && active) bootstrapAnchorStatus.textContent = 'Could not check Railway. Wallet verification or the service may be unavailable. This does not prove a copy is absent; do not save again.';
+    } finally {
+      active = false; clearTimeout(timeout); stopWalletPresentation(); busy(false);
+      if (current()) { renderControls(); hideBanner(); }
+    }
   });
   bootstrapAnchorRestore?.addEventListener('click', async () => {
     const client = bootstrapRecoveryClient, proof = ownerVerification, wallet = selectedWallet,

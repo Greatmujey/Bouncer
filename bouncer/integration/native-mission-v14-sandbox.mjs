@@ -15,7 +15,7 @@ import { validateKnownFirstPartyActionRequest, MAX_ACTION_REQUEST_CANONICAL_JSON
 import { syntheticV14MeteorRequest } from './v14-synthetic-meteor.mjs';
 import { FileJournal } from '../agent/procurement.mjs';
 import { runNativeMission } from '../agent/native-mission.mjs';
-import { createAuthenticatedNativeMissionService } from '../agent/authenticated-native-mission-service.mjs';
+import { createPlannedNativeMissionService } from '../agent/planned-native-mission-service.mjs';
 import { createNativeMissionSite } from '../agent/native-mission-site.mjs';
 import { nativeMissionApprovalMessage } from '../web-src/native-mission-auth.mjs';
 import { nep413Payload } from '../web-src/cli-login.mjs';
@@ -25,7 +25,7 @@ import { inspectV14PhoneSetupCompletion } from '../agent/native-v14-phone-comple
 import { createV14SetupRpcVerifier } from '../agent/v14-setup-rpc-verifier.mjs';
 import { createV14OriginalWitness,deriveV14OriginalBinding,V14_WITNESS_GENESIS } from '../agent/v14-original-witness.mjs';
 import { createV14BackedMissionHooks,inspectV14MissionJournalBackup,writeV14MissionRecoveryCopy } from '../agent/v14-mission-journal-backup.mjs';
-import { verifyOutlayerResult } from '../agent/outlayer.mjs';
+import { verifyOutlayerResult, RANDOM_TESTNET_PROGRAM } from '../agent/outlayer.mjs';
 import { verifyOracleResult } from '../agent/oracle-outlayer.mjs';
 import { verifyNativeStorageResult } from '../agent/native-storage.mjs';
 import { createV14FileWitnessStore } from '../agent/v14-file-witness-store.mjs';
@@ -112,6 +112,13 @@ function makeMission(codeHash,priceRoute,storageRoute,suffix='') {
       {kind:'storage',goal:{id:`store${suffix}`,contract_id:VAULT,contract_code_hash:codeHash,owner_account_id:OWNER,policy_id:'store',amount:String(N/10n),
         object_id:`mission-results${suffix}`,value:{from_goal_ids:[`price${suffix}`,`compute${suffix}`]},route:storageRoute}},
     ]};
+}
+function makeRandomMission(codeHash,priceRoute,storageRoute,suffix='') {
+  const market=makeMission(codeHash,priceRoute,storageRoute,suffix),[oracle,compute,storage]=market.goals;
+  return {...market,id:`sandbox-random${suffix}`,goals:[
+    {...compute,kind:'random',goal:{...compute.goal,input:{min:1,max:10},program:RANDOM_TESTNET_PROGRAM}},
+    oracle,{...storage,goal:{...storage.goal,value:{from_goal_ids:[compute.goal.id,oracle.goal.id]}}},
+  ]};
 }
 async function main() {
   const binary=process.env.BOUNCER_SANDBOX_BIN, vaultWasm=fs.readFileSync(process.env.BOUNCER_V14_WASM_PATH),
@@ -370,17 +377,23 @@ async function main() {
       assert.equal(resumed.status,'FULFILLED');assert.equal(resumed.new_payments,2);assert.equal(rpc.transportCalls,6);
       assert.equal(journal.get('price-second').tx_hash,original);
 
-      // Wire the real same-origin HTTP service to the real three guarded
-      // runners. Consent and provider are still synthetic, and everything is
-      // isolated to this nearcore; no browser wallet or public chain is used.
-      const third=make('-http');activeIds={compute:'compute-http',price:'price-http',store:'store-http'};
-      const siteOrigin='https://bouncer.example',service=createAuthenticatedNativeMissionService({mission:third,provider:rpc,
-        signers:signers('-http'),journal,auth:syntheticConsent(ownerKey,siteOrigin)});
+      // Connect a bounded, FAKE model proposal through the actual same-origin
+      // review service to the real three guarded sandbox runners. The model,
+      // consent and provider are synthetic; no public chain or API is used.
+      activeIds={compute:'compute-http',price:'price-http',store:'store-http'};
+      const catalog={version:1,market:{mission:make('-http'),max_quantity:50},
+        random:{mission:makeRandomMission(codeHash,priceRoute,storageRoute,'-http'),min:0,max:100,max_span:100}};
+      let modelCalls=0;
+      const siteOrigin='https://bouncer.example',service=await createPlannedNativeMissionService({
+        objective:'Estimate and record the value of 12 NEAR',catalog,modelRequestApproved:true,
+        modelClient:async input=>{modelCalls++;assert.deepEqual(input,{objective:'Estimate and record the value of 12 NEAR',choices:['market','random']});
+          return {kind:'market',quantity:12}},provider:rpc,signers:signers('-http'),journal,auth:syntheticConsent(ownerKey,siteOrigin)});
       const site=createNativeMissionSite({siteOrigin,service});
       await new Promise((resolve,reject)=>site.listen(0,'127.0.0.1',resolve).once('error',reject));
       try {
         assert.equal((await siteRequest(site)).status,200);
         const config=JSON.parse((await siteRequest(site,{route:'/api/native-mission/config'})).body),reviewHash=config.review.mission_sha256;
+        assert.equal(modelCalls,1);assert.equal(config.review.mission.goals[1].goal.input.quantity,12);
         let executed;
         for (const [index,goalId] of ['price-http','compute-http','store-http'].entries()) {
           const preview=JSON.parse((await siteRequest(site,{route:'/api/native-mission/preview',input:{missionSha256:reviewHash}})).body);
@@ -396,6 +409,9 @@ async function main() {
           assert.equal(executed.new_payments,1);assert.equal(rpc.transportCalls,7+index);
           assert.equal((await siteRequest(site,{route:'/api/native-mission/execute',input})).status,409);assert.equal(rpc.transportCalls,7+index);
         }
+        const plannedResult=JSON.parse(executed.deliveries[2].delivery.result.value);
+        assert.equal(plannedResult.resources[1].result.value_usd_micros,33_000_000);
+        assert.deepEqual(plannedResult.resources.map(row=>row.tx_hash),executed.deliveries.slice(0,2).map(row=>row.delivery.tx_hash));
         const list=JSON.parse((await siteRequest(site,{route:'/api/native-mission/originals',input:{missionSha256:reviewHash}})).body);
         assert.deepEqual(list.originals.map(row=>row.original_hash),executed.deliveries.map(row=>row.delivery.tx_hash));
         const receiptOnly=JSON.parse((await siteRequest(site,{route:'/api/native-mission/recover',input:{missionSha256:reviewHash}})).body);
@@ -412,6 +428,7 @@ async function main() {
           failed_upgrade_owner_refund_tested:true,real_phone_tested:false}:null,
         dependent_price_calculation_and_public_result_storage:true, fake_provider_did_not_run_wasi:true, sandbox_refunds_verified:true,
         original_hash_recovery_without_new_send:true, lost_response_recovered_and_remaining_legs_continued:true,
+        bounded_fake_model_proposal_to_http_review_and_sandbox_public_storage:true, real_model_called:false,
         fixed_site_http_three_distinct_synthetic_step_consents:true,
         independent_delivery_verified:false, public_chain_transactions:false};
     });

@@ -15,7 +15,7 @@ async function body(req){
   return JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(Buffer.concat(chunks,size)));
 }
 export function createV14BootstrapRailwayAnchorHttp({anchor,fetch:fetchImpl=globalThis.fetch,now=Date.now,allowWrites=false}={}) {
-  if(!anchor||['initialize','read','append','recoverByOwner'].some(name=>typeof anchor[name]!=='function')||
+  if(!anchor||['initialize','read','append','recoverByOwner','inspectByOwner'].some(name=>typeof anchor[name]!=='function')||
     typeof fetchImpl!=='function'||typeof now!=='function'||typeof allowWrites!=='boolean')throw Error('invalid recovery anchor');
   let active=0;
   return async function handle(req,res){
@@ -44,9 +44,10 @@ export function createV14BootstrapRailwayAnchorHttp({anchor,fetch:fetchImpl=glob
       }else if(data?.operation==='append'){
         if(!allowWrites||!exact(data,['operation','scope_id','capability','expected_revision','expected_head_sha256','record']))throw Error();
         const {operation,...input}=data;result=await anchor.append(input);
-      }else if(data?.operation==='recover_owner'){
+      }else if(data?.operation==='recover_owner'||data?.operation==='inspect_owner'){
         if(!exact(data,['operation','terms','nonce_base64','signature_base64']))throw Error();
-        const {operation,...signed}=data;result=await anchor.recoverByOwner({signed,origin,fetch:fetchImpl,now});
+        const {operation,...signed}=data,request={signed,origin,fetch:fetchImpl,now};
+        result=operation==='recover_owner'?await anchor.recoverByOwner(request):await anchor.inspectByOwner(request);
       }else throw Error();
       return respond(200,result);
     }catch{return respond(503,{error:'unavailable'})}finally{active--}
