@@ -48,8 +48,10 @@ async function main() {
   assert.ok(wasm.length > 100_000 && wasm.length < 2_000_000 && wasm.subarray(0, 4).equals(Buffer.from([0, 97, 115, 109])));
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bouncer-v14-storage-'));
   const rootSeed = nearApi.KeyPair.fromRandom('ed25519'), ownerKey = nearApi.KeyPair.fromRandom('ed25519'), agentKey = nearApi.KeyPair.fromRandom('ed25519');
-  // Disposable sandbox key only. This branch does not authorize or create a
-  // key on testnet, and contains no browser custody or independent recovery.
+  // Disposable sandbox keys only. The synthetic wallet deliberately uses a
+  // second owner key, exercising wallets that choose a different transaction
+  // key than the earlier identity-message key. No public account is touched.
+  const walletKey = temporaryBootstrap ? nearApi.KeyPair.fromRandom('ed25519') : null;
   const bootstrapKey = temporaryBootstrap ? nearApi.KeyPair.fromRandom('ed25519') : null;
   let sandbox, journal;
   try {
@@ -60,7 +62,8 @@ async function main() {
       const root = account('testnet', provider, sandbox.rootKey), owner = account(OWNER, provider, ownerKey);
       const send = (signer, receiverId, actions) => signer.signAndSendTransaction({ receiverId, actions, waitUntil: 'FINAL', throwOnFailure: false });
       const must = async (signer, receiver, actions, label) => { const result = await send(signer, receiver, actions); requireFinalSuccess(result, label); return result; };
-      await must(root, OWNER, [tx.createAccount(), tx.transfer(100n * N), tx.addKey(ownerKey.getPublicKey(), tx.fullAccessKey())], 'create local owner');
+      await must(root, OWNER, [tx.createAccount(), tx.transfer(100n * N), tx.addKey(ownerKey.getPublicKey(), tx.fullAccessKey()),
+        ...(walletKey ? [tx.addKey(walletKey.getPublicKey(), tx.fullAccessKey())] : [])], 'create local owner');
       if (temporaryBootstrap) {
         // Exercise the actual browser-safe plan, not a separately handwritten
         // batch. All keys, passphrases and witnesses here are disposable. The
@@ -146,7 +149,9 @@ async function main() {
         const wallet={manifest:{features:{signAndSendTransaction:true}},async signAndSendTransaction(request){
           walletCalls++;assert.deepEqual(request,plan.walletRequest);
           assert.equal((await local.read()).revision,1);assert.deepEqual(await local.read(),await simulatedIndependent.read());
-          created=await must(owner,VAULT,plan.createActions,'create local bootstrap vault');
+          const syntheticWalletOwner=account(OWNER,provider,walletKey);
+          created=await must(syntheticWalletOwner,VAULT,plan.createActions,'create local bootstrap vault');
+          assert.equal(created.transaction.public_key,pub(walletKey));
           return undefined; // transaction succeeded but the wallet response is lost
         }};
         const prompt=await prepareIsolatedBootstrapCreateOnce({review:plan.review,compressedV14:compressed,
@@ -261,7 +266,8 @@ async function main() {
       return { scope: 'isolated nearcore, disposable keys and local WASM only', v14_deployed_locally: true,
         temporary_vault_bootstrap_tested: temporaryBootstrap,
         ...(temporaryBootstrap ? {small_meteor_request_synthetic:true, one_shot_create_driver_exercised_on_sandbox:true,
-          exact_plan_and_budget_checked_on_sandbox:true, create_original_and_fresh_state_verified_on_sandbox:true,
+          wallet_selected_other_owner_full_access_key:true, exact_plan_and_budget_checked_on_sandbox:true,
+          create_original_and_fresh_state_verified_on_sandbox:true,
           lost_wallet_result_reconciled_without_reprompt:true, deployment_original_retained_before_sandbox_send:true,
           deployment_original_and_keyless_state_verified_on_sandbox:true, bootstrap_key_deleted_on_chain:true, two_original_copies_simulated:true,
           actual_wallet_tested:false, independent_recovery_tested:false} : {}),

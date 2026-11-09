@@ -6,6 +6,7 @@
  * transaction is not in flight. It never signs, broadcasts, or retries an
  * uncertain original. The wallet/deployment path is deliberately not wired. */
 import {buildV14TemporaryBootstrapPlan} from './v14-bootstrap-plan.mjs';
+import {PublicKey} from '@near-js/crypto';
 import {decodeNativeHash32} from './native-oracle-transaction.mjs';
 import {pinnedAccessKeyNonce} from '../shared/pinned-access-key-nonce.mjs';
 
@@ -21,6 +22,10 @@ const object=x=>x!==null&&typeof x==='object'&&!Array.isArray(x);
 const exact=(x,fields)=>object(x)&&Object.keys(x).length===fields.length&&fields.every(k=>Object.hasOwn(x,k));
 const absent=(x,key)=>!Object.hasOwn(x,key)||x[key]===null;
 const hash=x=>{try{decodeNativeHash32(x);return true}catch{return false}};
+const ed25519=x=>{try{
+  const key=PublicKey.from(x);
+  return typeof x==='string'&&x.startsWith('ed25519:')&&key.keyType===0&&key.ed25519Key?.data?.length===32&&String(key)===x;
+}catch{return false}};
 const uint=x=>typeof x==='string'&&/^(?:0|[1-9][0-9]{0,38})$/.test(x)&&BigInt(x)<=MAX?BigInt(x):null;
 const number=x=>typeof x==='number'&&Number.isSafeInteger(x)&&x>=0?String(x):
   typeof x==='string'&&/^(?:0|[1-9][0-9]{0,38})$/.test(x)?x:null;
@@ -40,10 +45,10 @@ function createActionsMatch(actions,review) {
     exact(actions[2],['AddKey'])&&exact(add,['public_key','access_key'])&&add.public_key===review.temporary_vault_public_key&&
     exact(access,['nonce','permission'])&&number(access.nonce)==='0'&&access.permission==='FullAccess';
 }
-function gasRefund(receipt,outcome,review) {
+function gasRefund(receipt,outcome,review,transactionPublicKey) {
   const a=receipt?.receipt?.Action,actions=a?.actions,transfer=actions?.[0]?.Transfer,value=number(transfer?.deposit);
   return receipt?.predecessor_id==='system'&&receipt?.receiver_id===review.owner&&metadata(receipt)&&
-    a.signer_id===review.owner&&a.signer_public_key===review.owner_public_key&&number(a.gas_price)==='0'&&
+    a.signer_id===review.owner&&a.signer_public_key===transactionPublicKey&&number(a.gas_price)==='0'&&
     Array.isArray(actions)&&actions.length===1&&exact(actions[0],['Transfer'])&&exact(transfer,['deposit'])&&
     value!==null&&BigInt(value)>0n&&BigInt(value)<=MAX&&outcome?.executor_id===review.owner&&success(outcome.status)&&
     Array.isArray(outcome.receipt_ids)&&outcome.receipt_ids.length===0;
@@ -56,7 +61,7 @@ export function inspectBootstrapCreateReceipt({result,review,originalHash}={}) {
     !Array.isArray(result.receipts)||!Array.isArray(result.receipts_outcome)||
     result.receipts.length<1||result.receipts.length>2||result.receipts_outcome.length!==result.receipts.length)throw fail();
   const tx=result.transaction,t=result.transaction_outcome?.outcome;
-  if(tx?.hash!==originalHash||tx.signer_id!==review.owner||tx.public_key!==review.owner_public_key||tx.receiver_id!==review.vault||
+  if(tx?.hash!==originalHash||tx.signer_id!==review.owner||!ed25519(tx.public_key)||tx.receiver_id!==review.vault||
     !createActionsMatch(tx.actions,review)||result.transaction_outcome?.id!==originalHash||t?.executor_id!==review.owner||
     !exact(t.status,['SuccessReceiptId'])||!hash(t.status.SuccessReceiptId)||!Array.isArray(t.receipt_ids)||
     t.receipt_ids.length!==1||t.receipt_ids[0]!==t.status.SuccessReceiptId)throw fail();
@@ -67,12 +72,13 @@ export function inspectBootstrapCreateReceipt({result,review,originalHash}={}) {
       new Set(o.outcome.receipt_ids).size!==o.outcome.receipt_ids.length)throw fail();outcomes.set(o.id,o.outcome)}
   const id=t.status.SuccessReceiptId,root=receipts.get(id),out=outcomes.get(id),a=root?.receipt?.Action;
   if(root?.predecessor_id!==review.owner||root.receiver_id!==review.vault||!metadata(root)||
-    a.signer_id!==review.owner||a.signer_public_key!==review.owner_public_key||!createActionsMatch(a.actions,review)||
+    a.signer_id!==review.owner||a.signer_public_key!==tx.public_key||!createActionsMatch(a.actions,review)||
     out?.executor_id!==review.vault||!success(out.status)||out.receipt_ids.length>1)throw fail();
   const children=out.receipt_ids;
   if(receipts.size!==1+children.length||outcomes.size!==1+children.length)throw fail();
-  if(children.length&&(children[0]===id||!gasRefund(receipts.get(children[0]),outcomes.get(children[0]),review)))throw fail();
-  return Object.freeze({original_hash:originalHash,root_receipt_id:id,final_execution_verified:true,transaction_sent:false});
+  if(children.length&&(children[0]===id||!gasRefund(receipts.get(children[0]),outcomes.get(children[0]),review,tx.public_key)))throw fail();
+  return Object.freeze({original_hash:originalHash,root_receipt_id:id,transaction_signing_public_key:tx.public_key,
+    final_execution_verified:true,transaction_sent:false});
 }
 async function boundedJson(response,maximum) {
   const length=response.headers?.get?.('content-length');
@@ -134,7 +140,7 @@ export async function createV14BootstrapCreateVerifier({review:inputReview,compr
       const started=now();if(!Number.isSafeInteger(started))throw fail();
       if((await rpc('status',[]))?.chain_id!=='testnet')throw fail();
       const result=await rpc('EXPERIMENTAL_tx_status',{tx_hash:original_hash,sender_account_id:review.owner,wait_until:'FINAL'},4_000_000);
-      inspectBootstrapCreateReceipt({result,review,originalHash:original_hash});
+      const receipt=inspectBootstrapCreateReceipt({result,review,originalHash:original_hash});
       const block=await rpc('block',{finality:'final'}),at=freshBlock(block,now());
       const query=(type,account)=>rpc('query',{request_type:type,account_id:account,block_id:at});
       const [owner,ownerKeyView,vault,vaultKeyView]=await Promise.all([
@@ -142,8 +148,13 @@ export async function createV14BootstrapCreateVerifier({review:inputReview,compr
         query('view_account',review.vault),query('view_access_key_list',review.vault),
       ]);
       const ownerKeys=keyList(ownerKeyView,at),vaultKeys=keyList(vaultKeyView,at);
-      const ownerKey=ownerKeys.find(k=>k.public_key===review.owner_public_key),temp=vaultKeys[0];
+      const ownerKey=ownerKeys.find(k=>k.public_key===review.owner_public_key),
+        signingKey=ownerKeys.find(k=>k.public_key===receipt.transaction_signing_public_key),temp=vaultKeys[0];
+      // A wallet may choose a different owner key from the message-signing
+      // key. Both must be current FullAccess keys at this same FINAL block;
+      // the transaction and every receipt must agree on the actual signer.
       if(!emptyContract(owner,at)||ownerKey?.access_key?.permission!=='FullAccess'||pinnedAccessKeyNonce(ownerKey.access_key.nonce)===null||
+        signingKey?.access_key?.permission!=='FullAccess'||pinnedAccessKeyNonce(signingKey.access_key.nonce)===null||
         !emptyContract(vault,at)||uint(vault.amount)!==BigInt(review.vault_funding_yocto)||uint(vault.locked)!==0n||
         !Number.isSafeInteger(vault.storage_usage)||vault.storage_usage<0||vaultKeys.length!==1||
         temp?.public_key!==review.temporary_vault_public_key||temp.access_key.permission!=='FullAccess'||

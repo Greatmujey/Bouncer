@@ -208,7 +208,10 @@ The source-only temporary-bootstrap original retainer records a returned wallet
 hash in both existing witness copies, or leaves a one-shot claim if the wallet
 result is unknown. A hash later found in wallet history must pass the exact
 FINAL create receipt and fresh temporary-key check before being retained; it
-never opens or repeats the wallet. For the later locally signed deployment it
+never opens or repeats the wallet. A wallet-selected transaction key may differ
+from the verified message key: the verifier requires both to be current owner
+FullAccess keys at the same FINAL block and checks the actual transaction and
+receipt signer consistently. For the later locally signed deployment it
 checks the exact pinned actions, transaction hash and signature before
 retaining the hash in both copies. These source-only pieces are not wired to
 the live wallet; neither matching copies nor a hash proves an independent backup

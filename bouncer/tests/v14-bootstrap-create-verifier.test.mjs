@@ -60,7 +60,7 @@ async function fixture(){
   return {review,original,root,block,state,methods,fetch,verifier,binding};
 }
 function addRefund(f){
-  const id=randomHash(),review=f.review,action={signer_id:OWNER,signer_public_key:review.owner_public_key,gas_price:'0',
+  const id=randomHash(),action={signer_id:OWNER,signer_public_key:f.state.result.transaction.public_key,gas_price:'0',
     input_data_ids:[],output_data_receivers:[],actions:[{Transfer:{deposit:'123'}}]};
   f.state.result.receipts_outcome[0].outcome.receipt_ids.push(id);
   f.state.result.receipts.push({receipt_id:id,predecessor_id:'system',receiver_id:OWNER,receipt:{Action:action}});
@@ -81,6 +81,31 @@ test('FINAL exact create receipt and fresh temporary-key state produce only a re
     final_block_hash:f.block,checked_at_ms:clock,final_execution_verified:true,temporary_full_access_key_present:true,transaction_sent:false});
   assert.deepEqual(f.methods.sort(),['status','EXPERIMENTAL_tx_status','block','query','query','query','query'].sort());
   assert.equal(inspectBootstrapCreateReceipt({result:f.state.result,review:f.review,originalHash:f.original}).root_receipt_id,f.root);
+});
+
+test('a wallet-selected alternative key is accepted only when both owner keys and every receipt agree',async()=>{
+  const alternate=String(KeyPair.fromRandom('ed25519').getPublicKey());
+  function useAlternate(f){
+    f.state.result.transaction.public_key=alternate;
+    f.state.result.receipts[0].receipt.Action.signer_public_key=alternate;
+    f.state.ownerKeys.keys.push({public_key:alternate,access_key:{nonce:7,permission:'FullAccess'}});
+    addRefund(f);
+  }
+  const f=await fixture();useAlternate(f);
+  const inspected=inspectBootstrapCreateReceipt({result:f.state.result,review:f.review,originalHash:f.original});
+  assert.equal(inspected.transaction_signing_public_key,alternate);
+  assert.equal((await (await f.verifier())(f.binding)).final_execution_verified,true);
+  for(const change of [
+    x=>{x.state.ownerKeys.keys.pop()},
+    x=>{x.state.ownerKeys.keys[1].access_key.permission={FunctionCall:{}}},
+    x=>{x.state.ownerKeys.keys[1].access_key.nonce=Number.MAX_SAFE_INTEGER},
+    x=>{x.state.ownerKeys.keys[0].access_key.permission={FunctionCall:{}}},
+    x=>{x.state.result.receipts[0].receipt.Action.signer_public_key=x.review.owner_public_key},
+    x=>{x.state.result.receipts[1].receipt.Action.signer_public_key=x.review.owner_public_key},
+    x=>{x.state.result.transaction.public_key='ed25519:not-a-key'},
+  ]){
+    const x=await fixture();useAlternate(x);change(x);await assert.rejects((await x.verifier())(x.binding));
+  }
 });
 
 test('the two-copy witness refuses a deployment claim until the real verifier checks its retained original',async()=>{
