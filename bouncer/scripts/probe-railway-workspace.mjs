@@ -16,7 +16,7 @@ const rpc='https://rpc.testnet.near.org';
 const browser=await chromium.launch({executablePath,args:['--no-sandbox','--disable-gpu'],headless:true});
 const report={top_level:false,workspace:false,standby_notice:false,journal_read:false,
   dummy_original_retained:false,rpc_cors:false,meteor_adapter:false,meteor_handoff:false,no_wallet:true,no_transaction:true};
-const diagnostics={meteor_requests:0,meteor_status:0,meteor_failure:'',browser_errors:[]};
+const diagnostics={meteor_requests:0,meteor_status:0,meteor_failure:'',browser_errors:[],blocked_requests:[]};
 let error,stage='initialization',page;
 try {
   const context=await browser.newContext({viewport:{width:390,height:844},isMobile:true,hasTouch:true,
@@ -31,8 +31,8 @@ try {
   page.on('requestfailed',req=>{if(req.url().includes('/storage/meteor-near-connect-latest.js'))diagnostics.meteor_failure=req.failure()?.errorText||'failed'});
   page.on('pageerror',e=>diagnostics.browser_errors.push(String(e.message).slice(0,150)));
   page.on('console',m=>{if(m.type()==='error')diagnostics.browser_errors.push(m.text().slice(0,150))});
-  // Only the dummy journal and read-only status RPC may receive POST requests.
-  // No app code can broadcast a transaction or reach a wallet via this probe.
+  // The dummy journal, status RPC, and Meteor's pairing bridge may receive
+  // POST requests. window.open is stubbed; no real wallet or signer is used.
   await page.route('**/*',async route=>{
     const req=route.request(),url=req.url(),method=req.method();
     if(['GET','HEAD','OPTIONS'].includes(method))return route.continue();
@@ -43,6 +43,8 @@ try {
     if(method==='POST'&&url===`${rpc}/`) {
       try {if(req.postDataJSON()?.method==='status')return route.continue()}catch{}
     }
+    if(method==='POST'&&new URL(url).origin==='https://mc.meteorwallet.app')return route.continue();
+    try {const u=new URL(url);diagnostics.blocked_requests.push(`${method} ${u.origin}${u.pathname}`)}catch{}
     return route.abort();
   });
   stage='workspace';
@@ -96,6 +98,7 @@ try {
       wallet_status:document.querySelector('#wallet-status')?.textContent?.slice(0,300),
       dialog_status:document.querySelector('#wallet-dialog-status')?.textContent?.slice(0,300),
       popup:document.querySelector('.hot-connector-popup')?.innerText?.slice(0,300),
+      opened:(window.__bouncerOpenCalls||[]).map(s=>{try {const u=new URL(s);return `${u.protocol}//${u.host}`}catch{return 'invalid'}}),
       frames:[...document.querySelectorAll('iframe')].map(f=>({title:f.title,src:f.getAttribute('src')?.split('?')[0],sandbox:f.getAttribute('sandbox')})),
     }));
     diagnostics.frame_text=await Promise.all(page.frames().slice(1,5).map(f=>f.evaluate(()=>document.body?.innerText?.slice(0,400)).catch(()=>'')));
