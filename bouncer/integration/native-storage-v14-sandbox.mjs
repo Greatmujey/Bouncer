@@ -16,6 +16,9 @@ import { SANDBOX_SHA256, readVerifiedFile, assertSandboxStatus, requireFinalSucc
 import { startSandbox, stopSandboxChild } from './v11-nearcore-sandbox.mjs';
 import { syntheticV14MeteorRequest } from './v14-synthetic-meteor.mjs';
 import { buildV14TemporaryBootstrapPlan, signV14TemporaryBootstrapDeployment } from '../web-src/v14-bootstrap-plan.mjs';
+import { createV14BootstrapCreateVerifier, V14_BOOTSTRAP_READ_RPC } from '../web-src/v14-bootstrap-create-verifier.mjs';
+import { createBootstrapTwoCopyWitness } from '../web-src/v14-bootstrap-originals.mjs';
+import { bootstrapSha256 } from '../shared/v14-bootstrap-protocol.mjs';
 import { sealV14BootstrapRecoveryKit, openV14BootstrapRecoveryKit } from '../web-src/v14-bootstrap-recovery-kit.mjs';
 import { validateKnownFirstPartyActionRequest, MAX_ACTION_REQUEST_CANONICAL_JSON_LENGTH } from '@meteorwallet/connect-shared/internal';
 
@@ -71,25 +74,52 @@ async function main() {
         assert.equal(MAX_ACTION_REQUEST_CANONICAL_JSON_LENGTH,400_000);
         assert.equal(valid.ok,true,valid.reason);
         assert.ok(Buffer.byteLength(JSON.stringify(mobileRequest))<4_000);
-        await must(owner,VAULT,plan.createActions,'create local bootstrap vault');
+        // The verifier's fixed public RPC is replaced ONLY by a loopback-only
+        // test adapter. The sandbox chain ID is aliased to testnet after its
+        // actual identity was checked; no public-chain request is possible.
+        const browserSandboxFetch=async (url,options)=>{
+          assert.equal(url,V14_BOOTSTRAP_READ_RPC);
+          const request=JSON.parse(options.body);
+          assert.ok(['status','EXPERIMENTAL_tx_status','block','query'].includes(request.method));
+          const response=await fetch(rpcUrl,options),body=await response.json();
+          if(request.method==='status' && body.result)body.result.chain_id='testnet';
+          return Response.json(body,{status:response.status});
+        };
+        const verifyCreateFinal=await createV14BootstrapCreateVerifier({review:plan.review,compressedV14:compressed,
+          fetch:browserSandboxFetch,crypto:crypto.webcrypto});
+        const simulatedCopy=()=>{let snapshot={revision:0,head_sha256:'0'.repeat(64),events:[]};return {
+          read:async()=>structuredClone(snapshot),append:async({expected_revision,expected_head_sha256,record})=>{
+            assert.equal(expected_revision,snapshot.revision);assert.equal(expected_head_sha256,snapshot.head_sha256);
+            snapshot={revision:expected_revision+1,head_sha256:await bootstrapSha256(crypto.webcrypto,record),events:[...snapshot.events,record]};
+            return structuredClone(snapshot);
+          }};};
+        const local=simulatedCopy(),simulatedIndependent=simulatedCopy();
+        const witness=createBootstrapTwoCopyWitness({scopeId,reviewSha256:plan.review.review_sha256,
+          localStore:local,remoteStore:simulatedIndependent,verifyCreateFinal,crypto:crypto.webcrypto});
+        await witness.claimCreate();
+        const created=await must(owner,VAULT,plan.createActions,'create local bootstrap vault');
+        await witness.retainCreateOriginal(created.transaction_outcome.id);
         const before=await provider.viewAccessKeyList(VAULT,{finality:'final'});
         assert.equal(before.keys.length,1);
         assert.equal(before.keys[0].public_key,pub(bootstrapKey));
         assert.equal(before.keys[0].access_key.permission,'FullAccess');
+        // Fetch the actual sandbox create receipt and fresh state before a
+        // deployment claim. Both witness stores are still simulations.
+        assert.equal((await witness.claimDeployment()).next_event,'deploy_original');
         await recovered.useSecrets(async ({temporaryKey,checkpointCapability})=>{
           assert.equal(checkpointCapability,capability);
           const block=await provider.viewBlock({finality:'final'});
           const access=await provider.viewAccessKey(VAULT,pub(temporaryKey),{finality:'final'});
           const original=await signV14TemporaryBootstrapDeployment({review:plan.review,expectedReviewSha256:plan.review.review_sha256,
             compressedV14:compressed,temporaryKey,nonce:String(BigInt(access.nonce)+1n),blockHash:block.header.hash,crypto:crypto.webcrypto});
-          // Test-only simulated two-copy witnesses. The real remote checkpoint,
-          // its freshness and phone recovery have NOT been enabled or proven.
-          const localOriginal={tx_hash:original.transaction_hash},simulatedIndependent=JSON.parse(JSON.stringify(localOriginal));
-          assert.equal(localOriginal.tx_hash,simulatedIndependent.tx_hash);
+          // Both copies are test-only memory stores, not independent cloud or
+          // phone recovery. Retain the exact signed hash before the only send.
+          await witness.retainDeploymentOriginal(original.transaction_hash);
+          assert.deepEqual(await local.read(),await simulatedIndependent.read());
           const decoded=tx.SignedTransaction.decode(original.signed_bytes);
           const result=await provider.sendTransactionUntil(decoded,'FINAL');
           requireFinalSuccess(result,'deploy V14 and delete recovered local bootstrap key');
-          assert.equal(result.transaction_outcome.id,localOriginal.tx_hash);
+          assert.equal(result.transaction_outcome.id,original.transaction_hash);
         });
         recovered.dispose();
         assert.deepEqual((await provider.viewAccessKeyList(VAULT,{finality:'final'})).keys,[]);
@@ -148,7 +178,8 @@ async function main() {
       assert.equal(rpc.transportCalls, 1);
       return { scope: 'isolated nearcore, disposable keys and local WASM only', v14_deployed_locally: true,
         temporary_vault_bootstrap_tested: temporaryBootstrap,
-        ...(temporaryBootstrap ? {small_meteor_request_synthetic:true, bootstrap_key_deleted_on_chain:true,
+        ...(temporaryBootstrap ? {small_meteor_request_synthetic:true, create_original_and_fresh_state_verified_on_sandbox:true,
+          bootstrap_key_deleted_on_chain:true, two_original_copies_simulated:true,
           actual_wallet_tested:false, independent_recovery_tested:false} : {}),
         scoped_agent_storage_and_receipt_verified: true, original_hash_reused_without_resend: true,
         zero_yocto_owner_guard_rejected: true, over_cap_and_duplicate_rejected: true,
