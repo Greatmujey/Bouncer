@@ -316,9 +316,18 @@ ciphertext with current-owner authentication. The V2 schema is installed in
 the separate checkpoint database after disposable PostgreSQL 17.11 tests; its
 function bodies and restricted grants were checked against the reviewed source.
 No V2 Edge handlers are deployed or enabled, and no owner scope or kit exists.
-This is not wired into the UI; secure Railway handoff, durable journal backup
-and restoration remain unfinished. An administrator able to
-roll back both copies can defeat it. Never infer independent durability from
+For phone or desktop, the experimental `v14-browser-witness-store.mjs` keeps
+an encrypted IndexedDB copy and performs an atomic compare-and-swap between
+same-origin tabs. `v14-browser-original-witness.mjs` compares it with a
+separately retained copy and can record a one-shot claim before a prompt; no
+wallet prompt is yet wired to require it. The browser checkpoint bridge is
+default-off and not deployed. A missing,
+evicted, rolled-back or mismatched copy stops the flow rather than silently
+creating a replacement. Synthetic desktop and phone-sized Chromium tests do
+not prove a physical phone, wallet, or browser-storage durability. This is not
+wired into the UI; secure Railway handoff, durable mission-journal backup,
+receipt verification in the browser flow and restoration remain unfinished.
+An administrator able to roll back both copies can defeat it. Never infer independent durability from
 two adapter names or silently recreate a
 missing copy. Railway says
 [trial volumes can be deleted 30 days after trial credits
