@@ -14,6 +14,7 @@ import { createNativeMissionClient } from './native-mission-client.mjs';
 import { prepareV14Recovery, signV14Recovery } from './v14-checkpoint-recovery.mjs';
 import { createV14CheckpointRecoveryClient } from './v14-checkpoint-recovery-client.mjs';
 import { createBootstrapRecoveryReadClient } from './v14-bootstrap-recovery-read.mjs';
+import { inspectV14BootstrapBudget } from './v14-bootstrap-budget-client.mjs';
 import { V14_BOOTSTRAP_ORIGINS } from '../shared/v14-bootstrap-protocol.mjs';
 import { V14_ENROLLMENT_SITE } from './v14-checkpoint-enrollment.mjs';
 import { createDirectOutlayerTest, directOutlayerOriginAllowed } from './direct-outlayer-testnet.mjs';
@@ -113,6 +114,11 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
   const accountRefresh = doc.querySelector('#wallet-account-refresh');
   const ownerVerify = doc.querySelector('#wallet-owner-verify');
   const ownerStatus = doc.querySelector('#wallet-owner-status');
+  const bootstrapBudgetOpen = doc.querySelector('#wallet-bootstrap-budget-open');
+  const bootstrapBudgetPanel = doc.querySelector('#wallet-bootstrap-budget-panel');
+  const bootstrapBudgetRefresh = doc.querySelector('#wallet-bootstrap-budget-refresh');
+  const bootstrapBudgetStatus = doc.querySelector('#wallet-bootstrap-budget-status');
+  const bootstrapBudgetResult = doc.querySelector('#wallet-bootstrap-budget-result');
   const v14RecoveryOpen = doc.querySelector('#wallet-v14-recovery-open');
   const v14RecoveryPanel = doc.querySelector('#wallet-v14-recovery-panel');
   const v14RecoveryVault = doc.querySelector('#wallet-v14-recovery-vault');
@@ -233,6 +239,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
   let bufferSetupDraft = null, nativeSetupAvailable = false, nativeFlow = null, nativeSetupOpening = false, directFlow = null;
   let v14RecoveryClient = null, v14RecoveryVisible = false;
   let bootstrapRecoveryClient = null, bootstrapRecoveryReady = false, bootstrapRecoveryVisible = false, bootstrapRecoveryUnlocked = false;
+  let bootstrapBudgetVisible = false;
   let missionFlow = null, missionReview = null, missionReady = false, missionStarted = false;
   const bufferSetupStages = ['create_keyless_vault', 'register_vault_circle', 'fund_vault_circle'];
   let bannerTimer;
@@ -334,6 +341,11 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
       ownerVerify.disabled = busyState;
       ownerVerify.textContent = ownerVerified ? 'Verify account again' : 'Verify account in wallet';
     }
+    const budgetEligible = isTop && V14_BOOTSTRAP_ORIGINS.includes(win.location.origin) &&
+      (connected ? connectedAccount : viewedAccount) === 'great_mujey.testnet';
+    if (bootstrapBudgetOpen) { bootstrapBudgetOpen.hidden = !budgetEligible || bootstrapBudgetVisible; bootstrapBudgetOpen.disabled = busyState; }
+    if (bootstrapBudgetPanel) bootstrapBudgetPanel.hidden = !budgetEligible || !bootstrapBudgetVisible;
+    if (bootstrapBudgetRefresh) bootstrapBudgetRefresh.disabled = busyState;
     const v14RecoveryEnabled = ownerVerified && isTop && win.location.origin === V14_ENROLLMENT_SITE && Boolean(v14RecoveryClient);
     if (v14RecoveryOpen) { v14RecoveryOpen.hidden = !v14RecoveryEnabled || v14RecoveryVisible; v14RecoveryOpen.disabled = busyState; }
     if (v14RecoveryPanel) v14RecoveryPanel.hidden = !v14RecoveryEnabled || !v14RecoveryVisible;
@@ -486,6 +498,9 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     v14RecoveryClient = null; v14RecoveryVisible = false;
     if (v14RecoveryVault) v14RecoveryVault.value = '';
     clearV14RecoveryDisplay(); clearBootstrapRecovery();
+    bootstrapBudgetVisible = false;
+    if (bootstrapBudgetStatus) bootstrapBudgetStatus.textContent = '';
+    if (bootstrapBudgetResult) { bootstrapBudgetResult.textContent = ''; bootstrapBudgetResult.hidden = true; }
     if (missionConsent) missionConsent.checked = false;
     if (missionSummary) missionSummary.textContent = ''; if (missionStatus) missionStatus.textContent = '';
     if (missionManifest) missionManifest.textContent = ''; if (missionDetails) { missionDetails.hidden = true; missionDetails.open = false; }
@@ -858,6 +873,47 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
         if (bufferSetupStatus) bufferSetupStatus.textContent = 'This stage may have executed or been recorded without a verified result. Stop and use setup recovery; never approve it again.';
       }
     } finally { stopWalletPresentation(); busy(false); if (stillCurrent()) { renderControls(); hideBanner(); openPicker(opener); } }
+  });
+  bootstrapBudgetOpen?.addEventListener('click', () => {
+    if (busyState || !bootstrapBudgetStatus) return;
+    const account = connected ? connectedAccount : viewedAccount;
+    if (!isTop || account !== 'great_mujey.testnet' || !V14_BOOTSTRAP_ORIGINS.includes(win.location.origin)) return;
+    bootstrapBudgetVisible = true;
+    bootstrapBudgetStatus.textContent = 'Check public testnet data below. This review does not ask your wallet to sign.';
+    renderControls();
+  });
+  bootstrapBudgetRefresh?.addEventListener('click', async () => {
+    const account = connected ? connectedAccount : viewedAccount, version = ownerSessionVersion;
+    if (busyState || !bootstrapBudgetVisible || !bootstrapBudgetStatus || !bootstrapBudgetResult || account !== 'great_mujey.testnet') return;
+    const current = () => ownerSessionVersion === version && bootstrapBudgetVisible &&
+      (connected ? connectedAccount : viewedAccount) === account;
+    bootstrapBudgetResult.hidden = true; bootstrapBudgetResult.textContent = '';
+    bootstrapBudgetStatus.textContent = 'Reading public testnet state and gas. No wallet request is being made.';
+    busy(true);
+    try {
+      const r = await inspectV14BootstrapBudget({fetch:win.fetch.bind(win),isCurrent:current}); if (!current()) return;
+      const b = r.budget, amount = value => formatPublicAmount(value,24,12);
+      const reasons={candidate_absent_at_block:'The proposed vault name is already present; do not create it again.',
+        owner_has_plain_account_profile:'The owner account has an unexpected contract profile.',
+        owner_has_full_access_key:'A current FullAccess owner key was not observed.',
+        owner_covers_example_vault_and_create_upfront:'The owner balance does not cover this example plus the estimated create gas.',
+        example_covers_storage_and_deploy_upfront:'The example funding does not cover the estimated storage and deployment gas reserve.'};
+      bootstrapBudgetResult.textContent = [
+        `Snapshot: ${r.observed_at} · final block ${r.block_height}`,
+        `Owner available: ${amount(r.owner_available_yocto)} test NEAR`,
+        `Candidate vault: ${r.candidate_presence === 'ABSENT_AT_FINAL_BLOCK' ? 'not present at this block' : 'present — do not create again'}`,
+        `Example vault transfer: ${amount(b.proposed_vault_funding_yocto)} test NEAR (not approved)`,
+        `Estimated storage funding: ${amount(b.storage_estimate_yocto)} test NEAR, including a 50,000-byte margin and 0.1 test NEAR reserve. Actual locked storage differs.`,
+        `Create gas upfront: ${amount(b.create.gas_upfront_estimate_yocto)} test NEAR, paid by the owner in addition to the transfer. The ${amount(b.account_creation_charge_yocto)} test NEAR account-creation charge is normally retained from the refund, not added twice.`,
+        `Deploy gas upfront: ${amount(b.deployment.gas_upfront_estimate_yocto)} test NEAR, paid from the funded vault. Includes 30 Tgas for initialization and separate deploy/action fees.`,
+        'Unused prepaid gas and price differences may be refunded. These are snapshot estimates, not guaranteed final fees. A mission budget is separate and unapproved.',
+        ...(r.blockers.length ? ['BLOCKED:',...r.blockers.map(key=>`• ${reasons[key]||key}`)] : ['Public checks passed. Independent recovery and owner approval are still required.']),
+      ].join('\n\n');
+      bootstrapBudgetResult.hidden = false;
+      bootstrapBudgetStatus.textContent = 'Read-only estimate. No transaction was authorized or sent.';
+    } catch {
+      if (current()) bootstrapBudgetStatus.textContent = 'Could not obtain a fresh testnet review. Do not guess the balance or approve a transaction.';
+    } finally { busy(false); if (current()) renderControls(); }
   });
   ownerVerify?.addEventListener('click', async () => {
     const wallet = selectedWallet, accountId = connectedAccount, version = ownerSessionVersion;

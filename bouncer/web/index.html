@@ -190,6 +190,16 @@
     <p class="account-view-warning" id="wallet-account-warning">Unverified account name. No wallet is connected and no spending access was granted.</p>
     <button class="account-entry-primary" id="wallet-owner-verify" type="button" hidden>Verify account in wallet</button>
     <p class="account-view-status" id="wallet-owner-status" role="status" aria-live="polite" hidden></p>
+    <button class="account-entry-secondary" id="wallet-bootstrap-budget-open" type="button" hidden>Review proposed testnet vault →</button>
+    <section class="setup-recovery native-setup" id="wallet-bootstrap-budget-panel" aria-label="Proposed testnet vault review" hidden>
+      <strong>Proposed V14 vault · review only</strong>
+      <p class="account-view-status">Stage 1: your wallet would create native.great_mujey.testnet, transfer the reviewed test NEAR, and add a temporary FullAccess key to that new vault. Stage 2: the temporary vault key would deploy and initialize V14, then delete itself. No transaction is requested here.</p>
+      <p class="account-view-status">Until deletion is final, that key can move all vault funds or change the vault. Interrupted setup can leave it active; losing the recovery key may strand funds. The V14 artifact is unaudited. Independent recovery and receipt checks must be proven before any wallet transaction.</p>
+      <p class="account-view-status">After setup, owner policy changes use the 1-yocto guard; agent keys are restricted. Mission caps and payments need separate review. Storage locks test NEAR; gas is additional or paid from the funded vault as shown below.</p>
+      <button class="account-entry-secondary" id="wallet-bootstrap-budget-refresh" type="button">Check current funding and gas →</button>
+      <p class="account-view-status" id="wallet-bootstrap-budget-status" role="status" aria-live="polite"></p>
+      <pre class="native-mission-manifest" id="wallet-bootstrap-budget-result" hidden></pre>
+    </section>
     <button class="account-entry-secondary" id="wallet-v14-recovery-open" type="button" hidden>Read V14 setup history →</button>
     <section class="setup-recovery native-setup" id="wallet-v14-recovery-panel" aria-label="Read-only V14 checkpoint history" hidden>
       <strong>Recover history, not another deployment</strong>
@@ -338,7 +348,7 @@
   </dialog>
   <dialog class="tour-dialog" id="welcome-tour" aria-labelledby="tour-title" aria-describedby="tour-description"><div class="tour-topline"><span class="brand-mark" aria-hidden="true"><svg viewBox="16 17 300 300"><use href="#i-bouncer"/></svg></span><span class="tour-count" id="tour-count">STEP 1 OF 4</span><button type="button" class="tour-close" id="tour-skip" aria-label="Close the tour">×</button></div><div class="tour-progress" aria-hidden="true"><span></span><span></span><span></span><span></span></div><div class="tour-copy" aria-live="polite"><div class="section-kicker" id="tour-kicker">WELCOME TO BOUNCER</div><h2 id="tour-title">Meet your resource agent.</h2><p id="tour-description">Bouncer helps an agent get compute, storage and API services while your on-chain rules guard its spending.</p><div class="tour-callout" id="tour-callout">Bouncer is a testnet prototype, not an open marketplace.</div></div><div class="tour-actions"><button class="button tour-back" type="button" id="tour-back" disabled>Back</button><button class="button tour-next" type="button" id="tour-next">Next →</button></div></dialog>
   <script type="module" src="./app.mjs?v=7"></script>
-  <script type="module" src="./wallet.bundle.js?v=34"></script>
+  <script type="module" src="./wallet.bundle.js?v=35"></script>
   <script type="module" src="./google-signin.mjs?v=3"></script>
 </body>
 </html>

@@ -6,6 +6,7 @@ import { isTransactionHash } from '../shared/direct-payment-settlement.mjs';
 import { assertFreshFinalBlock } from '../shared/fresh-final-block.mjs';
 import { hasPlainOwnerProfileAt } from '../shared/plain-owner-profile.mjs';
 import { V14_TESTNET_ARTIFACT } from '../shared/v14-testnet-artifact.mjs';
+import { estimateV14BootstrapBudget } from '../shared/v14-bootstrap-budget.mjs';
 import { readPinnedJsonView } from './read-only-near-rpc.mjs';
 import { ORACLE_PROJECT_ID, ORACLE_TESTNET_HASH, oracleTestnetRegistryMatches } from './oracle-testnet-registry.mjs';
 import { MIN_V11_TESTNET_PROTOCOL, selectedV11WasmFeaturesEnabled } from './svalin-setup-preflight.mjs';
@@ -56,6 +57,10 @@ export async function inspectV14Readiness({ owner, vault, provider, now = Date.n
   // actions require a separately reviewed, fresh plan. No amount is approved.
   const storageEstimate = (BigInt(V14_TESTNET_ARTIFACT.bytes) + MARGIN_BYTES) * storageCost + ONE / 10n;
   if (storageEstimate > MAX || storageEstimate + EXAMPLE_MISSION_MAX > MAX) throw new Error('invalid estimated funding');
+  // A missing/newer fee schedule is UNKNOWN, not a zero-cost estimate. The
+  // bootstrap example remains unapproved even when all public checks pass.
+  let bootstrapBudget=null;
+  try { bootstrapBudget=estimateV14BootstrapBudget({protocol,gasPrice:gas.gas_price,owner}); } catch { /* fail closed below */ }
   const checks = {
     owner_has_plain_account_profile: hasPlainOwnerProfileAt(account, hash),
     owner_has_a_full_access_key: keys.keys.some(k => k.access_key.permission === 'FullAccess'),
@@ -65,6 +70,10 @@ export async function inspectV14Readiness({ owner, vault, provider, now = Date.n
     outlayer_contract_present: outlayer.code_hash !== '11111111111111111111111111111111',
     pinned_oracle_registry: oracleTestnetRegistryMatches(project,version,pricing),
     available_covers_example_storage_and_cap_before_gas: available >= storageEstimate + EXAMPLE_MISSION_MAX,
+    bootstrap_gas_estimate_available: bootstrapBudget!==null,
+    available_covers_example_vault_and_create_upfront: bootstrapBudget!==null &&
+      available>=BigInt(bootstrapBudget.create.owner_total_upfront_estimate_yocto),
+    example_funding_covers_estimated_storage_and_deploy_upfront: bootstrapBudget?.funding_covers_estimated_storage_and_deploy_upfront===true,
   };
   const finished = now();
   if (!Number.isSafeInteger(finished) || finished < started) throw new Error('local clock moved backwards');
@@ -76,7 +85,7 @@ export async function inspectV14Readiness({ owner, vault, provider, now = Date.n
     artifact:{...V14_TESTNET_ARTIFACT}, storage_amount_per_byte_yocto:cost, estimated_owner_available_yocto:available.toString(),
     storage_margin_bytes:Number(MARGIN_BYTES), storage_reserve_yocto:(ONE/10n).toString(),
     estimated_vault_storage_funding_yocto:storageEstimate.toString(), illustrative_mission_max_yocto:EXAMPLE_MISSION_MAX.toString(),
-    gas_price_yocto_per_gas:gas.gas_price, checks, blockers,
+    gas_price_yocto_per_gas:gas.gas_price, bootstrap_budget:bootstrapBudget, checks, blockers,
     wallet_control_proven:false, wallet_approval_obtained:false, transaction_sent:false, provider_execution_requested:false,
     independent_original_backup_verified:false, vault_deployed_by_this_check:false,
     scope:'Trusted-RPC single FINAL snapshot; proposed name and amounts are examples only, not approved funding or a quote. Gas is additional. Storage estimates, artifact identity and RPC views do not prove deployment, independent recovery, wallet support or provider execution.' };

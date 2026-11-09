@@ -70,6 +70,7 @@ function fakeBrowser(url, { top = true, storageFails = false, approved = '' } = 
   const ids = ['wallet-connect', 'wallet-disconnect', 'wallet-status', 'wallet-open-site', 'wallet-dialog', 'wallet-close', 'wallet-options', 'wallet-dialog-status', 'wallet-title-text', 'wallet-dialog-description', 'wallet-banner', 'wallet-safety',
     'wallet-account-entry', 'wallet-account-form', 'wallet-account-id', 'wallet-account-error', 'wallet-account-back', 'wallet-cli-verify',
     'wallet-account-view', 'wallet-account-name', 'wallet-account-badge', 'wallet-account-warning', 'wallet-account-near', 'wallet-account-usdc', 'wallet-account-balance-status', 'wallet-account-use-wallet', 'wallet-account-refresh', 'wallet-owner-verify', 'wallet-owner-status',
+    'wallet-bootstrap-budget-open', 'wallet-bootstrap-budget-panel', 'wallet-bootstrap-budget-refresh', 'wallet-bootstrap-budget-status', 'wallet-bootstrap-budget-result',
     'wallet-bootstrap-recovery-open', 'wallet-bootstrap-recovery-panel', 'wallet-bootstrap-recovery-read', 'wallet-bootstrap-recovery-file',
     'wallet-bootstrap-recovery-import', 'wallet-bootstrap-recovery-status', 'wallet-bootstrap-recovery-originals', 'wallet-bootstrap-recovery-backup',
     'wallet-bootstrap-recovery-export', 'wallet-bootstrap-recovery-passphrase', 'wallet-bootstrap-recovery-unlock',
@@ -309,6 +310,42 @@ test('direct preview review is read-only and one explicit tap invokes only the f
   assert.equal(browser.nodes['wallet-direct-outlayer-check'].hidden,false);
   await browser.nodes['wallet-direct-outlayer-send'].click();
   assert.equal(config.transactionRequests.length,1);
+});
+
+test('vault budget review uses public testnet reads and never signs or sends', async () => {
+  const origin='https://bouncer-production-6df1.up.railway.app',browser=fakeBrowser(`${origin}/workspace`,{approved:origin});
+  const config={account:'great_mujey.testnet'},originalFetch=browser.win.fetch,block=encodeBase58(Buffer.alloc(32,17));
+  const fee={send_sir:100000000,send_not_sir:100000000,execution:100000000};
+  const actions={create_account_cost:fee,transfer_cost:fee,add_key_cost:{full_access_cost:fee},deploy_contract_cost:fee,
+    deploy_contract_cost_per_byte:fee,function_call_cost:fee,function_call_cost_per_byte:fee,delete_key_cost:fee};
+  let reads=0;
+  browser.win.fetch=async(url,options={})=>{
+    if(url!=='https://rpc.testnet.near.org')return originalFetch(url,options);
+    reads++;const req=JSON.parse(options.body),base={jsonrpc:'2.0',id:req.id};let result;
+    if(req.method==='status')result={chain_id:'testnet'};
+    else if(req.method==='block')result={header:{hash:block,height:123,timestamp_nanosec:String(BigInt(Date.now())*1000000n)}};
+    else if(req.method==='EXPERIMENTAL_protocol_config')result={chain_id:'testnet',protocol_version:90,runtime_config:{
+      storage_amount_per_byte:'10000000000000000000',min_gas_purchase_price:'1000000000',account_creation_charge:'7000000000000000000000',
+      transaction_costs:{action_receipt_creation_config:fee,action_creation_config:actions}}};
+    else if(req.method==='gas_price')result={gas_price:'100000000'};
+    else if(req.method==='query' && req.params.account_id==='native.great_mujey.testnet')return Response.json({...base,error:{cause:{name:'UNKNOWN_ACCOUNT',
+      info:{requested_account_id:req.params.account_id,block_hash:block}}}});
+    else if(req.method==='query' && req.params.request_type==='view_account')result={block_hash:block,code_hash:'11111111111111111111111111111111',
+      amount:String(26n*10n**24n),storage_usage:264};
+    else if(req.method==='query' && req.params.request_type==='view_access_key_list')result={block_hash:block,keys:[{public_key:'fixture',access_key:{permission:'FullAccess'}}]};
+    else throw Error('unexpected request');
+    return Response.json({...base,result});
+  };
+  await initWallet({window:browser.win,document:browser.doc,NearConnector:connectorClass(config)});
+  await browser.nodes['wallet-connect'].click();await browser.options[0].click();
+  const open=browser.nodes['wallet-bootstrap-budget-open'];assert.equal(open.hidden,false);
+  await open.click();await browser.nodes['wallet-bootstrap-budget-refresh'].click();
+  assert.equal(reads,7);assert.match(browser.nodes['wallet-bootstrap-budget-result'].textContent,/Example vault transfer: 6 test NEAR \(not approved\)/);
+  assert.match(browser.nodes['wallet-bootstrap-budget-result'].textContent,/Deploy gas upfront/);
+  assert.match(browser.nodes['wallet-bootstrap-budget-result'].textContent,/Independent recovery and owner approval are still required/);
+  assert.match(browser.nodes['wallet-bootstrap-budget-status'].textContent,/No transaction was authorized or sent/);
+  assert.equal(config.messageRequests,undefined);assert.equal(config.transactionRequests,undefined);
+  await browser.nodes['wallet-disconnect'].click();assert.equal(open.hidden,true);
 });
 
 test('connected phone-wallet accounts can verify a fresh identity message without approving spending', async () => {

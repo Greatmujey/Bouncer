@@ -89,6 +89,28 @@ try {
           body:JSON.stringify({jsonrpc:'2.0',id:'bouncer-cli-login',result:{permission:'FullAccess'}})});
         return route.abort('failed');
       }
+      if(url.origin==='https://rpc.testnet.near.org' && width===390 && mode==='recovery-empty') {
+        const cors={'access-control-allow-origin':origin,'access-control-allow-methods':'POST, OPTIONS','access-control-allow-headers':'content-type'};
+        if(req.method()==='OPTIONS')return route.fulfill({status:204,headers:cors});
+        const input=req.postDataJSON(),base={jsonrpc:'2.0',id:input.id},at=base58(19);
+        const fee={send_sir:100000000,send_not_sir:100000000,execution:100000000};
+        const actions={create_account_cost:fee,transfer_cost:fee,add_key_cost:{full_access_cost:fee},deploy_contract_cost:fee,
+          deploy_contract_cost_per_byte:fee,function_call_cost:fee,function_call_cost_per_byte:fee,delete_key_cost:fee};
+        let result,error;
+        if(input.method==='status')result={chain_id:'testnet'};
+        else if(input.method==='block')result={header:{hash:at,height:123,timestamp_nanosec:String(BigInt(Date.now())*1000000n)}};
+        else if(input.method==='EXPERIMENTAL_protocol_config')result={chain_id:'testnet',protocol_version:90,runtime_config:{
+          storage_amount_per_byte:'10000000000000000000',min_gas_purchase_price:'1000000000',account_creation_charge:'7000000000000000000000',
+          transaction_costs:{action_receipt_creation_config:fee,action_creation_config:actions}}};
+        else if(input.method==='gas_price')result={gas_price:'100000000'};
+        else if(input.method==='query' && input.params.account_id===vault)error={cause:{name:'UNKNOWN_ACCOUNT',
+          info:{requested_account_id:vault,block_hash:at}}};
+        else if(input.method==='query' && input.params.request_type==='view_account')result={block_hash:at,code_hash:'11111111111111111111111111111111',
+          amount:'26000000000000000000000000',storage_usage:264};
+        else if(input.method==='query' && input.params.request_type==='view_access_key_list')result={block_hash:at,keys:[{public_key:'synthetic',access_key:{permission:'FullAccess'}}]};
+        else return route.abort('failed');
+        return route.fulfill({status:200,contentType:'application/json',headers:cors,body:JSON.stringify({...base,...(error?{error}:{result})})});
+      }
       if(url.origin!==origin)return route.abort('failed');
       if(url.pathname==='/api/google-session')return json(route,{error:'not configured'},503);
       if(url.pathname==='/api/native-mission/config')return json(route,{enabled:true,network:'testnet',review});
@@ -135,6 +157,10 @@ try {
     try { await page.waitForFunction(()=>document.querySelector('#wallet-account-badge').textContent==='OWNER VERIFIED',null,{timeout:10_000}); }
     catch(error){console.error('Synthetic owner verification:',await page.locator('#wallet-owner-status').textContent(),errors,requests.slice(-12));throw error;}
     if(width===390 && mode==='recovery-empty') {
+      await page.locator('#wallet-bootstrap-budget-open').click();
+      await page.locator('#wallet-bootstrap-budget-refresh').click();
+      await page.waitForFunction(()=>document.querySelector('#wallet-bootstrap-budget-result').textContent.includes('Example vault transfer: 6 test NEAR'));
+      assert.match(await page.locator('#wallet-bootstrap-budget-status').innerText(),/no transaction was authorized or sent/i);
       // The checkpoint endpoint is deliberately unreachable in this browser
       // rehearsal. Offline recovery can still be opened and a malformed file
       // is rejected without another wallet signature or any transaction.
