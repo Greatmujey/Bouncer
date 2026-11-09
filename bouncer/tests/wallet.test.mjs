@@ -79,6 +79,7 @@ function fakeBrowser(url, { top = true, storageFails = false, approved = '' } = 
     'wallet-bootstrap-recovery-open', 'wallet-bootstrap-recovery-panel', 'wallet-bootstrap-recovery-read', 'wallet-bootstrap-recovery-file',
     'wallet-bootstrap-recovery-import', 'wallet-bootstrap-recovery-status', 'wallet-bootstrap-recovery-originals', 'wallet-bootstrap-recovery-backup',
     'wallet-bootstrap-recovery-export', 'wallet-bootstrap-recovery-passphrase', 'wallet-bootstrap-recovery-unlock',
+    'wallet-bootstrap-recovery-compare', 'wallet-bootstrap-recovery-compare-status',
     'wallet-direct-outlayer-open', 'wallet-direct-outlayer-panel', 'wallet-direct-outlayer-status', 'wallet-direct-outlayer-hash',
     'wallet-direct-outlayer-result', 'wallet-direct-outlayer-review', 'wallet-direct-outlayer-send', 'wallet-direct-outlayer-check',
     'wallet-direct-outlayer-recover', 'wallet-direct-outlayer-original', 'wallet-direct-outlayer-recover-original',
@@ -569,13 +570,14 @@ test('phone recovery reads and unlocks a synthetic encrypted kit without a trans
       data:{scope_id:scopeId,review_sha256:plan.review.review_sha256,tx_hash:index?original:null}});
     events.push(event);head=createHash('sha256').update(event).digest('hex');
   }
-  const originalFetch=browser.win.fetch;
+  const originalFetch=browser.win.fetch;let remoteIsStale=false;
   browser.win.fetch=async(url,options={})=>{
     if(String(url).includes('/functions/v1/bouncer-v14-bootstrap-checkpoint')) {
       if(options.method==='OPTIONS')return new Response(null,{status:204});
       const request=JSON.parse(options.body);assert.equal(request.operation,'recover');
+      for(const secret of [String(temporary),capability,passphrase])assert(!options.body.includes(secret));
       return Response.json({status:'EXISTING_RECOVERY_ONLY',scope_id:scopeId,review_text:draft.review_text,sealed_kit:draft.sealed_kit,
-        owner_attestation:attestation,revision:2,head_sha256:head,events,
+        owner_attestation:attestation,revision:remoteIsStale?0:2,head_sha256:remoteIsStale?'0'.repeat(64):head,events:remoteIsStale?[]:events,
         transaction_authorized:false,latest_head_independently_verified:false});
     }
     return originalFetch(url,options);
@@ -594,6 +596,7 @@ test('phone recovery reads and unlocks a synthetic encrypted kit without a trans
   assert.equal(browser.nodes['wallet-bootstrap-recovery-passphrase'].value,'');
   assert.match(browser.nodes['wallet-bootstrap-recovery-status'].textContent,/unlocked locally.*no transaction is authorized/i);
   assert.match(browser.nodes['wallet-bootstrap-recovery-originals'].children[0].textContent,/Unverified online history/);
+  assert.equal(browser.nodes['wallet-bootstrap-recovery-compare'].hidden,true,'only an authenticated imported file can be compared');
   const body={format:'bouncer-v14-bootstrap-recovery-export-v1',network:'testnet',owner,vault,scope_id:scopeId,
     review_text:draft.review_text,sealed_kit:draft.sealed_kit,owner_attestation:attestation,revision:2,head_sha256:head,events,
     latest_head_independently_verified:false,transaction_authorized:false};
@@ -608,15 +611,29 @@ test('phone recovery reads and unlocks a synthetic encrypted kit without a trans
   await browser.nodes['wallet-bootstrap-recovery-unlock'].click();
   assert.equal(browser.nodes['wallet-bootstrap-recovery-export'].disabled,false);
   assert.match(browser.nodes['wallet-bootstrap-recovery-originals'].children[0].textContent,/File integrity matched/);
+  assert.equal(browser.nodes['wallet-bootstrap-recovery-compare'].hidden,false);
+  await browser.nodes['wallet-bootstrap-recovery-compare'].click();
+  assert.match(browser.nodes['wallet-bootstrap-recovery-compare-status'].textContent,/match at revision 2.*does not prove.*latest history.*no transaction/i);
+  assert.equal(config.messageRequests.length,3);assert.equal(config.transactionRequests,undefined);
+  remoteIsStale=true;await browser.nodes['wallet-bootstrap-recovery-compare'].click();
+  assert.match(browser.nodes['wallet-bootstrap-recovery-compare-status'].textContent,/file is ahead.*service may be stale.*do not resend/i);
+  assert.equal(config.messageRequests.length,4);
+  browser.nodes['wallet-bootstrap-recovery-file'].files=[{size:Buffer.byteLength(local),text:async()=>local}];
+  browser.nodes['wallet-bootstrap-recovery-file'].listeners.change();
+  assert.equal(browser.nodes['wallet-bootstrap-recovery-compare'].hidden,true,'a new selection cannot compare the previous file');
+  assert.equal(browser.nodes['wallet-bootstrap-recovery-compare-status'].textContent,'');
+  await browser.nodes['wallet-bootstrap-recovery-import'].click();
+  browser.nodes['wallet-bootstrap-recovery-passphrase'].value=passphrase;await browser.nodes['wallet-bootstrap-recovery-unlock'].click();
   browser.nodes['wallet-bootstrap-recovery-passphrase'].value='wrong synthetic passphrase';
   await browser.nodes['wallet-bootstrap-recovery-unlock'].click();
   assert.equal(browser.nodes['wallet-bootstrap-recovery-export'].disabled,true);
   assert.equal(browser.nodes['wallet-bootstrap-recovery-originals'].hidden,true);
+  assert.equal(browser.nodes['wallet-bootstrap-recovery-compare'].hidden,true,'wrong passphrase invalidates the comparison');
   browser.nodes['wallet-bootstrap-recovery-file'].files=[];
   await browser.nodes['wallet-bootstrap-recovery-import'].click();
   assert.equal(browser.nodes['wallet-bootstrap-recovery-export'].disabled,true);
   assert.match(browser.nodes['wallet-bootstrap-recovery-status'].textContent,/choose a bouncer encrypted/i);
-  assert.equal(config.messageRequests.length,2,'offline import does not open the wallet');
+  assert.equal(config.messageRequests.length,4,'offline imports and unlocks do not open the wallet');
   await browser.nodes['wallet-disconnect'].click();
   assert.equal(browser.nodes['wallet-bootstrap-recovery-backup'].hidden,true);
   assert.equal(config.transactionRequests,undefined);

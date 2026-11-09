@@ -36,7 +36,15 @@ export function createBootstrapRecoveryReadClient({wallet,owner,ownerPublicKey,l
     }catch{return false}
   }
   async function run(fn){current();if(busy)throw fail();busy=true;try{return await fn()}finally{busy=false}}
-  async function retainVerified(result,expectedMac=null) {
+  async function fetchRecovery() {
+    // A failed availability check is not evidence of absence.
+    if(!await enabled())throw fail();current();
+    const draft=prepareBootstrapRecovery({owner,ownerPublicKey,vault:VAULT,site:location.origin,crypto,now});
+    const signed=await signBootstrapRecovery({draft,wallet,location,crypto,fetch:fetchImpl,now});current();
+    const result=await recoverBootstrapCheckpoint({signed,location,fetch:fetchImpl,crypto,isCurrent:()=>!disposed&&isCurrent()===true,now});
+    current();return result;
+  }
+  async function validateResult(result) {
     if(!exact(result,['status','scope_id','review_text','sealed_kit','owner_attestation','revision','head_sha256','events',
       'transaction_authorized','latest_head_independently_verified'])||result.status!=='EXISTING_RECOVERY_ONLY'||
       result.transaction_authorized!==false||result.latest_head_independently_verified!==false)throw fail();
@@ -45,8 +53,13 @@ export function createBootstrapRecoveryReadClient({wallet,owner,ownerPublicKey,l
     await verifyBootstrapEnrollmentContents({terms:att.terms,reviewText:result.review_text,kitText:result.sealed_kit,crypto});
     const state=await inspectBootstrapOriginals({snapshot:{revision:result.revision,head_sha256:result.head_sha256,events:result.events},
       scopeId:result.scope_id,reviewSha256:att.terms.review_sha256,crypto});current();
+    return {result:structuredClone(result),terms:{...att.terms},state:{...state}};
+  }
+  async function retainVerified(result,expectedMac=null) {
     if(expectedMac!==null&&!HEX.test(expectedMac))throw fail();
-    recovered={result:structuredClone(result),terms:{...att.terms},state:{...state},expectedMac,verifiedMac:null};
+    const checked=await validateResult(result);current();
+    recovered={...checked,expectedMac,verifiedMac:null};
+    const {state}=checked;
     // An unkeyed chain can be forged. Never present its claimed originals as
     // verified before the encrypted copy's MAC has been checked locally.
     return Object.freeze({revision:state.revision,head_sha256:state.head_sha256,create_original:null,
@@ -59,11 +72,7 @@ export function createBootstrapRecoveryReadClient({wallet,owner,ownerPublicKey,l
       recovered=null; // a failed new read must not leave an older export active
       // Check before requesting an owner signature. An unavailable endpoint is
       // not evidence that no earlier checkpoint or transaction exists.
-      if(!await enabled())throw fail();current();
-      const draft=prepareBootstrapRecovery({owner,ownerPublicKey,vault:VAULT,site:location.origin,crypto,now});
-      const signed=await signBootstrapRecovery({draft,wallet,location,crypto,fetch:fetchImpl,now});current();
-      const result=await recoverBootstrapCheckpoint({signed,location,fetch:fetchImpl,crypto,isCurrent:()=>!disposed&&isCurrent()===true,now});
-      current();return retainVerified(result);
+      return retainVerified(await fetchRecovery());
     })},
     /** Import only the owner's signed encrypted export. Works when the remote
      * service is off or unreachable; does not prove this is the latest copy. */
@@ -103,6 +112,29 @@ export function createBootstrapRecoveryReadClient({wallet,owner,ownerPublicKey,l
       return Object.freeze({status:'KIT_UNLOCKED_LOCALLY_NOT_AUTHORIZED',revision:state.revision,head_sha256:state.head_sha256,
         create_original:state.create_original,deploy_original:state.deploy_original,transaction_authorized:false,
         history_authentication_verified:expectedMac!==null,latest_head_independently_verified:false});
+    })},
+    /** Compare an unlocked, MAC-checked imported file with the current online
+     * response. This is a snapshot comparison, not proof that either copy is
+     * independently stored, freshest, on-chain, or authorized to transact. */
+    async compareOnline() {return run(async()=>{
+      const reference=recovered;
+      if(!reference||reference.expectedMac===null||reference.verifiedMac!==reference.expectedMac)throw fail();
+      const online=await validateResult(await fetchRecovery());current();
+      if(recovered!==reference)throw fail();
+      const file=reference.result,remote=online.result;
+      const sameSetup=['scope_id','review_text','sealed_kit','owner_attestation'].every(key=>file[key]===remote[key]);
+      let status='DIFFERENT_SETUP';
+      if(sameSetup) {
+        const prefix=file.events.slice(0,Math.min(file.events.length,remote.events.length));
+        if(!prefix.every((event,index)=>event===remote.events[index]))status='DIVERGED';
+        else if(file.revision<remote.revision)status='ONLINE_AHEAD';
+        else if(file.revision>remote.revision)status='FILE_AHEAD';
+        else status=file.head_sha256===remote.head_sha256?'MATCHED':'DIVERGED';
+      }
+      return Object.freeze({status,file_revision:file.revision,file_head_sha256:file.head_sha256,
+        online_revision:remote.revision,online_head_sha256:remote.head_sha256,
+        file_integrity_verified:true,independent_backup_verified:false,latest_head_independently_verified:false,
+        vault_or_receipts_checked:false,transaction_authorized:false,transaction_sent:false});
     })},
     /** Export ciphertext and authenticated public history only. A valid MAC
      * detects changes by those without the kit capability; it cannot prove the

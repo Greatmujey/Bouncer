@@ -164,6 +164,8 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
   const bootstrapRecoveryExport = doc.querySelector('#wallet-bootstrap-recovery-export');
   const bootstrapRecoveryPassphrase = doc.querySelector('#wallet-bootstrap-recovery-passphrase');
   const bootstrapRecoveryUnlock = doc.querySelector('#wallet-bootstrap-recovery-unlock');
+  const bootstrapRecoveryCompare = doc.querySelector('#wallet-bootstrap-recovery-compare');
+  const bootstrapRecoveryCompareStatus = doc.querySelector('#wallet-bootstrap-recovery-compare-status');
   const directOpen = doc.querySelector('#wallet-direct-outlayer-open');
   const directPanel = doc.querySelector('#wallet-direct-outlayer-panel');
   const directStatus = doc.querySelector('#wallet-direct-outlayer-status');
@@ -265,6 +267,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
   let bufferSetupDraft = null, nativeSetupAvailable = false, nativeFlow = null, nativeSetupOpening = false, directFlow = null;
   let v14RecoveryClient = null, v14RecoveryVisible = false;
   let bootstrapRecoveryClient = null, bootstrapRecoveryReady = false, bootstrapRecoveryVisible = false, bootstrapRecoveryUnlocked = false;
+  let bootstrapRecoveryFileVerified = false;
   let bootstrapBudgetVisible = false, candidateVisible = false, candidate = null, candidateEnrollmentSessionStopped = false;
   let missionFlow = null, missionReview = null, missionReady = false, missionStarted = false;
   const bufferSetupStages = ['create_keyless_vault', 'register_vault_circle', 'fund_vault_circle'];
@@ -408,6 +411,10 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     if (bootstrapRecoveryPanel) bootstrapRecoveryPanel.hidden = !bootstrapEligible || !bootstrapRecoveryVisible;
     if (bootstrapRecoveryRead) bootstrapRecoveryRead.disabled = busyState || !bootstrapRecoveryReady;
     if (bootstrapRecoveryExport) bootstrapRecoveryExport.disabled = busyState || !bootstrapRecoveryUnlocked;
+    if (bootstrapRecoveryCompare) {
+      bootstrapRecoveryCompare.hidden = !bootstrapRecoveryFileVerified;
+      bootstrapRecoveryCompare.disabled = busyState || !bootstrapRecoveryReady;
+    }
     for (const control of [bootstrapRecoveryFile,bootstrapRecoveryImport,bootstrapRecoveryPassphrase,bootstrapRecoveryUnlock]) {
       if (control) control.disabled = busyState;
     }
@@ -504,15 +511,17 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
   }
   function clearBootstrapRecovery() {
     bootstrapRecoveryClient?.destroy(); bootstrapRecoveryClient = null;
-    bootstrapRecoveryReady = false; bootstrapRecoveryVisible = false; bootstrapRecoveryUnlocked = false;
+    bootstrapRecoveryReady = false; bootstrapRecoveryVisible = false; bootstrapRecoveryUnlocked = false; bootstrapRecoveryFileVerified = false;
     if (bootstrapRecoveryStatus) bootstrapRecoveryStatus.textContent = '';
+    if (bootstrapRecoveryCompareStatus) bootstrapRecoveryCompareStatus.textContent = '';
     if (bootstrapRecoveryOriginals) { bootstrapRecoveryOriginals.replaceChildren(); bootstrapRecoveryOriginals.hidden = true; }
     if (bootstrapRecoveryBackup) bootstrapRecoveryBackup.hidden = true;
     if (bootstrapRecoveryPassphrase) bootstrapRecoveryPassphrase.value = '';
     if (bootstrapRecoveryFile) bootstrapRecoveryFile.value = '';
   }
   function discardBootstrapHistoryDisplay() {
-    bootstrapRecoveryUnlocked = false;
+    bootstrapRecoveryUnlocked = false; bootstrapRecoveryFileVerified = false;
+    if (bootstrapRecoveryCompareStatus) bootstrapRecoveryCompareStatus.textContent = '';
     if (bootstrapRecoveryOriginals) { bootstrapRecoveryOriginals.replaceChildren(); bootstrapRecoveryOriginals.hidden = true; }
     if (bootstrapRecoveryBackup) bootstrapRecoveryBackup.hidden = true;
     if (bootstrapRecoveryPassphrase) bootstrapRecoveryPassphrase.value = '';
@@ -1070,7 +1079,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
         win.localStorage.setItem(BOOTSTRAP_ENROLLMENT_MARKER,'1');
         return win.localStorage.getItem(BOOTSTRAP_ENROLLMENT_MARKER) === '1';
       }});
-      if (current()) candidateEnrollStatus.textContent = 'The checkpoint service acknowledged the encrypted enrollment. This is not a verified independent restore, proof of the latest history or an on-chain check. Restore it on another device before setup. No transaction was authorized.';
+      if (current()) candidateEnrollStatus.textContent = 'The checkpoint service acknowledged the encrypted enrollment. This is not a verified independent restore, proof of the latest history or a check of vault state or on-chain receipts. Restore it on another device before setup. No transaction was authorized.';
     } catch (error) {
       if (current()) candidateEnrollStatus.textContent = /may have been recorded/.test(error?.message || '')
         ? 'The checkpoint may have been recorded. Recover it instead of enrolling again; do not start another setup. No vault transaction was requested.'
@@ -1303,7 +1312,11 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
         !connected || !isTop || proof?.wallet !== wallet || proof.accountId !== accountId) return;
     const current = () => connected && selectedWallet === wallet && connectedAccount === accountId &&
       ownerSessionVersion === version && ownerVerification === proof && bootstrapRecoveryClient === client;
-    discardBootstrapHistoryDisplay(); client.forget();
+    discardBootstrapHistoryDisplay();
+    try { client.forget(); } catch {
+      bootstrapRecoveryStatus.textContent = 'An earlier recovery request is still finishing. Wait and keep your existing copies.';
+      renderControls(); return;
+    }
     busy(true); closePicker();
     setStatus('Approve the read-only recovery message in your wallet. No transaction is requested.');
     notify('Approve the read-only recovery message. No transaction is requested.', true);
@@ -1323,10 +1336,21 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
       if (current()) { renderControls(); hideBanner(); openPicker(opener); }
     }
   });
+  bootstrapRecoveryFile?.addEventListener('change', () => {
+    if (busyState || !bootstrapRecoveryClient) return;
+    discardBootstrapHistoryDisplay();
+    try { bootstrapRecoveryClient.forget(); } catch { /* a timed-out read may still be finishing */ }
+    if (bootstrapRecoveryStatus) bootstrapRecoveryStatus.textContent = 'Read and unlock the selected file before comparing it. No transaction is requested.';
+    renderControls();
+  });
   bootstrapRecoveryImport?.addEventListener('click', async () => {
     const client = bootstrapRecoveryClient, proof = ownerVerification, file = bootstrapRecoveryFile?.files?.[0];
     if (busyState || !client || !bootstrapRecoveryVisible || !bootstrapRecoveryStatus) return;
-    discardBootstrapHistoryDisplay(); client.forget();
+    discardBootstrapHistoryDisplay();
+    try { client.forget(); } catch {
+      bootstrapRecoveryStatus.textContent = 'An earlier recovery request is still finishing. Wait and keep your existing copies.';
+      renderControls(); return;
+    }
     if (!file || !Number.isSafeInteger(file.size) || file.size < 1 || file.size > 128_000 || typeof file.text !== 'function') {
       bootstrapRecoveryStatus.textContent = 'Choose a Bouncer encrypted recovery JSON file under 128 KB. No wallet request was made.';
       renderControls(); return;
@@ -1364,18 +1388,54 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     if (busyState || !client || !bootstrapRecoveryVisible || !bootstrapRecoveryPassphrase || !bootstrapRecoveryStatus) return;
     const current = () => bootstrapRecoveryClient === client && ownerVerification === proof;
     const passphrase = bootstrapRecoveryPassphrase.value; bootstrapRecoveryPassphrase.value = '';
-    bootstrapRecoveryUnlocked = false;
+    bootstrapRecoveryUnlocked = false; bootstrapRecoveryFileVerified = false;
+    if (bootstrapRecoveryCompareStatus) bootstrapRecoveryCompareStatus.textContent = '';
     if (bootstrapRecoveryOriginals) { bootstrapRecoveryOriginals.replaceChildren(); bootstrapRecoveryOriginals.hidden = true; }
     busy(true);
     try {
       const history = await client.verifyPassphrase(passphrase); if (!current()) return;
-      bootstrapRecoveryUnlocked = true; showBootstrapOriginals(history);
+      bootstrapRecoveryUnlocked = true; bootstrapRecoveryFileVerified = history.history_authentication_verified === true;
+      showBootstrapOriginals(history);
       bootstrapRecoveryStatus.textContent = history.history_authentication_verified
         ? 'The encrypted kit unlocked locally and file integrity matched. Latest-head and receipt checks are still required; no transaction is authorized.'
         : 'The encrypted kit unlocked locally. Online history is not independently authenticated; an integrity-protected copy is ready to save. Latest-head and receipt checks are still required; no transaction is authorized.';
     } catch {
       if (current()) bootstrapRecoveryStatus.textContent = 'Could not unlock or verify this file. Check the recovery passphrase and keep existing copies; never enter a wallet seed phrase.';
     } finally { busy(false); if (current()) renderControls(); }
+  });
+  bootstrapRecoveryCompare?.addEventListener('click', async () => {
+    const client = bootstrapRecoveryClient, proof = ownerVerification, wallet = selectedWallet,
+      accountId = connectedAccount, version = ownerSessionVersion;
+    if (busyState || !client || !bootstrapRecoveryReady || !bootstrapRecoveryVisible || !bootstrapRecoveryFileVerified ||
+        !bootstrapRecoveryCompareStatus || !connected || !isTop || proof?.wallet !== wallet || proof.accountId !== accountId) return;
+    const current = () => connected && selectedWallet === wallet && connectedAccount === accountId &&
+      ownerSessionVersion === version && ownerVerification === proof && bootstrapRecoveryClient === client && bootstrapRecoveryFileVerified;
+    bootstrapRecoveryCompareStatus.textContent = 'Approve one read-only wallet message to compare this unlocked file with the online checkpoint.';
+    busy(true); closePicker();
+    setStatus('Approve a read-only recovery comparison. No transaction is requested.');
+    notify('Approve the read-only comparison message. No transaction is requested.', true);
+    let stopWalletPresentation = () => {}, timeout;
+    try {
+      if (['near-mobile','nightly-wallet','ledger'].includes(wallet.manifest.id)) stopWalletPresentation = decorateWalletPopup(wallet.manifest.id);
+      const result = await Promise.race([client.compareOnline(),new Promise((_,reject) => {
+        timeout = setTimeout(() => reject(new Error('BOOTSTRAP_COMPARISON_TIMEOUT')),90_000);
+      })]);
+      if (!current()) return;
+      const messages = {
+        MATCHED: `The unlocked file and online checkpoint match at revision ${result.file_revision}. This does not prove a separate backup, the latest history or on-chain receipts. No transaction was requested.`,
+        ONLINE_AHEAD: 'The service claims additional events beyond this file; those events are not authenticated by your saved file. Stop and reconcile; do not resend an uncertain transaction.',
+        FILE_AHEAD: 'The saved file is ahead of the online checkpoint. The service may be stale. Stop and reconcile; do not resend an uncertain transaction.',
+        DIVERGED: 'The saved file and online history disagree. Stop and reconcile; do not resend an uncertain transaction.',
+        DIFFERENT_SETUP: 'The saved file and online checkpoint describe different setups. Stop and reconcile; do not start another setup.',
+      };
+      bootstrapRecoveryCompareStatus.textContent = messages[result.status] || 'Comparison unavailable. Stop and reconcile; no transaction was requested.';
+      setStatus('Recovery comparison completed. No transaction was requested.');
+    } catch {
+      if (current()) bootstrapRecoveryCompareStatus.textContent = 'Could not compare this file with the service. Keep your existing copies; absence and latest history are not proven. No transaction was requested.';
+    } finally {
+      clearTimeout(timeout); stopWalletPresentation(); busy(false);
+      if (current()) { renderControls(); hideBanner(); openPicker(opener); }
+    }
   });
   missionConsent?.addEventListener('change', () => renderControls());
   missionDetails?.addEventListener('toggle', () => renderControls());

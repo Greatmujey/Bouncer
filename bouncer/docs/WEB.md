@@ -161,13 +161,25 @@ A separate enrollment control appears only when the default-off checkpoint
 reports enabled. It rechecks the saved file, backup ID, passphrase, pinned
 artifact and current owner key, then asks for one owner identity signature; it
 sends only the encrypted kit and public review, not the passphrase or unlocked
-keys. It never requests a NEAR transaction. Before the POST it requires a
+keys. The owner message check reads the owner's current testnet key, but it
+never requests a NEAR transaction. Before the POST it requires a
 persistent same-origin browser stop marker; a lost or malformed acknowledgement
 stops further attempts in that browser and must be reconciled by recovery, not
 by re-enrolling. This marker is not a cross-tab lock and does not coordinate
 other browsers or devices. An acknowledgement is not proof of a separate restore,
-latest original history or on-chain state, and does not authorize setup. The
+latest original history, vault state or final receipts, and does not authorize setup. The
 endpoint remains disabled for the real owner until separately reviewed.
+
+Recovery also permits a user to import and locally MAC-check a saved encrypted
+recovery export, then compare that exact snapshot with an owner-signed online
+read. The comparison reports a match, a file ahead of the service, claimed
+additional online events, or divergent/different setups. Online-only extra
+events are not authenticated by an older file; any disagreement requires a
+stop and reconciliation. Even a match cannot prove the file is independently
+stored, either snapshot is latest, or receipts are final, and it does not
+permit a transaction. The UI clears the prior comparison if another file is
+selected or the unlock fails. These checks have synthetic browser and database
+coverage, not a real-device restore.
 
 `stage-public-web.mjs` publishes only the 19 allowlisted website files,
 including that public, lazily loaded artifact. Vercel separately detects the

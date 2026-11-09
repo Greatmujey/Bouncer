@@ -55,7 +55,7 @@ test('saved candidate can reach recovery-only enrollment with one identity signa
   assert.equal(result.status,'ENROLLED');assert.equal(result.revision,0);
   assert.equal(result.transaction_authorized,false);assert.equal(result.transaction_sent,false);
   assert.equal(result.independent_backup_verified,false);assert.equal(result.latest_head_independently_verified,false);
-  assert.equal(result.on_chain_state_checked,false);
+  assert.equal(result.vault_or_receipts_checked,false);
   assert.equal(counts().signatures,1);assert.equal(counts().markers,1);assert.equal(counts().posts,1);
   await assert.rejects(client.enroll(args));assert.equal(counts().signatures,1);assert.equal(counts().posts,1);
   client.destroy();

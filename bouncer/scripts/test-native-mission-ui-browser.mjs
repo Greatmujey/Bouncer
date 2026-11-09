@@ -13,7 +13,7 @@ import { nativeMissionAction, nativeMissionApprovalMessage } from '../web-src/na
 import { nep413Payload } from '../web-src/cli-login.mjs';
 import { buildV14TemporaryBootstrapPlan } from '../web-src/v14-bootstrap-plan.mjs';
 import { sealV14BootstrapRecoveryKit } from '../web-src/v14-bootstrap-recovery-kit.mjs';
-import { prepareBootstrapEnrollment, bootstrapEnrollmentMessage } from '../web-src/v14-bootstrap-checkpoint.mjs';
+import { prepareBootstrapEnrollment, bootstrapEnrollmentMessage, bootstrapRecoveryMessage } from '../web-src/v14-bootstrap-checkpoint.mjs';
 import { WALLET_EXECUTOR_SHA256 } from '../web-src/wallet-executor.mjs';
 import { PUBLIC_WEB_FILES, stagePublicWeb } from './stage-public-web.mjs';
 
@@ -50,15 +50,17 @@ const staging=fs.mkdtempSync(path.join(os.tmpdir(),'bouncer-mission-ui-'));
 // One disposable owner key is reused solely to test a saved file on two
 // independent synthetic browser contexts and the two approved origins.
 const candidateOwnerKeys=generateKeyPairSync('ed25519');
-let crossDeviceCandidate;
+  let crossDeviceCandidate,crossDeviceRecovery;
 try {
   for(const {width,mode,origin} of [{width:1280,mode:'market',origin:defaultOrigin}, {width:390,mode:'market',origin:defaultOrigin},
     {width:1280,mode:'success',origin:defaultOrigin},
     {width:390,mode:'success',origin:defaultOrigin},{width:320,mode:'unknown',origin:defaultOrigin},
     {width:390,mode:'blocked',origin:defaultOrigin},{width:390,mode:'recovery-empty',origin:defaultOrigin},
     {width:1280,mode:'candidate-read',origin:'https://bouncer-production-6df1.up.railway.app'},
+    {width:1280,mode:'recovery-compare-desktop',origin:'https://bouncer-production-6df1.up.railway.app'},
     {width:390,mode:'candidate-read-rotated',origin:defaultOrigin},
     {width:390,mode:'candidate-enroll-lost',origin:defaultOrigin},
+    {width:390,mode:'recovery-compare-mobile',origin:defaultOrigin},
     {width:390,mode:'success',origin:'https://synthetic-bouncer.netlify.app'}]) {
     const mission=mode==='market'?marketMission:randomMission;
     const review={format:'bouncer-native-mission-review-v1',network:'testnet',mission,mission_sha256:sha(JSON.stringify(mission))};
@@ -75,7 +77,7 @@ try {
       }
     });
     const errors=[],requests=[];page.on('pageerror',e=>errors.push(e.message));
-    const keys=['recovery-empty','candidate-read','candidate-enroll-lost'].includes(mode)?candidateOwnerKeys:generateKeyPairSync('ed25519'),
+    const keys=['recovery-empty','candidate-read','candidate-enroll-lost','recovery-compare-desktop','recovery-compare-mobile'].includes(mode)?candidateOwnerKeys:generateKeyPairSync('ed25519'),
       privatePkcs8=keys.privateKey.export({type:'pkcs8',format:'der'}).toString('base64'),
       publicKey=`ed25519:${nearApi.utils.serialize.base_encode(Buffer.from(keys.publicKey.export({format:'jwk'}).x,'base64url'))}`;
     const mock=`window.selector.ready({
@@ -94,7 +96,7 @@ try {
     });`;
     const bundle=fs.readFileSync(path.join(siteDir,'wallet.bundle.js'),'utf8'),pinned=WALLET_EXECUTOR_SHA256['meteor-wallet'];
     assert(bundle.includes(pinned));const mockDigest=sha(mock);
-    let saved, executes=0, recovers=0, challengeCount=0, checkpointPosts=0;
+    let saved, executes=0, recovers=0, challengeCount=0, checkpointPosts=0, mockRecoveryStale=false;
     const deliveries = count => mission.goals.slice(0,count).map((item,index)=>({kind:item.kind,goal_id:item.goal.id,
       delivery:{tx_hash:base58(40+index),result:item.kind==='oracle'?{price_usd:2.75}:item.kind==='market'?
         {value_usd_micros:27500000}:{value:'synthetic public object'}}}));
@@ -102,8 +104,8 @@ try {
     await page.route('**/*',async route=>{
       const req=route.request(),url=new URL(req.url());requests.push(`${req.method()} ${url.pathname}`);
       const payload=req.postData()??'';
-      assert(!payload.includes('synthetic only phone recovery passphrase')&&!payload.includes('synthetic wrong phone passphrase'),
-        'candidate passphrases must never enter network requests');
+      assert(!payload.includes('synthetic only phone recovery passphrase')&&!payload.includes('synthetic wrong phone passphrase')&&
+        !payload.includes('fixture-only long passphrase'),'recovery passphrases must never enter network requests');
       if(url.pathname.endsWith('meteor-near-connect-latest.js'))return route.fulfill({status:200,contentType:'text/javascript',body:mock});
       if(url.origin==='https://test.rpc.fastnear.com') {
         const cors={'access-control-allow-origin':origin,'access-control-allow-methods':'POST, OPTIONS','access-control-allow-headers':'content-type'};
@@ -137,17 +139,24 @@ try {
       }
       if(url.origin==='https://jiouaqwxkvlkmvyumzwc.supabase.co' &&
           url.pathname==='/functions/v1/bouncer-v14-bootstrap-checkpoint' &&
-          ['candidate-read','candidate-read-rotated','candidate-enroll-lost'].includes(mode)) {
+          ['candidate-read','candidate-read-rotated','candidate-enroll-lost','recovery-compare-desktop','recovery-compare-mobile'].includes(mode)) {
         const cors={'access-control-allow-origin':origin,'access-control-allow-methods':'POST, OPTIONS',
           'access-control-allow-headers':'content-type','cache-control':'no-store'};
         if(req.method()==='OPTIONS')return route.fulfill({status:204,headers:cors});
         assert.equal(req.method(),'POST');checkpointPosts++;
-        assert.equal(await page.evaluate(()=>localStorage.getItem('bouncer-v14-bootstrap-enrollment-attempt-great-mujey-v1')),'1');
-        const input=req.postDataJSON();assert.equal(input.operation,'enroll');assert.equal(input.terms.owner,owner);
+        const input=req.postDataJSON();assert(['enroll','recover'].includes(input.operation));assert.equal(input.terms.owner,owner);
         assert.equal(input.terms.owner_public_key,publicKey);assert.equal(input.terms.site,origin);
-        const payload=nep413Payload({message:bootstrapEnrollmentMessage(input.terms),nonce:new Uint8Array(Buffer.from(input.nonce_base64,'base64')),
-          recipient:new URL(origin).host});
+        const message=input.operation==='enroll'?bootstrapEnrollmentMessage(input.terms):bootstrapRecoveryMessage(input.terms);
+        const payload=nep413Payload({message,nonce:new Uint8Array(Buffer.from(input.nonce_base64,'base64')),recipient:new URL(origin).host});
         assert.equal(verify(null,createHash('sha256').update(payload).digest(),keys.publicKey,Buffer.from(input.signature_base64,'base64')),true);
+        if(input.operation==='recover') {
+          assert(crossDeviceRecovery);const file=JSON.parse(crossDeviceRecovery.text);
+          const result={status:'EXISTING_RECOVERY_ONLY',scope_id:file.scope_id,review_text:file.review_text,sealed_kit:file.sealed_kit,
+            owner_attestation:file.owner_attestation,revision:mockRecoveryStale?0:file.revision,head_sha256:mockRecoveryStale?'0'.repeat(64):file.head_sha256,
+            events:mockRecoveryStale?[]:file.events,transaction_authorized:false,latest_head_independently_verified:false};
+          return route.fulfill({status:200,contentType:'application/json',headers:cors,body:JSON.stringify(result)});
+        }
+        assert.equal(await page.evaluate(()=>localStorage.getItem('bouncer-v14-bootstrap-enrollment-attempt-great-mujey-v1')),'1');
         if(mode==='candidate-enroll-lost')return route.abort('failed');
         const attestation=JSON.stringify({terms:input.terms,nonce_base64:input.nonce_base64,signature_base64:input.signature_base64});
         return route.fulfill({status:200,contentType:'application/json',headers:cors,body:JSON.stringify({status:'ENROLLED',
@@ -158,7 +167,7 @@ try {
       if(url.pathname==='/api/native-mission/config')return json(route,{enabled:true,network:'testnet',review});
       if(url.pathname.startsWith('/api/native-mission/')) {
         const name=url.pathname.split('/').pop(),input=req.postDataJSON();assert.equal(input.missionSha256,review.mission_sha256);
-        if(name==='preview')return json(route,{review,preview:{status:['blocked','recovery-empty','candidate-read','candidate-read-rotated','candidate-enroll-lost'].includes(mode)?'BLOCKED':'READY',stage:'synthetic',
+        if(name==='preview')return json(route,{review,preview:{status:['blocked','recovery-empty','candidate-read','candidate-read-rotated','candidate-enroll-lost','recovery-compare-desktop','recovery-compare-mobile'].includes(mode)?'BLOCKED':'READY',stage:'synthetic',
           ...(mode==='market'?{next_goal_id:mission.goals[executes]?.goal.id??null,verified_prior_deliveries:deliveries(executes)}:{})}});
         if(name==='challenge') {
           assert.equal(input.ownerPublicKey,publicKey);challengeCount++;
@@ -272,6 +281,7 @@ try {
         latest_head_independently_verified:false,transaction_authorized:false};
       const mac=createHmac('sha256',Buffer.from(capability,'hex')).update(`bouncer-v14-bootstrap-export-v1\0${JSON.stringify(body)}`).digest('hex');
       const recovery=JSON.stringify({...body,history_hmac_sha256:mac});
+      crossDeviceRecovery={text:recovery,passphrase};
       for(const secret of [String(temp),capability,passphrase])assert(!recovery.includes(secret));
       const sigs=await signatureCount(),networkBefore=requests.length;
       await page.locator('#wallet-bootstrap-recovery-file').setInputFiles({name:'synthetic.json',mimeType:'application/json',buffer:Buffer.from(recovery)});
@@ -283,6 +293,8 @@ try {
       await page.waitForFunction(()=>document.querySelector('#wallet-bootstrap-recovery-status').textContent.includes('file integrity matched'));
       assert.match(await page.locator('#wallet-bootstrap-recovery-originals a').first().innerText(),/File integrity matched.*Create original/);
       assert.equal(await page.locator('#wallet-bootstrap-recovery-export').isDisabled(),false);
+      assert.equal(await page.locator('#wallet-bootstrap-recovery-compare').isVisible(),true);
+      assert.equal(await page.locator('#wallet-bootstrap-recovery-compare').isDisabled(),true,'offline files cannot prompt an online comparison');
       const forged=JSON.parse(recovery),event=JSON.parse(forged.events[1]);event.data.tx_hash=base58(52);
       forged.events[1]=JSON.stringify(event);forged.head_sha256=sha(forged.events[1]);
       await page.locator('#wallet-bootstrap-recovery-file').setInputFiles({name:'forged.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(forged))});
@@ -338,6 +350,32 @@ try {
       }
       assert.equal(executes,0);assert.equal(challengeCount,0);
     }
+    if(['recovery-compare-desktop','recovery-compare-mobile'].includes(mode)) {
+      assert(crossDeviceRecovery,'an encrypted recovery file was saved in a separate browser context');
+      const beforeSignatures=await signatureCount(),beforePosts=checkpointPosts;
+      await page.locator('#wallet-bootstrap-recovery-open').click();
+      await page.waitForFunction(()=>!document.querySelector('#wallet-bootstrap-recovery-read').disabled);
+      await page.locator('#wallet-bootstrap-recovery-file').setInputFiles({name:'separately-saved-recovery.json',mimeType:'application/json',
+        buffer:Buffer.from(crossDeviceRecovery.text)});
+      await page.locator('#wallet-bootstrap-recovery-import').click();
+      assert.equal(await page.locator('#wallet-bootstrap-recovery-compare').isVisible(),false);
+      await page.locator('#wallet-bootstrap-recovery-passphrase').fill(crossDeviceRecovery.passphrase);
+      await page.locator('#wallet-bootstrap-recovery-unlock').click();
+      await page.waitForFunction(()=>document.querySelector('#wallet-bootstrap-recovery-status').textContent.includes('file integrity matched'));
+      await page.locator('#wallet-bootstrap-recovery-compare').click();
+      await page.waitForFunction(()=>document.querySelector('#wallet-bootstrap-recovery-compare-status').textContent.includes('match at revision 2'));
+      assert.match(await page.locator('#wallet-bootstrap-recovery-compare-status').innerText(),/does not prove a separate backup, the latest history or on-chain receipts.*no transaction/i);
+      assert.equal(await signatureCount(),beforeSignatures+1);assert.equal(checkpointPosts,beforePosts+1);
+      mockRecoveryStale=true;await page.locator('#wallet-bootstrap-recovery-compare').click();
+      await page.waitForFunction(()=>document.querySelector('#wallet-bootstrap-recovery-compare-status').textContent.includes('file is ahead'));
+      assert.match(await page.locator('#wallet-bootstrap-recovery-compare-status').innerText(),/service may be stale.*do not resend/i);
+      assert.equal(await signatureCount(),beforeSignatures+2);assert.equal(checkpointPosts,beforePosts+2);
+      await page.locator('#wallet-bootstrap-recovery-file').setInputFiles({name:'different-selection.json',mimeType:'application/json',
+        buffer:Buffer.from(crossDeviceRecovery.text)});
+      assert.equal(await page.locator('#wallet-bootstrap-recovery-compare').isVisible(),false);
+      assert.equal(await page.locator('#wallet-bootstrap-recovery-compare-status').innerText(),'');
+      assert.equal(executes,0);assert.equal(challengeCount,0);
+    }
     await page.locator('#wallet-native-mission-open').waitFor({state:'visible'});await page.locator('#wallet-native-mission-open').click();
     await page.waitForFunction(()=>document.querySelector('#wallet-native-mission-details') && !document.querySelector('#wallet-native-mission-details').hidden);
     assert.match(await page.locator('#wallet-native-mission-panel').innerText(),/public NEAR contract state/i);
@@ -345,7 +383,7 @@ try {
     await page.locator('#wallet-native-mission-details summary').click();
     assert.match(await page.locator('#wallet-native-mission-manifest').innerText(),/"from_goal_ids"/);
     assert.equal(executes,0);assert.equal(challengeCount,0);
-    if(['blocked','recovery-empty','candidate-read','candidate-read-rotated','candidate-enroll-lost'].includes(mode)) {
+    if(['blocked','recovery-empty','candidate-read','candidate-read-rotated','candidate-enroll-lost','recovery-compare-desktop','recovery-compare-mobile'].includes(mode)) {
       await page.waitForFunction(()=>document.querySelector('#wallet-native-mission-status').textContent.includes('Mission blocked'));
       assert.equal(await page.locator('#wallet-native-mission-approve').isVisible(),false);
       if(mode==='recovery-empty') {
@@ -381,5 +419,5 @@ try {
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
     assert.deepEqual(errors,[]);await context.close();
   }
-  console.log('Synthetic desktop and mobile mission UI: cross-origin encrypted file save/import, per-step checkpoints, blocked preflight, unknown response and recovery passed.');
+  console.log('Synthetic desktop/mobile UI: encrypted file transfer, enrollment, matching/stale recovery comparison, blocked preflight and uncertain-response recovery passed.');
 } finally { await browser.close(); fs.rmSync(staging,{recursive:true,force:true}); }

@@ -67,7 +67,7 @@ export function createBootstrapCandidateEnrollmentClient({wallet,owner,ownerPubl
         return Object.freeze({status:result.status,scope_id:result.scope_id,revision:result.revision,
           head_sha256:result.head_sha256,review_sha256:checked.review_sha256,
           transaction_authorized:false,transaction_sent:false,independent_backup_verified:false,
-          latest_head_independently_verified:false,on_chain_state_checked:false});
+          latest_head_independently_verified:false,vault_or_receipts_checked:false});
       }catch(error){
         if(barrierStarted){stopped=true;throw uncertain()}
         if(error?.message===ownerChanged().message)throw error;

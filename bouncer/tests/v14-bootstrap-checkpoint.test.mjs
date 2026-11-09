@@ -145,6 +145,58 @@ test('offline recovery hides originals until the file MAC matches, rejects forge
   assert.equal(network,0);assert.equal(signatures,0);client.destroy();
 });
 
+test('a verified saved file compares read-only snapshots without claiming freshness',async()=>{
+  const {plan,draft,attestation}=await fixture(),zero='0'.repeat(64),original=encodeBase58(crypto.randomBytes(32));
+  const events=[];let head=zero;
+  for(const [i,type] of ['create_claim','create_original'].entries()) {
+    const event=JSON.stringify({format:'bouncer-v14-original-event-v1',seq:i+1,previous_sha256:head,type,
+      data:{scope_id:scopeId,review_sha256:plan.review.review_sha256,tx_hash:i?original:null}});
+    events.push(event);head=await bootstrapSha256(webcrypto,event);
+  }
+  const snapshot0={revision:0,head_sha256:zero,events:[]},snapshot2={revision:2,head_sha256:head,events};
+  const makeFile=snapshot=>{
+    const body={format:'bouncer-v14-bootstrap-recovery-export-v1',network:'testnet',owner:originOwner,vault,scope_id:scopeId,
+      review_text:draft.review_text,sealed_kit:draft.sealed_kit,owner_attestation:attestation,...snapshot,
+      latest_head_independently_verified:false,transaction_authorized:false};
+    const mac=crypto.createHmac('sha256',Buffer.from(capability,'hex')).update(`bouncer-v14-bootstrap-export-v1\0${JSON.stringify(body)}`).digest('hex');
+    return JSON.stringify({...body,history_hmac_sha256:mac});
+  };
+  const makeRemote=snapshot=>({status:'EXISTING_RECOVERY_ONLY',scope_id:scopeId,review_text:draft.review_text,
+    sealed_kit:draft.sealed_kit,owner_attestation:attestation,...snapshot,transaction_authorized:false,latest_head_independently_verified:false});
+  let remote=makeRemote(snapshot2),available=true,signatures=0,posts=0;
+  const wallet={manifest:{id:'meteor'},async signMessage({message,nonce,recipient,signerId,network}){
+    signatures++;assert.equal(signerId,originOwner);assert.equal(network,'testnet');
+    const digest=crypto.createHash('sha256').update(nep413Payload({message,nonce,recipient})).digest();
+    return {accountId:originOwner,publicKey:String(owner.getPublicKey()),signature:Buffer.from(owner.sign(digest).signature).toString('base64')};
+  }};
+  const fetch=async(url,options={})=>{
+    if(String(url)==='https://test.rpc.fastnear.com')return Response.json({jsonrpc:'2.0',id:'bouncer-cli-login',result:{permission:'FullAccess'}});
+    if(options.method==='OPTIONS')return new Response(null,{status:available?204:503});
+    posts++;assert.equal(options.method,'POST');assert.equal(JSON.parse(options.body).operation,'recover');
+    for(const secret of [String(temporary),capability,passphrase])assert(!options.body.includes(secret));
+    return Response.json(remote);
+  };
+  const client=createBootstrapRecoveryReadClient({wallet,owner:originOwner,ownerPublicKey:String(owner.getPublicKey()),
+    location:{origin:site,host:new URL(site).host},isTopLevel:true,crypto:webcrypto,fetch,now});
+  const file2=makeFile(snapshot2);await client.importEncrypted(file2);
+  await assert.rejects(client.compareOnline());assert.equal(signatures,0);assert.equal(posts,0);
+  await client.verifyPassphrase(passphrase);
+  const match=await client.compareOnline();assert.equal(match.status,'MATCHED');assert.equal(match.file_integrity_verified,true);
+  assert.equal(match.latest_head_independently_verified,false);assert.equal(match.independent_backup_verified,false);
+  assert.equal(match.vault_or_receipts_checked,false);assert.equal(match.transaction_authorized,false);assert.equal(match.transaction_sent,false);
+  remote=makeRemote(snapshot0);assert.equal((await client.compareOnline()).status,'FILE_AHEAD');
+  const differentEvents=[...events],changed=JSON.parse(differentEvents[1]);changed.data.tx_hash=encodeBase58(crypto.randomBytes(32));
+  differentEvents[1]=JSON.stringify(changed);remote=makeRemote({revision:2,head_sha256:await bootstrapSha256(webcrypto,differentEvents[1]),events:differentEvents});
+  assert.equal((await client.compareOnline()).status,'DIVERGED');
+  remote=makeRemote({...snapshot0,head_sha256:'1'.repeat(64)});await assert.rejects(client.compareOnline());
+  assert.equal(client.exportEncrypted(),file2,'a bad online response does not replace the saved file');
+  available=false;const previous=signatures;await assert.rejects(client.compareOnline());assert.equal(signatures,previous);
+  available=true;remote=makeRemote(snapshot2);await client.importEncrypted(makeFile(snapshot0));await client.verifyPassphrase(passphrase);
+  assert.equal((await client.compareOnline()).status,'ONLINE_AHEAD');
+  assert.equal(signatures,posts,'the disabled check made no wallet request; every prompt was a read-only POST');
+  client.destroy();
+});
+
 // PGlite is installed separately only for disposable schema tests; the
 // standard suite does not require or download it.
 if(process.env.BOUNCER_PGLITE_MODULE) {
@@ -219,16 +271,25 @@ if(process.env.BOUNCER_PGLITE_MODULE) {
       const makeHandler=process.env.BOUNCER_EDGE_BUNDLE
         ? (await import(process.env.BOUNCER_EDGE_BUNDLE)).createV14BootstrapCheckpointHandler : createV14BootstrapCheckpointHandler;
       const handler=makeHandler({getEnv:key=>env[key],fetch:backendFetch,crypto:webcrypto,now});
-      let publishMarked=false,signed;
+      let publishMarked=false,signed,earlyRemote=null,overrideRemote=null,signatures=0;
       const browserFetch=async(url,opts)=>{
+        let operation;
         if(opts.method==='POST'&&opts.body) {
-          const {operation,...rest}=JSON.parse(opts.body);
+          const parsed=JSON.parse(opts.body);operation=parsed.operation;
+          const {operation:ignored,...rest}=parsed;
           if(operation==='enroll'&&!signed){assert.equal(publishMarked,true);signed=rest;}
+          if(operation==='recover')for(const secret of [String(temporary),capability,passphrase])assert(!opts.body.includes(secret));
         }
         const headers=new Headers(opts.headers);headers.set('origin',site);
-        return handler(new Request(url,{...opts,headers}));
+        const response=await handler(new Request(url,{...opts,headers}));
+        if(operation==='recover'&&response.ok) {
+          if(overrideRemote)return Response.json(overrideRemote);
+          if(!earlyRemote)earlyRemote=await response.clone().json();
+        }
+        return response;
       };
       const wallet={manifest:{id:'meteor'},async signMessage({message,nonce,recipient}){
+        signatures++;
         const hash=crypto.createHash('sha256').update(nep413Payload({message,nonce,recipient})).digest();
         return {accountId:originOwner,publicKey:String(owner.getPublicKey()),signature:Buffer.from(owner.sign(hash).signature).toString('base64')};
       }};
@@ -243,6 +304,11 @@ if(process.env.BOUNCER_PGLITE_MODULE) {
       assert.equal(enrollment.status,'ENROLLED');assert.equal(enrollment.independent_backup_verified,false);
       assert.equal(enrollment.transaction_authorized,false);assert.ok(signed);enrollmentClient.destroy();
       assert.equal((await enrollBootstrapCheckpoint({signed,location,crypto:webcrypto,fetch:browserFetch,now})).status,'EXISTING');
+      const makeReader=()=>createBootstrapRecoveryReadClient({wallet,owner:originOwner,ownerPublicKey:String(owner.getPublicKey()),
+        location,isTopLevel:true,crypto:webcrypto,fetch:combinedFetch,now});
+      const earlyReader=makeReader();await earlyReader.read();await earlyReader.verifyPassphrase(passphrase);
+      const earlyFile=earlyReader.exportEncrypted();earlyReader.destroy();
+      assert.equal(earlyRemote.revision,0);
       const local=await createV14BrowserWitnessStore({indexedDB:new IDBFactory(),crypto:webcrypto,owner:originOwner,vault,scopeId,
         journalKeyHex:await bootstrapLocalJournalKey({capability,crypto:webcrypto}),initializeBrandNew:true});
       const remote=createBootstrapRemoteStore({location,scopeId,capability,reviewSha256:plan.review.review_sha256,crypto:webcrypto,fetch:browserFetch});
@@ -273,6 +339,35 @@ if(process.env.BOUNCER_PGLITE_MODULE) {
       const exported=client.exportEncrypted();assert.equal(exported.includes(String(temporary)),false);
       assert.equal(exported.includes(capability),false);assert.equal(exported.includes(passphrase),false);
       client.destroy();assert.throws(()=>client.exportEncrypted());
+      const compare=makeReader();await compare.importEncrypted(exported);
+      const beforeCompare=signatures;await assert.rejects(compare.compareOnline());assert.equal(signatures,beforeCompare,'locked files cannot prompt');
+      await compare.verifyPassphrase(passphrase);
+      const matching=await compare.compareOnline();
+      assert.equal(matching.status,'MATCHED');assert.equal(matching.file_integrity_verified,true);
+      assert.equal(matching.independent_backup_verified,false);assert.equal(matching.latest_head_independently_verified,false);
+      assert.equal(matching.vault_or_receipts_checked,false);assert.equal(matching.transaction_authorized,false);assert.equal(matching.transaction_sent,false);
+      overrideRemote=earlyRemote;
+      assert.equal((await compare.compareOnline()).status,'FILE_AHEAD','a rolled-back service cannot match a newer file');
+      const divergent=structuredClone(recovered),changed=JSON.parse(divergent.events[1]);
+      changed.data.tx_hash=encodeBase58(crypto.randomBytes(32));divergent.events[1]=JSON.stringify(changed);
+      divergent.head_sha256=await bootstrapSha256(webcrypto,divergent.events[1]);overrideRemote=divergent;
+      assert.equal((await compare.compareOnline()).status,'DIVERGED');
+      const alternateScope='ef'.repeat(16),alternateKit=await sealV14BootstrapRecoveryKit({review:plan.review,temporaryKey:temporary,
+        scopeId:alternateScope,checkpointCapability:'12'.repeat(32),passphrase,crypto:webcrypto});
+      const alternateDraft=await prepareBootstrapEnrollment({review:plan.review,kit:alternateKit,passphrase,compressedV14:compressed,site,crypto:webcrypto,now});
+      const alternateHash=crypto.createHash('sha256').update(nep413Payload({message:alternateDraft.message,
+        nonce:alternateDraft.nonce,recipient:alternateDraft.recipient})).digest();
+      const alternateAttestation=JSON.stringify({terms:alternateDraft.terms,nonce_base64:Buffer.from(alternateDraft.nonce).toString('base64'),
+        signature_base64:Buffer.from(owner.sign(alternateHash).signature).toString('base64')});
+      overrideRemote={...earlyRemote,scope_id:alternateScope,review_text:alternateDraft.review_text,sealed_kit:alternateDraft.sealed_kit,
+        owner_attestation:alternateAttestation};
+      assert.equal((await compare.compareOnline()).status,'DIFFERENT_SETUP');
+      overrideRemote={...earlyRemote,head_sha256:'1'.repeat(64)};
+      await assert.rejects(compare.compareOnline());assert.equal(compare.exportEncrypted(),exported,'a failed comparison keeps the authenticated file');
+      overrideRemote=null;
+      const earlyCompare=makeReader();await earlyCompare.importEncrypted(earlyFile);await earlyCompare.verifyPassphrase(passphrase);
+      assert.equal((await earlyCompare.compareOnline()).status,'ONLINE_AHEAD');
+      earlyCompare.destroy();compare.destroy();
       let offlineNetworkCalls=0,offlineSignatures=0;
       const offline=createBootstrapRecoveryReadClient({wallet:{async signMessage(){offlineSignatures++;throw Error('offline')}},
         owner:originOwner,ownerPublicKey:String(owner.getPublicKey()),location,isTopLevel:true,crypto:webcrypto,now,
