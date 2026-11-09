@@ -66,6 +66,13 @@ test('stale preflight before claim causes no prompt; a second preflight failure 
   await assert.rejects((await prepareV14PhoneWalletPrompt(s.args)).invoke(),/do not repeat/);s.local.close();
 });
 
+test('a preflight that becomes stale while rereading both copies blocks the claimed prompt',async()=>{
+  const s=await setup();let checks=0;s.args.now=()=>++checks<3?10_001:20_001;
+  const prompt=await prepareV14PhoneWalletPrompt(s.args);await assert.rejects(prompt.invoke(),/do not repeat/);
+  assert.equal(s.walletCalls(),0);assert.equal((await s.witness.inspect()).pending.stage_id,s.binding.stages[0].id);
+  s.local.close();
+});
+
 test('an unknown wallet response never triggers a second prompt',async()=>{
   const s=await setup();let calls=0;s.args.wallet.signAndSendTransaction=async()=>{calls++;throw Error('wallet closed')};
   const prompt=await prepareV14PhoneWalletPrompt(s.args);

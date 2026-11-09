@@ -27,9 +27,14 @@ export function railwayNativePort(env=process.env) {
 /** No input is trusted or reflected. No wallet, journal, agent keys or mission
  * runtime is loaded in standby. Optional diagnostics are public reads only,
  * never invoked by a request, and do not establish mission readiness. */
-export function createRailwayNativeStandby({readiness}={}) {
+export function createRailwayNativeStandby({readiness,setupHandler}={}) {
   if(readiness!==undefined && typeof readiness?.snapshot!=='function')throw new Error('invalid standby diagnostics');
+  if(setupHandler!==undefined && typeof setupHandler!=='function')throw new Error('invalid read-only setup handler');
   const server=http.createServer((req,res)=>{
+    if(setupHandler && (req.url==='/api/native-mission/v14-preflight'||req.url==='/api/native-mission/v14-receipt')) {
+      void setupHandler(req,res).catch(()=>{if(!res.headersSent)res.writeHead(503,headers);res.end(JSON.stringify({error:'unavailable'}))});
+      return;
+    }
     const get=req.method==='GET'||req.method==='HEAD';
     const status=get && (req.url==='/'||req.url==='/healthz');
     const diagnostic=get && req.url==='/readiness' && readiness!==undefined;
@@ -52,14 +57,25 @@ async function main() {
   }
   const check=process.env.BOUNCER_STANDBY_READINESS;
   if(check!==undefined && check!=='' && check!=='0' && check!=='1')throw new Error('invalid standby diagnostics configuration');
-  let readiness;
+  let readiness,setupHandler;
   if(check==='1') {
     const {createStandbyReadiness}=await import('../agent/railway-standby-readiness.mjs');
     readiness=createStandbyReadiness();
   }
-  const port=railwayNativePort(),server=createRailwayNativeStandby({readiness});
+  const setup=process.env.BOUNCER_V14_SETUP_READONLY;
+  if(setup!==undefined&&setup!==''&&setup!=='0'&&setup!=='1')throw new Error('invalid read-only setup configuration');
+  if(setup==='1') {
+    const [{ReadOnlyNearReceiptProvider},{createV14SetupReadService},{createV14SetupReadHttpHandler},{V14_SETUP_TESTNET_RPC}]=await Promise.all([
+      import('../agent/read-only-near-receipts.mjs'),import('../agent/v14-setup-read-service.mjs'),
+      import('../agent/v14-setup-read-http.mjs'),import('../agent/v14-setup-rpc-verifier.mjs')]);
+    const provider=new ReadOnlyNearReceiptProvider(V14_SETUP_TESTNET_RPC,{timeoutMs:15_000});
+    const service=createV14SetupReadService({provider});
+    setupHandler=createV14SetupReadHttpHandler({service,siteOrigin:process.env.BOUNCER_WALLET_ORIGIN,
+      backendOrigin:process.env.BOUNCER_NATIVE_MISSION_BACKEND_ORIGIN,proxySecret:process.env.BOUNCER_NATIVE_MISSION_PROXY_SECRET});
+  }
+  const port=railwayNativePort(),server=createRailwayNativeStandby({readiness,setupHandler});
   await new Promise((resolve,reject)=>server.listen(port,'0.0.0.0',resolve).once('error',reject));
-  console.log(`Bouncer testnet backend in STANDBY on port ${port}; no mission, wallet or transactions are enabled.`);
+  console.log(`Bouncer testnet backend in STANDBY on port ${port}; no mission, wallet or transactions are enabled.${setupHandler?' Read-only setup verification is enabled.':''}`);
   if(readiness)void readiness.start().catch(()=>{});
   let stopping=false;
   const shutdown=()=>{if(stopping)return;stopping=true;server.close(error=>{if(error)process.exitCode=1});server.closeIdleConnections?.()};

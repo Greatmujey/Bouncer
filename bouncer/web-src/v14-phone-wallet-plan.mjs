@@ -156,6 +156,10 @@ export async function verifyV14BrowserPhonePlan({review:rawReview,trustedReviewS
         a.compressed_sha256!==trustedArtifacts.compressed_sha256||!Number.isSafeInteger(a.vault_bytes)||a.vault_bytes<8||a.vault_bytes>1_000_000||
         !Number.isSafeInteger(a.loader_bytes)||a.loader_bytes<8||a.loader_bytes>200_000||a.loader_bytes!==loaderBytes.length||
         !Number.isSafeInteger(a.compressed_bytes)||a.compressed_bytes<1||a.compressed_bytes>200_000||a.compressed_bytes!==compressedBytes.length)throw fail();
+    // Conservative envelope allowance, not proof that a wallet accepts the
+    // request. Meteor's mobile bridge caps the whole request at 400,000 bytes.
+    const encodedLowerBound=4*Math.ceil(loader.length/3)+4*Math.ceil(compressed.length/3);
+    if(encodedLowerBound+40_000>400_000)throw fail();
     const unsigned={...review};delete unsigned.review_sha256;
     if(await shaText(crypto,JSON.stringify(unsigned))!==trustedReviewSha256||
         await shaText(crypto,JSON.stringify(review.mission))!==review.mission_sha256)throw fail();

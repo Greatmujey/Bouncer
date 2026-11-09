@@ -321,17 +321,24 @@ an encrypted IndexedDB copy and performs an atomic compare-and-swap between
 same-origin tabs. `v14-browser-original-witness.mjs` compares it with a
 separately retained copy and can record a one-shot claim before a prompt.
 The experimental phone prompt adapter reconstructs all six action commitments
-and requires that claim plus fresh preflight callbacks before calling a wallet;
-it is not wired into the live UI and its callbacks are not yet connected to
-real receipt/state checks. The browser checkpoint bridge is default-off and
-not deployed. A missing,
+and requires that claim plus fresh preflight callbacks before calling a wallet.
+A read-only preflight implementation checks each retained prior original and
+fresh cumulative state at the pinned testnet RPC; synthetic integration covers
+all six stages. A separately default-off, secret-gated Railway/Vercel route and
+same-origin browser client exist in source; they are not deployed, enabled or
+connected to the live UI. The browser checkpoint bridge is also default-off
+and not deployed. A missing,
 evicted, rolled-back or mismatched copy stops the flow rather than silently
 creating a replacement. Synthetic desktop and phone-sized Chromium tests do
-not prove a physical phone, wallet, or browser-storage durability. This is not
-wired into the UI; secure Railway handoff, durable mission-journal backup,
-receipt verification in the browser flow and restoration remain unfinished.
-Plan bytes must match independently retained artifact pins, not pins obtained
-from the server being checked. A wallet returning no result after navigation
+not prove a physical phone, wallet, or browser-storage durability. Live
+wallet/UI wiring, secure Railway handoff, durable mission-journal backup and
+restoration remain unfinished. The separate read-only setup flags must not be interpreted as
+mission execution or loader enablement; neither is active on the deployed
+services. Public research binaries in `web/artifacts/` match the hashes in
+`shared/v14-phone-research-artifacts.mjs` and the explicitly checked V14 build.
+They are not included in static-site staging, and remain disabled and
+unaudited; their availability is not approval to use them. Plan bytes must match independently retained artifact pins, not pins
+obtained from the server being checked. A wallet returning no result after navigation
 leaves its claim blocked until the original is reconciled, never retried.
 An administrator able to roll back both copies can defeat it. Never infer independent durability from
 two adapter names or silently recreate a

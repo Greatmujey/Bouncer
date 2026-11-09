@@ -8,6 +8,11 @@ import { pathToFileURL } from 'node:url';
 import nearApi from 'near-api-js';
 import { build } from 'esbuild';
 import { webcrypto } from 'node:crypto';
+import {inflateRawSync} from 'node:zlib';
+import {buildV14PhoneResearchPlan} from '../agent/native-v14-phone-plan.mjs';
+import {deriveV14OriginalBinding} from '../agent/v14-original-witness.mjs';
+import {V14_TESTNET_ARTIFACT} from '../shared/v14-testnet-artifact.mjs';
+import {V14_PHONE_RESEARCH_ARTIFACTS as pinnedArtifacts} from '../shared/v14-phone-research-artifacts.mjs';
 import {createV14BrowserOriginalCheckpointHandler} from '../infrastructure/v14-browser-original-checkpoint-edge.mjs';
 import {V14_BROWSER_CHECKPOINT_ENDPOINT} from '../web-src/v14-browser-independent-store.mjs';
 import {fixture,scope,owner,vault} from '../tests/v14-witness-fixture.mjs';
@@ -22,13 +27,22 @@ const compiled=await build({stdin:{contents:[
   "export * from './web-src/v14-browser-independent-store.mjs';",
   "export * from './web-src/v14-phone-wallet-plan.mjs';",
   "export * from './web-src/v14-phone-wallet-prompt.mjs';",
+  "export * from './web-src/v14-setup-read-client.mjs';",
 ].join('\n'),resolveDir:process.cwd(),sourcefile:'synthetic-browser-original-entry.mjs'},bundle:true,format:'iife',
   globalName:'BouncerSyntheticOriginal',platform:'browser',target:'es2020',write:false});
-const {review,binding,inputs}=fixture(),key='a'.repeat(64),capability='b'.repeat(64),originalHash=nearApi.utils.serialize.base_encode(Buffer.alloc(32,33));
+const {inputs}=fixture();
+inputs.loaderWasm=fs.readFileSync('web/artifacts/v14-research-loader.wasm');
+inputs.compressed=fs.readFileSync('web/artifacts/v14-research.deflate');
+inputs.vaultWasm=inflateRawSync(inputs.compressed,{maxOutputLength:V14_TESTNET_ARTIFACT.bytes});
+inputs.trustedArtifacts={vault_sha256:pinnedArtifacts.vault_sha256,loader_sha256:pinnedArtifacts.loader_sha256};
+inputs.mission.goals.find(item=>item.kind==='storage').goal.contract_code_hash=V14_TESTNET_ARTIFACT.near_code_hash;
+const review=buildV14PhoneResearchPlan(inputs).review,
+  binding=deriveV14OriginalBinding({...inputs,review,trustedReviewSha256:review.review_sha256,scopeId:scope}),
+  key='a'.repeat(64),capability='b'.repeat(64),originalHash=nearApi.utils.serialize.base_encode(Buffer.alloc(32,33));
 const digest=value=>createHash('sha256').update(value).digest('hex');
 const input={review,scope,owner,vault,key,capability,originalHash,blockHash:nearApi.utils.serialize.base_encode(Buffer.alloc(32,90)),stageId:binding.stages[0].id,
   loaderBase64:Buffer.from(inputs.loaderWasm).toString('base64'),compressedBase64:Buffer.from(inputs.compressed).toString('base64'),
-  trustedArtifacts:{...inputs.trustedArtifacts,compressed_sha256:digest(inputs.compressed)}};
+  trustedArtifacts:pinnedArtifacts};
 const origin='https://bouncer-near.vercel.app';
 const browser=await chromium.launch({executablePath,args:['--no-sandbox','--disable-gpu'],headless:true});
 async function initialize(page,brandNew) {
@@ -45,7 +59,7 @@ async function initialize(page,brandNew) {
 }
 try {
   for(const width of [1280,390]) {
-    let remote={revision:0,head_sha256:'0'.repeat(64),events:[]},loseNext=false;
+    let remote={revision:0,head_sha256:'0'.repeat(64),events:[]},loseNext=false,preflights=0;
     const project='https://jiouaqwxkvlkmvyumzwc.supabase.co';
     const getEnv=name=>({BOUNCER_V14_BROWSER_CHECKPOINT_ENABLE:'1',SUPABASE_URL:project,
       SUPABASE_SERVICE_ROLE_KEY:'synthetic-service-role'})[name];
@@ -64,6 +78,14 @@ try {
     await page.route('**/*',async route=>{
       const request=route.request(),url=request.url();
       if(url===`${origin}/` && request.method()==='GET')return route.fulfill({status:200,contentType:'text/html',body:'<!doctype html><title>Synthetic original checkpoint</title>'});
+      if(url===`${origin}/api/native-mission/v14-preflight` && request.method()==='POST') {
+        preflights++;const data=request.postDataJSON(),stage=review.stages.find(item=>item.id===data.stageId);
+        assert.equal(data.scopeId,scope);assert.equal(request.headers()['x-bouncer-native-mission'],'v1');
+        return route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({status:'V14_SETUP_PREFLIGHT_MATCH',network:'testnet',
+          owner,vault,stage_id:data.stageId,review_sha256:review.review_sha256,action_commitment_sha256:stage.action_commitment_sha256,
+          prior_original_hashes:data.prior.map(item=>item.tx_hash),final_block_hash:input.blockHash,checked_at_ms:Date.now(),
+          wallet_transaction_authorized:false,transaction_sent:false})});
+      }
       if(url===V14_BROWSER_CHECKPOINT_ENDPOINT && ['POST','OPTIONS'].includes(request.method())) {
         const method=request.method(),body=method==='POST'?request.postData():undefined;
         const forwarded=new Request(url,{method,headers:{...request.headers(),origin},...(body?{body}:{})});
@@ -84,19 +106,15 @@ try {
     assert.deepEqual(plan,{commitments:review.stages.map(stage=>stage.action_commitment_sha256),authorized:false});
     assert.deepEqual(await initialize(page,true),{secure:true,indexedDB:true});
     const first=await page.evaluate(async input=>{
-      await window.syntheticWitness.reserve();let walletCalls=0,preflights=0;
+      await window.syntheticWitness.reserve();let walletCalls=0;
       const wallet={manifest:{features:{signAndSendTransaction:true}},async signAndSendTransaction(request){
         walletCalls++;const state=await window.syntheticWitness.inspect();
         if(state.pending?.stage_id!==input.stageId||request.network!=='testnet')throw Error('claim missing');
         throw Error('synthetic wallet closed without a result');
       }};
-      const verifyPreflight=async({stageId,prior})=>{
-        preflights++;const stage=input.review.stages.find(item=>item.id===stageId);
-        return {status:'V14_SETUP_PREFLIGHT_MATCH',network:'testnet',owner:input.owner,vault:input.vault,stage_id:stageId,
-          review_sha256:input.review.review_sha256,action_commitment_sha256:stage.action_commitment_sha256,
-          prior_original_hashes:prior.map(item=>item.tx_hash),final_block_hash:input.blockHash,checked_at_ms:Date.now(),
-          wallet_transaction_authorized:false,transaction_sent:false};
-      };
+      const client=await window.BouncerSyntheticOriginal.createV14SetupReadClient({review:input.review,
+        trustedReviewSha256:input.review.review_sha256,scopeId:input.scope,location:window.location,isCurrent:()=>true});
+      const verifyPreflight=client.preflight;
       const bytes=value=>Uint8Array.from(atob(value),char=>char.charCodeAt(0));
       const prompt=await window.BouncerSyntheticOriginal.prepareV14PhoneWalletPrompt({review:input.review,
         trustedReviewSha256:input.review.review_sha256,trustedArtifacts:input.trustedArtifacts,
@@ -110,10 +128,10 @@ try {
       });
       const encoded=JSON.stringify(record);
       return {revision:record.revision,encrypted:!encoded.includes(input.review.review_sha256)&&!encoded.includes(input.key)&&!encoded.includes('wallet_claim'),
-        walletCalls,preflights,walletResult:result.status};
+        walletCalls,walletResult:result.status};
     },input);
-    assert.deepEqual(first,{revision:2,encrypted:true,walletCalls:1,preflights:2,walletResult:'WALLET_RESULT_UNKNOWN'});
-    assert.equal(remote.revision,2);
+    assert.deepEqual(first,{revision:2,encrypted:true,walletCalls:1,walletResult:'WALLET_RESULT_UNKNOWN'});
+    assert.equal(preflights,2);assert.equal(remote.revision,2);
     // Navigation/reload preserves the encrypted local record, not a new scope.
     await page.reload();await page.addScriptTag({content:compiled.outputFiles[0].text});await initialize(page,false);
     const restored=await page.evaluate(async input=>{

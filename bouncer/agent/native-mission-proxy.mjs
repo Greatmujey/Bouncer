@@ -7,9 +7,10 @@
 import { isIP } from 'node:net';
 import { readBoundedBytes } from '../shared/bounded-json.mjs';
 
-export const NATIVE_PROXY_ACTIONS = Object.freeze(['config','preview','challenge','execute','originals','recover']);
+export const NATIVE_PROXY_ACTIONS = Object.freeze(['config','preview','challenge','execute','originals','recover','v14-preflight','v14-receipt']);
 export const DEFAULT_WALLET_ORIGIN = 'https://bouncer-near.vercel.app';
-const MAX_BODY = 8192, MAX_RESPONSE = 131072;
+const MAX_BODY = 8192, MAX_SETUP_BODY = 24_000, MAX_RESPONSE = 131072;
+const setupAction = action => action==='v14-preflight'||action==='v14-receipt';
 const noStore = { 'content-type':'application/json; charset=utf-8', 'cache-control':'no-store',
   'x-content-type-options':'nosniff', 'referrer-policy':'no-referrer' };
 const exactRoute = action => `/api/native-mission/${action}`;
@@ -45,9 +46,9 @@ export function validateNativeProxySecret(value) {
   return value;
 }
 
-async function requestBody(req) {
+async function requestBody(req, limit=MAX_BODY) {
   const length = req.headers['content-length'];
-  if (length !== undefined && (typeof length !== 'string' || !/^\d+$/.test(length) || BigInt(length) > BigInt(MAX_BODY))) throw Error();
+  if (length !== undefined && (typeof length !== 'string' || !/^\d+$/.test(length) || BigInt(length) > BigInt(limit))) throw Error();
   let bytes;
   // Vercel may already have parsed application/json before invoking a Node
   // handler. Otherwise consume the raw stream with the same size limit.
@@ -55,13 +56,13 @@ async function requestBody(req) {
     if (Buffer.isBuffer(req.body) || typeof req.body === 'string') bytes = Buffer.from(req.body);
     else if (req.body && typeof req.body === 'object') bytes = Buffer.from(JSON.stringify(req.body));
     else throw Error();
-    if (bytes.length > MAX_BODY) throw Error();
+    if (bytes.length > limit) throw Error();
   } else {
     const chunks = []; let total = 0;
     const timer = setTimeout(() => req.destroy(), 10_000); timer.unref?.();
     try {
       for await (const chunk of req) {
-        total += chunk.length; if (total > MAX_BODY) throw Error(); chunks.push(chunk);
+        total += chunk.length; if (total > limit) throw Error(); chunks.push(chunk);
       }
       bytes = Buffer.concat(chunks, total);
     } finally { clearTimeout(timer); }
@@ -77,7 +78,9 @@ export function createVercelNativeMissionProxy({ action, env = process.env, fetc
   return async function proxy(req, res) {
     // Do not expose an active-looking endpoint until the operator explicitly
     // configures it. This makes the existing static-only deployment fail shut.
-    if (env.BOUNCER_NATIVE_MISSION_PROXY_ENABLED !== '1') return reply(res, 404, {error:'unavailable'});
+    if (setupAction(action) ? env.BOUNCER_V14_SETUP_PROXY_ENABLED !== '1' : env.BOUNCER_NATIVE_MISSION_PROXY_ENABLED !== '1') {
+      return reply(res, 404, {error:'unavailable'});
+    }
     let siteOrigin, backendOrigin, secret, url;
     try {
       siteOrigin = validateNativeProxySiteOrigin(env.BOUNCER_WALLET_ORIGIN || DEFAULT_WALLET_ORIGIN);
@@ -96,7 +99,7 @@ export function createVercelNativeMissionProxy({ action, env = process.env, fetc
       return reply(res, 403, {error:'unavailable'});
     }
     let bytes;
-    try { if (!config) bytes = await requestBody(req); }
+    try { if (!config) bytes = await requestBody(req,setupAction(action)?MAX_SETUP_BODY:MAX_BODY); }
     catch { return reply(res, 400, {error:'unavailable',do_not_retry:true}); }
     try {
       // Neither cookies nor arbitrary client headers are forwarded. TLS and a
@@ -104,7 +107,7 @@ export function createVercelNativeMissionProxy({ action, env = process.env, fetc
       // and one-use database challenge remain the spending authority.
       const upstream = await fetchImpl(`${backendOrigin}${exactRoute(action)}`, {
         method:config ? 'GET' : 'POST', redirect:'error', cache:'no-store',
-        signal:AbortSignal.timeout(action === 'execute' ? 150_000 : action === 'recover' ? 110_000 : 25_000),
+        signal:AbortSignal.timeout(action === 'execute' ? 150_000 : action === 'recover' || setupAction(action) ? 110_000 : 25_000),
         headers:{ origin:siteOrigin, 'x-bouncer-native-mission':'v1', 'x-bouncer-proxy-secret':secret,
           ...(config ? {} : {'content-type':'application/json'}) },
         ...(config ? {} : {body:bytes}),

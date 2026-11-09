@@ -29,10 +29,12 @@ async function readBoundedBytes(response, { maxBytes = 64 * 1024, label = "HTTP"
 }
 
 // agent/native-mission-proxy.mjs
-var NATIVE_PROXY_ACTIONS = Object.freeze(["config", "preview", "challenge", "execute", "originals", "recover"]);
+var NATIVE_PROXY_ACTIONS = Object.freeze(["config", "preview", "challenge", "execute", "originals", "recover", "v14-preflight", "v14-receipt"]);
 var DEFAULT_WALLET_ORIGIN = "https://bouncer-near.vercel.app";
 var MAX_BODY = 8192;
+var MAX_SETUP_BODY = 24e3;
 var MAX_RESPONSE = 131072;
+var setupAction = (action) => action === "v14-preflight" || action === "v14-receipt";
 var noStore = {
   "content-type": "application/json; charset=utf-8",
   "cache-control": "no-store",
@@ -73,15 +75,15 @@ function validateNativeProxySecret(value) {
   if (typeof value !== "string" || !/^[a-f0-9]{64}$/.test(value)) throw new Error("a 32-byte random proxy secret in lower-case hex is required");
   return value;
 }
-async function requestBody(req) {
+async function requestBody(req, limit = MAX_BODY) {
   const length = req.headers["content-length"];
-  if (length !== void 0 && (typeof length !== "string" || !/^\d+$/.test(length) || BigInt(length) > BigInt(MAX_BODY))) throw Error();
+  if (length !== void 0 && (typeof length !== "string" || !/^\d+$/.test(length) || BigInt(length) > BigInt(limit))) throw Error();
   let bytes;
   if (req.body !== void 0) {
     if (Buffer.isBuffer(req.body) || typeof req.body === "string") bytes = Buffer.from(req.body);
     else if (req.body && typeof req.body === "object") bytes = Buffer.from(JSON.stringify(req.body));
     else throw Error();
-    if (bytes.length > MAX_BODY) throw Error();
+    if (bytes.length > limit) throw Error();
   } else {
     const chunks = [];
     let total = 0;
@@ -90,7 +92,7 @@ async function requestBody(req) {
     try {
       for await (const chunk of req) {
         total += chunk.length;
-        if (total > MAX_BODY) throw Error();
+        if (total > limit) throw Error();
         chunks.push(chunk);
       }
       bytes = Buffer.concat(chunks, total);
@@ -105,7 +107,9 @@ async function requestBody(req) {
 function createVercelNativeMissionProxy({ action, env = process.env, fetchImpl = globalThis.fetch } = {}) {
   if (!NATIVE_PROXY_ACTIONS.includes(action) || !env || typeof fetchImpl !== "function") throw new Error("invalid mission proxy");
   return async function proxy(req, res) {
-    if (env.BOUNCER_NATIVE_MISSION_PROXY_ENABLED !== "1") return reply(res, 404, { error: "unavailable" });
+    if (setupAction(action) ? env.BOUNCER_V14_SETUP_PROXY_ENABLED !== "1" : env.BOUNCER_NATIVE_MISSION_PROXY_ENABLED !== "1") {
+      return reply(res, 404, { error: "unavailable" });
+    }
     let siteOrigin, backendOrigin, secret, url;
     try {
       siteOrigin = validateNativeProxySiteOrigin(env.BOUNCER_WALLET_ORIGIN || DEFAULT_WALLET_ORIGIN);
@@ -123,7 +127,7 @@ function createVercelNativeMissionProxy({ action, env = process.env, fetchImpl =
     }
     let bytes;
     try {
-      if (!config) bytes = await requestBody(req);
+      if (!config) bytes = await requestBody(req, setupAction(action) ? MAX_SETUP_BODY : MAX_BODY);
     } catch {
       return reply(res, 400, { error: "unavailable", do_not_retry: true });
     }
@@ -132,7 +136,7 @@ function createVercelNativeMissionProxy({ action, env = process.env, fetchImpl =
         method: config ? "GET" : "POST",
         redirect: "error",
         cache: "no-store",
-        signal: AbortSignal.timeout(action === "execute" ? 15e4 : action === "recover" ? 11e4 : 25e3),
+        signal: AbortSignal.timeout(action === "execute" ? 15e4 : action === "recover" || setupAction(action) ? 11e4 : 25e3),
         headers: {
           origin: siteOrigin,
           "x-bouncer-native-mission": "v1",

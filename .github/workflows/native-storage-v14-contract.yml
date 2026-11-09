@@ -214,6 +214,11 @@ jobs:
             exit 1
           fi
           cat "$RUNNER_TEMP/v14-browser-result.log"
+          if ! node scripts/test-v14-browser-witness.mjs > "$RUNNER_TEMP/v14-browser-witness-result.log" 2>&1; then
+            python3 -c 'import os; s=open(os.environ["RUNNER_TEMP"]+"/v14-browser-witness-result.log").read()[-4500:]; print("::error title=Synthetic V14 phone witness browser failed::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
+            exit 1
+          fi
+          cat "$RUNNER_TEMP/v14-browser-witness-result.log"
 
   public-preflight:
     if: github.event_name == 'workflow_dispatch' && inputs.run_v14_readiness == true && inputs.export_public_artifacts != true

@@ -53,6 +53,9 @@ test('real Railway entry starts in standby and exits cleanly without creating st
     env:{PATH:process.env.PATH,BOUNCER_NATIVE_MISSION_ENABLED:'1',BOUNCER_NATIVE_MISSION_INGRESS:'railway-proxy',
       BOUNCER_NATIVE_MISSION_BIND:'0.0.0.0'},encoding:'utf8',timeout:5000});
   assert.notEqual(failed.status,0);assert.match(failed.stderr,/did not start/);
+  const unsafeSetup=spawnSync(process.execPath,[fileURLToPath(new URL('../scripts/start-railway-native.mjs',import.meta.url))],{
+    env:{PATH:process.env.PATH,BOUNCER_V14_SETUP_READONLY:'1'},encoding:'utf8',timeout:5000});
+  assert.notEqual(unsafeSetup.status,0);assert.match(unsafeSetup.stderr,/did not start/);
 });
 
 test('standby exposes only an honest non-spending status, no mission APIs or reflected input',async()=>{

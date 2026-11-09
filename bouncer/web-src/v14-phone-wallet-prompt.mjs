@@ -62,8 +62,9 @@ export async function prepareV14PhoneWalletPrompt({review,trustedReviewSha256,tr
           before.next_setup_stage!==stage.id||!Array.isArray(before.setup)||before.setup.length!==index)throw fail();
       const prior=structuredClone(before.setup);
       async function preflight() {
-        const result=await verifyPreflight({review:structuredClone(immutableReview),scopeId,stageId:stage.id,prior:structuredClone(prior)});
+        const result=structuredClone(await verifyPreflight({review:structuredClone(immutableReview),scopeId,stageId:stage.id,prior:structuredClone(prior)}));
         current();validatePreflight(result,{review:immutableReview,stage:immutableStage,prior,now:now()});
+        return result;
       }
       await preflight();
       const claimed=await witness.claimWalletStage(stage.id);current();
@@ -72,10 +73,11 @@ export async function prepareV14PhoneWalletPrompt({review,trustedReviewSha256,tr
           claimed.pending.tx_hash!==null||!same(claimed.setup,prior))throw fail();
       // Failure here leaves an explicit one-shot claim. It is NOT permission
       // to prompt again; reconciliation must determine what happened.
-      await preflight();
+      const latestPreflight=await preflight();
       const reread=await witness.inspect();current();
       if(reread.revision!==claimed.revision||reread.head_sha256!==claimed.head_sha256||
           !same(reread.pending,claimed.pending)||!same(reread.setup,prior))throw fail();
+      validatePreflight(latestPreflight,{review:immutableReview,stage:immutableStage,prior,now:now()});
       const localClaim=[scopeId,immutableReview.review_sha256,stage.id].join('|');
       if(usedClaims.has(localClaim))throw fail();
       usedClaims.add(localClaim); // before executing wallet code, even a synchronous throw

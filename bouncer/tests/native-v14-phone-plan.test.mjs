@@ -3,6 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import zlib from 'node:zlib';
+import {readFileSync} from 'node:fs';
 import nearApi from 'near-api-js';
 import { ORACLE_TESTNET_PROJECT } from '../agent/oracle-outlayer.mjs';
 import { MARKET_SUMMARY_PROGRAM } from '../agent/market-summary.mjs';
@@ -12,8 +13,18 @@ import { syntheticV14MeteorRequest } from '../integration/v14-synthetic-meteor.m
 import { validateKnownFirstPartyActionRequest } from '@meteorwallet/connect-shared/internal';
 import { inspectV14PhoneSetupCompletion } from '../agent/native-v14-phone-completion.mjs';
 import { createV14SetupRpcVerifier } from '../agent/v14-setup-rpc-verifier.mjs';
+import { createV14SetupStagePreflight } from '../agent/v14-setup-stage-preflight.mjs';
+import { createV14SetupReadService } from '../agent/v14-setup-read-service.mjs';
+import { V14_PHONE_RESEARCH_ARTIFACTS } from '../shared/v14-phone-research-artifacts.mjs';
+import { V14_TESTNET_ARTIFACT } from '../shared/v14-testnet-artifact.mjs';
+import { ORACLE_PROJECT_ID,ORACLE_PROJECT_UUID,ORACLE_TESTNET_PROGRAM } from '../agent/oracle-testnet-registry.mjs';
+import { V11_SELECTED_WASM_FEATURES } from '../agent/svalin-setup-preflight.mjs';
 import { createV14OriginalWitness,deriveV14OriginalBinding,V14_WITNESS_GENESIS } from '../agent/v14-original-witness.mjs';
 import { ReadOnlyNearReceiptProvider } from '../agent/read-only-near-receipts.mjs';
+import {IDBFactory} from 'fake-indexeddb';
+import {createV14BrowserWitnessStore} from '../web-src/v14-browser-witness-store.mjs';
+import {createV14BrowserOriginalWitness} from '../web-src/v14-browser-original-witness.mjs';
+import {prepareV14PhoneWalletPrompt} from '../web-src/v14-phone-wallet-prompt.mjs';
 
 const owner='owner.testnet',vault=`native.${owner}`,sha=bytes=>crypto.createHash('sha256').update(bytes).digest('hex');
 const codeHash=bytes=>nearApi.utils.serialize.base_encode(crypto.createHash('sha256').update(bytes).digest());
@@ -229,8 +240,15 @@ test('read-only V14 completion requires all distinct originals and one fresh pin
 
 // The receipt verifier fetches the retained original through the read-only
 // provider, then pins all public state to one synthetic FINAL block.
-function rpcVerifierFixture({market=false}={}) {
+function rpcVerifierFixture({market=false,realArtifacts=false}={}) {
   const raw=fixture();
+  if(realArtifacts) {
+    raw.loaderWasm=readFileSync(new URL('../web/artifacts/v14-research-loader.wasm',import.meta.url));
+    raw.compressed=readFileSync(new URL('../web/artifacts/v14-research.deflate',import.meta.url));
+    raw.vaultWasm=zlib.inflateRawSync(raw.compressed,{maxOutputLength:V14_TESTNET_ARTIFACT.bytes});
+    raw.trustedArtifacts={vault_sha256:V14_PHONE_RESEARCH_ARTIFACTS.vault_sha256,loader_sha256:V14_PHONE_RESEARCH_ARTIFACTS.loader_sha256};
+    raw.mission.goals.find(item=>item.kind==='storage').goal.contract_code_hash=V14_TESTNET_ARTIFACT.near_code_hash;
+  }
   if(market) {
     const [compute,price,storage]=raw.mission.goals;
     compute.kind='market';compute.goal.input={from_goal_id:'price',quantity:10};compute.goal.program={...MARKET_SUMMARY_PROGRAM};
@@ -383,4 +401,110 @@ test('setup verification fails closed on a forged receipt, stale/mixed state, ch
   assert.throws(()=>createV14SetupRpcVerifier({planInputs:f.inputs,provider:{...f.provider},now:f.now}),/unresolved/);
   const otherRpc=new ReadOnlyNearReceiptProvider('https://rpc.testnet.near.org');
   assert.throws(()=>createV14SetupRpcVerifier({planInputs:f.inputs,provider:otherRpc,now:f.now}),/unresolved/);
+});
+
+// Synthetic public RPC only. A matching result is never owner authorization.
+test('fresh stage preflight checks every earlier original and the latest cumulative state',async()=>{
+  const f=rpcVerifierFixture(),preflight=createV14SetupStagePreflight({planInputs:f.inputs,provider:f.provider,now:f.now});
+  for(let index=1;index<6;index++) {
+    f.setStage(index-1);
+    const prior=f.prior.slice(0,index).map((item,i)=>({stage_id:f.review.stages[i].id,tx_hash:item.trustedOriginalHash,recorded_final_block_hash:hash(9)}));
+    const result=await preflight({review:f.review,scopeId:f.binding.scope_id,stageId:f.review.stages[index].id,prior});
+    assert.equal(result.status,'V14_SETUP_PREFLIGHT_MATCH');assert.deepEqual(result.prior_original_hashes,prior.map(item=>item.tx_hash));
+    assert.equal(result.final_block_hash,hash(9));assert.equal(result.wallet_transaction_authorized,false);assert.equal(result.transaction_sent,false);
+  }
+  const prior=f.prior.slice(0,2).map((item,i)=>({stage_id:f.review.stages[i].id,tx_hash:item.trustedOriginalHash,recorded_final_block_hash:hash(9)}));
+  f.setStage(1);const args={review:f.review,scopeId:f.binding.scope_id,stageId:f.review.stages[2].id,prior};
+  await assert.rejects(preflight({...args,prior:[...prior].reverse()}),/unavailable or inconsistent/);
+  await assert.rejects(preflight({...args,prior:[prior[0],{...prior[1],tx_hash:prior[0].tx_hash}]}),/unavailable or inconsistent/);
+  const altered=structuredClone(f.review);altered.stages[2].actions[0].deposit_yocto='2';
+  await assert.rejects(preflight({...args,review:altered}),/unavailable or inconsistent/);
+  const receipts=f.provider.txStatusReceipts;f.provider.txStatusReceipts=async(tx,signer,finality)=>{
+    const result=await receipts(tx,signer,finality);if(tx===prior[0].tx_hash)result.final_execution_status='EXECUTED';return result};
+  await assert.rejects(preflight(args),/unavailable or inconsistent/);
+});
+
+function initialReadiness(f) {
+  const block=hash(9),originalQuery=f.provider.query.bind(f.provider),originalView=f.provider.callFunctionRaw.bind(f.provider),
+    setupProtocol=f.provider.experimental_protocolConfig.bind(f.provider);
+  f.setStage(0);f.state.owner.amount=String(16n*10n**24n);f.state.owner.storage_usage=264;
+  f.provider.viewTestnetAccountPresenceAt=async()=>({exists:false,block_hash:block});
+  f.provider.experimental_protocolConfig=async()=>({chain_id:'testnet',protocol_version:90,runtime_config:{storage_amount_per_byte:'10000000000000000000',
+    wasm_config:Object.fromEntries(V11_SELECTED_WASM_FEATURES.map(feature=>[feature,true]))}});
+  f.provider.gasPrice=async()=>({gas_price:'100000000'});
+  f.provider.query=async request=>{
+    if(request.request_type==='view_access_key')return {block_hash:block,nonce:0,permission:'FullAccess'};
+    if(request.request_type==='view_account'&&request.account_id==='outlayer.testnet')return {block_hash:block,code_hash:hash(8)};
+    return originalQuery(request);
+  };
+  f.provider.callFunctionRaw=async(contract,method,args,ref)=>{
+    if(contract!=='outlayer.testnet')return originalView(contract,method,args,ref);
+    const p=ORACLE_TESTNET_PROGRAM,values={get_project:{project_id:ORACLE_PROJECT_ID,uuid:ORACLE_PROJECT_UUID,owner:'zavodil2.testnet'},
+      get_version:{wasm_hash:p.sha256,source:{WasmUrl:{url:p.url,hash:p.sha256,build_target:p.build_target}}},get_project_pricing:null};
+    return {block_hash:block,result:[...Buffer.from(JSON.stringify(values[method]))]};
+  };
+  return {block,setupProtocol};
+}
+
+test('first stage requires candidate absence, sufficient reviewed principal before gas, and exact owner FullAccess',async()=>{
+  const f=rpcVerifierFixture(),{block}=initialReadiness(f);
+  const preflight=createV14SetupStagePreflight({planInputs:f.inputs,provider:f.provider,now:f.now}),
+    args={review:f.review,scopeId:f.binding.scope_id,stageId:f.review.stages[0].id,prior:[]};
+  assert.equal((await preflight(args)).status,'V14_SETUP_PREFLIGHT_MATCH');
+  f.provider.viewTestnetAccountPresenceAt=async()=>({exists:true,block_hash:block});
+  await assert.rejects(preflight(args),/unavailable or inconsistent/);
+  f.provider.viewTestnetAccountPresenceAt=async()=>({exists:false,block_hash:block});
+  const query=f.provider.query;f.provider.query=async request=>request.request_type==='view_access_key'?
+    {block_hash:block,nonce:0,permission:{FunctionCall:{}}}:query(request);
+  await assert.rejects(preflight(args),/unavailable or inconsistent/);
+  f.provider.query=query;
+  f.state.ownerKeys.keys.push({public_key:f.inputs.agentPublicKeys.compute,access_key:{nonce:0,permission:'FullAccess'}});
+  await assert.rejects(preflight(args),/unavailable or inconsistent/);f.state.ownerKeys.keys.pop();
+  f.state.owner.amount='1';await assert.rejects(preflight(args),/unavailable or inconsistent/);
+});
+
+test('integrated synthetic phone prompt uses real preflight and receipt verifiers between stages',async()=>{
+  const f=rpcVerifierFixture(),{setupProtocol}=initialReadiness(f),remote=witnessMemoryStore();
+  const local=await createV14BrowserWitnessStore({indexedDB:new IDBFactory(),crypto:crypto.webcrypto,owner,vault,scopeId:f.binding.scope_id,
+    journalKeyHex:'a'.repeat(64),initializeBrandNew:true});
+  const witness=await createV14BrowserOriginalWitness({review:f.review,trustedReviewSha256:f.review.review_sha256,
+    scopeId:f.binding.scope_id,localStore:local,independentStore:remote,verifySetupReceipt:f.verify,crypto:crypto.webcrypto});
+  const preflight=createV14SetupStagePreflight({planInputs:f.inputs,provider:f.provider,now:f.now});
+  await witness.reserve();let count=0;
+  const wallet={manifest:{features:{signAndSendTransaction:true}},async signAndSendTransaction(request){
+    const index=count++;assert.equal(request.signerId,owner);
+    const pending=(await witness.inspect()).pending;assert.equal(pending.stage_id,f.review.stages[index].id);assert.equal(pending.tx_hash,null);
+    // Simulate the change in chain state only after a fake wallet response.
+    f.provider.experimental_protocolConfig=setupProtocol;f.setStage(index);
+    return {transaction:{hash:f.prior[index].trustedOriginalHash}};
+  }};
+  for(let index=0;index<6;index++) {
+    const stageId=f.review.stages[index].id;
+    const prompt=await prepareV14PhoneWalletPrompt({review:f.review,trustedReviewSha256:f.review.review_sha256,
+      trustedArtifacts:{...f.inputs.trustedArtifacts,compressed_sha256:sha(f.inputs.compressed)},
+      loaderBytes:new Uint8Array(f.inputs.loaderWasm),compressedBytes:new Uint8Array(f.inputs.compressed),
+      scopeId:f.binding.scope_id,stageId,witness,wallet,verifyPreflight:preflight,location:{origin:'https://bouncer-near.vercel.app'},
+      isTopLevel:true,isCurrent:()=>true,now:f.now,crypto:crypto.webcrypto});
+    const result=await prompt.invoke();assert.equal(result.status,'ORIGINAL_HASH_RETAINED');
+    assert.equal(result.original_hash,f.prior[index].trustedOriginalHash);
+    await witness.verifyWalletOriginal({stageId});
+  }
+  const state=await witness.inspect();assert.equal(count,6);assert.equal(state.setup.length,6);
+  assert.equal(state.next_setup_stage,null);assert.deepEqual(await local.read(),await remote.read());
+  local.close();
+});
+
+test('read-only setup service pins the public artifacts and verifies an exact retained original',async()=>{
+  const f=rpcVerifierFixture({realArtifacts:true}),{setupProtocol}=initialReadiness(f);
+  const service=createV14SetupReadService({provider:f.provider,now:f.now});
+  const scopeId=f.binding.scope_id,stageId=f.review.stages[0].id,txHash=f.prior[0].trustedOriginalHash;
+  const request={review:f.review,scopeId,stageId,prior:[]};
+  const preflight=await service.preflight(request);assert.equal(preflight.status,'V14_SETUP_PREFLIGHT_MATCH');
+  assert.equal(preflight.transaction_sent,false);assert.equal(preflight.wallet_transaction_authorized,false);
+  f.provider.experimental_protocolConfig=setupProtocol;f.setStage(0);
+  assert.deepEqual(await service.receipt({review:f.review,scopeId,stageId,txHash}),{tx_hash:txHash,final_block_hash:hash(9)});
+  const changed=structuredClone(f.review);changed.artifacts.loader_sha256='f'.repeat(64);
+  await assert.rejects(service.preflight({...request,review:changed}),/unavailable/);
+  await assert.rejects(service.receipt({review:f.review,scopeId,stageId,txHash:hash(99)}),/unavailable/);
+  await assert.rejects(service.preflight({...request,private_key:'not allowed'}),/unavailable/);
 });
