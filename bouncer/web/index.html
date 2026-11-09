@@ -187,32 +187,35 @@
         <button class="account-entry-secondary" id="wallet-bootstrap-match-check" type="button">Check file against existing checkpoint →</button>
         <p class="account-view-status" id="wallet-bootstrap-match-status" role="status" aria-live="polite"></p>
       </div>
-      <strong>Recover the encrypted setup copy</strong>
-      <p class="account-view-status">A wallet message reads an existing encrypted recovery kit and original transaction hashes. It does not create a vault, send a transaction or grant spending access. If a result is unknown, do not approve it again.</p>
-      <p class="account-view-status">Save the encrypted file somewhere separate and keep its recovery passphrase safe. A leaked file can be guessed offline; a lost file or passphrase may strand funds.</p>
+      <strong>Read the existing checkpoint</strong>
+      <p class="account-view-status">A wallet message reads the existing encrypted kit and any retained transaction hashes. It does not create a vault, send a transaction or grant spending access. Never resend a transaction whose result is unknown.</p>
+      <p class="account-view-status">To save a separate recovery file, sign the read-only message below, then unlock and save the file on this device. Keep it and the passphrase safe: a leaked file can be guessed offline; a lost file or passphrase may strand funds.</p>
       <button class="account-entry-secondary" id="wallet-bootstrap-recovery-read" type="button">Sign a read-only online recovery message →</button>
-      <label for="wallet-bootstrap-recovery-file">Or choose an existing encrypted recovery file</label>
+      <label for="wallet-bootstrap-recovery-file">Already have a Bouncer recovery export? Choose it here — not the preparation file checked above</label>
       <input id="wallet-bootstrap-recovery-file" type="file" accept="application/json,.json">
       <button class="account-entry-secondary" id="wallet-bootstrap-recovery-import" type="button">Read encrypted file on this device →</button>
       <p class="account-view-status" id="wallet-bootstrap-recovery-status" role="status" aria-live="polite"></p>
+      <div id="wallet-bootstrap-recovery-originals" class="native-mission-receipts" aria-label="Retained setup originals" hidden></div>
+      <div id="wallet-bootstrap-recovery-backup" hidden>
+        <strong>Unlock and save the recovery file</strong>
+        <p class="account-view-status">The recovery export includes the owner-attested encrypted kit; it is a different file from the original preparation file. It does not prove the latest history.</p>
+        <label for="wallet-bootstrap-recovery-passphrase">Unlock before saving. Recovery kit passphrase — not your wallet seed</label>
+        <input id="wallet-bootstrap-recovery-passphrase" type="password" minlength="16" maxlength="1024" autocomplete="off" autocapitalize="off" spellcheck="false">
+        <button class="account-entry-secondary" id="wallet-bootstrap-recovery-unlock" type="button">Check passphrase on this device →</button>
+        <button class="account-entry-secondary" id="wallet-bootstrap-recovery-export" type="button" disabled>Save encrypted recovery file →</button>
+        <p class="account-view-status">After unlocking a saved recovery file, you can compare it with the online checkpoint using another identity message. A match does not prove the file is separately stored or that either copy is the latest.</p>
+        <button class="account-entry-secondary" id="wallet-bootstrap-recovery-compare" type="button" hidden disabled>Compare saved file with online checkpoint →</button>
+        <p class="account-view-status" id="wallet-bootstrap-recovery-compare-status" role="status" aria-live="polite"></p>
+      </div>
       <div id="wallet-bootstrap-anchor-panel" hidden>
-        <strong>Separate encrypted recovery copy</strong>
-        <p class="account-view-status">Save the existing checkpoint to Railway, or restore it there if the primary service is unavailable. No vault or transaction is created. A second provider does not prove the latest history.</p>
+        <strong>Separate encrypted recovery copy on Railway</strong>
+        <p class="account-view-status">This is separate from downloading the recovery file above. Saving it writes the existing checkpoint to Railway; restoring it is read-only. Neither creates a vault or transaction, and a second provider does not prove the latest history.</p>
+        <p class="account-view-status"><strong>If you already tried to save to Railway, or are not sure, do not save again.</strong> A failed restore does not prove the copy is absent; keep your existing backups and stop to reconcile.</p>
         <label for="wallet-bootstrap-anchor-passphrase">Recovery passphrase — not your wallet seed</label>
         <input id="wallet-bootstrap-anchor-passphrase" type="password" minlength="16" maxlength="1024" autocomplete="off" autocapitalize="off" spellcheck="false">
         <button class="account-entry-secondary" id="wallet-bootstrap-anchor-save" type="button" hidden>Save encrypted copy to Railway →</button>
         <button class="account-entry-secondary" id="wallet-bootstrap-anchor-restore" type="button">Restore from Railway copy →</button>
         <p class="account-view-status" id="wallet-bootstrap-anchor-status" role="status" aria-live="polite"></p>
-      </div>
-      <div id="wallet-bootstrap-recovery-originals" class="native-mission-receipts" aria-label="Retained setup originals" hidden></div>
-      <div id="wallet-bootstrap-recovery-backup" hidden>
-        <button class="account-entry-secondary" id="wallet-bootstrap-recovery-export" type="button" disabled>Save encrypted recovery file →</button>
-        <label for="wallet-bootstrap-recovery-passphrase">Unlock before saving. Recovery kit passphrase — not your wallet seed</label>
-        <input id="wallet-bootstrap-recovery-passphrase" type="password" minlength="16" maxlength="1024" autocomplete="off" autocapitalize="off" spellcheck="false">
-        <button class="account-entry-secondary" id="wallet-bootstrap-recovery-unlock" type="button">Check passphrase on this device →</button>
-        <p class="account-view-status">After unlocking a saved recovery file, you can compare it with the online checkpoint using another identity message. A match does not prove the file is separately stored or that either copy is the latest.</p>
-        <button class="account-entry-secondary" id="wallet-bootstrap-recovery-compare" type="button" hidden disabled>Compare saved file with online checkpoint →</button>
-        <p class="account-view-status" id="wallet-bootstrap-recovery-compare-status" role="status" aria-live="polite"></p>
       </div>
     </section>
     <button class="account-entry-secondary" id="wallet-v14-recovery-open" type="button" hidden>Read V14 setup history →</button>

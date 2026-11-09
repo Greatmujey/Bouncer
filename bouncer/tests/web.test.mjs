@@ -217,6 +217,24 @@ test('workspace picker contains the six testnet wallets, WalletConnect and Googl
   assert.match(css, /prefers-reduced-motion:reduce/);
 });
 
+test('recovery screen distinguishes the two file types and warns before an uncertain Railway save', () => {
+  const html = fs.readFileSync(new URL('../web/index.html', import.meta.url), 'utf8');
+  const panel = html.slice(html.indexOf('id="wallet-bootstrap-recovery-panel"'), html.indexOf('id="wallet-v14-recovery-open"'));
+  assert.match(panel, /recovery export\? Choose it here — not the preparation file/i);
+  assert.match(panel, /recovery export includes the owner-attested encrypted kit; it is a different file/i);
+  assert.match(panel, /If you already tried to save to Railway, or are not sure, do not save again/i);
+  assert.match(panel, /A failed restore does not prove the copy is absent/i);
+  const position = id => {
+    const pattern = `id="${id}"`;
+    assert.equal(panel.split(pattern).length, 2, `${id} must occur once`);
+    return panel.indexOf(pattern);
+  };
+  assert.ok(position('wallet-bootstrap-recovery-read') < position('wallet-bootstrap-recovery-backup'));
+  assert.ok(position('wallet-bootstrap-recovery-passphrase') < position('wallet-bootstrap-recovery-unlock'));
+  assert.ok(position('wallet-bootstrap-recovery-unlock') < position('wallet-bootstrap-recovery-export'));
+  assert.ok(position('wallet-bootstrap-recovery-export') < position('wallet-bootstrap-anchor-panel'));
+});
+
 test('proof page distinguishes historical independent native lookup from self-hosted resource examples', () => {
   const html = fs.readFileSync(new URL('../web/index.html', import.meta.url), 'utf8');
   assert.match(html, /Independent OutLayer price lookup/);
