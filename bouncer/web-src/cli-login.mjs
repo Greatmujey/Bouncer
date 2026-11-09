@@ -6,7 +6,7 @@ import { isTestnetAccount } from './wallet-utils.mjs';
 const BASE58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
 const TESTNET_RPC = 'https://test.rpc.fastnear.com';
 
-function decodePublicKey(value) {
+export function decodePublicKey(value) {
   if (typeof value !== 'string' || !/^ed25519:[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(value)) throw new Error('Invalid CLI public key');
   const encoded = value.slice(8);
   let number = 0n;
@@ -21,7 +21,7 @@ function decodePublicKey(value) {
   return raw;
 }
 
-function decodeSignature(value) {
+export function decodeSignature(value) {
   if (typeof value !== 'string' || !/^[A-Za-z0-9+/]{86}==$/.test(value)) throw new Error('Invalid CLI signature');
   let decoded;
   try { decoded = atob(value); } catch { throw new Error('Invalid CLI signature'); }

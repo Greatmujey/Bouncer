@@ -116,6 +116,15 @@ function checkedHeader(envelope,identity,scopeId,capabilitySha256) {
   return {salt,iv,ciphertext,additionalData:utf8(JSON.stringify(headerFor(envelope)))};
 }
 
+/** Validate only the public encrypted-envelope shape and original binding.
+ * This does not decrypt, authenticate the owner or establish a usable backup. */
+export function inspectV14SealedKit({envelope,owner,vault,scopeId,reviewSha256,capabilitySha256}={}) {
+  if(!isV14CheckpointAccountPair(vault,owner)||!HEX.test(reviewSha256??''))throw fail();
+  const copy=structuredClone(envelope);
+  checkedHeader(copy,{owner,vault,review_sha256:reviewSha256},scopeId,capabilitySha256);
+  return copy;
+}
+
 /** Seal on the trusted device. `capabilitySha256` must come from the exact
  * separately retained owner-signed enrollment; do not trust a server-supplied
  * replacement. Passwords should be long, unique and saved outside the app. */

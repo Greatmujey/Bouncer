@@ -14,12 +14,22 @@ const browserPath=process.env.BOUNCER_PLAYWRIGHT_PATH || path.join(process.env.R
 const {chromium}=await import(pathToFileURL(path.resolve(browserPath)));
 const executablePath=process.env.CHROMIUM_PATH || ['/usr/bin/google-chrome','/usr/bin/chromium'].find(fs.existsSync);
 if(!executablePath)throw Error('No Chromium executable found');
-const compiled=await build({entryPoints:['web-src/v14-secret-recovery-kit.mjs'],bundle:true,format:'iife',globalName:'BouncerSyntheticKit',
+const compiled=await build({stdin:{contents:[
+  "export * from './web-src/v14-secret-recovery-kit.mjs';",
+  "export * from './web-src/v14-checkpoint-enrollment.mjs';",
+  "export * from './web-src/v14-checkpoint-enrollment-kit.mjs';",
+  "export * from './web-src/v14-checkpoint-kit-recovery.mjs';",
+  "export * from './web-src/v14-checkpoint-kit-client.mjs';",
+  "export { nep413Payload } from './web-src/cli-login.mjs';",
+].join('\n'),resolveDir:process.cwd(),sourcefile:'synthetic-kit-browser-entry.mjs'},bundle:true,format:'iife',globalName:'BouncerSyntheticKit',
   platform:'browser',target:'es2020',write:false});
-const {inputs}=fixture(),pairs=Object.fromEntries(['compute','price','store'].map(id=>[id,nearApi.KeyPair.fromRandom('ed25519')]));
+const {inputs}=fixture(),ownerKey=nearApi.KeyPair.fromRandom('ed25519'),pairs=Object.fromEntries(['compute','price','store'].map(id=>[id,nearApi.KeyPair.fromRandom('ed25519')]));
+inputs.ownerPublicKey=String(ownerKey.getPublicKey());
 inputs.agentPublicKeys=Object.fromEntries(Object.entries(pairs).map(([id,pair])=>[id,String(pair.getPublicKey())]));
 const review=buildV14PhoneResearchPlan(inputs).review,capability=randomBytes(32).toString('hex');
-const synthetic={review,trustedReviewSha256:review.review_sha256,scopeId:scope,
+const rawOwner=nearApi.utils.serialize.base_decode(ownerKey.toString().replace(/^ed25519:/,''));
+const ownerPkcs8=Buffer.concat([Buffer.from('302e020100300506032b657004220420','hex'),Buffer.from(rawOwner.slice(0,32))]).toString('base64');
+const synthetic={review,ownerPkcs8,trustedReviewSha256:review.review_sha256,scopeId:scope,
   capabilitySha256:createHash('sha256').update(capability).digest('hex'),capability,witnessJournalKey:randomBytes(32).toString('hex'),
   missionJournalKey:randomBytes(32).toString('hex'),restrictedAgentKeys:Object.fromEntries(Object.entries(pairs).map(([id,pair])=>[id,pair.toString()])),
   passphrase:'synthetic-unicode-🔒-passphrase'};
@@ -47,6 +57,48 @@ try {
         encrypted:!JSON.stringify(envelope).includes(input.capability),wrong_password_rejected:rejected};
     },synthetic);
     assert.deepEqual(result,{secure:true,capability:true,witness:true,mission:true,agents:true,encrypted:true,wrong_password_rejected:true});
+    const enrollment=await page.evaluate(async input=>{
+      const api=window.BouncerSyntheticKit,owner=input.review.owner,ownerPublicKey=input.review.owner_public_key,vault=input.review.vault;
+      const original=await api.prepareV14Enrollment({owner,ownerPublicKey,vault,reviewSha256:input.review.review_sha256});
+      const sealed=await api.sealV14SecretKit({...input,scopeId:original.terms.scope_id,capability:original.capability,
+        capabilitySha256:original.terms.capability_sha256});
+      const draft=await api.prepareV14KitEnrollment({draft:original,envelope:sealed,review:input.review,
+        trustedReviewSha256:input.review.review_sha256,passphrase:input.passphrase});
+      const pkcs8=Uint8Array.from(atob(input.ownerPkcs8),c=>c.charCodeAt(0));
+      const privateKey=await crypto.subtle.importKey('pkcs8',pkcs8,{name:'Ed25519'},false,['sign']);
+      let signatures=0,saved;
+      const wallet={async signMessage({signerId,message,nonce,recipient}){
+        signatures++;const digest=await crypto.subtle.digest('SHA-256',api.nep413Payload({message,nonce,recipient}));
+        const sig=new Uint8Array(await crypto.subtle.sign('Ed25519',privateKey,digest));
+        return {accountId:signerId,publicKey:ownerPublicKey,signature:btoa(String.fromCharCode(...sig))};
+      }};
+      const fetch=async(url,options)=>{
+        const body=JSON.parse(options.body);
+        if(url==='https://test.rpc.fastnear.com')return new Response(JSON.stringify({jsonrpc:'2.0',id:body.id,result:{permission:'FullAccess'}}));
+        if(url===api.V14_KIT_ENROLLMENT_ENDPOINT) {
+          const att=JSON.stringify({terms:body.terms,nonce_base64:body.nonce_base64,signature_base64:body.signature_base64});
+          saved={status:'EXISTING_ENCRYPTED_KIT',scope_id:body.terms.scope_id,review_sha256:body.terms.review_sha256,
+            capability_sha256:body.terms.capability_sha256,kit_sha256:body.terms.kit_sha256,sealed_kit:body.sealed_kit,
+            attestation_sha256:await api.v14KitSha256(crypto,att),owner_attestation:att};
+          return new Response(JSON.stringify({status:'ENROLLED_WITH_KIT',scope_id:saved.scope_id,revision:0,head_sha256:'0'.repeat(64),
+            kit_sha256:saved.kit_sha256,attestation_sha256:saved.attestation_sha256}));
+        }
+        if(url===api.V14_KIT_RECOVERY_ENDPOINT)return new Response(JSON.stringify({...saved,wallet_transaction_authorized:false,journal_restored:false}));
+        throw Error('unexpected synthetic request');
+      };
+      const signed=await api.signV14KitEnrollment({draft,wallet,location,fetch});
+      const client=api.createV14KitClient({location,fetch});
+      const created=await client.enroll(signed);
+      const recovery=api.prepareV14KitRecovery({owner,ownerPublicKey,vault});
+      const signedRead=await api.signV14KitRecovery({draft:recovery,wallet,location,fetch});
+      const read=await client.read(signedRead,{review:input.review,scopeId:original.terms.scope_id,
+        trustedReviewSha256:input.review.review_sha256});
+      const opened=await api.openV14SecretKit({envelope:read.envelope,review:input.review,trustedReviewSha256:input.review.review_sha256,
+        scopeId:read.scope_id,capabilitySha256:read.capability_sha256,passphrase:input.passphrase});
+      return {created:created.status==='ENROLLED_WITH_KIT',sameCapability:opened.capability===original.capability,
+        signatures,notRestored:read.journal_restored===false,noSpend:read.wallet_transaction_authorized===false};
+    },synthetic);
+    assert.deepEqual(enrollment,{created:true,sameCapability:true,signatures:2,notRestored:true,noSpend:true});
     assert.deepEqual(errors,[]);assert.deepEqual(unexpected,[]);await context.close();
   }
   console.log('Synthetic V14 encrypted key kit passed on desktop and phone-sized Chromium; no external network or wallet.');

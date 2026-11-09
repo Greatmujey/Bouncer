@@ -114,3 +114,66 @@ dbtest('owner enrollment binds one immutable scope and exact public review witho
     await client.query('RESET ROLE');
   } finally {client.release();}
 }));
+
+const kitSql=fs.readFileSync(new URL('../infrastructure/v14-secret-kit.sql',import.meta.url),'utf8');
+function sealedFixture(s=scope,o=owner,v=vault) {
+  const envelope={format:'bouncer-v14-secret-kit-v1',kdf:'PBKDF2-SHA256',iterations:600000,cipher:'AES-256-GCM',owner:o,vault:v,
+    scope_id:s,review_sha256:review,capability_sha256:capHash,salt_base64:Buffer.alloc(16).toString('base64'),
+    iv_base64:Buffer.alloc(12).toString('base64'),ciphertext_base64:Buffer.alloc(40).toString('base64')};
+  const sealed=JSON.stringify(envelope),terms={format:'bouncer-v14-checkpoint-kit-enrollment-v2',network:'testnet',owner:o,
+    owner_public_key:pub,vault:v,scope_id:s,review_sha256:review,capability_sha256:capHash,
+    issued_ms:1800000000000,expires_ms:1800000180000,kit_sha256:sha(sealed)};
+  const attestation=JSON.stringify({terms,nonce_base64:Buffer.alloc(32).toString('base64'),signature_base64:Buffer.alloc(64).toString('base64')});
+  return {s,o,v,sealed,kitHash:sha(sealed),attestation,attestationHash:sha(attestation)};
+}
+async function enrollKit(db,f,overrides={}) {
+  const x={...f,...overrides};
+  return (await db.query('SELECT public.bouncer_v14_enroll_kit_v2($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) AS value',
+    [x.s,capHash,x.o,x.v,pub,review,x.kitHash,x.sealed,x.attestationHash,x.attestation])).rows[0].value;
+}
+
+dbtest('encrypted kit and owner attestation enroll atomically and cannot overwrite or retrofit a stream',async()=>database(async db=>{
+  await db.query(enrollmentSql);await db.query(kitSql);
+  const f=sealedFixture(),expected={status:'ENROLLED_WITH_KIT',scope_id:scope,revision:0,head_sha256:zero,
+    kit_sha256:f.kitHash,attestation_sha256:f.attestationHash};
+  assert.deepEqual(await enrollKit(db,f),expected);
+  assert.deepEqual(await enrollKit(db,f),{...expected,status:'EXISTING_KIT'});
+  const other=sealedFixture('2'.repeat(32));
+  assert.deepEqual(await enrollKit(db,other),{error:'unavailable'}); // unique owner/vault
+  assert.deepEqual(await enrollKit(db,f,{kitHash:'f'.repeat(64)}),{error:'unavailable'});
+  const malformed=JSON.parse(f.sealed);delete malformed.salt_base64;malformed.extra='x';
+  const malformedText=JSON.stringify(malformed),malformedAtt=JSON.parse(f.attestation);malformedAtt.terms.kit_sha256=sha(malformedText);
+  const malformedAttText=JSON.stringify(malformedAtt);
+  assert.deepEqual(await enrollKit(db,f,{sealed:malformedText,kitHash:sha(malformedText),attestation:malformedAttText,
+    attestationHash:sha(malformedAttText)}),{error:'unavailable'});
+  const conflict=JSON.parse(f.sealed);conflict.ciphertext_base64=Buffer.alloc(40,1).toString('base64');
+  const conflictText=JSON.stringify(conflict),conflictAtt=JSON.parse(f.attestation);conflictAtt.terms.kit_sha256=sha(conflictText);
+  const conflictAttText=JSON.stringify(conflictAtt);
+  assert.deepEqual(await enrollKit(db,f,{sealed:conflictText,kitHash:sha(conflictText),attestation:conflictAttText,
+    attestationHash:sha(conflictAttText)}),{error:'unavailable'});
+  const original=(await db.query('SELECT public.bouncer_v14_owner_kit_inspect_v2($1,$2) AS value',[owner,vault])).rows[0].value;
+  assert.deepEqual(original,{status:'EXISTING_ENCRYPTED_KIT',scope_id:scope,review_sha256:review,capability_sha256:capHash,
+    kit_sha256:f.kitHash,sealed_kit:f.sealed,attestation_sha256:f.attestationHash,owner_attestation:f.attestation});
+  const first=event(1,zero,'reserve',{scope_id:scope,owner,vault,review_sha256:review,public_review:{owner_public_key:pub,review_sha256:review}});
+  await call(db,'append',0,zero,first);
+  assert.deepEqual(await enrollKit(db,f),{...expected,status:'EXISTING_KIT',revision:1,head_sha256:sha(first)});
+  for(const query of ['UPDATE bouncer_v14_originals_v1.secret_kits SET sealed_kit=sealed_kit',
+    'DELETE FROM bouncer_v14_originals_v1.secret_kits','TRUNCATE bouncer_v14_originals_v1.secret_kits']) await assert.rejects(db.query(query));
+  // A pre-existing v1 scope may reflect an unrecorded prompt even when empty.
+  const old=sealedFixture('3'.repeat(32),'old.testnet','native.old.testnet');
+  assert.equal((await enroll(db,old.s,old.o,old.v)).status,'ENROLLED');
+  assert.deepEqual(await enrollKit(db,old),{error:'unavailable'});
+  const racers=['4','5'].map(ch=>sealedFixture(ch.repeat(32),'race.testnet','native.race.testnet'));
+  const outcomes=await Promise.all(racers.map(item=>enrollKit(db,item)));
+  assert.equal(outcomes.filter(item=>item.status==='ENROLLED_WITH_KIT').length,1);
+  assert.equal(outcomes.filter(item=>item.error==='unavailable').length,1);
+  const client=await db.connect();try {
+    await client.query('SET ROLE anon');
+    await assert.rejects(client.query('SELECT public.bouncer_v14_owner_kit_inspect_v2($1,$2)',[owner,vault]),e=>e.code==='42501');
+    await assert.rejects(client.query('SELECT * FROM bouncer_v14_originals_v1.secret_kits'),e=>e.code==='42501');
+    await client.query('RESET ROLE');await client.query('SET ROLE service_role');
+    assert.deepEqual((await client.query('SELECT public.bouncer_v14_owner_kit_inspect_v2($1,$2) AS value',[owner,vault])).rows[0].value,original);
+    await assert.rejects(client.query('SELECT * FROM bouncer_v14_originals_v1.secret_kits'),e=>e.code==='42501');
+    await client.query('RESET ROLE');
+  } finally {client.release()}
+}));
