@@ -304,7 +304,13 @@ Edge endpoint is explicitly enabled. Enrollment is not wired into the wallet UI.
 **This checkpoint is not yet provisioned for the owner, wired into wallet
 prompts or mission sends, or verified against a real receipt.** It retains the public review, hashes and commitments, not the
 journal encryption key or agent keys; those still require separate durable
-recovery. An administrator able to roll back both copies can defeat it. Never
+recovery. `web-src/v14-secret-recovery-kit.mjs` provides an experimental,
+passphrase-encrypted *key kit* for the capability, distinct journal encryption
+keys and only the three reviewed agent keys; it rejects the reviewed owner
+signing key but cannot by itself prove another key is not FullAccess. Never
+supply a wallet key. It performs no network or file I/O. A key kit is **not** a journal
+backup or proof of the latest head. There is no live UI, secure handoff, storage
+or tested restoration flow for it yet. An administrator able to roll back both copies can defeat it. Never
 infer independent durability from two adapter names or silently recreate a
 missing copy. Railway says
 [trial volumes can be deleted 30 days after trial credits
