@@ -157,6 +157,11 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
   const v14RecoveryOriginals = doc.querySelector('#wallet-v14-recovery-originals');
   const bootstrapRecoveryOpen = doc.querySelector('#wallet-bootstrap-recovery-open');
   const bootstrapRecoveryPanel = doc.querySelector('#wallet-bootstrap-recovery-panel');
+  const bootstrapMatchFile = doc.querySelector('#wallet-bootstrap-match-file');
+  const bootstrapMatchId = doc.querySelector('#wallet-bootstrap-match-id');
+  const bootstrapMatchPassphrase = doc.querySelector('#wallet-bootstrap-match-passphrase');
+  const bootstrapMatchCheck = doc.querySelector('#wallet-bootstrap-match-check');
+  const bootstrapMatchStatus = doc.querySelector('#wallet-bootstrap-match-status');
   const bootstrapRecoveryRead = doc.querySelector('#wallet-bootstrap-recovery-read');
   const bootstrapRecoveryFile = doc.querySelector('#wallet-bootstrap-recovery-file');
   const bootstrapRecoveryImport = doc.querySelector('#wallet-bootstrap-recovery-import');
@@ -269,7 +274,10 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
   let bufferSetupDraft = null, nativeSetupAvailable = false, nativeFlow = null, nativeSetupOpening = false, directFlow = null;
   let v14RecoveryClient = null, v14RecoveryVisible = false;
   let bootstrapRecoveryClient = null, bootstrapRecoveryReady = false, bootstrapRecoveryVisible = false, bootstrapRecoveryUnlocked = false;
-  let bootstrapRecoveryFileVerified = false;
+  let bootstrapRecoveryFileVerified = false, bootstrapMatchSelectionVersion = 0;
+  const recoveryOnlineMessage = 'Read-only recovery for native.great_mujey.testnet. No transaction will be requested.';
+  const recoveryOfflineMessage = 'Online recovery is not enabled or not reachable yet. You can read an existing encrypted file on this device; no transaction will be requested.';
+  const matchOfflineMessage = 'The online checkpoint is not available yet. Keep your saved copies; reconnect later if this does not clear.';
   let bootstrapBudgetVisible = false, candidateVisible = false, candidate = null, candidateEnrollmentSessionStopped = false;
   let missionFlow = null, missionReview = null, missionReady = false, missionStarted = false;
   const bufferSetupStages = ['create_keyless_vault', 'register_vault_circle', 'fund_vault_circle'];
@@ -424,6 +432,8 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
       bootstrapRecoveryOpen.textContent = 'Recover encrypted vault setup →';
     }
     if (bootstrapRecoveryPanel) bootstrapRecoveryPanel.hidden = !bootstrapEligible || !bootstrapRecoveryVisible;
+    for (const control of [bootstrapMatchFile,bootstrapMatchId,bootstrapMatchPassphrase]) if (control) control.disabled = busyState;
+    if (bootstrapMatchCheck) bootstrapMatchCheck.disabled = busyState || !bootstrapRecoveryReady || typeof loadBootstrapArtifact !== 'function';
     if (bootstrapRecoveryRead) bootstrapRecoveryRead.disabled = busyState || !bootstrapRecoveryReady;
     if (bootstrapRecoveryExport) bootstrapRecoveryExport.disabled = busyState || !bootstrapRecoveryUnlocked;
     if (bootstrapRecoveryCompare) {
@@ -529,6 +539,11 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
   function clearBootstrapRecovery() {
     bootstrapRecoveryClient?.destroy(); bootstrapRecoveryClient = null;
     bootstrapRecoveryReady = false; bootstrapRecoveryVisible = false; bootstrapRecoveryUnlocked = false; bootstrapRecoveryFileVerified = false;
+    bootstrapMatchSelectionVersion++;
+    if (bootstrapMatchStatus) bootstrapMatchStatus.textContent = '';
+    if (bootstrapMatchFile) bootstrapMatchFile.value = '';
+    if (bootstrapMatchId) bootstrapMatchId.value = '';
+    if (bootstrapMatchPassphrase) bootstrapMatchPassphrase.value = '';
     if (bootstrapRecoveryStatus) bootstrapRecoveryStatus.textContent = '';
     if (bootstrapRecoveryCompareStatus) bootstrapRecoveryCompareStatus.textContent = '';
     if (bootstrapRecoveryOriginals) { bootstrapRecoveryOriginals.replaceChildren(); bootstrapRecoveryOriginals.hidden = true; }
@@ -1191,7 +1206,12 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
           location:win.location,isTopLevel:isTop,crypto:win.crypto,fetch:walletReadFetch,isCurrent:current});
         bootstrapRecoveryClient = client;
         void client.enabled().then(enabled => {
-          if (current() && bootstrapRecoveryClient === client) { bootstrapRecoveryReady = enabled; renderControls(); }
+          if (current() && bootstrapRecoveryClient === client) {
+            bootstrapRecoveryReady = enabled;
+            if (enabled && bootstrapRecoveryStatus?.textContent === recoveryOfflineMessage) bootstrapRecoveryStatus.textContent = recoveryOnlineMessage;
+            if (enabled && bootstrapMatchStatus?.textContent === matchOfflineMessage) bootstrapMatchStatus.textContent = '';
+            renderControls();
+          }
         }).catch(() => {});
       } catch { /* optional recovery must not erase verified identity */ }
     }
@@ -1337,10 +1357,71 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
   bootstrapRecoveryOpen?.addEventListener('click', () => {
     if (busyState || !bootstrapRecoveryClient || !bootstrapRecoveryStatus) return;
     bootstrapRecoveryVisible = true;
-    bootstrapRecoveryStatus.textContent = bootstrapRecoveryReady
-      ? 'Read-only recovery for native.great_mujey.testnet. No transaction will be requested.'
-      : 'Online recovery is not enabled. You can read an existing encrypted file on this device; no transaction will be requested.';
+    bootstrapRecoveryStatus.textContent = bootstrapRecoveryReady ? recoveryOnlineMessage : recoveryOfflineMessage;
+    if (bootstrapMatchStatus && !bootstrapRecoveryReady) bootstrapMatchStatus.textContent = matchOfflineMessage;
     renderControls();
+  });
+  for (const control of [bootstrapMatchFile,bootstrapMatchId,bootstrapMatchPassphrase]) {
+    control?.addEventListener(control === bootstrapMatchFile ? 'change' : 'input', () => {
+      bootstrapMatchSelectionVersion++;
+      if (bootstrapMatchStatus) bootstrapMatchStatus.textContent = '';
+    });
+  }
+  bootstrapMatchCheck?.addEventListener('click', async () => {
+    const client = bootstrapRecoveryClient, proof = ownerVerification, wallet = selectedWallet,
+      accountId = connectedAccount, version = ownerSessionVersion, selectionVersion = bootstrapMatchSelectionVersion,
+      file = bootstrapMatchFile?.files?.[0];
+    if (busyState || !client || !bootstrapRecoveryReady || !bootstrapRecoveryVisible || !bootstrapMatchId ||
+        !bootstrapMatchPassphrase || !bootstrapMatchStatus || typeof loadBootstrapArtifact !== 'function' ||
+        !connected || !isTop || proof?.wallet !== wallet || proof.accountId !== accountId) return;
+    const expectedFingerprint = bootstrapMatchId.value.trim().toLowerCase();
+    let passphrase = bootstrapMatchPassphrase.value; bootstrapMatchPassphrase.value = '';
+    bootstrapMatchStatus.textContent = '';
+    if (!file || !Number.isSafeInteger(file.size) || file.size < 1 || file.size > 30_000 || typeof file.text !== 'function' ||
+        !/^[a-f0-9]{64}$/.test(expectedFingerprint) || passphrase.length < 16 || passphrase.length > 1024 || !/\S/.test(passphrase)) {
+      passphrase = '';
+      bootstrapMatchStatus.textContent = 'Choose the saved preparation file and enter its separately saved 64-character backup ID and recovery passphrase. No recovery wallet message was requested.';
+      return;
+    }
+    let active = true, stopWalletPresentation = () => {}, timeout;
+    const sessionCurrent = () => connected && selectedWallet === wallet && connectedAccount === accountId &&
+      ownerSessionVersion === version && ownerVerification === proof && bootstrapRecoveryClient === client && bootstrapRecoveryVisible;
+    const stillSelected = () => active && sessionCurrent() && bootstrapMatchSelectionVersion === selectionVersion &&
+      bootstrapMatchFile?.files?.[0] === file && bootstrapMatchId.value.trim().toLowerCase() === expectedFingerprint;
+    bootstrapMatchStatus.textContent = 'Checking the saved file, ID, passphrase and pinned plan on this device…';
+    busy(true); closePicker();
+    try {
+      const operation = (async () => {
+        const [text,compressedV14] = await Promise.all([file.text(),loadBootstrapArtifact()]);
+        if (!stillSelected()) throw new Error('stale selection');
+        const result = client.compareSavedCandidate({text,expectedFingerprint,compressedV14,passphrase,stillSelected,
+          onWalletPrompt:() => {
+            if (!stillSelected()) return;
+            bootstrapMatchStatus.textContent = 'Local file check passed. Approve one read-only recovery message in your wallet; no transaction is requested.';
+            setStatus('Approve the read-only recovery comparison. No transaction is requested.');
+            notify('Approve the read-only recovery comparison. No transaction is requested.', true);
+            if (['near-mobile','nightly-wallet','ledger'].includes(wallet.manifest.id)) stopWalletPresentation = decorateWalletPopup(wallet.manifest.id);
+          }});
+        passphrase = '';
+        return result;
+      })();
+      const result = await Promise.race([operation,new Promise((_,reject) => {
+        timeout = setTimeout(() => reject(new Error('BOOTSTRAP_CANDIDATE_COMPARISON_TIMEOUT')),90_000);
+      })]);
+      if (!stillSelected()) return;
+      const messages = {
+        MATCHED: 'Matched: this saved file, backup ID and passphrase open the same encrypted kit and pinned plan recorded in the owner-signed checkpoint. This does not prove a separate backup, latest history, vault state or final receipts, and does not authorize a transaction.',
+        DIFFERENT_SETUP: 'This file and the signed online checkpoint describe different setups. Stop and reconcile; do not create or enroll another setup.',
+        OWNER_KEY_CHANGED: 'The owner key in this file differs from the verified wallet key. Stop and reconcile the key change. No recovery wallet message or transaction was requested.',
+      };
+      bootstrapMatchStatus.textContent = messages[result.status] || 'Comparison unavailable. Keep your existing copies; no transaction was requested.';
+      setStatus('Recovery comparison completed. No transaction was requested.');
+    } catch {
+      if (stillSelected()) bootstrapMatchStatus.textContent = 'Could not verify this file or compare it with the checkpoint. Check the saved file, backup ID, passphrase and wallet; keep existing copies. Do not repeat an uncertain transaction.';
+    } finally {
+      active = false; passphrase = ''; clearTimeout(timeout); stopWalletPresentation(); busy(false);
+      if (sessionCurrent()) { renderControls(); hideBanner(); }
+    }
   });
   bootstrapRecoveryRead?.addEventListener('click', async () => {
     const client = bootstrapRecoveryClient, proof = ownerVerification, wallet = selectedWallet,

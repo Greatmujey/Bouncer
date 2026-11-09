@@ -14,7 +14,7 @@
   <title>Bouncer — The resource layer for agents</title>
   <link rel="icon" type="image/svg+xml" href="./favicon.svg?v=3">
   <link rel="preload" href="./manrope-latin.woff2" as="font" type="font/woff2" crossorigin>
-  <link rel="stylesheet" href="./styles.css?v=19">
+  <link rel="stylesheet" href="./styles.css?v=20">
 </head>
 <body>
   <svg class="svg-defs" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
@@ -175,9 +175,21 @@
     <div class="workspace-tool-heading"><span>01</span><div><h3>Recover an existing setup</h3><p>Already saved or enrolled a setup? Recover it first. Do not create or enroll another candidate, and never repeat an uncertain transaction.</p></div></div>
     <button class="account-entry-secondary" id="wallet-bootstrap-recovery-open" type="button" hidden>Recover encrypted vault setup →</button>
     <section class="setup-recovery native-setup" id="wallet-bootstrap-recovery-panel" aria-label="Encrypted vault setup recovery" hidden>
+      <div class="bootstrap-match-form">
+        <strong>Check your saved setup file</strong>
+        <p class="account-view-status">Choose the original encrypted preparation file, enter its separately saved backup ID and passphrase, then approve one read-only wallet message. The file, ID and passphrase stay on this device. Never enter your wallet seed phrase or private key.</p>
+        <label for="wallet-bootstrap-match-file">Saved encrypted preparation file</label>
+        <input id="wallet-bootstrap-match-file" type="file" accept="application/json,.json">
+        <label for="wallet-bootstrap-match-id">Separately saved backup ID (64 characters)</label>
+        <input id="wallet-bootstrap-match-id" type="text" minlength="64" maxlength="64" autocomplete="off" autocapitalize="off" spellcheck="false">
+        <label for="wallet-bootstrap-match-passphrase">Recovery passphrase — not your wallet seed</label>
+        <input id="wallet-bootstrap-match-passphrase" type="password" minlength="16" maxlength="1024" autocomplete="off" autocapitalize="off" spellcheck="false">
+        <button class="account-entry-secondary" id="wallet-bootstrap-match-check" type="button">Check file against existing checkpoint →</button>
+        <p class="account-view-status" id="wallet-bootstrap-match-status" role="status" aria-live="polite"></p>
+      </div>
       <strong>Recover the encrypted setup copy</strong>
       <p class="account-view-status">A wallet message reads an existing encrypted recovery kit and original transaction hashes. It does not create a vault, send a transaction or grant spending access. If a result is unknown, do not approve it again.</p>
-      <p class="account-view-status">Save the encrypted file somewhere separate and keep its recovery passphrase safe. A leaked file can be guessed offline; a lost file or passphrase may strand funds. Never enter your wallet seed phrase or private key here.</p>
+      <p class="account-view-status">Save the encrypted file somewhere separate and keep its recovery passphrase safe. A leaked file can be guessed offline; a lost file or passphrase may strand funds.</p>
       <button class="account-entry-secondary" id="wallet-bootstrap-recovery-read" type="button">Sign a read-only online recovery message →</button>
       <label for="wallet-bootstrap-recovery-file">Or choose an existing encrypted recovery file</label>
       <input id="wallet-bootstrap-recovery-file" type="file" accept="application/json,.json">
@@ -421,7 +433,7 @@
   </dialog>
   <dialog class="tour-dialog" id="welcome-tour" aria-labelledby="tour-title" aria-describedby="tour-description"><div class="tour-topline"><span class="brand-mark" aria-hidden="true"><svg viewBox="16 17 300 300"><use href="#i-bouncer"/></svg></span><span class="tour-count" id="tour-count">STEP 1 OF 4</span><button type="button" class="tour-close" id="tour-skip" aria-label="Close the tour">×</button></div><div class="tour-progress" aria-hidden="true"><span></span><span></span><span></span><span></span></div><div class="tour-copy" aria-live="polite"><div class="section-kicker" id="tour-kicker">WELCOME TO BOUNCER</div><h2 id="tour-title">Meet your resource agent.</h2><p id="tour-description">Bouncer helps an agent get compute, storage and API services while your on-chain rules guard its spending.</p><div class="tour-callout" id="tour-callout">Bouncer is a testnet prototype, not an open marketplace.</div></div><div class="tour-actions"><button class="button tour-back" type="button" id="tour-back" disabled>Back</button><button class="button tour-next" type="button" id="tour-next">Next →</button></div></dialog>
   <script type="module" src="./app.mjs?v=7"></script>
-  <script type="module" src="./wallet.bundle.js?v=41"></script>
+  <script type="module" src="./wallet.bundle.js?v=42"></script>
   <script type="module" src="./google-signin.mjs?v=3"></script>
 </body>
 </html>

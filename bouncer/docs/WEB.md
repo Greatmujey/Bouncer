@@ -184,6 +184,18 @@ The endpoint is default-off in code; it was separately enabled for a
 recovery-only real-owner test. Enabling it alone does not establish enrollment,
 an independent restore or transaction readiness.
 
+Recovery first offers a check of the **original saved preparation file** against
+an existing checkpoint. It verifies the separately recorded backup ID, the
+passphrase, the pinned plan and the current owner key locally before asking for
+one read-only owner message. It then verifies the enrollment attestation and
+compares the exact encrypted kit and public review. The file, backup ID,
+passphrase, temporary key and checkpoint capability are not sent in the read.
+A match does not authenticate transaction history, prove another backup or the
+latest head, check a vault or receipts, or authorize a transaction. A changed
+owner key stops before the read message; mismatch, unavailable or uncertain
+responses require reconciliation rather than re-enrollment. The comparison does
+not replace an imported or unlocked recovery export.
+
 Recovery also permits a user to import and locally MAC-check a saved encrypted
 recovery export, then compare that exact snapshot with an owner-signed online
 read. The comparison reports a match, a file ahead of the service, claimed

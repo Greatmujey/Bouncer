@@ -8,6 +8,8 @@ import {V14_BOOTSTRAP_ENDPOINT,recoverBootstrapCheckpoint} from './v14-bootstrap
 import {V14_BOOTSTRAP_ORIGINS,verifyBootstrapAttestation,verifyBootstrapEnrollmentContents} from '../shared/v14-bootstrap-protocol.mjs';
 import {inspectBootstrapOriginals} from './v14-bootstrap-originals.mjs';
 import {openV14BootstrapRecoveryKit} from './v14-bootstrap-recovery-kit.mjs';
+import {verifyV14BootstrapCandidate} from './v14-bootstrap-candidate.mjs';
+import {V14_EXAMPLE_VAULT_FUNDING_YOCTO} from '../shared/v14-bootstrap-budget.mjs';
 
 const OWNER='great_mujey.testnet',VAULT=`native.${OWNER}`;
 const HEX=/^[a-f0-9]{64}$/;
@@ -36,13 +38,16 @@ export function createBootstrapRecoveryReadClient({wallet,owner,ownerPublicKey,l
     }catch{return false}
   }
   async function run(fn){current();if(busy)throw fail();busy=true;try{return await fn()}finally{busy=false}}
-  async function fetchRecovery() {
+  async function fetchRecovery(stillSelected=()=>true,onWalletPrompt=()=>{}) {
+    const check=()=>{current();if(stillSelected()!==true)throw fail()};
     // A failed availability check is not evidence of absence.
-    if(!await enabled())throw fail();current();
+    if(!await enabled())throw fail();check();
+    onWalletPrompt();check();
     const draft=prepareBootstrapRecovery({owner,ownerPublicKey,vault:VAULT,site:location.origin,crypto,now});
-    const signed=await signBootstrapRecovery({draft,wallet,location,crypto,fetch:fetchImpl,now});current();
-    const result=await recoverBootstrapCheckpoint({signed,location,fetch:fetchImpl,crypto,isCurrent:()=>!disposed&&isCurrent()===true,now});
-    current();return result;
+    const signed=await signBootstrapRecovery({draft,wallet,location,crypto,fetch:fetchImpl,now});check();
+    const result=await recoverBootstrapCheckpoint({signed,location,fetch:fetchImpl,crypto,
+      isCurrent:()=>!disposed&&isCurrent()===true&&stillSelected()===true,now});
+    check();return result;
   }
   async function validateResult(result) {
     if(!exact(result,['status','scope_id','review_text','sealed_kit','owner_attestation','revision','head_sha256','events',
@@ -112,6 +117,32 @@ export function createBootstrapRecoveryReadClient({wallet,owner,ownerPublicKey,l
       return Object.freeze({status:'KIT_UNLOCKED_LOCALLY_NOT_AUTHORIZED',revision:state.revision,head_sha256:state.head_sha256,
         create_original:state.create_original,deploy_original:state.deploy_original,transaction_authorized:false,
         history_authentication_verified:expectedMac!==null,latest_head_independently_verified:false});
+    })},
+    /** Check the originally saved preparation file against the enrolled kit.
+     * The file, passphrase and backup ID stay on this device; only a fresh
+     * owner-signed read reaches the service. The file has no history, so a
+     * match cannot authenticate later events or establish the latest head. */
+    async compareSavedCandidate({text,expectedFingerprint,passphrase,compressedV14,stillSelected=()=>true,onWalletPrompt=()=>{}}={}) {return run(async()=>{
+      if(!(compressedV14 instanceof Uint8Array)||typeof stillSelected!=='function'||stillSelected()!==true||typeof onWalletPrompt!=='function')throw fail();
+      let checked;
+      try {
+        checked=await verifyV14BootstrapCandidate({text,expectedFingerprint,owner:OWNER,vault:VAULT,
+          vaultFundingYocto:V14_EXAMPLE_VAULT_FUNDING_YOCTO,currentOwnerPublicKey:ownerPublicKey,
+          compressedV14:compressedV14.slice(),passphrase,crypto});
+      } finally {passphrase='';}
+      current();if(stillSelected()!==true)throw fail();
+      if(checked.owner_key_matches_current!==true) return Object.freeze({status:'OWNER_KEY_CHANGED',
+        file_integrity_verified:true,independent_backup_verified:false,latest_head_independently_verified:false,
+        vault_or_receipts_checked:false,transaction_authorized:false,transaction_sent:false});
+      const candidate=JSON.parse(text);
+      const online=await validateResult(await fetchRecovery(stillSelected,onWalletPrompt));current();if(stillSelected()!==true)throw fail();
+      const same=online.result.scope_id===candidate.sealed_kit.scope_id &&
+        online.result.review_text===JSON.stringify(candidate.review) &&
+        online.result.sealed_kit===JSON.stringify(candidate.sealed_kit);
+      return Object.freeze({status:same?'MATCHED':'DIFFERENT_SETUP',file_integrity_verified:true,
+        service_reported_revision:online.state.revision,history_authentication_verified:false,
+        independent_backup_verified:false,latest_head_independently_verified:false,vault_or_receipts_checked:false,
+        transaction_authorized:false,transaction_sent:false});
     })},
     /** Compare an unlocked, MAC-checked imported file with the current online
      * response. This is a snapshot comparison, not proof that either copy is
