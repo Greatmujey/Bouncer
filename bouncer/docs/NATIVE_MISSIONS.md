@@ -290,7 +290,12 @@ approval. A research-only two-copy checkpoint is now implemented in
 provides one-shot methods for recording wallet claims and original hashes,
 and stops if copies differ. Its encrypted local `FileJournal` adapter and
 separate Supabase compare-and-append schema/Edge adapter are tested with
-synthetic data. Research-only owner enrollment and recovery helpers verify a
+synthetic data. `agent/v14-setup-rpc-verifier.mjs` can check each separately
+retained setup original through the fixed read-only testnet RPC, then validate
+cumulative policy, funding and key state at one fresh FINAL block before the
+witness records verification. This is tested with synthetic receipts/state and
+still trusts the RPC; it is not yet integrated into wallet prompts. Research-only
+owner enrollment and recovery helpers verify a
 short-lived NEP-413 message and a current testnet FullAccess key at a fresh
 FINAL block. Recovery can read the existing public history even if the
 checkpoint capability is lost; it cannot rotate that capability or recreate a

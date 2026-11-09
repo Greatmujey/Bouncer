@@ -91,7 +91,7 @@ export async function inspectV14PublicHistory({snapshot,owner,vault,crypto=globa
       } else if(event.type==='mission_verified') {
         if(!pending||pending.type!=='mission'||!exact(d,['goal_id','tx_hash','final_block_hash'])||
            d.goal_id!==pending.goal_id||d.tx_hash!==pending.tx_hash||!txHash(d.final_block_hash))throw fail();
-        mission.push({goal_id:d.goal_id,kind:pending.kind,tx_hash:d.tx_hash,fingerprint:pending.fingerprint,
+        mission.push({goal_id:d.goal_id,kind:pending.kind,tx_hash:pending.tx_hash,fingerprint:pending.fingerprint,
           recorded_final_block_hash:d.final_block_hash});missionIndex++;pending=null;
       } else throw fail();
       head=await sha(crypto,line);

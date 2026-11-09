@@ -11,6 +11,9 @@ import { prepareV14PhoneAttempt, inspectV14PhoneAttempt } from '../agent/native-
 import { syntheticV14MeteorRequest } from '../integration/v14-synthetic-meteor.mjs';
 import { validateKnownFirstPartyActionRequest } from '@meteorwallet/connect-shared/internal';
 import { inspectV14PhoneSetupCompletion } from '../agent/native-v14-phone-completion.mjs';
+import { createV14SetupRpcVerifier } from '../agent/v14-setup-rpc-verifier.mjs';
+import { createV14OriginalWitness,deriveV14OriginalBinding,V14_WITNESS_GENESIS } from '../agent/v14-original-witness.mjs';
+import { ReadOnlyNearReceiptProvider } from '../agent/read-only-near-receipts.mjs';
 
 const owner='owner.testnet',vault=`native.${owner}`,sha=bytes=>crypto.createHash('sha256').update(bytes).digest('hex');
 const codeHash=bytes=>nearApi.utils.serialize.base_encode(crypto.createHash('sha256').update(bytes).digest());
@@ -173,14 +176,14 @@ test('a V14 FINAL failure is a state-review warning, never retry or refund autho
   assert.equal(proof.wallet_prompt_authorized,false);assert.equal(proof.current_state_verified,false);
 });
 
-function completionFixture() {
-  const inputs=fixture(),plan=buildV14PhoneResearchPlan(inputs),{review}=plan,blockHash=hash(9),time=1_800_000_000_000;
+function completionFixture(inputs=fixture()) {
+  const plan=buildV14PhoneResearchPlan(inputs),{review}=plan,blockHash=hash(9),time=1_800_000_000_000;
   const prior=plan.batches.map((_,i)=>{const {attempt,trustedOriginalHash,result}=receiptFixture(i,i===5,inputs,hash(10+i));
     return {attempt,trustedOriginalHash,result};});
   const state={owner:{block_hash:blockHash,code_hash:hash(0)},vault:{block_hash:blockHash,code_hash:review.artifacts.vault_code_hash,amount:'10000',storage_usage:100},
     ownerKeys:{block_hash:blockHash,keys:[{public_key:inputs.ownerPublicKey,access_key:{nonce:0,permission:'FullAccess'}},
       ...review.mission.goals.map(({kind,goal})=>({public_key:inputs.agentPublicKeys[goal.id],access_key:{nonce:0,permission:{FunctionCall:{
-        receiver_id:vault,allowance:inputs.gasAllowances[goal.id],method_names:[kind==='random'?'execute_outlayer':
+        receiver_id:vault,allowance:inputs.gasAllowances[goal.id],method_names:[['random','market'].includes(kind)?'execute_outlayer':
           kind==='oracle'?'execute_outlayer_native_project':'execute_native_storage']}}}}))]},
     vaultKeys:{block_hash:blockHash,keys:[]},ledger:inputs.nativeDepositYocto,overrides:{}};
   const provider={async viewNodeStatus(){return {chain_id:'testnet'}},async viewBlock(){return {header:{hash:blockHash,height:42,timestamp_nanosec:`${time}000000`}}},
@@ -222,4 +225,130 @@ test('read-only V14 completion requires all distinct originals and one fresh pin
   for(const name of ['price_policy','store_route','price_grant','store_allowed'])assert.ok(bad.includes(name),name);
   f.state.owner.block_hash=hash(8);await assert.rejects(inspectV14PhoneSetupCompletion(options),/mixed-block/);
   await assert.rejects(inspectV14PhoneSetupCompletion({...options,now:()=>f.now()+300_000}),/stale/);
+});
+
+// The receipt verifier fetches the retained original through the read-only
+// provider, then pins all public state to one synthetic FINAL block.
+function rpcVerifierFixture({market=false}={}) {
+  const raw=fixture();
+  if(market) {
+    const [compute,price,storage]=raw.mission.goals;
+    compute.kind='market';compute.goal.input={from_goal_id:'price',quantity:10};compute.goal.program={...MARKET_SUMMARY_PROGRAM};
+    storage.goal.value.from_goal_ids=['price','compute'];raw.mission.goals=[price,compute,storage];
+  }
+  const f=completionFixture(raw),inputs={...f.inputs,review:f.review,trustedReviewSha256:f.trustedReviewSha256};
+  const binding=deriveV14OriginalBinding({...inputs,scopeId:'9'.repeat(32)}),calls=[],views=[];
+  const provider=new ReadOnlyNearReceiptProvider('https://test.rpc.fastnear.com',{fetchImpl:async()=>{throw Error('unexpected network')}});
+  for(const method of ['viewNodeStatus','viewBlock','query','experimental_protocolConfig'])provider[method]=f.provider[method];
+  provider.callFunctionRaw=async(contract,method,args,options)=>{
+    views.push({method,policy:args.policy_id});
+    if(method==='check'&&!Object.hasOwn(f.state.overrides,`check:${args.policy_id}`)) {
+      const verdict=f.state.ledger==='0'?[false,'BLOCKED: insufficient vault balance (fund first)']:
+        [true,'ok: within cap, payee allowed, daily ok, vault funded'];
+      return {block_hash:hash(9),result:[...Buffer.from(JSON.stringify(verdict))]};
+    }
+    return f.provider.callFunctionRaw(contract,method,args,options);
+  };
+  provider.txStatusReceipts=async(txHash,signer,finality)=>{
+    calls.push({txHash,signer,finality});
+    const original=f.prior.find(item=>item.trustedOriginalHash===txHash);
+    if(!original||signer!==owner||finality!=='FINAL')throw Error('wrong original');
+    return structuredClone(original.result);
+  };
+  const allKeys=structuredClone(f.state.ownerKeys.keys);
+  function setStage(index) {
+    f.state.ownerKeys.keys=structuredClone(index===5?allKeys:allKeys.slice(0,1));
+    f.state.ledger=index>=4?f.inputs.nativeDepositYocto:'0';
+  }
+  const verify=createV14SetupRpcVerifier({planInputs:inputs,provider,now:f.now});
+  return {...f,inputs,binding,provider,calls,views,setStage,verify};
+}
+
+function witnessMemoryStore() {
+  let snapshot={revision:0,head_sha256:V14_WITNESS_GENESIS,events:[]};
+  return {read:async()=>structuredClone(snapshot),append:async({expected_revision,expected_head_sha256,record})=>{
+    if(expected_revision!==snapshot.revision||expected_head_sha256!==snapshot.head_sha256)throw Error('CAS conflict');
+    snapshot={revision:snapshot.revision+1,head_sha256:sha(Buffer.from(record)),events:[...snapshot.events,record]};
+    return structuredClone(snapshot);
+  }};
+}
+
+test('read-only receipt verifier checks each retained original and cumulative fresh V14 state',async()=>{
+  for(const market of [false,true]) {
+    const f=rpcVerifierFixture({market});
+    if(market)assert.deepEqual(f.review.mission.goals.map(item=>item.kind),['oracle','market','storage']);
+    for(let i=0;i<f.review.stages.length;i++) {
+      f.setStage(i);const stageId=f.review.stages[i].id,txHash=f.prior[i].trustedOriginalHash,viewStart=f.views.length;
+      assert.deepEqual(await f.verify({binding:f.binding,stageId,txHash}),{tx_hash:txHash,final_block_hash:hash(9)});
+      assert.deepEqual(f.calls.at(-1),{txHash,signer:owner,finality:'FINAL'});
+      assert.deepEqual(f.views.slice(viewStart).filter(item=>item.method==='get_policy').map(item=>item.policy),
+        ['compute','price','store'].slice(0,Math.min(i,3)));
+    }
+    assert.equal(f.calls.length,6);
+    // Changes to caller-owned data after verifier construction cannot rewrite the
+    // plan being verified or the original retained by the witness.
+    f.setStage(0);f.inputs.mission.goals[0].goal.amount='999';f.inputs.vaultWasm.fill(0);
+    assert.deepEqual(await f.verify({binding:f.binding,stageId:f.review.stages[0].id,txHash:f.prior[0].trustedOriginalHash}),
+      {tx_hash:f.prior[0].trustedOriginalHash,final_block_hash:hash(9)});
+  }
+});
+
+test('the two-copy witness advances only after the RPC verifier checks its retained synthetic original',async()=>{
+  const f=rpcVerifierFixture(),local=witnessMemoryStore(),independent=witnessMemoryStore();
+  const witness=createV14OriginalWitness({binding:f.binding,localStore:local,independentStore:independent,verifySetupReceipt:f.verify});
+  await witness.reserve();
+  for(let i=0;i<f.review.stages.length;i++) {
+    f.setStage(i);const stageId=f.review.stages[i].id,txHash=f.prior[i].trustedOriginalHash;
+    await witness.claimWalletStage(stageId);await witness.retainWalletOriginal({stageId,txHash});
+    if(i===0) {
+      const current=f.state.vault.code_hash;f.state.vault.code_hash=hash(8);
+      await assert.rejects(witness.verifyWalletOriginal({stageId}),/unresolved/);
+      const pending=await witness.inspect();assert.equal(pending.pending.tx_hash,txHash);
+      await assert.rejects(witness.claimWalletStage(stageId),/never prompt again/);
+      f.state.vault.code_hash=current;
+    }
+    await witness.verifyWalletOriginal({stageId});
+  }
+  const state=await witness.inspect();assert.equal(state.revision,19);assert.equal(state.next_setup_stage,null);
+  assert.deepEqual(state.setup.map(item=>item.tx_hash),f.prior.map(item=>item.trustedOriginalHash));
+  assert.deepEqual(await local.read(),await independent.read());
+  // Setup receipt verification does not authorize, validate or execute a mission.
+  await witness.retainMissionOriginal({goalId:f.binding.goals[0].id,kind:f.binding.goals[0].kind,txHash:hash(70),fingerprint:'a'.repeat(64)});
+  await assert.rejects(witness.verifyMissionOriginal({goalId:f.binding.goals[0].id}),/verifier are required/);
+});
+
+test('setup verification fails closed on a forged receipt, stale/mixed state, changed grants or unsafe keys',async()=>{
+  const changes=[
+    f=>{f.provider.viewNodeStatus=async()=>({chain_id:'mainnet'});},
+    f=>{f.provider.txStatusReceipts=async()=>({...f.prior[0].result,final_execution_status:'EXECUTED'});},
+    f=>{f.provider.txStatusReceipts=async()=>({...f.prior[0].result,transaction:{...f.prior[0].result.transaction,hash:hash(20)}});},
+    f=>{f.provider.txStatusReceipts=async()=>{throw Error('receipt unavailable')};},
+    f=>{f.provider.viewBlock=async()=>({header:{hash:hash(9),height:42,timestamp_nanosec:`${f.now()-300_000}000000`}});},
+    f=>{f.state.owner.block_hash=hash(8);},
+    f=>{f.state.ownerKeys.keys[0].access_key.permission={FunctionCall:{}};},
+    f=>{f.state.vault.code_hash=hash(8);},
+    f=>{f.state.vaultKeys.keys.push({public_key:key()});},
+    f=>{f.state.ledger='1';},
+    f=>{f.state.ownerKeys.keys.push({public_key:f.inputs.agentPublicKeys.compute,access_key:{nonce:0,permission:'FullAccess'}});},
+  ];
+  for(const change of changes) {
+    const f=rpcVerifierFixture();f.setStage(0);change(f);
+    await assert.rejects(f.verify({binding:f.binding,stageId:f.review.stages[0].id,txHash:f.prior[0].trustedOriginalHash}),/unresolved/);
+  }
+  const configured=rpcVerifierFixture();configured.setStage(3);
+  configured.state.overrides['get_policy:compute']={token:'native',per_tx_cap:'999',daily_cap:'500'};
+  await assert.rejects(configured.verify({binding:configured.binding,stageId:configured.review.stages[3].id,txHash:configured.prior[3].trustedOriginalHash}),/unresolved/);
+  delete configured.state.overrides['get_policy:compute'];configured.state.overrides['check:price']=[false,'BLOCKED: payee not in allowlist'];
+  await assert.rejects(configured.verify({binding:configured.binding,stageId:configured.review.stages[3].id,txHash:configured.prior[3].trustedOriginalHash}),/unresolved/);
+  const installed=rpcVerifierFixture();installed.setStage(5);
+  installed.state.ownerKeys.keys[1].access_key.permission='FullAccess';
+  await assert.rejects(installed.verify({binding:installed.binding,stageId:installed.review.stages[5].id,txHash:installed.prior[5].trustedOriginalHash}),/unresolved/);
+  const f=rpcVerifierFixture();f.setStage(0);
+  await assert.rejects(f.verify({binding:{...f.binding,review_sha256:'f'.repeat(64)},stageId:f.review.stages[0].id,txHash:f.prior[0].trustedOriginalHash}),/unresolved/);
+  await assert.rejects(f.verify({binding:f.binding,stageId:f.review.stages[0].id,txHash:f.prior[0].trustedOriginalHash,proof:{fake:true}}),/unresolved/);
+  f.provider.connection.url='https://unexpected.example/';
+  await assert.rejects(f.verify({binding:f.binding,stageId:f.review.stages[0].id,txHash:f.prior[0].trustedOriginalHash}),/unresolved/);
+  assert.throws(()=>createV14SetupRpcVerifier({planInputs:f.inputs,provider:{...f.provider},now:f.now}),/unresolved/);
+  const otherRpc=new ReadOnlyNearReceiptProvider('https://rpc.testnet.near.org');
+  assert.throws(()=>createV14SetupRpcVerifier({planInputs:f.inputs,provider:otherRpc,now:f.now}),/unresolved/);
 });
