@@ -6,6 +6,7 @@ import {KeyPair} from '@near-js/crypto';
 import {buildV14TemporaryBootstrapPlan} from '../web-src/v14-bootstrap-plan.mjs';
 import {createV14BootstrapDeploymentVerifier,inspectBootstrapDeploymentReceipt} from '../web-src/v14-bootstrap-deployment-verifier.mjs';
 import {V14_BOOTSTRAP_READ_RPC} from '../web-src/v14-bootstrap-create-verifier.mjs';
+import {V14_TESTNET_ARTIFACT} from '../shared/v14-testnet-artifact.mjs';
 import {encodeBase58} from '../web-src/native-oracle-transaction.mjs';
 
 const webcrypto=crypto.webcrypto,clock=1_800_000_000_000,now=()=>clock,scope='ab'.repeat(16);
@@ -20,6 +21,7 @@ async function fixture({rootBody=false}={}){
   const plan=await buildV14TemporaryBootstrapPlan({owner:OWNER,ownerPublicKey:String(owner.getPublicKey()),vault:VAULT,
     temporaryPublicKey:String(temporary.getPublicKey()),vaultFundingYocto:FUNDING,compressedV14:compressed,crypto:webcrypto});
   const review=plan.review,original=randomHash(),root=randomHash(),block=randomHash();
+  assert.equal(review.vault_code_hash,V14_TESTNET_ARTIFACT.near_code_hash);
   const actions=[{DeployContract:{code:Buffer.from(review.vault_wasm_sha256,'hex').toString('base64')}},
     {FunctionCall:{method_name:'new',args:Buffer.from(JSON.stringify({owner:OWNER})).toString('base64'),gas:30000000000000,deposit:'0'}},
     {DeleteKey:{public_key:review.temporary_vault_public_key}}];
@@ -32,7 +34,7 @@ async function fixture({rootBody=false}={}){
     transaction_outcome:{id:original,outcome:{executor_id:VAULT,status:{SuccessReceiptId:root},receipt_ids:[root]}},
     receipts:rootBody?[receipt]:[],receipts_outcome:[outcome]};
   const state={chain:'testnet',result,block:{header:{hash:block,height:200,timestamp_nanosec:String(BigInt(clock)*1_000_000n)}},
-    owner:{block_hash:block,code_hash:emptyCode},vault:{block_hash:block,code_hash:review.vault_near_code_hash,amount:FUNDING,locked:'0',storage_usage:500000},
+    owner:{block_hash:block,code_hash:emptyCode},vault:{block_hash:block,code_hash:V14_TESTNET_ARTIFACT.near_code_hash,amount:FUNDING,locked:'0',storage_usage:500000},
     ownerKeys:{block_hash:block,keys:[{public_key:review.owner_public_key,access_key:{nonce:1,permission:'FullAccess'}}]},
     vaultKeys:{block_hash:block,keys:[]},version:view(block,'bouncer-agent-v14-native-storage-testnet'),vaultOwner:view(block,OWNER)};
   const methods=[];let current=true;
@@ -126,6 +128,8 @@ test('wrong network, stale or mixed views, changed code, owner or retained key b
     f=>{f.state.ownerKeys.block_hash=randomHash()},
     f=>{f.state.version.block_hash=randomHash()},
     f=>{f.state.vault.code_hash=randomHash()},
+    f=>{delete f.state.vault.code_hash},
+    f=>{f.state.vault.code_hash=emptyCode},
     f=>{f.state.vault.global_contract_hash=randomHash()},
     f=>{f.state.vault.locked='1'},
     f=>{f.state.vaultKeys.keys=[{public_key:f.review.temporary_vault_public_key,access_key:{nonce:1,permission:'FullAccess'}}]},

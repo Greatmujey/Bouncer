@@ -34,7 +34,7 @@ const hexBytes=value=>Uint8Array.from(value.match(/../g),x=>parseInt(x,16));
 function basicReview(review) {
   if(!object(review)||!isTestnetAccount(review.owner)||!isTestnetAccount(review.vault)||
     !review.vault.endsWith(`.${review.owner}`)||review.vault.slice(0,-review.owner.length-1).includes('.')||
-    review.vault_wasm_sha256!==V14_TESTNET_ARTIFACT.sha256)return false;
+    review.vault_wasm_sha256!==V14_TESTNET_ARTIFACT.sha256||review.vault_code_hash!==V14_TESTNET_ARTIFACT.near_code_hash)return false;
   try{decodePublicKey(review.temporary_vault_public_key);return true}catch{return false}
 }
 function metadata(receipt) {
@@ -112,7 +112,7 @@ function freshBlock(block,now) {
   if(ms<time-120_000n||ms>time+30_000n)throw fail();return h.hash;
 }
 function localAccount(account,block,codeHash) {
-  return object(account)&&account.block_hash===block&&account.code_hash===codeHash&&
+  return hash(codeHash)&&object(account)&&account.block_hash===block&&account.code_hash===codeHash&&
     absent(account,'global_contract_hash')&&absent(account,'global_contract_account_id')&&
     absent(account,'bootstrap_nonce')&&(!Object.hasOwn(account,'state')||account.state==='initialized');
 }
@@ -178,7 +178,7 @@ export async function createV14BootstrapDeploymentVerifier({review:inputReview,c
       const ownerKey=ownerKeys.find(k=>k.public_key===review.owner_public_key);
       if(!localAccount(owner,at,EMPTY_CODE)||ownerKey?.access_key?.permission!=='FullAccess'||
         pinnedAccessKeyNonce(ownerKey?.access_key?.nonce)===null||
-        !localAccount(vault,at,review.vault_near_code_hash)||uint(vault.amount)===null||uint(vault.locked)!==0n||
+        !localAccount(vault,at,V14_TESTNET_ARTIFACT.near_code_hash)||uint(vault.amount)===null||uint(vault.locked)!==0n||
         !Number.isSafeInteger(vault.storage_usage)||vault.storage_usage<0||vaultKeys.length!==0||
         jsonView(versionView,at)!=='bouncer-agent-v14-native-storage-testnet'||jsonView(vaultOwnerView,at)!==review.owner)throw fail();
       phase='session freshness';
