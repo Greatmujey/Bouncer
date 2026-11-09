@@ -904,7 +904,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
         `Candidate vault: ${r.candidate_presence === 'ABSENT_AT_FINAL_BLOCK' ? 'not present at this block' : 'present — do not create again'}`,
         `Example vault transfer: ${amount(b.proposed_vault_funding_yocto)} test NEAR (not approved)`,
         `Estimated storage funding: ${amount(b.storage_estimate_yocto)} test NEAR, including a 50,000-byte margin and 0.1 test NEAR reserve. Actual locked storage differs.`,
-        `Create gas upfront: ${amount(b.create.gas_upfront_estimate_yocto)} test NEAR, paid by the owner in addition to the transfer. The ${amount(b.account_creation_charge_yocto)} test NEAR account-creation charge is normally retained from the refund, not added twice.`,
+        `Create gas upfront: ${amount(b.create.gas_upfront_estimate_yocto)} test NEAR, paid by the owner in addition to the transfer. Account creation targets ${amount(b.account_creation_charge_yocto)} test NEAR including its execution gas; the remaining amount may be retained from the refund, not added twice.`,
         `Deploy gas upfront: ${amount(b.deployment.gas_upfront_estimate_yocto)} test NEAR, paid from the funded vault. Includes 30 Tgas for initialization and separate deploy/action fees.`,
         'Unused prepaid gas and price differences may be refunded. These are snapshot estimates, not guaranteed final fees. A mission budget is separate and unapproved.',
         ...(r.blockers.length ? ['BLOCKED:',...r.blockers.map(key=>`• ${reasons[key]||key}`)] : ['Public checks passed. Independent recovery and owner approval are still required.']),

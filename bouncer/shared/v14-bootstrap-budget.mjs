@@ -57,5 +57,5 @@ export function estimateV14BootstrapBudget({protocol,gasPrice,owner,fundingYocto
       estimated_funding_after_upfront_gas_yocto:s(funding>deployGasUpfront?funding-deployGasUpfront:0n)},
     funding_covers_estimated_storage_and_deploy_upfront:funding>=storageEstimate+deployGasUpfront,
     funding_is_approved:false,transaction_authorized:false,transaction_sent:false,
-    scope:'Example funding and snapshot arithmetic only. Network price, usage, state and refunds can change; account creation charge is retained from a refund where applicable. Deployment gas is paid from the vault funding, not in addition to that transfer. The estimate is not a receipt, quote, backup proof or owner approval.'});
+    scope:'Example funding and snapshot arithmetic only. Network price, usage, state and refunds can change; the account creation target includes creation execution gas, with any remaining charge retained from a refund where applicable. Deployment gas is paid from the vault funding, not in addition to that transfer. The estimate is not a receipt, quote, backup proof or owner approval.'});
 }
