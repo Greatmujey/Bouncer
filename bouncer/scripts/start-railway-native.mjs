@@ -50,7 +50,7 @@ export function createRailwayNativeStandby({readiness,setupHandler,webHandler,bo
     const status=get && (req.url==='/'||req.url==='/healthz');
     // Fixed cache-busting variants let a non-secret diagnostic be read across
     // two deployments; arbitrary queries remain unavailable and unreflected.
-    const diagnostic=get && ['/readiness','/readiness?volume-probe=1','/readiness?volume-probe=2'].includes(req.url) && readiness!==undefined;
+    const diagnostic=get && ['/readiness','/readiness?volume-probe=1','/readiness?volume-probe=2','/readiness?volume-probe=3'].includes(req.url) && readiness!==undefined;
     req.resume();
     res.writeHead(status||diagnostic?200:404,headers);
     res.end(req.method==='HEAD' ? undefined : JSON.stringify(status?STANDBY_STATUS:diagnostic?readiness.snapshot():{error:'unavailable'}));
@@ -76,12 +76,12 @@ async function main() {
       import('../agent/railway-standby-readiness.mjs'),import('../agent/railway-recovery-volume-probe.mjs')]);
     let recoveryVolumeProbe;
     if(isRailwayRecoveryProbeTarget()) {
-      // This is a non-secret disposable diagnostic, not the real checkpoint.
-      // Only the exact named Railway project, service, environment and mounted
-      // /data are eligible. The next deployment switches to read-only mode.
+      // This is a non-secret diagnostic, not the real checkpoint. Only this
+      // exact Railway service and mounted /data are eligible. After the first
+      // deployment, this phase can observe but NEVER recreate a missing marker.
       recoveryVolumeProbe=inspectStandbyMount()==='DECLARED_MOUNT_PRESENT'
-        ? runRailwayRecoveryVolumeProbe({root:'/data',phase:'initial',mode:'create-once'})
-        : {phase:'initial',status:'MOUNT_NOT_CONFIRMED',fingerprint:null,transaction_authorized:false};
+        ? runRailwayRecoveryVolumeProbe({root:'/data',phase:'after-redeploy',mode:'observe-only'})
+        : {phase:'after-redeploy',status:'MOUNT_NOT_CONFIRMED',fingerprint:null,transaction_authorized:false};
     }
     readiness=createStandbyReadiness({recoveryVolumeProbe});
   }
