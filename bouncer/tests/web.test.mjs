@@ -149,7 +149,9 @@ test('latest oracle-led mission links to the verified testnet data and three res
   assert.match(html, /intentionally corrupted result stopped later payments/);
   assert.match(html, /independent execution was not paid in USDC/);
   assert.match(html, /process is non-atomic/);
-  assert.equal((html.match(/class="track-card"/g) || []).length, 6);
+  assert.equal((html.match(/class="track-card"/g) || []).length, 3);
+  assert.match(html, /ONE FOCUS · AI SECURITY &amp; DEFENSE/);
+  assert.doesNotMatch(html, /SIX TRACKS · ONE ROADMAP/);
 });
 
 test('the same custom Bouncer mark appears in both navigation layouts, the tour and favicon', () => {

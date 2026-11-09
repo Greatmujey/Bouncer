@@ -12,6 +12,7 @@ import {bootstrapLocalJournalKey,createBootstrapTwoCopyWitness,inspectBootstrapO
 import {enrollBootstrapCheckpoint,createBootstrapRemoteStore,recoverBootstrapCheckpoint} from '../web-src/v14-bootstrap-remote-store.mjs';
 import {openV14BootstrapRecoveryKit} from '../web-src/v14-bootstrap-recovery-kit.mjs';
 import {createBootstrapRecoveryReadClient} from '../web-src/v14-bootstrap-recovery-read.mjs';
+import {createBootstrapCandidateEnrollmentClient} from '../web-src/v14-bootstrap-candidate-enrollment.mjs';
 import {createV14BootstrapCheckpointHandler} from '../infrastructure/v14-bootstrap-checkpoint-edge.mjs';
 import {createV14BrowserWitnessStore} from '../web-src/v14-browser-witness-store.mjs';
 import {nep413Payload} from '../web-src/cli-login.mjs';
@@ -191,7 +192,7 @@ if(process.env.BOUNCER_PGLITE_MODULE) {
     try {
       await db.exec('CREATE ROLE anon; CREATE ROLE authenticated; CREATE ROLE service_role;');
       await db.exec(fs.readFileSync(new URL('../infrastructure/v14-bootstrap-checkpoint.sql',import.meta.url),'utf8'));
-      const {plan,draft}=await fixture(),blockHash=encodeBase58(crypto.randomBytes(32));
+      const {plan,kit}=await fixture(),blockHash=encodeBase58(crypto.randomBytes(32));
       const location={origin:site,host:new URL(site).host};let permission='FullAccess',seenCapabilityInDb=false;
       const fieldMap={
         bouncer_v14_bootstrap_enroll_v1:['p_scope_id','p_capability_hash','p_owner_id','p_vault_id','p_owner_public_key',
@@ -218,7 +219,12 @@ if(process.env.BOUNCER_PGLITE_MODULE) {
       const makeHandler=process.env.BOUNCER_EDGE_BUNDLE
         ? (await import(process.env.BOUNCER_EDGE_BUNDLE)).createV14BootstrapCheckpointHandler : createV14BootstrapCheckpointHandler;
       const handler=makeHandler({getEnv:key=>env[key],fetch:backendFetch,crypto:webcrypto,now});
+      let publishMarked=false,signed;
       const browserFetch=async(url,opts)=>{
+        if(opts.method==='POST'&&opts.body) {
+          const {operation,...rest}=JSON.parse(opts.body);
+          if(operation==='enroll'&&!signed){assert.equal(publishMarked,true);signed=rest;}
+        }
         const headers=new Headers(opts.headers);headers.set('origin',site);
         return handler(new Request(url,{...opts,headers}));
       };
@@ -226,9 +232,16 @@ if(process.env.BOUNCER_PGLITE_MODULE) {
         const hash=crypto.createHash('sha256').update(nep413Payload({message,nonce,recipient})).digest();
         return {accountId:originOwner,publicKey:String(owner.getPublicKey()),signature:Buffer.from(owner.sign(hash).signature).toString('base64')};
       }};
-      const signed=await signBootstrapEnrollment({draft,wallet,location,crypto:webcrypto,fetch:backendFetch,now});
-      const enrollment=await enrollBootstrapCheckpoint({signed,location,crypto:webcrypto,fetch:browserFetch,now});
-      assert.equal(enrollment.status,'ENROLLED');assert.equal(enrollment.recovery_only,true);assert.equal(enrollment.transaction_authorized,false);
+      const combinedFetch=(url,opts)=>String(url).startsWith('https://jiouaqwxkvlkmvyumzwc.supabase.co/functions/')
+        ? browserFetch(url,opts):backendFetch(url,opts);
+      const text=JSON.stringify({format:'bouncer-v14-local-bootstrap-candidate-v1',network:'testnet',review:plan.review,sealed_kit:kit});
+      const expectedFingerprint=crypto.createHash('sha256').update(`bouncer-v14-local-bootstrap-candidate-file-v1\0${text}`).digest('hex');
+      const enrollmentClient=createBootstrapCandidateEnrollmentClient({wallet,owner:originOwner,ownerPublicKey:String(owner.getPublicKey()),
+        location,isTopLevel:true,crypto:webcrypto,fetch:combinedFetch,now});
+      const enrollment=await enrollmentClient.enroll({text,expectedFingerprint,passphrase,compressedV14:compressed,
+        beforePublish:async()=>{publishMarked=true;return true}});
+      assert.equal(enrollment.status,'ENROLLED');assert.equal(enrollment.independent_backup_verified,false);
+      assert.equal(enrollment.transaction_authorized,false);assert.ok(signed);enrollmentClient.destroy();
       assert.equal((await enrollBootstrapCheckpoint({signed,location,crypto:webcrypto,fetch:browserFetch,now})).status,'EXISTING');
       const local=await createV14BrowserWitnessStore({indexedDB:new IDBFactory(),crypto:webcrypto,owner:originOwner,vault,scopeId,
         journalKeyHex:await bootstrapLocalJournalKey({capability,crypto:webcrypto}),initializeBrandNew:true});
@@ -247,8 +260,6 @@ if(process.env.BOUNCER_PGLITE_MODULE) {
       await opened.useSecrets(({temporaryKey,checkpointCapability})=>{
         assert.equal(String(temporaryKey.getPublicKey()),String(temporary.getPublicKey()));assert.equal(checkpointCapability,capability);
       });opened.dispose();
-      const combinedFetch=(url,opts)=>String(url).startsWith('https://jiouaqwxkvlkmvyumzwc.supabase.co/functions/')
-        ? browserFetch(url,opts):backendFetch(url,opts);
       const client=createBootstrapRecoveryReadClient({wallet,owner:originOwner,ownerPublicKey:String(owner.getPublicKey()),
         location,isTopLevel:true,crypto:webcrypto,fetch:combinedFetch,now});
       assert.equal(await client.enabled(),true);

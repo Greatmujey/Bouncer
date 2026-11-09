@@ -157,6 +157,18 @@ the vault until its deletion is final; a lost passphrase/file can strand funds,
 and a compromised browser can steal unlocked secrets. This feature is not a
 live setup transaction path or proof of a real-phone recovery.
 
+A separate enrollment control appears only when the default-off checkpoint
+reports enabled. It rechecks the saved file, backup ID, passphrase, pinned
+artifact and current owner key, then asks for one owner identity signature; it
+sends only the encrypted kit and public review, not the passphrase or unlocked
+keys. It never requests a NEAR transaction. Before the POST it requires a
+persistent same-origin browser stop marker; a lost or malformed acknowledgement
+stops further attempts in that browser and must be reconciled by recovery, not
+by re-enrolling. This marker is not a cross-tab lock and does not coordinate
+other browsers or devices. An acknowledgement is not proof of a separate restore,
+latest original history or on-chain state, and does not authorize setup. The
+endpoint remains disabled for the real owner until separately reviewed.
+
 `stage-public-web.mjs` publishes only the 19 allowlisted website files,
 including that public, lazily loaded artifact. Vercel separately detects the
 Google and WalletConnect functions and fixed-action mission/read-only setup

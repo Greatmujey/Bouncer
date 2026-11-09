@@ -75,6 +75,7 @@ function fakeBrowser(url, { top = true, storageFails = false, approved = '' } = 
     'wallet-bootstrap-candidate-create', 'wallet-bootstrap-candidate-status', 'wallet-bootstrap-candidate-saved', 'wallet-bootstrap-candidate-id', 'wallet-bootstrap-candidate-details',
     'wallet-bootstrap-candidate-copy', 'wallet-bootstrap-candidate-download', 'wallet-bootstrap-candidate-file', 'wallet-bootstrap-candidate-expected',
     'wallet-bootstrap-candidate-unlock', 'wallet-bootstrap-candidate-verify', 'wallet-bootstrap-candidate-check-status',
+    'wallet-bootstrap-candidate-enrollment', 'wallet-bootstrap-candidate-enroll', 'wallet-bootstrap-candidate-enroll-status',
     'wallet-bootstrap-recovery-open', 'wallet-bootstrap-recovery-panel', 'wallet-bootstrap-recovery-read', 'wallet-bootstrap-recovery-file',
     'wallet-bootstrap-recovery-import', 'wallet-bootstrap-recovery-status', 'wallet-bootstrap-recovery-originals', 'wallet-bootstrap-recovery-backup',
     'wallet-bootstrap-recovery-export', 'wallet-bootstrap-recovery-passphrase', 'wallet-bootstrap-recovery-unlock',
@@ -392,6 +393,7 @@ test('local preparation saves and rechecks an encrypted candidate without an add
   await n['wallet-owner-verify'].click();await new Promise(resolve=>setImmediate(resolve));
   assert.equal(n['wallet-bootstrap-candidate-open'].hidden,false);
   await n['wallet-bootstrap-candidate-open'].click();
+  assert.equal(n['wallet-bootstrap-candidate-enrollment'].hidden,true, 'offline checkpoint must not offer enrollment');
   const passphrase='synthetic only long recovery passphrase';
   n['wallet-bootstrap-candidate-passphrase'].value=passphrase;
   n['wallet-bootstrap-candidate-confirm'].value='different passphrase';
@@ -426,6 +428,77 @@ test('local preparation saves and rechecks an encrypted candidate without an add
   assert.equal(n['wallet-bootstrap-candidate-open'].hidden,true);
   assert.equal(n['wallet-bootstrap-candidate-id'].textContent,'');
   assert.equal(n['wallet-bootstrap-candidate-check-status'].textContent,'');
+});
+
+test('saved candidate enrollment is identity-only and stops on success, lost response or marker failure', async () => {
+  const origin='https://bouncer-production-6df1.up.railway.app';
+  const marker='bouncer-v14-bootstrap-enrollment-attempt-great-mujey-v1';
+  const bytes=new Uint8Array(fs.readFileSync(new URL('../web/artifacts/v14-research.deflate',import.meta.url)));
+  const passphrase='synthetic-only long enrollment passphrase';
+  for (const mode of ['acknowledged','lost','marker-failure']) {
+    const browser=fakeBrowser(`${origin}/workspace`,{approved:origin});
+    const config={account:'great_mujey.testnet',signConnectedMessage:true,cliKey:KeyPair.fromRandom('ed25519')};
+    const originalFetch=browser.win.fetch; let downloaded,posts=0;
+    browser.win.Blob=Blob;browser.win.URL={createObjectURL(blob){downloaded=blob;return 'blob:synthetic'},revokeObjectURL(){}};
+    browser.doc.body.append=()=>{};
+    browser.win.fetch=async(url,options={})=>{
+      if(!String(url).includes('/functions/v1/bouncer-v14-bootstrap-checkpoint'))return originalFetch(url,options);
+      if(options.method==='OPTIONS')return new Response(null,{status:204});
+      assert.equal(options.method,'POST');assert.equal(browser.data.get(marker),'1','local stop precedes the POST');
+      posts++;assert.equal(options.body.includes(passphrase),false);
+      const body=JSON.parse(options.body);assert.equal(body.operation,'enroll');
+      if(mode==='lost')throw Error('synthetic lost acknowledgement');
+      const attestation=JSON.stringify({terms:body.terms,nonce_base64:body.nonce_base64,signature_base64:body.signature_base64});
+      return Response.json({status:'ENROLLED',scope_id:body.terms.scope_id,revision:0,head_sha256:'0'.repeat(64),
+        kit_sha256:body.terms.kit_sha256,attestation_sha256:createHash('sha256').update(attestation).digest('hex')});
+    };
+    await initWallet({window:browser.win,document:browser.doc,NearConnector:connectorClass(config),loadBootstrapArtifact:async()=>bytes.slice()});
+    const n=browser.nodes;await n['wallet-connect'].click();await browser.options[0].click();
+    await n['wallet-owner-verify'].click();await new Promise(resolve=>setImmediate(resolve));
+    await n['wallet-bootstrap-candidate-open'].click();
+    assert.equal(n['wallet-bootstrap-candidate-enrollment'].hidden,false);
+    n['wallet-bootstrap-candidate-passphrase'].value=passphrase;n['wallet-bootstrap-candidate-confirm'].value=passphrase;
+    await n['wallet-bootstrap-candidate-create'].click();await n['wallet-bootstrap-candidate-download'].click();
+    const text=await downloaded.text(),id=n['wallet-bootstrap-candidate-id'].textContent;
+    n['wallet-bootstrap-candidate-file'].files=[{size:Buffer.byteLength(text),text:async()=>text}];
+    n['wallet-bootstrap-candidate-expected'].value=id;n['wallet-bootstrap-candidate-unlock'].value=passphrase;
+    if(mode==='marker-failure')browser.win.localStorage.setItem=()=>{throw Error('synthetic storage failure')};
+    await n['wallet-bootstrap-candidate-enroll'].click();
+    const expectedPosts=mode==='marker-failure'?0:1;
+    assert.equal(posts,expectedPosts);assert.equal(config.messageRequests.length,2,'one owner verification and one enrollment identity signature');
+    assert.equal(browser.data.get(marker),mode==='marker-failure'?undefined:'1');
+    assert.equal(config.transactionRequests,undefined);assert.equal(n['wallet-bootstrap-candidate-unlock'].value,'');
+    assert.equal(n['wallet-bootstrap-candidate-enroll'].disabled,true);
+    assert.match(n['wallet-bootstrap-candidate-enroll-status'].textContent,mode!=='acknowledged'
+      ? /may have been recorded.*recover it instead/i : /acknowledged.*not a verified independent restore.*no transaction/i);
+    await n['wallet-bootstrap-candidate-enroll'].click();assert.equal(posts,expectedPosts);
+    await n['wallet-disconnect'].click();await n['wallet-connect'].click();await browser.options[0].click();
+    await n['wallet-owner-verify'].click();await new Promise(resolve=>setImmediate(resolve));
+    await n['wallet-bootstrap-candidate-open'].click();
+    assert.equal(n['wallet-bootstrap-candidate-enroll'].disabled,true);
+    assert.match(n['wallet-bootstrap-candidate-enroll-status'].textContent,/attempted on this browser.*recover/i);
+    assert.equal(posts,expectedPosts);assert.equal(config.transactionRequests,undefined);
+  }
+});
+
+test('enrollment is unavailable before signing when browser storage is blocked', async () => {
+  const origin='https://bouncer-production-6df1.up.railway.app';
+  const browser=fakeBrowser(`${origin}/workspace`,{approved:origin,storageFails:true});
+  const config={account:'great_mujey.testnet',signConnectedMessage:true,cliKey:KeyPair.fromRandom('ed25519')};
+  const originalFetch=browser.win.fetch;let posts=0;
+  browser.win.fetch=async(url,options={})=>{
+    if(!String(url).includes('/functions/v1/bouncer-v14-bootstrap-checkpoint'))return originalFetch(url,options);
+    if(options.method==='OPTIONS')return new Response(null,{status:204});
+    posts++;throw Error('no enrollment should be sent');
+  };
+  await initWallet({window:browser.win,document:browser.doc,NearConnector:connectorClass(config),loadBootstrapArtifact:async()=>new Uint8Array()});
+  const n=browser.nodes;await n['wallet-connect'].click();await browser.options[0].click();
+  await n['wallet-owner-verify'].click();await new Promise(resolve=>setImmediate(resolve));await n['wallet-bootstrap-candidate-open'].click();
+  assert.equal(n['wallet-bootstrap-candidate-enrollment'].hidden,false);
+  assert.equal(n['wallet-bootstrap-candidate-enroll'].disabled,true);
+  assert.match(n['wallet-bootstrap-candidate-enroll-status'].textContent,/browser storage is unavailable/i);
+  await n['wallet-bootstrap-candidate-enroll'].click();
+  assert.equal(posts,0);assert.equal(config.messageRequests.length,1);assert.equal(config.transactionRequests,undefined);
 });
 
 test('late local preparation cannot repopulate a signed-out owner session', async () => {

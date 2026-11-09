@@ -16,11 +16,16 @@ import { createV14CheckpointRecoveryClient } from './v14-checkpoint-recovery-cli
 import { createBootstrapRecoveryReadClient } from './v14-bootstrap-recovery-read.mjs';
 import { inspectV14BootstrapBudget } from './v14-bootstrap-budget-client.mjs';
 import { createV14BootstrapCandidate, verifyV14BootstrapCandidate } from './v14-bootstrap-candidate.mjs';
+import { createBootstrapCandidateEnrollmentClient } from './v14-bootstrap-candidate-enrollment.mjs';
 import { V14_EXAMPLE_VAULT_FUNDING_YOCTO } from '../shared/v14-bootstrap-budget.mjs';
 import { V14_BOOTSTRAP_ORIGINS } from '../shared/v14-bootstrap-protocol.mjs';
 import { V14_ENROLLMENT_SITE } from './v14-checkpoint-enrollment.mjs';
 import { createDirectOutlayerTest, directOutlayerOriginAllowed } from './direct-outlayer-testnet.mjs';
 import { createRemoteDirectFence, directTestCapability } from './direct-test-remote-fence.mjs';
+
+// This device-local stop sign holds no key or transaction data. It cannot
+// establish the latest head or coordinate other browsers or origins.
+const BOOTSTRAP_ENROLLMENT_MARKER = 'bouncer-v14-bootstrap-enrollment-attempt-great-mujey-v1';
 
 // HTTP Date is coarse and can be cached. Only flag a large discrepancy when
 // the response provides a valid Date/Age and the request was reasonably fast.
@@ -137,6 +142,9 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
   const candidateUnlock = doc.querySelector('#wallet-bootstrap-candidate-unlock');
   const candidateVerify = doc.querySelector('#wallet-bootstrap-candidate-verify');
   const candidateCheckStatus = doc.querySelector('#wallet-bootstrap-candidate-check-status');
+  const candidateEnrollment = doc.querySelector('#wallet-bootstrap-candidate-enrollment');
+  const candidateEnroll = doc.querySelector('#wallet-bootstrap-candidate-enroll');
+  const candidateEnrollStatus = doc.querySelector('#wallet-bootstrap-candidate-enroll-status');
   const v14RecoveryOpen = doc.querySelector('#wallet-v14-recovery-open');
   const v14RecoveryPanel = doc.querySelector('#wallet-v14-recovery-panel');
   const v14RecoveryVault = doc.querySelector('#wallet-v14-recovery-vault');
@@ -257,7 +265,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
   let bufferSetupDraft = null, nativeSetupAvailable = false, nativeFlow = null, nativeSetupOpening = false, directFlow = null;
   let v14RecoveryClient = null, v14RecoveryVisible = false;
   let bootstrapRecoveryClient = null, bootstrapRecoveryReady = false, bootstrapRecoveryVisible = false, bootstrapRecoveryUnlocked = false;
-  let bootstrapBudgetVisible = false, candidateVisible = false, candidate = null;
+  let bootstrapBudgetVisible = false, candidateVisible = false, candidate = null, candidateEnrollmentSessionStopped = false;
   let missionFlow = null, missionReview = null, missionReady = false, missionStarted = false;
   const bufferSetupStages = ['create_keyless_vault', 'register_vault_circle', 'fund_vault_circle'];
   let bannerTimer;
@@ -339,6 +347,11 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     }
   }
   function hideBanner() { clearTimeout(bannerTimer); if (banner) banner.hidden = true; }
+  function candidateEnrollmentMarkerState() {
+    if (candidateEnrollmentSessionStopped) return 'attempted';
+    try { return win.localStorage.getItem(BOOTSTRAP_ENROLLMENT_MARKER) === null ? 'clear' : 'attempted'; }
+    catch { return 'unavailable'; }
+  }
   function renderControls() {
     const viewing = Boolean(viewedAccount);
     // Rendering must not erase a wallet error or an uncertain onboarding result.
@@ -373,6 +386,13 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     for (const control of [candidatePassphrase,candidateConfirm]) if (control) control.disabled = busyState || Boolean(candidate);
     for (const control of [candidateCopy,candidateDownload]) if (control) control.disabled = busyState || !candidate;
     for (const control of [candidateFile,candidateExpected,candidateUnlock,candidateVerify]) if (control) control.disabled = busyState;
+    const enrollmentMarker = candidateEnrollmentMarkerState();
+    if (candidateEnrollment) candidateEnrollment.hidden = !candidateEligible || !candidateVisible || !bootstrapRecoveryReady;
+    if (candidateEnroll) candidateEnroll.disabled = busyState || enrollmentMarker !== 'clear';
+    if (candidateEnrollStatus && candidateEnrollment && !candidateEnrollment.hidden && !candidateEnrollStatus.textContent) {
+      if (enrollmentMarker === 'attempted') candidateEnrollStatus.textContent = 'An enrollment was attempted on this browser. Recover the existing checkpoint instead of enrolling again. This local marker does not prove the latest history.';
+      else if (enrollmentMarker === 'unavailable') candidateEnrollStatus.textContent = 'Browser storage is unavailable, so this device cannot safely mark an enrollment attempt.';
+    }
     const v14RecoveryEnabled = ownerVerified && isTop && win.location.origin === V14_ENROLLMENT_SITE && Boolean(v14RecoveryClient);
     if (v14RecoveryOpen) { v14RecoveryOpen.hidden = !v14RecoveryEnabled || v14RecoveryVisible; v14RecoveryOpen.disabled = busyState; }
     if (v14RecoveryPanel) v14RecoveryPanel.hidden = !v14RecoveryEnabled || !v14RecoveryVisible;
@@ -479,7 +499,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
   function clearBootstrapCandidate() {
     candidateVisible = false; candidate = null;
     for (const input of [candidatePassphrase,candidateConfirm,candidateFile,candidateExpected,candidateUnlock]) if (input) input.value = '';
-    for (const item of [candidateStatus,candidateId,candidateDetails,candidateCheckStatus]) if (item) item.textContent = '';
+    for (const item of [candidateStatus,candidateId,candidateDetails,candidateCheckStatus,candidateEnrollStatus]) if (item) item.textContent = '';
     if (candidateSaved) candidateSaved.hidden = true;
   }
   function clearBootstrapRecovery() {
@@ -1017,6 +1037,48 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
       if (current()) candidateCheckStatus.textContent = 'Could not verify that file, ID, passphrase and pinned plan. Keep existing copies; do not repeat an uncertain transaction.';
     } finally {
       passphrase = ''; if (candidateFile) candidateFile.value = '';
+      busy(false); if (current()) renderControls();
+    }
+  });
+  candidateEnroll?.addEventListener('click', async () => {
+    const proof = ownerVerification, version = ownerSessionVersion, file = candidateFile?.files?.[0];
+    if (busyState || !candidateVisible || !bootstrapRecoveryReady || !candidateEnrollment || candidateEnrollment.hidden ||
+        !candidateExpected || !candidateUnlock || !candidateEnrollStatus || !connected || !proof ||
+        proof.wallet !== selectedWallet || proof.accountId !== 'great_mujey.testnet') return;
+    const current = () => connected && selectedWallet === proof.wallet && connectedAccount === proof.accountId &&
+      ownerVerification === proof && ownerSessionVersion === version && candidateVisible && bootstrapRecoveryReady;
+    if (candidateEnrollmentMarkerState() !== 'clear') {
+      candidateEnrollStatus.textContent = 'This browser cannot start another enrollment. Recover the existing checkpoint instead.'; return;
+    }
+    const expectedFingerprint = candidateExpected.value.trim().toLowerCase();
+    let passphrase = candidateUnlock.value; candidateUnlock.value = '';
+    if (!file || !Number.isFinite(file.size) || file.size < 1 || file.size > 30_000 ||
+        !/^[a-f0-9]{64}$/.test(expectedFingerprint) || passphrase.length < 16 || passphrase.length > 1024) {
+      candidateEnrollStatus.textContent = 'Choose the saved file and enter its separately recorded ID and recovery passphrase above.';
+      passphrase = ''; return;
+    }
+    candidateEnrollStatus.textContent = 'Checking the saved file locally. Your wallet may then request an identity message, not a transaction.';
+    busy(true); let client;
+    try {
+      const [text,compressedV14] = await Promise.all([file.text(),loadBootstrapArtifact()]); if (!current()) return;
+      client = createBootstrapCandidateEnrollmentClient({wallet:proof.wallet,owner:proof.accountId,ownerPublicKey:proof.publicKey,
+        location:win.location,isTopLevel:isTop,crypto:win.crypto,fetch:walletReadFetch,isCurrent:current});
+      await client.enroll({text,expectedFingerprint,passphrase,compressedV14,beforePublish:async()=>{
+        if (!current() || candidateEnrollmentMarkerState() !== 'clear') return false;
+        // Even if storage fails, do not offer another attempt in this tab.
+        candidateEnrollmentSessionStopped = true;
+        win.localStorage.setItem(BOOTSTRAP_ENROLLMENT_MARKER,'1');
+        return win.localStorage.getItem(BOOTSTRAP_ENROLLMENT_MARKER) === '1';
+      }});
+      if (current()) candidateEnrollStatus.textContent = 'The checkpoint service acknowledged the encrypted enrollment. This is not a verified independent restore, proof of the latest history or an on-chain check. Restore it on another device before setup. No transaction was authorized.';
+    } catch (error) {
+      if (current()) candidateEnrollStatus.textContent = /may have been recorded/.test(error?.message || '')
+        ? 'The checkpoint may have been recorded. Recover it instead of enrolling again; do not start another setup. No vault transaction was requested.'
+        : /owner key changed/.test(error?.message || '')
+          ? 'The recorded owner key differs from this session. Stop and reconcile the key change. No enrollment or transaction was sent.'
+          : 'This attempt did not send an enrollment. Check the saved file, ID, passphrase and connection. No vault transaction was requested.';
+    } finally {
+      client?.destroy(); passphrase = ''; if (candidateFile) candidateFile.value = '';
       busy(false); if (current()) renderControls();
     }
   });

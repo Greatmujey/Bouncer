@@ -1,7 +1,9 @@
 # Bouncer: blockers, attempted approaches and track fit
 
-Snapshot: 6 November 2026. This is a working plan, not a claim that a track
-is complete or a submission decision. The [official rules and track descriptions](https://nearhackathon.com/HACKATHON.md)
+**Current focus:** AI Security & Defense (`security`) is the one active target. The table and provider research below are historical, not separate roadmaps. Keep the resource mission, FT support and recovery records; defer unrelated track expansion.
+
+Historical provider snapshot: 6 November 2026. The current single-track choice
+above is not a claim of completion or permission to submit. The [official rules and track descriptions](https://nearhackathon.com/HACKATHON.md)
 can change; re-read them before any submission. The current deadline is
 14 November 2026 at 23:59 UTC (15 November at 00:59 in Lagos). Testnet-only
 projects are eligible; integrations named in the track hints are not mandatory.
@@ -92,20 +94,15 @@ not a verified publicly available seller or a Bouncer payment. No funds were
 sent and no source-code licensing, deployed-code equivalence or safety audit is
 claimed.
 
-## Recommended focus, not automatic track selection
+## Current focus
 
-1. **Agent Economy + AI Security & Defense:** pursue the bounded native-NEAR
-   OutLayer path first, with owner approval, original-hash recovery and verified
-   provider results. An independent FT seller is optional afterward; do not
-   call a synthetic test or historical transaction a new purchase.
-2. Fix and verify the real wallet approval flow, without adding transaction or
-   AddKey authority to an identity-only connection. Protect the live relay.
-3. Expand the same working purchase into compute, storage and API/data, rather
-   than building unrelated track-specific features. Business, Real-World
-   Money, DeFi and Swarms become stronger candidates only when supported by
-   completed evidence; their track names do not themselves require mainnet.
+Build one defensible, usable testnet demonstration for **AI Security & Defense**:
+an owner-defined policy, bounded agent-driven compute and data, stake-backed
+NEAR storage, a denied unauthorized action, and independently recoverable
+originals. The direct wallet OutLayer test and earlier self-hosted runs remain
+historical evidence, not the new guarded mission. Recovery and the fresh V14
+vault are not yet verified or transaction-approved.
 
-MCP expansion and Gloam/privacy work remain deferred. Neither Gloam nor any
-particular partner is mandatory, and track selection should not derail the
-core multi-resource product. The entrant chooses tracks before the one allowed
-submission; no submission or public post is made without their approval.
+Defer MCP expansion, swarm, DeFi and independent FT-vendor purchases until the
+core works. Preserve existing FT support and original recovery material. No
+submission or public post is made without the owner's explicit approval.

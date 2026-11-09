@@ -13,7 +13,7 @@ import { nativeMissionAction, nativeMissionApprovalMessage } from '../web-src/na
 import { nep413Payload } from '../web-src/cli-login.mjs';
 import { buildV14TemporaryBootstrapPlan } from '../web-src/v14-bootstrap-plan.mjs';
 import { sealV14BootstrapRecoveryKit } from '../web-src/v14-bootstrap-recovery-kit.mjs';
-import { prepareBootstrapEnrollment } from '../web-src/v14-bootstrap-checkpoint.mjs';
+import { prepareBootstrapEnrollment, bootstrapEnrollmentMessage } from '../web-src/v14-bootstrap-checkpoint.mjs';
 import { WALLET_EXECUTOR_SHA256 } from '../web-src/wallet-executor.mjs';
 import { PUBLIC_WEB_FILES, stagePublicWeb } from './stage-public-web.mjs';
 
@@ -58,6 +58,7 @@ try {
     {width:390,mode:'blocked',origin:defaultOrigin},{width:390,mode:'recovery-empty',origin:defaultOrigin},
     {width:1280,mode:'candidate-read',origin:'https://bouncer-production-6df1.up.railway.app'},
     {width:390,mode:'candidate-read-rotated',origin:defaultOrigin},
+    {width:390,mode:'candidate-enroll-lost',origin:defaultOrigin},
     {width:390,mode:'success',origin:'https://synthetic-bouncer.netlify.app'}]) {
     const mission=mode==='market'?marketMission:randomMission;
     const review={format:'bouncer-native-mission-review-v1',network:'testnet',mission,mission_sha256:sha(JSON.stringify(mission))};
@@ -74,7 +75,7 @@ try {
       }
     });
     const errors=[],requests=[];page.on('pageerror',e=>errors.push(e.message));
-    const keys=['recovery-empty','candidate-read'].includes(mode)?candidateOwnerKeys:generateKeyPairSync('ed25519'),
+    const keys=['recovery-empty','candidate-read','candidate-enroll-lost'].includes(mode)?candidateOwnerKeys:generateKeyPairSync('ed25519'),
       privatePkcs8=keys.privateKey.export({type:'pkcs8',format:'der'}).toString('base64'),
       publicKey=`ed25519:${nearApi.utils.serialize.base_encode(Buffer.from(keys.publicKey.export({format:'jwk'}).x,'base64url'))}`;
     const mock=`window.selector.ready({
@@ -93,7 +94,7 @@ try {
     });`;
     const bundle=fs.readFileSync(path.join(siteDir,'wallet.bundle.js'),'utf8'),pinned=WALLET_EXECUTOR_SHA256['meteor-wallet'];
     assert(bundle.includes(pinned));const mockDigest=sha(mock);
-    let saved, executes=0, recovers=0, challengeCount=0;
+    let saved, executes=0, recovers=0, challengeCount=0, checkpointPosts=0;
     const deliveries = count => mission.goals.slice(0,count).map((item,index)=>({kind:item.kind,goal_id:item.goal.id,
       delivery:{tx_hash:base58(40+index),result:item.kind==='oracle'?{price_usd:2.75}:item.kind==='market'?
         {value_usd_micros:27500000}:{value:'synthetic public object'}}}));
@@ -134,12 +135,30 @@ try {
         else return route.abort('failed');
         return route.fulfill({status:200,contentType:'application/json',headers:cors,body:JSON.stringify({...base,...(error?{error}:{result})})});
       }
+      if(url.origin==='https://jiouaqwxkvlkmvyumzwc.supabase.co' &&
+          url.pathname==='/functions/v1/bouncer-v14-bootstrap-checkpoint' &&
+          ['candidate-read','candidate-read-rotated','candidate-enroll-lost'].includes(mode)) {
+        const cors={'access-control-allow-origin':origin,'access-control-allow-methods':'POST, OPTIONS',
+          'access-control-allow-headers':'content-type','cache-control':'no-store'};
+        if(req.method()==='OPTIONS')return route.fulfill({status:204,headers:cors});
+        assert.equal(req.method(),'POST');checkpointPosts++;
+        assert.equal(await page.evaluate(()=>localStorage.getItem('bouncer-v14-bootstrap-enrollment-attempt-great-mujey-v1')),'1');
+        const input=req.postDataJSON();assert.equal(input.operation,'enroll');assert.equal(input.terms.owner,owner);
+        assert.equal(input.terms.owner_public_key,publicKey);assert.equal(input.terms.site,origin);
+        const payload=nep413Payload({message:bootstrapEnrollmentMessage(input.terms),nonce:new Uint8Array(Buffer.from(input.nonce_base64,'base64')),
+          recipient:new URL(origin).host});
+        assert.equal(verify(null,createHash('sha256').update(payload).digest(),keys.publicKey,Buffer.from(input.signature_base64,'base64')),true);
+        if(mode==='candidate-enroll-lost')return route.abort('failed');
+        const attestation=JSON.stringify({terms:input.terms,nonce_base64:input.nonce_base64,signature_base64:input.signature_base64});
+        return route.fulfill({status:200,contentType:'application/json',headers:cors,body:JSON.stringify({status:'ENROLLED',
+          scope_id:input.terms.scope_id,revision:0,head_sha256:'0'.repeat(64),kit_sha256:input.terms.kit_sha256,attestation_sha256:sha(attestation)})});
+      }
       if(url.origin!==origin)return route.abort('failed');
       if(url.pathname==='/api/google-session')return json(route,{error:'not configured'},503);
       if(url.pathname==='/api/native-mission/config')return json(route,{enabled:true,network:'testnet',review});
       if(url.pathname.startsWith('/api/native-mission/')) {
         const name=url.pathname.split('/').pop(),input=req.postDataJSON();assert.equal(input.missionSha256,review.mission_sha256);
-        if(name==='preview')return json(route,{review,preview:{status:['blocked','recovery-empty','candidate-read','candidate-read-rotated'].includes(mode)?'BLOCKED':'READY',stage:'synthetic',
+        if(name==='preview')return json(route,{review,preview:{status:['blocked','recovery-empty','candidate-read','candidate-read-rotated','candidate-enroll-lost'].includes(mode)?'BLOCKED':'READY',stage:'synthetic',
           ...(mode==='market'?{next_goal_id:mission.goals[executes]?.goal.id??null,verified_prior_deliveries:deliveries(executes)}:{})}});
         if(name==='challenge') {
           assert.equal(input.ownerPublicKey,publicKey);challengeCount++;
@@ -186,6 +205,7 @@ try {
       // synthetic wallet only. Neither operation prompts or sends anything.
       const beforeSignatures=await signatureCount(),candidatePassphraseValue='synthetic only phone recovery passphrase';
       await page.locator('#wallet-bootstrap-candidate-open').click();
+      assert.equal(await page.locator('#wallet-bootstrap-candidate-enrollment').isVisible(),false,'offline checkpoint is not offered');
       await page.locator('#wallet-bootstrap-candidate-passphrase').fill(candidatePassphraseValue);
       await page.locator('#wallet-bootstrap-candidate-confirm').fill(candidatePassphraseValue);
       await page.locator('#wallet-bootstrap-candidate-create').click();
@@ -276,7 +296,7 @@ try {
       assert.equal(await signatureCount(),sigs);assert.equal(requests.length,networkBefore,'offline import made no network calls');
       assert.equal(executes,0);assert.equal(challengeCount,0);
     }
-    if(['candidate-read','candidate-read-rotated'].includes(mode)) {
+    if(['candidate-read','candidate-read-rotated','candidate-enroll-lost'].includes(mode)) {
       assert(crossDeviceCandidate,'a separate phone-sized context saved the file first');
       const {bytes,id,passphrase}=crossDeviceCandidate,beforeSignatures=await signatureCount();
       await page.locator('#wallet-bootstrap-candidate-open').click();
@@ -287,7 +307,7 @@ try {
       await page.locator('#wallet-bootstrap-candidate-verify').click();
       await page.waitForFunction(()=>document.querySelector('#wallet-bootstrap-candidate-check-status').textContent.includes('File matches the recorded ID'));
       const checked=await page.locator('#wallet-bootstrap-candidate-check-status').innerText();
-      if(mode==='candidate-read')assert.match(checked,/owner key matches this verified session.*does not prove another backup/i);
+      if(mode!=='candidate-read-rotated')assert.match(checked,/owner key matches this verified session.*does not prove another backup/i);
       else assert.match(checked,/WARNING: the recorded owner key differs.*reconcile the key change/i);
       await page.locator('#wallet-bootstrap-candidate-file').setInputFiles({name:'from-another-device.json',mimeType:'application/json',buffer:bytes});
       await page.locator('#wallet-bootstrap-candidate-expected').fill('0'.repeat(64));
@@ -296,6 +316,27 @@ try {
       await page.waitForFunction(()=>document.querySelector('#wallet-bootstrap-candidate-check-status').textContent.includes('Could not verify'));
       assert.equal(await signatureCount(),beforeSignatures);assert.equal(executes,0);assert.equal(challengeCount,0);
       assert(requests.some(item=>item==='GET /v14-bootstrap-artifact-v1.json'));
+      // One cross-device saved file, an identity message, and a mocked remote
+      // checkpoint. No real wallet, live service or NEAR transaction is used.
+      await page.waitForFunction(()=>!document.querySelector('#wallet-bootstrap-candidate-enrollment').hidden);
+      await page.locator('#wallet-bootstrap-candidate-file').setInputFiles({name:'from-another-device.json',mimeType:'application/json',buffer:bytes});
+      await page.locator('#wallet-bootstrap-candidate-expected').fill(id);
+      await page.locator('#wallet-bootstrap-candidate-unlock').fill(passphrase);
+      await page.locator('#wallet-bootstrap-candidate-enroll').click();
+      const wanted=mode==='candidate-read-rotated'?'recorded owner key differs':mode==='candidate-enroll-lost'?'may have been recorded':'acknowledged';
+      await page.waitForFunction(value=>document.querySelector('#wallet-bootstrap-candidate-enroll-status').textContent.includes(value),wanted,{timeout:20_000});
+      assert.equal(await page.locator('#wallet-bootstrap-candidate-unlock').inputValue(),'');
+      if(mode==='candidate-read-rotated') {
+        assert.equal(await signatureCount(),beforeSignatures);assert.equal(checkpointPosts,0);
+        assert.equal(await page.evaluate(()=>localStorage.getItem('bouncer-v14-bootstrap-enrollment-attempt-great-mujey-v1')),null);
+      } else {
+        await page.waitForFunction(count=>window.__bouncerSyntheticSignatures===count,beforeSignatures+1);
+        assert.equal(checkpointPosts,1);assert.equal(await page.locator('#wallet-bootstrap-candidate-enroll').isDisabled(),true);
+        assert.equal(await page.evaluate(()=>localStorage.getItem('bouncer-v14-bootstrap-enrollment-attempt-great-mujey-v1')),'1');
+        assert.match(await page.locator('#wallet-bootstrap-candidate-enroll-status').innerText(),mode==='candidate-enroll-lost'
+          ? /recover it instead.*no vault transaction/i : /not a verified independent restore.*no transaction/i);
+      }
+      assert.equal(executes,0);assert.equal(challengeCount,0);
     }
     await page.locator('#wallet-native-mission-open').waitFor({state:'visible'});await page.locator('#wallet-native-mission-open').click();
     await page.waitForFunction(()=>document.querySelector('#wallet-native-mission-details') && !document.querySelector('#wallet-native-mission-details').hidden);
@@ -304,7 +345,7 @@ try {
     await page.locator('#wallet-native-mission-details summary').click();
     assert.match(await page.locator('#wallet-native-mission-manifest').innerText(),/"from_goal_ids"/);
     assert.equal(executes,0);assert.equal(challengeCount,0);
-    if(['blocked','recovery-empty','candidate-read','candidate-read-rotated'].includes(mode)) {
+    if(['blocked','recovery-empty','candidate-read','candidate-read-rotated','candidate-enroll-lost'].includes(mode)) {
       await page.waitForFunction(()=>document.querySelector('#wallet-native-mission-status').textContent.includes('Mission blocked'));
       assert.equal(await page.locator('#wallet-native-mission-approve').isVisible(),false);
       if(mode==='recovery-empty') {
