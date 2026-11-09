@@ -211,6 +211,7 @@ export function createV14OriginalWitness({ binding:rawBinding,localStore,indepen
     // Public-only immutable reviewed binding, returned as a detached copy.
     binding:()=>copy(binding),
     inspect:async () => (await readBoth()).state,
+    history:async () => copy((await readBoth()).snapshot),
     reserve:() => mutate('reserve', state => {
       if (state.reserved) return null;
       if (state.revision!==0) throw uncertain();

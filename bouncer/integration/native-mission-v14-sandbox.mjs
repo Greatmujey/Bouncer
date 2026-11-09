@@ -24,7 +24,7 @@ import { prepareV14PhoneAttempt, inspectV14PhoneAttempt } from '../agent/native-
 import { inspectV14PhoneSetupCompletion } from '../agent/native-v14-phone-completion.mjs';
 import { createV14SetupRpcVerifier } from '../agent/v14-setup-rpc-verifier.mjs';
 import { createV14OriginalWitness,deriveV14OriginalBinding,V14_WITNESS_GENESIS } from '../agent/v14-original-witness.mjs';
-import { createV14MissionOriginalCheckpoint,createV14MissionOriginalVerifier } from '../agent/v14-mission-original-checkpoint.mjs';
+import { createV14BackedMissionHooks,inspectV14MissionJournalBackup,writeV14MissionRecoveryCopy } from '../agent/v14-mission-journal-backup.mjs';
 import { verifyOutlayerResult } from '../agent/outlayer.mjs';
 import { verifyOracleResult } from '../agent/oracle-outlayer.mjs';
 import { verifyNativeStorageResult } from '../agent/native-storage.mjs';
@@ -53,6 +53,18 @@ function sandboxWitnessStore() {
     snapshot={revision:snapshot.revision+1,head_sha256:sha(record).toString('hex'),events:[...snapshot.events,record]};
     return structuredClone(snapshot);
   }};
+}
+// In-memory protocol substitute only: not independent storage or durability.
+function sandboxMissionBackupStore(witness) {
+  const saved=new Map(),key=(id,phase)=>`${id}:${phase}`;
+  return {
+    read:async({goal_id,phase})=>structuredClone(saved.get(key(goal_id,phase))??null),
+    append:async record=>{
+      const state=await witness.inspect(),id=key(record.goal_id,record.phase);
+      assert.equal(record.witness_revision,state.revision);assert.equal(record.witness_head_sha256,state.head_sha256);
+      assert.equal(saved.has(id),false);saved.set(id,structuredClone(record));return structuredClone(record);
+    },
+  };
 }
 const createLoader=(loader,funding=20n*N)=>[tx.createAccount(),tx.transfer(funding),tx.deployContract(loader),call('loader_init',{},1n,20n*T)];
 const deployCompressed=(compressed,deposit=1n)=>call('loader_deploy',compressed,deposit,240n*T);
@@ -133,7 +145,7 @@ async function main() {
     assert.equal(MAX_ACTION_REQUEST_CANONICAL_JSON_LENGTH,400_000); assert.equal(valid.ok,true,valid.reason);
     assert.ok(meteorBytes<380_000,`synthetic Meteor action request too large: ${meteorBytes}`);
   }
-  let sandbox,journal,setupJournal;
+  let sandbox,journal,setupJournal,missionJournalKey;
   try {
     sandbox=await startSandbox(binary,dir,pub(rootSeed)); const {provider,rpcUrl}=sandbox;
     const report=await withSandboxOnlyFetch(rpcUrl,async()=>{
@@ -301,18 +313,24 @@ async function main() {
       }
       const make=(suffix='')=>makeMission(codeHash,priceRoute,storageRoute,suffix);
       const signers=(suffix='')=>Object.fromEntries(Object.entries(keys).map(([id,k])=>[`${id}${suffix}`,{account:account(OWNER,rpc,k),publicKey:k.getPublicKey()}]));
-      journal=new FileJournal(path.join(dir,'mission-originals.json'),VAULT,OWNER);
+      missionJournalKey=crypto.randomBytes(32);
+      journal=new FileJournal(path.join(dir,'mission-originals.json'),VAULT,OWNER,{encryptionKey:missionJournalKey});
       const run=(mission,opts={})=>runNativeMission({mission,provider:rpc,journal,log:()=>{},...opts});
-      const mission=make();
-      const missionHooks=setupWitness?{beforeOriginalBroadcast:createV14MissionOriginalCheckpoint({witness:setupWitness}),
-        afterOriginalVerified:createV14MissionOriginalVerifier({witness:setupWitness})}:{};
+      const mission=make(),missionBackup=setupWitness?sandboxMissionBackupStore(setupWitness):null;
+      const missionHooks=setupWitness?createV14BackedMissionHooks({journal,witness:setupWitness,backupStore:missionBackup}):{};
       assert.equal((await run(mission,{signers:signers()})).status,'READY');assert.equal(rpc.transportCalls,0);
       // Lose the response only after the first real local submission. The
       // witnessed original must be verified by hash without a replacement.
       rpc.loseNextAcknowledgementForTest();
       await assert.rejects(run(mission,{signers:signers(),execute:true,...missionHooks}),/unresolved/);
       const firstOriginal=journal.get('price').tx_hash;assert.equal(rpc.transportCalls,1);
-      if(setupWitness) assert.equal((await setupWitness.inspect()).pending?.tx_hash,firstOriginal);
+      if(setupWitness) {
+        assert.equal((await setupWitness.inspect()).pending?.tx_hash,firstOriginal);
+        const history=await setupWitness.history(),record=await missionBackup.read({goal_id:'price',phase:'pending'});
+        const inspected=inspectV14MissionJournalBackup({record,history,binding:setupWitness.binding(),encryptionKey:missionJournalKey,
+          trustedRevision:history.revision,trustedHeadSha256:history.head_sha256});
+        assert.equal(inspected.phase,'pending');assert.equal(inspected.transaction_authorized,false);
+      }
       const firstRecovery=await run(mission,{signers:{},recoverOnly:true,...(setupWitness?{afterOriginalVerified:missionHooks.afterOriginalVerified}:{})});
       assert.equal(firstRecovery.status,'RECOVERED_PARTIAL');assert.equal(firstRecovery.deliveries[0].delivery.tx_hash,firstOriginal);
       assert.equal(rpc.transportCalls,1);
@@ -323,6 +341,13 @@ async function main() {
         assert.deepEqual(witnessed.mission.map(item=>item.tx_hash),completed.deliveries.map(item=>item.delivery.tx_hash));
         assert.equal(witnessed.pending,null);assert.equal(witnessed.next_mission_goal,null);
         assert.deepEqual(await setupLocal.read(),await setupRemote.read());
+        const history=await setupWitness.history(),record=await missionBackup.read({goal_id:'store',phase:'completed'});
+        const copyFile=path.join(dir,'mission.recovery.enc');
+        const copy=writeV14MissionRecoveryCopy({file:copyFile,copyOnly:true,record,history,binding:setupWitness.binding(),
+          encryptionKey:missionJournalKey,trustedRevision:history.revision,trustedHeadSha256:history.head_sha256});
+        assert.equal(copy.status,'RECOVERY_COPY_WRITTEN');assert.equal(copy.transaction_authorized,false);
+        const restored=new FileJournal(copyFile,VAULT,OWNER,{encryptionKey:missionJournalKey,requireExisting:true});
+        try {assert.deepEqual(restored.list(),journal.list());} finally {restored.close()}
       }
       const saved=JSON.parse(completed.deliveries[2].delivery.result.value);
       assert.deepEqual(saved.resources.map(x=>x.goal_id),['price','compute']);
@@ -382,6 +407,7 @@ async function main() {
           sandbox_original_receipt_proofs:setupProofs,sandbox_completion_snapshot:completion?.status,
           encrypted_local_and_simulated_second_checkpoint_reconciled:true,
           mission_originals_retained_before_submit_and_verified_after_local_final_receipts:true,
+          encrypted_mission_backup_and_separate_recovery_copy_tested_with_simulated_store:true,
           staged_receipt_and_fresh_state_verifier_exercised:true,independent_durable_store_tested:false,
           failed_upgrade_owner_refund_tested:true,real_phone_tested:false}:null,
         dependent_price_calculation_and_public_result_storage:true, fake_provider_did_not_run_wasi:true, sandbox_refunds_verified:true,
@@ -391,6 +417,6 @@ async function main() {
     });
     console.log(JSON.stringify(report,null,2));
     if (loader && process.env.GITHUB_ACTIONS==='true') console.log(`::notice title=V14 research phone loader::Synthetic Meteor request ${meteorBytes} bytes; loader ${loader.length} bytes; compressed V14 ${compressed.length} bytes. Isolated chain and fake provider only; not a real phone, wallet approval or live fulfillment.`);
-  } finally {journal?.close();setupJournal?.close();if(sandbox)await stopSandboxChild(sandbox.child);fs.rmSync(dir,{recursive:true,force:true});}
+  } finally {journal?.close();setupJournal?.close();missionJournalKey?.fill(0);if(sandbox)await stopSandboxChild(sandbox.child);fs.rmSync(dir,{recursive:true,force:true});}
 }
 main().catch(error=>{console.error('Isolated native mission FAILED:',error?.stack??String(error));process.exitCode=1;});

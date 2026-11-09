@@ -315,7 +315,19 @@ simulated independent store and synthetic or isolated-sandbox receipts only.
 **These hooks are not enabled in the live mission service, and the checkpoint
 is not provisioned for the owner or verified against a real testnet receipt.**
 It retains the public review, hashes and commitments, not the journal encryption
-key or agent keys; those still require separate durable recovery. `web-src/v14-secret-recovery-kit.mjs` provides an experimental,
+key or agent keys; those still require separate durable recovery. Research-only
+`agent/v14-mission-journal-backup.mjs` now coordinates an authenticated encrypted
+mission-journal snapshot before each witness original and again before each
+verified-result advance. A new append-only SQL design binds each ciphertext to
+the current original-stream head; its fixed-origin server transport is off by
+default and is not deployed. The SQL and adapters have only synthetic and
+isolated-database tests. Recovery inspection requires a **separately retained
+latest witness head** and the original journal key; it can write a separate,
+non-overwriting recovery copy, but it does not verify receipts, replace the
+active journal, fence another host or authorize execution. It also quarantines
+crash windows where a backup exists before its witness event. Database-owner
+rollback, missing/incorrect heads or simultaneous copies remain unsafe.
+`web-src/v14-secret-recovery-kit.mjs` provides an experimental,
 passphrase-encrypted *key kit* for the capability, distinct journal encryption
 keys and only the three reviewed agent keys; it rejects the reviewed owner
 signing key but cannot by itself prove another key is not FullAccess. Never

@@ -337,3 +337,26 @@ test('an oversized encrypted write fails before replacing the journal and poison
     const reopened = open(f); assert.equal(reopened.get('pending').tx_hash, 'original-hash'); assert.equal(reopened.get('huge'), undefined); reopened.close();
   } finally { f.cleanup(); }
 });
+
+test('encrypted snapshot export authenticates exact on-disk current state and refuses plaintext or rollback',()=>{
+  const f=fixture();let journal;
+  try {
+    const plain=new FileJournal(path.join(f.dir,'plain.json'),contract,owner);
+    plain.put('p',{status:'pending',fingerprint:'fp'});
+    assert.throws(()=>plain.exportEncryptedSnapshot(),/encrypted original journal/);plain.close();
+    journal=open(f);
+    journal.put('one',{status:'pending',fingerprint:'one',tx_hash:'first',claim:secret});
+    const first=journal.exportEncryptedSnapshot();assert.equal(first,fs.readFileSync(f.file,'utf8'));
+    assert.doesNotMatch(first,/SYNTHETIC-REPLAYABLE|first|claim/);
+    journal.put('two',{status:'completed',fingerprint:'two',tx_hash:'second'});
+    const second=journal.exportEncryptedSnapshot();assert.notEqual(first,second);
+    // Both versions decrypt correctly, but a previous version is not current.
+    fs.writeFileSync(f.file,first);assert.throws(()=>journal.exportEncryptedSnapshot(),/differs/);
+    fs.writeFileSync(f.file,second);fs.chmodSync(f.file,0o644);
+    assert.throws(()=>journal.exportEncryptedSnapshot(),/unsafe|differs/);fs.chmodSync(f.file,0o600);
+    const link=path.join(f.dir,'hardlink');fs.linkSync(f.file,link);
+    assert.throws(()=>journal.exportEncryptedSnapshot(),/unsafe|differs/);fs.unlinkSync(link);
+    assert.equal(journal.exportEncryptedSnapshot(),second);
+    journal.close();assert.throws(()=>journal.exportEncryptedSnapshot(),/closed/);journal=null;
+  } finally {journal?.close();f.cleanup();}
+});

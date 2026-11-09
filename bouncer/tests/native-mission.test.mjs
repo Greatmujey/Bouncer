@@ -20,6 +20,7 @@ import { nep413Payload } from '../web-src/cli-login.mjs';
 import { buildV14PhoneResearchPlan } from '../agent/native-v14-phone-plan.mjs';
 import { createV14OriginalWitness, deriveV14OriginalBinding, V14_WITNESS_GENESIS } from '../agent/v14-original-witness.mjs';
 import { createV14MissionOriginalCheckpoint, createV14MissionOriginalVerifier } from '../agent/v14-mission-original-checkpoint.mjs';
+import { createV14BackedMissionHooks, inspectV14MissionJournalBackup, writeV14MissionRecoveryCopy } from '../agent/v14-mission-journal-backup.mjs';
 import { fixture as phoneFixture, scope as witnessScope } from './v14-witness-fixture.mjs';
 
 const owner = 'owner.testnet', vault = 'bouncer.testnet';
@@ -45,8 +46,8 @@ function fixture({ stale = false, ambiguous = false, ambiguousGoal = null, sameP
   const vault = withWitness ? `native.${owner}` : 'bouncer.testnet';
   const storageCodeHash = withWitness ? witnessCodeHash : nearApi.utils.serialize.base_encode(Buffer.alloc(32, 42));
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bouncer-native-mission-'));
-  const journalPath = path.join(dir, 'original.json');
-  let journal = new FileJournal(journalPath, vault, owner);
+  const journalPath = path.join(dir, 'original.json'), journalKey=withWitness?crypto.randomBytes(32):undefined;
+  let journal = new FileJournal(journalPath, vault, owner, journalKey?{encryptionKey:journalKey}:{});
   const mission = makeMission();
   mission.contract_id=vault;
   for (const {goal} of mission.goals) goal.contract_id=vault;
@@ -173,13 +174,13 @@ function fixture({ stale = false, ambiguous = false, ambiguousGoal = null, sameP
     },
   };
   const invoke = (options = {}) => runNativeMission({ mission, signers, provider, journal, log: () => {}, ...options });
-  return { mission, signers, provider, events, invoke, transactions, get journal() { return journal; },
+  return { mission, signers, provider, events, invoke, transactions, journalKey, get journal() { return journal; },
     get sends() { return sends; }, setDaily(value) { daily = BigInt(value); }, setPerTx(value) { perTx = BigInt(value); },
     setBalance(value) { balance = BigInt(value); }, setReceiptFailure(value) { denyReceipts = value; },
     setCode(value) { deployedCode = value; }, setExecutedCode(value) { executedCode = value; }, setVaultKeys(value) { vaultKeys = value; },
     setBeforeView(fn) { beforeView = fn; }, setBeforeSend(fn) { beforeSend = fn; },
-    reopen() { journal.close(); journal = new FileJournal(journalPath, vault, owner, { requireExisting: true }); },
-    close() { journal.close(); fs.rmSync(dir, { recursive: true, force: true }); } };
+    reopen() { journal.close(); journal = new FileJournal(journalPath, vault, owner, { requireExisting: true,...(journalKey?{encryptionKey:journalKey}:{}) }); },
+    close() { journal.close(); journalKey?.fill(0); fs.rmSync(dir, { recursive: true, force: true }); } };
 }
 async function withFixture(fn, options) { const f = fixture(options); try { await fn(f); } finally { f.close(); } }
 
@@ -829,3 +830,110 @@ test('ambiguous synthetic submission recovers only the retained original and wai
   assert.equal(state.pending,null);assert.equal(state.mission[0].tx_hash,original);assert.equal(state.next_mission_goal,'price');
   assert.equal(f.journal.get('price'),undefined);
 },{storage:true,withWitness:true,ambiguous:true}));
+
+// Memory-only substitute for the separate backup database. It enforces the
+// intended head CAS but proves neither independent durability nor deployment.
+function syntheticBackupStore(witness) {
+  const records=new Map();let losePhase=null,eraseRead=false;
+  const key=(goal,phase)=>`${goal}:${phase}`;
+  return {
+    async read({goal_id,phase}) {return eraseRead?null:structuredClone(records.get(key(goal_id,phase))??null);},
+    async append(record) {
+      const state=await witness.inspect(),k=key(record.goal_id,record.phase);
+      if(state.revision!==record.witness_revision||state.head_sha256!==record.witness_head_sha256||records.has(k))throw Error('synthetic backup CAS conflict');
+      records.set(k,structuredClone(record));
+      if(losePhase===record.phase){losePhase=null;throw Error('synthetic backup acknowledgement lost after commit');}
+      return structuredClone(record);
+    },
+    loseNext(phase){losePhase=phase},hideReads(value){eraseRead=value},
+  };
+}
+
+test('encrypted mission backups precede each synthetic send and authenticate against the newest witness head',()=>withFixture(async f=>{
+  const c=await missionCheckpoint(f),backup=syntheticBackupStore(c.witness);
+  const hooks=createV14BackedMissionHooks({journal:f.journal,witness:c.witness,backupStore:backup});
+  f.setBeforeSend(async({goal,hash})=>{
+    const history=await c.witness.history(),record=await backup.read({goal_id:goal.id,phase:'pending'});
+    assert.equal(record.tx_hash,hash);assert.doesNotMatch(record.ciphertext,/native-mission|original|agent_public_key/);
+    const result=inspectV14MissionJournalBackup({record,history,binding:c.binding,encryptionKey:f.journalKey,
+      trustedRevision:history.revision,trustedHeadSha256:history.head_sha256});
+    assert.equal(result.phase,'pending');assert.equal(result.receipts_verified,false);assert.equal(result.transaction_authorized,false);
+  });
+  const result=await f.invoke({execute:true,...hooks});assert.equal(result.status,'FULFILLED');assert.equal(f.sends,3);
+  const history=await c.witness.history(),record=await backup.read({goal_id:'store',phase:'completed'});
+  const args={record,history,binding:c.binding,encryptionKey:f.journalKey,trustedRevision:history.revision,trustedHeadSha256:history.head_sha256};
+  const inspected=inspectV14MissionJournalBackup(args);
+  assert.equal(inspected.status,'AUTHENTICATED_RECOVERY_COPY_ONLY');assert.equal(inspected.phase,'completed');assert.equal(inspected.journal_restored,false);
+  assert.throws(()=>inspectV14MissionJournalBackup({...args,encryptionKey:crypto.randomBytes(32)}),/uncertain/);
+  assert.throws(()=>inspectV14MissionJournalBackup({...args,trustedHeadSha256:'f'.repeat(64)}),/uncertain/);
+  const altered=structuredClone(record);altered.ciphertext=altered.ciphertext.replace('aes-256-gcm','aes-256-gcx');
+  altered.ciphertext_sha256=crypto.createHash('sha256').update(altered.ciphertext).digest('hex');
+  assert.throws(()=>inspectV14MissionJournalBackup({...args,record:altered}),/uncertain/);
+  const stale=await backup.read({goal_id:'price',phase:'completed'});
+  assert.throws(()=>inspectV14MissionJournalBackup({...args,record:stale}),/uncertain/);
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'bouncer-recovery-copy-')),file=path.join(dir,'mission.recovery.enc');
+  try {
+    const copy=writeV14MissionRecoveryCopy({file,copyOnly:true,...args});
+    assert.equal(copy.status,'RECOVERY_COPY_WRITTEN');assert.equal(copy.transaction_authorized,false);
+    const restored=new FileJournal(file,`native.${owner}`,owner,{encryptionKey:f.journalKey,requireExisting:true});
+    try {assert.deepEqual(restored.list(),f.journal.list());} finally {restored.close();}
+    const contents=fs.readFileSync(file,'utf8');
+    assert.throws(()=>writeV14MissionRecoveryCopy({file,copyOnly:true,...args}),/may already exist/);
+    assert.equal(fs.readFileSync(file,'utf8'),contents);
+    const other=path.join(dir,'other.recovery.enc');
+    assert.throws(()=>writeV14MissionRecoveryCopy({file:other,copyOnly:true,...args,trustedHeadSha256:'f'.repeat(64)}),/uncertain/);
+    assert.equal(fs.existsSync(other),false);
+    assert.throws(()=>writeV14MissionRecoveryCopy({file:other,copyOnly:false,...args}),/uncertain/);
+    fs.chmodSync(dir,0o755);assert.throws(()=>writeV14MissionRecoveryCopy({file:other,copyOnly:true,...args}),/failed/);
+  } finally {fs.rmSync(dir,{recursive:true,force:true});}
+  const replay=await f.invoke({recoverOnly:true,signers:{},afterOriginalVerified:hooks.afterOriginalVerified});
+  assert.equal(replay.status,'RECOVERED');assert.equal(f.sends,3);
+},{storage:true,market:true,withWitness:true}));
+
+test('an uncertain pending encrypted backup stops before submission and never retries the original',()=>withFixture(async f=>{
+  const c=await missionCheckpoint(f),backup=syntheticBackupStore(c.witness);backup.loseNext('pending');
+  const hooks=createV14BackedMissionHooks({journal:f.journal,witness:c.witness,backupStore:backup});
+  await assert.rejects(f.invoke({execute:true,...hooks}),/independent original checkpoint is uncertain/);
+  assert.equal(f.sends,0);assert.equal(f.journal.get('compute').status,'pending');
+  const record=await backup.read({goal_id:'compute',phase:'pending'}),history=await c.witness.history();
+  assert.ok(record);assert.equal((await c.witness.inspect()).pending,null);
+  const inspected=inspectV14MissionJournalBackup({record,history,binding:c.binding,encryptionKey:f.journalKey,
+    trustedRevision:history.revision,trustedHeadSha256:history.head_sha256});
+  assert.equal(inspected.witness_original_recorded,false);assert.equal(inspected.transaction_authorized,false);
+  await assert.rejects(f.invoke({execute:true,...hooks}),/unresolved|receipts unavailable/);assert.equal(f.sends,0);
+},{storage:true,withWitness:true}));
+
+test('lost completed-backup acknowledgement recovers by readback and original FINAL receipt, without resend',()=>withFixture(async f=>{
+  const c=await missionCheckpoint(f),backup=syntheticBackupStore(c.witness);backup.loseNext('completed');
+  let hooks=createV14BackedMissionHooks({journal:f.journal,witness:c.witness,backupStore:backup});
+  await assert.rejects(f.invoke({execute:true,...hooks}),/independent original verification is uncertain/);
+  const original=f.journal.get('compute').tx_hash;assert.equal(f.sends,1);
+  assert.equal((await c.witness.inspect()).pending?.tx_hash,original);
+  const record=await backup.read({goal_id:'compute',phase:'completed'}),history=await c.witness.history();
+  const args={record,history,binding:c.binding,encryptionKey:f.journalKey,
+    trustedRevision:history.revision,trustedHeadSha256:history.head_sha256};
+  const inspected=inspectV14MissionJournalBackup(args);
+  assert.equal(inspected.witness_original_recorded,true);assert.equal(inspected.witness_result_verified,false);
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'bouncer-lost-backup-')),file=path.join(dir,'mission.recovery.enc');
+  try {
+    writeV14MissionRecoveryCopy({file,copyOnly:true,...args});
+    const restored=new FileJournal(file,`native.${owner}`,owner,{encryptionKey:f.journalKey,requireExisting:true});
+    try {
+      hooks=createV14BackedMissionHooks({journal:restored,witness:c.witness,backupStore:backup});
+      const recovered=await f.invoke({journal:restored,recoverOnly:true,signers:{},afterOriginalVerified:hooks.afterOriginalVerified});
+      assert.equal(recovered.status,'RECOVERED_PARTIAL');assert.equal(f.sends,1);
+    } finally {restored.close()}
+  } finally {fs.rmSync(dir,{recursive:true,force:true})}
+  assert.equal((await c.witness.inspect()).mission[0].tx_hash,original);
+  assert.equal(f.journal.get('price'),undefined);
+},{storage:true,withWitness:true}));
+
+test('missing or rolled-back encrypted backup prevents continued recovery',()=>withFixture(async f=>{
+  const c=await missionCheckpoint(f),backup=syntheticBackupStore(c.witness);
+  const hooks=createV14BackedMissionHooks({journal:f.journal,witness:c.witness,backupStore:backup});
+  const result=await f.invoke({execute:true,checkpointGoalId:'compute',...hooks});
+  assert.equal(result.status,'CHECKPOINT');assert.equal(f.sends,1);
+  backup.hideReads(true);
+  await assert.rejects(f.invoke({execute:true,...hooks}),/independent original verification is uncertain/);
+  assert.equal(f.sends,1);assert.equal(f.journal.get('price'),undefined);
+},{storage:true,withWitness:true}));

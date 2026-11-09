@@ -8,7 +8,7 @@
     "postinstall": "npm install --prefix walletconnect --no-audit --no-fund",
     "test": "node --test packages/policy/policy.test.mjs tests/*.test.mjs",
     "test:all": "node --test packages/policy/policy.test.mjs tests/*.test.mjs",
-    "test:postgres": "node --test --test-concurrency=1 tests/experimental-phone-setup-runtime.test.mjs tests/postgres-buffer-order-fence.test.mjs tests/postgres-native-oracle-prompt-fence.test.mjs tests/postgres-setup-head-anchor.test.mjs tests/postgres-v14-original-checkpoint.test.mjs tests/postgres-wallet-owner-fence.test.mjs tests/postgres-wallet-prompt-auth.test.mjs tests/native-mission-site-runtime.test.mjs tests/postgres-wallet-prompt-fence.test.mjs tests/postgres-witnessed-wallet-setup.test.mjs tests/shared-buyer-journal.test.mjs tests/shared-resource-provider.test.mjs tests/witnessed-setup-flow.test.mjs",
+    "test:postgres": "node --test --test-concurrency=1 tests/experimental-phone-setup-runtime.test.mjs tests/postgres-buffer-order-fence.test.mjs tests/postgres-native-oracle-prompt-fence.test.mjs tests/postgres-setup-head-anchor.test.mjs tests/postgres-v14-original-checkpoint.test.mjs tests/postgres-v14-mission-backup.test.mjs tests/postgres-wallet-owner-fence.test.mjs tests/postgres-wallet-prompt-auth.test.mjs tests/native-mission-site-runtime.test.mjs tests/postgres-wallet-prompt-fence.test.mjs tests/postgres-witnessed-wallet-setup.test.mjs tests/shared-buyer-journal.test.mjs tests/shared-resource-provider.test.mjs tests/witnessed-setup-flow.test.mjs",
     "test:svalin-upstream": "node scripts/test-svalin-upstream.mjs",
     "build": "bash scripts/build.sh",
     "agent": "node agent/procurement.mjs",
