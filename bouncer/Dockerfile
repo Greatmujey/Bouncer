@@ -16,5 +16,6 @@ COPY packages ./packages
 COPY scripts ./scripts
 COPY web ./web
 COPY web-src ./web-src
+COPY infrastructure/v14-owner-nep413.mjs ./infrastructure/v14-owner-nep413.mjs
 COPY walletconnect ./walletconnect
 CMD ["node", "scripts/start-railway-native.mjs"]

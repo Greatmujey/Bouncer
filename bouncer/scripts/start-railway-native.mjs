@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 /** Railway container entry. Without explicit enablement it serves a public,
  * non-spending standby; it creates no state and never imports the mission
- * runtime. Optional, fixed public read-only checks run once on startup. A
- * configured mission still starts recovery-first. */
+ * runtime. An independently configured recovery anchor never initializes on
+ * startup and has no transaction route. Optional fixed public read-only checks
+ * run once on startup. A configured mission still starts recovery-first. */
 import http from 'node:http';
+import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -24,14 +26,20 @@ export function railwayNativePort(env=process.env) {
   if(typeof raw!=='string'||!/^\d{1,5}$/.test(raw)||Number(raw)<1||Number(raw)>65535)throw new Error('invalid port');
   return Number(raw);
 }
-/** No input is trusted or reflected. No wallet, journal, agent keys or mission
- * runtime is loaded in standby. Optional diagnostics are public reads only,
- * never invoked by a request, and do not establish mission readiness. */
-export function createRailwayNativeStandby({readiness,setupHandler,webHandler}={}) {
+/** No input is trusted or reflected. Default standby loads no wallet, journal,
+ * agent keys or mission runtime. The optional recovery anchor stores no key
+ * or transaction handler. Diagnostics are public reads only, never invoked by
+ * a request, and do not establish mission readiness. */
+export function createRailwayNativeStandby({readiness,setupHandler,webHandler,bootstrapAnchorHandler}={}) {
   if(readiness!==undefined && typeof readiness?.snapshot!=='function')throw new Error('invalid standby diagnostics');
   if(setupHandler!==undefined && typeof setupHandler!=='function')throw new Error('invalid read-only setup handler');
   if(webHandler!==undefined && typeof webHandler!=='function')throw new Error('invalid public website handler');
+  if(bootstrapAnchorHandler!==undefined && typeof bootstrapAnchorHandler!=='function')throw new Error('invalid recovery anchor handler');
   const server=http.createServer((req,res)=>{
+    if(bootstrapAnchorHandler && req.url==='/api/v14-bootstrap-anchor'){
+      void bootstrapAnchorHandler(req,res).catch(()=>{if(!res.headersSent)res.writeHead(503,headers);res.end(JSON.stringify({error:'unavailable'}))});
+      return;
+    }
     if(webHandler && webHandler(req,res))return;
     if(setupHandler && (req.url==='/api/native-mission/v14-preflight'||req.url==='/api/native-mission/v14-receipt'||
         req.url==='/api/native-mission/v14-completed-history')) {
@@ -81,7 +89,21 @@ async function main() {
   // handler; this does not enable any backend transaction or mission route.
   const {createRailwayStandbyWeb}=await import('../agent/railway-standby-web.mjs');
   const webHandler=createRailwayStandbyWeb();
-  const port=railwayNativePort(),server=createRailwayNativeStandby({readiness,setupHandler,webHandler});
+  const anchorFlag=process.env.BOUNCER_V14_BOOTSTRAP_RAILWAY_ANCHOR;
+  if(anchorFlag!==undefined&&anchorFlag!==''&&anchorFlag!=='0'&&anchorFlag!=='1')throw new Error('invalid recovery anchor configuration');
+  let bootstrapAnchorHandler;
+  if(anchorFlag==='1') {
+    // Environment plus a real directory catches common ephemeral-path errors;
+    // neither proves persistence, independence, correct mount or freshness.
+    if(process.env.RAILWAY_VOLUME_MOUNT_PATH!=='/data'||!fs.lstatSync('/data').isDirectory()||fs.lstatSync('/data').isSymbolicLink())
+      throw new Error('declared Railway recovery volume required');
+    const [{createV14BootstrapRailwayAnchor},{createV14BootstrapRailwayAnchorHttp}]=await Promise.all([
+      import('../agent/v14-bootstrap-railway-anchor.mjs'),import('../agent/v14-bootstrap-railway-anchor-http.mjs')]);
+    const compressedV14=new Uint8Array(fs.readFileSync(new URL('../web/artifacts/v14-research.deflate',import.meta.url)));
+    const anchor=createV14BootstrapRailwayAnchor({volumePath:'/data',compressedV14});
+    bootstrapAnchorHandler=createV14BootstrapRailwayAnchorHttp({anchor});
+  }
+  const port=railwayNativePort(),server=createRailwayNativeStandby({readiness,setupHandler,webHandler,bootstrapAnchorHandler});
   await new Promise((resolve,reject)=>server.listen(port,'0.0.0.0',resolve).once('error',reject));
   console.log(`Bouncer testnet backend in STANDBY on port ${port}; static workspace available, no backend transactions or missions enabled.${setupHandler?' Read-only setup verification is enabled.':''}`);
   if(readiness)void readiness.start().catch(()=>{});

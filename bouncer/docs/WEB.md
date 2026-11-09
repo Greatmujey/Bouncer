@@ -228,6 +228,19 @@ simulated gate and disposable wallet; this is not evidence to open the live
 gate. Estimates cannot guarantee future network charges and the wallet may
 choose a different signing key.
 
+A separately hosted Railway-volume recovery anchor is implemented but **off by
+default and not initialized**. It can retain the same owner-attested encrypted
+kit and append-only original history with a different capability derived in
+the browser from the temporary key; it never receives the passphrase, the
+Supabase capability or a wallet key. Fresh owner-message verification can read
+its encrypted backup without already having the temporary key. An exclusive,
+fsynced write marker fences overlapping processes; an interrupted write leaves
+a stop marker for manual reconciliation, never automatic repair. Local-volume
+and HTTP tests are synthetic. Railway volume durability, a real restore and an
+independently retained latest head still need verification; two matching service
+copies are not proof against rollback, a compromised operator or a shared
+failure. Enabling this recovery route would not enable transactions or missions.
+
 The source-only temporary-bootstrap completion verifier can check a separately
 retained deployment original against its exact reviewed actions, a FINAL
 outcome, and one fresh block's V14 code, contract owner and keyless vault state.

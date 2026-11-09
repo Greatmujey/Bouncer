@@ -193,6 +193,21 @@ jobs:
             const checks=await diagnostic.json();assert.equal(checks.status,"STANDBY");assert.equal(checks.transactions_enabled,false);
             assert.equal((await fetch("http://127.0.0.1:8080/api/native-mission/config")).status,404);
           '
+          docker rm --force "$container" >/dev/null
+          mkdir "$RUNNER_TEMP/bootstrap-anchor-volume"
+          container=$(docker run -d --network none -e PORT=8080 -e RAILWAY_VOLUME_MOUNT_PATH=/data \
+            -e BOUNCER_V14_BOOTSTRAP_RAILWAY_ANCHOR=1 -v "$RUNNER_TEMP/bootstrap-anchor-volume:/data" bouncer-native-railway:ci)
+          docker exec "$container" node --input-type=module -e '
+            import assert from "node:assert/strict";import http from "node:http";import fs from "node:fs";
+            import {setTimeout as delay} from "node:timers/promises";
+            const request=()=>new Promise((resolve,reject)=>{const r=http.request({host:"127.0.0.1",port:8080,
+              path:"/api/v14-bootstrap-anchor",method:"OPTIONS",headers:{host:"bouncer-production-6df1.up.railway.app",
+                origin:"https://bouncer-production-6df1.up.railway.app"}},resolve);r.on("error",reject);r.end()});
+            let response;const deadline=Date.now()+5000;
+            while(!response && Date.now()<deadline){try{response=await request()}catch{await delay(100)}}
+            assert.equal(response?.statusCode,204);assert.equal(response.headers["access-control-allow-origin"],"https://bouncer-production-6df1.up.railway.app");
+            assert.deepEqual(fs.readdirSync("/data"),[]);response.resume();
+          '
           set +e
           output=$(docker run --rm --network none -e BOUNCER_NATIVE_MISSION_ENABLED=1 bouncer-native-railway:ci 2>&1)
           status=$?
