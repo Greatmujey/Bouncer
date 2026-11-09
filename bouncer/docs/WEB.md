@@ -236,10 +236,13 @@ Supabase capability or a wallet key. Fresh owner-message verification can read
 its encrypted backup without already having the temporary key. An exclusive,
 fsynced write marker fences overlapping processes; an interrupted write leaves
 a stop marker for manual reconciliation, never automatic repair. Local-volume
-and HTTP tests are synthetic. Railway volume durability, a real restore and an
-independently retained latest head still need verification; two matching service
-copies are not proof against rollback, a compromised operator or a shared
-failure. Enabling this recovery route would not enable transactions or missions.
+and HTTP tests are synthetic. When explicitly enabled, the workspace offers a
+save of the existing checkpoint and an owner-message restore from Railway; it
+does not re-enroll the Supabase checkpoint. The controls are hidden while the
+route is off. Railway volume durability, a real restore and an independently
+retained latest head still need verification; two matching service copies are
+not proof against rollback, a compromised operator or a shared failure.
+Enabling this recovery route would not enable transactions or missions.
 
 The source-only temporary-bootstrap completion verifier can check a separately
 retained deployment original against its exact reviewed actions, a FINAL

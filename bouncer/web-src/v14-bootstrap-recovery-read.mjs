@@ -4,7 +4,8 @@
  * encrypted kit and hash chain do not prove the latest head or final receipts.
  * No key, capability, or passphrase is returned from this interface. */
 import {prepareBootstrapRecovery,signBootstrapRecovery} from './v14-bootstrap-checkpoint.mjs';
-import {V14_BOOTSTRAP_ENDPOINT,recoverBootstrapCheckpoint} from './v14-bootstrap-remote-store.mjs';
+import {V14_BOOTSTRAP_ENDPOINT,recoverBootstrapCheckpoint,createBootstrapRemoteStore} from './v14-bootstrap-remote-store.mjs';
+import {V14_RAILWAY_ANCHOR_ENDPOINT,createV14BootstrapRailwayStore,recoverV14BootstrapRailwayAnchor} from './v14-bootstrap-railway-store.mjs';
 import {V14_BOOTSTRAP_ORIGINS,verifyBootstrapAttestation,verifyBootstrapEnrollmentContents} from '../shared/v14-bootstrap-protocol.mjs';
 import {inspectBootstrapOriginals} from './v14-bootstrap-originals.mjs';
 import {openV14BootstrapRecoveryKit} from './v14-bootstrap-recovery-kit.mjs';
@@ -37,6 +38,14 @@ export function createBootstrapRecoveryReadClient({wallet,owner,ownerPublicKey,l
       current();return response.status===204;
     }catch{return false}
   }
+  async function anchorEnabled() {
+    try {
+      current();
+      const response=await fetchImpl(V14_RAILWAY_ANCHOR_ENDPOINT,{method:'OPTIONS',mode:'cors',credentials:'omit',redirect:'error',
+        cache:'no-store',referrerPolicy:'no-referrer',signal:AbortSignal.timeout(8_000)});
+      current();return response.status===204;
+    }catch{return false}
+  }
   async function run(fn){current();if(busy)throw fail();busy=true;try{return await fn()}finally{busy=false}}
   async function fetchRecovery(stillSelected=()=>true,onWalletPrompt=()=>{}) {
     const check=()=>{current();if(stillSelected()!==true)throw fail()};
@@ -60,10 +69,10 @@ export function createBootstrapRecoveryReadClient({wallet,owner,ownerPublicKey,l
       scopeId:result.scope_id,reviewSha256:att.terms.review_sha256,crypto});current();
     return {result:structuredClone(result),terms:{...att.terms},state:{...state}};
   }
-  async function retainVerified(result,expectedMac=null) {
-    if(expectedMac!==null&&!HEX.test(expectedMac))throw fail();
+  async function retainVerified(result,expectedMac=null,source='online') {
+    if((expectedMac!==null&&!HEX.test(expectedMac))||!['online','file','railway'].includes(source))throw fail();
     const checked=await validateResult(result);current();
-    recovered={...checked,expectedMac,verifiedMac:null};
+    recovered={...checked,expectedMac,verifiedMac:null,source};
     const {state}=checked;
     // An unkeyed chain can be forged. Never present its claimed originals as
     // verified before the encrypted copy's MAC has been checked locally.
@@ -71,29 +80,7 @@ export function createBootstrapRecoveryReadClient({wallet,owner,ownerPublicKey,l
       deploy_original:null,next_event:null,transaction_authorized:false,
       latest_head_independently_verified:false,history_authentication_verified:false});
   }
-  return Object.freeze({
-    enabled,
-    async read() {return run(async()=>{
-      recovered=null; // a failed new read must not leave an older export active
-      // Check before requesting an owner signature. An unavailable endpoint is
-      // not evidence that no earlier checkpoint or transaction exists.
-      return retainVerified(await fetchRecovery());
-    })},
-    /** Import only the owner's signed encrypted export. Works when the remote
-     * service is off or unreachable; does not prove this is the latest copy. */
-    async importEncrypted(text) {return run(async()=>{
-      recovered=null; // malformed replacement must not expose a previous copy
-      if(typeof text!=='string'||new TextEncoder().encode(text).length>128_000)throw fail();
-      let file;try{file=JSON.parse(text)}catch{throw fail()}
-      if(!exact(file,['format','network','owner','vault','scope_id','review_text','sealed_kit','owner_attestation',
-        'revision','head_sha256','events','latest_head_independently_verified','transaction_authorized','history_hmac_sha256'])||
-        file.format!=='bouncer-v14-bootstrap-recovery-export-v1'||file.network!=='testnet'||file.owner!==OWNER||file.vault!==VAULT||
-        file.latest_head_independently_verified!==false||file.transaction_authorized!==false||!HEX.test(file.history_hmac_sha256??''))throw fail();
-      return retainVerified({status:'EXISTING_RECOVERY_ONLY',scope_id:file.scope_id,review_text:file.review_text,sealed_kit:file.sealed_kit,
-        owner_attestation:file.owner_attestation,revision:file.revision,head_sha256:file.head_sha256,events:file.events,
-        transaction_authorized:false,latest_head_independently_verified:false},file.history_hmac_sha256);
-    })},
-    async verifyPassphrase(passphrase) {return run(async()=>{
+  async function unlockRetained(passphrase) {
       if(!recovered)throw fail();const {result,terms,state,expectedMac}=recovered;
       recovered.verifiedMac=null;
       const kit=JSON.parse(result.sealed_kit);
@@ -117,6 +104,80 @@ export function createBootstrapRecoveryReadClient({wallet,owner,ownerPublicKey,l
       return Object.freeze({status:'KIT_UNLOCKED_LOCALLY_NOT_AUTHORIZED',revision:state.revision,head_sha256:state.head_sha256,
         create_original:state.create_original,deploy_original:state.deploy_original,transaction_authorized:false,
         history_authentication_verified:expectedMac!==null,latest_head_independently_verified:false});
+  }
+  return Object.freeze({
+    enabled,anchorEnabled,
+    async read() {return run(async()=>{
+      recovered=null; // a failed new read must not leave an older export active
+      // Check before requesting an owner signature. An unavailable endpoint is
+      // not evidence that no earlier checkpoint or transaction exists.
+      return retainVerified(await fetchRecovery());
+    })},
+    /** Import only the owner's signed encrypted export. Works when the remote
+     * service is off or unreachable; does not prove this is the latest copy. */
+    async importEncrypted(text) {return run(async()=>{
+      recovered=null; // malformed replacement must not expose a previous copy
+      if(typeof text!=='string'||new TextEncoder().encode(text).length>128_000)throw fail();
+      let file;try{file=JSON.parse(text)}catch{throw fail()}
+      if(!exact(file,['format','network','owner','vault','scope_id','review_text','sealed_kit','owner_attestation',
+        'revision','head_sha256','events','latest_head_independently_verified','transaction_authorized','history_hmac_sha256'])||
+        file.format!=='bouncer-v14-bootstrap-recovery-export-v1'||file.network!=='testnet'||file.owner!==OWNER||file.vault!==VAULT||
+        file.latest_head_independently_verified!==false||file.transaction_authorized!==false||!HEX.test(file.history_hmac_sha256??''))throw fail();
+      return retainVerified({status:'EXISTING_RECOVERY_ONLY',scope_id:file.scope_id,review_text:file.review_text,sealed_kit:file.sealed_kit,
+        owner_attestation:file.owner_attestation,revision:file.revision,head_sha256:file.head_sha256,events:file.events,
+        transaction_authorized:false,latest_head_independently_verified:false},file.history_hmac_sha256,'file');
+    })},
+    async verifyPassphrase(passphrase) {return run(()=>unlockRetained(passphrase))},
+    /** Restore from the separate service without contacting the original
+     * checkpoint. The wallet signs a fresh message only; the passphrase and
+     * unlocked key remain local. No returned history is claimed as latest. */
+    async restoreIndependentAnchor({passphrase,compressedV14,onWalletPrompt=()=>{},stillSelected=()=>true}={}) {return run(async()=>{
+      recovered=null;
+      if(!(compressedV14 instanceof Uint8Array)||typeof onWalletPrompt!=='function'||typeof stillSelected!=='function'||
+        stillSelected()!==true||!await anchorEnabled()||stillSelected()!==true)throw fail();
+      const check=()=>{current();if(stillSelected()!==true)throw fail()};
+      try {
+        onWalletPrompt();check();
+        const draft=prepareBootstrapRecovery({owner,ownerPublicKey,vault:VAULT,site:location.origin,crypto,now});
+        const signed=await signBootstrapRecovery({draft,wallet,location,crypto,fetch:fetchImpl,now});check();
+        const handle=await recoverV14BootstrapRailwayAnchor({signed,compressedV14,location,isTopLevel,
+          fetch:fetchImpl,crypto,isCurrent:()=>!disposed&&isCurrent()===true&&stillSelected()===true});check();
+        let backup;
+        try {await handle.unlock(passphrase);backup=handle.readEncryptedCopy()}finally{handle.destroy()}
+        check();await retainVerified({status:'EXISTING_RECOVERY_ONLY',scope_id:backup.scope_id,review_text:backup.review_text,
+          sealed_kit:backup.sealed_kit,owner_attestation:backup.owner_attestation,revision:backup.revision,
+          head_sha256:backup.head_sha256,events:backup.events,transaction_authorized:false,
+          latest_head_independently_verified:false},null,'railway');
+        check();const history=await unlockRetained(passphrase);check();return history;
+      }catch{recovered=null;throw fail()}finally{passphrase=''}
+    })},
+    /** Copy the existing owner-signed encrypted kit to the independent Railway
+     * anchor, without replacing the Supabase enrollment. This is available
+     * only from a fresh online recovery at genesis. The passphrase and both
+     * secret capabilities stay in local memory, never in the result. An
+     * uncertain initialization must be recovered, never retried. */
+    async saveIndependentAnchor({passphrase,compressedV14,markBeforeInitialize}={}) {return run(async()=>{
+      const reference=recovered;
+      if(!reference||reference.source!=='online'||reference.state.revision!==0||reference.state.head_sha256!=='0'.repeat(64)||
+        !(compressedV14 instanceof Uint8Array)||typeof markBeforeInitialize!=='function')throw fail();
+      const {result,terms}=reference,kit=JSON.parse(result.sealed_kit),artifact=new Uint8Array(compressedV14);
+      let opened,railway;
+      try {
+        if(!await anchorEnabled()||recovered!==reference)throw fail();
+        opened=await openV14BootstrapRecoveryKit({kit,passphrase,crypto,expected:{owner:terms.owner,vault:terms.vault,
+          ownerPublicKey:terms.owner_public_key,temporaryPublicKey:terms.temporary_public_key,
+          reviewSha256:terms.review_sha256,scopeId:terms.scope_id}});passphrase='';
+        const selected=()=>!disposed&&isCurrent()===true&&recovered===reference;
+        const outcome=await opened.useSecrets(async({temporaryKey,checkpointCapability})=>{
+          const remote=createBootstrapRemoteStore({location,scopeId:terms.scope_id,capability:checkpointCapability,
+            reviewSha256:terms.review_sha256,crypto,fetch:fetchImpl,isCurrent:selected});
+          railway=await createV14BootstrapRailwayStore({location,isTopLevel,scopeId:terms.scope_id,reviewSha256:terms.review_sha256,
+            temporaryKey,compressedV14:artifact,fetch:fetchImpl,crypto,isCurrent:selected});
+          return railway.initializeNew({reviewText:result.review_text,sealedKit:result.sealed_kit,
+            ownerAttestation:result.owner_attestation,remoteStore:remote,markBeforeInitialize});
+        });
+        current();if(recovered!==reference)throw fail();return outcome;
+      }catch{throw fail()}finally{passphrase='';railway?.destroy();opened?.dispose()}
     })},
     /** Check the originally saved preparation file against the enrolled kit.
      * The file, passphrase and backup ID stay on this device; only a fresh

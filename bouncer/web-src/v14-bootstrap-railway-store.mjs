@@ -106,12 +106,12 @@ export async function recoverV14BootstrapRailwayAnchor({signed,location,isTopLev
   if(JSON.stringify(plan.review)!==JSON.stringify(review)||isCurrent()!==true)throw fail();
   const snapshot={revision:result.revision,head_sha256:result.head_sha256,events:result.events};
   await inspectBootstrapOriginals({snapshot,scopeId:result.scope_id,reviewSha256:result.review_sha256,crypto});
-  let disposed=false,busy=false;const current=()=>!disposed&&isCurrent()===true;
+  let disposed=false,busy=false,unlocked=false;const current=()=>!disposed&&isCurrent()===true;
   return Object.freeze({status:'ENCRYPTED_ANCHOR_READ_ONLY',owner:OWNER,vault:VAULT,scope_id:result.scope_id,
     review_sha256:result.review_sha256,service_reported_revision:result.revision,history_authentication_verified:false,
     latest_head_independently_verified:false,transaction_authorized:false,
     async unlock(passphrase){
-      if(busy||!current())throw fail();busy=true;let opened;
+      if(busy||!current())throw fail();busy=true;unlocked=false;let opened;
       try {
         opened=await openV14BootstrapRecoveryKit({kit,passphrase,crypto,expected:{owner:OWNER,vault:VAULT,
           ownerPublicKey:review.owner_public_key,temporaryPublicKey:review.temporary_vault_public_key,
@@ -124,12 +124,16 @@ export async function recoverV14BootstrapRailwayAnchor({signed,location,isTopLev
         });
         const state=await inspectBootstrapOriginals({snapshot:authenticated,scopeId:result.scope_id,reviewSha256:result.review_sha256,crypto});
         if(!current()||JSON.stringify(snapshot)!==JSON.stringify(authenticated))throw fail();
+        unlocked=true;
         return Object.freeze({status:'ANCHOR_KIT_UNLOCKED_AND_SNAPSHOT_MATCHED',revision:state.revision,head_sha256:state.head_sha256,
           service_reported_create_original:state.create_original,service_reported_deploy_original:state.deploy_original,
           capability_read_matches:true,
           history_authentication_verified:false,independent_recovery_verified:false,latest_head_independently_verified:false,transaction_authorized:false});
       }catch{throw fail()}finally{passphrase='';opened?.dispose();busy=false}
     },
-    destroy(){disposed=true},
+    /** Return only the already-encrypted envelope after a successful local
+     * unlock. The service-reported history remains unverified and not latest. */
+    readEncryptedCopy(){if(!unlocked||busy||!current())throw fail();return structuredClone(result)},
+    destroy(){disposed=true;unlocked=false},
   });
 }

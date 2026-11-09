@@ -13,6 +13,8 @@ import {deriveBootstrapAnchorCredentials,verifyBootstrapAnchorInitialization} fr
 import {createV14BootstrapRailwayAnchor} from '../agent/v14-bootstrap-railway-anchor.mjs';
 import {createV14BootstrapRailwayAnchorHttp,V14_RAILWAY_ANCHOR_PATH} from '../agent/v14-bootstrap-railway-anchor-http.mjs';
 import {createV14BootstrapRailwayStore,recoverV14BootstrapRailwayAnchor,V14_RAILWAY_ANCHOR_ENDPOINT} from '../web-src/v14-bootstrap-railway-store.mjs';
+import {createBootstrapRecoveryReadClient} from '../web-src/v14-bootstrap-recovery-read.mjs';
+import {V14_BOOTSTRAP_ENDPOINT} from '../web-src/v14-bootstrap-remote-store.mjs';
 import {createRailwayNativeStandby} from '../scripts/start-railway-native.mjs';
 import {createBootstrapTwoCopyWitness} from '../web-src/v14-bootstrap-originals.mjs';
 import {nep413Payload} from '../web-src/cli-login.mjs';
@@ -198,6 +200,8 @@ test('Railway route is off by default and denies untrusted origins and cookies b
   try {
     const options=await server.request({method:'OPTIONS'});assert.equal(options.status,204);
     assert.equal(options.headers.get('access-control-allow-origin'),site);
+    const vercel=await server.request({method:'OPTIONS',headers:{origin:'https://bouncer-near.vercel.app'}});
+    assert.equal(vercel.status,204);assert.equal(vercel.headers.get('access-control-allow-origin'),'https://bouncer-near.vercel.app');
     const denied=await server.request({method:'POST',headers:{origin:'https://evil.invalid','content-type':'application/json'},body:'{}'});
     assert.equal(denied.status,403);assert.equal(denied.headers.get('access-control-allow-origin'),null);
     const cookie=await server.request({method:'POST',headers:{'content-type':'application/json',cookie:'x=y'},body:'{}'});
@@ -268,13 +272,75 @@ test('owner-signed browser recovery can unlock the other provider without exposi
     const recovered=await recoverV14BootstrapRailwayAnchor({signed,location:{origin:site,host:new URL(site).host},isTopLevel:true,
       compressedV14:compressed,fetch:localFetch,crypto:webcrypto});
     assert.equal(recovered.status,'ENCRYPTED_ANCHOR_READ_ONLY');assert.equal(Object.hasOwn(recovered,'events'),false);
+    assert.throws(()=>recovered.readEncryptedCopy());
     assert.equal(recovered.history_authentication_verified,false);await assert.rejects(recovered.unlock('incorrect recovery passphrase'));
-    const unlocked=await recovered.unlock(passphrase);
+    assert.throws(()=>recovered.readEncryptedCopy());const unlocked=await recovered.unlock(passphrase);
     assert.equal(unlocked.status,'ANCHOR_KIT_UNLOCKED_AND_SNAPSHOT_MATCHED');assert.equal(unlocked.capability_read_matches,true);
     assert.equal(unlocked.history_authentication_verified,false);assert.equal(unlocked.latest_head_independently_verified,false);
     assert.equal(unlocked.independent_recovery_verified,false);assert.equal(unlocked.transaction_authorized,false);
+    assert.equal(recovered.readEncryptedCopy().sealed_kit,x.draft.sealed_kit);
     for(const secret of [String(x.temporary),remoteCapability,x.credentials.capability,passphrase])
       assert.equal(JSON.stringify(unlocked).includes(secret),false);
     recovered.destroy();await assert.rejects(recovered.unlock(passphrase));
+  }finally{await server.close();x.cleanup()}
+});
+
+test('existing online recovery can add a distinct encrypted anchor without re-enrollment or a wallet transaction',async()=>{
+  const x=await fixture(),anchor=x.open(),block=hash();
+  const server=await testServer(createV14BootstrapRailwayAnchorHttp({anchor,fetch:async(url,options)=>{
+    assert.equal(url,'https://test.rpc.fastnear.com');const req=JSON.parse(options.body);
+    const result=req.method==='status'?{chain_id:'testnet'}:req.method==='block'
+      ?{header:{hash:block,height:100,timestamp_nanosec:String(BigInt(now())*1_000_000n)}}:{block_hash:block,permission:'FullAccess'};
+    return Response.json({id:req.id,jsonrpc:'2.0',result});
+  },now}));
+  try {
+    let signatures=0,transactions=0,enrollments=0,markers=0,ownerRestores=0,primaryOnline=true;
+    const wallet={async signMessage({message,nonce,recipient}){
+      signatures++;const digest=crypto.createHash('sha256').update(nep413Payload({message,nonce,recipient})).digest();
+      return {accountId:ownerId,publicKey:String(x.owner.getPublicKey()),signature:Buffer.from(x.owner.sign(digest).signature).toString('base64')};
+    },async signAndSendTransaction(){transactions++;throw Error('must not send')}};
+    const fetch=async(url,options)=>{
+      if(url===V14_RAILWAY_ANCHOR_ENDPOINT){
+        if(options.method==='POST'&&JSON.parse(options.body).operation==='recover_owner')ownerRestores++;
+        return server.request(options);
+      }
+      if(url==='https://test.rpc.fastnear.com'){
+        const req=JSON.parse(options.body);assert.equal(req.method,'query');
+        return Response.json({jsonrpc:'2.0',id:req.id,result:{permission:'FullAccess'}});
+      }
+      assert.equal(url,V14_BOOTSTRAP_ENDPOINT);assert.equal(primaryOnline,true,'restoring must not contact the primary provider');
+      if(options.method==='OPTIONS')return new Response(null,{status:204});
+      const data=JSON.parse(options.body);
+      if(data.operation==='recover')return Response.json({status:'EXISTING_RECOVERY_ONLY',scope_id:scopeId,
+        review_text:x.draft.review_text,sealed_kit:x.draft.sealed_kit,owner_attestation:x.attestation,...empty,
+        transaction_authorized:false,latest_head_independently_verified:false});
+      if(data.operation==='read')return Response.json(empty);
+      if(data.operation==='enroll')enrollments++;
+      throw Error('unexpected checkpoint operation');
+    };
+    const client=createBootstrapRecoveryReadClient({wallet,owner:ownerId,ownerPublicKey:String(x.owner.getPublicKey()),
+      location:{origin:site,host:new URL(site).host},isTopLevel:true,fetch,crypto:webcrypto,now});
+    assert.equal(await client.anchorEnabled(),true);assert.equal((await client.read()).revision,0);
+    const marker=async()=>{markers++;return true};
+    await assert.rejects(client.saveIndependentAnchor({passphrase:'incorrect recovery passphrase',compressedV14:compressed,markBeforeInitialize:marker}));
+    assert.equal(markers,0);assert.equal(fs.readdirSync(x.dir).length,0);
+    const copied=await client.saveIndependentAnchor({passphrase,compressedV14:compressed,markBeforeInitialize:marker});
+    assert.equal(copied.status,'INDEPENDENT_ANCHOR_CREATED');assert.equal(copied.independent_restore_verified,false);
+    assert.equal(markers,1);assert.equal(signatures,1);assert.equal(transactions,0);assert.equal(enrollments,0);
+    assert.equal((await anchor.recover({capability:x.credentials.capability})).sealed_kit,x.draft.sealed_kit);
+    client.destroy();primaryOnline=false;
+    const separate=createBootstrapRecoveryReadClient({wallet,owner:ownerId,ownerPublicKey:String(x.owner.getPublicKey()),
+      location:{origin:site,host:new URL(site).host},isTopLevel:true,fetch,crypto:webcrypto,now});
+    const restored=await separate.restoreIndependentAnchor({passphrase,compressedV14:compressed});
+    assert.equal(restored.status,'KIT_UNLOCKED_LOCALLY_NOT_AUTHORIZED');assert.equal(restored.revision,0);
+    assert.equal(restored.latest_head_independently_verified,false);assert.equal(restored.history_authentication_verified,false);
+    assert.equal(JSON.parse(separate.exportEncrypted()).sealed_kit,x.draft.sealed_kit);
+    assert.equal(signatures,2);assert.equal(transactions,0);assert.equal(enrollments,0);assert.equal(ownerRestores,1);separate.destroy();
+    let selected=true;const staleWallet={...wallet,async signMessage(args){const response=await wallet.signMessage(args);selected=false;return response}};
+    const stale=createBootstrapRecoveryReadClient({wallet:staleWallet,owner:ownerId,ownerPublicKey:String(x.owner.getPublicKey()),
+      location:{origin:site,host:new URL(site).host},isTopLevel:true,fetch,crypto:webcrypto,now});
+    await assert.rejects(stale.restoreIndependentAnchor({passphrase,compressedV14:compressed,stillSelected:()=>selected}));
+    assert.equal(ownerRestores,1,'a late or stale wallet result must not read the anchor');
+    assert.throws(()=>stale.exportEncrypted());stale.destroy();
   }finally{await server.close();x.cleanup()}
 });

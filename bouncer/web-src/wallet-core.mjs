@@ -26,6 +26,7 @@ import { createRemoteDirectFence, directTestCapability } from './direct-test-rem
 // This device-local stop sign holds no key or transaction data. It cannot
 // establish the latest head or coordinate other browsers or origins.
 const BOOTSTRAP_ENROLLMENT_MARKER = 'bouncer-v14-bootstrap-enrollment-attempt-great-mujey-v1';
+const BOOTSTRAP_ANCHOR_MARKER = 'bouncer-v14-independent-anchor-attempt-great-mujey-v1';
 
 // HTTP Date is coarse and can be cached. Only flag a large discrepancy when
 // the response provides a valid Date/Age and the request was reasonably fast.
@@ -173,6 +174,11 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
   const bootstrapRecoveryUnlock = doc.querySelector('#wallet-bootstrap-recovery-unlock');
   const bootstrapRecoveryCompare = doc.querySelector('#wallet-bootstrap-recovery-compare');
   const bootstrapRecoveryCompareStatus = doc.querySelector('#wallet-bootstrap-recovery-compare-status');
+  const bootstrapAnchorPanel = doc.querySelector('#wallet-bootstrap-anchor-panel');
+  const bootstrapAnchorPassphrase = doc.querySelector('#wallet-bootstrap-anchor-passphrase');
+  const bootstrapAnchorSave = doc.querySelector('#wallet-bootstrap-anchor-save');
+  const bootstrapAnchorRestore = doc.querySelector('#wallet-bootstrap-anchor-restore');
+  const bootstrapAnchorStatus = doc.querySelector('#wallet-bootstrap-anchor-status');
   const directOpen = doc.querySelector('#wallet-direct-outlayer-open');
   const directPanel = doc.querySelector('#wallet-direct-outlayer-panel');
   const directStatus = doc.querySelector('#wallet-direct-outlayer-status');
@@ -275,6 +281,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
   let v14RecoveryClient = null, v14RecoveryVisible = false;
   let bootstrapRecoveryClient = null, bootstrapRecoveryReady = false, bootstrapRecoveryVisible = false, bootstrapRecoveryUnlocked = false;
   let bootstrapRecoveryFileVerified = false, bootstrapMatchSelectionVersion = 0;
+  let bootstrapAnchorReady = false, bootstrapOnlineGenesis = false, bootstrapAnchorSessionStopped = false;
   const recoveryOnlineMessage = 'Read-only recovery for native.great_mujey.testnet. No transaction will be requested.';
   const recoveryOfflineMessage = 'Online recovery is not enabled or not reachable yet. You can read an existing encrypted file on this device; no transaction will be requested.';
   const matchOfflineMessage = 'The online checkpoint is not available yet. Keep your saved copies; reconnect later if this does not clear.';
@@ -365,6 +372,11 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     try { return win.localStorage.getItem(BOOTSTRAP_ENROLLMENT_MARKER) === null ? 'clear' : 'attempted'; }
     catch { return 'unavailable'; }
   }
+  function bootstrapAnchorMarkerState() {
+    if (bootstrapAnchorSessionStopped) return 'attempted';
+    try { return win.localStorage.getItem(BOOTSTRAP_ANCHOR_MARKER) === null ? 'clear' : 'attempted'; }
+    catch { return 'unavailable'; }
+  }
   function renderControls() {
     const viewing = Boolean(viewedAccount);
     // Rendering must not erase a wallet error or an uncertain onboarding result.
@@ -443,6 +455,17 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     for (const control of [bootstrapRecoveryFile,bootstrapRecoveryImport,bootstrapRecoveryPassphrase,bootstrapRecoveryUnlock]) {
       if (control) control.disabled = busyState;
     }
+    const anchorMarker = bootstrapAnchorMarkerState();
+    if (bootstrapAnchorPanel) bootstrapAnchorPanel.hidden = !bootstrapEligible || !bootstrapRecoveryVisible || !bootstrapAnchorReady;
+    if (bootstrapAnchorSave) {
+      bootstrapAnchorSave.hidden = !bootstrapOnlineGenesis;
+      bootstrapAnchorSave.disabled = busyState || anchorMarker !== 'clear' || typeof loadBootstrapArtifact !== 'function';
+    }
+    if (bootstrapAnchorRestore) bootstrapAnchorRestore.disabled = busyState || typeof loadBootstrapArtifact !== 'function';
+    if (bootstrapAnchorPassphrase) bootstrapAnchorPassphrase.disabled = busyState;
+    if (bootstrapAnchorStatus && !bootstrapAnchorStatus.textContent && anchorMarker !== 'clear') bootstrapAnchorStatus.textContent =
+      anchorMarker === 'attempted' ? 'A save was already attempted on this device. Restore the existing copy; do not attempt a replacement.'
+        : 'This browser cannot preserve the stop marker, so saving is disabled. Existing backups can still be restored.';
     if (missionOpen) { missionOpen.hidden = !ownerVerified || Boolean(missionFlow); missionOpen.disabled = busyState; }
     if (missionPanel) missionPanel.hidden = !ownerVerified || !missionFlow;
     if (missionConsentLabel) missionConsentLabel.hidden = !missionReview || !missionReady || missionStarted;
@@ -539,6 +562,9 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
   function clearBootstrapRecovery() {
     bootstrapRecoveryClient?.destroy(); bootstrapRecoveryClient = null;
     bootstrapRecoveryReady = false; bootstrapRecoveryVisible = false; bootstrapRecoveryUnlocked = false; bootstrapRecoveryFileVerified = false;
+    bootstrapAnchorReady = false; bootstrapOnlineGenesis = false;
+    if (bootstrapAnchorPassphrase) bootstrapAnchorPassphrase.value = '';
+    if (bootstrapAnchorStatus) bootstrapAnchorStatus.textContent = '';
     bootstrapMatchSelectionVersion++;
     if (bootstrapMatchStatus) bootstrapMatchStatus.textContent = '';
     if (bootstrapMatchFile) bootstrapMatchFile.value = '';
@@ -552,7 +578,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     if (bootstrapRecoveryFile) bootstrapRecoveryFile.value = '';
   }
   function discardBootstrapHistoryDisplay() {
-    bootstrapRecoveryUnlocked = false; bootstrapRecoveryFileVerified = false;
+    bootstrapRecoveryUnlocked = false; bootstrapRecoveryFileVerified = false; bootstrapOnlineGenesis = false;
     if (bootstrapRecoveryCompareStatus) bootstrapRecoveryCompareStatus.textContent = '';
     if (bootstrapRecoveryOriginals) { bootstrapRecoveryOriginals.replaceChildren(); bootstrapRecoveryOriginals.hidden = true; }
     if (bootstrapRecoveryBackup) bootstrapRecoveryBackup.hidden = true;
@@ -560,6 +586,7 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
   }
   function showBootstrapHistory(history,source) {
     discardBootstrapHistoryDisplay();
+    bootstrapOnlineGenesis = source === 'Online recovery' && history.revision === 0 && history.head_sha256 === '0'.repeat(64);
     if (bootstrapRecoveryBackup) bootstrapRecoveryBackup.hidden = false;
     if (bootstrapRecoveryStatus) bootstrapRecoveryStatus.textContent = `${source}: ${history.revision} claimed events. Enter the recovery passphrase before displaying originals or saving a separate encrypted copy. ` +
       'The latest head and on-chain receipts are not independently re-verified; never repeat an uncertain transaction.';
@@ -1211,6 +1238,9 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
         const client = createBootstrapRecoveryReadClient({wallet,owner:accountId,ownerPublicKey:proof.publicKey,
           location:win.location,isTopLevel:isTop,crypto:win.crypto,fetch:walletReadFetch,isCurrent:current});
         bootstrapRecoveryClient = client;
+        void client.anchorEnabled().then(enabled => {
+          if (current() && bootstrapRecoveryClient === client) { bootstrapAnchorReady = enabled; renderControls(); }
+        }).catch(() => {});
         void client.enabled().then(enabled => {
           if (current() && bootstrapRecoveryClient === client) {
             bootstrapRecoveryReady = enabled;
@@ -1427,6 +1457,76 @@ export async function initWallet({ window: win, document: doc, NearConnector, Sa
     } finally {
       active = false; passphrase = ''; clearTimeout(timeout); stopWalletPresentation(); busy(false);
       if (sessionCurrent()) { renderControls(); hideBanner(); }
+    }
+  });
+  bootstrapAnchorSave?.addEventListener('click', async () => {
+    const client = bootstrapRecoveryClient, proof = ownerVerification, wallet = selectedWallet,
+      accountId = connectedAccount, version = ownerSessionVersion;
+    if (busyState || !client || !bootstrapAnchorReady || !bootstrapOnlineGenesis || !bootstrapRecoveryVisible ||
+        !bootstrapAnchorPassphrase || !bootstrapAnchorStatus || bootstrapAnchorMarkerState() !== 'clear' ||
+        !connected || proof?.wallet !== wallet || proof.accountId !== accountId || typeof loadBootstrapArtifact !== 'function') return;
+    const current = () => connected && selectedWallet === wallet && connectedAccount === accountId &&
+      ownerSessionVersion === version && ownerVerification === proof && bootstrapRecoveryClient === client;
+    let passphrase = bootstrapAnchorPassphrase.value; bootstrapAnchorPassphrase.value = '';
+    if (passphrase.length < 16 || passphrase.length > 1024 || !/\S/.test(passphrase)) {
+      passphrase = ''; bootstrapAnchorStatus.textContent = 'Enter your recovery passphrase, not a wallet seed phrase. Nothing was saved.'; return;
+    }
+    bootstrapAnchorStatus.textContent = 'Checking the encrypted kit and pinned plan locally before saving…'; busy(true);
+    try {
+      const compressedV14 = await loadBootstrapArtifact(); if (!current()) return;
+      await client.saveIndependentAnchor({passphrase,compressedV14,markBeforeInitialize:async () => {
+        if (!current() || bootstrapAnchorMarkerState() !== 'clear') return false;
+        bootstrapAnchorSessionStopped = true;
+        try { win.localStorage.setItem(BOOTSTRAP_ANCHOR_MARKER,'attempted'); return win.localStorage.getItem(BOOTSTRAP_ANCHOR_MARKER) === 'attempted'; }
+        catch { return false; }
+      }});
+      if (!current()) return;
+      bootstrapAnchorStatus.textContent = 'Encrypted copy saved to Railway. Restore it separately to check recovery. Latest history and transaction receipts are not proven.';
+      setStatus('Separate encrypted copy saved. No transaction was requested.');
+    } catch {
+      if (current()) bootstrapAnchorStatus.textContent = bootstrapAnchorMarkerState() === 'clear'
+        ? 'The copy was not requested. Check the recovery passphrase and connection; keep your existing copies.'
+        : 'A save may have completed. Do not save a replacement; use Restore from Railway and keep existing copies.';
+    } finally { passphrase = ''; busy(false); if (current()) renderControls(); }
+  });
+  bootstrapAnchorRestore?.addEventListener('click', async () => {
+    const client = bootstrapRecoveryClient, proof = ownerVerification, wallet = selectedWallet,
+      accountId = connectedAccount, version = ownerSessionVersion;
+    if (busyState || !client || !bootstrapAnchorReady || !bootstrapRecoveryVisible || !bootstrapAnchorPassphrase ||
+        !bootstrapAnchorStatus || !connected || proof?.wallet !== wallet || proof.accountId !== accountId || typeof loadBootstrapArtifact !== 'function') return;
+    const current = () => connected && selectedWallet === wallet && connectedAccount === accountId &&
+      ownerSessionVersion === version && ownerVerification === proof && bootstrapRecoveryClient === client;
+    let passphrase = bootstrapAnchorPassphrase.value; bootstrapAnchorPassphrase.value = '';
+    if (passphrase.length < 16 || passphrase.length > 1024 || !/\S/.test(passphrase)) {
+      passphrase = ''; bootstrapAnchorStatus.textContent = 'Enter your recovery passphrase, not a wallet seed phrase. No wallet message was requested.'; return;
+    }
+    discardBootstrapHistoryDisplay(); bootstrapAnchorStatus.textContent = 'Preparing the read-only restore…';
+    let stopWalletPresentation = () => {}, timeout, active = true; busy(true); closePicker();
+    try {
+      const operation = (async () => {
+        const compressedV14 = await loadBootstrapArtifact(); if (!current() || !active) throw new Error('stale session');
+        const promise = client.restoreIndependentAnchor({passphrase,compressedV14,stillSelected:() => active && current(),onWalletPrompt:() => {
+          if (!current() || !active) return;
+          bootstrapAnchorStatus.textContent = 'Approve a read-only recovery message in your wallet. No transaction is requested.';
+          setStatus('Approve the read-only recovery message. No transaction is requested.');
+          notify('Approve the read-only recovery message. No transaction is requested.', true);
+          if (['near-mobile','nightly-wallet','ledger'].includes(wallet.manifest.id)) stopWalletPresentation = decorateWalletPopup(wallet.manifest.id);
+        }}); passphrase = ''; return promise;
+      })();
+      const history = await Promise.race([operation,new Promise((_,reject) => {
+        timeout = setTimeout(() => reject(new Error('BOOTSTRAP_ANCHOR_RESTORE_TIMEOUT')),90_000);
+      })]);
+      if (!current() || !active) return;
+      showBootstrapHistory(history,'Railway recovery'); bootstrapRecoveryUnlocked = true;
+      showBootstrapOriginals(history);
+      if (bootstrapRecoveryStatus) bootstrapRecoveryStatus.textContent = 'Railway copy unlocked locally and is ready to save as an encrypted file. Its history and latest head are not independently verified.';
+      bootstrapAnchorStatus.textContent = 'Railway recovery copy unlocked on this device. No transaction was requested.';
+      setStatus('Separate recovery copy restored. No transaction was requested.');
+    } catch {
+      if (current()) bootstrapAnchorStatus.textContent = 'Could not restore the Railway copy. Check the wallet, passphrase and connection; an unavailable result does not prove absence.';
+    } finally {
+      active = false; passphrase = ''; clearTimeout(timeout); stopWalletPresentation(); busy(false);
+      if (current()) { renderControls(); hideBanner(); }
     }
   });
   bootstrapRecoveryRead?.addEventListener('click', async () => {
