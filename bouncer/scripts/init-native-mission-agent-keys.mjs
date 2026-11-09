@@ -14,7 +14,7 @@ export function initializeNativeAgentKeys({missionFile,agentFile}={}) {
     for(const {kind,goal} of mission.goals) {
       const pair=nearApi.KeyPair.fromRandom('ed25519'),publicKey=String(pair.getPublicKey());
       if(seen.has(publicKey))throw new Error('duplicate generated public key');seen.add(publicKey);
-      const method={random:'execute_outlayer',oracle:'execute_outlayer_native_project',storage:'execute_native_storage'}[kind];
+      const method={random:'execute_outlayer',market:'execute_outlayer',oracle:'execute_outlayer_native_project',storage:'execute_native_storage'}[kind];
       keys[goal.id]=pair.toString();publicKeys[goal.id]={kind,public_key:publicKey,receiver_id:mission.contract_id,method_name:method,
         max_gas_allowance_yocto:'1000000000000000000000000'};
     }

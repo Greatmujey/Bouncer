@@ -219,8 +219,9 @@ try {
         await frame.locator('#submit-sign-btn').press('Enter');
       }
       await submitCliSignature();
-      await page.waitForFunction(() => document.querySelector('#wallet-status').textContent.includes('cli-synthetic.testnet'));
-      assert.match(await page.locator('#wallet-status').textContent(), /CLI login verified against testnet/);
+      await page.waitForFunction(() => document.querySelector('#wallet-account-badge').textContent === 'OWNER VERIFIED');
+      assert.match(await page.locator('#wallet-status').textContent(), /Verified testnet wallet control for cli-synthetic\.testnet/);
+      assert.equal(await page.locator('#wallet-owner-verify').isVisible(),false);
       assert.equal(await page.locator('.top-connect').getAttribute('data-wallet-state'), 'connected');
       assert.equal(await page.locator('.top-connect [data-wallet-label]').innerText(), 'Connected');
       assert.equal(rpc.length, 1);
@@ -310,14 +311,14 @@ try {
       assert.equal(await page.locator('.bouncer-mobile-close').getAttribute('aria-label'), 'Cancel NEAR Mobile connection');
       assert.equal(await mobileFrame.locator('#approve-button').innerText(), 'Open NEAR Mobile');
       approved = true;
-      await page.waitForFunction(() => document.querySelector('#wallet-status').textContent.includes('synthetic.testnet'), null, { timeout: 20_000 });
-      assert.match(await page.locator('#wallet-status').textContent(), /NEAR Mobile login verified against testnet/);
+      await page.waitForFunction(() => document.querySelector('#wallet-account-badge').textContent === 'OWNER VERIFIED', null, { timeout: 20_000 });
+      assert.match(await page.locator('#wallet-status').textContent(), /Verified testnet wallet control for synthetic\.testnet/);
+      assert.equal(await page.locator('#wallet-owner-verify').isVisible(),false);
       assert.equal(await page.locator('.top-connect').getAttribute('data-wallet-state'), 'connected');
       assert.equal(await page.locator('.top-connect [data-wallet-label]').innerText(), 'Connected');
-      assert.match(await page.locator('#wallet-banner').textContent(), /Connected: synthetic\.testnet/);
-      assert.deepEqual(rpc.map(request => [request.method, request.params.request_type]), [['query', 'view_access_key']]);
-      assert.equal(rpc[0].params.account_id, 'synthetic.testnet');
-      assert.equal(rpc[0].params.public_key, publicKey);
+      assert.match(await page.locator('#wallet-banner').textContent(), /Wallet verified/);
+      assert.deepEqual(rpc.map(request => [request.method, request.params.request_type]), [['query', 'view_access_key'],['query', 'view_access_key']]);
+      assert.ok(rpc.every(request=>request.params.account_id === 'synthetic.testnet' && request.params.public_key === publicKey));
       await page.locator('.top-connect').click();
       await page.locator('#wallet-disconnect').click();
       assert.equal(calls.filter(call => call.method === 'POST').length, 1);
@@ -329,7 +330,7 @@ try {
       approved = true;
       await page.waitForFunction(() => document.querySelector('#wallet-status').textContent.includes('Could not verify the NEAR Mobile login message'), null, { timeout: 20_000 });
       assert.equal(await page.locator('#wallet-disconnect').isVisible(), false);
-      assert.equal(rpc.length, 1, 'invalid signature must not reach RPC verification');
+      assert.equal(rpc.length, 2, 'invalid signature must not reach any additional RPC verification');
       assert.deepEqual(calls.filter(call => call.method === 'POST').map(call => call.pathname), ['/api/signer-request/message', '/api/signer-request/message']);
       approved = false; corruptSignature = false;
       await page.locator('[data-wallet-id="near-mobile"]').click();

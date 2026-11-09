@@ -14,6 +14,7 @@ import { isTransactionHash } from '../shared/direct-payment-settlement.mjs';
 import { readNativeJournal } from './synchronous-native-journal.mjs';
 import { FileJournal } from './procurement.mjs';
 import { runNativeMission, validateNativeMission } from './native-mission.mjs';
+import { marketInputFromOracle } from './market-summary.mjs';
 import { nativeMissionAction } from '../web-src/native-mission-auth.mjs';
 
 const fail = () => new Error('native mission unavailable; stop and reconcile the original before approving again');
@@ -22,11 +23,14 @@ export function createAuthenticatedNativeMissionService({ mission: raw, provider
   const mission = validateNativeMission(raw);
   const kinds = new Set(mission.goals.map(item => item.kind));
   if (!['compute','storage','api'].every(r => mission.required_resources.includes(r)) ||
-      !['random','storage','oracle'].every(k => kinds.has(k)) ||
+      !['storage','oracle'].every(k => kinds.has(k)) || !['random','market'].some(k => kinds.has(k)) ||
       !(journal instanceof FileJournal) || !provider || typeof run !== 'function' || typeof log !== 'function' ||
       (signers !== undefined && (!signers || typeof signers !== 'object' || Array.isArray(signers)))) {
     throw new Error('complete fixed testnet mission and durable local journal are required');
   }
+  // Market missions use separately authenticated per-leg checkpoints. The
+  // older random demo retains its existing single-approval behavior.
+  const checkpointMode = kinds.has('market');
   const recoveryOnly = !signers || Object.keys(signers).length === 0;
   if (!recoveryOnly && (!auth || typeof auth.issue !== 'function' || typeof auth.authenticate !== 'function')) {
     throw new Error('one-use owner authentication is required for mission execution');
@@ -40,8 +44,13 @@ export function createAuthenticatedNativeMissionService({ mission: raw, provider
     if (!signer || !signer.account || !signer.publicKey) throw new Error('a configured restricted signer is required for every goal');
     return [goal.id, Object.freeze({ account: signer.account, publicKey: signer.publicKey })];
   }));
-  const action = ownerPublicKey => nativeMissionAction({ owner: mission.owner_account_id, ownerPublicKey,
-    vault: mission.contract_id, missionId: mission.id, missionSha256, maxNativeYocto: mission.max_native_amount });
+  const action = (ownerPublicKey, goalId) => {
+    const goal = checkpointMode ? mission.goals.find(item => item.goal.id === goalId)?.goal : null;
+    if (checkpointMode ? !goal : goalId !== undefined) throw fail();
+    return nativeMissionAction({ owner: mission.owner_account_id, ownerPublicKey,
+      vault: mission.contract_id, missionId: mission.id, missionSha256, maxNativeYocto: mission.max_native_amount,
+      ...(checkpointMode ? { goalId: goal.id, goalMaxNativeYocto: goal.amount } : {}) });
+  };
   const checkHash = value => { if (value !== missionSha256) throw fail(); };
   const executeRun = options => run({ mission, provider, journal, log, ...options });
   function originals() {
@@ -55,10 +64,17 @@ export function createAuthenticatedNativeMissionService({ mission: raw, provider
     mission.goals.forEach(({kind,goal}, i) => {
       const entry = entries[i];
       if (!entry) { stopped = true; return; }
-      const key = kind === 'random' ? 'outlayer_goal' : kind === 'oracle' ? 'oracle_goal' : 'storage_goal';
+      const key = ['random','market'].includes(kind) ? 'outlayer_goal' : kind === 'oracle' ? 'oracle_goal' : 'storage_goal';
       const saved = entry[key];
       const comparable = kind === 'storage' && typeof goal.value !== 'string' && saved
-        ? { ...saved, value:goal.value } : saved;
+        ? { ...saved, value:goal.value } : kind === 'market' && saved ? { ...saved, input:goal.input } : saved;
+      if (kind === 'market' && saved) {
+        const sourceIndex = mission.goals.findIndex(item => item.goal.id === goal.input.from_goal_id);
+        const source = entries[sourceIndex];
+        if (sourceIndex < 0 || sourceIndex >= i || source?.status !== 'completed' ||
+            !isDeepStrictEqual(saved.input, marketInputFromOracle(goal.input.quantity, source.delivery)) ||
+            saved.input.oracle_tx_hash !== source.tx_hash) throw fail();
+      }
       if (stopped || !['pending','completed'].includes(entry.status) || !isTransactionHash(entry.tx_hash) ||
           !saved || !isDeepStrictEqual(comparable, goal) ||
           entry.fingerprint !== crypto.createHash('sha256').update(JSON.stringify(saved)).digest('hex')) throw fail();
@@ -77,20 +93,20 @@ export function createAuthenticatedNativeMissionService({ mission: raw, provider
       const preview = await executeRun({ signers: signerSnapshot, execute: false });
       return { review: structuredClone(review), preview };
     },
-    async issue({ missionSha256: requested, ownerPublicKey } = {}) {
+    async issue({ missionSha256: requested, ownerPublicKey, goalId } = {}) {
       checkHash(requested); if (recoveryOnly) throw fail();
-      const authorization = action(ownerPublicKey);
+      const authorization = action(ownerPublicKey, goalId);
       const preview = await executeRun({ signers: signerSnapshot, execute: false });
-      if (preview?.status !== 'READY') throw fail();
+      if (preview?.status !== 'READY' || (checkpointMode && preview.next_goal_id !== goalId)) throw fail();
       return auth.issue(authorization);
     },
-    async execute({ missionSha256: requested, ownerPublicKey, evidence } = {}) {
+    async execute({ missionSha256: requested, ownerPublicKey, evidence, goalId } = {}) {
       checkHash(requested); if (recoveryOnly) throw fail();
-      const authorization = action(ownerPublicKey);
+      const authorization = action(ownerPublicKey, goalId);
       if (await auth.authenticate({ action: authorization, evidence }) !== true) throw fail();
-      // The authenticated message explicitly approves this exact mission and
-      // maximum. Re-run every current preflight; no input comes from the client.
-      return executeRun({ signers: signerSnapshot, execute: true });
+      // A market challenge authorizes only this goal. The runner checks it is
+      // still the next unpaid original after reconciling everything before it.
+      return executeRun({ signers: signerSnapshot, execute: true, ...(checkpointMode ? { checkpointGoalId: goalId } : {}) });
     },
     async originals({ missionSha256: requested } = {}) {
       checkHash(requested); return originals();

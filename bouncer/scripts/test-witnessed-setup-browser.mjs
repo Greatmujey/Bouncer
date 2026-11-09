@@ -89,9 +89,10 @@ try {
     await page.goto(`${origin}/`,{waitUntil:'networkidle'});
     await page.waitForFunction(() => !document.querySelector('[data-wallet-id="meteor-wallet"]').disabled);
     await page.locator('.top-connect').click(); await page.locator('[data-wallet-id="meteor-wallet"]').click();
-    await page.waitForFunction(() => document.querySelector('#wallet-status').textContent.includes('great_mujey.testnet'));
-    await page.locator('.top-connect').click(); await page.locator('#wallet-owner-verify').click();
     await page.waitForFunction(() => document.querySelector('#wallet-account-badge').textContent === 'OWNER VERIFIED');
+    assert.equal(await page.locator('#wallet-dialog').evaluate(el=>el.open),false);
+    await page.evaluate(()=>{location.hash='#guardrails';});
+    await page.locator('#vault-tools-title').waitFor({state:'visible'});
     assert.equal(await page.locator('#wallet-native-setup-open').isHidden(),true); // no native backend advertised
     await page.locator('#wallet-setup-recovery').click();
     await page.waitForFunction(() => /claimed.*Do not repeat.*wallet history/i.test(document.querySelector('#wallet-setup-recovery-status').textContent));
@@ -103,6 +104,7 @@ try {
     await page.locator('#wallet-setup-record-original').click();
     await page.waitForFunction(() => /reconciled at FINAL.*Review the next setup stage/i.test(document.querySelector('#wallet-setup-recovery-status').textContent));
     assert.equal(await page.locator('#wallet-setup-recovery-form').isVisible(),false);
+    await page.locator('[data-route-view="guardrails"] .workspace-advanced > summary').click();
     assert.match(await page.locator('#wallet-buffer-setup-approve').innerText(), /register vault circle/i);
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
     assert.ok(calls.some(x=>x.endsWith('/api/read-only/owner-key')));

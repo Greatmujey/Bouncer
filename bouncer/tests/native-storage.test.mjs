@@ -152,3 +152,15 @@ test('changed original during final guard and a failing write stop before broadc
   const g = fixture(); g.journal.put = () => { throw Error('disk full'); };
   await assert.rejects(g.run({ execute: true }), /disk full/); assert.equal(g.sent, 0);
 });
+
+test('independent storage original is retained before the only synthetic broadcast',async()=>{
+  const f=fixture();let checkpoints=0;
+  const result=await f.run({execute:true,beforeOriginalBroadcast:async original=>{
+    checkpoints++;assert.equal(f.sent,0);assert.equal(original.goal_id,f.goal.id);assert.equal(original.kind,'storage');
+    assert.equal(original.tx_hash,f.journal.get(f.goal.id).tx_hash);assert.equal(original.fingerprint,f.journal.get(f.goal.id).fingerprint);
+    return {status:'V14_MISSION_ORIGINAL_RETAINED',goal_id:original.goal_id,tx_hash:original.tx_hash};
+  }});
+  assert.equal(result.status,'FULFILLED');assert.equal(checkpoints,1);assert.equal(f.sent,1);
+  const failed=fixture();await assert.rejects(failed.run({execute:true,beforeOriginalBroadcast:async()=>{throw Error('unavailable')}}),/no broadcast was attempted/);
+  assert.equal(failed.sent,0);assert.equal(failed.journal.get(failed.goal.id).status,'pending');
+});

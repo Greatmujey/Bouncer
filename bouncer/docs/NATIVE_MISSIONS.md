@@ -1,10 +1,12 @@
 # Guarded native-NEAR missions (experimental testnet)
 
 This is the **standard Bouncer-guarded** path, not the separate direct
-wallet-to-OutLayer test. A fixed, owner-reviewed manifest can sequence random
-compute, a price/API result and a **public, self-hosted NEAR contract storage**
-write. The storage value can be assembled from earlier verified compute/API
-results and their original transaction hashes. This is not an independent
+wallet-to-OutLayer test. An owner-reviewed manifest can sequence either random
+compute and a price/API result, or a **dependent price → calculation** task,
+followed by a **public, self-hosted NEAR contract storage** write. The latter
+uses a verified OutLayer price as input to a separate pinned WASI calculation.
+The public value records both verified results and their original transaction
+hashes. This is not an independent
 storage purchase, private storage, an availability guarantee, or proof of
 permanence. Never store secrets; transaction history remains public even after
 release. FT functionality remains separately supported.
@@ -20,7 +22,20 @@ Do not use real funds.
 ## Mission interface and safety
 
 [`native-mission.example.json`](../examples/native-mission.example.json)
-shows all three kinds in order and a storage goal referencing the first two.
+shows the original random example. The separate
+[`native-market-mission.example.json`](../examples/native-market-mission.example.json)
+shows the dependent price → compute → storage sequence. Both are unsigned,
+illustrative templates, not live vaults or spending authorization. The market
+input names an earlier oracle goal and an owner-reviewed integer quantity.
+Bouncer checks the oracle transaction/receipts and freshness, rounds the
+reported USD price half-up to micro-dollars, and binds the calculation input to
+the oracle's original hash. It independently rechecks the returned integer
+product before storing anything. This does not prove market accuracy, TEE
+execution, the source's observation time, or that OutLayer can fetch the WASI
+program. See the [program and reproducible build](../programs/market-summary/README.md).
+OutLayer charges for fetching public data and compute; storage is protocol stake
+locked in the vault, not an independent vendor purchase.
+
 One storage goal must pin the actual V14 deployed-code hash; multiple storage
 goals must agree on it. The mission checks the reviewed hash and an empty
 vault access-key list at FINAL before each leg, and verifies the reported
@@ -29,7 +44,12 @@ RPC end-of-block views: they cannot prevent a later owner-authorized upgrade or
 prove ordering within a block.
 
 The programmatic entry point is `runNativeMission({ mission, provider, journal,
-signers, execute, recoverOnly })`. Preview is the default (`execute: false`).
+signers, execute, recoverOnly, checkpointGoalId })`. Preview is the default
+(`execute: false`). Passing `checkpointGoalId` with execution authorizes only
+that next unpaid goal; it returns `CHECKPOINT` before the next goal. Omitting it
+from a direct programmatic call can run all remaining goals: callers must
+supply their own consent boundary. The browser service enforces checkpoints for
+market missions.
 New calls require the original exclusive journal and `execute: true`.
 `recoverOnly: true` must not include signers; it reconciles existing original
 hashes without creating transactions. The signers map is keyed by goal ID;
@@ -64,12 +84,38 @@ Receipt and object verification trust the RPC and provider; an oracle result is
 not a guarantee of truth or a TEE attestation. Preflight is a snapshot, not a
 reservation.
 
+## Bounded natural-language proposals
+
+`agent/native-mission-planner.mjs` can ask an operator-selected, OpenAI-compatible
+model to choose **market valuation or random compute** and bounded parameters
+from an owner-controlled catalog. It creates a normal V14 mission manifest for
+review; it never chooses the vault, account, policy, payee, program, amount,
+public-storage ID or key. The catalog and proposal are validated before the
+normal runner can use them; there is no fake fallback. Model output can still
+misinterpret an objective and must be reviewed. The objective is sent to the
+chosen model endpoint, which may retain it: never include secrets. The new
+`agent/planned-native-mission-service.mjs` can bind one bounded proposal to the
+existing hash-checked browser review and approval service (per-leg for the
+market task), after an explicit model-request approval and validation of both
+catalog templates and
+restricted-signer configuration. This boolean is a caller-side guard, not proof
+of informed consent, a billing limit or an independent original checkpoint.
+The UI test uses a fake model, runner and wallet; the isolated nearcore rehearsal
+uses a fake model and provider. Neither is a real model or provider delivery.
+Hosted startup still uses a fixed manifest and does **not** enable this planner
+or mission execution. A live model-backed mission and review-once autonomy
+remain unproven.
+
 ## Optional browser review and service
 
 The wallet panel offers **Review a guarded testnet mission** after identity
 verification. If an operator has deliberately mounted the optional same-origin
 backend, it displays the exact manifest, hash, maximum plus gas, public-storage
 and non-atomic/no-retry warnings before an explicit NEP-413 owner approval.
+For a market mission it requires a distinct one-use approval for each next step,
+shows the verified prior outputs and each step maximum, and links original
+transactions to a testnet explorer. The older random demo retains its one-mission
+approval. This is not yet the planned review-once autonomous live mode.
 Connecting, entering an account name, or signing the separate identity message
 does not grant spending authority. The explicit approval is an off-chain
 instruction to the configured agent, not an on-chain transaction signed by
@@ -86,12 +132,13 @@ is not proof that a transaction never happened.
 `agent/authenticated-native-mission-service.mjs` composes a fixed manifest,
 server-side scoped agent signers, trusted RPC, `FileJournal` and the existing
 PostgreSQL one-use owner authenticator. `npm run native-mission:serve` now
-wires these pieces to the reviewed website in **one fixed-origin, single-host
-Node service**; it is disabled unless explicitly configured. It serves the
-same site and mission API for computer and phone, as well as the optional
-WalletConnect relay and Google identity endpoint when configured. Its startup
-performs no wallet prompt or transaction. It is not a deployment, and has not
-been tested with a real wallet or live mission.
+wires these pieces to a **single-host Node service**; it is disabled unless
+explicitly configured. Its original loopback mode serves the reviewed website
+and mission API, with the optional WalletConnect relay and Google identity.
+An experimental Vercel-to-Railway split described below keeps the same browser
+origin and runs only the mission API on Railway. Startup performs no wallet
+prompt or transaction. Neither setup has been tested with a real wallet or
+live mission.
 
 The operator still needs a dedicated HTTPS host, PostgreSQL challenge store,
 persistent original journal, and an owner-authorized fresh V14 vault with
@@ -156,7 +203,9 @@ then run `npm run native-mission:serve`. Optional public configuration is
 `BOUNCER_WALLETCONNECT_PROJECT_ID` and `BOUNCER_GOOGLE_CLIENT_ID`; port defaults
 to 8789 (`BOUNCER_NATIVE_MISSION_PORT`). The server refuses to recreate a
 missing journal or initialize its database on startup. It listens on loopback
-only and must be behind the dedicated TLS proxy; this has not been deployed.
+only in the original same-origin mode and must be behind the dedicated TLS
+proxy; the Railway API-only mode below must be explicitly selected instead.
+Neither mode has been deployed for this mission.
 
 To investigate retained originals without loading agent keys or the consent
 database, start with `BOUNCER_NATIVE_MISSION_MODE=recover` and the same mission,
@@ -166,7 +215,190 @@ disconnect; a forced kill or lost disk still requires reconciliation. The
 filesystem, database and operator may be compromised or rolled back. A missing
 hash never proves that a transaction did not happen.
 
-Mobile V14 provisioning is also unresolved. At commit `42255e1`, the CI-built
+### Experimental Vercel website + Railway API
+
+This is a **recovery-first testnet design**, not a claim that a mission is
+provisioned or that a Railway volume is durable. Charges may apply; review the
+actual plan and obtain approval before creating a paid service. The website stays on the
+exact approved Vercel wallet origin. Six bundled `/api/native-mission/*`
+functions are **off by default** and forward only their fixed actions to one
+configured Railway HTTPS origin. They do not forward cookies, select a
+browser-provided destination, follow redirects, sign, or retry. An ambiguous
+execution response must be reconciled by the original hash.
+
+The `bouncer/Dockerfile` builds a persistent Node service with Linux `flock`;
+the Railway project root must be `bouncer`. Without explicit mission enablement
+it runs a **non-spending standby**: `/` and `/healthz` report `STANDBY`, and
+mission endpoints return 404. No mission, vault, keys, consent database or
+journal is created, and the mission runtime is not loaded. The container also
+runs one fixed, public read-only check at startup; `/readiness` reports whether
+it observed the declared mounted directory, a testnet RPC, the pinned oracle
+registry and a backend-side hash of the market WASM. It never performs checks
+on incoming requests and can be disabled with `BOUNCER_STANDBY_READINESS=0`.
+These are point-in-time indications, **not** proof of volume persistence,
+backup, provider-side fetch/execution, wallet control or mission readiness.
+When configured, `/healthz` returns `ONLINE` without authentication; it is only
+process liveness. Every mission API remains gated by the proxy secret. Attach a
+persistent volume to **one instance**;
+under it, provision an owner-only 0700 directory containing the already
+reviewed mission, its dedicated **original** encrypted journal and its key.
+The journal must retain that mission's intent and no unrelated entries. The
+container user must own those private files. Do not put private state in the build, Git,
+serverless `/tmp`, logs, or a browser. The current project has no complete
+browser setup to create these files or the V14 vault.
+
+The Railway service must explicitly set `BOUNCER_NATIVE_MISSION_ENABLED=1`,
+`BOUNCER_NATIVE_MISSION_MODE=recover`,
+`BOUNCER_NATIVE_MISSION_INGRESS=railway-proxy`,
+`BOUNCER_NATIVE_MISSION_BIND=0.0.0.0`, the exact `BOUNCER_WALLET_ORIGIN`, a
+trusted `BOUNCER_TESTNET_RPC_URL`, and absolute volume paths for
+`BOUNCER_NATIVE_MISSION_FILE`, `BOUNCER_NATIVE_MISSION_JOURNAL_FILE` and
+`BOUNCER_FILE_JOURNAL_KEY_FILE`. Set `BOUNCER_NATIVE_MISSION_BACKEND_ORIGIN`
+to its exact HTTPS `*.up.railway.app` origin and
+`BOUNCER_NATIVE_MISSION_PROXY_SECRET` to a newly generated 32-byte random
+lowercase-hex secret. Railway supplies `PORT` and
+`RAILWAY_VOLUME_MOUNT_PATH`; the service checks the file parents resolve
+inside that declared mount. If overriding the port it must match `PORT`.
+
+Only after the backend is checked, the Vercel project can deliberately set
+`BOUNCER_NATIVE_MISSION_PROXY_ENABLED=1` and the **same** fixed wallet origin,
+backend origin and proxy secret. Store the secret in provider secret settings,
+never in Git, the browser or chat. The secret is only a network gate: it does
+not authorize the owner, and a compromised host can bypass it. Recovery needs
+no agent keys or database. The recovery-only service's original-journal check
+creates a `.recovery-started` marker, which is **not** proof that no transaction
+occurred or that receipts were verified. Railway execution is explicitly
+blocked even after this marker until the independent original checkpoint is
+wired into setup and every mission leg and recovery-tested. The separately
+reviewed vault, restricted keys and PostgreSQL one-use owner authentication
+are also required. A fresh owner signature remains required for each market
+leg. Enabling or deploying is not itself permission to spend.
+
+For the Railway mode the runtime holds an exclusive kernel lock on a persistent
+`.host-fence` beside the journal and checks that a second open cannot take it.
+The process keeps the lock until a drained shutdown or death; never remove or
+replace this fence file while a process may be running. On an unclean stop, an
+exact marker from this fenced runtime can be reclaimed **only in recover mode**.
+A durable `.recovery-required` marker blocks execution across restarts or a
+wrong key until recovery has verified all retained mission-original receipts
+and the journal records them complete. If there is no verifiable original, or the
+marker is legacy, partial or unrecognized, the service fails closed for manual
+review. Do not delete locks, reset state, invent an original or retry a payment.
+A graceful recovery start alone does not clear the requirement. Tests exercise
+this on a local Linux filesystem; actual Railway volume locking, persistence,
+headers and routing still need a non-paying deployed check.
+
+This host fence coordinates only cooperating processes sharing that same honest
+filesystem. It cannot prevent a second journal, another host, volume loss,
+rollback, a forged mount setting, compromised operator or old snapshot. A
+backup must never be restored as if it were current authority. Keep a separately
+protected record of original hashes and reconcile uncertainty before any new
+approval. A research-only two-copy checkpoint is now implemented in
+`agent/v14-original-witness.mjs`: it binds the reviewed setup and mission,
+provides one-shot methods for recording wallet claims and original hashes,
+and stops if copies differ. Its encrypted local `FileJournal` adapter and
+separate Supabase compare-and-append schema/Edge adapter are tested with
+synthetic data. `agent/v14-setup-rpc-verifier.mjs` can check each separately
+retained setup original through the fixed read-only testnet RPC, then validate
+cumulative policy, funding and key state at one fresh FINAL block before the
+witness records verification. A separate completed-setup history verifier can
+re-read all six retained originals and current state before a possible backend
+handoff; it cannot prove that a caller-supplied witness head is fresh and does
+not restore a journal or authorize a mission. These checks use synthetic
+receipts/state in tests, still trust the RPC and are not integrated into live
+wallet prompts. Research-only
+owner enrollment and recovery helpers verify a
+short-lived NEP-413 message and a current testnet FullAccess key at a fresh
+FINAL block. Recovery can read the existing public history even if the
+checkpoint capability is lost; it cannot rotate that capability or recreate a
+journal. The optional read-only wallet panel stays hidden unless its separate
+Edge endpoint is explicitly enabled. Enrollment is not wired into the wallet UI.
+Research-only mission hooks can now connect the native runners to this witness:
+`beforeOriginalBroadcast` is called after the local pending hash is recorded
+but before the single broadcast, and `afterOriginalVerified` runs before a
+later goal can begin. The V14 adapters bind owner, vault, reviewed mission
+hash, goal kind and original fingerprint; they stop on a missing or mismatched
+acknowledgement. Recovery may verify the same retained original without
+signing or sending again. The runner rechecks its local journal and freshness
+after asynchronous callbacks. The hooks are optional for legacy callers: a
+callback or its acknowledgement is **not** proof that storage is independent,
+durable, authenticated, or that its receipt verifier is honest. Tests use a
+simulated independent store and synthetic or isolated-sandbox receipts only.
+**These hooks are not enabled in the live mission service, and the checkpoint
+is not provisioned for the owner or verified against a real testnet receipt.**
+It retains the public review, hashes and commitments, not the journal encryption
+key or agent keys; those still require separate durable recovery. Research-only
+`agent/v14-mission-journal-backup.mjs` now coordinates an authenticated encrypted
+mission-journal snapshot before each witness original and again before each
+verified-result advance. A new append-only SQL design binds each ciphertext to
+the current original-stream head. The empty schema is installed in the separate
+checkpoint project, and its fixed-origin Edge endpoint is deployed with the
+backup-enable flag absent. No owner scope or backup is provisioned; the SQL
+and adapters have passed synthetic and disposable PostgreSQL 17.11 tests. The
+updated isolated nearcore rehearsal also passed, using simulated checkpoint and
+receipt stores rather than the deployed service.
+Recovery inspection requires a **separately retained
+latest witness head** and the original journal key; it can write a separate,
+non-overwriting recovery copy, but it does not verify receipts, replace the
+active journal, fence another host or authorize execution. It also quarantines
+crash windows where a backup exists before its witness event. Database-owner
+rollback, missing/incorrect heads or simultaneous copies remain unsafe.
+`web-src/v14-secret-recovery-kit.mjs` provides an experimental,
+passphrase-encrypted *key kit* for the capability, distinct journal encryption
+keys and only the three reviewed agent keys; it rejects the reviewed owner
+signing key but cannot by itself prove another key is not FullAccess. Never
+supply a wallet key. The cryptographic helper performs no network or file I/O.
+A key kit is **not** a journal backup or proof of the latest head. Separate
+research-only helpers and default-off Edge handlers can bind one encrypted kit
+and its owner-signed enrollment to a new checkpoint, then retrieve the
+ciphertext with current-owner authentication. The V2 schema is installed in
+the separate checkpoint database after disposable PostgreSQL 17.11 tests; its
+function bodies and restricted grants were checked against the reviewed source.
+No V2 Edge handlers are deployed or enabled, and no owner scope or kit exists.
+For phone or desktop, the experimental `v14-browser-witness-store.mjs` keeps
+an encrypted IndexedDB copy and performs an atomic compare-and-swap between
+same-origin tabs. `v14-browser-original-witness.mjs` compares it with a
+separately retained copy and can record a one-shot claim before a prompt.
+The experimental phone prompt adapter reconstructs all six action commitments
+and requires that claim plus fresh preflight callbacks before calling a wallet.
+A read-only preflight implementation checks each retained prior original and
+fresh cumulative state at the pinned testnet RPC; synthetic integration covers
+all six stages. Separately default-off, secret-gated Railway/Vercel read routes
+and a same-origin browser client also cover the completed-history recheck;
+they are not deployed, enabled or connected to the live UI. The history route
+accepts only public checkpoint data, not capabilities, passwords or keys.
+The browser checkpoint bridge is also default-off
+and not deployed. A missing,
+evicted, rolled-back or mismatched copy stops the flow rather than silently
+creating a replacement. Synthetic desktop and phone-sized Chromium tests do
+not prove a physical phone, wallet, or browser-storage durability. Live
+wallet/UI wiring, secure Railway handoff, live mission-journal backup and
+restoration remain unfinished. The separate read-only setup flags must not be interpreted as
+mission execution or loader enablement; neither is active on the deployed
+services. Public research binaries in `web/artifacts/` match the hashes in
+`shared/v14-phone-research-artifacts.mjs` and the explicitly checked V14 build.
+They are not included in static-site staging, and remain disabled and
+unaudited; their availability is not approval to use them. Plan bytes must match independently retained artifact pins, not pins
+obtained from the server being checked. A wallet returning no result after navigation
+leaves its claim blocked until the original is reconciled, never retried.
+An administrator able to roll back both copies can defeat it. Never infer independent durability from
+two adapter names or silently recreate a
+missing copy. Railway says
+[trial volumes can be deleted 30 days after trial credits
+expire](https://docs.railway.com/pricing/free-trial#data-retention); a trial volume
+must never be the sole copy of originals. Railway and Vercel remain unavailable
+for this mission until their actual service, cost, configuration and deployed
+behavior are verified.
+
+A separate manually dispatched V14 public preflight reads a named owner and
+candidate direct-child vault at one fresh FINAL testnet block. It reports the
+pinned artifact identity, account/registry checks and an **unapproved estimate**
+for storage funding and the example mission cap, with gas additional. An
+unknown candidate-account view is not treated as absence. These public reads
+cannot prove wallet control, consent, delivery or an independently retained
+original. The example amounts are not instructions to fund or sign.
+
+Mobile V14 provisioning is also unresolved. The identified CI-built
 WASM was 499,063 bytes; its 665,420-byte base64 code field alone exceeds the
 Meteor mobile bridge's 400,000-byte request limit. CI also investigates a
 separately pinned compressed loader, **research only**: at commit `236aeca`,

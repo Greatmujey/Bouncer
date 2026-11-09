@@ -15,16 +15,25 @@ import { validateKnownFirstPartyActionRequest, MAX_ACTION_REQUEST_CANONICAL_JSON
 import { syntheticV14MeteorRequest } from './v14-synthetic-meteor.mjs';
 import { FileJournal } from '../agent/procurement.mjs';
 import { runNativeMission } from '../agent/native-mission.mjs';
-import { createAuthenticatedNativeMissionService } from '../agent/authenticated-native-mission-service.mjs';
+import { createPlannedNativeMissionService } from '../agent/planned-native-mission-service.mjs';
 import { createNativeMissionSite } from '../agent/native-mission-site.mjs';
 import { nativeMissionApprovalMessage } from '../web-src/native-mission-auth.mjs';
 import { nep413Payload } from '../web-src/cli-login.mjs';
 import { buildV14PhoneResearchPlan, verifyV14PhoneResearchPlan, v14PhoneBatchCommitment } from '../agent/native-v14-phone-plan.mjs';
 import { prepareV14PhoneAttempt, inspectV14PhoneAttempt } from '../agent/native-v14-phone-receipts.mjs';
 import { inspectV14PhoneSetupCompletion } from '../agent/native-v14-phone-completion.mjs';
+import { createV14SetupRpcVerifier } from '../agent/v14-setup-rpc-verifier.mjs';
+import { createV14OriginalWitness,deriveV14OriginalBinding,V14_WITNESS_GENESIS } from '../agent/v14-original-witness.mjs';
+import { createV14BackedMissionHooks,inspectV14MissionJournalBackup,writeV14MissionRecoveryCopy } from '../agent/v14-mission-journal-backup.mjs';
+import { verifyOutlayerResult, RANDOM_TESTNET_PROGRAM } from '../agent/outlayer.mjs';
+import { verifyOracleResult } from '../agent/oracle-outlayer.mjs';
+import { verifyNativeStorageResult } from '../agent/native-storage.mjs';
+import { createV14FileWitnessStore } from '../agent/v14-file-witness-store.mjs';
+import { ReadOnlyNearReceiptProvider } from '../agent/read-only-near-receipts.mjs';
 import { ORACLE_TESTNET_PROJECT } from '../agent/oracle-outlayer.mjs';
+import { MARKET_SUMMARY_PROGRAM } from '../agent/market-summary.mjs';
 import { SandboxSetupRpc, withSandboxOnlyFetch } from './v11-sandbox-setup-rpc.mjs';
-import { SANDBOX_SHA256, readVerifiedFile, assertSandboxStatus, requireFinalSuccess } from './v11-sandbox-support.mjs';
+import { SANDBOX_CHAIN_ID, SANDBOX_SHA256, readVerifiedFile, assertSandboxStatus, requireFinalSuccess } from './v11-sandbox-support.mjs';
 import { startSandbox, stopSandboxChild } from './v11-nearcore-sandbox.mjs';
 
 const {transactions:tx}=nearApi, N=10n**24n, T=10n**12n;
@@ -33,9 +42,30 @@ const INTRUDER='loader-intruder.testnet', HOLD=`hold.${OWNER}`, FAILED=`failed.$
 const pair=()=>nearApi.KeyPair.fromRandom('ed25519'), pub=k=>String(k.getPublicKey());
 const account=(id,provider,key)=>new nearApi.Account(id,provider,new nearApi.KeyPairSigner(key));
 const call=(method,args={},deposit=0n,gas=30n*T)=>tx.functionCall(method,args,gas,deposit);
-const program={url:'https://example.test/not-real.wasm',sha256:'a'.repeat(64),build_target:'wasm32-wasip1',
-  max_instructions:10_000_000,max_memory_mb:128,max_execution_seconds:60};
+const program=MARKET_SUMMARY_PROGRAM; // The local fake reports arithmetic; it never fetches this program.
 const sha=bytes=>crypto.createHash('sha256').update(bytes).digest();
+// A synthetic second store checks the protocol in isolation. It is NOT an
+// independent durable provider, and its in-memory state is discarded afterward.
+function sandboxWitnessStore() {
+  let snapshot={revision:0,head_sha256:V14_WITNESS_GENESIS,events:[]};
+  return {read:async()=>structuredClone(snapshot),append:async({expected_revision,expected_head_sha256,record})=>{
+    assert.equal(expected_revision,snapshot.revision);assert.equal(expected_head_sha256,snapshot.head_sha256);
+    snapshot={revision:snapshot.revision+1,head_sha256:sha(record).toString('hex'),events:[...snapshot.events,record]};
+    return structuredClone(snapshot);
+  }};
+}
+// In-memory protocol substitute only: not independent storage or durability.
+function sandboxMissionBackupStore(witness) {
+  const saved=new Map(),key=(id,phase)=>`${id}:${phase}`;
+  return {
+    read:async({goal_id,phase})=>structuredClone(saved.get(key(goal_id,phase))??null),
+    append:async record=>{
+      const state=await witness.inspect(),id=key(record.goal_id,record.phase);
+      assert.equal(record.witness_revision,state.revision);assert.equal(record.witness_head_sha256,state.head_sha256);
+      assert.equal(saved.has(id),false);saved.set(id,structuredClone(record));return structuredClone(record);
+    },
+  };
+}
 const createLoader=(loader,funding=20n*N)=>[tx.createAccount(),tx.transfer(funding),tx.deployContract(loader),call('loader_init',{},1n,20n*T)];
 const deployCompressed=(compressed,deposit=1n)=>call('loader_deploy',compressed,deposit,240n*T);
 function failed(result,label) { assert.equal(result?.final_execution_status,'FINAL',`${label}: not FINAL`); assert.ok(result?.status?.Failure,`${label}: expected failure`); }
@@ -76,11 +106,19 @@ function siteRequest(server,{route='/',input}={}) {
 function makeMission(codeHash,priceRoute,storageRoute,suffix='') {
   return {version:1,id:`sandbox-mission${suffix}`,contract_id:VAULT,owner_account_id:OWNER,
     max_native_amount:String(3n*N/10n),required_resources:['compute','api','storage'],goals:[
-      {kind:'random',goal:{id:`compute${suffix}`,contract_id:VAULT,owner_account_id:OWNER,policy_id:'compute',amount:String(N/10n),input:{min:1,max:100},program}},
       {kind:'oracle',goal:{id:`price${suffix}`,contract_id:VAULT,owner_account_id:OWNER,policy_id:'price',amount:String(N/10n),route:priceRoute,max_age_seconds:300}},
+      {kind:'market',goal:{id:`compute${suffix}`,contract_id:VAULT,owner_account_id:OWNER,policy_id:'compute',amount:String(N/10n),
+        input:{from_goal_id:`price${suffix}`,quantity:10},program}},
       {kind:'storage',goal:{id:`store${suffix}`,contract_id:VAULT,contract_code_hash:codeHash,owner_account_id:OWNER,policy_id:'store',amount:String(N/10n),
-        object_id:`mission-results${suffix}`,value:{from_goal_ids:[`compute${suffix}`,`price${suffix}`]},route:storageRoute}},
+        object_id:`mission-results${suffix}`,value:{from_goal_ids:[`price${suffix}`,`compute${suffix}`]},route:storageRoute}},
     ]};
+}
+function makeRandomMission(codeHash,priceRoute,storageRoute,suffix='') {
+  const market=makeMission(codeHash,priceRoute,storageRoute,suffix),[oracle,compute,storage]=market.goals;
+  return {...market,id:`sandbox-random${suffix}`,goals:[
+    {...compute,kind:'random',goal:{...compute.goal,input:{min:1,max:10},program:RANDOM_TESTNET_PROGRAM}},
+    oracle,{...storage,goal:{...storage.goal,value:{from_goal_ids:[compute.goal.id,oracle.goal.id]}}},
+  ]};
 }
 async function main() {
   const binary=process.env.BOUNCER_SANDBOX_BIN, vaultWasm=fs.readFileSync(process.env.BOUNCER_V14_WASM_PATH),
@@ -114,7 +152,7 @@ async function main() {
     assert.equal(MAX_ACTION_REQUEST_CANONICAL_JSON_LENGTH,400_000); assert.equal(valid.ok,true,valid.reason);
     assert.ok(meteorBytes<380_000,`synthetic Meteor action request too large: ${meteorBytes}`);
   }
-  let sandbox,journal;
+  let sandbox,journal,setupJournal,missionJournalKey;
   try {
     sandbox=await startSandbox(binary,dir,pub(rootSeed)); const {provider,rpcUrl}=sandbox;
     const report=await withSandboxOnlyFetch(rpcUrl,async()=>{
@@ -123,8 +161,60 @@ async function main() {
       const send=(signer,receiverId,actions)=>signer.signAndSendTransaction({receiverId,actions,waitUntil:'FINAL',throwOnFailure:false});
       const must=async(signer,receiver,actions,label)=>{const r=await send(signer,receiver,actions);requireFinalSuccess(r,label);return r;};
       const setupProofs=[],setupPrior=[];
+      let setupWitness,setupLocal,setupRemote;
+      if(phonePlan) {
+        const scopeId=crypto.randomBytes(16).toString('hex');
+        const binding=deriveV14OriginalBinding({...phonePlanAnchors,scopeId});
+        const encryptionKey=crypto.randomBytes(32);
+        try {setupJournal=new FileJournal(path.join(dir,'setup-witness.json'),VAULT,OWNER,{encryptionKey});}
+        finally {encryptionKey.fill(0)}
+        setupLocal=createV14FileWitnessStore({journal:setupJournal,owner:OWNER,vault:VAULT,scopeId,initializeBrandNew:true});
+        setupRemote=sandboxWitnessStore();
+        // Production remains pinned to public testnet. For this isolated test
+        // ONLY, the real bounded read/receipt transport is redirected to the
+        // loopback sandbox. Only the chain-id fields are aliased, and only
+        // after checking the sandbox's actual identity and protocol version.
+        // The enclosing fetch fence rejects every other network destination.
+        const setupRead=new ReadOnlyNearReceiptProvider('https://test.rpc.fastnear.com/',{fetchImpl:(url,options)=>{
+          if(url!=='https://test.rpc.fastnear.com/')throw new Error('unexpected test transport URL');
+          return globalThis.fetch(rpcUrl,options);
+        }});
+        const status=setupRead.viewNodeStatus.bind(setupRead),protocol=setupRead.experimental_protocolConfig.bind(setupRead);
+        setupRead.viewNodeStatus=async()=>{const result=await status();assertSandboxStatus(result);return {...result,chain_id:'testnet'}};
+        setupRead.experimental_protocolConfig=async reference=>{
+          const result=await protocol(reference);
+          if(result?.chain_id!==SANDBOX_CHAIN_ID||result.protocol_version!==88)throw new Error('unexpected sandbox protocol');
+          return {...result,chain_id:'testnet'};
+        };
+        // Test-only reinspection of the exact original against this disposable
+        // node and the locally journaled materialized goal. This is NOT a
+        // reviewed production verifier or independent provider evidence.
+        const verifySandboxMission=async({goalId,kind,txHash})=>{
+          const entry=journal?.get(goalId);
+          assert.equal(entry?.status,'completed');assert.equal(entry.tx_hash,txHash);
+          assert.equal(entry.agent_public_key,pub(keys[goalId]));
+          const receipt=await rpc.txStatusReceipts(txHash,OWNER,'FINAL');
+          const verified=kind==='oracle'?await verifyOracleResult(entry.oracle_goal,receipt,entry.agent_public_key,rpc):
+            kind==='storage'?await verifyNativeStorageResult(entry.storage_goal,receipt,entry.agent_public_key,rpc):
+              verifyOutlayerResult(entry.outlayer_goal,receipt,entry.agent_public_key);
+          assert.equal(verified.tx_hash,txHash);
+          const finalBlock=await rpc.block({finality:'final'});
+          return {tx_hash:txHash,final_block_hash:finalBlock.header.hash};
+        };
+        setupWitness=createV14OriginalWitness({binding,localStore:setupLocal,independentStore:setupRemote,
+          verifySetupReceipt:createV14SetupRpcVerifier({planInputs:phonePlanAnchors,provider:setupRead}),
+          verifyMissionReceipt:verifySandboxMission});
+        await setupWitness.reserve();
+      }
+      const claimSetup=async index=>{
+        const stageId=phonePlan.batches[index].id;
+        await setupWitness.claimWalletStage(stageId);
+        await assert.rejects(setupWitness.claimWalletStage(stageId),/never prompt again/);
+      };
       const inspectSetup=async(index,sent)=>{
         const stage=phonePlan.batches[index],trustedOriginalHash=sent.transaction_outcome.id;
+        await setupWitness.retainWalletOriginal({stageId:stage.id,txHash:trustedOriginalHash});
+        await setupWitness.verifyWalletOriginal({stageId:stage.id});
         const attempt=prepareV14PhoneAttempt({...phonePlanAnchors,stageId:stage.id,trustedOriginalHash});
         const result=await provider.txStatusReceipts(trustedOriginalHash,OWNER,'FINAL');
         const proof=inspectV14PhoneAttempt({...phonePlanAnchors,trustedOriginalHash,attempt,result});
@@ -165,6 +255,7 @@ async function main() {
         const afterRefund=BigInt((await provider.viewAccount(OWNER,{finality:'final'})).amount);
         assert.ok(afterRefund>beforeRefund+N/2n,'failed-upgrade loader funding did not return to sandbox owner');
         assert.equal(v14PhoneBatchCommitment(phonePlan.batches[0]),phonePlan.review.stages[0].action_commitment_sha256);
+        await claimSetup(0);
         const sent=await must(owner,VAULT,phonePlan.batches[0].actions,'compressed V14 research self-deploy');
         await inspectSetup(0,sent);
         const receipt=await provider.txStatusReceipts(sent.transaction_outcome.id,OWNER,'FINAL');
@@ -185,6 +276,7 @@ async function main() {
         for (let i=1;i<phonePlan.batches.length;i++) {
           const stage=phonePlan.batches[i];
           assert.equal(v14PhoneBatchCommitment(stage),phonePlan.review.stages[i].action_commitment_sha256);
+          await claimSetup(i);
           const sent=await must(owner,stage.receiverId,stage.actions,stage.id);
           await inspectSetup(i,sent);
         }
@@ -220,70 +312,128 @@ async function main() {
         completion=await inspectV14PhoneSetupCompletion({...phonePlanAnchors,prior:setupPrior,provider:new SandboxSetupRpc(rpcUrl)});
         assert.equal(completion.status,'ORIGINALS_AND_SETUP_SNAPSHOT_MATCH_NOT_AUTHORIZED',JSON.stringify(completion.blockers));
         assert.equal(completion.wallet_prompt_authorized,false);
+        const witnessState=await setupWitness.inspect();
+        assert.equal(witnessState.setup.length,6);assert.equal(witnessState.pending,null);assert.equal(witnessState.next_setup_stage,null);
+        assert.deepEqual(witnessState.setup.map(item=>item.tx_hash),setupPrior.map(item=>item.trustedOriginalHash));
+        assert.deepEqual(await setupLocal.read(),await setupRemote.read());
+        assert.ok(!fs.readFileSync(path.join(dir,'setup-witness.json'),'utf8').includes(phonePlan.review.review_sha256));
       }
       const make=(suffix='')=>makeMission(codeHash,priceRoute,storageRoute,suffix);
       const signers=(suffix='')=>Object.fromEntries(Object.entries(keys).map(([id,k])=>[`${id}${suffix}`,{account:account(OWNER,rpc,k),publicKey:k.getPublicKey()}]));
-      journal=new FileJournal(path.join(dir,'mission-originals.json'),VAULT,OWNER);
+      missionJournalKey=crypto.randomBytes(32);
+      journal=new FileJournal(path.join(dir,'mission-originals.json'),VAULT,OWNER,{encryptionKey:missionJournalKey});
       const run=(mission,opts={})=>runNativeMission({mission,provider:rpc,journal,log:()=>{},...opts});
-      const mission=make();
+      const mission=make(),missionBackup=setupWitness?sandboxMissionBackupStore(setupWitness):null;
+      const missionHooks=setupWitness?createV14BackedMissionHooks({journal,witness:setupWitness,backupStore:missionBackup}):{};
       assert.equal((await run(mission,{signers:signers()})).status,'READY');assert.equal(rpc.transportCalls,0);
-      const completed=await run(mission,{signers:signers(),execute:true});
-      assert.equal(completed.status,'FULFILLED');assert.equal(completed.new_payments,3);assert.equal(rpc.transportCalls,3);
+      // Lose the response only after the first real local submission. The
+      // witnessed original must be verified by hash without a replacement.
+      rpc.loseNextAcknowledgementForTest();
+      await assert.rejects(run(mission,{signers:signers(),execute:true,...missionHooks}),/unresolved/);
+      const firstOriginal=journal.get('price').tx_hash;assert.equal(rpc.transportCalls,1);
+      if(setupWitness) {
+        assert.equal((await setupWitness.inspect()).pending?.tx_hash,firstOriginal);
+        const history=await setupWitness.history(),record=await missionBackup.read({goal_id:'price',phase:'pending'});
+        const inspected=inspectV14MissionJournalBackup({record,history,binding:setupWitness.binding(),encryptionKey:missionJournalKey,
+          trustedRevision:history.revision,trustedHeadSha256:history.head_sha256});
+        assert.equal(inspected.phase,'pending');assert.equal(inspected.transaction_authorized,false);
+      }
+      const firstRecovery=await run(mission,{signers:{},recoverOnly:true,...(setupWitness?{afterOriginalVerified:missionHooks.afterOriginalVerified}:{})});
+      assert.equal(firstRecovery.status,'RECOVERED_PARTIAL');assert.equal(firstRecovery.deliveries[0].delivery.tx_hash,firstOriginal);
+      assert.equal(rpc.transportCalls,1);
+      const completed=await run(mission,{signers:signers(),execute:true,...missionHooks});
+      assert.equal(completed.status,'FULFILLED');assert.equal(completed.new_payments,2);assert.equal(rpc.transportCalls,3);
+      if(setupWitness) {
+        const witnessed=await setupWitness.inspect();
+        assert.deepEqual(witnessed.mission.map(item=>item.tx_hash),completed.deliveries.map(item=>item.delivery.tx_hash));
+        assert.equal(witnessed.pending,null);assert.equal(witnessed.next_mission_goal,null);
+        assert.deepEqual(await setupLocal.read(),await setupRemote.read());
+        const history=await setupWitness.history(),record=await missionBackup.read({goal_id:'store',phase:'completed'});
+        const copyFile=path.join(dir,'mission.recovery.enc');
+        const copy=writeV14MissionRecoveryCopy({file:copyFile,copyOnly:true,record,history,binding:setupWitness.binding(),
+          encryptionKey:missionJournalKey,trustedRevision:history.revision,trustedHeadSha256:history.head_sha256});
+        assert.equal(copy.status,'RECOVERY_COPY_WRITTEN');assert.equal(copy.transaction_authorized,false);
+        const restored=new FileJournal(copyFile,VAULT,OWNER,{encryptionKey:missionJournalKey,requireExisting:true});
+        try {assert.deepEqual(restored.list(),journal.list());} finally {restored.close()}
+      }
       const saved=JSON.parse(completed.deliveries[2].delivery.result.value);
-      assert.deepEqual(saved.resources.map(x=>x.goal_id),['compute','price']);
+      assert.deepEqual(saved.resources.map(x=>x.goal_id),['price','compute']);
+      assert.equal(saved.resources[1].result.value_usd_micros,27_500_000);
+      assert.equal(journal.get('compute').outlayer_goal.input.oracle_tx_hash,completed.deliveries[0].delivery.tx_hash);
       assert.deepEqual(saved.resources.map(x=>x.tx_hash),completed.deliveries.slice(0,2).map(x=>x.delivery.tx_hash));
       for(const delivery of completed.deliveries.slice(0,2)) assert.equal(delivery.delivery.refunded_to_owner_yocto,String(N/100n));
-      const recovered=await run(mission,{signers:{},recoverOnly:true});assert.equal(recovered.status,'RECOVERED');assert.equal(rpc.transportCalls,3);
+      const recovered=await run(mission,{signers:{},recoverOnly:true,
+        ...(setupWitness?{afterOriginalVerified:missionHooks.afterOriginalVerified}:{})});
+      assert.equal(recovered.status,'RECOVERED');assert.equal(rpc.transportCalls,3);
       assert.deepEqual(recovered.deliveries.map(x=>x.delivery.tx_hash),completed.deliveries.map(x=>x.delivery.tx_hash));
       // Simulate losing the response AFTER the real first sandbox submission.
       const second=make('-second');activeIds={compute:'compute-second',price:'price-second',store:'store-second'};
       rpc.loseNextAcknowledgementForTest();
       await assert.rejects(run(second,{signers:signers('-second'),execute:true}),/unresolved/);
-      const original=journal.get('compute-second').tx_hash;assert.equal(rpc.transportCalls,4);
+      const original=journal.get('price-second').tx_hash;assert.equal(rpc.transportCalls,4);
       const partial=await run(second,{signers:{},recoverOnly:true});assert.equal(partial.status,'RECOVERED_PARTIAL');
       assert.equal(partial.deliveries[0].delivery.tx_hash,original);assert.equal(rpc.transportCalls,4);
       const resumed=await run(second,{signers:signers('-second'),execute:true});
       assert.equal(resumed.status,'FULFILLED');assert.equal(resumed.new_payments,2);assert.equal(rpc.transportCalls,6);
-      assert.equal(journal.get('compute-second').tx_hash,original);
+      assert.equal(journal.get('price-second').tx_hash,original);
 
-      // Wire the real same-origin HTTP service to the real three guarded
-      // runners. Consent and provider are still synthetic, and everything is
-      // isolated to this nearcore; no browser wallet or public chain is used.
-      const third=make('-http');activeIds={compute:'compute-http',price:'price-http',store:'store-http'};
-      const siteOrigin='https://bouncer.example',service=createAuthenticatedNativeMissionService({mission:third,provider:rpc,
-        signers:signers('-http'),journal,auth:syntheticConsent(ownerKey,siteOrigin)});
+      // Connect a bounded, FAKE model proposal through the actual same-origin
+      // review service to the real three guarded sandbox runners. The model,
+      // consent and provider are synthetic; no public chain or API is used.
+      activeIds={compute:'compute-http',price:'price-http',store:'store-http'};
+      const catalog={version:1,market:{mission:make('-http'),max_quantity:50},
+        random:{mission:makeRandomMission(codeHash,priceRoute,storageRoute,'-http'),min:0,max:100,max_span:100}};
+      let modelCalls=0;
+      const siteOrigin='https://bouncer.example',service=await createPlannedNativeMissionService({
+        objective:'Estimate and record the value of 12 NEAR',catalog,modelRequestApproved:true,
+        modelClient:async input=>{modelCalls++;assert.deepEqual(input,{objective:'Estimate and record the value of 12 NEAR',choices:['market','random']});
+          return {kind:'market',quantity:12}},provider:rpc,signers:signers('-http'),journal,auth:syntheticConsent(ownerKey,siteOrigin)});
       const site=createNativeMissionSite({siteOrigin,service});
       await new Promise((resolve,reject)=>site.listen(0,'127.0.0.1',resolve).once('error',reject));
       try {
         assert.equal((await siteRequest(site)).status,200);
         const config=JSON.parse((await siteRequest(site,{route:'/api/native-mission/config'})).body),reviewHash=config.review.mission_sha256;
-        const preview=JSON.parse((await siteRequest(site,{route:'/api/native-mission/preview',input:{missionSha256:reviewHash}})).body);
-        assert.equal(preview.preview.status,'READY');assert.equal(rpc.transportCalls,6);
-        const challenge=JSON.parse((await siteRequest(site,{route:'/api/native-mission/challenge',input:{missionSha256:reviewHash,ownerPublicKey:pub(ownerKey)}})).body);
-        const payload=nep413Payload({message:challenge.message,nonce:new Uint8Array(Buffer.from(challenge.nonce_base64,'base64')),recipient:challenge.recipient});
-        const evidence={challenge_id:challenge.challenge_id,accountId:OWNER,publicKey:pub(ownerKey),
-          signature:Buffer.from(ownerKey.sign(sha(payload)).signature).toString('base64')};
-        const input={missionSha256:reviewHash,ownerPublicKey:pub(ownerKey),evidence};
-        const response=await siteRequest(site,{route:'/api/native-mission/execute',input}),executed=JSON.parse(response.body);
-        assert.equal(response.status,200);assert.equal(executed.status,'FULFILLED');assert.equal(executed.new_payments,3);assert.equal(rpc.transportCalls,9);
+        assert.equal(modelCalls,1);assert.equal(config.review.mission.goals[1].goal.input.quantity,12);
+        let executed;
+        for (const [index,goalId] of ['price-http','compute-http','store-http'].entries()) {
+          const preview=JSON.parse((await siteRequest(site,{route:'/api/native-mission/preview',input:{missionSha256:reviewHash}})).body);
+          assert.equal(preview.preview.status,'READY');assert.equal(preview.preview.next_goal_id,goalId);assert.equal(rpc.transportCalls,6+index);
+          const challenge=JSON.parse((await siteRequest(site,{route:'/api/native-mission/challenge',input:{missionSha256:reviewHash,ownerPublicKey:pub(ownerKey),goalId}})).body);
+          assert.ok(challenge.message.includes(`Step: ${goalId}`));
+          const payload=nep413Payload({message:challenge.message,nonce:new Uint8Array(Buffer.from(challenge.nonce_base64,'base64')),recipient:challenge.recipient});
+          const evidence={challenge_id:challenge.challenge_id,accountId:OWNER,publicKey:pub(ownerKey),
+            signature:Buffer.from(ownerKey.sign(sha(payload)).signature).toString('base64')};
+          const input={missionSha256:reviewHash,ownerPublicKey:pub(ownerKey),goalId,evidence};
+          const response=await siteRequest(site,{route:'/api/native-mission/execute',input});executed=JSON.parse(response.body);
+          assert.equal(response.status,200);assert.equal(executed.status,index===2?'FULFILLED':'CHECKPOINT');
+          assert.equal(executed.new_payments,1);assert.equal(rpc.transportCalls,7+index);
+          assert.equal((await siteRequest(site,{route:'/api/native-mission/execute',input})).status,409);assert.equal(rpc.transportCalls,7+index);
+        }
+        const plannedResult=JSON.parse(executed.deliveries[2].delivery.result.value);
+        assert.equal(plannedResult.resources[1].result.value_usd_micros,33_000_000);
+        assert.deepEqual(plannedResult.resources.map(row=>row.tx_hash),executed.deliveries.slice(0,2).map(row=>row.delivery.tx_hash));
         const list=JSON.parse((await siteRequest(site,{route:'/api/native-mission/originals',input:{missionSha256:reviewHash}})).body);
         assert.deepEqual(list.originals.map(row=>row.original_hash),executed.deliveries.map(row=>row.delivery.tx_hash));
         const receiptOnly=JSON.parse((await siteRequest(site,{route:'/api/native-mission/recover',input:{missionSha256:reviewHash}})).body);
         assert.equal(receiptOnly.status,'RECOVERED');assert.equal(receiptOnly.new_payments,0);assert.equal(rpc.transportCalls,9);
-        assert.equal((await siteRequest(site,{route:'/api/native-mission/execute',input})).status,409);assert.equal(rpc.transportCalls,9);
       } finally {await new Promise(resolve=>site.close(resolve))}
       return {scope:'isolated nearcore and fabricated provider; no public chain or real service',
         research_loader:loader?{synthetic_meteor_request_bytes:meteorBytes,loader_wasm_bytes:loader.length,
           compressed_v14_bytes:compressed.length,all_unsigned_plan_stages_executed_only_in_sandbox:true,
           sandbox_original_receipt_proofs:setupProofs,sandbox_completion_snapshot:completion?.status,
+          encrypted_local_and_simulated_second_checkpoint_reconciled:true,
+          mission_originals_retained_before_submit_and_verified_after_local_final_receipts:true,
+          encrypted_mission_backup_and_separate_recovery_copy_tested_with_simulated_store:true,
+          staged_receipt_and_fresh_state_verifier_exercised:true,independent_durable_store_tested:false,
           failed_upgrade_owner_refund_tested:true,real_phone_tested:false}:null,
-        three_guarded_legs_and_public_result_storage:true, sandbox_refunds_verified:true,
+        dependent_price_calculation_and_public_result_storage:true, fake_provider_did_not_run_wasi:true, sandbox_refunds_verified:true,
         original_hash_recovery_without_new_send:true, lost_response_recovered_and_remaining_legs_continued:true,
-        fixed_site_http_synthetic_consent_three_real_runners:true,
+        bounded_fake_model_proposal_to_http_review_and_sandbox_public_storage:true, real_model_called:false,
+        fixed_site_http_three_distinct_synthetic_step_consents:true,
         independent_delivery_verified:false, public_chain_transactions:false};
     });
     console.log(JSON.stringify(report,null,2));
     if (loader && process.env.GITHUB_ACTIONS==='true') console.log(`::notice title=V14 research phone loader::Synthetic Meteor request ${meteorBytes} bytes; loader ${loader.length} bytes; compressed V14 ${compressed.length} bytes. Isolated chain and fake provider only; not a real phone, wallet approval or live fulfillment.`);
-  } finally {journal?.close();if(sandbox)await stopSandboxChild(sandbox.child);fs.rmSync(dir,{recursive:true,force:true});}
+  } finally {journal?.close();setupJournal?.close();missionJournalKey?.fill(0);if(sandbox)await stopSandboxChild(sandbox.child);fs.rmSync(dir,{recursive:true,force:true});}
 }
 main().catch(error=>{console.error('Isolated native mission FAILED:',error?.stack??String(error));process.exitCode=1;});

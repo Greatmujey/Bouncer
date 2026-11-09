@@ -9,12 +9,14 @@ import { isDeepStrictEqual } from 'node:util';
 import { isTestnetAccount } from '../shared/account-id.mjs';
 import { isTransactionHash } from '../shared/direct-payment-settlement.mjs';
 import { validateOutlayerGoal } from './outlayer.mjs';
+import { marketQuantity, marketInputFromOracle } from './market-summary.mjs';
 import { validateOracleGoal, assertOracleFreshForUse } from './oracle-outlayer.mjs';
 import { validateNativeStorageGoal, assertPinnedNativeStorageVault } from './native-storage.mjs';
 import { runNativeResource } from './mixed-mission.mjs';
 import { withExclusiveJournalOperation } from './journal-operation.mjs';
 import { assertJournalScope } from './journal-write.mjs';
 import { readNativeJournal, writeConfirmedNativeJournal } from './synchronous-native-journal.mjs';
+import {validateNativeOriginalCheckpoint,verifyNativeOriginalCheckpoint} from './native-original-checkpoint.mjs';
 
 const MAX_U128 = (1n << 128n) - 1n;
 const plain = value => value !== null && typeof value === 'object' && !Array.isArray(value) &&
@@ -34,7 +36,7 @@ function amount(value, label, { zero = false } = {}) {
   if (n > MAX_U128 || (!zero && n === 0n)) throw new Error(`invalid ${label}`);
   return n;
 }
-const resourceOf = kind => kind === 'random' ? 'compute' : kind === 'storage' ? 'storage' : 'api';
+const resourceOf = kind => ['random','market'].includes(kind) ? 'compute' : kind === 'storage' ? 'storage' : 'api';
 const allResources = ['compute', 'storage', 'api'];
 const manifestId = mission => `native-mission:${mission.id}`; // payable goal ids cannot contain ':'
 const fingerprint = mission => crypto.createHash('sha256').update(`bouncer-native-mission-v1\0${JSON.stringify(mission)}`).digest('hex');
@@ -51,13 +53,25 @@ export function validateNativeMission(raw) {
   if (!Array.isArray(raw.goals) || raw.goals.length < 1 || raw.goals.length > 10) throw new Error('native mission requires 1 to 10 goals');
   const ids = new Map(); let total = 0n;
   const goals = raw.goals.map(item => {
-    if (!exact(item, ['kind', 'goal']) || !['random', 'oracle', 'storage'].includes(item.kind)) throw new Error('unsupported native mission goal');
+    if (!exact(item, ['kind', 'goal']) || !['random', 'market', 'oracle', 'storage'].includes(item.kind)) throw new Error('unsupported native mission goal');
     let goal;
-    if (item.kind === 'storage' && typeof item.goal?.value !== 'string') {
+    if (item.kind === 'market') {
+      const reference = item.goal?.input;
+      if (!exact(reference, ['from_goal_id', 'quantity']) || ids.get(reference.from_goal_id) !== 'oracle') {
+        throw new Error('market calculation must reference one earlier verified oracle goal');
+      }
+      const quantity = marketQuantity(reference.quantity);
+      // Validate all financial/program fields now. This placeholder is only
+      // used for a read-only preflight, never as a live calculation input.
+      goal = validateOutlayerGoal({ ...item.goal, input: {
+        price_usd_micros: 1, quantity, oracle_tx_hash: '1'.repeat(32),
+      } });
+      goal.input = { from_goal_id: reference.from_goal_id, quantity };
+    } else if (item.kind === 'storage' && typeof item.goal?.value !== 'string') {
       const reference = item.goal?.value;
       if (!exact(reference, ['from_goal_ids']) || !Array.isArray(reference.from_goal_ids) || !reference.from_goal_ids.length ||
           reference.from_goal_ids.length > 2 || new Set(reference.from_goal_ids).size !== reference.from_goal_ids.length ||
-          reference.from_goal_ids.some(id => typeof id !== 'string' || !['random', 'oracle'].includes(ids.get(id)))) {
+          reference.from_goal_ids.some(id => typeof id !== 'string' || !['random', 'market', 'oracle'].includes(ids.get(id)))) {
         throw new Error('storage may reference only distinct earlier verified compute or oracle goals');
       }
       goal = validateNativeStorageGoal({ ...item.goal, value: 'pending verified results' });
@@ -66,6 +80,7 @@ export function validateNativeMission(raw) {
     } else {
       goal = item.kind === 'oracle' ? validateOracleGoal(item.goal) : item.kind === 'storage'
         ? validateNativeStorageGoal(item.goal) : validateOutlayerGoal(item.goal);
+      if (item.kind === 'random' && !Object.hasOwn(goal.input, 'min')) throw new Error('random goal requires random input');
     }
     if (goal.contract_id !== raw.contract_id || goal.owner_account_id !== raw.owner_account_id) throw new Error('all native goals must share one reviewed owner and vault');
     if (ids.has(goal.id)) throw new Error('native mission goal ids must be unique');
@@ -141,6 +156,18 @@ function assertSnapshot(mission, journal, state, exceptId) {
 // Deferred data is derived ONLY from prior verified, journal-bound results.
 // The on-chain value is public and includes each source's original hash.
 function materialize(item, deliveries, { allowPending = false } = {}) {
+  if (item.kind === 'market') {
+    const source = deliveries.get(item.goal.input.from_goal_id);
+    if (!source) {
+      if (!allowPending) throw new Error('market oracle dependency has not been verified; stop');
+      return { kind: 'market', goal: validateOutlayerGoal({ ...item.goal, input: {
+        price_usd_micros: 1, quantity: item.goal.input.quantity, oracle_tx_hash: '1'.repeat(32),
+      } }) };
+    }
+    if (source.kind !== 'oracle') throw new Error('market source is not a verified oracle result');
+    const input = marketInputFromOracle(item.goal.input.quantity, source.delivery);
+    return { kind: 'market', goal: validateOutlayerGoal({ ...item.goal, input }) };
+  }
   if (item.kind !== 'storage' || typeof item.goal.value === 'string') return item;
   const sources = item.goal.value.from_goal_ids.map(id => deliveries.get(id));
   if (sources.some(source => !source)) {
@@ -188,7 +215,7 @@ async function assertLegExecutedAtPinnedVault(item, result, provider, pinnedStor
 }
 
 /**
- * `signers` is keyed by goal id because random and oracle methods need
+ * `signers` is keyed by goal id because compute and oracle methods need
  * differently scoped function-call keys. Injected `runners` are for offline
  * tests only and are not an authorization boundary. Recovery requires no keys.
  */
@@ -196,14 +223,24 @@ export async function runNativeMission(options = {}) {
   return withExclusiveJournalOperation(options?.journal, scope => runNativeMissionUnlocked(options, scope), options?.exclusiveJournalScope);
 }
 async function runNativeMissionUnlocked({ mission: raw, signers = {}, provider, journal, execute = false, recoverOnly = false,
-  log = console.log, runners = {} }, scope) {
+  checkpointGoalId, beforeOriginalBroadcast, afterOriginalVerified, log = console.log, runners = {} }, scope) {
+  validateNativeOriginalCheckpoint(beforeOriginalBroadcast);validateNativeOriginalCheckpoint(afterOriginalVerified);
+  // Execution requires the pair: retaining without checking a receipt cannot
+  // safely advance to a later goal. Recovery receives only the verifier.
+  if(execute && (beforeOriginalBroadcast===undefined)!==(afterOriginalVerified===undefined))throw new Error('both native original checkpoint hooks are required');
   if (typeof execute !== 'boolean' || typeof recoverOnly !== 'boolean' || (execute && recoverOnly) || typeof log !== 'function' ||
-      !provider || !plain(signers) || !plain(runners)) throw new Error('invalid native mission request');
+      !provider || !plain(signers) || !plain(runners) || (checkpointGoalId !== undefined &&
+        (!execute || typeof checkpointGoalId !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(checkpointGoalId)))) {
+    throw new Error('invalid native mission request');
+  }
   if (journal?.sharedDirectV3 === true) throw new Error('shared buyer journal does not coordinate native missions');
   if (journal && (typeof journal.get !== 'function' || typeof journal.put !== 'function')) throw new Error('invalid native mission journal');
   if ((execute || recoverOnly) && !journal) throw new Error('native mission execution or recovery requires the original exclusive journal');
   if (recoverOnly && Object.keys(signers).length) throw new Error('native mission recovery must not receive signing keys');
   const mission = validateNativeMission(raw);
+  const missionSha256=crypto.createHash('sha256').update(JSON.stringify(mission)).digest('hex');
+  const beforeForMission=beforeOriginalBroadcast ? input=>beforeOriginalBroadcast(Object.freeze({...input,mission_sha256:missionSha256})) : undefined;
+  const afterForMission=afterOriginalVerified ? input=>afterOriginalVerified(Object.freeze({...input,mission_sha256:missionSha256})) : undefined;
   const pinnedStorage = mission.goals.find(item => item.kind === 'storage')?.goal;
   assertJournalScope(journal, mission.contract_id, mission.owner_account_id);
   const state = initialJournal(mission, journal), deliveries = new Map();
@@ -240,10 +277,19 @@ async function runNativeMissionUnlocked({ mission: raw, signers = {}, provider, 
     await assertLegExecutedAtPinnedVault(item, result, provider, pinnedStorage);
     assertSnapshot(mission, journal, state, item.goal.id);
     if (!isDeepStrictEqual(copy(readNativeJournal(journal, item.goal.id)), current)) throw new Error('native original changed during receipt check');
+    if(afterOriginalVerified && (execute || recoverOnly)) {
+      await verifyNativeOriginalCheckpoint(afterForMission,{goalId:item.goal.id,kind:item.kind,txHash:current.tx_hash,
+        fingerprint:current.fingerprint,owner:mission.owner_account_id,vault:mission.contract_id});
+      assertSnapshot(mission,journal,state,item.goal.id);
+      if(!isDeepStrictEqual(copy(readNativeJournal(journal,item.goal.id)),current))throw new Error('native original changed during independent verification');
+    }
     rememberResult(item, result, current, deliveries);
     state.entries.set(item.goal.id, current);
   }
   const remaining = mission.goals.filter(item => !state.entries.get(item.goal.id));
+  if (checkpointGoalId !== undefined && remaining[0]?.goal.id !== checkpointGoalId) {
+    throw new Error('authorized checkpoint is not the next unpaid goal; stop and reconcile');
+  }
   if (recoverOnly && deliveries.size === 0) throw new Error('native mission has no original payment to recover');
   if (recoverOnly) return { status: !incomplete.length && !remaining.length ? 'RECOVERED' : 'RECOVERED_PARTIAL',
     new_payments: 0, remaining_goal_ids: remaining.map(item => item.goal.id), missing_resources: missing,
@@ -271,6 +317,7 @@ async function runNativeMissionUnlocked({ mission: raw, signers = {}, provider, 
   assertSnapshot(mission, journal, state);
   if (budget.status !== 'READY') return { status: 'BLOCKED', stage: 'budget', budget, new_payments: 0 };
   if (!execute) return { status: incomplete.length ? 'READY_PARTIAL' : 'READY', budget, missing_resources: incomplete, new_payments: 0,
+    next_goal_id: remaining[0]?.goal.id ?? null, verified_prior_deliveries: [...deliveries.values()],
     note: 'Read-only preview. Storage is PUBLIC, self-hosted NEAR state, not an independent vendor; no live fulfillment is established.' };
 
   if (!state.intent && remaining.length) {
@@ -293,7 +340,7 @@ async function runNativeMissionUnlocked({ mission: raw, signers = {}, provider, 
     catch { return { status: 'BLOCKED', stage: 'stale-oracle', goal_id: item.goal.id, new_payments: newPayments }; }
     if (pinnedStorage) await assertPinnedNativeStorageVault(provider, pinnedStorage, { finality: 'final' });
     assertSnapshot(mission, journal, state);
-    const result = await call(item, { execute: true, beforeBroadcast: () => {
+    const result = await call(item, { execute: true, ...(beforeForMission ? {beforeOriginalBroadcast:beforeForMission} : {}), beforeBroadcast: () => {
       guardFresh(deliveries);
       assertSnapshot(mission, journal, state, item.goal.id);
     } });
@@ -308,9 +355,21 @@ async function runNativeMissionUnlocked({ mission: raw, signers = {}, provider, 
     await assertLegExecutedAtPinnedVault(item, result, provider, pinnedStorage);
     assertSnapshot(mission, journal, state, item.goal.id);
     if (!isDeepStrictEqual(copy(readNativeJournal(journal, item.goal.id)), original)) throw new Error('native original changed during receipt check');
+    if(afterOriginalVerified) {
+      await verifyNativeOriginalCheckpoint(afterForMission,{goalId:item.goal.id,kind:item.kind,txHash:original.tx_hash,
+        fingerprint:original.fingerprint,owner:mission.owner_account_id,vault:mission.contract_id});
+      assertSnapshot(mission,journal,state,item.goal.id);
+      if(!isDeepStrictEqual(copy(readNativeJournal(journal,item.goal.id)),original))throw new Error('native original changed during independent verification');
+    }
     rememberResult(item, result, original, deliveries, { newlyPaid: true });
     state.entries.set(item.goal.id, original);
     newPayments++;
+    // A separately approved checkpoint can authorize this one goal only.
+    // Never silently advance, including after a lost or delayed response.
+    if (checkpointGoalId !== undefined && index + 1 < remaining.length) {
+      return { status:'CHECKPOINT', new_payments:newPayments, remaining_goal_ids:remaining.slice(index + 1).map(x=>x.goal.id),
+        deliveries:[...deliveries.values()], note:'One approved step completed. Review its result and separately approve the next step.' };
+    }
   }
   try { guardFresh(deliveries); }
   catch { return { status: 'BLOCKED', stage: 'stale-oracle', new_payments: newPayments, deliveries: [...deliveries.values()] }; }

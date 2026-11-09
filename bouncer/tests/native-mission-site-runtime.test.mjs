@@ -13,12 +13,14 @@ import { ORACLE_PROJECT_ID, ORACLE_PROJECT_UUID, ORACLE_TESTNET_PROGRAM } from '
 import { initializePostgresWalletPromptAuth } from '../agent/postgres-wallet-prompt-auth.mjs';
 import { nep413Payload } from '../web-src/cli-login.mjs';
 import { createNativeMissionSite } from '../agent/native-mission-site.mjs';
-import { configureNativeMissionSite, readConfiguredMission, readConfiguredNativeSigners, inspectConfiguredNativeSigners, trackNativeMissionWork } from '../agent/configured-native-mission-site.mjs';
+import { configureNativeMissionSite, readConfiguredMission, readConfiguredNativeSigners, inspectConfiguredNativeSigners, trackNativeMissionWork, assertRailwayNativeVolume } from '../agent/configured-native-mission-site.mjs';
 import { initializeNativeMissionJournal } from '../scripts/init-native-mission-journal.mjs';
 import { initializeNativeAgentKeys } from '../scripts/init-native-mission-agent-keys.mjs';
 import { FileJournal } from '../agent/procurement.mjs';
 import { readFileJournalKeyFile } from '../agent/file-journal-crypto.mjs';
+import { acquireRailwayNativeJournalFence } from '../agent/railway-native-journal-fence.mjs';
 
+const linuxFlockTest=process.platform==='linux'&&fs.existsSync('/usr/bin/flock') ? test : test.skip;
 const origin='https://bouncer.example',host='bouncer.example';
 const clone=x=>structuredClone(x);
 const listen=server=>new Promise((resolve,reject)=>server.listen(0,'127.0.0.1',resolve).once('error',reject));
@@ -190,6 +192,117 @@ test('configured recovery site needs the original journal and does not load keys
     const preview=JSON.parse((await request(runtime.server,{url:'/api/native-mission/preview',method:'POST',headers:post,body})).body);
     assert.equal(preview.preview.stage,'recovery-only');assert.equal(preview.preview.new_payments,0);
     assert.ok(methods.every(m=>m==='status'));
+  } finally {if(runtime)await runtime.close();await close(rpc);f.clean()}
+});
+
+test('Railway volume guard refuses missing mounts, outside paths and symlink escapes',()=>{
+  const f=files(),outside=fs.mkdtempSync(path.join(os.tmpdir(),'bouncer-outside-'));
+  try {
+    fs.chmodSync(outside,0o700);
+    assert.doesNotThrow(()=>assertRailwayNativeVolume({mountPath:f.dir,files:[f.missionFile,f.journalFile,f.keyFile]}));
+    assert.throws(()=>assertRailwayNativeVolume({mountPath:'/',files:[f.missionFile,f.journalFile,f.keyFile]}),/volume/);
+    assert.throws(()=>assertRailwayNativeVolume({mountPath:f.dir,files:[f.missionFile,f.journalFile,path.join(outside,'key')]}),/declared Railway volume/);
+    const link=path.join(f.dir,'escape');fs.symlinkSync(outside,link,'dir');
+    assert.throws(()=>assertRailwayNativeVolume({mountPath:f.dir,files:[f.missionFile,f.journalFile,path.join(link,'key')]}),/declared Railway volume/);
+    assert.throws(()=>assertRailwayNativeVolume({mountPath:path.join(f.dir,'missing'),files:[f.missionFile,f.journalFile,f.keyFile]}),/declared Railway volume/);
+  } finally {fs.rmSync(outside,{recursive:true,force:true});f.clean()}
+});
+
+linuxFlockTest('Railway recovery-only startup needs its original volume and cannot authorize or send',async()=>{
+  const f=files(), methods=[], rpc=http.createServer(async(req,res)=>{
+    const chunks=[];for await(const c of req)chunks.push(c);const msg=JSON.parse(Buffer.concat(chunks));methods.push(msg.method);
+    res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({jsonrpc:'2.0',id:msg.id,result:{chain_id:'testnet'}}));
+  });await listen(rpc);let runtime;
+  const secret='ab'.repeat(32),railwayOrigin='https://bouncer-synthetic.up.railway.app',railwayHost='bouncer-synthetic.up.railway.app';
+  try {
+    initializeNativeMissionJournal({...f,confirmBrandNewVault:true});
+    const env={BOUNCER_NATIVE_MISSION_ENABLED:'1',BOUNCER_NATIVE_MISSION_MODE:'recover',BOUNCER_NATIVE_MISSION_INGRESS:'railway-proxy',
+      BOUNCER_WALLET_ORIGIN:origin,BOUNCER_TESTNET_RPC_URL:`http://127.0.0.1:${rpc.address().port}`,
+      BOUNCER_NATIVE_MISSION_FILE:f.missionFile,BOUNCER_NATIVE_MISSION_JOURNAL_FILE:f.journalFile,BOUNCER_FILE_JOURNAL_KEY_FILE:f.keyFile,
+      BOUNCER_NATIVE_MISSION_BACKEND_ORIGIN:railwayOrigin,BOUNCER_NATIVE_MISSION_PROXY_SECRET:secret,RAILWAY_VOLUME_MOUNT_PATH:f.dir,
+      BOUNCER_NATIVE_MISSION_AGENT_KEYS_FILE:f.agentFile};
+    await assert.rejects(configureNativeMissionSite({env:{...env,BOUNCER_NATIVE_MISSION_MODE:'execute'}}),/start in recovery-only mode/);
+    await assert.rejects(configureNativeMissionSite({env:{...env,RAILWAY_VOLUME_MOUNT_PATH:'/wrong'}}),/volume/);
+    await assert.rejects(configureNativeMissionSite({env:{...env,BOUNCER_NATIVE_MISSION_PROXY_SECRET:'bad'}}),/secret/);
+    runtime=await configureNativeMissionSite({env});assert.equal(runtime.mode,'recover');assert.equal(runtime.ingress,'railway-proxy');
+    await listen(runtime.server);
+    const auth={host:railwayHost,'x-forwarded-proto':'https','x-bouncer-proxy-secret':secret,'x-bouncer-native-mission':'v1'};
+    assert.equal((await request(runtime.server,{url:'/api/native-mission/config',headers:{...auth,'x-bouncer-proxy-secret':'cd'.repeat(32)}})).status,403);
+    const conf=await request(runtime.server,{url:'/api/native-mission/config',headers:auth});assert.equal(conf.status,200);
+    const review=JSON.parse(conf.body).review,post={...auth,origin,'content-type':'application/json'};
+    const preview=await request(runtime.server,{url:'/api/native-mission/preview',method:'POST',headers:post,body:JSON.stringify({missionSha256:review.mission_sha256})});
+    assert.equal(JSON.parse(preview.body).preview.stage,'recovery-only');
+    assert.equal(fs.existsSync(`${f.journalFile}.recovery-started`),false);
+    const originals=await request(runtime.server,{url:'/api/native-mission/originals',method:'POST',headers:post,
+      body:JSON.stringify({missionSha256:review.mission_sha256})});
+    assert.equal(JSON.parse(originals.body).status,'NO_LOCAL_ORIGINALS');
+    assert.equal(fs.existsSync(`${f.journalFile}.recovery-started`),true);
+    const challenge=await request(runtime.server,{url:'/api/native-mission/challenge',method:'POST',headers:post,
+      body:JSON.stringify({missionSha256:review.mission_sha256,ownerPublicKey:'synthetic'})});
+    assert.equal(challenge.status,409);assert.ok(!methods.includes('send_tx'));
+    await runtime.close();runtime=null;
+    const fence=acquireRailwayNativeJournalFence({journalFile:f.journalFile,mode:'execute'});fence.close();
+    // A recovery-start marker is not an independent checkpoint. Hosted
+    // execution stays blocked even if the operator flips the mode manually.
+    await assert.rejects(configureNativeMissionSite({env:{...env,BOUNCER_NATIVE_MISSION_MODE:'execute'}}),/independent V14 original checkpoint/);
+    assert.ok(!methods.includes('send_tx'));
+  } finally {if(runtime)await runtime.close();await close(rpc);f.clean()}
+});
+
+linuxFlockTest('Railway refuses to serve a journal containing another original',async()=>{
+  const f=files(),rpc=http.createServer(async(req,res)=>{
+    const chunks=[];for await(const c of req)chunks.push(c);const msg=JSON.parse(Buffer.concat(chunks));
+    res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({jsonrpc:'2.0',id:msg.id,result:{chain_id:'testnet'}}));
+  });await listen(rpc);
+  try {
+    initializeNativeMissionJournal({...f,confirmBrandNewVault:true});
+    const key=readFileJournalKeyFile(f.keyFile),journal=new FileJournal(f.journalFile,f.mission.contract_id,f.mission.owner_account_id,
+      {encryptionKey:key,keyFile:f.keyFile,requireExisting:true});key.fill(0);
+    journal.put('unrelated',{status:'pending',fingerprint:'synthetic',tx_hash:'synthetic-other-original'});journal.close();
+    const before=fs.readFileSync(f.journalFile);
+    const env={BOUNCER_NATIVE_MISSION_ENABLED:'1',BOUNCER_NATIVE_MISSION_MODE:'recover',BOUNCER_NATIVE_MISSION_INGRESS:'railway-proxy',
+      BOUNCER_WALLET_ORIGIN:origin,BOUNCER_TESTNET_RPC_URL:`http://127.0.0.1:${rpc.address().port}`,
+      BOUNCER_NATIVE_MISSION_FILE:f.missionFile,BOUNCER_NATIVE_MISSION_JOURNAL_FILE:f.journalFile,BOUNCER_FILE_JOURNAL_KEY_FILE:f.keyFile,
+      BOUNCER_NATIVE_MISSION_BACKEND_ORIGIN:'https://bouncer-synthetic.up.railway.app',BOUNCER_NATIVE_MISSION_PROXY_SECRET:'ab'.repeat(32),
+      RAILWAY_VOLUME_MOUNT_PATH:f.dir};
+    await assert.rejects(configureNativeMissionSite({env}),/dedicated original mission journal/);
+    assert.deepEqual(fs.readFileSync(f.journalFile),before);
+  } finally {await close(rpc);f.clean()}
+});
+
+linuxFlockTest('unclean Railway restart stays recovery-only across wrong keys and an empty recovery',async()=>{
+  const f=files(),methods=[],rpc=http.createServer(async(req,res)=>{
+    const chunks=[];for await(const c of req)chunks.push(c);const msg=JSON.parse(Buffer.concat(chunks));methods.push(msg.method);
+    res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({jsonrpc:'2.0',id:msg.id,result:{chain_id:'testnet'}}));
+  });await listen(rpc);let runtime;
+  const secret='ab'.repeat(32),backend='https://bouncer-synthetic.up.railway.app';
+  const env={BOUNCER_NATIVE_MISSION_ENABLED:'1',BOUNCER_NATIVE_MISSION_MODE:'recover',BOUNCER_NATIVE_MISSION_INGRESS:'railway-proxy',
+    BOUNCER_WALLET_ORIGIN:origin,BOUNCER_TESTNET_RPC_URL:`http://127.0.0.1:${rpc.address().port}`,
+    BOUNCER_NATIVE_MISSION_FILE:f.missionFile,BOUNCER_NATIVE_MISSION_JOURNAL_FILE:f.journalFile,BOUNCER_FILE_JOURNAL_KEY_FILE:f.keyFile,
+    BOUNCER_NATIVE_MISSION_BACKEND_ORIGIN:backend,BOUNCER_NATIVE_MISSION_PROXY_SECRET:secret,RAILWAY_VOLUME_MOUNT_PATH:f.dir,
+    BOUNCER_NATIVE_MISSION_AGENT_KEYS_FILE:f.agentFile};
+  try {
+    initializeNativeMissionJournal({...f,confirmBrandNewVault:true});
+    const fence=acquireRailwayNativeJournalFence({journalFile:f.journalFile,mode:'recover'}),key=readFileJournalKeyFile(f.keyFile);
+    const journal=new FileJournal(f.journalFile,f.mission.contract_id,f.mission.owner_account_id,{encryptionKey:key,keyFile:f.keyFile,requireExisting:true});
+    fence.mark(journal);key.fill(0);
+    // Simulate an unclean process exit: close descriptors but leave its marker.
+    fs.closeSync(journal.lockFd);journal.lockFd=null;journal.close();fence.close();
+    const saved=fs.readFileSync(f.keyFile);fs.writeFileSync(f.keyFile,crypto.randomBytes(32));
+    await assert.rejects(configureNativeMissionSite({env}));fs.writeFileSync(f.keyFile,saved);saved.fill(0);
+    assert.equal(fs.existsSync(`${f.journalFile}.recovery-required`),true);
+    await assert.rejects(configureNativeMissionSite({env:{...env,BOUNCER_NATIVE_MISSION_MODE:'execute'}}),/unclean shutdown/);
+    runtime=await configureNativeMissionSite({env});await listen(runtime.server);
+    const headers={host:new URL(backend).host,'x-forwarded-proto':'https','x-bouncer-proxy-secret':secret,
+      'x-bouncer-native-mission':'v1',origin,'content-type':'application/json'};
+    const config=JSON.parse((await request(runtime.server,{url:'/api/native-mission/config',headers})).body);
+    const response=await request(runtime.server,{url:'/api/native-mission/recover',method:'POST',headers,
+      body:JSON.stringify({missionSha256:config.review.mission_sha256})});
+    assert.equal(response.status,409); // no original receipt exists to verify
+    await runtime.close();runtime=null;
+    assert.equal(fs.existsSync(`${f.journalFile}.recovery-required`),true);
+    await assert.rejects(configureNativeMissionSite({env:{...env,BOUNCER_NATIVE_MISSION_MODE:'execute'}}),/unclean shutdown/);
+    assert.ok(!methods.includes('send_tx'));
   } finally {if(runtime)await runtime.close();await close(rpc);f.clean()}
 });
 

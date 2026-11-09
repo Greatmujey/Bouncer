@@ -189,12 +189,14 @@ test('an unverified or wrong-origin object cannot enable a temporary wallet host
   assert.equal(calls,0);
 });
 
-test('the public Bouncer origin requires its verified one-shot journal for the direct test',async()=>{
-  const journal=sharedJournal();let calls=0;
-  const wallet={manifest:{id:'meteor-wallet',features:{signAndSendTransaction:true}},async signAndSendTransaction(){calls++;return {transaction:{hash:original}}}};
-  const {args}=await remoteEnvironment(journal,wallet,new IDBFactory(),'https://bouncer-near.vercel.app');
-  assert.throws(()=>createDirectOutlayerTest({...args,remoteFence:null}));
-  assert.throws(()=>createDirectOutlayerTest({...args,origin:'https://bouncer-near.vercel.app.evil.example'}));
-  const flow=createDirectOutlayerTest(args);await flow.review();assert.equal(calls,0);
-  await flow.send();assert.equal(calls,1);assert.equal(journal.get().saved,original);
+test('each dedicated Bouncer origin requires its verified one-shot journal for the direct test',async()=>{
+  for(const origin of ['https://bouncer-near.vercel.app','https://bouncer-production-6df1.up.railway.app']) {
+    const journal=sharedJournal();let calls=0;
+    const wallet={manifest:{id:'meteor-wallet',features:{signAndSendTransaction:true}},async signAndSendTransaction(){calls++;return {transaction:{hash:original}}}};
+    const {args}=await remoteEnvironment(journal,wallet,new IDBFactory(),origin);
+    assert.throws(()=>createDirectOutlayerTest({...args,remoteFence:null}));
+    assert.throws(()=>createDirectOutlayerTest({...args,origin:`${origin}.evil.example`}));
+    const flow=createDirectOutlayerTest(args);await flow.review();assert.equal(calls,0);
+    await flow.send();assert.equal(calls,1);assert.equal(journal.get().saved,original);
+  }
 });

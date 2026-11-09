@@ -27,15 +27,12 @@ import { withExclusiveJournalOperation } from './journal-operation.mjs';
 import { assertJournalScope } from './journal-write.mjs';
 import { readNativeJournal, writeConfirmedNativeJournal, assertNativeJournalUnchanged } from './synchronous-native-journal.mjs';
 import { validateNativeBroadcastGuard, checkNativeBroadcastGuard } from './native-broadcast-guard.mjs';
+import {validateNativeOriginalCheckpoint,retainNativeOriginalBeforeBroadcast} from './native-original-checkpoint.mjs';
+import { ORACLE_TESTNET_HASH as HASH, ORACLE_TESTNET_PROGRAM, ORACLE_PROJECT_ID, ORACLE_PROJECT_UUID,
+  assertOracleProjectRegistry } from './oracle-testnet-registry.mjs';
+export { ORACLE_TESTNET_PROGRAM, ORACLE_PROJECT_ID, ORACLE_PROJECT_UUID, assertOracleProjectRegistry } from './oracle-testnet-registry.mjs';
 
 const { KeyPair, KeyPairSigner } = nearApi;
-const HASH = '3585b3890f49748713b43ccb9b0ef4148f317d62f4d598db80fdaffc3f3185a0';
-// Independently published project version observed in the testnet registry;
-// its WasmUrl is pinned, not followed through the mutable active-version view.
-export const ORACLE_TESTNET_PROGRAM = Object.freeze({
-  url: `https://wasmhub.testnet.fastfs.io/fastfs.testnet/${HASH}.wasm`, sha256: HASH,
-  build_target: 'wasm32-wasip2', max_instructions: 10_000_000_000, max_memory_mb: 256, max_execution_seconds: 60,
-});
 export const ORACLE_NEAR_INPUT = Object.freeze({ command: 'fetch_external', token_id: 'near', source: 'coingecko' });
 // One explicitly reviewed public source, not an agent-supplied URL. The
 // deployed oracle parses only data.amount and labels the output "custom";
@@ -43,8 +40,6 @@ export const ORACLE_NEAR_INPUT = Object.freeze({ command: 'fetch_external', toke
 export const ORACLE_COINBASE_NEAR_INPUT = Object.freeze({ command: 'fetch_external', token_id: 'near', source: Object.freeze({
   custom: Object.freeze({ url: 'https://api.coinbase.com/v2/prices/NEAR-USD/spot', json_path: 'data.amount', value_type: 'number', method: 'GET' }),
 }) });
-export const ORACLE_PROJECT_ID = 'zavodil2.testnet/price-oracle';
-export const ORACLE_PROJECT_UUID = 'p0000000000000007';
 export const ORACLE_TESTNET_PROJECT = Object.freeze({ project_id: ORACLE_PROJECT_ID, version_key: HASH,
   input_data: JSON.stringify(ORACLE_COINBASE_NEAR_INPUT), max_instructions: ORACLE_TESTNET_PROGRAM.max_instructions,
   max_memory_mb: ORACLE_TESTNET_PROGRAM.max_memory_mb, max_execution_seconds: ORACLE_TESTNET_PROGRAM.max_execution_seconds });
@@ -187,26 +182,10 @@ async function recoverOracleGoalUnlocked({ goal: rawGoal, provider, journal, pub
   return { status: 'REUSED', delivery };
 }
 
-// Fail closed if the public registry no longer resolves the reviewed version to
-// the expected project namespace, bytecode hash and native-only pricing. This
-// is a non-atomic view of an independent provider, not a code attestation.
-export async function assertOracleProjectRegistry(provider) {
-  const final = { finality: 'final' };
-  const [project, projectVersion, pricing] = await Promise.all([
-    provider.callFunction(OUTLAYER, 'get_project', { project_id: ORACLE_PROJECT_ID }, final),
-    provider.callFunction(OUTLAYER, 'get_version', { project_id: ORACLE_PROJECT_ID, version_key: HASH }, final),
-    provider.callFunction(OUTLAYER, 'get_project_pricing', { project_id: ORACLE_PROJECT_ID }, final),
-  ]);
-  const p = ORACLE_TESTNET_PROGRAM;
-  if (project?.project_id !== ORACLE_PROJECT_ID || project?.uuid !== ORACLE_PROJECT_UUID || project?.owner !== 'zavodil2.testnet' ||
-      projectVersion?.wasm_hash !== HASH || !equal(projectVersion?.source, { WasmUrl: { url: p.url, hash: p.sha256, build_target: p.build_target } }) || pricing !== null) {
-    throw new Error('independent project identity, pinned source or native-only pricing changed');
-  }
-}
-
 /** Dry-run or sign one exact-input request after on-chain policy preflight. */
-async function runOracleGoalUnlocked({ goal: rawGoal, provider, account, publicKey, journal, execute = false, log = console.log, beforeBroadcast }) {
+async function runOracleGoalUnlocked({ goal: rawGoal, provider, account, publicKey, journal, execute = false, log = console.log, beforeBroadcast, beforeOriginalBroadcast }) {
   validateNativeBroadcastGuard(beforeBroadcast);
+  validateNativeOriginalCheckpoint(beforeOriginalBroadcast);
   if (journal?.sharedDirectV3 === true) throw new Error('shared buyer journal does not coordinate oracle payments');
   const goal = validateOracleGoal(rawGoal);
   assertJournalScope(journal, goal.contract_id, goal.owner_account_id);
@@ -262,6 +241,8 @@ async function runOracleGoalUnlocked({ goal: rawGoal, provider, account, publicK
       throw new Error('witnessed native original changed or is uncertain; stop and reconcile');
     }
   }
+  if(beforeOriginalBroadcast) await retainNativeOriginalBeforeBroadcast(beforeOriginalBroadcast,
+    {goalId:goal.id,kind:'oracle',txHash,fingerprint:fp,owner:goal.owner_account_id,vault:goal.contract_id});
   try {
     // Freshness and the original journal are rechecked after signing, fsync
     // and any witnessed-original verification, immediately before submission.

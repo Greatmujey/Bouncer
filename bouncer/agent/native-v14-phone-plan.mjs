@@ -16,14 +16,15 @@ import { isDeepStrictEqual } from 'node:util';
 import nearApi from 'near-api-js';
 import { validateNativeMission } from './native-mission.mjs';
 import { isDirectTestnetChild } from './native-oracle-wallet-plan.mjs';
+import { V14_PHONE_RESEARCH_STAGE_IDS } from '../shared/v14-phone-stages.mjs';
+export { V14_PHONE_RESEARCH_STAGE_IDS } from '../shared/v14-phone-stages.mjs';
 
 const T = 10n ** 12n, MAX_U128 = (1n << 128n) - 1n, MAX_AGENT_GAS_ALLOWANCE = 10n ** 24n;
 const MARKER = Buffer.from('bouncer-agent-v14-native-storage-testnet');
 const MAGIC = Buffer.from([0,97,115,109,1,0,0,0]);
 const DOMAIN = Buffer.from('bouncer-research-v14-phone-batch-v1\0');
 const DUMMY_KEY = nearApi.utils.PublicKey.from('ed25519:11111111111111111111111111111111');
-const STAGE_IDS = Object.freeze(['create_v14_research_vault','configure_compute','configure_api','configure_storage',
-  'fund_native_vault','install_restricted_agents']);
+const STAGE_IDS = V14_PHONE_RESEARCH_STAGE_IDS;
 const plain = x => x && typeof x === 'object' && !Array.isArray(x) && [Object.prototype,null].includes(Object.getPrototypeOf(x));
 const exact = (x, keys) => plain(x) && Object.keys(x).length === keys.length && keys.every(k => Object.hasOwn(x,k));
 const hex = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
@@ -74,12 +75,14 @@ export function buildV14PhoneResearchPlan({ mission: raw, ownerPublicKey, agentP
   const mission = validateNativeMission(raw);
   if (!isDirectTestnetChild(mission.contract_id,mission.owner_account_id) ||
       mission.owner_account_id === 'bouncer-owner-12f343b795633e357ae5560d.testnet' ||
-      mission.goals.length !== 3 || mission.goals.map(g=>g.kind).join(',') !== 'random,oracle,storage' ||
+      mission.goals.length !== 3 || !['random,oracle,storage','oracle,market,storage'].includes(mission.goals.map(g=>g.kind).join(',')) ||
       !['compute','api','storage'].every(r=>mission.required_resources.includes(r))) {
-    throw new Error('a fresh named-testnet three-resource mission in compute/API/storage order is required');
+    throw new Error('a fresh named-testnet three-resource mission with supported dependency order is required');
   }
-  const [compute,api,storage] = mission.goals.map(x=>x.goal), ids = mission.goals.map(x=>x.goal.id);
-  if (!isDeepStrictEqual(storage.value,{from_goal_ids:[compute.id,api.id]})) {
+  const compute = mission.goals.find(x=>['random','market'].includes(x.kind)).goal;
+  const api = mission.goals.find(x=>x.kind==='oracle').goal, storage = mission.goals.find(x=>x.kind==='storage').goal;
+  const ids = mission.goals.map(x=>x.goal.id), sources = mission.goals.slice(0,2).map(x=>x.goal.id);
+  if (!isDeepStrictEqual(storage.value,{from_goal_ids:sources})) {
     throw new Error('storage must record both earlier verified compute and API results');
   }
   if (new Set(mission.goals.map(x=>x.goal.policy_id)).size !== 3 ||
@@ -133,10 +136,10 @@ export function buildV14PhoneResearchPlan({ mission: raw, ownerPublicKey, agentP
     (()=>{const c=call('deposit_native',{},deposit); return {id:STAGE_IDS[4],signerId:owner,receiverId:vaultId,vault:vaultId,
       actions:[c.action],summaries:[c.summary]};})(),
     {id:STAGE_IDS[5],signerId:owner,receiverId:owner,vault:vaultId,actions:mission.goals.map(({kind,goal})=>
-      t.addKey(publicKey(agents[goal.id]),t.functionCallAccessKey(vaultId,[kind === 'random'?'execute_outlayer':
+      t.addKey(publicKey(agents[goal.id]),t.functionCallAccessKey(vaultId,[['random','market'].includes(kind)?'execute_outlayer':
         kind === 'oracle'?'execute_outlayer_native_project':'execute_native_storage'],BigInt(allowances[goal.id])))),
       summaries:mission.goals.map(({kind,goal})=>({type:'add_function_call_key',public_key:agents[goal.id],receiver_id:vaultId,
-        method_names:[kind === 'random'?'execute_outlayer':kind === 'oracle'?'execute_outlayer_native_project':'execute_native_storage'],
+        method_names:[['random','market'].includes(kind)?'execute_outlayer':kind === 'oracle'?'execute_outlayer_native_project':'execute_native_storage'],
         allowance_yocto:allowances[goal.id]}))},
   ];
   const stages = batches.map(b=>({id:b.id,signer_id:b.signerId,receiver_id:b.receiverId,actions:structuredClone(b.summaries),

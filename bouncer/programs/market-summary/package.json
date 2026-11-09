@@ -1,0 +1,12 @@
+{
+  "name": "bouncer-market-summary-wasi",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A bounded public-data calculation for the Bouncer testnet mission.",
+  "scripts": {
+    "build": "asc assembly/index.ts --outFile market-summary.wasm --runtime stub --optimize --noAssert --initialMemory 2 --maximumMemory 2"
+  },
+  "devDependencies": {
+    "assemblyscript": "0.27.31"
+  }
+}

@@ -47,12 +47,12 @@ function fixture(t, options = {}) {
 test('read-only hosted verification checks every staged byte, security headers and absent mission backend', async t => {
   const {fetchImpl,calls} = fixture(t);
   const result = await verifyHostedStatic({origin:preview,walletOrigin,fetchImpl});
-  assert.equal(result.files_verified,18);
+  assert.equal(result.files_verified,19);
   assert.equal(result.wallet_blocked_on_preview,true);
   assert.equal(result.mission_backend,'absent (HTTP 404)');
   assert.match(result.index_sha256,/^[a-f0-9]{64}$/);
-  assert.equal(calls.length,20); // /, 18 files, and the read-only 404 check
-  assert.equal(new Set(calls.map(c=>c.url)).size,20);
+  assert.equal(calls.length,21); // /, 19 files, and the read-only 404 check
+  assert.equal(new Set(calls.map(c=>c.url)).size,21);
 });
 
 test('rejects altered bytes, redirects, weakened headers, wrong MIME and an unexpected backend', async t => {

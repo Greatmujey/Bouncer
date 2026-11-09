@@ -7,6 +7,7 @@ use near_sdk::serde_json::{json, Value};
 const PROJECT: &str = "zavodil2.testnet/price-oracle";
 const UUID: &str = "p0000000000000007";
 const HASH: &str = "3585b3890f49748713b43ccb9b0ef4148f317d62f4d598db80fdaffc3f3185a0";
+const MARKET_HASH: &str = "0016209450769d4a03ee802e4dcbca854f14ca54f9185bed03333924e31b5ef6";
 
 fn oracle_source() -> Value {
     json!({"WasmUrl": {"url": format!("https://wasmhub.testnet.fastfs.io/fastfs.testnet/{}.wasm", HASH),
@@ -43,6 +44,7 @@ impl FakeOutlayer {
         assert!(resource_limits.is_object()); assert!(secrets_ref.is_none()); assert!(params.is_none());
         assert_eq!(response_format, "Json");
         let amount = env::attached_deposit().as_yoctonear(); assert!(amount >= 10);
+        let input: Value = near_sdk::serde_json::from_str(&input_data).expect("synthetic JSON input");
         let project = source.get("Project").is_some();
         let resolved = if project {
             assert_eq!(source["Project"]["project_id"], PROJECT); assert_eq!(source["Project"]["version_key"], HASH);
@@ -60,6 +62,14 @@ impl FakeOutlayer {
         let output = if project {
             json!({"success":true, "token_id":"near", "source":"custom", "price_usd":2.75,
                 "timestamp":env::block_timestamp() / 1_000_000_000})
+        } else if input.get("price_usd_micros").is_some() {
+            // Synthetic arithmetic only; this fake does not download or execute WASM.
+            assert_eq!(source["WasmUrl"]["hash"], MARKET_HASH);
+            let price = input["price_usd_micros"].as_u64().expect("price");
+            let quantity = input["quantity"].as_u64().expect("quantity");
+            assert!(price > 0 && price <= 1_000_000_000_000 && quantity > 0 && quantity <= 1000);
+            assert!(input["oracle_tx_hash"].as_str().is_some());
+            json!({"value_usd_micros":price * quantity})
         } else { json!({"random_number":48}) };
         event("execution_completed", json!({"success":true, "sender_id":payer_account_id.clone(), "code_source":resolved,
             "payment_charged":charged.to_string(), "payment_refunded":refund.to_string()}));

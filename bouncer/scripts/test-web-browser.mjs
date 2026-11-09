@@ -37,6 +37,9 @@ try {
     page.on('request', req => { if (!['GET', 'HEAD'].includes(req.method())) writes.push(`${req.method()} ${new URL(req.url()).pathname}`); });
     await page.route('**/api/google-session**', route => route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'Google sign-in is not configured.' }) }));
     await page.goto(url, { waitUntil: 'networkidle' });
+    try {
+      await page.waitForFunction(() => document.title === 'Bouncer — A workspace for autonomous agents', null, { timeout: 10_000 });
+    } catch (error) { console.error('Workspace initialization errors:', errors); throw error; }
     assert.equal(await page.title(), 'Bouncer — A workspace for autonomous agents');
     assert.equal(await page.locator('#welcome-tour').evaluate(el => el.open), false);
     assert.equal(await page.locator('[data-route-view="workspace"]').isVisible(), true);
@@ -79,6 +82,20 @@ try {
     await page.keyboard.press('Escape');
     assert.equal(await picker.evaluate(el => el.open), false);
     assert.equal(await page.evaluate(() => document.activeElement === document.querySelector('.top-connect')), true, 'close returns focus to opener');
+    for (const [id, route] of [['wallet-bootstrap-recovery-open','guardrails'],['wallet-bootstrap-budget-open','guardrails'],
+      ['wallet-bootstrap-candidate-open','guardrails'],['wallet-native-setup-open','guardrails'],
+      ['wallet-native-mission-open','resources'],['wallet-direct-outlayer-open','resources']]) {
+      const control=page.locator(`#${id}`);assert.equal(await control.count(),1);
+      assert.equal(await control.evaluate(node=>node.closest('#wallet-dialog')),null, `${id} must not be inside the wallet picker`);
+      assert.equal(await control.evaluate(node=>node.closest('[data-route-view]')?.dataset.routeView),route);
+    }
+    await page.locator(width <= 740 ? '.mobile-nav a[href="#guardrails"]' : '.side-link[href="#guardrails"]').click();
+    await page.locator('#vault-tools-title').waitFor({state:'visible'});
+    assert.match(await page.locator('#workspace-vault-wallet-state').innerText(),/Connect a supported testnet wallet/i);
+    if (process.env.BOUNCER_SCREENSHOTS) await page.locator('[aria-labelledby="vault-tools-title"]').screenshot({path:path.join(process.env.BOUNCER_SCREENSHOTS,`vault-${width}x${height}.png`)});
+    await page.locator(width <= 740 ? '.mobile-nav a[href="#capabilities"]' : '.side-link[href="#capabilities"]').click();
+    await page.locator('#resource-tools-title').waitFor({state:'visible'});
+    assert.match(await page.locator('[aria-labelledby="resource-tools-title"]').innerText(),/connecting never runs a mission/i);
     await page.locator(width <= 740 ? '.mobile-nav a[href="#connect"]' : '.side-link[href="#connect"]').click();
     await page.locator('[data-route-view="connect"]').waitFor({ state: 'visible' });
     assert.match(await page.locator('.account-card').innerText(), /does not create a Bouncer vault or grant agent spending access/i);
@@ -88,6 +105,67 @@ try {
     await page.locator('#wallet-close').click();
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `horizontal overflow at ${width}x${height}`);
     assert.deepEqual(writes, [], 'browsing without sign-in must not send mutations');
+    assert.deepEqual(errors, []);
+    await page.close();
+  }
+
+  // The layout checks above use reduced motion. Separately check the actual
+  // visual orbit with motion enabled, on desktop and a phone-sized viewport.
+  // Compare positions relative to the orbit so the page entrance and pointer
+  // parallax cannot be mistaken for resource icons moving around the center.
+  for (const [width, height] of [[1440, 900], [390, 844]]) {
+    const mobile = width < 650;
+    const page = await browser.newPage({ viewport: { width, height }, isMobile: mobile, hasTouch: mobile, reducedMotion: 'no-preference' });
+    const errors = [];
+    page.on('pageerror', error => errors.push(error.message));
+    await page.route('**/*', route => route.request().url().startsWith(url) ? route.continue() : route.abort());
+    await page.goto(url, { waitUntil: 'domcontentloaded' });
+    await page.locator('.orbit-carrier').waitFor({ state: 'visible' });
+
+    const offset = () => page.locator('.orbit-node-compute').evaluate(node => {
+      const icon = node.getBoundingClientRect(), orbit = node.closest('.workspace-orbit').getBoundingClientRect();
+      return [icon.x + icon.width / 2 - (orbit.x + orbit.width / 2), icon.y + icon.height / 2 - (orbit.y + orbit.height / 2)];
+    });
+    const waitForMovement = start => page.waitForFunction(([x, y]) => {
+      const node = document.querySelector('.orbit-node-compute');
+      const icon = node.getBoundingClientRect(), orbit = node.closest('.workspace-orbit').getBoundingClientRect();
+      return Math.hypot(icon.x + icon.width / 2 - (orbit.x + orbit.width / 2) - x,
+        icon.y + icon.height / 2 - (orbit.y + orbit.height / 2) - y) > 6;
+    }, start, { timeout: 10_000 });
+
+    assert.equal(await page.evaluate(() => matchMedia('(prefers-reduced-motion: reduce)').matches), false);
+    await waitForMovement(await offset());
+    const orbit = await page.locator('.workspace-orbit').evaluate(root => {
+      const center = root.getBoundingClientRect();
+      const carrier = new DOMMatrix(getComputedStyle(root.querySelector('.orbit-carrier')).transform);
+      const symbol = new DOMMatrix(getComputedStyle(root.querySelector('.orbit-node svg')).transform);
+      const rotation = Math.atan2(carrier.b, carrier.a) + Math.atan2(symbol.b, symbol.a);
+      return {
+        angles: [...root.querySelectorAll('.orbit-node')].map(node => {
+          const box = node.getBoundingClientRect();
+          return Math.atan2(box.y + box.height / 2 - (center.y + center.height / 2), box.x + box.width / 2 - (center.x + center.width / 2));
+        }).sort((a, b) => a - b),
+        symbolRotation: Math.atan2(Math.sin(rotation), Math.cos(rotation)),
+      };
+    });
+    assert.equal(orbit.angles.length, 3);
+    for (const gap of [orbit.angles[1] - orbit.angles[0], orbit.angles[2] - orbit.angles[1], 2 * Math.PI + orbit.angles[0] - orbit.angles[2]]) {
+      assert.ok(Math.abs(gap - 2 * Math.PI / 3) < .08, 'moving resource icons should stay evenly spaced');
+    }
+    assert.ok(Math.abs(orbit.symbolRotation) < .05, 'resource symbols should stay upright while orbiting');
+    await page.locator('[data-workspace-resource="storage"]').click();
+    assert.equal(await page.locator('[data-workspace-visual]').getAttribute('data-resource'), 'storage');
+
+    // Respect the browser/OS preference, including a change while the page is open.
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await page.waitForFunction(() => ['.orbit-carrier', '.orbit-ring-outer', '.orbit-ring-inner', '.orbit-center>span', '.orbit-node svg']
+      .every(selector => getComputedStyle(document.querySelector(selector)).animationName === 'none'));
+    const stopped = await offset();
+    await page.waitForTimeout(400);
+    const still = await offset();
+    assert.ok(Math.hypot(still[0] - stopped[0], still[1] - stopped[1]) < .5, 'reduced motion should stop the orbit');
+    await page.emulateMedia({ reducedMotion: 'no-preference' });
+    await waitForMovement(await offset());
     assert.deepEqual(errors, []);
     await page.close();
   }
@@ -169,14 +247,13 @@ try {
   await page.waitForFunction(() => !document.querySelector('[data-wallet-id="meteor-wallet"]').disabled);
   await page.locator('.top-connect').click();
   await page.locator('[data-wallet-id="meteor-wallet"]').click();
-  await page.waitForFunction(() => document.querySelector('#wallet-status').textContent.includes('browser-test.testnet'));
-  assert.match(await page.locator('#wallet-status').textContent(), /wallet-reported.*no vault or spending access/i);
-  assert.equal(walletCalls.length, 1);
-  assert.match(walletCalls[0], /53a8b39d1aaaf067502c11e49ebb050c75df019e/);
-  await page.locator('.top-connect').click();
-  assert.equal(await page.locator('#wallet-owner-verify').isVisible(), true);
-  await page.locator('#wallet-owner-verify').click();
   await page.waitForFunction(() => document.querySelector('#wallet-account-badge').textContent === 'OWNER VERIFIED');
+  assert.match(await page.locator('#wallet-status').textContent(), /verified.*no vault or spending access/i);
+  assert.equal(await page.locator('#wallet-dialog').evaluate(el => el.open),false, 'successful verification returns to the workspace');
+  assert.equal(walletCalls.length, 2, 'connection and identity prompt each load the pinned sandboxed adapter');
+  assert.ok(walletCalls.every(url => /53a8b39d1aaaf067502c11e49ebb050c75df019e/.test(url)));
+  await page.locator('.top-connect').click();
+  assert.equal(await page.locator('#wallet-owner-verify').isVisible(), false, 'no verify button after success');
   assert.match(await page.locator('#wallet-account-warning').textContent(), /does not approve transactions.*spending access/);
   assert.equal(ownerRpc.length, 1);
   assert.deepEqual(ownerRpc[0].params, { request_type: 'view_access_key', finality: 'final', account_id: 'browser-test.testnet', public_key: publicKey });
@@ -213,6 +290,12 @@ try {
         window.opener.postMessage({type:'connected',accountId:'intear-synthetic.testnet',walletUrl:'https://wallet.intear.tech'}, '*');
       });
     </script>` });
+    if (pathname === '/sign-message') return route.fulfill({ status: 200, contentType: 'text/html', body: `<script>
+      window.opener.postMessage({type:'ready'}, '*');
+      window.addEventListener('message', event => {
+        if (event.data.type === 'signMessage') window.opener.postMessage({type:'error',message:'User rejected the signature'}, '*');
+      });
+    </script>` });
     return route.fulfill({ status: 404, body: 'Blocked in synthetic test' });
   });
   await intearPage.goto(url, { waitUntil: 'networkidle' });
@@ -226,13 +309,15 @@ try {
   // Programmatic activation avoids flaky synthetic pointer events in nested
   // sandbox frames; this test does not claim real-device touch was verified.
   await sandbox.frameLocator('iframe').locator('.card-title').getByText('Web', { exact: true }).locator('..').evaluate(el => el.click());
-  await intearPage.waitForFunction(() => document.querySelector('#wallet-status').textContent.includes('intear-synthetic.testnet'), null, { timeout: 20000 });
+  await intearPage.waitForFunction(() => document.querySelector('#wallet-owner-status').textContent.includes('cancelled'), null, { timeout: 20000 });
   const intearPayload = await intearPage.evaluate(() => window.__intearTestPayload);
   assert.equal(intearPayload.networkId, 'testnet');
   assert.equal(intearPayload.contractId, undefined);
   assert.equal(JSON.parse(intearPayload.message).functionCallPublicKey, undefined);
   assert.ok(intearCalls.includes('/connect'));
-  await intearPage.locator('.top-connect').click();
+  assert.ok(intearCalls.includes('/sign-message'));
+  assert.equal(await intearPage.locator('#wallet-account-badge').textContent(),'CONNECTED');
+  assert.equal(await intearPage.locator('#wallet-owner-verify').isVisible(),true, 'a cancelled identity message remains retryable');
   await intearPage.locator('#wallet-disconnect').click();
   await intearPage.waitForFunction(() => document.querySelector('#wallet-status').textContent.includes('Wallet disconnected.'));
   assert.deepEqual(intearErrors, []);

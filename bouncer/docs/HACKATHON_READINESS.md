@@ -9,17 +9,20 @@ Status updated on November 7, 2026. Re-read the [official live rules](https://ne
 - The default contract and separate V11 feature are built and unit-tested in CI. V11 has also been exercised on a [disposable nearcore chain with a mock FT](V11_SANDBOX.md), including the 1-yocto guard and buyer recovery. It is **not deployed on live testnet or independently audited**; a version marker is not proof of deployed code. Payment settlement alone is not delivery.
 - Bouncer has **not** verified useful independent FT-paid fulfillment. Svalin observations are a read-only lead: no real checkout, payment, activation or paid report has been performed. Its actual buyer and original-hash recovery passed on a local nearcore chain with a fake seller; an optional separate test uses pinned independent seller **source** with a simulated chain/indexer and sample data. Neither establishes seller attribution. A [separate Buffer code comparison](https://github.com/Greatmujey/Bouncer/actions/runs/42277687212) matched the pinned public source build to its deployed testnet code hash at one trusted-RPC FINAL block; it was not a payment, delivery or audit. The V11 owner setup runner also passed in the isolated sandbox, but no V11 setup has been used for a live deployment or Circle funding. MultiAgency's exact-FT path has synthetic tests but no completed live purchase or task.
 
-## Track fit: evidence, not six claims of completion
+## Single-track focus: AI Security & Defense
 
-The official [FAQ](https://nearhackathon.com/) explicitly says a project may
-select **every track it fits**, with **one submission per project**. The
-[submission contract](https://nearhackathon.com/HACKATHON.md) likewise accepts
-one or more track IDs. Although the website's getting-started section says
-“choose a track,” the FAQ explicitly clarifies that multiple tracks may be
-selected. Recheck the live rules before submitting. No particular partner
-integration is mandatory (Q-011).
+The owner has chosen **AI Security & Defense** (`security`) as the single active
+hackathon target. Bouncer remains a resource agent for compute, data and storage;
+the policy-controlled vault is its security foundation. The official rules allow
+one project submission with multiple tracks, but that option is not this plan.
+No submission or public post is authorized by this choice.
 
-The entrant must select the tracks. `security` (policy, scoped keys and owner guard) and `agents` (resource procurement) are the clearest current fits. `business` and `realworld` are early prototypes, not proven business operations or real-money rails. `defi` has historical testnet swap work but no finished guarded swap/output-accounting flow. `swarms` is an aspiration, not a demonstrated multi-agent economy. See the six-track table in the README and select additional tracks only if the completed work actually supports them.
+The immediate path is independent recovery and original retention; a separately
+approved fresh V14 testnet vault; a recovery-only hosted backend; a bounded
+model-driven resource mission; and receipt, readback and denied-action proof.
+An independent audit and real-device recovery remain unverified. Keep FT
+support and historical recovery records; defer swarm, DeFi and marketplace
+expansion rather than treating them as additional track targets.
 
 ## Public repository — security and publication review remains open
 
@@ -48,5 +51,5 @@ Existing private-repository and first-attempt CI gates do not retroactively prot
 - [ ] Complete the outstanding security, privacy and rights review of the now-public repository and Actions history; get explicit approval before any additional publication.
 - [ ] Keep the hosted testnet site available; wallet connection is identity-only and the page is not a live purchasing dashboard. Verify real wallet sign-in end to end and preserve the shared-origin restrictions.
 - [ ] After the full intended flow works, the human records and posts the public X demo: state it was built at NEAR HACKATHON, include `@NEARProtocol` and `#NEARHackathon`, and attach the appropriate video or screenshots. A local-only demo requires video under the current rules. Do not post on the human's behalf.
-- [ ] The human supplies the project/team/contact details, track choices, entrant-controlled **mainnet** payout account ID, public repo and demo-post URLs, description, and the required consent. Never request or store a wallet seed or private key.
+- [ ] The human supplies the project/team/contact details, the confirmed `security` track, entrant-controlled **mainnet** payout account ID, public repo and demo-post URLs, description, and the required consent. Never request or store a wallet seed or private key.
 - [ ] Re-read the rules, print the exact submission payload, and wait for explicit approval before sending it. Generate one request ID and reuse it on any permitted retry; never commit the payload or submit twice.

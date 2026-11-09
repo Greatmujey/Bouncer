@@ -15,13 +15,16 @@ account**. Site updates reach production only after review and deployment.
 
 Wallet sessions are restricted to approved dedicated, top-level origins, with
 GitHub Pages and shared guest origins blocked. The curated executors are
-sandboxed and their pinned bytes are SHA-256 verified before use. NEAR Mobile
-and CLI use fresh, off-chain login messages checked against testnet; other
-named wallets initially report an account without independently proving control.
-For named accounts on adapters that support NEP-413 message signing, the optional
-**Verify account in wallet** button requests a fresh off-chain signature and
-checks its public key for Full Access using a read-only final testnet RPC query.
-It verifies control only for the current browser session; it is not server
+sandboxed and their pinned bytes are SHA-256 verified before use. Immediately
+following an explicit connection, named testnet wallets that support NEP-413
+are asked for an off-chain identity signature. The browser verifies it and
+checks the public key for Full Access using a read-only final testnet RPC query.
+NEAR Mobile and CLI already sign a fresh login message; it is reused only after
+that same signature and key check, avoiding a second prompt. If verification is
+cancelled, blocked or unavailable, the wallet remains connected but unverified
+and the picker offers a retry. The button disappears after success. A restored
+session never triggers an unsolicited signature; the user can verify it from the
+picker. Verification lasts only for that browser session; it is not server
 identity, transaction approval, a vault, or agent spending authority. Account
 entry and WalletConnect are view/account-only; the Ethereum adapter does not
 support this message verification and its own onboarding may request an approved
@@ -29,11 +32,39 @@ testnet setup transaction. Wallet extensions, provider availability and
 real-device sign-in still need end-to-end testing; unit and mocked-browser tests
 are not live logins. Never enter a seed phrase into Bouncer.
 
+Vault review, setup and encrypted recovery live in **Guardrails**; mission and
+direct-provider controls live in **Resources**. Their existing origin, owner,
+readiness and explicit-action gates remain. Connecting or verifying does not
+run a mission or enroll a recovery checkpoint. For any existing or uncertain
+setup, recover the retained copy and original instead of preparing or enrolling
+another candidate.
+
 WalletConnect requests only `near_getAccounts` on `near:testnet` and rejects
 broader permissions. Pairing keys remain in the browser; a limited fallback
 may relay encrypted messages through Bouncer's server. Pairing QR codes contain
 sensitive information: do not publish or reuse a photographed code. Cancel and
 generate a fresh one if it has been shared.
+
+## Vercel deployment policy
+
+`web/vercel.json` and `testnet-relay/vercel.json` set
+`git.deploymentEnabled` to `false`. On branches containing those files,
+Git pushes should not automatically create production or preview deployments
+for either project. The intent is to use Vercel only for a deliberately chosen,
+reviewed release, not for every commit. CLI/API/dashboard deployments and deploy
+hooks are separate triggers and must not be launched automatically; neither
+this setting nor repository tests restricts another Vercel account holder.
+
+This is **branch-scoped source configuration**, not a dashboard-wide switch:
+`main` or an older branch without the change can still trigger deployments.
+Do not claim account-wide protection until the configuration is merged to the
+relevant branches or the owner disconnects the Git integration in both Vercel
+project settings. Disconnecting affects Git-sourced releases; choose a tested
+manual upload/reconnect process first. Other projects share the team's quota.
+Don't use an Ignored Build Step as a quota guard: Vercel can count canceled
+builds. Keep the live site unchanged until a deliberate deployment is approved
+and the quota is available; an older live site does not prove new deployments
+are currently allowed.
 
 ## Configure Google Identity Services
 
@@ -119,7 +150,153 @@ Ledger device, Google login or transaction is tested. `google-session.test.mjs`
 uses locally generated RSA keys to test signatures, claims, nonce, CSRF,
 expiry, restoration, sign-out and key rotation.
 
-`stage-public-web.mjs` publishes only the 16 allowlisted website files. Vercel
-separately detects `web/api/google-session.mjs` and `web/api/wc-relay.mjs`;
-neither function is published as a static source file. The public URL is
+When this revision is deployed, after verifying `great_mujey.testnet`, the
+Vercel and Railway workspaces can prepare an encrypted **local setup candidate** for the illustrative 6 test
+NEAR vault funding. The browser generates a vault-only temporary key and a
+checkpoint capability, encrypts them with a separate passphrase, and lets the
+user save/re-import the file with a separately recorded SHA-256 backup ID.
+It lazily fetches the public, non-executable `v14-bootstrap-artifact-v1.json`
+and checks both compressed and inflated artifact hashes; this is not an audit. Preparation
+and checking request no additional signature, enrollment or transaction. The
+file contains no original transaction history and is not an owner-attested
+recovery export. Verifying it does not establish that a separate backup exists,
+that any history is latest, or that the vault/account is absent on-chain. A
+mismatched owner key is reported and requires manual reconciliation. Never
+repeat an uncertain setup. If installed later, the temporary key can control
+the vault until its deletion is final; a lost passphrase/file can strand funds,
+and a compromised browser can steal unlocked secrets. This feature is not a
+live setup transaction path or proof of a real-phone recovery.
+
+A separate enrollment control appears only when the default-off checkpoint
+reports enabled. It rechecks the saved file, backup ID, passphrase, pinned
+artifact and current owner key, then asks for one owner identity signature; it
+sends only the encrypted kit and public review, not the passphrase or unlocked
+keys. The owner message check reads the owner's current testnet key, but it
+never requests a NEAR transaction. Before the POST it requires a
+persistent same-origin browser stop marker; a lost or malformed acknowledgement
+stops further attempts in that browser and must be reconciled by recovery, not
+by re-enrolling. When that marker exists, generating a replacement candidate
+is also disabled in that browser, but checking the saved file remains available.
+This marker is not a cross-tab lock and does not coordinate other browsers or
+devices. An acknowledgement is not proof of a separate restore, latest original
+history, vault state or final receipts, and does not authorize setup.
+The endpoint is default-off in code; it was separately enabled for a
+recovery-only real-owner test. Enabling it alone does not establish enrollment,
+an independent restore or transaction readiness.
+
+Recovery first offers a check of the **original saved preparation file** against
+an existing checkpoint. It verifies the separately recorded backup ID, the
+passphrase, the pinned plan and the current owner key locally before asking for
+one read-only owner message. It then verifies the enrollment attestation and
+compares the exact encrypted kit and public review. The file, backup ID,
+passphrase, temporary key and checkpoint capability are not sent in the read.
+A match does not authenticate transaction history, prove another backup or the
+latest head, check a vault or receipts, or authorize a transaction. A changed
+owner key stops before the read message; mismatch, unavailable or uncertain
+responses require reconciliation rather than re-enrollment. The comparison does
+not replace an imported or unlocked recovery export.
+
+The read-only funding review also checks the verified session's specific
+message-signing key at the same FINAL block when a verified wallet is connected.
+A missing, restricted or unrepresentable key is a blocker. This does not prove
+the wallet will use that key for a later transaction or establish backup,
+receipt, latest-head or spending approval. A separate source-only create
+preflight rebuilds the enrolled plan and checks that exact owner key, funding,
+gas and vault absence together; it is not connected to a live wallet prompt.
+
+The source-only temporary-bootstrap original retainer records a returned wallet
+hash in both existing witness copies, or leaves a one-shot claim if the wallet
+result is unknown. A hash later found in wallet history must pass the exact
+FINAL create receipt and fresh temporary-key check before being retained; it
+never opens or repeats the wallet. A wallet-selected transaction key may differ
+from the verified message key: the verifier requires both to be current owner
+FullAccess keys at the same FINAL block and checks the actual transaction and
+receipt signer consistently. For the later locally signed deployment it
+checks the exact pinned actions, transaction hash and signature before
+retaining the hash in both copies. These source-only pieces are not wired to
+the live wallet; neither matching copies nor a hash proves an independent backup
+or a latest head.
+
+The new one-shot create coordinator joins the reviewed actions and cost
+snapshot, fresh exact-key preflights, two-copy claim, one wallet call and
+original retention. It stops if prices increase beyond the reviewed estimates,
+the account or session changes, or either claim is uncertain. A lost wallet
+response stays claimed and is recovered by the original, never another prompt.
+Its public entry point **always blocks invocation**: a real independent restore
+and latest-head gate is not implemented. An explicitly isolated sandbox uses a
+simulated gate and disposable wallet; this is not evidence to open the live
+gate. Estimates cannot guarantee future network charges and the wallet may
+choose a different signing key.
+
+A Railway-volume recovery anchor is implemented with the route **off by
+default**; the state of any particular deployment cannot be inferred from that
+default. It can retain the same owner-attested encrypted kit and append-only
+original history with a separate capability derived in the browser from the
+temporary key; it never receives the passphrase, the Supabase capability or a
+wallet key. Fresh owner-message verification can read an existing encrypted
+backup without already having the temporary key. An exclusive, fsynced write
+marker fences overlapping processes; an interrupted write leaves a stop marker
+for manual reconciliation, never automatic repair.
+
+The hosted standby now **rejects initialization and append requests** because a
+previous initialization may have been attempted; there is no environment switch
+to reopen writes. It does not remove or reset records. Owner-message and
+capability-authenticated reads remain available when the route is enabled, and
+the workspace still supports local recovery-file exports; the Railway save
+button is absent. A failed restore is not proof of absence. When the recovery
+route is enabled, **Check Railway copy status** uses a fresh owner-signed,
+non-transaction message to return only a coarse current-volume observation:
+verified record, no record on the current mount, or unavailable/locked. It does
+not return the encrypted kit, use a passphrase, write anything, remove locks, or
+authorize a save. Even a missing current record cannot establish that an earlier
+save did not happen. This status does not prove a successful restore, independent
+administration or the latest head. The read-only `recovery_anchor_writes_enabled`
+diagnostic describes this code configuration, not independent verification of
+the volume or its history. Tests of local volumes and HTTP are synthetic. Railway durability, a real independent restore and an
+independently retained latest head still require verification; two matching
+service copies do not prove freshness against rollback, a compromised operator
+or a shared failure. Enabling the recovery route does not enable transactions
+or missions.
+
+A narrowly scoped diagnostic on the existing Railway standby service checks the
+`/data` volume using a separate non-secret random marker, never a checkpoint or
+wallet key. Its first deployment creates and fsyncs the marker; the follow-up
+is observation-only and must not recreate a missing marker. A matching public
+fingerprint across those deployments shows only that this small marker survived
+that restart. It does not prove crash durability, backup restore, operator
+independence, an untampered latest head or permission to transact. The live
+standby at commit `9de5d75` reported `OBSERVED` with public test-marker
+fingerprint `ddedbee9176926e6a7adcb3e4d10376663920a77eff8338b02f675432bce7b81`.
+After deploying `791215f`, the observation-only phase reported the same
+fingerprint and no transaction authorization. This is a real small-marker
+restart check, not a real encrypted-kit restore or a latest-head proof.
+
+The source-only temporary-bootstrap completion verifier can check a separately
+retained deployment original against its exact reviewed actions, a FINAL
+outcome, and one fresh block's V14 code, contract owner and keyless vault state.
+If nearcore omits a self-transaction's local root receipt body, the result says
+so; it never invents that body. It trusts the RPC and does not prove independent
+original retention, latest history, consent, or that no other transaction is in
+flight. It does not sign, broadcast or authorize a transaction and is not wired
+into the live workspace. Actual setup and real-device recovery remain unverified.
+
+Recovery also permits a user to import and locally MAC-check a saved encrypted
+recovery export, then compare that exact snapshot with an owner-signed online
+read. The comparison reports a match, a file ahead of the service, claimed
+additional online events, or divergent/different setups. Online-only extra
+events are not authenticated by an older file; any disagreement requires a
+stop and reconciliation. Even a match cannot prove the file is independently
+stored, either snapshot is latest, or receipts are final, and it does not
+permit a transaction. The UI clears the prior comparison if another file is
+selected or the unlock fails. These checks have synthetic browser and database
+coverage, not a real-device restore.
+
+`stage-public-web.mjs` publishes only the 19 allowlisted website files,
+including that public, lazily loaded artifact. Vercel separately detects the
+Google and WalletConnect functions and fixed-action mission/read-only setup
+proxy functions under `web/api/native-mission/`; none is a static source
+file. The mission proxies are disabled unless explicitly configured, and do not
+provide a backend or authorize spending by themselves. The experimental
+Vercel/Railway split and its unverified hosting limits are described in
+[NATIVE_MISSIONS.md](NATIVE_MISSIONS.md). The public URL is
 https://bouncer-near.vercel.app/. The site and functions remain unaudited.

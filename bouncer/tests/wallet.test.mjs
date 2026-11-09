@@ -1,9 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createHash, webcrypto } from 'node:crypto';
+import { createHash, createHmac, webcrypto } from 'node:crypto';
 import { KeyPair } from '@near-js/crypto';
 import { IDBFactory } from 'fake-indexeddb';
 import { nep413Payload } from '../web-src/cli-login.mjs';
+import { buildV14TemporaryBootstrapPlan } from '../web-src/v14-bootstrap-plan.mjs';
+import { sealV14BootstrapRecoveryKit } from '../web-src/v14-bootstrap-recovery-kit.mjs';
+import { prepareBootstrapEnrollment } from '../web-src/v14-bootstrap-checkpoint.mjs';
 import { setupAuthAction } from '../web-src/witnessed-setup-auth.mjs';
 import fs from 'node:fs';
 import { initWallet as bootWallet, walletOriginAllowed, nativeSetupOriginAllowed } from '../web-src/wallet-core.mjs';
@@ -34,13 +37,13 @@ class FakeSandboxWallet {
   async signMessage(params) {
     this.config.messageRequests ??= [];
     this.config.messageRequests.push(params);
-    if (this.config.fail) throw new Error('cancelled');
+    if (this.config.fail || this.config.messageFail) throw new Error('cancelled');
     if (this.config.messageWait) await this.config.messageWait;
     if (this.config.signConnectedMessage) {
       const pair = this.config.cliKey || KeyPair.fromRandom('ed25519');
       const hash = createHash('sha256').update(nep413Payload(params)).digest();
       const publicKey = pair.getPublicKey().toString();
-      return { accountId: this.config.account || 'alice.testnet', publicKey,
+      return { accountId: this.config.account || (this.manifest.id === 'near-mobile' ? 'mobile.testnet' : 'alice.testnet'), publicKey,
         signature: Buffer.from(pair.sign(hash).signature).toString('base64') };
     }
     return this.config.messageResult || { accountId: 'mobile.testnet', publicKey: 'ed25519:public', signature: 'test-signature' };
@@ -48,8 +51,12 @@ class FakeSandboxWallet {
 }
 const initWallet = params => bootWallet({ ...params, SandboxWallet: FakeSandboxWallet });
 class Element {
-  constructor(dataset = {}) { this.listeners = {}; this.dataset = dataset; this.hidden = false; this.disabled = false; this.textContent = ''; this.open = false; this.attributes = {}; this.focused = false; }
+  constructor(dataset = {}) { this.listeners = {}; this.dataset = dataset; this.hidden = false; this.disabled = false; this.textContent = ''; this.open = false; this.attributes = {}; this.focused = false; this.children = []; }
   addEventListener(event, callback) { this.listeners[event] = callback; }
+  replaceChildren(...children) { this.children = children; }
+  append(...children) { this.children.push(...children); }
+  get childElementCount() { return this.children.length; }
+  remove() {}
   setAttribute(name, value) { this.attributes[name] = value; }
   removeAttribute(name) { delete this.attributes[name]; }
   getContext() { return { clearRect: () => { this.renderedCanvas = null; }, drawImage: canvas => { this.renderedCanvas = canvas; } }; }
@@ -62,7 +69,18 @@ class Element {
 function fakeBrowser(url, { top = true, storageFails = false, approved = '' } = {}) {
   const ids = ['wallet-connect', 'wallet-disconnect', 'wallet-status', 'wallet-open-site', 'wallet-dialog', 'wallet-close', 'wallet-options', 'wallet-dialog-status', 'wallet-title-text', 'wallet-dialog-description', 'wallet-banner', 'wallet-safety',
     'wallet-account-entry', 'wallet-account-form', 'wallet-account-id', 'wallet-account-error', 'wallet-account-back', 'wallet-cli-verify',
-    'wallet-account-view', 'wallet-account-name', 'wallet-account-badge', 'wallet-account-warning', 'wallet-account-near', 'wallet-account-usdc', 'wallet-account-balance-status', 'wallet-account-use-wallet', 'wallet-account-refresh', 'wallet-owner-verify', 'wallet-owner-status',
+    'wallet-account-view', 'wallet-account-name', 'wallet-account-badge', 'wallet-account-warning', 'wallet-account-near', 'wallet-account-usdc', 'wallet-account-balance-status', 'wallet-account-use-wallet', 'wallet-account-refresh', 'wallet-owner-verify', 'wallet-owner-status', 'workspace-vault-wallet-state', 'workspace-resource-wallet-state',
+    'wallet-bootstrap-budget-open', 'wallet-bootstrap-budget-panel', 'wallet-bootstrap-budget-refresh', 'wallet-bootstrap-budget-status', 'wallet-bootstrap-budget-result',
+    'wallet-bootstrap-candidate-open', 'wallet-bootstrap-candidate-panel', 'wallet-bootstrap-candidate-passphrase', 'wallet-bootstrap-candidate-confirm',
+    'wallet-bootstrap-candidate-create', 'wallet-bootstrap-candidate-status', 'wallet-bootstrap-candidate-saved', 'wallet-bootstrap-candidate-id', 'wallet-bootstrap-candidate-details',
+    'wallet-bootstrap-candidate-copy', 'wallet-bootstrap-candidate-download', 'wallet-bootstrap-candidate-file', 'wallet-bootstrap-candidate-expected',
+    'wallet-bootstrap-candidate-unlock', 'wallet-bootstrap-candidate-verify', 'wallet-bootstrap-candidate-check-status',
+    'wallet-bootstrap-candidate-enrollment', 'wallet-bootstrap-candidate-enroll', 'wallet-bootstrap-candidate-enroll-status',
+    'wallet-bootstrap-recovery-open', 'wallet-bootstrap-recovery-panel', 'wallet-bootstrap-match-file', 'wallet-bootstrap-match-id',
+    'wallet-bootstrap-match-passphrase', 'wallet-bootstrap-match-check', 'wallet-bootstrap-match-status', 'wallet-bootstrap-recovery-read', 'wallet-bootstrap-recovery-file',
+    'wallet-bootstrap-recovery-import', 'wallet-bootstrap-recovery-status', 'wallet-bootstrap-recovery-originals', 'wallet-bootstrap-recovery-backup',
+    'wallet-bootstrap-recovery-export', 'wallet-bootstrap-recovery-passphrase', 'wallet-bootstrap-recovery-unlock',
+    'wallet-bootstrap-recovery-compare', 'wallet-bootstrap-recovery-compare-status',
     'wallet-direct-outlayer-open', 'wallet-direct-outlayer-panel', 'wallet-direct-outlayer-status', 'wallet-direct-outlayer-hash',
     'wallet-direct-outlayer-result', 'wallet-direct-outlayer-review', 'wallet-direct-outlayer-send', 'wallet-direct-outlayer-check',
     'wallet-direct-outlayer-recover', 'wallet-direct-outlayer-original', 'wallet-direct-outlayer-recover-original',
@@ -102,7 +120,11 @@ function connectorClass(config = {}) {
       this.db = {}; this.whenManifestLoaded = Promise.resolve();
     }
     on(event, fn) { this.events[event] = fn; }
-    async getConnectedWallet() { throw new Error('not connected'); }
+    async getConnectedWallet() {
+      if (config.restoreWallet) return {wallet:this.wallets.find(w => w.manifest.id === config.restoreWallet),
+        accounts:[{accountId:config.account || 'alice.testnet'}]};
+      throw new Error('not connected');
+    }
     async connect(input) {
       config.input = input;
       if (config.browser) config.dialogWasOpen = config.browser.nodes['wallet-dialog'].open;
@@ -202,8 +224,8 @@ test('shared guest, GitHub Pages and embedded preview never instantiate the wall
   }
 });
 
-test('connects and disconnects a wallet-reported account without requesting a key or signature', async () => {
-  const browser = fakeBrowser('http://127.0.0.1:4173/'), config = { browser };
+test('explicit connection requests only a fresh identity signature and disconnect clears the session', async () => {
+  const browser = fakeBrowser('http://127.0.0.1:4173/'), config = { browser, signConnectedMessage:true };
   await initWallet({ window: browser.win, document: browser.doc, NearConnector: connectorClass(config) });
   assert.equal(config.options.network, 'testnet');
   assert.equal(config.options.features.testnet, true);
@@ -223,14 +245,17 @@ test('connects and disconnects a wallet-reported account without requesting a ke
   await browser.options[0].click();
   assert.deepEqual(config.input, { walletId: 'meteor-wallet' });
   assert.equal(config.dialogWasOpen, false, 'wallet iframe is not blocked behind our dialog');
-  assert.match(browser.nodes['wallet-status'].textContent, /Connected: alice\.testnet \(wallet-reported\)/);
+  assert.match(browser.nodes['wallet-status'].textContent, /Verified testnet wallet control for alice\.testnet/);
+  assert.equal(config.messageRequests.length,1);
+  assert.equal(config.transactionRequests,undefined);
+  assert.equal(browser.nodes['wallet-owner-verify'].hidden,true);
   assert.equal(browser.nodes['wallet-options'].hidden, true);
   assert.equal(browser.nodes['wallet-disconnect'].hidden, false);
   assert.deepEqual(browser.labels.map(node => node.textContent), ['Connected', 'Connected', 'Connected']);
   assert.ok(browser.openers.every(button => button.dataset.walletState === 'connected'));
   assert.ok(browser.openers.every(button => button.attributes['aria-label'] === 'Connected: alice.testnet. Manage accounts'));
   assert.equal(browser.nodes['wallet-title-text'].textContent, 'Wallet connected');
-  assert.match(browser.nodes['wallet-dialog-description'].textContent, /connected/);
+  assert.match(browser.nodes['wallet-dialog-description'].textContent, /identity is verified/);
   await browser.nodes['wallet-connect'].click();
   await browser.nodes['wallet-disconnect'].click();
   assert.equal(config.disconnected, 'meteor-wallet');
@@ -301,29 +326,393 @@ test('direct preview review is read-only and one explicit tap invokes only the f
   assert.equal(config.transactionRequests.length,1);
 });
 
-test('connected phone-wallet accounts can verify a fresh identity message without approving spending', async () => {
+test('vault budget review uses public testnet reads and adds no signature or transaction', async () => {
+  const origin='https://bouncer-production-6df1.up.railway.app',browser=fakeBrowser(`${origin}/workspace`,{approved:origin});
+  const config={account:'great_mujey.testnet',signConnectedMessage:true,cliKey:KeyPair.fromRandom('ed25519')},
+    originalFetch=browser.win.fetch,block=encodeBase58(Buffer.alloc(32,17));
+  const sessionKey=String(config.cliKey.getPublicKey()),otherKey=String(KeyPair.fromRandom('ed25519').getPublicKey());
+  let sessionKeyPresent=true;
+  const fee={send_sir:100000000,send_not_sir:100000000,execution:100000000};
+  const actions={create_account_cost:fee,transfer_cost:fee,add_key_cost:{full_access_cost:fee},deploy_contract_cost:fee,
+    deploy_contract_cost_per_byte:fee,function_call_cost:fee,function_call_cost_per_byte:fee,delete_key_cost:fee};
+  let reads=0;
+  browser.win.fetch=async(url,options={})=>{
+    if(url!=='https://rpc.testnet.near.org')return originalFetch(url,options);
+    reads++;const req=JSON.parse(options.body),base={jsonrpc:'2.0',id:req.id};let result;
+    if(req.method==='status')result={chain_id:'testnet'};
+    else if(req.method==='block')result={header:{hash:block,height:123,timestamp_nanosec:String(BigInt(Date.now())*1000000n)}};
+    else if(req.method==='EXPERIMENTAL_protocol_config')result={chain_id:'testnet',protocol_version:90,runtime_config:{
+      storage_amount_per_byte:'10000000000000000000',min_gas_purchase_price:'1000000000',account_creation_charge:'7000000000000000000000',
+      transaction_costs:{action_receipt_creation_config:fee,action_creation_config:actions}}};
+    else if(req.method==='gas_price')result={gas_price:'100000000'};
+    else if(req.method==='query' && req.params.account_id==='native.great_mujey.testnet')return Response.json({...base,error:{cause:{name:'UNKNOWN_ACCOUNT',
+      info:{requested_account_id:req.params.account_id,block_hash:block}}}});
+    else if(req.method==='query' && req.params.request_type==='view_account')result={block_hash:block,code_hash:'11111111111111111111111111111111',
+      amount:String(26n*10n**24n),storage_usage:264};
+    else if(req.method==='query' && req.params.request_type==='view_access_key_list')result={block_hash:block,
+      keys:[{public_key:sessionKeyPresent?sessionKey:otherKey,access_key:{permission:'FullAccess',nonce:7}}]};
+    else throw Error('unexpected request');
+    return Response.json({...base,result});
+  };
+  await initWallet({window:browser.win,document:browser.doc,NearConnector:connectorClass(config)});
+  await browser.nodes['wallet-connect'].click();await browser.options[0].click();
+  const open=browser.nodes['wallet-bootstrap-budget-open'];assert.equal(open.hidden,false);
+  const signaturesBeforeReview = config.messageRequests.length;
+  await open.click();await browser.nodes['wallet-bootstrap-budget-refresh'].click();
+  assert.equal(reads,7);assert.match(browser.nodes['wallet-bootstrap-budget-result'].textContent,/Example vault transfer: 6 test NEAR \(not approved\)/);
+  assert.match(browser.nodes['wallet-bootstrap-budget-result'].textContent,/Deploy gas upfront/);
+  assert.match(browser.nodes['wallet-bootstrap-budget-result'].textContent,/message-signing key: current FullAccess at this block/);
+  assert.match(browser.nodes['wallet-bootstrap-budget-result'].textContent,/wallet may choose a different key/);
+  assert.match(browser.nodes['wallet-bootstrap-budget-result'].textContent,/Independent recovery and owner approval are still required/);
+  assert.match(browser.nodes['wallet-bootstrap-budget-status'].textContent,/No transaction was authorized or sent/);
+  sessionKeyPresent=false;await browser.nodes['wallet-bootstrap-budget-refresh'].click();
+  assert.match(browser.nodes['wallet-bootstrap-budget-result'].textContent,/BLOCKED:/);
+  assert.match(browser.nodes['wallet-bootstrap-budget-result'].textContent,/message-signing key is not a current FullAccess key/);
+  assert.equal(config.messageRequests.length,signaturesBeforeReview);assert.equal(config.transactionRequests,undefined);
+  await browser.nodes['wallet-disconnect'].click();assert.equal(open.hidden,true);
+});
+
+test('explicit phone-wallet connections automatically verify identity, hide retry and never approve spending', async () => {
   for (const id of ['meteor-wallet', 'intear-wallet', 'nightly-wallet', 'ledger']) {
     const browser = fakeBrowser('http://127.0.0.1:4173/'), config = { account: 'great_mujey.testnet', signConnectedMessage: true };
     await initWallet({ window: browser.win, document: browser.doc, NearConnector: connectorClass(config) });
     await browser.nodes['wallet-connect'].click();
     await browser.options.find(option => option.dataset.walletId === id).click();
-    assert.equal(browser.nodes['wallet-owner-verify'].hidden, false);
-    assert.equal(browser.nodes['wallet-account-badge'].textContent, 'CONNECTED');
-    assert.equal(config.messageRequests, undefined, 'connecting alone does not sign a message');
-    await browser.nodes['wallet-connect'].click();
-    await browser.nodes['wallet-owner-verify'].click();
-    assert.equal(config.messageRequests.length, 1);
+    assert.equal(config.messageRequests.length, 1, 'explicit connection starts one identity message');
     assert.equal(config.messageRequests[0].signerId, 'great_mujey.testnet');
     assert.equal(config.messageRequests[0].network, 'testnet');
+    assert.match(config.messageRequests[0].message, /does not approve a transaction/);
+    assert.equal(config.transactionRequests, undefined);
     assert.equal(browser.nodes['wallet-account-badge'].textContent, 'OWNER VERIFIED');
+    assert.equal(browser.nodes['wallet-owner-verify'].hidden, true);
     assert.match(browser.nodes['wallet-account-warning'].textContent, /does not approve transactions.*spending access/);
     assert.match(browser.nodes['wallet-owner-status'].textContent, /not spending permission/);
-    assert.equal(browser.nodes['wallet-dialog'].open, true);
+    assert.match(browser.nodes['workspace-vault-wallet-state'].textContent, /Identity verified for great_mujey\.testnet/);
+    assert.equal(browser.nodes['wallet-dialog'].open, false, 'success returns to the workspace');
+    await browser.nodes['wallet-connect'].click();
     await browser.nodes['wallet-disconnect'].click();
     assert.equal(browser.nodes['wallet-owner-verify'].hidden, true);
     assert.equal(browser.nodes['wallet-owner-status'].hidden, true);
     assert.equal(browser.nodes['wallet-owner-status'].textContent, '');
+    assert.match(browser.nodes['workspace-resource-wallet-state'].textContent, /Connect a supported testnet wallet/);
   }
+});
+
+test('local preparation saves and rechecks an encrypted candidate without an additional signature or transaction', async () => {
+  const origin='https://bouncer-production-6df1.up.railway.app';
+  const browser=fakeBrowser(`${origin}/workspace`,{approved:origin});
+  const config={account:'great_mujey.testnet',signConnectedMessage:true,cliKey:KeyPair.fromRandom('ed25519')};
+  const bytes=new Uint8Array(fs.readFileSync(new URL('../web/artifacts/v14-research.deflate',import.meta.url)));
+  let downloaded;
+  browser.win.Blob=Blob;browser.win.URL={createObjectURL(blob){downloaded=blob;return 'blob:synthetic'},revokeObjectURL(){}};
+  browser.doc.body.append=()=>{};
+  await initWallet({window:browser.win,document:browser.doc,NearConnector:connectorClass(config),loadBootstrapArtifact:async()=>bytes.slice()});
+  const n=browser.nodes;assert.equal(n['wallet-bootstrap-candidate-open'].hidden,true);
+  await n['wallet-connect'].click();await browser.options[0].click();
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(n['wallet-bootstrap-candidate-open'].hidden,false);
+  await n['wallet-bootstrap-candidate-open'].click();
+  assert.equal(n['wallet-bootstrap-candidate-enrollment'].hidden,true, 'offline checkpoint must not offer enrollment');
+  const passphrase='synthetic only long recovery passphrase';
+  n['wallet-bootstrap-candidate-passphrase'].value=passphrase;
+  n['wallet-bootstrap-candidate-confirm'].value='different passphrase';
+  await n['wallet-bootstrap-candidate-create'].click();
+  assert.match(n['wallet-bootstrap-candidate-status'].textContent,/must match/);
+  assert.equal(n['wallet-bootstrap-candidate-passphrase'].value,'');
+  assert.equal(n['wallet-bootstrap-candidate-confirm'].value,'');
+  n['wallet-bootstrap-candidate-passphrase'].value=passphrase;n['wallet-bootstrap-candidate-confirm'].value=passphrase;
+  await n['wallet-bootstrap-candidate-create'].click();
+  assert.match(n['wallet-bootstrap-candidate-status'].textContent,/no enrollment or transaction/i);
+  assert.equal(n['wallet-bootstrap-candidate-create'].disabled,true);
+  assert.equal(n['wallet-bootstrap-candidate-saved'].hidden,false);
+  const id=n['wallet-bootstrap-candidate-id'].textContent;assert.match(id,/^[a-f0-9]{64}$/);
+  assert.match(n['wallet-bootstrap-candidate-details'].textContent,/Temporary vault public key: ed25519:.*Example funding: 6 test NEAR \(not approved\)/s);
+  assert.equal(n['wallet-bootstrap-candidate-details'].textContent.includes(passphrase),false);
+  await n['wallet-bootstrap-candidate-copy'].click();assert.equal(browser.win.clipboard,id);
+  await n['wallet-bootstrap-candidate-download'].click();
+  assert.match(n['wallet-bootstrap-candidate-status'].textContent,/download started.*does not prove/i);
+  const text=await downloaded.text();assert.equal(text.includes(passphrase),false);
+  const file={size:Buffer.byteLength(text),text:async()=>text};
+  n['wallet-bootstrap-candidate-file'].files=[file];n['wallet-bootstrap-candidate-expected'].value=id;
+  n['wallet-bootstrap-candidate-unlock'].value=passphrase;
+  await n['wallet-bootstrap-candidate-verify'].click();
+  assert.match(n['wallet-bootstrap-candidate-check-status'].textContent,/matches the recorded ID.*no transaction originals.*latest head/i);
+  assert.equal(n['wallet-bootstrap-candidate-unlock'].value,'');
+  n['wallet-bootstrap-candidate-unlock'].value='wrong synthetic passphrase';
+  await n['wallet-bootstrap-candidate-verify'].click();
+  assert.match(n['wallet-bootstrap-candidate-check-status'].textContent,/could not verify/i);
+  assert.doesNotMatch(n['wallet-bootstrap-candidate-check-status'].textContent,/matches the recorded ID/i);
+  assert.equal(config.messageRequests.length,1);assert.equal(config.transactionRequests,undefined);
+  await n['wallet-disconnect'].click();
+  assert.equal(n['wallet-bootstrap-candidate-open'].hidden,true);
+  assert.equal(n['wallet-bootstrap-candidate-id'].textContent,'');
+  assert.equal(n['wallet-bootstrap-candidate-check-status'].textContent,'');
+});
+
+test('saved candidate enrollment is identity-only and stops on success, lost response or marker failure', async () => {
+  const origin='https://bouncer-production-6df1.up.railway.app';
+  const marker='bouncer-v14-bootstrap-enrollment-attempt-great-mujey-v1';
+  const bytes=new Uint8Array(fs.readFileSync(new URL('../web/artifacts/v14-research.deflate',import.meta.url)));
+  const passphrase='synthetic-only long enrollment passphrase';
+  for (const mode of ['acknowledged','lost','marker-failure']) {
+    const browser=fakeBrowser(`${origin}/workspace`,{approved:origin});
+    const config={account:'great_mujey.testnet',signConnectedMessage:true,cliKey:KeyPair.fromRandom('ed25519')};
+    const originalFetch=browser.win.fetch; let downloaded,posts=0;
+    browser.win.Blob=Blob;browser.win.URL={createObjectURL(blob){downloaded=blob;return 'blob:synthetic'},revokeObjectURL(){}};
+    browser.doc.body.append=()=>{};
+    browser.win.fetch=async(url,options={})=>{
+      if(!String(url).includes('/functions/v1/bouncer-v14-bootstrap-checkpoint'))return originalFetch(url,options);
+      if(options.method==='OPTIONS')return new Response(null,{status:204});
+      assert.equal(options.method,'POST');assert.equal(browser.data.get(marker),'1','local stop precedes the POST');
+      posts++;assert.equal(options.body.includes(passphrase),false);
+      const body=JSON.parse(options.body);assert.equal(body.operation,'enroll');
+      if(mode==='lost')throw Error('synthetic lost acknowledgement');
+      const attestation=JSON.stringify({terms:body.terms,nonce_base64:body.nonce_base64,signature_base64:body.signature_base64});
+      return Response.json({status:'ENROLLED',scope_id:body.terms.scope_id,revision:0,head_sha256:'0'.repeat(64),
+        kit_sha256:body.terms.kit_sha256,attestation_sha256:createHash('sha256').update(attestation).digest('hex')});
+    };
+    await initWallet({window:browser.win,document:browser.doc,NearConnector:connectorClass(config),loadBootstrapArtifact:async()=>bytes.slice()});
+    const n=browser.nodes;await n['wallet-connect'].click();await browser.options[0].click();
+    await n['wallet-owner-verify'].click();await new Promise(resolve=>setImmediate(resolve));
+    await n['wallet-bootstrap-candidate-open'].click();
+    assert.equal(n['wallet-bootstrap-candidate-enrollment'].hidden,false);
+    n['wallet-bootstrap-candidate-passphrase'].value=passphrase;n['wallet-bootstrap-candidate-confirm'].value=passphrase;
+    await n['wallet-bootstrap-candidate-create'].click();await n['wallet-bootstrap-candidate-download'].click();
+    const text=await downloaded.text(),id=n['wallet-bootstrap-candidate-id'].textContent;
+    n['wallet-bootstrap-candidate-file'].files=[{size:Buffer.byteLength(text),text:async()=>text}];
+    n['wallet-bootstrap-candidate-expected'].value=id;n['wallet-bootstrap-candidate-unlock'].value=passphrase;
+    if(mode==='marker-failure')browser.win.localStorage.setItem=()=>{throw Error('synthetic storage failure')};
+    await n['wallet-bootstrap-candidate-enroll'].click();
+    const expectedPosts=mode==='marker-failure'?0:1;
+    assert.equal(posts,expectedPosts);assert.equal(config.messageRequests.length,2,'one owner verification and one enrollment identity signature');
+    assert.equal(browser.data.get(marker),mode==='marker-failure'?undefined:'1');
+    assert.equal(config.transactionRequests,undefined);assert.equal(n['wallet-bootstrap-candidate-unlock'].value,'');
+    assert.equal(n['wallet-bootstrap-candidate-enroll'].disabled,true);
+    assert.match(n['wallet-bootstrap-candidate-enroll-status'].textContent,mode!=='acknowledged'
+      ? /may have been recorded.*recover it instead/i : /acknowledged.*not a verified independent restore.*no transaction/i);
+    await n['wallet-bootstrap-candidate-enroll'].click();assert.equal(posts,expectedPosts);
+    await n['wallet-disconnect'].click();await n['wallet-connect'].click();await browser.options[0].click();
+    await n['wallet-owner-verify'].click();await new Promise(resolve=>setImmediate(resolve));
+    await n['wallet-bootstrap-candidate-open'].click();
+    assert.equal(n['wallet-bootstrap-candidate-enroll'].disabled,true);
+    assert.equal(n['wallet-bootstrap-candidate-create'].disabled,true,'do not generate a replacement after a same-browser attempt');
+    assert.equal(n['wallet-bootstrap-candidate-verify'].disabled,false,'checking the existing saved file remains available');
+    assert.match(n['wallet-bootstrap-candidate-status'].textContent,/recover the existing checkpoint.*do not create a new candidate/i);
+    assert.match(n['wallet-bootstrap-candidate-enroll-status'].textContent,/attempted on this browser.*recover/i);
+    assert.equal(posts,expectedPosts);assert.equal(config.transactionRequests,undefined);
+  }
+});
+
+test('enrollment is unavailable before signing when browser storage is blocked', async () => {
+  const origin='https://bouncer-production-6df1.up.railway.app';
+  const browser=fakeBrowser(`${origin}/workspace`,{approved:origin,storageFails:true});
+  const config={account:'great_mujey.testnet',signConnectedMessage:true,cliKey:KeyPair.fromRandom('ed25519')};
+  const originalFetch=browser.win.fetch;let posts=0;
+  browser.win.fetch=async(url,options={})=>{
+    if(!String(url).includes('/functions/v1/bouncer-v14-bootstrap-checkpoint'))return originalFetch(url,options);
+    if(options.method==='OPTIONS')return new Response(null,{status:204});
+    posts++;throw Error('no enrollment should be sent');
+  };
+  await initWallet({window:browser.win,document:browser.doc,NearConnector:connectorClass(config),loadBootstrapArtifact:async()=>new Uint8Array()});
+  const n=browser.nodes;await n['wallet-connect'].click();await browser.options[0].click();
+  await n['wallet-owner-verify'].click();await new Promise(resolve=>setImmediate(resolve));await n['wallet-bootstrap-candidate-open'].click();
+  assert.equal(n['wallet-bootstrap-candidate-enrollment'].hidden,false);
+  assert.equal(n['wallet-bootstrap-candidate-enroll'].disabled,true);
+  assert.match(n['wallet-bootstrap-candidate-enroll-status'].textContent,/browser storage is unavailable/i);
+  await n['wallet-bootstrap-candidate-enroll'].click();
+  assert.equal(posts,0);assert.equal(config.messageRequests.length,1);assert.equal(config.transactionRequests,undefined);
+});
+
+test('late local preparation cannot repopulate a signed-out owner session', async () => {
+  const origin='https://bouncer-near.vercel.app',browser=fakeBrowser(`${origin}/`,{approved:origin});
+  const config={account:'great_mujey.testnet',signConnectedMessage:true,cliKey:KeyPair.fromRandom('ed25519')};
+  const bytes=new Uint8Array(fs.readFileSync(new URL('../web/artifacts/v14-research.deflate',import.meta.url)));
+  let resolveArtifact;
+  const artifact=new Promise(resolve=>{resolveArtifact=resolve});
+  await initWallet({window:browser.win,document:browser.doc,NearConnector:connectorClass(config),loadBootstrapArtifact:()=>artifact});
+  const n=browser.nodes;await n['wallet-connect'].click();await browser.options[0].click();
+  await n['wallet-owner-verify'].click();await n['wallet-bootstrap-candidate-open'].click();
+  n['wallet-bootstrap-candidate-passphrase'].value='synthetic only long passphrase';
+  n['wallet-bootstrap-candidate-confirm'].value='synthetic only long passphrase';
+  const pending=n['wallet-bootstrap-candidate-create'].click();
+  config.instance.events['wallet:signOut']();resolveArtifact(bytes);await pending;
+  assert.equal(n['wallet-bootstrap-candidate-open'].hidden,true);
+  assert.equal(n['wallet-bootstrap-candidate-saved'].hidden,true);
+  assert.equal(n['wallet-bootstrap-candidate-id'].textContent,'');
+  assert.equal(n['wallet-bootstrap-candidate-status'].textContent,'');
+  assert.equal(n['wallet-bootstrap-candidate-passphrase'].value,'');
+  assert.equal(config.messageRequests.length,1);assert.equal(config.transactionRequests,undefined);
+});
+
+test('Railway owner can open offline recovery while online recovery is disabled without an extra signature', async () => {
+  const origin = 'https://bouncer-production-6df1.up.railway.app';
+  const browser = fakeBrowser(`${origin}/workspace`, {approved:origin});
+  const config = {account:'great_mujey.testnet',signConnectedMessage:true,cliKey:KeyPair.fromRandom('ed25519')};
+  const originalFetch = browser.win.fetch;
+  browser.win.fetch = async (url,options={}) => {
+    if (String(url).includes('/functions/v1/bouncer-v14-bootstrap-checkpoint')) {
+      assert.equal(options.method,'OPTIONS');return new Response('{"error":"unavailable"}',{status:503});
+    }
+    return originalFetch(url,options);
+  };
+  await initWallet({window:browser.win,document:browser.doc,NearConnector:connectorClass(config)});
+  await browser.nodes['wallet-connect'].click();await browser.options[0].click();
+  await new Promise(resolve=>setImmediate(resolve));
+  const recovery=browser.nodes['wallet-bootstrap-recovery-open'];
+  assert.equal(recovery.hidden,false);assert.equal(recovery.disabled,false);
+  await recovery.click();
+  assert.match(browser.nodes['wallet-bootstrap-recovery-status'].textContent,/online recovery is not enabled/i);
+  assert.equal(browser.nodes['wallet-bootstrap-recovery-read'].disabled,true);
+  assert.equal(browser.nodes['wallet-bootstrap-recovery-import'].disabled,false);
+  await browser.nodes['wallet-bootstrap-recovery-read'].click();assert.equal(config.messageRequests.length,1);
+  assert.equal(config.transactionRequests,undefined);
+  await browser.nodes['wallet-disconnect'].click();
+  assert.equal(recovery.hidden,true);
+});
+
+test('a late checkpoint readiness response updates the open recovery panel without a wallet request', async () => {
+  const origin='https://bouncer-production-6df1.up.railway.app',browser=fakeBrowser(`${origin}/workspace`,{approved:origin});
+  const config={account:'great_mujey.testnet',signConnectedMessage:true,cliKey:KeyPair.fromRandom('ed25519')};
+  let resolveReady;const pending=new Promise(resolve=>{resolveReady=resolve}),originalFetch=browser.win.fetch;
+  browser.win.fetch=async(url,options={})=>String(url).includes('/functions/v1/bouncer-v14-bootstrap-checkpoint')
+    ? pending : originalFetch(url,options);
+  await initWallet({window:browser.win,document:browser.doc,NearConnector:connectorClass(config),loadBootstrapArtifact:async()=>new Uint8Array()});
+  await browser.nodes['wallet-connect'].click();await browser.options[0].click();
+  await browser.nodes['wallet-bootstrap-recovery-open'].click();
+  assert.match(browser.nodes['wallet-bootstrap-match-status'].textContent,/not available yet/i);
+  assert.equal(browser.nodes['wallet-bootstrap-match-check'].disabled,true);
+  resolveReady(new Response(null,{status:204}));await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(browser.nodes['wallet-bootstrap-match-status'].textContent,'');
+  assert.match(browser.nodes['wallet-bootstrap-recovery-status'].textContent,/read-only recovery/i);
+  assert.equal(browser.nodes['wallet-bootstrap-match-check'].disabled,false);
+  assert.equal(config.messageRequests.length,1);assert.equal(config.transactionRequests,undefined);
+});
+
+test('phone recovery reads and unlocks a synthetic encrypted kit without a transaction', async () => {
+  const origin='https://bouncer-production-6df1.up.railway.app', owner='great_mujey.testnet', vault=`native.${owner}`;
+  const browser=fakeBrowser(`${origin}/workspace`,{approved:origin});
+  const config={account:owner,signConnectedMessage:true,cliKey:KeyPair.fromRandom('ed25519')};
+  const temporary=KeyPair.fromRandom('ed25519'),scopeId='ab'.repeat(16),capability='cd'.repeat(32),passphrase='synthetic recovery passphrase';
+  const compressed=new Uint8Array(fs.readFileSync(new URL('../web/artifacts/v14-research.deflate',import.meta.url)));
+  const plan=await buildV14TemporaryBootstrapPlan({owner,ownerPublicKey:String(config.cliKey.getPublicKey()),vault,
+    temporaryPublicKey:String(temporary.getPublicKey()),vaultFundingYocto:String(6n*10n**24n),compressedV14:compressed,crypto:webcrypto});
+  const kit=await sealV14BootstrapRecoveryKit({review:plan.review,temporaryKey:temporary,scopeId,checkpointCapability:capability,passphrase,crypto:webcrypto});
+  const draft=await prepareBootstrapEnrollment({review:plan.review,kit,passphrase,compressedV14:compressed,site:origin,crypto:webcrypto});
+  const digest=createHash('sha256').update(nep413Payload({message:draft.message,nonce:draft.nonce,recipient:draft.recipient})).digest();
+  const attestation=JSON.stringify({terms:draft.terms,nonce_base64:Buffer.from(draft.nonce).toString('base64'),
+    signature_base64:Buffer.from(config.cliKey.sign(digest).signature).toString('base64')});
+  const original=encodeBase58(Buffer.alloc(32,23)),events=[];let head='0'.repeat(64);
+  for(const [index,type] of ['create_claim','create_original'].entries()) {
+    const event=JSON.stringify({format:'bouncer-v14-original-event-v1',seq:index+1,previous_sha256:head,type,
+      data:{scope_id:scopeId,review_sha256:plan.review.review_sha256,tx_hash:index?original:null}});
+    events.push(event);head=createHash('sha256').update(event).digest('hex');
+  }
+  const originalFetch=browser.win.fetch;let remoteIsStale=false;
+  browser.win.fetch=async(url,options={})=>{
+    if(String(url).includes('/functions/v1/bouncer-v14-bootstrap-checkpoint')) {
+      if(options.method==='OPTIONS')return new Response(null,{status:204});
+      const request=JSON.parse(options.body);assert.equal(request.operation,'recover');
+      for(const secret of [String(temporary),capability,passphrase])assert(!options.body.includes(secret));
+      return Response.json({status:'EXISTING_RECOVERY_ONLY',scope_id:scopeId,review_text:draft.review_text,sealed_kit:draft.sealed_kit,
+        owner_attestation:attestation,revision:remoteIsStale?0:2,head_sha256:remoteIsStale?'0'.repeat(64):head,events:remoteIsStale?[]:events,
+        transaction_authorized:false,latest_head_independently_verified:false});
+    }
+    return originalFetch(url,options);
+  };
+  await initWallet({window:browser.win,document:browser.doc,NearConnector:connectorClass(config),loadBootstrapArtifact:async()=>compressed});
+  await browser.nodes['wallet-connect'].click();await browser.options[0].click();
+  await browser.nodes['wallet-owner-verify'].click();await new Promise(resolve=>setImmediate(resolve));
+  const open=browser.nodes['wallet-bootstrap-recovery-open'];assert.equal(open.disabled,false);
+  await open.click();await browser.nodes['wallet-bootstrap-recovery-read'].click();
+  assert.equal(config.messageRequests.length,2);assert.equal(config.transactionRequests,undefined);
+  assert.equal(browser.nodes['wallet-bootstrap-recovery-backup'].hidden,false);
+  assert.equal(browser.nodes['wallet-bootstrap-recovery-originals'].hidden,true,'originals are hidden before unlock');
+  assert.match(browser.nodes['wallet-bootstrap-recovery-status'].textContent,/not independently re-verified/);
+  browser.nodes['wallet-bootstrap-recovery-passphrase'].value=passphrase;
+  await browser.nodes['wallet-bootstrap-recovery-unlock'].click();
+  assert.equal(browser.nodes['wallet-bootstrap-recovery-passphrase'].value,'');
+  assert.match(browser.nodes['wallet-bootstrap-recovery-status'].textContent,/unlocked locally.*no transaction is authorized/i);
+  assert.match(browser.nodes['wallet-bootstrap-recovery-originals'].children[0].textContent,/Unverified online history/);
+  assert.equal(browser.nodes['wallet-bootstrap-recovery-compare'].hidden,true,'only an authenticated imported file can be compared');
+  const body={format:'bouncer-v14-bootstrap-recovery-export-v1',network:'testnet',owner,vault,scope_id:scopeId,
+    review_text:draft.review_text,sealed_kit:draft.sealed_kit,owner_attestation:attestation,revision:2,head_sha256:head,events,
+    latest_head_independently_verified:false,transaction_authorized:false};
+  const mac=createHmac('sha256',Buffer.from(capability,'hex')).update(`bouncer-v14-bootstrap-export-v1\0${JSON.stringify(body)}`).digest('hex');
+  const local=JSON.stringify({...body,history_hmac_sha256:mac});
+  browser.nodes['wallet-bootstrap-recovery-file'].files=[{size:Buffer.byteLength(local),text:async()=>local}];
+  await browser.nodes['wallet-bootstrap-recovery-import'].click();
+  assert.match(browser.nodes['wallet-bootstrap-recovery-status'].textContent,/local encrypted file/i);
+  assert.equal(browser.nodes['wallet-bootstrap-recovery-export'].disabled,true);
+  assert.equal(browser.nodes['wallet-bootstrap-recovery-originals'].hidden,true);
+  browser.nodes['wallet-bootstrap-recovery-passphrase'].value=passphrase;
+  await browser.nodes['wallet-bootstrap-recovery-unlock'].click();
+  assert.equal(browser.nodes['wallet-bootstrap-recovery-export'].disabled,false);
+  assert.match(browser.nodes['wallet-bootstrap-recovery-originals'].children[0].textContent,/File integrity matched/);
+  assert.equal(browser.nodes['wallet-bootstrap-recovery-compare'].hidden,false);
+  await browser.nodes['wallet-bootstrap-recovery-compare'].click();
+  assert.match(browser.nodes['wallet-bootstrap-recovery-compare-status'].textContent,/match at revision 2.*does not prove.*latest history.*no transaction/i);
+  assert.equal(config.messageRequests.length,3);assert.equal(config.transactionRequests,undefined);
+  const candidateText=JSON.stringify({format:'bouncer-v14-local-bootstrap-candidate-v1',network:'testnet',review:plan.review,sealed_kit:kit});
+  const backupId=createHash('sha256').update(`bouncer-v14-local-bootstrap-candidate-file-v1\0${candidateText}`).digest('hex');
+  browser.nodes['wallet-bootstrap-match-file'].files=[{size:Buffer.byteLength(candidateText),text:async()=>candidateText}];
+  browser.nodes['wallet-bootstrap-match-id'].value=backupId;
+  browser.nodes['wallet-bootstrap-match-passphrase'].value='wrong synthetic passphrase';
+  await browser.nodes['wallet-bootstrap-match-check'].click();
+  assert.match(browser.nodes['wallet-bootstrap-match-status'].textContent,/could not verify/i);
+  assert.equal(browser.nodes['wallet-bootstrap-match-passphrase'].value,'');
+  assert.equal(config.messageRequests.length,3,'wrong local passphrase must not prompt');
+  assert.equal(browser.nodes['wallet-bootstrap-recovery-export'].disabled,false,'candidate failure preserves unlocked recovery');
+  browser.nodes['wallet-bootstrap-match-passphrase'].value=passphrase;
+  await browser.nodes['wallet-bootstrap-match-check'].click();
+  assert.match(browser.nodes['wallet-bootstrap-match-status'].textContent,/Matched:.*same encrypted kit.*does not prove.*latest history/s);
+  assert.equal(browser.nodes['wallet-bootstrap-match-passphrase'].value,'');
+  assert.equal(browser.nodes['wallet-bootstrap-recovery-export'].disabled,false,'candidate comparison preserves unlocked recovery');
+  assert.equal(browser.nodes['wallet-bootstrap-recovery-compare'].hidden,false);
+  assert.equal(config.messageRequests.length,4);assert.equal(config.transactionRequests,undefined);
+  browser.nodes['wallet-bootstrap-match-id'].listeners.input();
+  assert.equal(browser.nodes['wallet-bootstrap-match-status'].textContent,'','editing the input removes the previous result');
+  remoteIsStale=true;await browser.nodes['wallet-bootstrap-recovery-compare'].click();
+  assert.match(browser.nodes['wallet-bootstrap-recovery-compare-status'].textContent,/file is ahead.*service may be stale.*do not resend/i);
+  assert.equal(config.messageRequests.length,5);
+  browser.nodes['wallet-bootstrap-recovery-file'].files=[{size:Buffer.byteLength(local),text:async()=>local}];
+  browser.nodes['wallet-bootstrap-recovery-file'].listeners.change();
+  assert.equal(browser.nodes['wallet-bootstrap-recovery-compare'].hidden,true,'a new selection cannot compare the previous file');
+  assert.equal(browser.nodes['wallet-bootstrap-recovery-compare-status'].textContent,'');
+  await browser.nodes['wallet-bootstrap-recovery-import'].click();
+  browser.nodes['wallet-bootstrap-recovery-passphrase'].value=passphrase;await browser.nodes['wallet-bootstrap-recovery-unlock'].click();
+  browser.nodes['wallet-bootstrap-recovery-passphrase'].value='wrong synthetic passphrase';
+  await browser.nodes['wallet-bootstrap-recovery-unlock'].click();
+  assert.equal(browser.nodes['wallet-bootstrap-recovery-export'].disabled,true);
+  assert.equal(browser.nodes['wallet-bootstrap-recovery-originals'].hidden,true);
+  assert.equal(browser.nodes['wallet-bootstrap-recovery-compare'].hidden,true,'wrong passphrase invalidates the comparison');
+  browser.nodes['wallet-bootstrap-recovery-file'].files=[];
+  await browser.nodes['wallet-bootstrap-recovery-import'].click();
+  assert.equal(browser.nodes['wallet-bootstrap-recovery-export'].disabled,true);
+  assert.match(browser.nodes['wallet-bootstrap-recovery-status'].textContent,/choose a bouncer encrypted/i);
+  assert.equal(config.messageRequests.length,5,'offline imports and unlocks do not open the wallet');
+  // An authenticated revision-zero file can have no hashes even when a send
+  // happened elsewhere. Keep the warning visible and never infer non-execution.
+  const emptyBody={...body,revision:0,head_sha256:'0'.repeat(64),events:[]};
+  const emptyMac=createHmac('sha256',Buffer.from(capability,'hex')).update(`bouncer-v14-bootstrap-export-v1\0${JSON.stringify(emptyBody)}`).digest('hex');
+  const emptyLocal=JSON.stringify({...emptyBody,history_hmac_sha256:emptyMac});
+  browser.nodes['wallet-bootstrap-recovery-file'].files=[{size:Buffer.byteLength(emptyLocal),text:async()=>emptyLocal}];
+  await browser.nodes['wallet-bootstrap-recovery-import'].click();
+  assert.equal(browser.nodes['wallet-bootstrap-recovery-originals'].hidden,true);
+  browser.nodes['wallet-bootstrap-recovery-passphrase'].value=passphrase;
+  await browser.nodes['wallet-bootstrap-recovery-unlock'].click();
+  const emptyOriginals=browser.nodes['wallet-bootstrap-recovery-originals'];
+  assert.equal(emptyOriginals.hidden,false,'missing hashes must not hide the recovery warning');
+  assert.equal(emptyOriginals.children.length,1,'no transaction links may be invented');
+  assert.match(emptyOriginals.children[0].textContent,/File integrity matched.*no create or deployment transaction hashes.*does not prove whether a transaction happened.*do not repeat.*latest-head and receipt verification/i);
+  assert.equal(emptyOriginals.children[0].attributes.role,'status');
+  assert.equal(config.messageRequests.length,5,'local no-hash recovery must not request a signature');
+  assert.equal(config.transactionRequests,undefined);
+  browser.nodes['wallet-bootstrap-match-passphrase'].value=passphrase;
+  await browser.nodes['wallet-disconnect'].click();
+  assert.equal(browser.nodes['wallet-bootstrap-match-passphrase'].value,'');
+  assert.equal(browser.nodes['wallet-bootstrap-match-id'].value,'');
+  assert.equal(browser.nodes['wallet-bootstrap-recovery-backup'].hidden,true);
+  assert.equal(config.transactionRequests,undefined);
 });
 
 test('phone recovery checks and records a matching original without submitting a transaction', async () => {
@@ -384,7 +773,7 @@ test('phone recovery checks and records a matching original without submitting a
   assert.match(browser.nodes['wallet-setup-recovery-status'].textContent,/reconciled at FINAL.*next setup stage/i);
   assert.equal(browser.nodes['wallet-buffer-setup-approve'].hidden,false);
   assert.equal(browser.nodes['wallet-setup-recovery-form'].hidden,true);
-  assert.equal(browser.nodes['wallet-dialog'].open,true);
+  assert.equal(browser.nodes['wallet-dialog'].open,false, 'workspace recovery must not reopen the wallet picker');
   assert.equal(config.messageRequests.length,5);
   assert.match(config.messageRequests[0].message,/does not approve a transaction/);
   assert.ok(config.messageRequests.slice(1).every(p=>/not a transaction/.test(p.message)));
@@ -428,25 +817,30 @@ test('Buffer setup review is backend-gated and remains read-only until the owner
   assert.ok(!calls.some(([url])=>/wallet-setup\/(reserve|claim|broadcast)$/.test(url)));
 });
 
-test('NEAR Mobile owner verification targets the connected account and performs no transaction', async () => {
+test('NEAR Mobile reuses its verified login; a retry targets the connected account', async () => {
   const browser = fakeBrowser('http://127.0.0.1:4173/'), config = { account: 'great_mujey.testnet', signConnectedMessage: true };
   await initWallet({ window: browser.win, document: browser.doc, NearConnector: connectorClass(config) });
+  browser.win.cliKeyPermission = { FunctionCall: {} };
   await browser.options.find(option => option.dataset.walletId === 'near-mobile').click();
-  assert.equal(config.messageRequests.length, 1, 'the connection uses a message only');
+  assert.equal(config.messageRequests.length, 1, 'the connection uses one message only');
+  assert.equal(browser.nodes['wallet-account-badge'].textContent, 'CONNECTED');
+  assert.equal(browser.nodes['wallet-owner-verify'].hidden, false);
+  assert.match(browser.nodes['wallet-owner-status'].textContent, /not a current testnet Full Access key/);
+  browser.win.cliKeyPermission = 'FullAccess';
   await browser.nodes['wallet-owner-verify'].click();
   assert.equal(config.messageRequests.length, 2);
   assert.equal(config.messageRequests[1].signerId, 'great_mujey.testnet');
   assert.equal(config.messageRequests[1].accountId, 'great_mujey.testnet', 'pinned Mobile adapter requires its accountId option');
   assert.equal(browser.nodes['wallet-account-badge'].textContent, 'OWNER VERIFIED');
-  assert.match(browser.nodes['wallet-account-warning'].textContent, /does not approve transactions.*spending access/);
+  assert.equal(browser.nodes['wallet-owner-verify'].hidden, true);
+  assert.equal(config.transactionRequests, undefined);
 });
 
 test('a restricted key or a late wallet result cannot mark the connected account as verified', async () => {
   const browser = fakeBrowser('http://127.0.0.1:4173/'), config = { signConnectedMessage: true };
+  browser.win.cliKeyPermission = { FunctionCall: {} };
   await initWallet({ window: browser.win, document: browser.doc, NearConnector: connectorClass(config) });
   await browser.options[0].click();
-  browser.win.cliKeyPermission = { FunctionCall: {} };
-  await browser.nodes['wallet-owner-verify'].click();
   assert.equal(browser.nodes['wallet-account-badge'].textContent, 'CONNECTED');
   assert.match(browser.nodes['wallet-owner-status'].textContent, /not a current testnet Full Access key/);
   browser.win.cliKeyPermission = 'FullAccess';
@@ -459,6 +853,64 @@ test('a restricted key or a late wallet result cannot mark the connected account
   assert.equal(browser.nodes['wallet-owner-verify'].hidden, true);
   assert.equal(browser.nodes['wallet-owner-status'].textContent, '');
   assert.equal(browser.nodes['wallet-dialog'].open, false);
+  assert.equal(config.transactionRequests, undefined);
+});
+
+test('cancelled identity verification stays connected and offers a fresh, no-transaction retry', async () => {
+  const browser = fakeBrowser('http://127.0.0.1:4173/'), config = {signConnectedMessage:true,messageFail:true};
+  await initWallet({window:browser.win,document:browser.doc,NearConnector:connectorClass(config)});
+  await browser.nodes['wallet-connect'].click();await browser.options[0].click();
+  assert.equal(config.messageRequests.length,1);
+  assert.equal(browser.nodes['wallet-account-badge'].textContent,'CONNECTED');
+  assert.equal(browser.nodes['wallet-owner-verify'].hidden,false);
+  assert.equal(browser.nodes['wallet-dialog'].open,true);
+  assert.match(browser.nodes['wallet-owner-status'].textContent,/cancelled|could not be verified/i);
+  assert.match(browser.nodes['workspace-vault-wallet-state'].textContent,/identity is not verified.*retry/i);
+  config.messageFail=false;
+  await browser.nodes['wallet-owner-verify'].click();
+  assert.equal(config.messageRequests.length,2);
+  assert.notDeepEqual([...config.messageRequests[0].nonce],[...config.messageRequests[1].nonce]);
+  assert.equal(browser.nodes['wallet-account-badge'].textContent,'OWNER VERIFIED');
+  assert.equal(browser.nodes['wallet-owner-verify'].hidden,true);
+  assert.equal(config.transactionRequests,undefined);
+});
+
+test('a late automatic identity result cannot verify a signed-out or changed account', async () => {
+  for (const changedAccount of [null,'bob.testnet']) {
+    const browser = fakeBrowser('http://127.0.0.1:4173/'), config = {signConnectedMessage:true};
+    let release;
+    config.messageWait = new Promise(resolve => {release=resolve;});
+    await initWallet({window:browser.win,document:browser.doc,NearConnector:connectorClass(config)});
+    const pending = browser.options[0].click();
+    await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(config.messageRequests.length,1);
+    if (changedAccount) {
+      const wallet=config.instance.wallets.find(item=>item.manifest.id==='meteor-wallet');
+      config.instance.events['wallet:signIn']({wallet,accounts:[{accountId:changedAccount}]});
+    } else config.instance.events['wallet:signOut']();
+    release();await pending;
+    assert.notEqual(browser.nodes['wallet-account-badge'].textContent,'OWNER VERIFIED');
+    assert.equal(browser.nodes['wallet-dialog'].open,false);
+    if (changedAccount) {
+      assert.equal(browser.nodes['wallet-account-name'].textContent,changedAccount);
+      assert.equal(browser.nodes['wallet-owner-verify'].hidden,false);
+    } else assert.equal(browser.nodes['wallet-account-view'].hidden,true);
+    assert.equal(config.transactionRequests,undefined);
+  }
+});
+
+test('restoring an earlier connection never automatically opens a wallet signature', async () => {
+  const browser = fakeBrowser('http://127.0.0.1:4173/'), config = {restoreWallet:'meteor-wallet',signConnectedMessage:true};
+  browser.data.set('bouncer:near-connect:selected-wallet','meteor-wallet');
+  await initWallet({window:browser.win,document:browser.doc,NearConnector:connectorClass(config)});
+  assert.equal(config.messageRequests,undefined);
+  assert.equal(browser.nodes['wallet-account-badge'].textContent,'CONNECTED');
+  assert.equal(browser.nodes['wallet-owner-verify'].hidden,false);
+  await browser.nodes['wallet-connect'].click();await browser.nodes['wallet-owner-verify'].click();
+  assert.equal(config.messageRequests.length,1);
+  assert.equal(browser.nodes['wallet-account-badge'].textContent,'OWNER VERIFIED');
+  assert.equal(browser.nodes['wallet-owner-verify'].hidden,true);
+  assert.equal(config.transactionRequests,undefined);
 });
 
 test('a connected wallet can load its own public balance without requesting a transaction', async () => {
@@ -496,15 +948,17 @@ test('a connected wallet can load its own public balance without requesting a tr
   assert.equal(browser.nodes['wallet-account-usdc'].textContent, '—');
 });
 
-test('all four wallet-reported choices connect on testnet and disconnect independently', async () => {
+test('all four NEAR wallet choices connect, verify and disconnect independently on testnet', async () => {
   for (const id of ['meteor-wallet', 'intear-wallet', 'nightly-wallet', 'ledger']) {
-    const browser = fakeBrowser('http://127.0.0.1:4173/'), config = {};
+    const browser = fakeBrowser('http://127.0.0.1:4173/'), config = {signConnectedMessage:true};
     await initWallet({ window: browser.win, document: browser.doc, NearConnector: connectorClass(config) });
     await browser.nodes['wallet-connect'].click();
     await browser.options.find(option => option.dataset.walletId === id).click();
     assert.deepEqual(config.input, { walletId: id });
     assert.equal(config.options.network, 'testnet');
-    assert.match(browser.nodes['wallet-status'].textContent, /wallet-reported/);
+    assert.match(browser.nodes['wallet-status'].textContent, /Verified testnet wallet control/);
+    assert.equal(config.messageRequests.length,1);
+    assert.equal(config.transactionRequests,undefined);
     await browser.nodes['wallet-disconnect'].click();
     assert.equal(config.disconnected, id);
     assert.match(browser.nodes['wallet-status'].textContent, /disconnected/i);
@@ -666,7 +1120,11 @@ test('optional CLI verification requires a fresh off-chain signature and current
   assert.equal(config.cliParams.addFunctionCallKey, undefined);
   assert.equal(config.cliParams.messageParams.nonce.length, 32);
   assert.match(config.cliParams.messageParams.message, /does not approve a transaction/);
-  assert.match(browser.nodes['wallet-status'].textContent, /Connected: cli\.testnet \(CLI login verified against testnet\)/);
+  assert.match(browser.nodes['wallet-status'].textContent, /Verified testnet wallet control for cli\.testnet/);
+  assert.equal(browser.nodes['wallet-account-badge'].textContent,'OWNER VERIFIED');
+  assert.equal(browser.nodes['wallet-owner-verify'].hidden,true);
+  assert.equal(config.messageRequests,undefined, 'the verified CLI login is reused without another signature');
+  assert.equal(config.transactionRequests,undefined);
   assert.equal(browser.nodes['wallet-disconnect'].hidden, false);
   assert.ok(browser.openers.every(button => button.dataset.walletState === 'connected'));
   await browser.nodes['wallet-disconnect'].click();
@@ -703,11 +1161,11 @@ test('a legacy manually entered CLI account is not restored or accepted as verif
 
 test('the dedicated Vercel origin can connect; implicit IDs use the fixed testnet network', async () => {
   for (const account of ['greatmujey.testnet', 'a'.repeat(64)]) {
-    const browser = fakeBrowser('https://bouncer-near.vercel.app/', { approved: 'https://bouncer-near.vercel.app' }), config = { account };
+    const browser = fakeBrowser('https://bouncer-near.vercel.app/', { approved: 'https://bouncer-near.vercel.app' }), config = { account, signConnectedMessage:true };
     await initWallet({ window: browser.win, document: browser.doc, NearConnector: connectorClass(config) });
     await browser.nodes['wallet-connect'].click();
     await browser.options[0].click();
-    assert.match(browser.nodes['wallet-status'].textContent, new RegExp(`^Connected: ${account}`));
+    assert.match(browser.nodes['wallet-status'].textContent, new RegExp(`^Verified testnet wallet control for ${account}`));
     assert.equal(config.options.network, 'testnet');
   }
 });
@@ -722,12 +1180,12 @@ test('wallet errors and named mainnet accounts fail closed; blocked browser stor
     assert.equal(browser.nodes['wallet-dialog'].open, true, 'the picker reopens after failure');
     assert.doesNotMatch(browser.nodes['wallet-status'].textContent, /^Connected:/);
   }
-  const browser = fakeBrowser('http://127.0.0.1:4173/', { storageFails: true }), config = {};
+  const browser = fakeBrowser('http://127.0.0.1:4173/', { storageFails: true }), config = {signConnectedMessage:true};
   await initWallet({ window: browser.win, document: browser.doc, NearConnector: connectorClass(config) });
   assert.equal(browser.nodes['wallet-connect'].disabled, false);
   await browser.nodes['wallet-connect'].click();
   await browser.options[0].click();
-  assert.match(browser.nodes['wallet-status'].textContent, /Connected: alice\.testnet/);
+  assert.match(browser.nodes['wallet-status'].textContent, /Verified testnet wallet control for alice\.testnet/);
   assert.equal(browser.nodes['wallet-disconnect'].hidden, false);
   await browser.nodes['wallet-disconnect'].click();
   assert.match(browser.nodes['wallet-status'].textContent, /disconnected/i);
@@ -759,7 +1217,7 @@ test('picker opens from every entry point, returns focus, and only accepts curat
 
 test('NEAR Mobile uses fresh off-chain testnet messages and never signs in or deletes a key', async () => {
   const browser = fakeBrowser('https://bouncer-near.vercel.app/', { approved: 'https://bouncer-near.vercel.app' });
-  const config = { browser };
+  const config = { browser, signConnectedMessage:true };
   await initWallet({ window: browser.win, document: browser.doc, NearConnector: connectorClass(config) });
   const mobile = browser.options.find(option => option.dataset.walletId === 'near-mobile');
   for (let index = 0; index < 2; index++) {
@@ -771,7 +1229,10 @@ test('NEAR Mobile uses fresh off-chain testnet messages and never signs in or de
     assert.equal(params.recipient, 'bouncer-near.vercel.app');
     assert.equal(params.nonce.length, 32);
     assert.match(params.message, /login message does not approve a transaction, transfer funds, or add an access key/i);
-    assert.match(browser.nodes['wallet-status'].textContent, /Connected: mobile\.testnet/);
+    assert.match(browser.nodes['wallet-status'].textContent, /Verified testnet wallet control for mobile\.testnet/);
+    assert.equal(browser.nodes['wallet-owner-verify'].hidden,true);
+    assert.equal(config.messageRequests.length,index+1,'the signed login was reused without a second prompt');
+    assert.equal(config.transactionRequests,undefined);
     assert.equal(browser.data.get('bouncer:near-connect:selected-wallet'), undefined, 'Mobile session is not persisted');
     await browser.nodes['wallet-connect'].click();
     await browser.nodes['wallet-disconnect'].click();
@@ -779,6 +1240,18 @@ test('NEAR Mobile uses fresh off-chain testnet messages and never signs in or de
     assert.match(browser.nodes['wallet-status'].textContent, /disconnected/i);
   }
   assert.notDeepEqual([...config.messageRequests[0].nonce], [...config.messageRequests[1].nonce]);
+});
+
+test('NEAR Mobile login is not reused as proof when its signature is invalid', async () => {
+  const browser=fakeBrowser('http://127.0.0.1:4173/');
+  const config={messageResult:{accountId:'mobile.testnet',publicKey:'ed25519:invalid',signature:'invalid'}};
+  await initWallet({window:browser.win,document:browser.doc,NearConnector:connectorClass(config)});
+  await browser.options.find(option=>option.dataset.walletId==='near-mobile').click();
+  assert.equal(config.messageRequests.length,1,'a failed check must not automatically prompt a second time');
+  assert.equal(browser.nodes['wallet-account-badge'].textContent,'CONNECTED');
+  assert.equal(browser.nodes['wallet-owner-verify'].hidden,false);
+  assert.match(browser.nodes['wallet-owner-status'].textContent,/could not be verified/i);
+  assert.equal(config.transactionRequests,undefined);
 });
 
 test('NEAR Mobile rejects missing signed data and named mainnet accounts', async () => {
@@ -839,7 +1312,7 @@ test('Intear fails clearly on browsers without native Ed25519 support', async ()
 
 test('Mobile sign-in events cannot bypass the verified message-only path', async () => {
   const browser = fakeBrowser('https://bouncer-near.vercel.app/', { approved: 'https://bouncer-near.vercel.app' });
-  const config = {};
+  const config = {signConnectedMessage:true};
   await initWallet({ window: browser.win, document: browser.doc, NearConnector: connectorClass(config) });
   const wallet = config.instance.wallets.find(item => item.manifest.id === 'near-mobile');
   config.instance.events['wallet:signIn']({ wallet, accounts: [{ accountId: 'mobile.testnet' }] });
@@ -847,7 +1320,7 @@ test('Mobile sign-in events cannot bypass the verified message-only path', async
   assert.equal(browser.nodes['wallet-disconnect'].hidden, true);
   await browser.nodes['wallet-connect'].click();
   await browser.options.find(option => option.dataset.walletId === 'near-mobile').click();
-  assert.match(browser.nodes['wallet-status'].textContent, /Connected: mobile\.testnet \(NEAR Mobile login verified against testnet\)/);
+  assert.match(browser.nodes['wallet-status'].textContent, /Verified testnet wallet control for mobile\.testnet/);
   assert.ok(browser.openers.every(button => button.dataset.walletState === 'connected'));
 });
 

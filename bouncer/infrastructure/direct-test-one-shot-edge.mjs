@@ -2,7 +2,7 @@
 // wallet key. The project service-role key is read only by this server runtime
 // and is never returned, logged, or accepted from the browser.
 const PROJECT='itzqbvbpmbnimvpyaige';
-const ORIGIN=/^(?:https:\/\/[a-z0-9]{4,20}\.csb\.app|https:\/\/bouncer-near\.vercel\.app)$/;
+const ORIGIN=/^(?:https:\/\/[a-z0-9]{4,20}\.csb\.app|https:\/\/bouncer-near\.vercel\.app|https:\/\/bouncer-production-6df1\.up\.railway\.app)$/;
 const TOKEN=/^[A-Za-z0-9_-]{43}$/;
 const HASH=/^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 

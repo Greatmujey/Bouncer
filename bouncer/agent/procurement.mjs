@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { withExclusiveJournalOperation } from './journal-operation.mjs';
 import { pathToFileURL } from 'node:url';
 import nearApi from 'near-api-js';
@@ -474,6 +475,40 @@ export class FileJournal {
   // A snapshot lets protocols reject reused seller challenges across this
   // journal without handing callers a mutable reference to its entries.
   list() { this.assertAvailable(); return structuredClone(this.data.entries); }
+  /** Authenticate a retained ciphertext with this journal's key and scope.
+   * The returned content is private; callers must never log or publish it. */
+  inspectEncryptedSnapshot(serialized) {
+    this.assertAvailable();
+    if (!this.#key || typeof serialized !== 'string' || Buffer.byteLength(serialized, 'utf8') > MAX_ENCRYPTED_JOURNAL_FILE) {
+      throw new Error('encrypted original journal is required');
+    }
+    try { return decryptFileJournal(JSON.parse(serialized), this.#key, this.#contractId, this.#ownerId); }
+    catch { throw new Error('encrypted original journal backup failed authentication'); }
+  }
+  /** Read back exactly the encrypted file only when it authenticates to this
+   * journal's current in-memory state. This does not prove remote retention or
+   * freshness after rollback; callers must hold the journal operation fence. */
+  exportEncryptedSnapshot() {
+    this.assertAvailable();
+    if (!this.#key) throw new Error('an encrypted original journal is required for backup');
+    let fd, bytes;
+    try {
+      fd = fs.openSync(this.file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+      const first = fs.fstatSync(fd);
+      if (!first.isFile() || first.nlink !== 1 || first.size <= 0 || first.size > MAX_ENCRYPTED_JOURNAL_FILE ||
+          (first.mode & 0o077) !== 0 || (typeof process.getuid === 'function' && first.uid !== process.getuid())) throw new Error();
+      bytes = fs.readFileSync(fd);
+      const last = fs.fstatSync(fd), named = fs.lstatSync(this.file);
+      if (!named.isFile() || named.isSymbolicLink() || named.nlink !== 1 || named.dev !== first.dev || named.ino !== first.ino ||
+          last.dev !== first.dev || last.ino !== first.ino || last.size !== first.size || last.nlink !== 1 ||
+          last.mode !== first.mode || last.uid !== first.uid || named.mode !== first.mode || named.uid !== first.uid || bytes.length !== first.size ||
+          last.mtimeMs !== first.mtimeMs || last.ctimeMs !== first.ctimeMs || !isDeepStrictEqual(
+            decryptFileJournal(JSON.parse(bytes.toString('utf8')), this.#key, this.#contractId, this.#ownerId), this.data)) throw new Error();
+      this.assertAvailable();
+      return bytes.toString('utf8'); // ciphertext only; never return the key or plaintext
+    } catch { throw new Error('encrypted original journal backup read is unsafe or differs; stop and reconcile'); }
+    finally { bytes?.fill(0); if (fd !== undefined) fs.closeSync(fd); }
+  }
   put(id, entry) {
     this.assertAvailable();
     if (typeof id !== 'string' || !id || !entry || typeof entry !== 'object' || Array.isArray(entry) ||

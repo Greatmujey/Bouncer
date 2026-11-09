@@ -22,7 +22,8 @@ test('public staging copies only reviewed wallet and Google assets, never creden
   fs.writeFileSync(path.join(source, 'credentials.txt'), 'private');
   fs.mkdirSync(path.join(source, 'journals'));
   fs.writeFileSync(path.join(source, 'journals', 'recovery.json'), 'private');
-  assert.equal(PUBLIC_WEB_FILES.length, 18);
+  assert.equal(PUBLIC_WEB_FILES.length, 19);
+  assert.ok(PUBLIC_WEB_FILES.includes('v14-bootstrap-artifact-v1.json'));
   assert.ok(PUBLIC_WEB_FILES.includes('google-signin.mjs'));
   assert.ok(PUBLIC_WEB_FILES.includes('hero-orbit.jpg'));
   assert.ok(PUBLIC_WEB_FILES.includes('manrope-latin.woff2'));
@@ -113,7 +114,9 @@ test('public staging requires six wallets, WalletConnect, then Google', t => {
 
 test('deployment revalidates HTML, permits Google popups, and versions its assets', () => {
   const config = JSON.parse(fs.readFileSync(path.join(realSource, 'vercel.json'), 'utf8'));
-  assert.equal(config.git?.deploymentEnabled?.['arena/6d538ba2-near-hub'], false);
+  assert.equal(config.git?.deploymentEnabled, false, 'the website must not automatically deploy any branch containing this configuration');
+  const relay = JSON.parse(fs.readFileSync(new URL('../testnet-relay/vercel.json', import.meta.url), 'utf8'));
+  assert.equal(relay.git?.deploymentEnabled, false, 'the relay must not automatically deploy any branch containing this configuration');
   for (const source of ['/', '/index.html']) {
     const headers = config.headers.find(rule => rule.source === source)?.headers || [];
     assert.match(headers.find(header => header.key.toLowerCase() === 'cache-control')?.value || '', /no-cache.*must-revalidate/);
@@ -128,11 +131,34 @@ test('deployment revalidates HTML, permits Google popups, and versions its asset
   for (const file of ['styles.css', 'app.mjs', 'google-signin.mjs', 'wallet.bundle.js']) assert.match(html, new RegExp(`\\./${file.replaceAll('.', '\\.') }\\?v=\\d+`));
 });
 
-test('Google session and WalletConnect relay are server functions, never public static files', async () => {
-  assert.deepEqual(fs.readdirSync(path.join(realSource, 'api')).sort(), ['google-session.mjs', 'wc-relay.mjs']);
-  for (const file of ['api/google-session.mjs', 'api/wc-relay.mjs']) assert.ok(!PUBLIC_WEB_FILES.includes(file));
+test('Google, WalletConnect and disabled-by-default mission proxies are server functions, never public static files', async () => {
+  assert.deepEqual(fs.readdirSync(path.join(realSource, 'api')).sort(), ['google-session.mjs', 'native-mission', 'wc-relay.mjs']);
+  const actions=['challenge','config','execute','originals','preview','recover','v14-completed-history','v14-preflight','v14-receipt'];
+  assert.deepEqual(fs.readdirSync(path.join(realSource,'api/native-mission')).sort(),actions.map(action=>`${action}.mjs`));
+  for (const file of ['api/google-session.mjs','api/wc-relay.mjs',...actions.map(action=>`api/native-mission/${action}.mjs`)]) {
+    assert.ok(!PUBLIC_WEB_FILES.includes(file));
+  }
   const api = await import('../web/api/google-session.mjs');
   assert.equal(typeof api.default, 'function');
+  // Exercise the generated deployment artifacts, not just their source.
+  // All destinations and credentials below are synthetic; fetch is replaced.
+  const proxyScript=`import assert from 'node:assert/strict';
+    const actions=${JSON.stringify(actions)},base=${JSON.stringify(new URL('../web/api/native-mission/',import.meta.url).href)};
+    let calls=[];globalThis.fetch=async (url,options)=>{calls.push([url,options]);return new Response('{"status":"synthetic"}',{headers:{'content-type':'application/json'}})};
+    const modules=await Promise.all(actions.map(action=>import(base+action+'.mjs')));
+    const invoke=async (handler,req)=>{let status,body;await handler(req,{writeHead(code){status=code},end(data){body=data}});return {status,body}};
+    for(const [i,module] of modules.entries()){
+      const action=actions[i],req={method:action==='config'?'GET':'POST',url:'/api/native-mission/'+action,
+        headers:{host:'bouncer-near.vercel.app','x-forwarded-proto':'https','x-bouncer-native-mission':'v1',origin:'https://bouncer-near.vercel.app','content-type':'application/json'},body:{missionSha256:'a'.repeat(64)}};
+      assert.equal((await invoke(module.default,req)).status,404);
+      process.env.BOUNCER_NATIVE_MISSION_PROXY_ENABLED='1';process.env.BOUNCER_V14_SETUP_PROXY_ENABLED='1';process.env.BOUNCER_WALLET_ORIGIN='https://bouncer-near.vercel.app';
+      process.env.BOUNCER_NATIVE_MISSION_BACKEND_ORIGIN='https://bouncer-synthetic.up.railway.app';process.env.BOUNCER_NATIVE_MISSION_PROXY_SECRET='ab'.repeat(32);
+      assert.equal((await invoke(module.default,req)).status,200);assert.equal(calls.at(-1)[0],'https://bouncer-synthetic.up.railway.app/api/native-mission/'+action);
+      assert.equal((await invoke(module.default,{...req,url:'/api/native-mission/not-'+action})).status,403);
+      process.env.BOUNCER_NATIVE_MISSION_PROXY_ENABLED='';process.env.BOUNCER_V14_SETUP_PROXY_ENABLED='';
+    }
+    assert.equal(calls.length,actions.length);`;
+  execFileSync(process.execPath,['--input-type=module','-e',proxyScript],{env:{...process.env,BOUNCER_NATIVE_MISSION_PROXY_ENABLED:'',BOUNCER_V14_SETUP_PROXY_ENABLED:''}});
   const script = `import http from 'node:http'; import server from ${JSON.stringify(new URL('../web/api/wc-relay.mjs', import.meta.url).href)};
     if (!(server instanceof http.Server)) throw new Error('Not an HTTP server');
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -145,6 +171,6 @@ test('Google session and WalletConnect relay are server functions, never public 
 test('staging CLI runs from the web root and publishes only allowlisted files', t => {
   const { dest } = fixture(t);
   const output = execFileSync(process.execPath, [script, dest], { cwd: realSource, encoding: 'utf8' });
-  assert.match(output, /Staged 18 reviewed public website files/);
+  assert.match(output, /Staged 19 reviewed public website files/);
   assert.deepEqual(fs.readdirSync(dest).sort(), [...PUBLIC_WEB_FILES].sort());
 });

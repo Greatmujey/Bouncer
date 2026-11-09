@@ -1,15 +1,19 @@
 // Desktop and mobile browser tests, synthetic wallet/backend/RPC only. No live send.
 import assert from 'node:assert/strict';
-import { createHash, generateKeyPairSync, verify } from 'node:crypto';
+import { createHash, createHmac, generateKeyPairSync, sign, verify, webcrypto } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import nearApi from 'near-api-js';
 import { ORACLE_TESTNET_PROJECT } from '../agent/oracle-outlayer.mjs';
+import { MARKET_SUMMARY_PROGRAM } from '../agent/market-summary.mjs';
 import { validateNativeMission } from '../agent/native-mission.mjs';
 import { nativeMissionAction, nativeMissionApprovalMessage } from '../web-src/native-mission-auth.mjs';
 import { nep413Payload } from '../web-src/cli-login.mjs';
+import { buildV14TemporaryBootstrapPlan } from '../web-src/v14-bootstrap-plan.mjs';
+import { sealV14BootstrapRecoveryKit } from '../web-src/v14-bootstrap-recovery-kit.mjs';
+import { prepareBootstrapEnrollment, bootstrapEnrollmentMessage, bootstrapRecoveryMessage } from '../web-src/v14-bootstrap-checkpoint.mjs';
 import { WALLET_EXECUTOR_SHA256 } from '../web-src/wallet-executor.mjs';
 import { PUBLIC_WEB_FILES, stagePublicWeb } from './stage-public-web.mjs';
 
@@ -24,33 +28,64 @@ const base58=n=>nearApi.utils.serialize.base_encode(Buffer.alloc(32,n));
 const program={url:'https://example.test/random.wasm',sha256:'a'.repeat(64),build_target:'wasm32-wasip1',max_instructions:10_000_000,max_memory_mb:128,max_execution_seconds:60};
 const route={project:{...ORACLE_TESTNET_PROJECT},route_revision:1,policy_revision:1,payee_revision:1,active:true};
 const storageRoute={prefix:'mission-',max_value_bytes:4096,route_revision:1,policy_revision:1,payee_revision:1,active:true};
-const mission=validateNativeMission({version:1,id:'ui-demo',contract_id:vault,owner_account_id:owner,max_native_amount:'3000000000000000000000',
+const randomMission=validateNativeMission({version:1,id:'ui-demo',contract_id:vault,owner_account_id:owner,max_native_amount:'3000000000000000000000',
   required_resources:['compute','storage','api'],goals:[
     {kind:'random',goal:{id:'compute',contract_id:vault,owner_account_id:owner,policy_id:'compute',amount:'1000000000000000000000',input:{min:1,max:10},program}},
     {kind:'oracle',goal:{id:'price',contract_id:vault,owner_account_id:owner,policy_id:'price',amount:'1000000000000000000000',route,max_age_seconds:300}},
     {kind:'storage',goal:{id:'store',contract_id:vault,contract_code_hash:base58(42),owner_account_id:owner,policy_id:'store',amount:'1000000000000000000000',
       object_id:'mission-demo',value:{from_goal_ids:['compute','price']},route:storageRoute}},
   ]});
+const marketMission=validateNativeMission({version:1,id:'ui-market-demo',contract_id:vault,owner_account_id:owner,max_native_amount:'3000000000000000000000',
+  required_resources:['compute','storage','api'],goals:[
+    {kind:'oracle',goal:{id:'price',contract_id:vault,owner_account_id:owner,policy_id:'price',amount:'1000000000000000000000',route,max_age_seconds:300}},
+    {kind:'market',goal:{id:'compute',contract_id:vault,owner_account_id:owner,policy_id:'compute',amount:'1000000000000000000000',
+      input:{from_goal_id:'price',quantity:10},program:MARKET_SUMMARY_PROGRAM}},
+    {kind:'storage',goal:{id:'store',contract_id:vault,contract_code_hash:base58(42),owner_account_id:owner,policy_id:'store',amount:'1000000000000000000000',
+      object_id:'mission-demo',value:{from_goal_ids:['price','compute']},route:storageRoute}},
+  ]});
 const sha=x=>createHash('sha256').update(x).digest('hex');
-const review={format:'bouncer-native-mission-review-v1',network:'testnet',mission,mission_sha256:sha(JSON.stringify(mission))};
 const allowed=new Set(PUBLIC_WEB_FILES),types={'.html':'text/html','.css':'text/css','.mjs':'text/javascript','.js':'text/javascript',
   '.json':'application/json','.zip':'application/zip','.svg':'image/svg+xml','.jpg':'image/jpeg','.woff2':'font/woff2','.txt':'text/plain'};
 const staging=fs.mkdtempSync(path.join(os.tmpdir(),'bouncer-mission-ui-'));
+// One disposable owner key is reused solely to test a saved file on two
+// independent synthetic browser contexts and the two approved origins.
+const candidateOwnerKeys=generateKeyPairSync('ed25519');
+  let crossDeviceCandidate,crossDeviceRecovery;
 try {
-  for(const {width,mode,origin} of [{width:1280,mode:'success',origin:defaultOrigin},
+  for(const {width,mode,origin} of [{width:1280,mode:'market',origin:defaultOrigin}, {width:390,mode:'market',origin:defaultOrigin},
+    {width:1280,mode:'success',origin:defaultOrigin},
     {width:390,mode:'success',origin:defaultOrigin},{width:320,mode:'unknown',origin:defaultOrigin},
-    {width:390,mode:'blocked',origin:defaultOrigin},{width:390,mode:'success',origin:'https://synthetic-bouncer.netlify.app'}]) {
+    {width:390,mode:'blocked',origin:defaultOrigin},{width:390,mode:'recovery-empty',origin:defaultOrigin},
+    {width:1280,mode:'candidate-read',origin:'https://bouncer-production-6df1.up.railway.app'},
+    {width:1280,mode:'recovery-compare-desktop',origin:'https://bouncer-production-6df1.up.railway.app'},
+    {width:390,mode:'candidate-read-rotated',origin:defaultOrigin},
+    {width:390,mode:'candidate-enroll-lost',origin:defaultOrigin},
+    {width:390,mode:'recovery-compare-mobile',origin:defaultOrigin},
+    {width:390,mode:'success',origin:'https://synthetic-bouncer.netlify.app'}]) {
+    const mission=mode==='market'?marketMission:randomMission;
+    const review={format:'bouncer-native-mission-review-v1',network:'testnet',mission,mission_sha256:sha(JSON.stringify(mission))};
     const siteDir=path.join(staging,`site-${fs.readdirSync(staging).length}`);
     stagePublicWeb(siteDir,web,{walletOrigin:origin,walletConnectProjectId:''});
     const mobile=width<600;
     const context=await browser.newContext({viewport:{width,height:844},isMobile:mobile,hasTouch:mobile,reducedMotion:'reduce'}),page=await context.newPage();
+    await page.addInitScript(()=>{
+      if(window===window.top) {
+        window.__bouncerSyntheticSignatures=0;
+        window.addEventListener('message',event=>{
+          if(event.data?.type==='bouncer-synthetic-signature')window.__bouncerSyntheticSignatures++;
+        });
+      }
+    });
     const errors=[],requests=[];page.on('pageerror',e=>errors.push(e.message));
-    const keys=generateKeyPairSync('ed25519'),privatePkcs8=keys.privateKey.export({type:'pkcs8',format:'der'}).toString('base64'),
+    const keys=['recovery-empty','candidate-read','candidate-enroll-lost','recovery-compare-desktop','recovery-compare-mobile'].includes(mode)?candidateOwnerKeys:generateKeyPairSync('ed25519'),
+      privatePkcs8=keys.privateKey.export({type:'pkcs8',format:'der'}).toString('base64'),
       publicKey=`ed25519:${nearApi.utils.serialize.base_encode(Buffer.from(keys.publicKey.export({format:'jwk'}).x,'base64url'))}`;
     const mock=`window.selector.ready({
       async signIn(p){if(p.network!=='testnet'||p.addFunctionCallKey)throw Error();return [{accountId:'${owner}'}]},
       async signOut(){},async getAccounts(){return [{accountId:'${owner}'}]},
       async signMessage({network,signerId,message,nonce,recipient}){
+        window.__bouncerSyntheticSignCount=(window.__bouncerSyntheticSignCount||0)+1;
+        window.parent.postMessage({type:'bouncer-synthetic-signature'},'*');
         if(network!=='testnet'||signerId!=='${owner}')throw Error();
         const e=new TextEncoder(),m=e.encode(message),r=e.encode(recipient),p=new Uint8Array(4+4+m.length+32+4+r.length+1),v=new DataView(p.buffer);
         let i=0;v.setUint32(i,0x80000000+413,true);i+=4;v.setUint32(i,m.length,true);i+=4;p.set(m,i);i+=m.length;
@@ -61,10 +96,16 @@ try {
     });`;
     const bundle=fs.readFileSync(path.join(siteDir,'wallet.bundle.js'),'utf8'),pinned=WALLET_EXECUTOR_SHA256['meteor-wallet'];
     assert(bundle.includes(pinned));const mockDigest=sha(mock);
-    let saved, executes=0, recovers=0, challengeCount=0;
+    let saved, executes=0, recovers=0, challengeCount=0, checkpointPosts=0, mockRecoveryStale=false;
+    const deliveries = count => mission.goals.slice(0,count).map((item,index)=>({kind:item.kind,goal_id:item.goal.id,
+      delivery:{tx_hash:base58(40+index),result:item.kind==='oracle'?{price_usd:2.75}:item.kind==='market'?
+        {value_usd_micros:27500000}:{value:'synthetic public object'}}}));
     const json=(route,data,status=200)=>route.fulfill({status,contentType:'application/json',body:JSON.stringify(data),headers:{'cache-control':'no-store'}});
     await page.route('**/*',async route=>{
       const req=route.request(),url=new URL(req.url());requests.push(`${req.method()} ${url.pathname}`);
+      const payload=req.postData()??'';
+      assert(!payload.includes('synthetic only phone recovery passphrase')&&!payload.includes('synthetic wrong phone passphrase')&&
+        !payload.includes('fixture-only long passphrase'),'recovery passphrases must never enter network requests');
       if(url.pathname.endsWith('meteor-near-connect-latest.js'))return route.fulfill({status:200,contentType:'text/javascript',body:mock});
       if(url.origin==='https://test.rpc.fastnear.com') {
         const cors={'access-control-allow-origin':origin,'access-control-allow-methods':'POST, OPTIONS','access-control-allow-headers':'content-type'};
@@ -74,15 +115,65 @@ try {
           body:JSON.stringify({jsonrpc:'2.0',id:'bouncer-cli-login',result:{permission:'FullAccess'}})});
         return route.abort('failed');
       }
+      if(url.origin==='https://rpc.testnet.near.org' && width===390 && mode==='recovery-empty') {
+        const cors={'access-control-allow-origin':origin,'access-control-allow-methods':'POST, OPTIONS','access-control-allow-headers':'content-type'};
+        if(req.method()==='OPTIONS')return route.fulfill({status:204,headers:cors});
+        const input=req.postDataJSON(),base={jsonrpc:'2.0',id:input.id},at=base58(19);
+        const fee={send_sir:100000000,send_not_sir:100000000,execution:100000000};
+        const actions={create_account_cost:fee,transfer_cost:fee,add_key_cost:{full_access_cost:fee},deploy_contract_cost:fee,
+          deploy_contract_cost_per_byte:fee,function_call_cost:fee,function_call_cost_per_byte:fee,delete_key_cost:fee};
+        let result,error;
+        if(input.method==='status')result={chain_id:'testnet'};
+        else if(input.method==='block')result={header:{hash:at,height:123,timestamp_nanosec:String(BigInt(Date.now())*1000000n)}};
+        else if(input.method==='EXPERIMENTAL_protocol_config')result={chain_id:'testnet',protocol_version:90,runtime_config:{
+          storage_amount_per_byte:'10000000000000000000',min_gas_purchase_price:'1000000000',account_creation_charge:'7000000000000000000000',
+          transaction_costs:{action_receipt_creation_config:fee,action_creation_config:actions}}};
+        else if(input.method==='gas_price')result={gas_price:'100000000'};
+        else if(input.method==='query' && input.params.account_id===vault)error={cause:{name:'UNKNOWN_ACCOUNT',
+          info:{requested_account_id:vault,block_hash:at}}};
+        else if(input.method==='query' && input.params.request_type==='view_account')result={block_hash:at,code_hash:'11111111111111111111111111111111',
+          amount:'26000000000000000000000000',storage_usage:264};
+        else if(input.method==='query' && input.params.request_type==='view_access_key_list')result={block_hash:at,keys:[{public_key:'synthetic',access_key:{permission:'FullAccess'}}]};
+        else return route.abort('failed');
+        return route.fulfill({status:200,contentType:'application/json',headers:cors,body:JSON.stringify({...base,...(error?{error}:{result})})});
+      }
+      if(url.origin==='https://jiouaqwxkvlkmvyumzwc.supabase.co' &&
+          url.pathname==='/functions/v1/bouncer-v14-bootstrap-checkpoint' &&
+          ['candidate-read','candidate-read-rotated','candidate-enroll-lost','recovery-compare-desktop','recovery-compare-mobile'].includes(mode)) {
+        const cors={'access-control-allow-origin':origin,'access-control-allow-methods':'POST, OPTIONS',
+          'access-control-allow-headers':'content-type','cache-control':'no-store'};
+        if(req.method()==='OPTIONS')return route.fulfill({status:204,headers:cors});
+        assert.equal(req.method(),'POST');checkpointPosts++;
+        const input=req.postDataJSON();assert(['enroll','recover'].includes(input.operation));assert.equal(input.terms.owner,owner);
+        assert.equal(input.terms.owner_public_key,publicKey);assert.equal(input.terms.site,origin);
+        const message=input.operation==='enroll'?bootstrapEnrollmentMessage(input.terms):bootstrapRecoveryMessage(input.terms);
+        const payload=nep413Payload({message,nonce:new Uint8Array(Buffer.from(input.nonce_base64,'base64')),recipient:new URL(origin).host});
+        assert.equal(verify(null,createHash('sha256').update(payload).digest(),keys.publicKey,Buffer.from(input.signature_base64,'base64')),true);
+        if(input.operation==='recover') {
+          assert(crossDeviceRecovery);const file=JSON.parse(crossDeviceRecovery.text);
+          const result={status:'EXISTING_RECOVERY_ONLY',scope_id:file.scope_id,review_text:file.review_text,sealed_kit:file.sealed_kit,
+            owner_attestation:file.owner_attestation,revision:mockRecoveryStale?0:file.revision,head_sha256:mockRecoveryStale?'0'.repeat(64):file.head_sha256,
+            events:mockRecoveryStale?[]:file.events,transaction_authorized:false,latest_head_independently_verified:false};
+          return route.fulfill({status:200,contentType:'application/json',headers:cors,body:JSON.stringify(result)});
+        }
+        assert.equal(await page.evaluate(()=>localStorage.getItem('bouncer-v14-bootstrap-enrollment-attempt-great-mujey-v1')),'1');
+        if(mode==='candidate-enroll-lost')return route.abort('failed');
+        const attestation=JSON.stringify({terms:input.terms,nonce_base64:input.nonce_base64,signature_base64:input.signature_base64});
+        return route.fulfill({status:200,contentType:'application/json',headers:cors,body:JSON.stringify({status:'ENROLLED',
+          scope_id:input.terms.scope_id,revision:0,head_sha256:'0'.repeat(64),kit_sha256:input.terms.kit_sha256,attestation_sha256:sha(attestation)})});
+      }
       if(url.origin!==origin)return route.abort('failed');
       if(url.pathname==='/api/google-session')return json(route,{error:'not configured'},503);
       if(url.pathname==='/api/native-mission/config')return json(route,{enabled:true,network:'testnet',review});
       if(url.pathname.startsWith('/api/native-mission/')) {
         const name=url.pathname.split('/').pop(),input=req.postDataJSON();assert.equal(input.missionSha256,review.mission_sha256);
-        if(name==='preview')return json(route,{review,preview:{status:mode==='blocked'?'BLOCKED':'READY',stage:'synthetic'}});
+        if(name==='preview')return json(route,{review,preview:{status:['blocked','recovery-empty','candidate-read','candidate-read-rotated','candidate-enroll-lost','recovery-compare-desktop','recovery-compare-mobile'].includes(mode)?'BLOCKED':'READY',stage:'synthetic',
+          ...(mode==='market'?{next_goal_id:mission.goals[executes]?.goal.id??null,verified_prior_deliveries:deliveries(executes)}:{})}});
         if(name==='challenge') {
           assert.equal(input.ownerPublicKey,publicKey);challengeCount++;
-          const action=nativeMissionAction({owner,ownerPublicKey:publicKey,vault,missionId:mission.id,missionSha256:review.mission_sha256,maxNativeYocto:mission.max_native_amount});
+          if(mode==='market')assert.equal(input.goalId,mission.goals[executes].goal.id);
+          const action=nativeMissionAction({owner,ownerPublicKey:publicKey,vault,missionId:mission.id,missionSha256:review.mission_sha256,
+            maxNativeYocto:mission.max_native_amount,...(mode==='market'?{goalId:input.goalId,goalMaxNativeYocto:mission.goals[executes].goal.amount}:{})});
           const issued=Date.now(),expires=issued+120_000,id=String(challengeCount).padStart(32,'0'),nonce=Buffer.alloc(32,challengeCount);
           const challenge={challenge_id:id,nonce_base64:nonce.toString('base64'),recipient:new URL(origin).host,expires_at_ms:expires,
             message:nativeMissionApprovalMessage(action,sha(JSON.stringify(action)),origin,issued,expires)};
@@ -93,10 +184,14 @@ try {
           assert.equal(input.evidence.accountId,owner);assert.equal(input.evidence.publicKey,publicKey);
           const payload=nep413Payload({message:saved.challenge.message,nonce:new Uint8Array(saved.nonce),recipient:saved.challenge.recipient});
           assert.equal(verify(null,createHash('sha256').update(payload).digest(),keys.publicKey,Buffer.from(input.evidence.signature,'base64')),true);
+          if(mode==='market')assert.equal(input.goalId,mission.goals[executes].goal.id);
           saved.used=true;executes++;if(mode==='unknown')return route.abort('failed');
+          if(mode==='market')return json(route,{status:executes<3?'CHECKPOINT':'FULFILLED',new_payments:1,
+            ...(executes<3?{remaining_goal_ids:mission.goals.slice(executes).map(x=>x.goal.id)}:{}),deliveries:deliveries(executes),note:'Synthetic test only.'});
           return json(route,{status:'FULFILLED',new_payments:3,deliveries:[],note:'Synthetic test only.'});
         }
-        if(name==='originals')return json(route,{status:'LOCAL_ORIGINALS',originals:[{goal_id:'compute',kind:'random',status:'pending',original_hash:base58(43)}]});
+        if(name==='originals')return json(route,mode==='recovery-empty'?{status:'NO_LOCAL_ORIGINALS',originals:[]}:
+          {status:'LOCAL_ORIGINALS',originals:[{goal_id:'compute',kind:'random',status:'pending',original_hash:base58(43)}]});
         if(name==='recover'){recovers++;if(mode==='unknown')return json(route,{error:'synthetic receipt unavailable'},409);
           return json(route,{status:'RECOVERED',new_payments:0,deliveries:[]});}
         return json(route,{error:'unavailable'},404);
@@ -108,10 +203,189 @@ try {
     await page.goto(`${origin}/`,{waitUntil:'networkidle'});
     await page.waitForFunction(()=>!document.querySelector('[data-wallet-id="meteor-wallet"]').disabled);
     await page.locator('.top-connect').click();await page.locator('[data-wallet-id="meteor-wallet"]').click();
-    await page.waitForFunction(()=>document.querySelector('#wallet-status').textContent.includes('great_mujey.testnet'));
-    await page.locator('.top-connect').click();await page.locator('#wallet-owner-verify').click();
     try { await page.waitForFunction(()=>document.querySelector('#wallet-account-badge').textContent==='OWNER VERIFIED',null,{timeout:10_000}); }
     catch(error){console.error('Synthetic owner verification:',await page.locator('#wallet-owner-status').textContent(),errors,requests.slice(-12));throw error;}
+    await page.waitForFunction(()=>window.__bouncerSyntheticSignatures===1);
+    assert.equal(await page.locator('#wallet-owner-verify').isVisible(),false);
+    assert.equal(await page.locator('#wallet-dialog').evaluate(el=>el.open),false);
+    assert.equal(executes,0);assert.equal(challengeCount,0);assert.equal(checkpointPosts,0);
+    const signatureCount=()=>page.evaluate(()=>window.__bouncerSyntheticSignatures);
+    await page.evaluate(()=>{location.hash='#guardrails';});
+    await page.locator('#vault-tools-title').waitFor({state:'visible'});
+    assert.match(await page.locator('#workspace-vault-wallet-state').innerText(),/identity verified/i);
+    if (mode==='recovery-empty' || ['candidate-read','candidate-read-rotated','candidate-enroll-lost'].includes(mode)) {
+      await page.locator('[data-route-view="guardrails"] .workspace-advanced > summary').click();
+    }
+    if(width===390 && mode==='recovery-empty') {
+      // Real browser download + import on a phone-sized viewport, using a
+      // synthetic wallet only. Neither operation prompts or sends anything.
+      const beforeSignatures=await signatureCount(),candidatePassphraseValue='synthetic only phone recovery passphrase';
+      await page.locator('#wallet-bootstrap-candidate-open').click();
+      assert.equal(await page.locator('#wallet-bootstrap-candidate-enrollment').isVisible(),false,'offline checkpoint is not offered');
+      await page.locator('#wallet-bootstrap-candidate-passphrase').fill(candidatePassphraseValue);
+      await page.locator('#wallet-bootstrap-candidate-confirm').fill(candidatePassphraseValue);
+      await page.locator('#wallet-bootstrap-candidate-create').click();
+      await page.waitForFunction(()=>document.querySelector('#wallet-bootstrap-candidate-status').textContent.includes('Local preparation created'),null,{timeout:20_000});
+      assert.equal(await page.locator('#wallet-bootstrap-candidate-passphrase').inputValue(),'');
+      assert.equal(await page.locator('#wallet-bootstrap-candidate-confirm').inputValue(),'');
+      const id=(await page.locator('#wallet-bootstrap-candidate-id').innerText()).trim();assert.match(id,/^[a-f0-9]{64}$/);
+      const [download]=await Promise.all([page.waitForEvent('download'),page.locator('#wallet-bootstrap-candidate-download').click()]);
+      assert.equal(download.suggestedFilename(),'bouncer-testnet-setup-preparation.json');
+      const bytes=fs.readFileSync(await download.path()),text=bytes.toString('utf8'),candidate=JSON.parse(text);
+      assert.equal(candidate.format,'bouncer-v14-local-bootstrap-candidate-v1');assert(!text.includes(candidatePassphraseValue));
+      assert.equal(candidate.review.owner,owner);assert.equal(candidate.review.owner_public_key,publicKey);
+      assert.equal(candidate.review.vault,vault);assert.equal(candidate.review.wallet_approval_obtained,false);
+      assert.equal(candidate.review.transaction_sent,false);
+      assert.equal(sha(`bouncer-v14-local-bootstrap-candidate-file-v1\0${text}`),id);
+      await page.locator('#wallet-bootstrap-candidate-file').setInputFiles({name:'saved.json',mimeType:'application/json',buffer:bytes});
+      await page.locator('#wallet-bootstrap-candidate-expected').fill(id);
+      await page.locator('#wallet-bootstrap-candidate-unlock').fill(candidatePassphraseValue);
+      await page.locator('#wallet-bootstrap-candidate-verify').click();
+      await page.waitForFunction(()=>document.querySelector('#wallet-bootstrap-candidate-check-status').textContent.includes('File matches the recorded ID'));
+      assert.match(await page.locator('#wallet-bootstrap-candidate-check-status').innerText(),/no transaction originals.*latest head/i);
+      assert.equal(await page.locator('#wallet-bootstrap-candidate-unlock').inputValue(),'');
+      await page.locator('#wallet-bootstrap-candidate-file').setInputFiles({name:'saved.json',mimeType:'application/json',buffer:bytes});
+      assert.equal(await page.locator('#wallet-bootstrap-candidate-check-status').innerText(),'');
+      await page.locator('#wallet-bootstrap-candidate-unlock').fill('synthetic wrong phone passphrase');
+      await page.locator('#wallet-bootstrap-candidate-verify').click();
+      await page.waitForFunction(()=>document.querySelector('#wallet-bootstrap-candidate-check-status').textContent.includes('Could not verify'));
+      assert.equal(await signatureCount(),beforeSignatures);assert.equal(executes,0);assert.equal(challengeCount,0);
+      assert(requests.some(item=>item==='GET /v14-bootstrap-artifact-v1.json'),'public artifact is lazy-loaded');
+      crossDeviceCandidate={bytes,id,passphrase:candidatePassphraseValue};
+      await page.locator('#wallet-bootstrap-budget-open').click();
+      await page.locator('#wallet-bootstrap-budget-refresh').click();
+      await page.waitForFunction(()=>document.querySelector('#wallet-bootstrap-budget-result').textContent.includes('Example vault transfer: 6 test NEAR'));
+      assert.match(await page.locator('#wallet-bootstrap-budget-status').innerText(),/no transaction was authorized or sent/i);
+      // The checkpoint endpoint is deliberately unreachable in this browser
+      // rehearsal. Offline recovery can still be opened and a malformed file
+      // is rejected without another wallet signature or any transaction.
+      await page.locator('#wallet-bootstrap-recovery-open').click();
+      assert.equal(await page.locator('#wallet-bootstrap-recovery-read').isDisabled(),true);
+      assert.match(await page.locator('#wallet-bootstrap-recovery-status').innerText(),/online recovery is not enabled/i);
+      await page.locator('#wallet-bootstrap-recovery-file').setInputFiles({name:'invalid.json',mimeType:'application/json',buffer:Buffer.from('{}')});
+      await page.locator('#wallet-bootstrap-recovery-import').click();
+      await page.waitForFunction(()=>document.querySelector('#wallet-bootstrap-recovery-status').textContent.includes('file is invalid'));
+      assert.equal(await page.locator('#wallet-bootstrap-recovery-backup').isVisible(),false);
+      // A disposable fixture exercises the real encrypted file and DOM in a
+      // phone-sized Chromium context. None of these keys exist on testnet.
+      const temp=nearApi.KeyPair.fromRandom('ed25519'),scopeId='ab'.repeat(16),capability='cd'.repeat(32),passphrase='fixture-only long passphrase';
+      const compressed=new Uint8Array(fs.readFileSync(path.join(web,'artifacts/v14-research.deflate')));
+      const plan=await buildV14TemporaryBootstrapPlan({owner,ownerPublicKey:publicKey,vault,temporaryPublicKey:String(temp.getPublicKey()),
+        vaultFundingYocto:String(6n*10n**24n),compressedV14:compressed,crypto:webcrypto});
+      const kit=await sealV14BootstrapRecoveryKit({review:plan.review,temporaryKey:temp,scopeId,checkpointCapability:capability,passphrase,crypto:webcrypto});
+      const draft=await prepareBootstrapEnrollment({review:plan.review,kit,passphrase,compressedV14:compressed,site:origin,crypto:webcrypto});
+      const digest=createHash('sha256').update(nep413Payload({message:draft.message,nonce:draft.nonce,recipient:draft.recipient})).digest();
+      const attestation=JSON.stringify({terms:draft.terms,nonce_base64:Buffer.from(draft.nonce).toString('base64'),
+        signature_base64:sign(null,digest,keys.privateKey).toString('base64')});
+      let head='0'.repeat(64);const events=[];
+      for(const [index,type] of ['create_claim','create_original'].entries()) {
+        const event=JSON.stringify({format:'bouncer-v14-original-event-v1',seq:index+1,previous_sha256:head,type,
+          data:{scope_id:scopeId,review_sha256:plan.review.review_sha256,tx_hash:index?base58(51):null}});
+        events.push(event);head=sha(event);
+      }
+      const body={format:'bouncer-v14-bootstrap-recovery-export-v1',network:'testnet',owner,vault,scope_id:scopeId,
+        review_text:draft.review_text,sealed_kit:draft.sealed_kit,owner_attestation:attestation,revision:2,head_sha256:head,events,
+        latest_head_independently_verified:false,transaction_authorized:false};
+      const mac=createHmac('sha256',Buffer.from(capability,'hex')).update(`bouncer-v14-bootstrap-export-v1\0${JSON.stringify(body)}`).digest('hex');
+      const recovery=JSON.stringify({...body,history_hmac_sha256:mac});
+      crossDeviceRecovery={text:recovery,passphrase};
+      for(const secret of [String(temp),capability,passphrase])assert(!recovery.includes(secret));
+      const sigs=await signatureCount(),networkBefore=requests.length;
+      await page.locator('#wallet-bootstrap-recovery-file').setInputFiles({name:'synthetic.json',mimeType:'application/json',buffer:Buffer.from(recovery)});
+      await page.locator('#wallet-bootstrap-recovery-import').click();
+      assert.equal(await page.locator('#wallet-bootstrap-recovery-originals').isVisible(),false);
+      assert.equal(await page.locator('#wallet-bootstrap-recovery-export').isDisabled(),true);
+      await page.locator('#wallet-bootstrap-recovery-passphrase').fill(passphrase);
+      await page.locator('#wallet-bootstrap-recovery-unlock').click();
+      await page.waitForFunction(()=>document.querySelector('#wallet-bootstrap-recovery-status').textContent.includes('file integrity matched'));
+      assert.match(await page.locator('#wallet-bootstrap-recovery-originals a').first().innerText(),/File integrity matched.*Create original/);
+      assert.equal(await page.locator('#wallet-bootstrap-recovery-export').isDisabled(),false);
+      assert.equal(await page.locator('#wallet-bootstrap-recovery-compare').isVisible(),true);
+      assert.equal(await page.locator('#wallet-bootstrap-recovery-compare').isDisabled(),true,'offline files cannot prompt an online comparison');
+      const forged=JSON.parse(recovery),event=JSON.parse(forged.events[1]);event.data.tx_hash=base58(52);
+      forged.events[1]=JSON.stringify(event);forged.head_sha256=sha(forged.events[1]);
+      await page.locator('#wallet-bootstrap-recovery-file').setInputFiles({name:'forged.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(forged))});
+      await page.locator('#wallet-bootstrap-recovery-import').click();
+      assert.equal(await page.locator('#wallet-bootstrap-recovery-originals').isVisible(),false);
+      await page.locator('#wallet-bootstrap-recovery-passphrase').fill(passphrase);
+      await page.locator('#wallet-bootstrap-recovery-unlock').click();
+      await page.waitForFunction(()=>document.querySelector('#wallet-bootstrap-recovery-status').textContent.includes('Could not unlock or verify'));
+      assert.equal(await page.locator('#wallet-bootstrap-recovery-originals').isVisible(),false);
+      assert.equal(await page.locator('#wallet-bootstrap-recovery-export').isDisabled(),true);
+      assert.equal(await signatureCount(),sigs);assert.equal(requests.length,networkBefore,'offline import made no network calls');
+      assert.equal(executes,0);assert.equal(challengeCount,0);
+    }
+    if(['candidate-read','candidate-read-rotated','candidate-enroll-lost'].includes(mode)) {
+      assert(crossDeviceCandidate,'a separate phone-sized context saved the file first');
+      const {bytes,id,passphrase}=crossDeviceCandidate,beforeSignatures=await signatureCount();
+      await page.locator('#wallet-bootstrap-candidate-open').click();
+      assert.equal(await page.locator('#wallet-bootstrap-candidate-saved').isVisible(),false);
+      await page.locator('#wallet-bootstrap-candidate-file').setInputFiles({name:'from-another-device.json',mimeType:'application/json',buffer:bytes});
+      await page.locator('#wallet-bootstrap-candidate-expected').fill(id.toUpperCase());
+      await page.locator('#wallet-bootstrap-candidate-unlock').fill(passphrase);
+      await page.locator('#wallet-bootstrap-candidate-verify').click();
+      await page.waitForFunction(()=>document.querySelector('#wallet-bootstrap-candidate-check-status').textContent.includes('File matches the recorded ID'));
+      const checked=await page.locator('#wallet-bootstrap-candidate-check-status').innerText();
+      if(mode!=='candidate-read-rotated')assert.match(checked,/owner key matches this verified session.*does not prove another backup/i);
+      else assert.match(checked,/WARNING: the recorded owner key differs.*reconcile the key change/i);
+      await page.locator('#wallet-bootstrap-candidate-file').setInputFiles({name:'from-another-device.json',mimeType:'application/json',buffer:bytes});
+      await page.locator('#wallet-bootstrap-candidate-expected').fill('0'.repeat(64));
+      await page.locator('#wallet-bootstrap-candidate-unlock').fill(passphrase);
+      await page.locator('#wallet-bootstrap-candidate-verify').click();
+      await page.waitForFunction(()=>document.querySelector('#wallet-bootstrap-candidate-check-status').textContent.includes('Could not verify'));
+      assert.equal(await signatureCount(),beforeSignatures);assert.equal(executes,0);assert.equal(challengeCount,0);
+      assert(requests.some(item=>item==='GET /v14-bootstrap-artifact-v1.json'));
+      // One cross-device saved file, an identity message, and a mocked remote
+      // checkpoint. No real wallet, live service or NEAR transaction is used.
+      await page.waitForFunction(()=>!document.querySelector('#wallet-bootstrap-candidate-enrollment').hidden);
+      await page.locator('#wallet-bootstrap-candidate-file').setInputFiles({name:'from-another-device.json',mimeType:'application/json',buffer:bytes});
+      await page.locator('#wallet-bootstrap-candidate-expected').fill(id);
+      await page.locator('#wallet-bootstrap-candidate-unlock').fill(passphrase);
+      await page.locator('#wallet-bootstrap-candidate-enroll').click();
+      const wanted=mode==='candidate-read-rotated'?'recorded owner key differs':mode==='candidate-enroll-lost'?'may have been recorded':'acknowledged';
+      await page.waitForFunction(value=>document.querySelector('#wallet-bootstrap-candidate-enroll-status').textContent.includes(value),wanted,{timeout:20_000});
+      assert.equal(await page.locator('#wallet-bootstrap-candidate-unlock').inputValue(),'');
+      if(mode==='candidate-read-rotated') {
+        assert.equal(await signatureCount(),beforeSignatures);assert.equal(checkpointPosts,0);
+        assert.equal(await page.evaluate(()=>localStorage.getItem('bouncer-v14-bootstrap-enrollment-attempt-great-mujey-v1')),null);
+      } else {
+        await page.waitForFunction(count=>window.__bouncerSyntheticSignatures===count,beforeSignatures+1);
+        assert.equal(checkpointPosts,1);assert.equal(await page.locator('#wallet-bootstrap-candidate-enroll').isDisabled(),true);
+        assert.equal(await page.evaluate(()=>localStorage.getItem('bouncer-v14-bootstrap-enrollment-attempt-great-mujey-v1')),'1');
+        assert.match(await page.locator('#wallet-bootstrap-candidate-enroll-status').innerText(),mode==='candidate-enroll-lost'
+          ? /recover it instead.*no vault transaction/i : /not a verified independent restore.*no transaction/i);
+      }
+      assert.equal(executes,0);assert.equal(challengeCount,0);
+    }
+    if(['recovery-compare-desktop','recovery-compare-mobile'].includes(mode)) {
+      assert(crossDeviceRecovery,'an encrypted recovery file was saved in a separate browser context');
+      const beforeSignatures=await signatureCount(),beforePosts=checkpointPosts;
+      await page.locator('#wallet-bootstrap-recovery-open').click();
+      await page.waitForFunction(()=>!document.querySelector('#wallet-bootstrap-recovery-read').disabled);
+      await page.locator('#wallet-bootstrap-recovery-file').setInputFiles({name:'separately-saved-recovery.json',mimeType:'application/json',
+        buffer:Buffer.from(crossDeviceRecovery.text)});
+      await page.locator('#wallet-bootstrap-recovery-import').click();
+      assert.equal(await page.locator('#wallet-bootstrap-recovery-compare').isVisible(),false);
+      await page.locator('#wallet-bootstrap-recovery-passphrase').fill(crossDeviceRecovery.passphrase);
+      await page.locator('#wallet-bootstrap-recovery-unlock').click();
+      await page.waitForFunction(()=>document.querySelector('#wallet-bootstrap-recovery-status').textContent.includes('file integrity matched'));
+      await page.locator('#wallet-bootstrap-recovery-compare').click();
+      await page.waitForFunction(()=>document.querySelector('#wallet-bootstrap-recovery-compare-status').textContent.includes('match at revision 2'));
+      assert.match(await page.locator('#wallet-bootstrap-recovery-compare-status').innerText(),/does not prove a separate backup, the latest history or on-chain receipts.*no transaction/i);
+      assert.equal(await signatureCount(),beforeSignatures+1);assert.equal(checkpointPosts,beforePosts+1);
+      mockRecoveryStale=true;await page.locator('#wallet-bootstrap-recovery-compare').click();
+      await page.waitForFunction(()=>document.querySelector('#wallet-bootstrap-recovery-compare-status').textContent.includes('file is ahead'));
+      assert.match(await page.locator('#wallet-bootstrap-recovery-compare-status').innerText(),/service may be stale.*do not resend/i);
+      assert.equal(await signatureCount(),beforeSignatures+2);assert.equal(checkpointPosts,beforePosts+2);
+      await page.locator('#wallet-bootstrap-recovery-file').setInputFiles({name:'different-selection.json',mimeType:'application/json',
+        buffer:Buffer.from(crossDeviceRecovery.text)});
+      assert.equal(await page.locator('#wallet-bootstrap-recovery-compare').isVisible(),false);
+      assert.equal(await page.locator('#wallet-bootstrap-recovery-compare-status').innerText(),'');
+      assert.equal(executes,0);assert.equal(challengeCount,0);
+    }
+    await page.evaluate(()=>{location.hash='#capabilities';});
+    await page.locator('#resource-tools-title').waitFor({state:'visible'});
+    assert.match(await page.locator('#workspace-resource-wallet-state').innerText(),/identity verified/i);
     await page.locator('#wallet-native-mission-open').waitFor({state:'visible'});await page.locator('#wallet-native-mission-open').click();
     await page.waitForFunction(()=>document.querySelector('#wallet-native-mission-details') && !document.querySelector('#wallet-native-mission-details').hidden);
     assert.match(await page.locator('#wallet-native-mission-panel').innerText(),/public NEAR contract state/i);
@@ -119,26 +393,41 @@ try {
     await page.locator('#wallet-native-mission-details summary').click();
     assert.match(await page.locator('#wallet-native-mission-manifest').innerText(),/"from_goal_ids"/);
     assert.equal(executes,0);assert.equal(challengeCount,0);
-    if(mode==='blocked') {
+    if(['blocked','recovery-empty','candidate-read','candidate-read-rotated','candidate-enroll-lost','recovery-compare-desktop','recovery-compare-mobile'].includes(mode)) {
       await page.waitForFunction(()=>document.querySelector('#wallet-native-mission-status').textContent.includes('Mission blocked'));
       assert.equal(await page.locator('#wallet-native-mission-approve').isVisible(),false);
+      if(mode==='recovery-empty') {
+        await page.locator('#wallet-native-mission-recover').click();
+        await page.waitForFunction(()=>document.querySelector('#wallet-native-mission-status').textContent.includes('No local original was found'));
+        assert.match(await page.locator('#wallet-native-mission-status').innerText(),/does not prove a transaction was never sent/i);
+        assert.equal(recovers,0);assert.equal(executes,0);assert.equal(challengeCount,0);
+      }
     } else {
       await page.locator('#wallet-native-mission-approve').waitFor({state:'visible'});
       assert.equal(await page.locator('#wallet-native-mission-approve').isDisabled(),true);
       await page.locator('#wallet-native-mission-consent').check();await page.locator('#wallet-native-mission-approve').click();
+      if(mode==='market') {
+        for(const [index,next] of ['compute','store'].entries()) {
+          await page.waitForFunction(goal=>document.querySelector('#wallet-native-mission-status').textContent.includes(`Next step: ${goal}`),next,{timeout:15_000});
+          assert.equal(executes,index+1);assert.equal(challengeCount,index+1);
+          assert.equal(await page.locator('#wallet-native-mission-receipts a').count(),index+1);
+          assert.match(await page.locator('#wallet-native-mission-receipts a').first().getAttribute('href'),/^https:\/\/testnet\.nearblocks\.io\/txns\//);
+          await page.locator('#wallet-native-mission-consent').check();await page.locator('#wallet-native-mission-approve').click();
+        }
+      }
       await page.waitForFunction(()=>/FULFILLED|uncertain/.test(document.querySelector('#wallet-native-mission-status').textContent),null,{timeout:15_000});
-      assert.equal(executes,1);assert.equal(challengeCount,1);
+      assert.equal(executes,mode==='market'?3:1);assert.equal(challengeCount,mode==='market'?3:1);
       assert.equal(await page.locator('#wallet-native-mission-approve').isVisible(),false);
       await page.locator('#wallet-native-mission-recover').click();
       if(mode==='unknown') {
         await page.waitForFunction(()=>document.querySelector('#wallet-native-mission-status').textContent.includes('Original receipts are unavailable'));
         assert.match(await page.locator('#wallet-native-mission-status').innerText(),new RegExp(base58(43)));
       } else await page.waitForFunction(()=>document.querySelector('#wallet-native-mission-status').textContent.includes('RECOVERED'));
-      assert.equal(executes,1);assert.equal(challengeCount,1);assert.equal(recovers,1);
+      assert.equal(executes,mode==='market'?3:1);assert.equal(challengeCount,mode==='market'?3:1);assert.equal(recovers,1);
     }
     assert.equal(await page.locator('#wallet-dialog').evaluate(el=>el.scrollWidth<=el.clientWidth),true);
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
     assert.deepEqual(errors,[]);await context.close();
   }
-  console.log('Synthetic desktop and mobile mission UI: review, explicit consent, blocked preflight, unknown response and no-key recovery passed.');
+  console.log('Synthetic desktop/mobile UI: encrypted file transfer, enrollment, matching/stale recovery comparison, blocked preflight and uncertain-response recovery passed.');
 } finally { await browser.close(); fs.rmSync(staging,{recursive:true,force:true}); }

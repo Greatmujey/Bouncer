@@ -64,15 +64,15 @@ export async function inspectV14PhoneSetupCompletion({prior=[],provider,now=Date
     deposited_and_storage_backed:ledger===BigInt(review.native_deposit_yocto) && balance>=ledger+BigInt(vault.storage_usage)*cost};
   const perGoal=await Promise.all(review.mission.goals.map(async({kind,goal})=>{
     const id=goal.id,policyId=goal.policy_id,publicKey=review.agent_public_keys[id];
-    const method=kind==='random'?'execute_outlayer':kind==='oracle'?'execute_outlayer_native_project':'execute_native_storage';
+    const method=['random','market'].includes(kind)?'execute_outlayer':kind==='oracle'?'execute_outlayer_native_project':'execute_native_storage';
     const payee=kind==='storage'?review.vault:'outlayer.testnet';
-    const routeMethod=kind==='random'?'get_outlayer_program':kind==='oracle'?'get_outlayer_native_project':'get_native_storage_route';
+    const routeMethod=['random','market'].includes(kind)?'get_outlayer_program':kind==='oracle'?'get_outlayer_native_project':'get_native_storage_route';
     const [policy,route,grant,verdict]=await Promise.all([view('get_policy',{policy_id:policyId}),view(routeMethod,{policy_id:policyId}),
       view('is_agent_key_allowed',{policy_id:policyId,public_key:publicKey}),view('check',{policy_id:policyId,payee,amount:goal.amount})]);
     const agent=ownerKeys.keys.find(k=>k.public_key===publicKey),permission=agent?.access_key?.permission?.FunctionCall;
     const allowance=amount(permission?.allowance),nonce=pinnedAccessKeyNonce(agent?.access_key?.nonce);
     return {id,policy:isDeepStrictEqual(policy,{token:'native',per_tx_cap:goal.amount,daily_cap:review.rolling_caps_yocto[id]}),
-      route:isDeepStrictEqual(route,kind==='random'?goal.program:goal.route),grant:grant===true,
+      route:isDeepStrictEqual(route,['random','market'].includes(kind)?goal.program:goal.route),grant:grant===true,
       allowed:Array.isArray(verdict)&&verdict.length===2&&verdict[0]===true,
       agent_key:exact(agent?.access_key?.permission,['FunctionCall']) && exact(permission,['allowance','receiver_id','method_names']) &&
         permission.receiver_id===review.vault && isDeepStrictEqual(permission.method_names,[method]) && nonce!==null &&

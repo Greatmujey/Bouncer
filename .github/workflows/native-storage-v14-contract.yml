@@ -1,14 +1,62 @@
-# Offline testnet prototype only. No public-chain deployment or transaction.
+# Offline tests by default. Optional manual preflight uses public views only.
 name: V14 native storage contract
 on:
   push:
-    branches: ['arena/ebd0bbac-near-hub']
+    branches: [main, 'arena/**', 'copilot/**']
+  pull_request:
+    branches: [main]
   workflow_dispatch:
+    inputs:
+      run_v14_readiness:
+        description: 'Run only the public, read-only testnet preflight'
+        required: false
+        default: false
+        type: boolean
+      export_public_artifacts:
+        description: 'Build and export public research WASM blobs (no deployment)'
+        required: false
+        default: false
+        type: boolean
+      measure_compact_v14:
+        description: 'Measure an optimized V14 for direct mobile deployment (no transactions)'
+        required: false
+        default: false
+        type: boolean
+      probe_railway_workspace:
+        description: 'Check live Railway website and a dummy journal row (no wallet or transactions)'
+        required: false
+        default: false
+        type: boolean
+      probe_v14_bootstrap:
+        description: 'Rehearse a temporary vault key on isolated nearcore only'
+        required: false
+        default: false
+        type: boolean
+      probe_v14_budget:
+        description: 'Check live phone-sized public vault cost review without a wallet or transaction'
+        required: false
+        default: false
+        type: boolean
+      probe_railway_recovery:
+        description: 'Read-only check of the live Railway recovery route; no wallet or records'
+        required: false
+        default: false
+        type: boolean
+      owner:
+        description: 'Named testnet owner (public account ID)'
+        required: false
+        type: string
+      candidate_vault:
+        description: 'Candidate direct-child testnet vault (public account ID)'
+        required: false
+        type: string
+
 permissions:
   contents: read
+
 jobs:
   contract:
-    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[native-storage-v14]')
+    if: github.event_name != 'workflow_dispatch' || (inputs.run_v14_readiness != true && inputs.export_public_artifacts != true && inputs.measure_compact_v14 != true && inputs.probe_railway_workspace != true && inputs.probe_v14_bootstrap != true && inputs.probe_v14_budget != true && inputs.probe_railway_recovery != true)
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -32,12 +80,29 @@ jobs:
         run: |
           cargo build --locked --target wasm32-unknown-unknown --release --no-default-features --features native-storage-v14
           sha256sum target/wasm32-unknown-unknown/release/bouncer.wasm
+          node --input-type=module -e '
+            import {readFileSync} from "node:fs";import {createHash} from "node:crypto";
+            import {V14_TESTNET_ARTIFACT as expected} from "../../shared/v14-testnet-artifact.mjs";
+            const bytes=readFileSync("target/wasm32-unknown-unknown/release/bouncer.wasm");
+            if(bytes.length!==expected.bytes||createHash("sha256").update(bytes).digest("hex")!==expected.sha256)throw Error("V14 research artifact changed; review and update its pin before using estimates");
+          '
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: '22'
       - name: Install test dependencies
         working-directory: bouncer
         run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Rebuild and compare the pinned market WASI artifact
+        working-directory: bouncer/programs/market-summary
+        run: |
+          cp market-summary.wasm "$RUNNER_TEMP/market-summary-reviewed.wasm"
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm run build
+          cmp "$RUNNER_TEMP/market-summary-reviewed.wasm" market-summary.wasm
+          sha256sum market-summary.wasm
+      - name: Test dependent market and WASI safety checks
+        working-directory: bouncer
+        run: node --test tests/market-summary-wasi.test.mjs tests/native-mission-planner.test.mjs tests/planned-native-mission-service.test.mjs tests/native-mission-browser-service.test.mjs tests/native-mission.test.mjs tests/native-v14-phone-plan.test.mjs
       - name: Measure V14 mobile wallet payload lower bound
         working-directory: bouncer
         run: node scripts/inspect-v14-mobile-artifact.mjs contracts/bouncer/target/wasm32-unknown-unknown/release/bouncer.wasm
@@ -72,11 +137,12 @@ jobs:
             'https://s3-us-west-1.amazonaws.com/build.nearprotocol.com/nearcore/Linux-x86_64/2.14.0/near-sandbox.tar.gz' \
             --output "$RUNNER_TEMP/near-sandbox.tar.gz"
           python3 scripts/extract-pinned-near-sandbox.py "$RUNNER_TEMP/near-sandbox.tar.gz" "$RUNNER_TEMP/near-sandbox"
-      - name: Exercise contract and original-hash verifier on loopback only
+      - name: Exercise temporary bootstrap, original-hash verifiers and storage on loopback only
         working-directory: bouncer
         env:
           BOUNCER_SANDBOX_BIN: ${{ runner.temp }}/near-sandbox
           BOUNCER_V14_WASM_PATH: ${{ github.workspace }}/bouncer/contracts/bouncer/target/wasm32-unknown-unknown/release/bouncer.wasm
+          BOUNCER_SANDBOX_TEMP_BOOTSTRAP: '1'
         run: |
           ulimit -Sn 65535
           if ! node integration/native-storage-v14-sandbox.mjs > "$RUNNER_TEMP/v14-sandbox-result.log" 2>&1; then
@@ -84,19 +150,8 @@ jobs:
             exit 1
           fi
           cat "$RUNNER_TEMP/v14-sandbox-result.log"
-      - name: Exercise three guarded legs against a fabricated local provider
-        working-directory: bouncer
-        env:
-          BOUNCER_SANDBOX_BIN: ${{ runner.temp }}/near-sandbox
-          BOUNCER_V14_WASM_PATH: ${{ github.workspace }}/bouncer/contracts/bouncer/target/wasm32-unknown-unknown/release/bouncer.wasm
-          BOUNCER_FAKE_OUTLAYER_WASM_PATH: ${{ github.workspace }}/bouncer/contracts/bouncer/target/wasm32-unknown-unknown/release/bouncer_fake_outlayer.wasm
-        run: |
-          ulimit -Sn 65535
-          if ! node integration/native-mission-v14-sandbox.mjs > "$RUNNER_TEMP/v14-mission-result.log" 2>&1; then
-            python3 -c 'import os; s=open(os.environ["RUNNER_TEMP"]+"/v14-mission-result.log").read()[-4500:]; print("::error title=Isolated three-leg mission failed::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
-            exit 1
-          fi
-          cat "$RUNNER_TEMP/v14-mission-result.log"
+      # One integrated rehearsal covers the guarded legs, recovery and the
+      # disabled research loader together; do not rerun the same mission twice.
       - name: Exercise research phone loader and full mission on isolated nearcore
         working-directory: bouncer
         env:
@@ -116,8 +171,64 @@ jobs:
           name: experimental-v14-testnet-wasm
           path: bouncer/contracts/bouncer/target/wasm32-unknown-unknown/release/bouncer.wasm
           retention-days: 7
+
+  railway-image:
+    if: github.event_name != 'workflow_dispatch' || (inputs.run_v14_readiness != true && inputs.export_public_artifacts != true && inputs.measure_compact_v14 != true && inputs.probe_railway_workspace != true && inputs.probe_v14_bootstrap != true && inputs.probe_v14_budget != true && inputs.probe_railway_recovery != true)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Build testnet backend container and check its default-off runtime
+        run: |
+          docker build --file bouncer/Dockerfile --tag bouncer-native-railway:ci bouncer
+          docker run --rm --network none --entrypoint /usr/bin/flock bouncer-native-railway:ci --version
+          docker run --rm --network none --entrypoint node bouncer-native-railway:ci --input-type=module -e 'await import("./agent/configured-native-mission-site.mjs")'
+          container=$(docker run -d --network none -e PORT=8080 bouncer-native-railway:ci)
+          trap 'docker rm --force "$container" >/dev/null' EXIT
+          docker exec "$container" node --input-type=module -e '
+            import assert from "node:assert/strict";
+            import {setTimeout as delay} from "node:timers/promises";
+            let health;const deadline=Date.now()+5000;
+            while(!health && Date.now()<deadline){try{health=await fetch("http://127.0.0.1:8080/healthz")}catch{await delay(100)}}
+            assert.equal(health?.status,200);const body=await health.json();
+            assert.equal(body.status,"STANDBY");assert.equal(body.mission_enabled,false);assert.equal(body.transactions_enabled,false);
+            const diagnostic=await fetch("http://127.0.0.1:8080/readiness");assert.equal(diagnostic.status,200);
+            const checks=await diagnostic.json();assert.equal(checks.status,"STANDBY");assert.equal(checks.transactions_enabled,false);
+            assert.equal(checks.recovery_anchor_enabled,false);assert.equal(checks.recovery_anchor_writes_enabled,false);
+            assert.equal((await fetch("http://127.0.0.1:8080/api/native-mission/config")).status,404);
+          '
+          docker rm --force "$container" >/dev/null
+          mkdir "$RUNNER_TEMP/bootstrap-anchor-volume"
+          container=$(docker run -d --network none -e PORT=8080 -e RAILWAY_VOLUME_MOUNT_PATH=/data \
+            -e BOUNCER_V14_BOOTSTRAP_RAILWAY_ANCHOR=1 -v "$RUNNER_TEMP/bootstrap-anchor-volume:/data" bouncer-native-railway:ci)
+          docker exec "$container" node --input-type=module -e '
+            import assert from "node:assert/strict";import http from "node:http";import fs from "node:fs";
+            import {setTimeout as delay} from "node:timers/promises";
+            const request=()=>new Promise((resolve,reject)=>{const r=http.request({host:"127.0.0.1",port:8080,
+              path:"/api/v14-bootstrap-anchor",method:"OPTIONS",headers:{host:"bouncer-production-6df1.up.railway.app",
+                origin:"https://bouncer-production-6df1.up.railway.app"}},resolve);r.on("error",reject);r.end()});
+            let response;const deadline=Date.now()+5000;
+            while(!response && Date.now()<deadline){try{response=await request()}catch{await delay(100)}}
+            assert.equal(response?.statusCode,204);assert.equal(response.headers["access-control-allow-origin"],"https://bouncer-production-6df1.up.railway.app");
+            const diagnostic=await fetch("http://127.0.0.1:8080/readiness");const state=await diagnostic.json();
+            assert.equal(state.recovery_anchor_enabled,true);assert.equal(state.recovery_anchor_writes_enabled,false);assert.equal(state.transactions_enabled,false);
+            assert.equal((await fetch("http://127.0.0.1:8080/api/native-mission/config")).status,404);
+            assert.deepEqual(fs.readdirSync("/data"),[]);response.resume();
+          '
+          set +e
+          output=$(docker run --rm --network none -e BOUNCER_NATIVE_MISSION_ENABLED=1 bouncer-native-railway:ci 2>&1)
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ] || [[ "$output" != *"did not start"* ]]; then
+            echo 'The enabled-but-unconfigured container did not fail closed.'
+            exit 1
+          fi
+          echo 'Standby and enabled-but-unconfigured modes verified without network access.'
+
   browser:
-    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[native-storage-v14]')
+    if: github.event_name != 'workflow_dispatch' || (inputs.run_v14_readiness != true && inputs.export_public_artifacts != true && inputs.measure_compact_v14 != true && inputs.probe_railway_workspace != true && inputs.probe_v14_bootstrap != true && inputs.probe_v14_budget != true && inputs.probe_railway_recovery != true)
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -133,8 +244,11 @@ jobs:
           npm ci --ignore-scripts --no-audit --no-fund
           npm ci --prefix walletconnect --ignore-scripts --no-audit --no-fund
           npm run build:web
-          git diff --exit-code -- web/wallet.bundle.js
-          npm install --prefix "$RUNNER_TEMP/bouncer-browser" --no-save --no-audit --no-fund playwright-core@1.64.1
+          git diff --exit-code -- web/wallet.bundle.js web/v14-bootstrap-artifact-v1.json web/api/native-mission
+          npm install --prefix "$RUNNER_TEMP/bouncer-browser" --no-save --no-audit --no-fund playwright@1.64.1
+          node "$RUNNER_TEMP/bouncer-browser/node_modules/playwright/cli.js" install chromium
+          CHROMIUM_PATH="$(node -e "console.log(require('$RUNNER_TEMP/bouncer-browser/node_modules/playwright-core').chromium.executablePath())")"
+          echo "CHROMIUM_PATH=$CHROMIUM_PATH" >> "$GITHUB_ENV"
       - name: Test synthetic desktop and mobile wallet consent and recovery
         working-directory: bouncer
         env:
@@ -145,3 +259,256 @@ jobs:
             exit 1
           fi
           cat "$RUNNER_TEMP/v14-browser-result.log"
+          if ! node scripts/test-v14-browser-witness.mjs > "$RUNNER_TEMP/v14-browser-witness-result.log" 2>&1; then
+            python3 -c 'import os; s=open(os.environ["RUNNER_TEMP"]+"/v14-browser-witness-result.log").read()[-4500:]; print("::error title=Synthetic V14 phone witness browser failed::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
+            exit 1
+          fi
+          cat "$RUNNER_TEMP/v14-browser-witness-result.log"
+
+  public-preflight:
+    if: github.event_name == 'workflow_dispatch' && inputs.run_v14_readiness == true && inputs.export_public_artifacts != true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    defaults:
+      run:
+        working-directory: bouncer
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Validate read-only guard using synthetic responses
+        run: node --test tests/native-v14-readiness.test.mjs
+      - name: Inspect public testnet state without signing
+        env:
+          BOUNCER_OWNER: ${{ inputs.owner }}
+          BOUNCER_CANDIDATE_VAULT: ${{ inputs.candidate_vault }}
+        run: node scripts/inspect-v14-readiness.mjs "$BOUNCER_OWNER" "$BOUNCER_CANDIDATE_VAULT"
+
+  public-artifact-export:
+    # Separate manual public-code export; it signs and deploys nothing.
+    if: github.event_name == 'workflow_dispatch' && inputs.export_public_artifacts == true && inputs.run_v14_readiness != true
+    permissions:
+      contents: write # create unreferenced Git blobs containing public WASM only
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      CARGO_BUILD_JOBS: 2
+      RUSTFLAGS: '-C link-arg=-s'
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: 1.99.1
+          targets: wasm32-unknown-unknown
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+      - name: Build exact V14 and its research loader
+        working-directory: bouncer
+        env:
+          BOUNCER_V14_LOADER_PIN_RS: ${{ runner.temp }}/v14-research-pin.rs
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          cargo build --locked --manifest-path contracts/bouncer/Cargo.toml --target wasm32-unknown-unknown --release --no-default-features --features native-storage-v14
+          V14=contracts/bouncer/target/wasm32-unknown-unknown/release/bouncer.wasm
+          test "$(sha256sum "$V14" | cut -d' ' -f1)" = '28dcba2d3a4dde6e48c2dc728f264f14f7af47c83a95e829f07127bd33c699f8'
+          node scripts/write-v14-loader-research-pin.mjs "$V14" "$BOUNCER_V14_LOADER_PIN_RS"
+          CARGO_TARGET_DIR="$RUNNER_TEMP/v14-loader-target" cargo build --locked --manifest-path integration/v14-phone-loader/Cargo.toml --target wasm32-unknown-unknown --release
+      - name: Publish public Git blobs with SHA-256 and size
+        working-directory: bouncer
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          cp contracts/bouncer/target/wasm32-unknown-unknown/release/bouncer.wasm "$RUNNER_TEMP/v14.wasm"
+          cp "$RUNNER_TEMP/v14-loader-target/wasm32-unknown-unknown/release/bouncer_v14_phone_loader_research.wasm" "$RUNNER_TEMP/loader.wasm"
+          node -e 'const fs=require("fs"),z=require("zlib");fs.writeFileSync(process.argv[2],z.deflateRawSync(fs.readFileSync(process.argv[1]),{level:9}));' "$RUNNER_TEMP/v14.wasm" "$RUNNER_TEMP/v14.deflate"
+          for name in v14.wasm loader.wasm v14.deflate; do
+            file="$RUNNER_TEMP/$name"
+            node -e 'const fs=require("fs");fs.writeFileSync(process.argv[2],JSON.stringify({content:fs.readFileSync(process.argv[1]).toString("base64"),encoding:"base64"}));' "$file" "$RUNNER_TEMP/blob.json"
+            blob=$(gh api --method POST "repos/$GITHUB_REPOSITORY/git/blobs" --input "$RUNNER_TEMP/blob.json" --jq .sha)
+            sha256=$(sha256sum "$file" | cut -d' ' -f1)
+            bytes=$(wc -c < "$file" | tr -d ' ')
+            echo "::notice title=Public artifact $name::$blob $sha256 $bytes"
+          done
+
+  compact-v14-size:
+    # Public code-size experiment; no wallet, signer, RPC or deployment.
+    if: github.event_name == 'workflow_dispatch' && inputs.measure_compact_v14 == true && inputs.run_v14_readiness != true && inputs.export_public_artifacts != true
+    permissions:
+      contents: write # Export a public candidate blob only if the size fits.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      CARGO_BUILD_JOBS: 2
+      # Preserve function names temporarily for wasm-snip; the final optimizer
+      # strips them. No candidate is authorized or deployed by this job.
+      CARGO_PROFILE_RELEASE_STRIP: 'none'
+      CARGO_PROFILE_RELEASE_LTO: 'fat'
+      CARGO_PROFILE_RELEASE_OPT_LEVEL: 'z'
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: 1.99.1
+          targets: wasm32-unknown-unknown
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+      - name: Compile V14 with size-focused link-time optimization
+        working-directory: bouncer
+        run: |
+          cargo build --locked --manifest-path contracts/bouncer/Cargo.toml --target wasm32-unknown-unknown --release --no-default-features --features native-storage-v14
+          cp contracts/bouncer/target/wasm32-unknown-unknown/release/bouncer.wasm "$RUNNER_TEMP/v14-compact.wasm"
+      - name: Measure standard and Binaryen-optimized mobile payloads
+        run: |
+          npm install --prefix "$RUNNER_TEMP/binaryen" --ignore-scripts --no-audit --no-fund binaryen@132.0.0
+          node "$RUNNER_TEMP/binaryen/node_modules/binaryen/bin/wasm-opt" "$RUNNER_TEMP/v14-compact.wasm" -Oz --all-features --strip-debug --strip-producers -o "$RUNNER_TEMP/v14-compact-opt.wasm"
+          node --input-type=module - "$RUNNER_TEMP/v14-compact.wasm" "$RUNNER_TEMP/v14-compact-opt.wasm" <<'NODE'
+          import fs from 'node:fs';import crypto from 'node:crypto';
+          for(const name of process.argv.slice(2)) {
+            const data=fs.readFileSync(name),sha=crypto.createHash('sha256').update(data).digest('hex');
+            if(!data.subarray(0,8).equals(Buffer.from([0,97,115,109,1,0,0,0])))throw Error('invalid WASM');
+            const result={artifact:name.endsWith('-opt.wasm')?'lto-and-binaryen':'lto',wasm_bytes:data.length,
+              base64_bytes:4*Math.ceil(data.length/3),sha256:sha,bridge_limit_bytes:400000,
+              raw_field_fits:4*Math.ceil(data.length/3)<400000,
+              limitations:'Size alone is not wallet compatibility, behavior equivalence or deployment approval.'};
+            console.log(`::notice title=Compact V14 mobile size::${JSON.stringify(result)}`);
+          }
+          NODE
+      - name: Measure a panic-snipped candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          cargo install wasm-snip --version 0.4.0 --locked --root "$RUNNER_TEMP/wasm-snip"
+          "$RUNNER_TEMP/wasm-snip/bin/wasm-snip" "$RUNNER_TEMP/v14-compact.wasm" --snip-rust-panicking-code -o "$RUNNER_TEMP/v14-snipped.wasm"
+          node "$RUNNER_TEMP/binaryen/node_modules/binaryen/bin/wasm-opt" "$RUNNER_TEMP/v14-snipped.wasm" -Oz --all-features --strip-debug --strip-producers -o "$RUNNER_TEMP/v14-snipped-opt.wasm"
+          node --input-type=module - "$RUNNER_TEMP/v14-snipped-opt.wasm" <<'NODE'
+          import fs from 'node:fs';import crypto from 'node:crypto';
+          const data=fs.readFileSync(process.argv[2]);
+          if(!data.subarray(0,8).equals(Buffer.from([0,97,115,109,1,0,0,0])))throw Error('invalid WASM');
+          console.log('::notice title=Snipped V14 mobile size::'+JSON.stringify({wasm_bytes:data.length,
+            base64_bytes:4*Math.ceil(data.length/3),sha256:crypto.createHash('sha256').update(data).digest('hex'),
+            raw_field_fits:4*Math.ceil(data.length/3)<400000,
+            limitations:'Panic paths changed; size alone does not establish correctness, wallet compatibility, or deployment approval.'}));
+          NODE
+          bytes=$(wc -c < "$RUNNER_TEMP/v14-snipped-opt.wasm" | tr -d ' ')
+          if [ "$bytes" -lt 295000 ]; then
+            node -e 'const fs=require("fs");fs.writeFileSync(process.argv[2],JSON.stringify({content:fs.readFileSync(process.argv[1]).toString("base64"),encoding:"base64"}));' "$RUNNER_TEMP/v14-snipped-opt.wasm" "$RUNNER_TEMP/snipped-blob.json"
+            blob=$(gh api --method POST "repos/$GITHUB_REPOSITORY/git/blobs" --input "$RUNNER_TEMP/snipped-blob.json" --jq .sha)
+            echo "::notice title=Unreviewed public snipped V14 candidate::$blob"
+          fi
+
+  railway-recovery-live-probe:
+    # Fixed GET/OPTIONS only: no wallet, signature, checkpoint read or write.
+    if: github.event_name == 'workflow_dispatch' && inputs.probe_railway_recovery == true && inputs.run_v14_readiness != true && inputs.export_public_artifacts != true && inputs.measure_compact_v14 != true && inputs.probe_railway_workspace != true && inputs.probe_v14_bootstrap != true && inputs.probe_v14_budget != true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+      - name: Check only public recovery route and standby
+        working-directory: bouncer
+        run: node scripts/probe-railway-recovery-live.mjs
+
+  railway-workspace-live-probe:
+    # The dummy database scope is not the direct-test scope and cannot send.
+    if: github.event_name == 'workflow_dispatch' && inputs.probe_railway_workspace == true && inputs.run_v14_readiness != true && inputs.export_public_artifacts != true && inputs.measure_compact_v14 != true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+      - name: Install browser test library
+        run: npm install --prefix "$RUNNER_TEMP/bouncer-browser" --no-save --no-audit --no-fund playwright-core@1.64.1
+      - name: Test Railway, dummy journal, testnet RPC, and Meteor handoff
+        working-directory: bouncer
+        env:
+          BOUNCER_PLAYWRIGHT_PATH: ${{ runner.temp }}/bouncer-browser/node_modules/playwright-core/index.mjs
+        run: node scripts/probe-railway-workspace.mjs
+
+  v14-budget-live-probe:
+    # Public views and checkpoint OPTIONS only; no wallet, key, row or transaction.
+    if: github.event_name == 'workflow_dispatch' && inputs.probe_v14_budget == true && inputs.run_v14_readiness != true && inputs.export_public_artifacts != true && inputs.measure_compact_v14 != true && inputs.probe_railway_workspace != true && inputs.probe_v14_bootstrap != true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+      - name: Check recovery endpoint and standby without a wallet
+        working-directory: bouncer
+        run: node scripts/probe-v14-checkpoint-live.mjs
+      - name: Install browser test library
+        run: npm install --prefix "$RUNNER_TEMP/bouncer-browser" --no-save --no-audit --no-fund playwright-core@1.64.1
+      - name: Check the live public testnet budget review
+        working-directory: bouncer
+        env:
+          BOUNCER_PLAYWRIGHT_PATH: ${{ runner.temp }}/bouncer-browser/node_modules/playwright-core/index.mjs
+        run: node scripts/probe-v14-budget-live.mjs
+
+  temporary-vault-bootstrap-sandbox:
+    # No public network, real wallet, live key, loader or testnet transaction.
+    if: github.event_name == 'workflow_dispatch' && inputs.probe_v14_bootstrap == true && inputs.run_v14_readiness != true && inputs.export_public_artifacts != true && inputs.measure_compact_v14 != true && inputs.probe_railway_workspace != true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+      - name: Install isolated test dependencies
+        working-directory: bouncer
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Recover and verify the already-pinned V14 artifact
+        working-directory: bouncer
+        run: |
+          node --input-type=module - "$RUNNER_TEMP/v14.wasm" <<'NODE'
+          import fs from 'node:fs';import crypto from 'node:crypto';import zlib from 'node:zlib';
+          import {V14_TESTNET_ARTIFACT as expected} from './shared/v14-testnet-artifact.mjs';
+          const bytes=zlib.inflateRawSync(fs.readFileSync('web/artifacts/v14-research.deflate'),{maxOutputLength:expected.bytes});
+          if(bytes.length!==expected.bytes||crypto.createHash('sha256').update(bytes).digest('hex')!==expected.sha256)throw Error('V14 artifact mismatch');
+          fs.writeFileSync(process.argv[2],bytes,{flag:'wx'});
+          NODE
+      - name: Download the pinned isolated nearcore binary
+        working-directory: bouncer
+        run: |
+          curl --fail --show-error --silent --location --proto '=https' --tlsv1.2 --max-time 180 --retry 2 --max-filesize 419430400 \
+            'https://s3-us-west-1.amazonaws.com/build.nearprotocol.com/nearcore/Linux-x86_64/2.14.0/near-sandbox.tar.gz' \
+            --output "$RUNNER_TEMP/near-sandbox.tar.gz"
+          python3 scripts/extract-pinned-near-sandbox.py "$RUNNER_TEMP/near-sandbox.tar.gz" "$RUNNER_TEMP/near-sandbox"
+      - name: Rehearse the short wallet batch, deploy, deletion and guarded storage
+        working-directory: bouncer
+        env:
+          BOUNCER_SANDBOX_BIN: ${{ runner.temp }}/near-sandbox
+          BOUNCER_V14_WASM_PATH: ${{ runner.temp }}/v14.wasm
+          BOUNCER_SANDBOX_TEMP_BOOTSTRAP: '1'
+        run: |
+          ulimit -Sn 65535
+          if ! node integration/native-storage-v14-sandbox.mjs > "$RUNNER_TEMP/bootstrap-result.log" 2>&1; then
+            python3 -c 'import os; s=open(os.environ["RUNNER_TEMP"]+"/bootstrap-result.log").read()[-4500:]; print("::error title=Isolated temporary-key rehearsal failed::"+s.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
+            exit 1
+          fi
+          python3 -c 'import os,json; d=json.load(open(os.environ["RUNNER_TEMP"]+"/bootstrap-result.log")); print("::notice title=Temporary vault key isolated rehearsal::"+json.dumps(d,separators=(",",":")))'

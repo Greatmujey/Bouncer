@@ -48,8 +48,12 @@ service is bundled. This is unaudited testnet software, not suitable
 for real funds.
 
 The experimental [native-mission flow](bouncer/docs/NATIVE_MISSIONS.md)
-sequences owner-pinned compute, API data and **public, self-hosted NEAR state**
-through a fresh V14 vault, with aggregate budgets and original-hash recovery.
+can sequence an OutLayer price into pinned compute and **public, self-hosted
+NEAR state** through a fresh V14 vault, with aggregate budgets and original-hash
+recovery. The first dependent market flow requires a separate signed checkpoint
+for each step; a bounded model planner can propose (but does not authorize) a
+reviewed mission. Neither a live provider run nor autonomous hosted operation
+has been established.
 The wallet UI can review and explicitly approve a fixed mission when the
 opt-in same-origin backend is provisioned. A single-host testnet server is now
 available, but V14 is not deployed or configured here and browser onboarding
@@ -168,22 +172,33 @@ remote clients need a separately hosted HTTPS endpoint and compatible
 authentication; an OAuth deployment is not supplied or verified. MCP connects
 tools—it does not itself provide a model or access to the new planning/execution path.
 
-## Six-track roadmap: evidence and gaps
+## Hackathon focus: AI Security & Defense
 
-Bouncer is a resource-buying agent; the on-chain firewall is its spending
-kernel, not the whole product. These are connections to the tracks, not claims
-that all six are complete. See the [current blockers and track map](bouncer/docs/BLOCKERS_AND_TRACKS.md)
-and [interoperability roadmap](bouncer/docs/INTEROPERABILITY_ROADMAP.md) for the independent-seller gap,
-experimental authentication and outstanding swap-accounting work.
+Bouncer is a resource agent with an owner-controlled spending boundary. The
+on-chain firewall is the kernel, not the entire product: the goal remains a
+bounded agent that uses data and compute, then records its result on NEAR.
+The selected hackathon focus is **AI Security & Defense** (`security`), not six
+separate roadmaps. The [official rules](https://nearhackathon.com/HACKATHON.md)
+should be rechecked before any submission; no submission has been made here.
 
-| Track | Evidence today | Still needed |
-| --- | --- | --- |
-| AI Security & Defense | 1-yocto guard, scoped keys, caps, pinned project/input and delivery gating. | Independent audit and stronger prompt defenses. |
-| Agent Economy | Native-paid independent price execution feeds three FT-paid development resources; x402 compatibility and authenticated seller-v3 have self-hosted tests. A new [synthetic x402-to-resources workflow](bouncer/docs/DEPENDENT_WORKFLOWS.md#paid-x402-data-as-a-workflow-source-experimental) composes both. | Independent FT-paid commercial API/storage providers, live combined x402 workflow, audited authentication and signed receipts. |
-| Autonomous Business | AI planning in a separate run; multi-resource payments, delivery checks and recovery. | Real customers, invoicing and production operations. |
-| Real-World Money | Circle testnet USDC paid for three self-hosted resources; fake USDC.e funded a separate probe. | Independent providers and real-money rails; testnet USDC has no real value. |
-| Unstoppable DeFi | Owner-setup Ref testnet swaps acquired test tokens, including Circle testnet USDC. | Agent-guarded swaps with safe output accounting and cross-chain settlement. |
-| AI Swarms | One coordinator sequences multiple resources. | Multiple autonomous agents and secure handoffs. |
+- **Evidence:** A historical testnet policy change without the required 1
+  yoctoNEAR was rejected. Restricted keys and spending controls have tests.
+  A more recent direct wallet-to-OutLayer test fetched a public price but
+  bypassed Bouncer; earlier multi-resource examples used self-hosted services.
+- **Still needed:** Independently retained transaction originals and proven
+  phone/computer recovery, a fresh approved V14 testnet vault, the hosted
+  guarded data/compute/storage mission, a genuinely bounded goal-driven agent,
+  and clear receipt/readback evidence. The contract and integrations are not
+  independently audited. Native NEAR storage is stake-backed storage in the
+  vault, not a purchase from an independent storage vendor.
+- **Deferred, not deleted:** Agent swarms, guarded DeFi swaps, extra
+  marketplace integrations and other track-specific expansions. Existing FT
+  support and recovery records remain; their presence does not prove a live
+  independent FT purchase.
+
+See [hackathon readiness](bouncer/docs/HACKATHON_READINESS.md) for safety and
+submission gates and [historical blockers](bouncer/docs/BLOCKERS_AND_TRACKS.md)
+for earlier experiments.
 
 ## Contract capabilities in this branch
 

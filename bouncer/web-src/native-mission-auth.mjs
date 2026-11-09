@@ -8,20 +8,29 @@ import { verifyCliLogin } from './cli-login.mjs';
 const fail = () => new Error('NATIVE_MISSION_AUTH_UNAVAILABLE');
 const keyPattern = /^ed25519:[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 const digestHex = bytes => [...new Uint8Array(bytes)].map(n => n.toString(16).padStart(2, '0')).join('');
-export function nativeMissionAction({ owner, ownerPublicKey, vault, missionId, missionSha256, maxNativeYocto } = {}) {
+export function nativeMissionAction({ owner, ownerPublicKey, vault, missionId, missionSha256, maxNativeYocto, goalId, goalMaxNativeYocto } = {}) {
   if (!isTestnetAccount(owner) || !owner.endsWith('.testnet') || owner === 'bouncer-owner-12f343b795633e357ae5560d.testnet' ||
       !isTestnetAccount(vault) || !keyPattern.test(ownerPublicKey ?? '') || !/^[A-Za-z0-9_-]{1,64}$/.test(missionId ?? '') ||
       !/^[a-f0-9]{64}$/.test(missionSha256 ?? '') || typeof maxNativeYocto !== 'string' ||
       !/^[1-9][0-9]{0,38}$/.test(maxNativeYocto) || BigInt(maxNativeYocto) > (1n << 128n) - 1n) throw fail();
-  return Object.freeze({ format: 'bouncer-wallet-prompt-auth-v1', network: 'testnet', purpose: 'authorize_native_mission',
-    owner, owner_public_key: ownerPublicKey, vault, mission_id: missionId, mission_sha256: missionSha256, max_native_yocto: maxNativeYocto });
+  const leg = goalId !== undefined || goalMaxNativeYocto !== undefined;
+  if (leg && (typeof goalId !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(goalId) ||
+      typeof goalMaxNativeYocto !== 'string' || !/^[1-9][0-9]{0,38}$/.test(goalMaxNativeYocto) ||
+      BigInt(goalMaxNativeYocto) > BigInt(maxNativeYocto))) throw fail();
+  return Object.freeze({ format: 'bouncer-wallet-prompt-auth-v1', network: 'testnet',
+    purpose: leg ? 'authorize_native_mission_leg' : 'authorize_native_mission',
+    owner, owner_public_key: ownerPublicKey, vault, mission_id: missionId, mission_sha256: missionSha256,
+    max_native_yocto: maxNativeYocto, ...(leg ? { goal_id: goalId, goal_max_native_yocto: goalMaxNativeYocto } : {}) });
 }
 export function nativeMissionApprovalMessage(action, digest, origin, issued, expires) {
-  return `Bouncer TESTNET mission approval\nAccount: ${action.owner}\nPublic key: ${action.owner_public_key}\n` +
+  const leg = action.purpose === 'authorize_native_mission_leg';
+  return `Bouncer TESTNET ${leg ? 'mission step' : 'mission'} approval\nAccount: ${action.owner}\nPublic key: ${action.owner_public_key}\n` +
     `Vault: ${action.vault}\nMission: ${action.mission_id}\nMission SHA-256: ${action.mission_sha256}\n` +
+    (leg ? `Step: ${action.goal_id}\nStep maximum: ${action.goal_max_native_yocto} yoctoNEAR plus gas\n` : '') +
     `Maximum: ${action.max_native_yocto} yoctoNEAR plus gas\nAction SHA-256: ${digest}\nSite: ${origin}\n` +
     `Issued: ${new Date(issued).toISOString()}\nExpires: ${new Date(expires).toISOString()}\n` +
-    'I approve this one Bouncer testnet mission. Steps are non-atomic; storage is public; uncertain transactions must not be resent.';
+    (leg ? 'I approve only this one Bouncer testnet mission step. ' : 'I approve this one Bouncer testnet mission. ') +
+    'Steps are non-atomic; storage is public; uncertain transactions must not be resent.';
 }
 export async function missionSha256(mission, crypto) {
   if (!crypto?.subtle || !mission || typeof mission !== 'object') throw fail();

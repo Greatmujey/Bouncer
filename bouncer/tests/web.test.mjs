@@ -149,7 +149,9 @@ test('latest oracle-led mission links to the verified testnet data and three res
   assert.match(html, /intentionally corrupted result stopped later payments/);
   assert.match(html, /independent execution was not paid in USDC/);
   assert.match(html, /process is non-atomic/);
-  assert.equal((html.match(/class="track-card"/g) || []).length, 6);
+  assert.equal((html.match(/class="track-card"/g) || []).length, 3);
+  assert.match(html, /ONE FOCUS · AI SECURITY &amp; DEFENSE/);
+  assert.doesNotMatch(html, /SIX TRACKS · ONE ROADMAP/);
 });
 
 test('the same custom Bouncer mark appears in both navigation layouts, the tour and favicon', () => {
@@ -174,8 +176,9 @@ test('website discloses testnet limitations, historical examples and identity-on
   assert.match(html, /self-hosted development examples, not commercial vendors/);
   assert.match(html, /newly created testnet tokens/);
   assert.match(html, /Separate earlier refund test/);
-  assert.match(html, /Refund recovery and the vault’s independent audit remain open/);
-  assert.match(html, /not proof of independent provider payment or delivery/);
+  assert.match(html, /The new guarded mission and an independent security audit remain open/);
+  assert.match(html, /The direct wallet test bypassed Bouncer/);
+  assert.match(html, /older vault funding and guard transactions do not prove independent delivery/);
   assert.doesNotMatch(html, /Start buying/i);
   assert.match(html, /Sign in with Google/i);
   assert.match(html, /does not create a Bouncer vault or grant agent spending access/i);
@@ -214,12 +217,37 @@ test('workspace picker contains the six testnet wallets, WalletConnect and Googl
   assert.match(css, /prefers-reduced-motion:reduce/);
 });
 
+test('recovery screen distinguishes the two file types and warns before an uncertain Railway save', () => {
+  const html = fs.readFileSync(new URL('../web/index.html', import.meta.url), 'utf8');
+  const panel = html.slice(html.indexOf('id="wallet-bootstrap-recovery-panel"'), html.indexOf('id="wallet-v14-recovery-open"'));
+  assert.match(panel, /recovery export\? Choose it here — not the preparation file/i);
+  assert.match(panel, /recovery export includes the owner-attested encrypted kit; it is a different file/i);
+  assert.match(panel, /If you already tried to save to Railway, or are not sure, do not save again/i);
+  assert.match(panel, /Creating and updating Railway copies is paused/i);
+  assert.doesNotMatch(panel, /id="wallet-bootstrap-anchor-save"/);
+  assert.match(panel, /A failed restore does not prove the copy is absent/i);
+  assert.match(panel, /No passphrase or transaction is needed/i);
+  assert.match(panel, /A missing record does not prove an earlier save never happened/i);
+  const position = id => {
+    const pattern = `id="${id}"`;
+    assert.equal(panel.split(pattern).length, 2, `${id} must occur once`);
+    return panel.indexOf(pattern);
+  };
+  assert.ok(position('wallet-bootstrap-recovery-read') < position('wallet-bootstrap-recovery-backup'));
+  assert.ok(position('wallet-bootstrap-recovery-passphrase') < position('wallet-bootstrap-recovery-unlock'));
+  assert.ok(position('wallet-bootstrap-recovery-unlock') < position('wallet-bootstrap-recovery-export'));
+  assert.ok(position('wallet-bootstrap-recovery-export') < position('wallet-bootstrap-anchor-panel'));
+  assert.ok(position('wallet-bootstrap-anchor-inspect') < position('wallet-bootstrap-anchor-passphrase'));
+});
+
 test('proof page distinguishes historical independent native lookup from self-hosted resource examples', () => {
   const html = fs.readFileSync(new URL('../web/index.html', import.meta.url), 'utf8');
   assert.match(html, /Independent OutLayer price lookup/);
   assert.match(html, /Historical testnet NEAR payment and owner refund/);
-  assert.match(html, /A recorded price lookup used independent OutLayer with testnet NEAR/);
+  assert.match(html, /A direct wallet test fetched a NEAR price through OutLayer on testnet, bypassing Bouncer/);
   assert.match(html, /compute, storage and API examples used self-hosted development services/);
-  assert.match(html, /live wallet-initiated purchase is not yet enabled/);
-  assert.match(html, /The OutLayer row records an independent native-NEAR price lookup/);
+  assert.match(html, /guarded wallet-initiated mission is not yet live/);
+  assert.match(html, /single-source price is not independently verified for accuracy/);
+  assert.match(html, /Direct phone wallet → OutLayer/);
+  assert.ok(html.includes(explorerTx('Ci7R3GXe2RxQ4fGs6fyzS8H3rfb3GjVi5iyXj5FyTYas')));
 });

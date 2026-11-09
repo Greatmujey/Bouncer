@@ -100,6 +100,18 @@ dbtest('mission approval binds exact hash, vault and maximum; owner consent is o
   assert.equal(attempts.filter(Boolean).length, 1);
 }));
 
+dbtest('dependent step authentication binds goal and per-step maximum independently', async () => resources(async (db, rpc, auth) => {
+  const f=fixture();
+  const action=nativeMissionAction({owner:f.owner,ownerPublicKey:pk(f.ownerKey),vault:`vault.${f.owner}`,
+    missionId:'market-mission',missionSha256:'a'.repeat(64),maxNativeYocto:'300',goalId:'price',goalMaxNativeYocto:'100'});
+  const challenge=await auth.issue(action), evidence=signed(challenge,f);
+  assert.match(challenge.message,/Step: price/);assert.match(challenge.message,/Step maximum: 100 yoctoNEAR plus gas/);
+  assert.equal(await auth.authenticate({action:{...action,goal_id:'compute'},evidence}),false);
+  assert.equal(await auth.authenticate({action:{...action,goal_max_native_yocto:'101'},evidence}),false);
+  assert.equal(await auth.authenticate({action,evidence}),true);
+  assert.equal(await auth.authenticate({action,evidence}),false);
+}));
+
 dbtest('a challenge cannot be reused concurrently or redirected to another origin or action', async () => resources(async (db, rpc, auth) => {
   const f = fixture(), c = await auth.issue(f.action), evidence = signed(c, f);
   const otherSite = createPostgresWalletPromptAuth({ pool: db, origin: 'https://other.example', provider: rpc });

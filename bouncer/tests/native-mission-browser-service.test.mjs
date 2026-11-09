@@ -9,6 +9,8 @@ import nearApi from 'near-api-js';
 import { FileJournal } from '../agent/procurement.mjs';
 import { ORACLE_TESTNET_PROJECT } from '../agent/oracle-outlayer.mjs';
 import { createAuthenticatedNativeMissionService } from '../agent/authenticated-native-mission-service.mjs';
+import { createPlannedNativeMissionService } from '../agent/planned-native-mission-service.mjs';
+import { MARKET_SUMMARY_PROGRAM } from '../shared/market-summary-constants.mjs';
 import { createNativeMissionHttpServer } from '../agent/native-mission-http.mjs';
 import { nativeMissionAction, nativeMissionApprovalMessage, signReviewedMissionChallenge } from '../web-src/native-mission-auth.mjs';
 import { createNativeMissionClient, validatePublicNativeMissionReview } from '../web-src/native-mission-client.mjs';
@@ -90,6 +92,52 @@ async function fixture({ blocked = false, executeThrows = false } = {}) {
     get evidence(){return evidenceSeen}, async close(){await new Promise(resolve=>server.close(resolve)); journal.close(); fs.rmSync(dir,{recursive:true,force:true})} };
 }
 async function use(fn, options) { const f=await fixture(options); try { await fn(f); } finally { await f.close(); } }
+
+test('a model-proposed bounded mission reaches the existing browser review and exact step consent',async()=>{
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'bouncer-planned-browser-'));
+  const journal=new FileJournal(path.join(dir,'journal.json'),vault,owner);
+  const ownerKey=nearApi.KeyPair.fromRandom('ed25519'),ownerPublicKey=String(ownerKey.getPublicKey());
+  const [random,oracle,storage]=structuredClone(mission.goals);
+  const market={...random,kind:'market',goal:{...random.goal,input:{from_goal_id:'price',quantity:10},program:MARKET_SUMMARY_PROGRAM}};
+  const marketMission={...structuredClone(mission),id:'browser-market',goals:[oracle,market,
+    {...storage,goal:{...storage.goal,value:{from_goal_ids:['price','compute']}}}]};
+  const catalog={version:1,market:{mission:marketMission,max_quantity:50},random:{mission:structuredClone(mission),min:0,max:1000,max_span:100}};
+  const signers=Object.fromEntries(mission.goals.map(({goal})=>[goal.id,{account:{},publicKey:'synthetic'}]));
+  let modelCalls=0,prompts=0,executions=0,reviewedHash;
+  const service=await createPlannedNativeMissionService({objective:'Estimate and record the USD value of 17 NEAR',catalog,
+    modelRequestApproved:true,modelClient:async({objective,choices})=>{
+      modelCalls++;assert.equal(objective,'Estimate and record the USD value of 17 NEAR');assert.deepEqual(choices,['market','random']);
+      return {kind:'market',quantity:17};
+    },provider:{},signers,journal,auth:testAuthenticator(ownerKey),run:async options=>{
+      assert.equal(options.mission.goals[1].goal.input.quantity,17);
+      if(!options.execute)return {status:'READY',next_goal_id:'price'};
+      executions++;assert.equal(options.checkpointGoalId,'price');
+      return {status:'CHECKPOINT',new_payments:1,remaining_goal_ids:['compute','store'],
+        deliveries:[{goal_id:'price',delivery:{tx_hash:nearApi.utils.serialize.base_encode(Buffer.alloc(32,43))}}]};
+    }});
+  const server=createNativeMissionHttpServer({service,siteOrigin:site});
+  await new Promise((resolve,reject)=>server.listen(0,'127.0.0.1',resolve).once('error',reject));
+  try {
+    const local=`http://127.0.0.1:${server.address().port}`;
+    const fetchImpl=async(url,options={})=>{
+      if(url==='https://test.rpc.fastnear.com')return Response.json({jsonrpc:'2.0',id:'bouncer-cli-login',result:{permission:'FullAccess'}});
+      if(url.endsWith('/execute'))reviewedHash=JSON.parse(options.body).missionSha256;
+      return fetch(`${local}${url}`,{...options,headers:{...options.headers,origin:site}});
+    };
+    const wallet={manifest:{id:'meteor-wallet'},async signMessage({message,nonce,recipient,signerId}){
+      prompts++;const bytes=nep413Payload({message,nonce,recipient}),hash=crypto.createHash('sha256').update(bytes).digest();
+      return {accountId:signerId,publicKey:ownerPublicKey,signature:Buffer.from(ownerKey.sign(hash).signature).toString('base64')};
+    }};
+    const client=createNativeMissionClient({wallet,accountId:owner,ownerPublicKey,location:{origin:site,host:'bouncer.example'},
+      crypto:crypto.webcrypto,fetch:fetchImpl});
+    const {review,preview}=await client.preview();
+    assert.equal(preview.next_goal_id,'price');assert.equal(review.mission.goals[1].goal.input.quantity,17);
+    assert.equal(prompts,0);assert.equal(executions,0);
+    const result=await client.approve(review);
+    assert.equal(result.status,'CHECKPOINT');assert.equal(prompts,1);assert.equal(executions,1);
+    assert.equal(reviewedHash,review.mission_sha256);assert.equal(modelCalls,1);
+  }finally{await new Promise(resolve=>server.close(resolve));journal.close();fs.rmSync(dir,{recursive:true,force:true})}
+});
 
 test('browser reviews exact mission, signs explicit consent once, runs fixed backend and can recover without signing', () => use(async f => {
   const {review,preview} = await f.client.preview();
