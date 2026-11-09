@@ -17,6 +17,11 @@ on:
         required: false
         default: false
         type: boolean
+      measure_compact_v14:
+        description: 'Measure an optimized V14 for direct mobile deployment (no transactions)'
+        required: false
+        default: false
+        type: boolean
       owner:
         description: 'Named testnet owner (public account ID)'
         required: false
@@ -31,7 +36,7 @@ permissions:
 
 jobs:
   contract:
-    if: github.event_name != 'workflow_dispatch' || (inputs.run_v14_readiness != true && inputs.export_public_artifacts != true)
+    if: github.event_name != 'workflow_dispatch' || (inputs.run_v14_readiness != true && inputs.export_public_artifacts != true && inputs.measure_compact_v14 != true)
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -147,7 +152,7 @@ jobs:
           retention-days: 7
 
   railway-image:
-    if: github.event_name != 'workflow_dispatch' || (inputs.run_v14_readiness != true && inputs.export_public_artifacts != true)
+    if: github.event_name != 'workflow_dispatch' || (inputs.run_v14_readiness != true && inputs.export_public_artifacts != true && inputs.measure_compact_v14 != true)
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -183,7 +188,7 @@ jobs:
           echo 'Standby and enabled-but-unconfigured modes verified without network access.'
 
   browser:
-    if: github.event_name != 'workflow_dispatch' || (inputs.run_v14_readiness != true && inputs.export_public_artifacts != true)
+    if: github.event_name != 'workflow_dispatch' || (inputs.run_v14_readiness != true && inputs.export_public_artifacts != true && inputs.measure_compact_v14 != true)
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -292,3 +297,46 @@ jobs:
             bytes=$(wc -c < "$file" | tr -d ' ')
             echo "::notice title=Public artifact $name::$blob $sha256 $bytes"
           done
+
+  compact-v14-size:
+    # One read-only build experiment; no wallet, signer, RPC or deployment.
+    if: github.event_name == 'workflow_dispatch' && inputs.measure_compact_v14 == true && inputs.run_v14_readiness != true && inputs.export_public_artifacts != true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      CARGO_BUILD_JOBS: 2
+      RUSTFLAGS: '-C link-arg=-s'
+      CARGO_PROFILE_RELEASE_LTO: 'fat'
+      CARGO_PROFILE_RELEASE_OPT_LEVEL: 'z'
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: 1.99.1
+          targets: wasm32-unknown-unknown
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+      - name: Compile V14 with size-focused link-time optimization
+        working-directory: bouncer
+        run: |
+          cargo build --locked --manifest-path contracts/bouncer/Cargo.toml --target wasm32-unknown-unknown --release --no-default-features --features native-storage-v14
+          cp contracts/bouncer/target/wasm32-unknown-unknown/release/bouncer.wasm "$RUNNER_TEMP/v14-compact.wasm"
+      - name: Measure standard and Binaryen-optimized mobile payloads
+        run: |
+          npm install --prefix "$RUNNER_TEMP/binaryen" --ignore-scripts --no-audit --no-fund binaryen@132.0.0
+          node "$RUNNER_TEMP/binaryen/node_modules/binaryen/bin/wasm-opt" "$RUNNER_TEMP/v14-compact.wasm" -Oz --all-features --strip-debug --strip-producers -o "$RUNNER_TEMP/v14-compact-opt.wasm"
+          node --input-type=module - "$RUNNER_TEMP/v14-compact.wasm" "$RUNNER_TEMP/v14-compact-opt.wasm" <<'NODE'
+          import fs from 'node:fs';import crypto from 'node:crypto';
+          for(const name of process.argv.slice(2)) {
+            const data=fs.readFileSync(name),sha=crypto.createHash('sha256').update(data).digest('hex');
+            if(!data.subarray(0,8).equals(Buffer.from([0,97,115,109,1,0,0,0])))throw Error('invalid WASM');
+            const result={artifact:name.endsWith('-opt.wasm')?'lto-and-binaryen':'lto',wasm_bytes:data.length,
+              base64_bytes:4*Math.ceil(data.length/3),sha256:sha,bridge_limit_bytes:400000,
+              raw_field_fits:4*Math.ceil(data.length/3)<400000,
+              limitations:'Size alone is not wallet compatibility, behavior equivalence or deployment approval.'};
+            console.log(`::notice title=Compact V14 mobile size::${JSON.stringify(result)}`);
+          }
+          NODE
