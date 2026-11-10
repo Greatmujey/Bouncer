@@ -22,7 +22,7 @@ test('public staging copies only reviewed wallet and Google assets, never creden
   fs.writeFileSync(path.join(source, 'credentials.txt'), 'private');
   fs.mkdirSync(path.join(source, 'journals'));
   fs.writeFileSync(path.join(source, 'journals', 'recovery.json'), 'private');
-  assert.equal(PUBLIC_WEB_FILES.length, 19);
+  assert.equal(PUBLIC_WEB_FILES.length, 20);
   assert.ok(PUBLIC_WEB_FILES.includes('v14-bootstrap-artifact-v1.json'));
   assert.ok(PUBLIC_WEB_FILES.includes('google-signin.mjs'));
   assert.ok(PUBLIC_WEB_FILES.includes('hero-orbit.jpg'));
@@ -132,10 +132,10 @@ test('deployment revalidates HTML, permits Google popups, and versions its asset
 });
 
 test('Google, WalletConnect and disabled-by-default mission proxies are server functions, never public static files', async () => {
-  assert.deepEqual(fs.readdirSync(path.join(realSource, 'api')).sort(), ['google-session.mjs', 'native-mission', 'wc-relay.mjs']);
+  assert.deepEqual(fs.readdirSync(path.join(realSource, 'api')).sort(), ['google-session.mjs', 'native-mission', 'railway-connection.mjs', 'wc-relay.mjs']);
   const actions=['challenge','config','execute','originals','preview','recover','v14-completed-history','v14-preflight','v14-receipt'];
   assert.deepEqual(fs.readdirSync(path.join(realSource,'api/native-mission')).sort(),actions.map(action=>`${action}.mjs`));
-  for (const file of ['api/google-session.mjs','api/wc-relay.mjs',...actions.map(action=>`api/native-mission/${action}.mjs`)]) {
+  for (const file of ['api/google-session.mjs','api/railway-connection.mjs','api/wc-relay.mjs',...actions.map(action=>`api/native-mission/${action}.mjs`)]) {
     assert.ok(!PUBLIC_WEB_FILES.includes(file));
   }
   const api = await import('../web/api/google-session.mjs');
@@ -171,6 +171,6 @@ test('Google, WalletConnect and disabled-by-default mission proxies are server f
 test('staging CLI runs from the web root and publishes only allowlisted files', t => {
   const { dest } = fixture(t);
   const output = execFileSync(process.execPath, [script, dest], { cwd: realSource, encoding: 'utf8' });
-  assert.match(output, /Staged 19 reviewed public website files/);
+  assert.match(output, /Staged 20 reviewed public website files/);
   assert.deepEqual(fs.readdirSync(dest).sort(), [...PUBLIC_WEB_FILES].sort());
 });

@@ -1,7 +1,9 @@
 import { RUN, explorerTx, formatUnits, readCurrentBalances, shortId } from './evidence.mjs';
 import { setupTour } from './tour.mjs?v=2';
+import { setupRailwayConnection } from './railway-connection.mjs?v=1';
 
 setupTour();
+setupRailwayConnection(document);
 
 // Each workspace destination is its own view, with hash links for deep links,
 // refresh and browser Back/Forward. Existing section URLs continue to work.

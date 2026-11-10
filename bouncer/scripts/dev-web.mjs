@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import session from '../web/api/google-session.mjs';
+import railwayConnection from '../web/api/railway-connection.mjs';
 import { PUBLIC_WEB_FILES } from './stage-public-web.mjs';
 
 const web = fileURLToPath(new URL('../web/', import.meta.url));
@@ -27,6 +28,7 @@ if (walletConnectProjectId && !/^[a-f0-9]{32}$/i.test(walletConnectProjectId)) t
 http.createServer((req, res) => {
   const pathname = new URL(req.url, 'http://preview.invalid').pathname;
   if (pathname === '/api/google-session') return void session(req, res);
+  if (pathname === '/api/railway-connection') return void railwayConnection(req, res);
   if (missionBackend && pathname.startsWith('/api/native-mission/')) {
     if (!['GET', 'POST'].includes(req.method)) { res.writeHead(405); res.end(); return; }
     const upstream = http.request({ hostname: '127.0.0.1', port: missionPort, path: req.url, method: req.method,

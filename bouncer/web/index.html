@@ -116,6 +116,12 @@
   </div>
   <div class="workspace-tool-content">
     <div class="workspace-tool-heading"><span>01</span><div><h3>Guarded mission</h3><p>Review compute, API data and public storage together. Availability depends on the backend; connecting never runs a mission or approves spending.</p></div></div>
+    <div class="setup-recovery native-setup" aria-label="Backend connection">
+      <strong>Railway backend</strong>
+      <p class="account-view-status">Check the backend connection. This is read-only and does not enable a mission or request a wallet approval.</p>
+      <button class="account-entry-secondary" id="railway-connection-check" type="button">Check backend connection →</button>
+      <p class="account-view-status" id="railway-connection-status" role="status" aria-live="polite">Connection has not been checked.</p>
+    </div>
     <button class="account-entry-primary" id="wallet-native-mission-open" type="button" hidden>Review a guarded testnet mission →</button>
     <section class="setup-recovery native-setup" id="wallet-native-mission-panel" aria-label="Guarded native testnet mission" hidden>
       <strong>Compute + data + public storage</strong>
@@ -445,7 +451,7 @@
     <div class="wallet-safety" id="wallet-safety"><svg><use href="#i-lock"/></svg><div><strong>Your wallet keys stay in your wallet.</strong><p>Connecting does not grant Bouncer spending access. Local setup preparation can generate a separate, encrypted vault-only key. Ethereum wallet setup may request an approved testnet transaction. Never share your seed phrase or wallet private key.</p><details><summary>CLI help &amp; licenses</summary><p>An account ID alone is view-only. To verify with CLI, use the optional signed login; it requires a terminal. <a href="./intear-wallet-source.zip">Intear adapter source</a> (AGPL-3.0) · <a href="./walletconnect-NOTICES.txt">WalletConnect notices</a> · <a href="./ethereum-wallet-NOTICE.txt">Ethereum wallet notice</a>.</p></details></div></div>
   </dialog>
   <dialog class="tour-dialog" id="welcome-tour" aria-labelledby="tour-title" aria-describedby="tour-description"><div class="tour-topline"><span class="brand-mark" aria-hidden="true"><svg viewBox="16 17 300 300"><use href="#i-bouncer"/></svg></span><span class="tour-count" id="tour-count">STEP 1 OF 4</span><button type="button" class="tour-close" id="tour-skip" aria-label="Close the tour">×</button></div><div class="tour-progress" aria-hidden="true"><span></span><span></span><span></span><span></span></div><div class="tour-copy" aria-live="polite"><div class="section-kicker" id="tour-kicker">WELCOME TO BOUNCER</div><h2 id="tour-title">Meet your resource agent.</h2><p id="tour-description">Bouncer helps an agent get compute, storage and API services while your on-chain rules guard its spending.</p><div class="tour-callout" id="tour-callout">Bouncer is a testnet prototype, not an open marketplace.</div></div><div class="tour-actions"><button class="button tour-back" type="button" id="tour-back" disabled>Back</button><button class="button tour-next" type="button" id="tour-next">Next →</button></div></dialog>
-  <script type="module" src="./app.mjs?v=7"></script>
+  <script type="module" src="./app.mjs?v=12"></script>
   <script type="module" src="./wallet.bundle.js?v=45"></script>
   <script type="module" src="./google-signin.mjs?v=3"></script>
 </body>
