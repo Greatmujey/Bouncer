@@ -33,3 +33,21 @@ test('button makes only a same-origin GET and reports standby or unknown',async(
  assert.equal(count,0);await click();assert.match(result.textContent,/standby.*off/);assert.equal(button.disabled,false);
  await click();assert.match(result.textContent,/unknown/);assert.equal(count,2);
 });
+
+test('one deployed endpoint routes strictly bounded read-only vault and original checks',async()=>{
+ const hash='E7zq24WLG4FQAoF9NmWesfQUm8figE9U1EDQ67kDf1fa',vault='native.great_mujey.testnet';
+ const seen=[];const handler=createRailwayConnectionHandler({fetch:async(url,opts)=>{
+  assert.equal(url,'https://test.rpc.fastnear.com/');assert.equal(opts.method,'POST');assert.equal(opts.credentials,'omit');
+  const q=JSON.parse(opts.body);seen.push(q.method);
+  if(q.method==='status')return json({jsonrpc:'2.0',id:q.id,result:{chain_id:'testnet'}});
+  if(q.method==='EXPERIMENTAL_tx_status')return json({jsonrpc:'2.0',id:q.id,result:{final_execution_status:'FINAL',
+   transaction:{hash,signer_id:'great_mujey.testnet',receiver_id:vault},status:{SuccessValue:''},receipts_outcome:[]}});
+  throw Error('simulated block outage');
+ }});
+ let out=await invoke(handler,{url:`/api/railway-connection?original=${hash}`});
+ assert.equal(out.code,200);assert.deepEqual(out.body,{hash,state:'final_success',receiptFailures:0});
+ out=await invoke(handler,{url:`/api/railway-connection?vault=${vault}`});assert.equal(out.code,503);
+ assert.equal((await invoke(handler,{url:`/api/railway-connection?vault=${vault}&original=${hash}`})).code,400);
+ assert.equal((await invoke(handler,{url:'/api/railway-connection?original=bad'})).code,400);
+ assert.deepEqual(seen,['status','EXPERIMENTAL_tx_status','status','block']);
+});

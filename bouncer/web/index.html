@@ -14,7 +14,7 @@
   <title>Bouncer — The resource layer for agents</title>
   <link rel="icon" type="image/svg+xml" href="./favicon.svg?v=3">
   <link rel="preload" href="./manrope-latin.woff2" as="font" type="font/woff2" crossorigin>
-  <link rel="stylesheet" href="./styles.css?v=20">
+  <link rel="stylesheet" href="./styles.css?v=23">
 </head>
 <body>
   <svg class="svg-defs" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
@@ -178,7 +178,22 @@
     <button class="button workspace-wallet-button" type="button" data-wallet-open>Connect or manage wallet <svg><use href="#i-wallet"/></svg></button>
   </div>
   <div class="workspace-tool-content">
-    <div class="workspace-tool-heading"><span>01</span><div><h3>Recover an existing setup</h3><p>Already saved or enrolled a setup? Recover it first. Do not create or enroll another candidate, and never repeat an uncertain transaction.</p></div></div>
+    <div class="workspace-tool-heading"><span>01</span><div><h3>Check your existing vault</h3><p>Read-only checks for your testnet vault. No wallet connection or transaction required.</p></div></div>
+    <section class="recovery-checks" aria-label="Read-only vault recovery checks">
+      <form id="vault-inspector-form" class="vault-inspector-form" novalidate>
+        <label for="vault-inspector-account">Vault account ID</label>
+        <div class="vault-inspector-actions"><input id="vault-inspector-account" type="text" maxlength="64" autocomplete="off" autocapitalize="off" spellcheck="false" value="native.great_mujey.testnet" required><button id="vault-inspector-submit" class="account-entry-secondary" type="submit">Check vault →</button></div>
+        <p id="vault-inspector-result" class="account-view-status vault-inspector-result" role="status" aria-live="polite">Check public contract and key state. This doesn't verify transaction history.</p>
+      </form>
+      <form id="original-inspector-form" class="vault-inspector-form" novalidate>
+        <label for="original-inspector-hash">Check a known original transaction hash</label>
+        <div class="vault-inspector-actions"><input id="original-inspector-hash" type="text" maxlength="44" autocomplete="off" autocapitalize="off" spellcheck="false" value="E7zq24WLG4FQAoF9NmWesfQUm8figE9U1EDQ67kDf1fa" required><button id="original-inspector-submit" class="account-entry-secondary" type="submit">Check original →</button></div>
+        <p class="account-view-status">The prefilled hash is the vault initialization already performed. You may check another known original sent by great_mujey.testnet to this vault. Never repeat an uncertain transaction.</p>
+        <p id="original-inspector-result" class="account-view-status vault-inspector-result" role="status" aria-live="polite">No transaction has been checked.</p>
+      </form>
+      <p class="account-view-status">Checks use a public testnet RPC. If the server cannot reach it, your browser may try the same RPC directly. No keys or wallet approval are requested.</p>
+    </section>
+    <div class="workspace-tool-heading"><span>02</span><div><h3>Recover an existing setup</h3><p>Already saved or enrolled a setup? Recover it first. Do not create or enroll another candidate, and never repeat an uncertain transaction.</p></div></div>
     <button class="account-entry-secondary" id="wallet-bootstrap-recovery-open" type="button" hidden>Recover encrypted vault setup →</button>
     <section class="setup-recovery native-setup" id="wallet-bootstrap-recovery-panel" aria-label="Encrypted vault setup recovery" hidden>
       <div class="bootstrap-match-form">
@@ -451,7 +466,7 @@
     <div class="wallet-safety" id="wallet-safety"><svg><use href="#i-lock"/></svg><div><strong>Your wallet keys stay in your wallet.</strong><p>Connecting does not grant Bouncer spending access. Local setup preparation can generate a separate, encrypted vault-only key. Ethereum wallet setup may request an approved testnet transaction. Never share your seed phrase or wallet private key.</p><details><summary>CLI help &amp; licenses</summary><p>An account ID alone is view-only. To verify with CLI, use the optional signed login; it requires a terminal. <a href="./intear-wallet-source.zip">Intear adapter source</a> (AGPL-3.0) · <a href="./walletconnect-NOTICES.txt">WalletConnect notices</a> · <a href="./ethereum-wallet-NOTICE.txt">Ethereum wallet notice</a>.</p></details></div></div>
   </dialog>
   <dialog class="tour-dialog" id="welcome-tour" aria-labelledby="tour-title" aria-describedby="tour-description"><div class="tour-topline"><span class="brand-mark" aria-hidden="true"><svg viewBox="16 17 300 300"><use href="#i-bouncer"/></svg></span><span class="tour-count" id="tour-count">STEP 1 OF 4</span><button type="button" class="tour-close" id="tour-skip" aria-label="Close the tour">×</button></div><div class="tour-progress" aria-hidden="true"><span></span><span></span><span></span><span></span></div><div class="tour-copy" aria-live="polite"><div class="section-kicker" id="tour-kicker">WELCOME TO BOUNCER</div><h2 id="tour-title">Meet your resource agent.</h2><p id="tour-description">Bouncer helps an agent get compute, storage and API services while your on-chain rules guard its spending.</p><div class="tour-callout" id="tour-callout">Bouncer is a testnet prototype, not an open marketplace.</div></div><div class="tour-actions"><button class="button tour-back" type="button" id="tour-back" disabled>Back</button><button class="button tour-next" type="button" id="tour-next">Next →</button></div></dialog>
-  <script type="module" src="./app.mjs?v=12"></script>
+  <script type="module" src="./app.mjs?v=13"></script>
   <script type="module" src="./wallet.bundle.js?v=45"></script>
   <script type="module" src="./google-signin.mjs?v=3"></script>
 </body>
