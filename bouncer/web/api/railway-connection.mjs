@@ -1,6 +1,7 @@
 // Public, read-only status and testnet inspection. One function keeps the
 // Hobby deployment within its existing function count. No wallet or signing.
 import {inspectVault,inspectOriginalTransaction,validVaultAccount,validOriginalHash} from '../vault-inspector.mjs';
+import {inspectVaultActivity} from '../vault-activity.mjs';
 const BACKEND='https://bouncer-production-6df1.up.railway.app/healthz';
 const headers={'content-type':'application/json; charset=utf-8','cache-control':'no-store',
   'x-content-type-options':'nosniff','referrer-policy':'no-referrer'};
@@ -24,13 +25,15 @@ export function createRailwayConnectionHandler({fetch:fetchImpl=globalThis.fetch
     if(req.method!=='GET')return reply(res,405,{status:'unavailable'});
     const args=[...url.searchParams.entries()];
     const mode=args.length===0?'standby':args.length===1&&args[0][0]==='vault'&&validVaultAccount(args[0][1])?'vault':
-      args.length===1&&args[0][0]==='original'&&validOriginalHash(args[0][1])?'original':null;
+      args.length===1&&args[0][0]==='original'&&validOriginalHash(args[0][1])?'original':
+      args.length===1&&args[0][0]==='activity'&&args[0][1]==='1'?'activity':null;
     if(!mode)return reply(res,400,{status:'unavailable'});
     const time=now();if(!Number.isSafeInteger(time)||time<started)return reply(res,503,{status:'unavailable'});
     if(time-started>=60_000){started=time;count=0}
     if(active>=4||count>=40)return reply(res,429,{status:'unavailable'});
     active++;count++;
     try {
+      if(mode==='activity')return reply(res,200,await inspectVaultActivity({fetch:fetchImpl,signal:AbortSignal.timeout(10_000)}));
       if(mode==='vault')return reply(res,200,await inspectVault(args[0][1],{fetch:fetchImpl,signal:AbortSignal.timeout(15_000)}));
       if(mode==='original')return reply(res,200,await inspectOriginalTransaction(args[0][1],{fetch:fetchImpl,signal:AbortSignal.timeout(15_000)}));
       const response=await fetchImpl(BACKEND,{method:'GET',redirect:'error',cache:'no-store',credentials:'omit',signal:AbortSignal.timeout(7_000),

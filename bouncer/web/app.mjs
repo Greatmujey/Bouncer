@@ -1,10 +1,12 @@
 import { RUN, explorerTx, formatUnits, readCurrentBalances, shortId } from './evidence.mjs';
 import { setupTour } from './tour.mjs?v=2';
 import { setupRailwayConnection } from './railway-connection.mjs?v=1';
+import { setupVaultActivity } from './vault-activity.mjs?v=1';
 import { setupVaultInspector, setupOriginalInspector } from './vault-inspector.mjs?v=4';
 
 setupTour();
 setupRailwayConnection(document);
+setupVaultActivity(document);
 setupVaultInspector(document);
 setupOriginalInspector(document);
 

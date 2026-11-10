@@ -22,7 +22,7 @@ test('public staging copies only reviewed wallet and Google assets, never creden
   fs.writeFileSync(path.join(source, 'credentials.txt'), 'private');
   fs.mkdirSync(path.join(source, 'journals'));
   fs.writeFileSync(path.join(source, 'journals', 'recovery.json'), 'private');
-  assert.equal(PUBLIC_WEB_FILES.length, 21);
+  assert.equal(PUBLIC_WEB_FILES.length, 22);
   assert.ok(PUBLIC_WEB_FILES.includes('v14-bootstrap-artifact-v1.json'));
   assert.ok(PUBLIC_WEB_FILES.includes('google-signin.mjs'));
   assert.ok(PUBLIC_WEB_FILES.includes('hero-orbit.jpg'));
@@ -171,6 +171,6 @@ test('Google, WalletConnect and disabled-by-default mission proxies are server f
 test('staging CLI runs from the web root and publishes only allowlisted files', t => {
   const { dest } = fixture(t);
   const output = execFileSync(process.execPath, [script, dest], { cwd: realSource, encoding: 'utf8' });
-  assert.match(output, /Staged 21 reviewed public website files/);
+  assert.match(output, /Staged 22 reviewed public website files/);
   assert.deepEqual(fs.readdirSync(dest).sort(), [...PUBLIC_WEB_FILES].sort());
 });
